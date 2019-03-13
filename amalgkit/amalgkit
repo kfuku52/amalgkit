@@ -1,0 +1,53 @@
+#! /usr/bin/env python
+
+import argparse
+import sys
+import time
+
+
+def command_metadata(args):
+    sys.stdout.write('amalgkit metadata: start\n')
+    start = time.time()
+    from amalgkit.metadata import metadata_main
+    metadata_main(args)
+    print('Time elapsed:', int(time.time()-start), '[sec]')
+    sys.stdout.write('amalgkit metadata: end\n')
+
+def command_help(args):
+    print(parser.parse_args([args.command, '--help']))
+
+# Main parser
+parser = argparse.ArgumentParser(description='A toolkit for transcriptome amalgamation')
+subparsers = parser.add_subparsers()
+
+# Sub parser: metadata
+parser_metadata = subparsers.add_parser('metadata', help='see `amalgkit metadata -h`')
+parser_metadata.add_argument('-c', '--config_dir', metavar='PATH', default='./', type=str, required=True, action='store',
+                        help='default=%(default)s: Path to the config directory.')
+parser_metadata.add_argument('-w', '--work_dir', metavar='PATH', default='./', type=str, required=True, action='store',
+                             help='default=%(default)s: Path to the directory where intermediate and output files are generated.')
+parser_metadata.add_argument('-e', '--entrez_email', metavar='aaa@bbb.com', default=None, type=str, required=True, action='store',
+                             help='default=%(default)s: Your email address.')
+parser_metadata.add_argument('-p', '--publication_date', metavar='YYYY/MM/DD:YYYY/MM/DD', default='1900/01/01:TODAY', type=str, required=False, action='store',
+                             help='default=%(default)s: Range of the date that records were made public in Entrez.')
+parser_metadata.add_argument('-n', '--min_nspots', metavar='INT', default=5000000, type=int, required=False, action='store',
+                             help='default=%(default)s: Minimum number of RNA-seq reads per sample.')
+parser_metadata.add_argument('-s', '--max_sample', metavar='INT', default=99999, type=int, required=False, action='store',
+                             help='default=%(default)s: Maximum number of RNA-seq data sampled for one tissue in a species.')
+parser_metadata.add_argument('-o', '--overwrite', metavar='no|yes', default='no', type=str,
+                             required=False, action='store', choices=['no','yes'],
+                             help='default=%(default)s: Overwrite existing intermediate files.')
+parser_metadata.set_defaults(handler=command_metadata)
+
+
+# Sub parser: help
+parser_help = subparsers.add_parser('help', help='see `help -h`')
+parser_help.add_argument('command', help='command name which help is shown')
+parser_help.set_defaults(handler=command_help)
+
+# Handler
+args = parser.parse_args()
+if hasattr(args, 'handler'):
+    args.handler(args)
+else:
+    parser.print_help()
