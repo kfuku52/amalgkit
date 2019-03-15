@@ -424,12 +424,13 @@ class Metadata:
         self.df = df_labeled
         self.reorder(omit_misc=False)
 
-    def pivot(self, n_sp_cutoff=0, sample_upper=True):
-        if sample_upper:
-            df_sampled = self.df.loc[(self.df['is_sampled']=='Yes'),:]
-        else:
-            df_sampled = self.df
-        df_reduced = df_sampled[['scientific_name', 'biosample', 'tissue']]
+    def pivot(self, n_sp_cutoff=0, qualified_only=True, sampled_only=False):
+        df =self.df
+        if qualified_only:
+            df = df.loc[(df['is_qualified']=='Yes'),:]
+        if sampled_only:
+            df = df.loc[(df['is_sampled']=='Yes'),:]
+        df_reduced = df[['scientific_name', 'biosample', 'tissue']]
         pivot = df_reduced.pivot_table(columns='tissue',index='scientific_name', aggfunc='count')
         pivot.columns = pivot.columns.get_level_values(1)
         column_sort = pivot.count(axis='index').sort_values(ascending=False).index
@@ -537,16 +538,16 @@ def metadata_main(args):
     metadata.reorder(omit_misc=True)
     metadata.df.to_csv('metadata_03_curated_'+date_range+'.tsv', sep='\t', index=False)
 
-    df_qualified = metadata.df.loc[(metadata.df.loc[:,'is_qualified']=='Yes'),:]
-    df_qualified = df_qualified.loc[(df_qualified['scientific_name']!='Drosophila melanogaster'),:]
-    df_qualified.to_csv('metadata_04_qualified_'+date_range+'.tsv', sep='\t', index=False)
+    #df_qualified = metadata.df.loc[(metadata.df.loc[:,'is_qualified']=='Yes'),:]
+    #df_qualified = df_qualified.loc[(df_qualified['scientific_name']!='Drosophila melanogaster'),:]
+    #df_qualified.to_csv('metadata_04_qualified_'+date_range+'.tsv', sep='\t', index=False)
 
-    df_reduced = metadata.df.loc[(metadata.df['is_sampled']=='Yes'),:]
-    df_reduced.to_csv('metadata_05_reduced_'+date_range+'.tsv', sep='\t', index=False)
+    #df_reduced = metadata.df.loc[(metadata.df['is_sampled']=='Yes'),:]
+    #df_reduced.to_csv('metadata_05_reduced_'+date_range+'.tsv', sep='\t', index=False)
 
-    sra_qualified_pivot = metadata.pivot(n_sp_cutoff=0, sample_upper=False)
+    sra_qualified_pivot = metadata.pivot(n_sp_cutoff=0, qualified_only=True, sampled_only=False)
     sra_qualified_pivot.to_csv('pivot_04_qualified_'+date_range+'.tsv', sep='\t')
-    sra_selected_pivot = metadata.pivot(n_sp_cutoff=0, sample_upper=True)
+    sra_selected_pivot = metadata.pivot(n_sp_cutoff=0, qualified_only=True, sampled_only=True)
     sra_selected_pivot.to_csv('pivot_05_selected_'+date_range+'.tsv', sep='\t')
 
 
