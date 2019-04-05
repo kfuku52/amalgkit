@@ -13,6 +13,16 @@ def command_metadata(args):
     print('Time elapsed:', int(time.time()-start), '[sec]')
     sys.stdout.write('amalgkit metadata: end\n')
 
+def command_view(args):
+    sys.stdout.write('amalgkit metadata: start\n')
+    start = time.time()
+    #from amalgkit.view import view_main
+    #view_main(args)
+    print('Hello world!')
+    print('Time elapsed:', int(time.time()-start), '[sec]')
+    sys.stdout.write('amalgkit metadata: end\n')
+
+
 def command_help(args):
     print(parser.parse_args([args.command, '--help']))
 
@@ -39,6 +49,11 @@ parser_metadata.add_argument('-o', '--overwrite', metavar='no|yes', default='no'
                              help='default=%(default)s: Overwrite existing intermediate files.')
 parser_metadata.set_defaults(handler=command_metadata)
 
+# Sub parser: view
+parser_view = subparsers.add_parser('view', help='see `amalgkit view -h`')
+parser_view.add_argument('-t', '--taxid', metavar='3400', default=None, type=int, required=True, action='store',
+                             help='default=%(default)s: NCBI Taxid (e.g., 3400 for Magnoliales).')
+parser_view.set_defaults(handler=command_view)
 
 # Sub parser: help
 parser_help = subparsers.add_parser('help', help='see `help -h`')
