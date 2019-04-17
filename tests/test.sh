@@ -30,4 +30,15 @@ amalgkit metadata \
 
 
 
+pip install "${dir_repo}"; \
+amalgkit getfastq \
+--entrez_email 'kfuku52@gmail.com' \
+--id 'PRJDB4514' \
+--threads 8 \
+--work_dir ${dir_repo}/tests/getfastq \
+--save_metadata 'yes' \
+--pfd 'yes' \
+--max_bp '7500' \
+--fastp 'yes' \
+--layout 'paired'
 

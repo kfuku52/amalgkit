@@ -16,8 +16,11 @@ pip install git+https://github.com/kfuku52/amalgkit
 amalgkit -h 
 ```
 
-## SRA metadata curation
+## `amalgkit metadata` – SRA metadata curation
 **amalgkit metadata** is a subcommand that fetches and curates metadata from the [NCBI's SRA database](https://www.ncbi.nlm.nih.gov/sra). This program needs many config files to enable a tailored metadata curation. See `/amalgkit/config/test/`. Currently, the config files are available only for RNA-seq data from vertebrate organs. To get a fairly good metadata for other taxa/tissues, you would have to extensively edit the config files. 
+
+#### Subcommand dependency
+- Nothing
 
 #### Test run
 
@@ -41,6 +44,26 @@ If you get a network connection error, simply rerun the same analysis. The progr
 * **metadata_02_grouped_YYYY_MM_DD-YYYY_MM_DD.tsv**: Similar attributes (columns) are grouped into a few categories according to .config settings.
 * **metadata_03_curated_YYYY_MM_DD-YYYY_MM_DD.tsv**: A variety of curation steps are applied according to .config settings. Data unsuitable for evolutionary gene expression analysis such as those from miRNA-seq are marked `No` in the `is_qualified` column. There are particular samples which have been intensively sequenced (e.g., livers of *Bos taurus*). Those samples can be subsampled by the `--max_sample` option and excluded data are marked `No` in the `is_sampled` column.
 * **pivot_\*.tsv**: "species x tissue" pivot tables.
+
+## `amalgkit getfastq` – Generate assembly-ready fastq
+**amalgkit getfastq** takes a BioProject/BioSample/SRA ID as input and generates RNA-seq fastq files for transcriptome assembly. In the assembly process, the more RNA-seq libraries you include, the more transcripts you get. However, it's often computationally challenging to get an assembly from overwhelming amount of data. **amalgkit getfastq** can automatically subsample RNA-seq reads from different libraries. The amount of data you need (specified by `--max_bp`) depends on many factors including the assembly program you use. See [this paper](https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0146062) for example.
+
+#### Subcommand dependency
+- [parallel-fastq-dump](https://github.com/rvalieris/parallel-fastq-dump) for `--pfd yes` (default)
+- [fastp](https://github.com/OpenGene/fastp) for `--fastp yes` (default)
+
+#### Test run
+```
+mkdir fastq_files
+
+amalgkit getfastq \
+--entrez_email 'aaa@bbb.com' \
+--id 'PRJDB4514' \
+--threads 2 \
+--work_dir ./fastq_files \
+--max_bp '75,000'
+```
+
 
 ## What comes next?
 After metadata curation, expression level quantification and further curations had been done in the [paper](https://www.biorxiv.org/content/10.1101/409888v1) where we described the transcriptome amalgamation. The downstream analyses will be added to **amalgkit** as sub-commands in future. Meanwhile, unpackaged scripts we used in the paper are available in `/amalgkit/util/`. For example, **kallisto_20180207.sh** is the quantification step we performed immediately after the metadata curation.

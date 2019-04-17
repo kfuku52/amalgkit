@@ -14,14 +14,21 @@ def command_metadata(args):
     sys.stdout.write('amalgkit metadata: end\n')
 
 def command_view(args):
-    sys.stdout.write('amalgkit metadata: start\n')
+    sys.stdout.write('amalgkit view: start\n')
     start = time.time()
     #from amalgkit.view import view_main
     #view_main(args)
     print('Hello world!')
     print('Time elapsed:', int(time.time()-start), '[sec]')
-    sys.stdout.write('amalgkit metadata: end\n')
+    sys.stdout.write('amalgkit view: end\n')
 
+def command_getfastq(args):
+    sys.stdout.write('amalgkit getfastq: start\n')
+    start = time.time()
+    from amalgkit.getfastq import getfastq_main
+    getfastq_main(args)
+    print('Time elapsed:', int(time.time()-start), '[sec]')
+    sys.stdout.write('amalgkit getfastq: end\n')
 
 def command_help(args):
     print(parser.parse_args([args.command, '--help']))
@@ -54,6 +61,30 @@ parser_view = subparsers.add_parser('view', help='see `amalgkit view -h`')
 parser_view.add_argument('-t', '--taxid', metavar='3400', default=None, type=int, required=True, action='store',
                              help='default=%(default)s: NCBI Taxid (e.g., 3400 for Magnoliales).')
 parser_view.set_defaults(handler=command_view)
+
+# Sub parser: getfastq
+parser_getfastq = subparsers.add_parser('getfastq', help='see `amalgkit getfastq -h`')
+parser_getfastq.add_argument('-e', '--entrez_email', metavar='aaa@bbb.com', default=None, type=str, required=True, action='store',
+                             help='default=%(default)s: Your email address.')
+parser_getfastq.add_argument('--work_dir', metavar='PATH', default='./', type=str, required=False, action='store',
+                             help='default=%(default)s: Working directory.')
+parser_getfastq.add_argument('--id', metavar='XXXXX0000', default=None, type=str, required=True, action='store',
+                             help='default=%(default)s: BioProject/BioSample/SRR ID.')
+parser_getfastq.add_argument('--layout', metavar='single|paired', default='paired', type=str, required=False, action='store',
+                             help='default=%(default)s: Library layout of RNA-seq data to be dumped.')
+parser_getfastq.add_argument('--max_bp', metavar='INT', default='7,500,000,000', type=str, required=False, action='store',
+                             help='default=%(default)s: Target sequence size (bp) to be dumped.')
+parser_getfastq.add_argument('--threads', metavar='INT', default=1, type=int, required=False, action='store',
+                             help='default=%(default)s: Number of threads.')
+parser_getfastq.add_argument('--save_metadata', metavar='yes|no', default='yes', type=str, required=False, action='store', choices=['yes','no'],
+                             help='default=%(default)s: Save metadata table.')
+parser_getfastq.add_argument('--pfd', metavar='yes|no', default='yes', type=str, required=False, action='store', choices=['yes','no'],
+                             help='default=%(default)s: Run parallel-fastq-dump.')
+parser_getfastq.add_argument('--fastp', metavar='yes|no', default='yes', type=str, required=False, action='store', choices=['yes','no'],
+                             help='default=%(default)s: Run fastp.')
+parser_getfastq.add_argument('--fastp_option', metavar='str', default='-j /dev/null -h /dev/null', type=str, required=False, action='store',
+                             help='default=%(default)s: Options to be passed to fastp.')
+parser_getfastq.set_defaults(handler=command_getfastq)
 
 # Sub parser: help
 parser_help = subparsers.add_parser('help', help='see `help -h`')
