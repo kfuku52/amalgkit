@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name             = 'amalgkit',
-    version          = "0.1",
+    version          = "0.2",
     description      = 'Tools for transcriptome amalgamation',
     license          = "BSD 3-clause License",
     author           = "Kenji Fukushima",
