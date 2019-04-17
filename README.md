@@ -6,6 +6,7 @@
 * [biopython](https://biopython.org/)
 * [numpy](https://github.com/numpy/numpy)
 * [pandas](https://github.com/pandas-dev/pandas)
+* [lxml](https://lxml.de/)
 
 ## Installation
 ```

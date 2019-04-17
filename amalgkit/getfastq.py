@@ -61,14 +61,15 @@ def get_range(max_bp, total_sra_bp, total_spot, num_read_per_sra, offset):
 
 def concat_fastq(args, metadata, clean=True):
     is_output_exist = True
-    ext = '.fastp.fastq.gz' if args.fastp=='yes' else '.fastq.gz'
+    inext = '.fastp.fastq.gz' if args.fastp=='yes' else '.fastq.gz'
+    outext = '.amalgkit.fastq.gz'
     if args.layout=='single':
         subexts = ['',]
     elif args.layout=='paired':
         subexts = ['_1','_2',]
     for subext in subexts:
-        infiles = metadata.df['run'].replace('$',subext+ext, regex=True)
-        outfile_path = os.path.join(args.work_dir,args.id+subext+ext)
+        infiles = metadata.df['run'].replace('$',subext+inext, regex=True)
+        outfile_path = os.path.join(args.work_dir,args.id+subext+outext)
         #with gzip.open(outfile_path, 'wb') as outfile:
         #    for each_infile in infiles:
         #        with gzip.open(os.path.join(args.work_dir, each_infile), 'rb') as infile:
@@ -128,16 +129,19 @@ def getfastq_main(args):
     print('Entrez search term:', search_term)
     xml_root = getfastq_getxml(search_term)
     metadata = Metadata.from_xml(xml_root)
+    metadata.df = metadata.df.loc[(metadata.df['lib_layout']==args.layout),:]
+    if args.sci_name is not None:
+        metadata.df = metadata.df.loc[(metadata.df['scientific_name']==args.sci_name),:]
     if args.save_metadata:
         metadata.df.to_csv(os.path.join(args.work_dir,'getfastq_sra_metadata.tsv'), sep='\t', index=False)
-    metadata.df = metadata.df.loc[(metadata.df['lib_layout']==args.layout),:]
+    assert metadata.df.shape[0] > 0, 'No SRA entry found. Make sure if --id is compatible with --sci_name and --layout.'
     print('SRA IDs:', ' '.join(metadata.df['run'].tolist()))
     max_bp = int(args.max_bp.replace(',',''))
     num_sra = metadata.df.shape[0]
     num_bp_per_sra = int(max_bp/num_sra)
     total_sra_bp = int(metadata.df['total_bases'].astype(int).sum())
     offset = 10000 # https://edwards.sdsu.edu/research/fastq-dump/
-    print('Number of SRA', num_sra)
+    print('Number of SRA:', num_sra)
     print('max_bp:', "{:,}".format(max_bp), 'bp')
     print('Total SRA size:', total_sra_bp, 'bp')
     print('Max size per SRA:', "{:,}".format(num_bp_per_sra), 'bp')
@@ -153,7 +157,11 @@ def getfastq_main(args):
         sra_id = metadata.df.loc[i,'run']
         layout = metadata.df.loc[i,'lib_layout']
         total_spot = int(metadata.df.loc[i,'total_spots'])
-        spot_length = int(metadata.df.loc[i,'spot_length'])
+        try:
+            spot_length = int(metadata.df.loc[i,'spot_length'])
+        except ValueError as e:
+            print('INFO: spot_length cannot be obtained directly from the metadata. Using total_bases/total_spots instead.')
+            spot_length = int(int(metadata.df.loc[i,'total_bases'])/int(metadata.df.loc[i,'total_spots']))
         num_read_per_sra = int(num_bp_per_sra/spot_length)
         print('SRA ID:', sra_id)
         print('Library layout:', layout)
@@ -170,6 +178,11 @@ def getfastq_main(args):
         print('Command:', ' '.join(pfd_command))
         if args.pfd=='yes':
             pfd_out = subprocess.run(pfd_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            if args.pfd_print=='yes':
+                print('parallel-fastq-dump stdout:')
+                print(pfd_out.stdout.decode('utf8'))
+                print('parallel-fastq-dump stderr:')
+                print(pfd_out.stderr.decode('utf8'))
             stdout = pfd_out.stdout.decode('utf8')
             nd = [ int(line.replace('Read ','').split(' ')[0]) for line in stdout.split('\n') if line.startswith('Read') ]
             nr = [ int(line.replace('Rejected ','').split(' ')[0]) for line in stdout.split('\n') if line.startswith('Rejected') ]
@@ -192,13 +205,22 @@ def getfastq_main(args):
             fp_command = [ fc for fc in fp_command if fc!='' ]
             print('Command:', ' '.join(fp_command))
             fp_out = subprocess.run(fp_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            if layout=='single':
-                if os.path.exists(infile+outext):
-                    os.remove(infile+inext)
-            if layout=='paired':
-                if os.path.exists(infile1+outext)&os.path.exists(infile2+outext):
-                    os.remove(infile1+inext)
-                    os.remove(infile2+inext)
+            if args.fastp_print=='yes':
+                print('fastp stdout:')
+                print(fp_out.stdout.decode('utf8'))
+                print('fastp stderr:')
+                print(fp_out.stderr.decode('utf8'))
+            if args.remove_tmp=='yes':
+                if layout=='single':
+                    if os.path.exists(infile+outext):
+                        print('Deleting:', infile+inext)
+                        os.remove(infile+inext)
+                if layout=='paired':
+                    if os.path.exists(infile1+outext)&os.path.exists(infile2+outext):
+                        print('Deleting:', infile1+inext)
+                        print('Deleting:', infile2+inext)
+                        os.remove(infile1+inext)
+                        os.remove(infile2+inext)
             bps = fp_out.stderr.decode('utf8').split('\n')
             bp_in = [ int(line.replace('total bases: ','').split(' ')[0]) for line in bps if line.startswith('total bases') ][0::2]
             bp_out = [ int(line.replace('total bases: ','').split(' ')[0]) for line in bps if line.startswith('total bases') ][1::2]
@@ -214,7 +236,8 @@ def getfastq_main(args):
             print('Sum of fastp input reads:', "{:,}".format(bp_fastp_in), 'bp')
             print('Sum of fastp output reads:', "{:,}".format(bp_fastp_out), 'bp')
         print('')
-        concat_fastq(args, metadata, clean=True)
+        do_clean = True if args.remove_tmp=='yes' else False
+        concat_fastq(args, metadata, clean=do_clean)
     if args.remove_sra=='yes':
         remove_sra_files(metadata, sra_dir)
     else:

@@ -86,6 +86,14 @@ parser_getfastq.add_argument('--fastp_option', metavar='str', default='-j /dev/n
                              help='default=%(default)s: Options to be passed to fastp.')
 parser_getfastq.add_argument('--remove_sra', metavar='yes|no', default='yes', type=str, required=False, action='store', choices=['yes','no'],
                              help='default=%(default)s: Remove downloaded SRA files after fastq extraction.')
+parser_getfastq.add_argument('--remove_tmp', metavar='yes|no', default='yes', type=str, required=False, action='store', choices=['yes','no'],
+                             help='default=%(default)s: Remove temporary files.')
+parser_getfastq.add_argument('--pfd_print', metavar='yes|no', default='no', type=str, required=False, action='store', choices=['yes','no'],
+                             help='default=%(default)s: Show parallel-fastq-dump stdout and stderr.')
+parser_getfastq.add_argument('--fastp_print', metavar='yes|no', default='no', type=str, required=False, action='store', choices=['yes','no'],
+                             help='default=%(default)s: Show fastp stdout and stderr.')
+parser_getfastq.add_argument('--sci_name', metavar='yes|no', default=None, type=str, required=False, action='store',
+                             help='default=%(default)s: Species name in case the BioProject covers multiple species. Example: "Homo sapiens"')
 parser_getfastq.set_defaults(handler=command_getfastq)
 
 # Sub parser: help

@@ -43,5 +43,3 @@ amalgkit getfastq \
 --layout 'paired' \
 --remove_sra 'yes'
 
-
-
