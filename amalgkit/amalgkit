@@ -70,8 +70,8 @@ parser_getfastq.add_argument('--work_dir', metavar='PATH', default='./', type=st
                              help='default=%(default)s: Working directory.')
 parser_getfastq.add_argument('--id', metavar='XXXXX0000', default=None, type=str, required=True, action='store',
                              help='default=%(default)s: BioProject/BioSample/SRR ID.')
-parser_getfastq.add_argument('--layout', metavar='single|paired', default='paired', type=str, required=False, action='store',
-                             help='default=%(default)s: Library layout of RNA-seq data to be dumped.')
+parser_getfastq.add_argument('--layout', metavar='single|paired|auto', default='auto', type=str, required=False, action='store', choices=['single','paired','auto'],
+                             help='default=%(default)s: Library layout of RNA-seq data to be dumped. "auto" prioritizes paird-end libraries if both types are available.')
 parser_getfastq.add_argument('--max_bp', metavar='INT', default='7,500,000,000', type=str, required=False, action='store',
                              help='default=%(default)s: Target sequence size (bp) to be dumped.')
 parser_getfastq.add_argument('--threads', metavar='INT', default=1, type=int, required=False, action='store',
