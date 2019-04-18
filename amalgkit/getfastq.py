@@ -129,11 +129,13 @@ def getfastq_main(args):
     print('Entrez search term:', search_term)
     xml_root = getfastq_getxml(search_term)
     metadata = Metadata.from_xml(xml_root)
+    if args.save_metadata:
+        metadata.df.to_csv(os.path.join(args.work_dir,'metadata_all.tsv'), sep='\t', index=False)
     metadata.df = metadata.df.loc[(metadata.df['lib_layout']==args.layout),:]
     if args.sci_name is not None:
         metadata.df = metadata.df.loc[(metadata.df['scientific_name']==args.sci_name),:]
     if args.save_metadata:
-        metadata.df.to_csv(os.path.join(args.work_dir,'getfastq_sra_metadata.tsv'), sep='\t', index=False)
+        metadata.df.to_csv(os.path.join(args.work_dir,'metadata_target.tsv'), sep='\t', index=False)
     assert metadata.df.shape[0] > 0, 'No SRA entry found. Make sure if --id is compatible with --sci_name and --layout.'
     print('SRA IDs:', ' '.join(metadata.df['run'].tolist()))
     max_bp = int(args.max_bp.replace(',',''))
