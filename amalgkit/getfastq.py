@@ -131,8 +131,10 @@ def getfastq_main(args):
     metadata = Metadata.from_xml(xml_root)
     if args.save_metadata:
         metadata.df.to_csv(os.path.join(args.work_dir,'metadata_all.tsv'), sep='\t', index=False)
+    print('Filtering SRA entry with --layout:', args.layout)
     metadata.df = metadata.df.loc[(metadata.df['lib_layout']==args.layout),:]
     if args.sci_name is not None:
+        print('Filtering SRA entry with --sci_name:', args.sci_name)
         metadata.df = metadata.df.loc[(metadata.df['scientific_name']==args.sci_name),:]
     if args.save_metadata:
         metadata.df.to_csv(os.path.join(args.work_dir,'metadata_target.tsv'), sep='\t', index=False)
