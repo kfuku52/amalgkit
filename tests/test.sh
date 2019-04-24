@@ -40,6 +40,6 @@ amalgkit getfastq \
 --pfd 'yes' \
 --max_bp '7500' \
 --fastp 'yes' \
---layout 'paired' \
---remove_sra 'yes'
+--layout 'auto' \
+--remove_sra 'no'
 

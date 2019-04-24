@@ -60,12 +60,13 @@ def get_range(max_bp, total_sra_bp, total_spot, num_read_per_sra, offset):
     return start,end
 
 def concat_fastq(args, metadata, clean=True):
+    layout = get_layout(args, metadata)
     is_output_exist = True
     inext = '.fastp.fastq.gz' if args.fastp=='yes' else '.fastq.gz'
     outext = '.amalgkit.fastq.gz'
-    if args.layout=='single':
+    if layout=='single':
         subexts = ['',]
-    elif args.layout=='paired':
+    elif layout=='paired':
         subexts = ['_1','_2',]
     for subext in subexts:
         infiles = metadata.df['run'].replace('$',subext+inext, regex=True)
@@ -92,7 +93,7 @@ def concat_fastq(args, metadata, clean=True):
                     print('Deleting:', infile_path)
                     os.remove(infile_path)
         print('')
-    if (clean)&(args.layout=='paired'):
+    if (clean)&(layout=='paired'):
         for sra_id in metadata.df['run']:
             unpaired_file = os.path.join(args.work_dir, sra_id+'.fastq.gz')
             if os.path.exists(unpaired_file):
@@ -114,6 +115,14 @@ def remove_sra_files(metadata, sra_dir):
             print('SRA file not found:', sra_pattern)
     print('')
 
+def get_layout(args, metadata):
+    if args.layout=='auto':
+        layouts = metadata.df['lib_layout'].unique().tolist()
+        layout = 'paired' if 'paired' in layouts else 'single'
+    else:
+        layout = args.layout
+    return layout
+
 def getfastq_main(args):
     sra_dir = os.path.join(os.path.expanduser("~"), 'ncbi/public/sra')
     assert (args.entrez_email!='aaa@bbb.com'), "Provide your email address. No worry, you won't get spam emails."
@@ -129,11 +138,16 @@ def getfastq_main(args):
     print('Entrez search term:', search_term)
     xml_root = getfastq_getxml(search_term)
     metadata = Metadata.from_xml(xml_root)
-    metadata.df = metadata.df.loc[(metadata.df['lib_layout']==args.layout),:]
+    if args.save_metadata:
+        metadata.df.to_csv(os.path.join(args.work_dir,'metadata_all.tsv'), sep='\t', index=False)
+    print('Filtering SRA entry with --layout:', args.layout)
+    layout = get_layout(args, metadata)
+    metadata.df = metadata.df.loc[(metadata.df['lib_layout']==layout),:]
     if args.sci_name is not None:
+        print('Filtering SRA entry with --sci_name:', args.sci_name)
         metadata.df = metadata.df.loc[(metadata.df['scientific_name']==args.sci_name),:]
     if args.save_metadata:
-        metadata.df.to_csv(os.path.join(args.work_dir,'getfastq_sra_metadata.tsv'), sep='\t', index=False)
+        metadata.df.to_csv(os.path.join(args.work_dir,'metadata_target.tsv'), sep='\t', index=False)
     assert metadata.df.shape[0] > 0, 'No SRA entry found. Make sure if --id is compatible with --sci_name and --layout.'
     print('SRA IDs:', ' '.join(metadata.df['run'].tolist()))
     max_bp = int(args.max_bp.replace(',',''))
@@ -155,7 +169,6 @@ def getfastq_main(args):
     for i in metadata.df.index:
         print('')
         sra_id = metadata.df.loc[i,'run']
-        layout = metadata.df.loc[i,'lib_layout']
         total_spot = int(metadata.df.loc[i,'total_spots'])
         try:
             spot_length = int(metadata.df.loc[i,'spot_length'])
