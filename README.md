@@ -64,6 +64,35 @@ amalgkit getfastq \
 --work_dir ./fastq_files \
 --max_bp '75,000'
 ```
+## `amalgkit quant` - quantification of RNAseq data
+**amalkit quant** quantifies abundances of transcripts from RNAseq data using Kallisto. All required input and intermediary files are assumed to be in the working directory (default `./`).
+
+#### Subcommand dependencies
+- [kallisto](https://pachterlab.github.io/kallisto/)
+
+#### Other specifics
+- Needs fastq files (single end or paired end) for quantification, ideally processed by `amalgkit getfastq`, but should be able to handle custom data as well.
+- Needs a reference file (usually a fasta file of cdna sequences) for index building, if `--build_index yes` (default), OR an index file if `--build_index no`
+- `--index` is either the name given to the index file (default: `id_name.idx`) for index building (optional in this case), or index file if `build_oindex no`
+- results are stored in `results_quant`
+
+####Usage example
+Contents of working directory:
+- `SRR8819967_1.amalgkit.fastq.gz`
+- `SRR8819967_2.amalgkit.fastq.gz`
+- `arabidopsis_thaliana.fasta` <- this is a reference genome
+
+amalgkit quant \
+--id SRR8819967 \
+--index arabidopsis_thaliana.idx \
+--ref arabidopsis_thaliana.fasta \
+--work_dir ./fastq_files
+
+####Output
+* **SRR8819967_abundance.h5**: bootstrap results in `h5dump` format
+* **SRR8819967_run_info.json**: contains run info
+* **SRR8819967_abundance.tsv**: contains target_id, lentgh, eff_length, est_counts and tpm in human readable .tsv
+
 
 
 ## What comes next?

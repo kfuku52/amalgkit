@@ -1,15 +1,23 @@
-import re, glob, subprocess, os
+import re, glob, subprocess, os, sys
 from Bio import Entrez
 from amalgkit.metadata import Metadata
 from amalgkit.getfastq import getfastq_getxml, getfastq_search_term
 
 def quant_main(args):
-    # build index via
+
+    #check kallisto depency
+    try:
+        subprocess.run(['blakdfaklasdf', '-h'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    except FileNotFoundError as e:
+        print(",<ERROR> kallisto is not installed.")
+        sys.exit(1)
+
+    # build index via kallisto index
     if args.build_index == "yes":
         if not args.ref:
             raise ValueError("--build_index enabled, but no reference sequences given.")
         else:
-            subprocess.run(["kallisto", "index", "--i", args.index, args.work_dir + args.ref])
+            subprocess.run(["kallisto", "index", "--i", args.id + ".idx", args.work_dir + args.ref])
 
     # prefer amalgkit processed files over others.
 

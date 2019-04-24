@@ -112,27 +112,25 @@ parser_getfastq.set_defaults(handler=command_getfastq)
 
 
 # Sub parser: quant
-parser_getfastq = subparsers.add_parser('quant', help='see `amalgkit getfastq -h`')
+parser_quant = subparsers.add_parser('quant', help='see `amalgkit getfastq -h`')
 
-parser_getfastq.add_argument('--sci_name', metavar='yes|no', default=None, type=str, required=False, action='store',
+parser_quant.add_argument('--sci_name', metavar='yes|no', default=None, type=str, required=False, action='store',
                              help='default=%(default)s: Species name in case the BioProject covers multiple species. Example: "Homo sapiens"')
-parser_getfastq.add_argument('--ref', metavar='PATH', default=None, type=str, required=False, action='store',
+parser_quant.add_argument('--ref', metavar='PATH', default=None, type=str, required=False, action='store',
                              help='default=%(default)s: path to the reference genome FASTA file. Required for Index building.')
-parser_getfastq.add_argument('--id', metavar='PATH', default=None, type=str, required=True, action='store',
+parser_quant.add_argument('--id', metavar='PATH', default=None, type=str, required=True, action='store',
                              help='default=%(default)s: path to .fastq or .fastq.gz file(s) to quantify.')
-parser_getfastq.add_argument('--index', metavar='yes|no', default=None, type=str, required=True, action='store',
+parser_quant.add_argument('--index', metavar='PATH', default=None, type=str, required=True, action='store',
                              help='default=%(default)s: path/name of kallisto index file to create.')
-parser_getfastq.add_argument('--build_index', metavar='yes|no', default="yes", type=str, required=False, action='store',
+parser_quant.add_argument('--build_index', metavar='yes|no', default="yes", type=str, required=False, action='store',
                              help='default=%(default)s: builds the kallisto index from a set of reference sequences. Index needs to be provided if this is set to "no".')
-parser_getfastq.add_argument('--threads', metavar='INT', default=4, type=int, required=False, action='store',
+parser_quant.add_argument('--threads', metavar='INT', default=4, type=int, required=False, action='store',
                              help='default=%(default)s: Number of threads.')
-parser_getfastq.add_argument('--fragment_length', metavar='INT', default=None, type=int, required=False, action='store',
+parser_quant.add_argument('--fragment_length', metavar='INT', default=None, type=int, required=False, action='store',
                              help='default=%(default)s: length of the fragment length (not read length). Only required, if single end reads are used.')
-#parser_getfastq.add_argument('--standard_deviation', metavar='INT', default=20, type=int, required=False, action='store',
-#                             help='default=%(default)s: Standard deviation of the fragment length (not read length). Only required, if single end reads are used.')
-parser_getfastq.add_argument('--work_dir', metavar='PATH', default='./', type=str, required=False, action='store',
+parser_quant.add_argument('--work_dir', metavar='PATH', default='./', type=str, required=False, action='store',
                              help='default=%(default)s: Working directory.')
-parser_getfastq.set_defaults(handler=command_quant)
+parser_quant.set_defaults(handler=command_quant)
 
 # Sub parser: help
 parser_help = subparsers.add_parser('help', help='see `help -h`')
