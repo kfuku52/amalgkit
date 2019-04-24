@@ -76,19 +76,19 @@ amalgkit getfastq \
 - `--index` is either the name given to the index file (default: `id_name.idx`) for index building (optional in this case), or index file if `build_oindex no`
 - results are stored in `results_quant`
 
-####Usage example
-Contents of working directory:
+#### Usage example
+#### Contents of working directory:
 - `SRR8819967_1.amalgkit.fastq.gz`
 - `SRR8819967_2.amalgkit.fastq.gz`
 - `arabidopsis_thaliana.fasta` <- this is a reference genome
 
-amalgkit quant \
+`amalgkit quant \
 --id SRR8819967 \
 --index arabidopsis_thaliana.idx \
 --ref arabidopsis_thaliana.fasta \
---work_dir ./fastq_files
+--work_dir ./fastq_files`
 
-####Output
+#### Output
 * **SRR8819967_abundance.h5**: bootstrap results in `h5dump` format
 * **SRR8819967_run_info.json**: contains run info
 * **SRR8819967_abundance.tsv**: contains target_id, lentgh, eff_length, est_counts and tpm in human readable .tsv

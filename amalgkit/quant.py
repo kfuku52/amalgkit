@@ -7,7 +7,7 @@ def quant_main(args):
 
     #check kallisto depency
     try:
-        subprocess.run(['blakdfaklasdf', '-h'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        subprocess.run(['kallisto', '-h'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     except FileNotFoundError as e:
         print(",<ERROR> kallisto is not installed.")
         sys.exit(1)
@@ -21,10 +21,10 @@ def quant_main(args):
 
     # prefer amalgkit processed files over others.
 
-    in_files = glob.glob(args.work_dir + args.id + "*.amalgkit.fastq.gz")
+    in_files = glob.glob(os.path.join(args.work_dir, args.id) + "*.amalgkit.fastq.gz")
 
     if not in_files:
-        in_files = glob.glob(args.work_dir + args.id + "*.fastq*")
+        in_files = glob.glob(os.path.join(args.work_dir, args.id) + "*.fastq*")
 
     # start quantification process.
     # throws exception, if in_files still empty.
@@ -87,10 +87,10 @@ def quant_main(args):
         raise ValueError("ID ", args.id, "not found in working directory", args.work_dir)
 
     # make results directory, if not already there
-    if not os.path.isdir(args.work_dir + "/results_quant/"):
-        os.makedirs(args.work_dir + "/results_quant/")
+    if not os.path.isdir(os.path.join(args.work_dir, "results_quant")):
+        os.makedirs(os.path.join(args.work_dir, "results_quant"))
 
     # move output to results with unique name
-    os.rename(args.work_dir + "run_info.json", args.work_dir + "/results/" + args.id + "_run_info.json")
-    os.rename(args.work_dir + "abundance.tsv", args.work_dir + "/results/" + args.id + "_abundance.tsv")
-    os.rename(args.work_dir + "abundance.h5", args.work_dir + "/results/" + args.id + "_abundance.h5")
+    os.rename(os.path.join(args.work_dir, "run_info.json", args.work_dir, "results_quant", args.id) + "_run_info.json")
+    os.rename(os.path.join(args.work_dir, "abundance.tsv", args.work_dir, "results_quant", args.id) + "_abundance.tsv")
+    os.rename(os.path.join(args.work_dir, "abundance.h5", args.work_dir, "results_quant", args.id) + "_abundance.h5")
