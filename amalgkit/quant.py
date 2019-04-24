@@ -12,12 +12,19 @@ def quant_main(args):
         print(",<ERROR> kallisto is not installed.")
         sys.exit(1)
 
+
+    if args.index == None:
+        index = args.id +  ".idx"
+    else:
+        index = args.index
+
     # build index via kallisto index
+
     if args.build_index == "yes":
         if not args.ref:
             raise ValueError("--build_index enabled, but no reference sequences given.")
         else:
-            subprocess.run(["kallisto", "index", "--i", args.id + ".idx", args.work_dir + args.ref])
+            subprocess.run(["kallisto", "index", "--i", index, args.work_dir + args.ref])
 
     # prefer amalgkit processed files over others.
 
@@ -33,13 +40,12 @@ def quant_main(args):
         # paired end read kallisto quant, if in_files == 2
         if len(in_files) == 2:
             print("paired end reads detected. Running in paired read mode.")
-            subprocess.run(["kallisto", "quant", "-i", args.index, "-o", args.work_dir, in_files[0], in_files[1]])
+            subprocess.run(["kallisto", "quant", "-i", index, "-o", args.work_dir, in_files[0], in_files[1]])
 
         # throws exception, if more than 2 files in in_files. Could be expanded to handle more than 2 files.
         elif len(in_files) > 2:
             raise ValueError("more than 2 input files given. Refer to kallisto quant -h for more info")
 
-        # kallisto needs fragment length and fragment length standard deviation
         else:
             print("single end reads detected. Proceeding in --single mode")
 
@@ -75,14 +81,14 @@ def quant_main(args):
                 print("fragment length set to: ", nominal_length)
                 fragment_sd = nominal_length/10
                 print("fragment length standard deviation set to:", fragment_sd)
-                subprocess.run(["kallisto", "quant", "--index", args.index, "-o", args.work_dir, "--single", "-l", str(nominal_length), "-s", str(fragment_sd), in_files[0]])
+                subprocess.run(["kallisto", "quant", "--index", index, "-o", args.work_dir, "--single", "-l", str(nominal_length), "-s", str(fragment_sd), in_files[0]])
 
             # if fragment length is supplied by the user, kallisto quant can be run immediately
             else:
                 print("fragment length set to: ", args.fragment_length)
                 fragment_sd = args.fragment_length/10
                 print("fragment length standard deviation set to:", fragment_sd)
-                subprocess.run(["kallisto", "quant", "--index", args.index,  "-o", args.work_dir, "--single", "-l", str(args.frament_length), "-s", str(fragment_sd), in_files[0]])
+                subprocess.run(["kallisto", "quant", "--index", index,  "-o", args.work_dir, "--single", "-l", str(args.frament_length), "-s", str(fragment_sd), in_files[0]])
     else:
         raise ValueError("ID ", args.id, "not found in working directory", args.work_dir)
 

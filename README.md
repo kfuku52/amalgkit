@@ -82,11 +82,13 @@ amalgkit getfastq \
 - `SRR8819967_2.amalgkit.fastq.gz`
 - `arabidopsis_thaliana.fasta` <- this is a reference genome
 
-`amalgkit quant \
+```
+amalgkit quant \
 --id SRR8819967 \
 --index arabidopsis_thaliana.idx \
 --ref arabidopsis_thaliana.fasta \
---work_dir ./fastq_files`
+--work_dir ./fastq_files
+```
 
 #### Output
 * **SRR8819967_abundance.h5**: bootstrap results in `h5dump` format

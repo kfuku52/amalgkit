@@ -120,7 +120,7 @@ parser_quant.add_argument('--ref', metavar='PATH', default=None, type=str, requi
                              help='default=%(default)s: path to the reference genome FASTA file. Required for Index building.')
 parser_quant.add_argument('--id', metavar='PATH', default=None, type=str, required=True, action='store',
                              help='default=%(default)s: path to .fastq or .fastq.gz file(s) to quantify.')
-parser_quant.add_argument('--index', metavar='PATH', default=None, type=str, required=True, action='store',
+parser_quant.add_argument('--index', metavar='PATH', default=None, type=str, required=False, action='store',
                              help='default=%(default)s: path/name of kallisto index file to create.')
 parser_quant.add_argument('--build_index', metavar='yes|no', default="yes", type=str, required=False, action='store',
                              help='default=%(default)s: builds the kallisto index from a set of reference sequences. Index needs to be provided if this is set to "no".')
