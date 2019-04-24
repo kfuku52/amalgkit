@@ -91,6 +91,6 @@ def quant_main(args):
         os.makedirs(os.path.join(args.work_dir, "results_quant"))
 
     # move output to results with unique name
-    os.rename(os.path.join(args.work_dir + "run_info.json"), os.path.join(args.work_dir, "results_quant" + args.id + "_run_info.json"))
-    os.rename(os.path.join(args.work_dir + "abundance.tsv"), os.path.join(args.work_dir, "results_quant" + args.id + "_abundance.tsv"))
-    os.rename(os.path.join(args.work_dir + "abundance.h5"), os.path.join(args.work_dir, "results_quant" + args.id + "_abundance.h5"))
+    os.rename(os.path.join(args.work_dir, "run_info.json"), os.path.join(args.work_dir, "results_quant", args.id + "_run_info.json"))
+    os.rename(os.path.join(args.work_dir, "abundance.tsv"), os.path.join(args.work_dir, "results_quant", args.id + "_abundance.tsv"))
+    os.rename(os.path.join(args.work_dir, "abundance.h5"), os.path.join(args.work_dir, "results_quant", args.id + "_abundance.h5"))
