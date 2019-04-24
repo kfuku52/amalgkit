@@ -87,8 +87,8 @@ def quant_main(args):
         raise ValueError("ID ", args.id, "not found in working directory", args.work_dir)
 
     # make results directory, if not already there
-    if not os.path.isdir(args.work_dir + "/results/"):
-        os.makedirs(args.work_dir + "/results/")
+    if not os.path.isdir(args.work_dir + "/results_quant/"):
+        os.makedirs(args.work_dir + "/results_quant/")
 
     # move output to results with unique name
     os.rename(args.work_dir + "run_info.json", args.work_dir + "/results/" + args.id + "_run_info.json")
