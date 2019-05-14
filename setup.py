@@ -10,6 +10,6 @@ setup(
     url              = 'https://github.com/kfuku52/amalgkit.git',
     keywords         = '',
     packages         = find_packages(),
-    install_requires = ['numpy','pandas','biopython',],
+    install_requires = ['numpy','pandas','biopython','lxml',],
     scripts          = ['amalgkit/amalgkit',],
 )

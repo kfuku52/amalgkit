@@ -105,7 +105,7 @@ def concat_fastq(args, metadata, clean=True):
 
 def remove_sra_files(metadata, sra_dir):
     for sra_id in metadata.df['run']:
-        sra_pattern = os.path.join(sra_dir, sra_id+'.*')
+        sra_pattern = os.path.join(sra_dir, sra_id+'.sra*')
         sra_paths = glob.glob(sra_pattern)
         if len(sra_paths)>0:
             for sra_path in sra_paths:
@@ -126,11 +126,17 @@ def get_layout(args, metadata):
 def getfastq_main(args):
     sra_dir = os.path.join(os.path.expanduser("~"), 'ncbi/public/sra')
     assert (args.entrez_email!='aaa@bbb.com'), "Provide your email address. No worry, you won't get spam emails."
-    test_pfd = subprocess.run(['parallel-fastq-dump', '-h'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    assert (test_pfd.returncode==0), "parallel-fastq-dump is not installed."
+    if args.pfd=='yes':
+        test_pfd = subprocess.run([args.pfd_exe, '-h'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        assert (test_pfd.returncode==0), "parallel-fastq-dump PATH cannot be found."
+        test_prefetch = subprocess.run([args.prefetch_exe, '-h'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        assert (test_prefetch.returncode==0), "prefetch (SRA toolkit) PATH cannot be found."
+    #if args.ascp=='yes':
+    #    test_ascp = subprocess.run([args.ascp_exe, '--help'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    #    assert (test_ascp.returncode==0), "ascp (Aspera Connect) PATH cannot be found."
     if args.fastp=='yes':
-        test_fp = subprocess.run(['fastp', '--help'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        assert (test_fp.returncode==0), "fastp is not installed."
+        test_fp = subprocess.run([args.fastp_exe, '--help'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        assert (test_fp.returncode==0), "fastp PATH cannot be found."
     if not os.path.exists(args.work_dir):
         os.makedirs(args.work_dir)
     Entrez.email = args.entrez_email
@@ -168,6 +174,7 @@ def getfastq_main(args):
     bp_fastp_out = 0
     for i in metadata.df.index:
         print('')
+        start_time = time.time()
         sra_id = metadata.df.loc[i,'run']
         total_spot = int(metadata.df.loc[i,'total_spots'])
         try:
@@ -181,15 +188,32 @@ def getfastq_main(args):
         print('Number of reads:', "{:,}".format(total_spot))
         print('Single/Paired read length:', spot_length, 'bp')
         print('Total bases:', "{:,}".format(int(metadata.df.loc[i,'total_bases'])), 'bp')
-        pfd_command = ['parallel-fastq-dump', '-t', str(args.threads), '--minReadLen', '25', '--qual-filter-1',
-                       '--skip-technical', '--split-3', '--clip', '--gzip', '--outdir', args.work_dir,
-                       '--tmpdir', args.work_dir]
-        start,end = get_range(max_bp, total_sra_bp, total_spot, num_read_per_sra, offset)
-        print('Total sampled bases:', "{:,}".format(spot_length*(end-start+1)), 'bp')
-        pfd_command = pfd_command + ['--minSpotId', str(start), '--maxSpotId', str(end)]
-        pfd_command = pfd_command + ['--sra-id', sra_id]
-        print('Command:', ' '.join(pfd_command))
         if args.pfd=='yes':
+            sra_path = os.path.join(args.work_dir, sra_id+'.sra')
+            #if (args.ascp=='yes')&(not os.path.exists(sra_path)):
+            #    sra_site = 'anonftp@ftp-private.ncbi.nlm.nih.gov:/sra/sra-instant/reads/ByRun/sra/'+sra_id[0:3]+'/'+sra_id[0:6]+'/'+sra_id+'/'+sra_id+'.sra'
+            #    ascp_command = [args.ascp_exe, '-v', '-i', args.ascp_key, '-k', '1', '-T', '-l', '300m', sra_site, args.workdir]
+            #    ascp_out = subprocess.run(ascp_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            #    print('ascp stdout:')
+            #    print(ascp_out.stdout.decode('utf8'))
+            #    print('ascp stderr:')
+            #    print(ascp_out.stderr.decode('utf8'))
+            if not os.path.exists(sra_path):
+                prefetch_command = [args.prefetch_exe, '--force', 'no', '--transport', 'fasp', '--max-size', '100G',
+                                    '--output-directory', args.work_dir, sra_id]
+                prefetch_out = subprocess.run(prefetch_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                print('prefetch stdout:')
+                print(prefetch_out.stdout.decode('utf8'))
+                print('prefetch stderr:')
+                print(prefetch_out.stderr.decode('utf8'))
+            pfd_command = ['parallel-fastq-dump', '-t', str(args.threads), '--minReadLen', '25', '--qual-filter-1',
+                           '--skip-technical', '--split-3', '--clip', '--gzip', '--outdir', args.work_dir,
+                           '--tmpdir', args.work_dir]
+            start,end = get_range(max_bp, total_sra_bp, total_spot, num_read_per_sra, offset)
+            print('Total sampled bases:', "{:,}".format(spot_length*(end-start+1)), 'bp')
+            pfd_command = pfd_command + ['--minSpotId', str(start), '--maxSpotId', str(end)]
+            pfd_command = pfd_command + ['-s', sra_path]
+            print('Command:', ' '.join(pfd_command))
             pfd_out = subprocess.run(pfd_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             if args.pfd_print=='yes':
                 print('parallel-fastq-dump stdout:')
@@ -239,6 +263,7 @@ def getfastq_main(args):
             bp_out = [ int(line.replace('total bases: ','').split(' ')[0]) for line in bps if line.startswith('total bases') ][1::2]
             bp_fastp_in += sum(bp_in)
             bp_fastp_out += sum(bp_out)
+        print('Time elapsed:', sra_id, int(time.time()-start_time), '[sec]')
     print('')
     if args.pfd=='yes':
         print('max_bp:', "{:,}".format(max_bp), 'bp')
@@ -252,7 +277,7 @@ def getfastq_main(args):
         do_clean = True if args.remove_tmp=='yes' else False
         concat_fastq(args, metadata, clean=do_clean)
     if args.remove_sra=='yes':
-        remove_sra_files(metadata, sra_dir)
+        remove_sra_files(metadata, sra_dir=args.work_dir)
     else:
         if args.pfd=='yes':
-            print('SRA files not removed:', sra_dir)
+            print('SRA files not removed:', args.work_dir)
