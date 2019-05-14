@@ -44,3 +44,5 @@ amalgkit getfastq \
 --layout 'auto' \
 --remove_sra 'no'
 
+
+

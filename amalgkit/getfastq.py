@@ -131,9 +131,9 @@ def getfastq_main(args):
         assert (test_pfd.returncode==0), "parallel-fastq-dump PATH cannot be found."
         test_prefetch = subprocess.run([args.prefetch_exe, '-h'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         assert (test_prefetch.returncode==0), "prefetch (SRA toolkit) PATH cannot be found."
-    #if args.ascp=='yes':
-    #    test_ascp = subprocess.run([args.ascp_exe, '--help'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    #    assert (test_ascp.returncode==0), "ascp (Aspera Connect) PATH cannot be found."
+    if args.ascp=='yes':
+        test_ascp = subprocess.run([args.ascp_exe, '--help'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        assert (test_ascp.returncode==0), "ascp (Aspera Connect) PATH cannot be found."
     if args.fastp=='yes':
         test_fp = subprocess.run([args.fastp_exe, '--help'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         assert (test_fp.returncode==0), "fastp PATH cannot be found."
@@ -190,16 +190,27 @@ def getfastq_main(args):
         print('Total bases:', "{:,}".format(int(metadata.df.loc[i,'total_bases'])), 'bp')
         if args.pfd=='yes':
             sra_path = os.path.join(args.work_dir, sra_id+'.sra')
-            #if (args.ascp=='yes')&(not os.path.exists(sra_path)):
-            #    sra_site = 'anonftp@ftp-private.ncbi.nlm.nih.gov:/sra/sra-instant/reads/ByRun/sra/'+sra_id[0:3]+'/'+sra_id[0:6]+'/'+sra_id+'/'+sra_id+'.sra'
-            #    ascp_command = [args.ascp_exe, '-v', '-i', args.ascp_key, '-k', '1', '-T', '-l', '300m', sra_site, args.workdir]
-            #    ascp_out = subprocess.run(ascp_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            #    print('ascp stdout:')
-            #    print(ascp_out.stdout.decode('utf8'))
-            #    print('ascp stderr:')
-            #    print(ascp_out.stderr.decode('utf8'))
+            if (args.ascp=='yes')&(not os.path.exists(sra_path)):
+                print('Trying to download the SRA file using ascp.')
+                sra_site = 'anonftp@ftp.ncbi.nlm.nih.gov:/sra/sra-instant/reads/ByRun/sra/'+sra_id[0:3]+'/'+sra_id[0:6]+'/'+sra_id+'/'+sra_id+'.sra'
+                ascp_command = [args.ascp_exe, '-v', '-i', args.ascp_key, '-k', '1', '-T', '-l', '300m', sra_site, args.work_dir]
+                ascp_out = subprocess.run(ascp_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                print('ascp stdout:')
+                print(ascp_out.stdout.decode('utf8'))
+                print('ascp stderr:')
+                print(ascp_out.stderr.decode('utf8'))
             if not os.path.exists(sra_path):
+                print('Trying to download the SRA file using prefetch (fasp protocol).')
                 prefetch_command = [args.prefetch_exe, '--force', 'no', '--transport', 'fasp', '--max-size', '100G',
+                                    '--output-directory', args.work_dir, sra_id]
+                prefetch_out = subprocess.run(prefetch_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                print('prefetch stdout:')
+                print(prefetch_out.stdout.decode('utf8'))
+                print('prefetch stderr:')
+                print(prefetch_out.stderr.decode('utf8'))
+            if not os.path.exists(sra_path):
+                print('Trying to download the SRA file using prefetch (http protocol).')
+                prefetch_command = [args.prefetch_exe, '--force', 'no', '--transport', 'http', '--max-size', '100G',
                                     '--output-directory', args.work_dir, sra_id]
                 prefetch_out = subprocess.run(prefetch_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 print('prefetch stdout:')

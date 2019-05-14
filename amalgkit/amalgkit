@@ -113,14 +113,14 @@ parser_getfastq.add_argument('--fastp_print', metavar='yes|no', default='no', ty
                              help='default=%(default)s: Show fastp stdout and stderr.')
 parser_getfastq.add_argument('--sci_name', metavar='STR', default=None, type=str, required=False, action='store',
                              help='default=%(default)s: Species name in case the BioProject covers multiple species. Example: "Homo sapiens"')
-#parser_getfastq.add_argument('--ascp', metavar='yes|no', default='no', type=str, required=False, action='store', choices=['yes','no'],
-#                             help='default=%(default)s: Download SRA files using ascp instead of http protocol.')
-#parser_getfastq.add_argument('--ascp_exe', metavar='PATH', default='ascp', type=str, required=False, action='store',
-#                             help='default=%(default)s: PATH to ascp executable.')
-#parser_getfastq.add_argument('--ascp_key', metavar='PATH', default='', type=str, required=False, action='store',
-#                             help='default=%(default)s: PATH to ascp key.')
-#parser_getfastq.add_argument('--ascp_option', metavar='STR', default='-v -k 1 -T -l 300m', type=str, required=False, action='store',
-#                             help='default=%(default)s: ascp options.')
+parser_getfastq.add_argument('--ascp', metavar='yes|no', default='no', type=str, required=False, action='store', choices=['yes','no'],
+                             help='default=%(default)s: Download SRA files using ascp instead of http protocol.')
+parser_getfastq.add_argument('--ascp_exe', metavar='PATH', default='ascp', type=str, required=False, action='store',
+                             help='default=%(default)s: PATH to ascp executable.')
+parser_getfastq.add_argument('--ascp_key', metavar='PATH', default='', type=str, required=False, action='store',
+                             help='default=%(default)s: PATH to ascp key.')
+parser_getfastq.add_argument('--ascp_option', metavar='STR', default='-v -k 1 -T -l 300m', type=str, required=False, action='store',
+                             help='default=%(default)s: ascp options.')
 parser_getfastq.set_defaults(handler=command_getfastq)
 
 
