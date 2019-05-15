@@ -62,7 +62,12 @@ def get_range(max_bp, total_sra_bp, total_spot, num_read_per_sra, offset):
 def concat_fastq(args, metadata, clean=True):
     layout = get_layout(args, metadata)
     is_output_exist = True
-    inext = '.fastp.fastq.gz' if args.fastp=='yes' else '.fastq.gz'
+    if args.read_name!='default':
+        inext = '.rename.fastq.gz'
+    elif args.fastp=='yes':
+        inext = '.fastp.fastq.gz'
+    else:
+        inext = '.fastq.gz'
     outext = '.amalgkit.fastq.gz'
     if layout=='single':
         subexts = ['',]
@@ -137,6 +142,16 @@ def getfastq_main(args):
     if args.fastp=='yes':
         test_fp = subprocess.run([args.fastp_exe, '--help'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         assert (test_fp.returncode==0), "fastp PATH cannot be found."
+    if args.read_name!='default':
+        test_pigz = subprocess.run(['pigz', '--help'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if test_pigz.returncode==0:
+            print('pigz found. It will be used for compression/decompression in read name formatting.')
+            gz_exe = 'pigz -p '+str(args.threads)
+            ungz_exe = 'unpigz -p'+str(args.threads)
+        else:
+            print('pigz not found. gzip/gunzip will be used for compression/decompression in read name formatting.')
+            gz_exe = 'gzip'
+            ungz_exe = 'gunzip'
     if not os.path.exists(args.work_dir):
         os.makedirs(args.work_dir)
     Entrez.email = args.entrez_email
@@ -274,6 +289,32 @@ def getfastq_main(args):
             bp_out = [ int(line.replace('total bases: ','').split(' ')[0]) for line in bps if line.startswith('total bases') ][1::2]
             bp_fastp_in += sum(bp_in)
             bp_fastp_out += sum(bp_out)
+        if args.read_name=='trinity':
+            inext1 = '.fastq.gz'
+            inext2 = '.fastp.fastq.gz'
+            outext = '.rename.fastq.gz'
+            if layout=='single':
+                inbase = os.path.join(args.work_dir,sra_id)
+                if os.path.exists(inbase+inext2):
+                    infile = inbase+inext2
+                elif os.path.exists(inbase+inext1):
+                    infile = inbase+inext1
+                else:
+                    print('Read name formatting: Input file not found.')
+                os.system(ungz_exe+' -c '+infile+' | sed -e "s|[[:space:]].*|/1|" | '+gz_exe+' -c > '+inbase+outext)
+            elif layout=='paired':
+                inbase1 = os.path.join(args.work_dir,sra_id+'_1')
+                inbase2 = os.path.join(args.work_dir,sra_id+'_2')
+                if os.path.exists(inbase1+inext2):
+                    infile1 = inbase1+inext2
+                    infile2 = inbase2+inext2
+                elif os.path.exists(inbase1+inext1):
+                    infile1 = inbase1+inext1
+                    infile2 = inbase2+inext1
+                else:
+                    print('Read name formatting: Input file not found.')
+                os.system(ungz_exe+' -c '+infile1+' | sed -e "s|[[:space:]].*|/1|" | '+gz_exe+' -c > '+inbase1+outext)
+                os.system(ungz_exe+' -c '+infile2+' | sed -e "s|[[:space:]].*|/2|" | '+gz_exe+' -c > '+inbase2+outext)
         print('Time elapsed:', sra_id, int(time.time()-start_time), '[sec]')
     print('')
     if args.pfd=='yes':

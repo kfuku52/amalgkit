@@ -121,6 +121,8 @@ parser_getfastq.add_argument('--ascp_key', metavar='PATH', default='', type=str,
                              help='default=%(default)s: PATH to ascp key.')
 parser_getfastq.add_argument('--ascp_option', metavar='STR', default='-v -k 1 -T -l 300m', type=str, required=False, action='store',
                              help='default=%(default)s: ascp options.')
+parser_getfastq.add_argument('--read_name', metavar='default|trinity', default='default', type=str, required=False, action='store', choices=['default','trinity'],
+                             help='default=%(default)s: read name formatting for downstream analysis.')
 parser_getfastq.set_defaults(handler=command_getfastq)
 
 
