@@ -42,8 +42,8 @@ amalgkit getfastq \
 --max_bp '75000' \
 --fastp 'yes' \
 --layout 'auto' \
---remove_tmp 'no' \
---remove_sra 'no' \
+--remove_tmp 'yes' \
+--remove_sra 'yes' \
 --read_name 'trinity'
 
 

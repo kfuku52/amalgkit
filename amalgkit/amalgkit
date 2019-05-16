@@ -101,7 +101,7 @@ parser_getfastq.add_argument('--fastp', metavar='yes|no', default='yes', type=st
                              help='default=%(default)s: Run fastp.')
 parser_getfastq.add_argument('--fastp_exe', metavar='PATH', default='fastp', type=str, required=False, action='store',
                              help='default=%(default)s: PATH to fastp executable.')
-parser_getfastq.add_argument('--fastp_option', metavar='STR', default='-j /dev/null -h /dev/null', type=str, required=False, action='store',
+parser_getfastq.add_argument('--fastp_option', metavar='STR', default='-j /dev/null -h /dev/null --length_required 25', type=str, required=False, action='store',
                              help='default=%(default)s: Options to be passed to fastp.')
 parser_getfastq.add_argument('--remove_sra', metavar='yes|no', default='yes', type=str, required=False, action='store', choices=['yes','no'],
                              help='default=%(default)s: Remove downloaded SRA files after fastq extraction.')
