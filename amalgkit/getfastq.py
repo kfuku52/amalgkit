@@ -61,7 +61,7 @@ def get_range(max_bp, total_sra_bp, total_spot, num_read_per_sra, offset):
 
 def concat_fastq(args, metadata):
     layout = get_layout(args, metadata)
-    inext = get_newest_intermediate_file_extension(work_dir=args.work_dir)
+    inext = '.amalgkit.fastq.gz'
     print('Concatenating files with the extension:', inext)
     outext = '.amalgkit.fastq.gz'
     if layout=='single':
@@ -131,11 +131,11 @@ def remove_intermediate_files(sra_id, layout, ext, work_dir):
         else:
             print('Tried to delete but file not found:', file_path)
 
-def get_newest_intermediate_file_extension(work_dir):
+def get_newest_intermediate_file_extension(sra_id, work_dir):
     # Order is important in this list. More downstream should come first.
-    extensions = ['.rename.fastq.gz','.fastp.fastq.gz','.fastq.gz']
+    extensions = ['.amalgkit.fastq.gz','.rename.fastq.gz','.fastp.fastq.gz','.fastq.gz']
     for ext in extensions:
-        if any([ f.endswith(ext) for f in os.listdir(work_dir) ]):
+        if any([ f.endswith(ext) for f in os.listdir(work_dir) if f.startswith(sra_id) ]):
             ext_out = ext
             break
     return ext_out
@@ -279,7 +279,7 @@ def getfastq_main(args):
                     print('Unpaired file not found:', unpaired_file)
         if args.fastp=='yes':
             print('Running fastp.')
-            inext = get_newest_intermediate_file_extension(work_dir=args.work_dir)
+            inext = get_newest_intermediate_file_extension(sra_id=sra_id, work_dir=args.work_dir)
             outext = '.fastp.fastq.gz'
             fp_command = ['fastp', '--thread', str(args.threads)] + args.fastp_option.split(' ')
             if layout=='single':
@@ -305,7 +305,7 @@ def getfastq_main(args):
             bp_fastp_in += sum(bp_in)
             bp_fastp_out += sum(bp_out)
         if args.read_name=='trinity':
-            inext = get_newest_intermediate_file_extension(work_dir=args.work_dir)
+            inext = get_newest_intermediate_file_extension(sra_id=sra_id, work_dir=args.work_dir)
             outext = '.rename.fastq.gz'
             if layout=='single':
                 inbase = os.path.join(args.work_dir,sra_id)
@@ -322,9 +322,20 @@ def getfastq_main(args):
                 os.system(ungz_exe+' -c '+infile2+' | sed -e "s|[[:space:]].*|/2|" | '+gz_exe+' -c > '+inbase2+outext)
             if args.remove_tmp=='yes':
                 remove_intermediate_files(sra_id=sra_id, layout=layout, ext=inext, work_dir=args.work_dir)
+        if args.pfd=='yes':
+            inext = get_newest_intermediate_file_extension(sra_id=sra_id, work_dir=args.work_dir)
+            outext = '.amalgkit.fastq.gz'
+            if layout=='single':
+                inbase = os.path.join(args.work_dir,sra_id)
+                os.rename(inbase+inext, inbase+outext)
+            elif layout=='paired':
+                inbase1 = os.path.join(args.work_dir,sra_id+'_1')
+                inbase2 = os.path.join(args.work_dir,sra_id+'_2')
+                os.rename(inbase1+inext, inbase1+outext)
+                os.rename(inbase2+inext, inbase2+outext)
         print('Time elapsed:', sra_id, int(time.time()-start_time), '[sec]')
     print('')
-    if args.pfd=='yes':
+    if args.concat=='yes':
         print('max_bp:', "{:,}".format(max_bp), 'bp')
         print('Sum of dumped reads:', "{:,}".format(bp_dumped), 'bp')
         print('Sum of rejected reads:', "{:,}".format(bp_rejected), 'bp')
@@ -337,7 +348,7 @@ def getfastq_main(args):
         if args.remove_tmp=='yes':
             for i in metadata.df.index:
                 sra_id = metadata.df.loc[i,'run']
-                ext = get_newest_intermediate_file_extension(work_dir=args.work_dir)
+                ext = get_newest_intermediate_file_extension(sra_id=sra_id, work_dir=args.work_dir)
                 remove_intermediate_files(sra_id=sra_id, layout=layout, ext=ext, work_dir=args.work_dir)
     if args.remove_sra=='yes':
         remove_sra_files(metadata, sra_dir=args.work_dir)

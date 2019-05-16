@@ -44,7 +44,8 @@ amalgkit getfastq \
 --layout 'auto' \
 --remove_tmp 'yes' \
 --remove_sra 'yes' \
---read_name 'trinity'
+--read_name 'trinity' \
+--concat 'yes'
 
 
 
