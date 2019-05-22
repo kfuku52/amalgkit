@@ -2,6 +2,7 @@ import re, glob, subprocess, os, sys
 from Bio import Entrez
 from amalgkit.metadata import Metadata
 from amalgkit.getfastq import getfastq_getxml, getfastq_search_term
+from amalgkit.metadata import create_run_dir
 
 def quant_main(args):
 
@@ -12,9 +13,8 @@ def quant_main(args):
         print(",<ERROR> kallisto is not installed.")
         sys.exit(1)
 
-
-    if args.index == None:
-        index = args.id +  ".idx"
+    if args.index is None:
+        index = args.id + ".idx"
     else:
         index = args.index
 
@@ -33,6 +33,10 @@ def quant_main(args):
     if not in_files:
         in_files = glob.glob(os.path.join(args.work_dir, args.id) + "*.fastq*")
 
+
+    # make results directory, if not already there
+    output_dir = create_run_dir(os.path.join(args.out_dir, 'quant_output'))
+
     # start quantification process.
     # throws exception, if in_files still empty.
 
@@ -40,7 +44,7 @@ def quant_main(args):
         # paired end read kallisto quant, if in_files == 2
         if len(in_files) == 2:
             print("paired end reads detected. Running in paired read mode.")
-            subprocess.run(["kallisto", "quant", "-i", index, "-o", args.work_dir, in_files[0], in_files[1]])
+            subprocess.run(["kallisto", "quant", "-i", index, "-o", output_dir, in_files[0], in_files[1]])
 
         # throws exception, if more than 2 files in in_files. Could be expanded to handle more than 2 files.
         elif len(in_files) > 2:
@@ -51,7 +55,7 @@ def quant_main(args):
 
             # kallisto needs fragment length and fragment length standard deviation.
             # if there is none supplied, check if ID matches SRA ID
-            if args.fragment_length == None:
+            if args.fragment_length is None:
 
                 print("No fragment length set.")
                 SRA_ID_pattern= re.compile("SR[RXP][0-9]{7}")
@@ -81,22 +85,20 @@ def quant_main(args):
                 print("fragment length set to: ", nominal_length)
                 fragment_sd = nominal_length/10
                 print("fragment length standard deviation set to:", fragment_sd)
-                subprocess.run(["kallisto", "quant", "--index", index, "-o", args.work_dir, "--single", "-l", str(nominal_length), "-s", str(fragment_sd), in_files[0]])
+                subprocess.run(["kallisto", "quant", "--index", index, "-o", output_dir, "--single", "-l", str(nominal_length), "-s", str(fragment_sd), in_files[0]])
 
             # if fragment length is supplied by the user, kallisto quant can be run immediately
             else:
                 print("fragment length set to: ", args.fragment_length)
                 fragment_sd = args.fragment_length/10
                 print("fragment length standard deviation set to:", fragment_sd)
-                subprocess.run(["kallisto", "quant", "--index", index,  "-o", args.work_dir, "--single", "-l", str(args.frament_length), "-s", str(fragment_sd), in_files[0]])
+                subprocess.run(["kallisto", "quant", "--index", index,  "-o", output_dir, "--single", "-l", str(args.frament_length), "-s", str(fragment_sd), in_files[0]])
     else:
         raise ValueError("ID ", args.id, "not found in working directory", args.work_dir)
 
-    # make results directory, if not already there
-    if not os.path.isdir(os.path.join(args.work_dir, "results_quant")):
-        os.makedirs(os.path.join(args.work_dir, "results_quant"))
+
 
     # move output to results with unique name
-    os.rename(os.path.join(args.work_dir, "run_info.json"), os.path.join(args.work_dir, "results_quant", args.id + "_run_info.json"))
-    os.rename(os.path.join(args.work_dir, "abundance.tsv"), os.path.join(args.work_dir, "results_quant", args.id + "_abundance.tsv"))
-    os.rename(os.path.join(args.work_dir, "abundance.h5"), os.path.join(args.work_dir, "results_quant", args.id + "_abundance.h5"))
+    os.rename(os.path.join(output_dir, "run_info.json"), os.path.join(output_dir, args.id + "_run_info.json"))
+    os.rename(os.path.join(output_dir, "abundance.tsv"), os.path.join(output_dir, args.id + "_abundance.tsv"))
+    os.rename(os.path.join(output_dir, "abundance.h5"), os.path.join(output_dir, args.id + "_abundance.h5"))

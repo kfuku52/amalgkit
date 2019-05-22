@@ -1,5 +1,6 @@
 from Bio import Entrez
 from amalgkit.metadata import Metadata
+from amalgkit.metadata import create_run_dir
 from urllib.error import HTTPError
 import numpy, pandas
 import time, datetime, lxml, subprocess, os, shutil, gzip, glob
@@ -131,15 +132,24 @@ def getfastq_main(args):
     if args.fastp=='yes':
         test_fp = subprocess.run(['fastp', '--help'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         assert (test_fp.returncode==0), "fastp is not installed."
+
     if not os.path.exists(args.work_dir):
         os.makedirs(args.work_dir)
+
+    output_dir = create_run_dir(os.path.join(args.work_dir, 'getfastq_output'))
+
+    if not os.path.exists(os.path.join(output_dir, 'sra_files')):
+        os.mkdir(os.path.join(output_dir, 'sra_files'))
+
+    sra_output_dir = os.path.join(output_dir, 'sra_files')
+
     Entrez.email = args.entrez_email
     search_term = getfastq_search_term(args.id)
     print('Entrez search term:', search_term)
     xml_root = getfastq_getxml(search_term)
     metadata = Metadata.from_xml(xml_root)
     if args.save_metadata:
-        metadata.df.to_csv(os.path.join(args.work_dir,'metadata_all.tsv'), sep='\t', index=False)
+        metadata.df.to_csv(os.path.join(output_dir,'metadata_all.tsv'), sep='\t', index=False)
     print('Filtering SRA entry with --layout:', args.layout)
     layout = get_layout(args, metadata)
     metadata.df = metadata.df.loc[(metadata.df['lib_layout']==layout),:]
@@ -147,7 +157,7 @@ def getfastq_main(args):
         print('Filtering SRA entry with --sci_name:', args.sci_name)
         metadata.df = metadata.df.loc[(metadata.df['scientific_name']==args.sci_name),:]
     if args.save_metadata:
-        metadata.df.to_csv(os.path.join(args.work_dir,'metadata_target.tsv'), sep='\t', index=False)
+        metadata.df.to_csv(os.path.join(output_dir,'metadata_target.tsv'), sep='\t', index=False)
     assert metadata.df.shape[0] > 0, 'No SRA entry found. Make sure if --id is compatible with --sci_name and --layout.'
     print('SRA IDs:', ' '.join(metadata.df['run'].tolist()))
     max_bp = int(args.max_bp.replace(',',''))
@@ -182,8 +192,8 @@ def getfastq_main(args):
         print('Single/Paired read length:', spot_length, 'bp')
         print('Total bases:', "{:,}".format(int(metadata.df.loc[i,'total_bases'])), 'bp')
         pfd_command = ['parallel-fastq-dump', '-t', str(args.threads), '--minReadLen', '25', '--qual-filter-1',
-                       '--skip-technical', '--split-3', '--clip', '--gzip', '--outdir', args.work_dir,
-                       '--tmpdir', args.work_dir]
+                       '--skip-technical', '--split-3', '--clip', '--gzip', '--outdir', sra_output_dir,
+                       '--tmpdir', sra_output_dir]
         start,end = get_range(max_bp, total_sra_bp, total_spot, num_read_per_sra, offset)
         print('Total sampled bases:', "{:,}".format(spot_length*(end-start+1)), 'bp')
         pfd_command = pfd_command + ['--minSpotId', str(start), '--maxSpotId', str(end)]
@@ -212,8 +222,8 @@ def getfastq_main(args):
                 infile = os.path.join(args.work_dir,sra_id)
                 fp_command = fp_command + ['--in1',infile+inext,'--out1',infile+outext]
             elif layout=='paired':
-                infile1 = os.path.join(args.work_dir,sra_id+'_1')
-                infile2 = os.path.join(args.work_dir,sra_id+'_2')
+                infile1 = os.path.join(sra_output_dir,sra_id+'_1')
+                infile2 = os.path.join(sra_output_dir,sra_id+'_2')
                 fp_command = fp_command + ['--in1',infile1+inext,'--out1',infile1+outext,'--in2',infile2+inext,'--out2',infile2+outext]
             fp_command = [ fc for fc in fp_command if fc!='' ]
             print('Command:', ' '.join(fp_command))
