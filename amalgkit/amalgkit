@@ -101,9 +101,15 @@ parser_getfastq.add_argument('--save_metadata', metavar='yes|no', default='yes',
                              help='default=%(default)s: Save metadata table.')
 parser_getfastq.add_argument('--pfd', metavar='yes|no', default='yes', type=str, required=False, action='store', choices=['yes','no'],
                              help='default=%(default)s: Run parallel-fastq-dump.')
+parser_getfastq.add_argument('--pfd_exe', metavar='PATH', default='parallel-fastq-dump', type=str, required=False, action='store',
+                             help='default=%(default)s: PATH to parallel-fastq-dump executable.')
+parser_getfastq.add_argument('--prefetch_exe', metavar='PATH', default='prefetch', type=str, required=False, action='store',
+                             help='default=%(default)s: PATH to prefetch executable.')
 parser_getfastq.add_argument('--fastp', metavar='yes|no', default='yes', type=str, required=False, action='store', choices=['yes','no'],
                              help='default=%(default)s: Run fastp.')
-parser_getfastq.add_argument('--fastp_option', metavar='STR', default='-j /dev/null -h /dev/null', type=str, required=False, action='store',
+parser_getfastq.add_argument('--fastp_exe', metavar='PATH', default='fastp', type=str, required=False, action='store',
+                             help='default=%(default)s: PATH to fastp executable.')
+parser_getfastq.add_argument('--fastp_option', metavar='STR', default='-j /dev/null -h /dev/null --length_required 25', type=str, required=False, action='store',
                              help='default=%(default)s: Options to be passed to fastp.')
 parser_getfastq.add_argument('--remove_sra', metavar='yes|no', default='yes', type=str, required=False, action='store', choices=['yes','no'],
                              help='default=%(default)s: Remove downloaded SRA files after fastq extraction.')
@@ -115,6 +121,18 @@ parser_getfastq.add_argument('--fastp_print', metavar='yes|no', default='no', ty
                              help='default=%(default)s: Show fastp stdout and stderr.')
 parser_getfastq.add_argument('--sci_name', metavar='STR', default=None, type=str, required=False, action='store',
                              help='default=%(default)s: Species name in case the BioProject covers multiple species. Example: "Homo sapiens"')
+parser_getfastq.add_argument('--ascp', metavar='yes|no', default='no', type=str, required=False, action='store', choices=['yes','no'],
+                             help='default=%(default)s: Download SRA files using ascp instead of http protocol.')
+parser_getfastq.add_argument('--ascp_exe', metavar='PATH', default='ascp', type=str, required=False, action='store',
+                             help='default=%(default)s: PATH to ascp executable.')
+parser_getfastq.add_argument('--ascp_key', metavar='PATH', default='', type=str, required=False, action='store',
+                             help='default=%(default)s: PATH to ascp key.')
+parser_getfastq.add_argument('--ascp_option', metavar='STR', default='-v -k 1 -T -l 300m', type=str, required=False, action='store',
+                             help='default=%(default)s: ascp options.')
+parser_getfastq.add_argument('--read_name', metavar='default|trinity', default='default', type=str, required=False, action='store', choices=['default','trinity'],
+                             help='default=%(default)s: read name formatting for downstream analysis.')
+parser_getfastq.add_argument('--concat', metavar='yes|no', default='no', type=str, required=False, action='store', choices=['yes','no'],
+                             help='default=%(default)s: concatenate SRA fastq files (e.g, for assembly).')
 parser_getfastq.set_defaults(handler=command_getfastq)
 
 
