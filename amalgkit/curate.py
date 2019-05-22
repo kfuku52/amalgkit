@@ -11,7 +11,7 @@ def curate_main(args):
 
     quant_out = os.path.join(args.work_dir, args.infile)
     meta_out = os.path.join(args.work_dir,args.metafile)
-    out_dir = create_run_dir(os.path.join(args.out_dir, 'getfastq_output'))
+    out_dir = create_run_dir(os.path.join(args.out_dir, 'curate_output'))
     dist_method = args.dist_method
     mr_cut = args.mapping_rate
     intermediate = args.cleanup
