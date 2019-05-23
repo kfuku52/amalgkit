@@ -51,6 +51,14 @@ def command_curate(args):
     print('Time elapsed:', int(time.time()-start), '[sec]')
     sys.stdout.write('amalgkit curate: end\n')
 
+def command_merge(args):
+    sys.stdout.write('amalgkit merge: start\n')
+    start = time.time()
+    from amalgkit.merge import merge_main
+    merge_main(args)
+    print('Time elapsed:', int(time.time()-start), '[sec]')
+    sys.stdout.write('amalgkit merge: end\n')
+
 def command_help(args):
     print(parser.parse_args([args.command, '--help']))
 
@@ -180,6 +188,16 @@ parser_curate.add_argument('--cleanup', metavar='INT', default=0, type=int, requ
 parser_curate.add_argument('--tissues', metavar='STR', default=None, type=str, required=False, action='store',
                            help='default=%(default): List of tissues to be included.')
 parser_curate.set_defaults(handler=command_curate)
+
+# Sub parser: curate
+parser_merge = subparsers.add_parser('merge', help='see `amalgkit getfastq -h`')
+
+parser_merge.add_argument('--work_dir', metavar='PATH', default='./', type=str, required=False, action='store',
+                           help='default=%(default)s: Working directory.')
+parser_merge.add_argument('--out_name', metavar='PATH', default='.=', type=str, required=False, action='store',
+                           help='default=%(default)s: Output directory.')
+
+parser_merge.set_defaults(handler=command_merge)
 
 # Sub parser: help
 parser_help = subparsers.add_parser('help', help='see `help -h`')
