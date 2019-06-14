@@ -281,7 +281,12 @@ def getfastq_main(args):
             print('Running fastp.')
             inext = get_newest_intermediate_file_extension(sra_id=sra_id, work_dir=args.work_dir)
             outext = '.fastp.fastq.gz'
-            fp_command = ['fastp', '--thread', str(args.threads)] + args.fastp_option.split(' ')
+            if args.threads>16:
+                print('Too many threads for fastp (--threads {}). Use 16 threads only.'.format(args.threads))
+                fastp_thread = 16
+            else:
+                fastp_thread = args.threads
+            fp_command = ['fastp', '--thread', str(fastp_thread)] + args.fastp_option.split(' ')
             if layout=='single':
                 infile = os.path.join(args.work_dir,sra_id)
                 fp_command = fp_command + ['--in1',infile+inext,'--out1',infile+outext]
