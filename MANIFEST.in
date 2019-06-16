@@ -1,4 +1,4 @@
-#recursive-include amalgkit *
+recursive-include amalgkit *
 #include README.md
-
+#recursive-include /amalgkit/transcriptome_curation.R
 include *.md

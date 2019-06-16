@@ -96,6 +96,40 @@ amalgkit quant \
 * **SRR8819967_abundance.tsv**: contains target_id, lentgh, eff_length, est_counts and tpm in human readable .tsv
 
 
+## `amalgkit curate` - transcriptome curation
+
+### Subcommand dependencies
+- [R](https://www.r-project.org), with various libraries:
+    - Biobase
+    - pcaMethods
+    - colorspace
+    - RColorBrewer
+    - sva
+    - MASS
+    - NMF
+    - dendextend
+    - amap
+    - pvclust
+    - Rtsne
+    - vioplot
+
+### Other specifics
+- needs transcriptome file, containing expression data for a single species across multiple runs/conditions/tissues
+- needs metadata file, containing SRA runs to be curated
+
+### Usage example
+
+```
+amalgkit curate\
+--infile transcriptome.tsv
+--metafile metadata.tsv
+--dist_method 'pearson'
+--tissues brain liver heart embryo
+--work_dir './'
+```
+#### Output
+
+
 
 ## What comes next?
 After metadata curation, expression level quantification and further curations had been done in the [paper](https://www.biorxiv.org/content/10.1101/409888v1) where we described the transcriptome amalgamation. The downstream analyses will be added to **amalgkit** as sub-commands in future. Meanwhile, unpackaged scripts we used in the paper are available in `/amalgkit/util/`. For example, **kallisto_20180207.sh** is the quantification step we performed immediately after the metadata curation.

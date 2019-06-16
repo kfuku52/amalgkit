@@ -141,12 +141,12 @@ def get_newest_intermediate_file_extension(sra_id, work_dir):
             break
     return ext_out
 
-def download_sra(sra_id, args):
-    sra_path = os.path.join(args.work_dir, sra_id+'.sra')
+def download_sra(sra_id, args, work_dir):
+    sra_path = os.path.join(work_dir, sra_id+'.sra')
     if (args.ascp=='yes')&(not os.path.exists(sra_path)):
         print('Trying to download the SRA file using ascp.')
         sra_site = 'anonftp@ftp.ncbi.nlm.nih.gov:/sra/sra-instant/reads/ByRun/sra/'+sra_id[0:3]+'/'+sra_id[0:6]+'/'+sra_id+'/'+sra_id+'.sra'
-        ascp_command = [args.ascp_exe, '-v', '-i', args.ascp_key, '-k', '1', '-T', '-l', '300m', sra_site, args.work_dir]
+        ascp_command = [args.ascp_exe, '-v', '-i', args.ascp_key, '-k', '1', '-T', '-l', '300m', sra_site, work_dir]
         ascp_out = subprocess.run(ascp_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         print('ascp stdout:')
         print(ascp_out.stdout.decode('utf8'))
@@ -155,7 +155,7 @@ def download_sra(sra_id, args):
     if not os.path.exists(sra_path):
         print('Trying to download the SRA file using prefetch (fasp protocol).')
         prefetch_command = [args.prefetch_exe, '--force', 'no', '--transport', 'fasp', '--max-size', '100G',
-                            '--output-directory', args.work_dir, sra_id]
+                            '--output-directory', work_dir, sra_id]
         prefetch_out = subprocess.run(prefetch_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         print('prefetch stdout:')
         print(prefetch_out.stdout.decode('utf8'))
@@ -164,7 +164,7 @@ def download_sra(sra_id, args):
     if not os.path.exists(sra_path):
         print('Trying to download the SRA file using prefetch (http protocol).')
         prefetch_command = [args.prefetch_exe, '--force', 'no', '--transport', 'http', '--max-size', '100G',
-                            '--output-directory', args.work_dir, sra_id]
+                            '--output-directory', work_dir, sra_id]
         prefetch_out = subprocess.run(prefetch_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         print('prefetch stdout:')
         print(prefetch_out.stdout.decode('utf8'))
@@ -205,6 +205,11 @@ def getfastq_main(args):
 
     sra_output_dir = os.path.join(output_dir, 'sra_files')
 
+    if not os.path.exists(os.path.join(output_dir, 'temp')):
+        os.mkdir(os.path.join(output_dir, 'temp'))
+
+    sra_temp_dir = os.path.join(output_dir, 'temp')
+
     Entrez.email = args.entrez_email
     search_term = getfastq_search_term(args.id)
     print('Entrez search term:', search_term)
@@ -218,7 +223,7 @@ def getfastq_main(args):
     if args.sci_name is not None:
         print('Filtering SRA entry with --sci_name:', args.sci_name)
         metadata.df = metadata.df.loc[(metadata.df['scientific_name']==args.sci_name),:]
-    remove_old_intermediate_files(metadata, work_dir=args.work_dir)
+    remove_old_intermediate_files(metadata, work_dir=sra_output_dir)
     if args.save_metadata:
         metadata.df.to_csv(os.path.join(output_dir,'metadata_target.tsv'), sep='\t', index=False)
     assert metadata.df.shape[0] > 0, 'No SRA entry found. Make sure if --id is compatible with --sci_name and --layout.'
@@ -256,15 +261,16 @@ def getfastq_main(args):
         print('Single/Paired read length:', spot_length, 'bp')
         print('Total bases:', "{:,}".format(int(metadata.df.loc[i,'total_bases'])), 'bp')
         if args.pfd=='yes':
-            sra_path = os.path.join(args.work_dir, sra_id+'.sra')
-            download_sra(sra_id, args)
+            sra_path = os.path.join(sra_output_dir, sra_id+'.sra')
+            download_sra(sra_id, args, sra_output_dir)
             pfd_command = ['parallel-fastq-dump', '-t', str(args.threads), '--minReadLen', '25', '--qual-filter-1',
-                           '--skip-technical', '--split-3', '--clip', '--gzip', '--outdir', args.work_dir,
-                           '--tmpdir', args.work_dir]
+                           '--skip-technical', '--split-3', '--clip', '--gzip', '--outdir', sra_output_dir,
+                           '--tmpdir', sra_temp_dir]
             start,end = get_range(max_bp, total_sra_bp, total_spot, num_read_per_sra, offset)
             print('Total sampled bases:', "{:,}".format(spot_length*(end-start+1)), 'bp')
             pfd_command = pfd_command + ['--minSpotId', str(start), '--maxSpotId', str(end)]
-            pfd_command = pfd_command + ['-s', sra_path]
+            #pfd_command = pfd_command + ['-s', sra_path]
+            pfd_command = pfd_command + ['-s', sra_id]
             print('Command:', ' '.join(pfd_command))
             pfd_out = subprocess.run(pfd_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             if args.pfd_print=='yes':
@@ -288,7 +294,7 @@ def getfastq_main(args):
                     print('Unpaired file not found:', unpaired_file)
         if args.fastp=='yes':
             print('Running fastp.')
-            inext = get_newest_intermediate_file_extension(sra_id=sra_id, work_dir=args.work_dir)
+            inext = get_newest_intermediate_file_extension(sra_id=sra_id, work_dir=sra_output_dir)
             outext = '.fastp.fastq.gz'
             fp_command = ['fastp', '--thread', str(args.threads)] + args.fastp_option.split(' ')
             if layout=='single':
@@ -307,23 +313,23 @@ def getfastq_main(args):
                 print('fastp stderr:')
                 print(fp_out.stderr.decode('utf8'))
             if args.remove_tmp=='yes':
-                remove_intermediate_files(sra_id=sra_id, layout=layout, ext=inext, work_dir=args.work_dir)
+                remove_intermediate_files(sra_id=sra_id, layout=layout, ext=inext, work_dir=sra_output_dir)
             bps = fp_out.stderr.decode('utf8').split('\n')
             bp_in = [ int(line.replace('total bases: ','').split(' ')[0]) for line in bps if line.startswith('total bases') ][0::2]
             bp_out = [ int(line.replace('total bases: ','').split(' ')[0]) for line in bps if line.startswith('total bases') ][1::2]
             bp_fastp_in += sum(bp_in)
             bp_fastp_out += sum(bp_out)
         if args.read_name=='trinity':
-            inext = get_newest_intermediate_file_extension(sra_id=sra_id, work_dir=args.work_dir)
+            inext = get_newest_intermediate_file_extension(sra_id=sra_id, work_dir=sra_output_dir)
             outext = '.rename.fastq.gz'
             if layout=='single':
-                inbase = os.path.join(args.work_dir,sra_id)
+                inbase = os.path.join(sra_output_dir,sra_id)
                 if os.path.exists(inbase+inext):
                     infile = inbase+inext
                 os.system(ungz_exe+' -c '+infile+' | sed -e "s|[[:space:]].*|/1|" | '+gz_exe+' -c > '+inbase+outext)
             elif layout=='paired':
-                inbase1 = os.path.join(args.work_dir,sra_id+'_1')
-                inbase2 = os.path.join(args.work_dir,sra_id+'_2')
+                inbase1 = os.path.join(sra_output_dir,sra_id+'_1')
+                inbase2 = os.path.join(sra_output_dir,sra_id+'_2')
                 if os.path.exists(inbase1+inext):
                     infile1 = inbase1+inext
                     infile2 = inbase2+inext
@@ -332,14 +338,14 @@ def getfastq_main(args):
             if args.remove_tmp=='yes':
                 remove_intermediate_files(sra_id=sra_id, layout=layout, ext=inext, work_dir=args.work_dir)
         if args.pfd=='yes':
-            inext = get_newest_intermediate_file_extension(sra_id=sra_id, work_dir=args.work_dir)
+            inext = get_newest_intermediate_file_extension(sra_id=sra_id, work_dir=sra_output_dir)
             outext = '.amalgkit.fastq.gz'
             if layout=='single':
-                inbase = os.path.join(args.work_dir,sra_id)
+                inbase = os.path.join(sra_output_dir,sra_id)
                 os.rename(inbase+inext, inbase+outext)
             elif layout=='paired':
-                inbase1 = os.path.join(args.work_dir,sra_id+'_1')
-                inbase2 = os.path.join(args.work_dir,sra_id+'_2')
+                inbase1 = os.path.join(sra_output_dir,sra_id+'_1')
+                inbase2 = os.path.join(sra_output_dir,sra_id+'_2')
                 os.rename(inbase1+inext, inbase1+outext)
                 os.rename(inbase2+inext, inbase2+outext)
         print('Time elapsed:', sra_id, int(time.time()-start_time), '[sec]')
@@ -357,8 +363,8 @@ def getfastq_main(args):
         if args.remove_tmp=='yes':
             for i in metadata.df.index:
                 sra_id = metadata.df.loc[i,'run']
-                ext = get_newest_intermediate_file_extension(sra_id=sra_id, work_dir=args.work_dir)
-                remove_intermediate_files(sra_id=sra_id, layout=layout, ext=ext, work_dir=args.work_dir)
+                ext = get_newest_intermediate_file_extension(sra_id=sra_id, work_dir=sra_output_dir)
+                remove_intermediate_files(sra_id=sra_id, layout=layout, ext=ext, work_dir=sra_output_dir)
     if args.remove_sra=='yes':
         remove_sra_files(metadata, sra_dir=args.work_dir)
     else:

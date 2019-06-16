@@ -22,4 +22,6 @@ def curate_main(args):
     intermediate = args.cleanup
     tissues = re.findall(r"[\w]+", args.tissues)
     tissues = '|'.join(tissues)
-    subprocess.check_call(["Rscript", 'util/transcriptome_curation.r', quant_out, meta_out, out_dir, dist_method, '0', str(mr_cut), str(intermediate), tissues])
+    curate_path = os.path.dirname(os.path.realpath(__file__))
+    r_script_path = curate_path+'/transcriptome_curation.r'
+    subprocess.check_call(['Rscript', r_script_path, os.path.realpath(quant_out), os.path.realpath(meta_out), os.path.realpath(out_dir), dist_method, '0', str(mr_cut), str(intermediate), tissues])
