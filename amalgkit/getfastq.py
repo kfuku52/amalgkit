@@ -146,6 +146,7 @@ def download_sra(sra_id, args):
         print('Trying to download the SRA file using ascp.')
         sra_site = 'anonftp@ftp.ncbi.nlm.nih.gov:/sra/sra-instant/reads/ByRun/sra/'+sra_id[0:3]+'/'+sra_id[0:6]+'/'+sra_id+'/'+sra_id+'.sra'
         ascp_command = [args.ascp_exe, '-v', '-i', args.ascp_key, '-k', '1', '-T', '-l', '300m', sra_site, args.work_dir]
+        print('Command:', ' '.join(ascp_command))
         ascp_out = subprocess.run(ascp_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         print('ascp stdout:')
         print(ascp_out.stdout.decode('utf8'))
@@ -155,6 +156,7 @@ def download_sra(sra_id, args):
         print('Trying to download the SRA file using prefetch (fasp protocol).')
         prefetch_command = [args.prefetch_exe, '--force', 'no', '--transport', 'fasp', '--max-size', '100G',
                             '--output-directory', args.work_dir, sra_id]
+        print('Command:', ' '.join(prefetch_command))
         prefetch_out = subprocess.run(prefetch_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         print('prefetch stdout:')
         print(prefetch_out.stdout.decode('utf8'))
@@ -164,6 +166,7 @@ def download_sra(sra_id, args):
         print('Trying to download the SRA file using prefetch (http protocol).')
         prefetch_command = [args.prefetch_exe, '--force', 'no', '--transport', 'http', '--max-size', '100G',
                             '--output-directory', args.work_dir, sra_id]
+        print('Command:', ' '.join(prefetch_command))
         prefetch_out = subprocess.run(prefetch_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         print('prefetch stdout:')
         print(prefetch_out.stdout.decode('utf8'))
