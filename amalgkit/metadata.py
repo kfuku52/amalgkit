@@ -9,6 +9,7 @@ import lxml.etree
 import datetime
 import time
 
+
 def check_config_dir(args):
     files = os.listdir(args.config_dir)
     asserted_files = [
@@ -108,6 +109,14 @@ def fetch_sra_xml(species_name, search_term, save_xml=True, read_from_existing_f
             with open(file_xml, 'wb') as f:
                 f.write(xml_string)
     return root
+
+def create_run_dir(run_path, run_no=1):
+        if not os.path.exists(os.path.join(run_path + '_' + str(run_no))):
+            os.makedirs(os.path.join(run_path + '_' + str(run_no)))
+            return(os.path.join(run_path + '_' + str(run_no)))
+        else:
+            run_no = run_no + 1
+            return create_run_dir(run_path, run_no)
 
 class Metadata:
     column_names = ['scientific_name','tissue','tissue_original','genotype','sex','age','treatment','source_name',
@@ -442,6 +451,8 @@ class Metadata:
         pivot_reduced = pivot_reduced.loc[index_sort,column_sort]
         return pivot_reduced
 
+
+
 def metadata_main(args):
     if not args.config_dir.endswith('./'):
         args.config_dir = args.config_dir+'/'
@@ -449,7 +460,22 @@ def metadata_main(args):
         args.work_dir = args.work_dir+'/'
     if not os.path.exists(args.work_dir):
         os.mkdir(args.work_dir)
-    os.chdir(args.work_dir)
+
+    metadata_dir = create_run_dir(os.path.join(args.work_dir, 'metadata_output'))
+    temp_dir = os.path.join(metadata_dir, 'temp')
+    res_dir = os.path.join(metadata_dir, 'results')
+    metadata_results_dir = os.path.join(res_dir, 'metadata')
+    pivot_table_dir = os.path.join(res_dir, 'pivot_tables')
+
+    if not os.path.exists(temp_dir):
+        os.makedirs(os.path.join(temp_dir))
+
+    if not os.path.exists(metadata_results_dir):
+        os.makedirs(os.path.join(metadata_results_dir))
+
+    if not os.path.exists(pivot_table_dir):
+        os.makedirs(os.path.join(pivot_table_dir))
+
     check_config_dir(args)
 
     assert (args.entrez_email!='aaa@bbb.com'), "Provide your email address. No worry, you won't get spam emails."
@@ -511,13 +537,13 @@ def metadata_main(args):
             print('Entrez search term:', search_term)
             root = fetch_sra_xml(species_name=sp, search_term=search_term, save_xml=False, read_from_existing_file=False)
             metadata_species[sp] = Metadata.from_xml(xml_root=root).df
-            metadata_species[sp].to_csv(sp_file_name, sep="\t", index=False)
+            metadata_species[sp].to_csv(os.path.join(temp_dir,sp_file_name), sep="\t", index=False)
         print('')
     metadata = Metadata.from_DataFrame(df=pandas.concat(metadata_species.values(), sort=False))
     metadata.config_dir = args.config_dir
     metadata.reorder(omit_misc=False)
     multisp_file_name = "metadata_01_raw_"+date_range+".tsv"
-    metadata.df.to_csv(multisp_file_name, sep="\t", index=False)
+    metadata.df.to_csv(os.path.join(metadata_results_dir,multisp_file_name), sep="\t", index=False)
     del metadata_species
 
     metadata.mark_exclude_ids()
@@ -528,7 +554,7 @@ def metadata_main(args):
     metadata.mark_exclude_keywords()
     metadata.group_tissues()
     metadata.reorder(omit_misc=False)
-    metadata.df.to_csv('metadata_02_grouped_'+date_range+'.tsv', sep='\t', index=False)
+    metadata.df.to_csv(os.path.join(metadata_results_dir, 'metadata_02_grouped_'+date_range+'.tsv'), sep='\t', index=False)
 
     metadata.mark_treatment_terms()
     metadata.nspot_cutoff(args.min_nspots)
@@ -536,7 +562,7 @@ def metadata_main(args):
     metadata.unmark_rescue_ids()
     metadata.label_sampled_data(args.max_sample)
     metadata.reorder(omit_misc=True)
-    metadata.df.to_csv('metadata_03_curated_'+date_range+'.tsv', sep='\t', index=False)
+    metadata.df.to_csv(os.path.join(metadata_results_dir, 'metadata_03_curated_'+date_range+'.tsv'), sep='\t', index=False)
 
     #df_qualified = metadata.df.loc[(metadata.df.loc[:,'is_qualified']=='Yes'),:]
     #df_qualified = df_qualified.loc[(df_qualified['scientific_name']!='Drosophila melanogaster'),:]
@@ -546,8 +572,8 @@ def metadata_main(args):
     #df_reduced.to_csv('metadata_05_reduced_'+date_range+'.tsv', sep='\t', index=False)
 
     sra_qualified_pivot = metadata.pivot(n_sp_cutoff=0, qualified_only=True, sampled_only=False)
-    sra_qualified_pivot.to_csv('pivot_04_qualified_'+date_range+'.tsv', sep='\t')
+    sra_qualified_pivot.to_csv(os.path.join(pivot_table_dir, 'pivot_04_qualified_'+date_range+'.tsv'), sep='\t')
     sra_selected_pivot = metadata.pivot(n_sp_cutoff=0, qualified_only=True, sampled_only=True)
-    sra_selected_pivot.to_csv('pivot_05_selected_'+date_range+'.tsv', sep='\t')
+    sra_selected_pivot.to_csv(os.path.join(pivot_table_dir, 'pivot_05_selected_'+date_range+'.tsv'), sep='\t')
 
 

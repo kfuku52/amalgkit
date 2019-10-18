@@ -43,6 +43,22 @@ def command_quant(args):
     print('Time elapsed:', int(time.time()-start), '[sec]')
     sys.stdout.write('amalgkit quant: end\n')
 
+def command_curate(args):
+    sys.stdout.write('amalgkit curate: start\n')
+    start = time.time()
+    from amalgkit.curate import curate_main
+    curate_main(args)
+    print('Time elapsed:', int(time.time()-start), '[sec]')
+    sys.stdout.write('amalgkit curate: end\n')
+
+def command_merge(args):
+    sys.stdout.write('amalgkit merge: start\n')
+    start = time.time()
+    from amalgkit.merge import merge_main
+    merge_main(args)
+    print('Time elapsed:', int(time.time()-start), '[sec]')
+    sys.stdout.write('amalgkit merge: end\n')
+
 def command_help(args):
     print(parser.parse_args([args.command, '--help']))
 
@@ -148,7 +164,40 @@ parser_quant.add_argument('--fragment_length', metavar='INT', default=None, type
                              help='default=%(default)s: length of the fragment length (not read length). Only required, if single end reads are used.')
 parser_quant.add_argument('--work_dir', metavar='PATH', default='./', type=str, required=False, action='store',
                              help='default=%(default)s: Working directory.')
+parser_quant.add_argument('--out_dir', metavar='PATH', default=None, type=str, required=False, action='store',
+                          help='default=work_dir: Working directory.')
 parser_quant.set_defaults(handler=command_quant)
+
+# Sub parser: curate
+parser_curate = subparsers.add_parser('curate', help='see `amalgkit getfastq -h`')
+
+parser_curate.add_argument('--work_dir', metavar='PATH', default='./', type=str, required=False, action='store',
+                          help='default=%(default)s: Working directory.')
+parser_curate.add_argument('--out_dir', metavar='PATH', default='./', type=str, required=False, action='store',
+                           help='default=%(default)s: Output directory.')
+parser_curate.add_argument('--infile', metavar='PATH', default=None, type=str, required=True, action='store',
+                           help='default=%(default): Name or Path of file to curate.')
+parser_curate.add_argument('--metafile', metavar='PATH', default=None, type=str, required=True, action='store',
+                           help='default=%(default): Path to metadata file, obtained by amalgkit metadata command.')
+parser_curate.add_argument('--dist_method', metavar='STR', default='pearson', type=str, required=False, action='store',
+                           help='default=%(default): Method for calculating distance.')
+parser_curate.add_argument('--mapping_rate', metavar='INT', default=0.20, type=int, required=False, action='store',
+                           help='default=%(default): cutoff for mapping rate.')
+parser_curate.add_argument('--cleanup', metavar='INT', default=0, type=int, required=False, action='store',
+                           help='default=%(default): Saves intermediate files, if 0.')
+parser_curate.add_argument('--tissues', metavar='STR', default=None, type=str, required=False, action='store',
+                           help='default=%(default): List of tissues to be included.')
+parser_curate.set_defaults(handler=command_curate)
+
+# Sub parser: curate
+parser_merge = subparsers.add_parser('merge', help='see `amalgkit getfastq -h`')
+
+parser_merge.add_argument('--work_dir', metavar='PATH', default='./', type=str, required=False, action='store',
+                           help='default=%(default)s: Working directory.')
+parser_merge.add_argument('--out_name', metavar='PATH', default='.=', type=str, required=False, action='store',
+                           help='default=%(default)s: Output directory.')
+
+parser_merge.set_defaults(handler=command_merge)
 
 # Sub parser: help
 parser_help = subparsers.add_parser('help', help='see `help -h`')
