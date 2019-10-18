@@ -5,6 +5,7 @@
 dir_repo='/Users/kef74yk/Dropbox_w/repos/amalgkit'
 dir_work="${dir_repo}/tests/test"
 mkdir -p ${dir_work}
+cd ${dir_work}
 
 pip install "${dir_repo}"; \
 amalgkit metadata \
@@ -38,8 +39,15 @@ amalgkit getfastq \
 --work_dir ${dir_repo}/tests/getfastq \
 --save_metadata 'yes' \
 --pfd 'yes' \
---max_bp '7500' \
+--max_bp '75000' \
 --fastp 'yes' \
---layout 'paired' \
---remove_sra 'yes'
+--layout 'auto' \
+--remove_tmp 'yes' \
+--remove_sra 'yes' \
+--read_name 'trinity' \
+--concat 'yes'
+
+
+
+
 
