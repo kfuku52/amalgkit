@@ -5,9 +5,9 @@ from urllib.error import HTTPError
 import numpy, pandas
 import time, datetime, lxml, subprocess, os, shutil, gzip, glob
 
-def getfastq_search_term(ncbi_id):
+def getfastq_search_term(ncbi_id, additional_search_term):
     # https://www.ncbi.nlm.nih.gov/books/NBK49540/
-    search_term = ncbi_id+' AND "platform illumina"[Properties] AND "type rnaseq"[Filter] AND "sra biosample"[Filter]'
+    search_term = ncbi_id+' AND '+additional_search_term
     #search_term = '"'+ncbi_id+'"'+'[Accession]'
     return search_term
 
@@ -214,7 +214,7 @@ def getfastq_main(args):
     sra_temp_dir = os.path.join(output_dir, 'temp')
 
     Entrez.email = args.entrez_email
-    search_term = getfastq_search_term(args.id)
+    search_term = getfastq_search_term(args.id, args.entrez_additional_search_term)
     print('Entrez search term:', search_term)
     xml_root = getfastq_getxml(search_term)
     metadata = Metadata.from_xml(xml_root)

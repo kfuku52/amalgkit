@@ -48,6 +48,18 @@ amalgkit getfastq \
 --concat 'yes'
 
 
-
-
+pip install "${dir_repo}"; \
+amalgkit getfastq \
+--entrez_email 'kfuku52@gmail.com' \
+--id 'PRJDB4484' \
+--threads 8 \
+--work_dir ${dir_repo}/tests/getfastq \
+--save_metadata 'yes' \
+--pfd 'yes' \
+--max_bp '75000' \
+--fastp 'yes' \
+--layout 'auto' \
+--remove_tmp 'yes' \
+--remove_sra 'yes' \
+--concat 'no'
 

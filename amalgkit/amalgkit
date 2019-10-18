@@ -141,6 +141,10 @@ parser_getfastq.add_argument('--read_name', metavar='default|trinity', default='
                              help='default=%(default)s: read name formatting for downstream analysis.')
 parser_getfastq.add_argument('--concat', metavar='yes|no', default='no', type=str, required=False, action='store', choices=['yes','no'],
                              help='default=%(default)s: concatenate SRA fastq files (e.g, for assembly).')
+parser_getfastq.add_argument('--entrez_additional_search_term', metavar='STR',
+                             default='"platform illumina"[Properties] AND "type rnaseq"[Filter] AND "sra biosample"[Filter]',
+                             type=str, required=False, action='store',
+                             help='default=%(default)s: Entrez search terms in addition to --id option to further restrict the SRA entry.')
 parser_getfastq.set_defaults(handler=command_getfastq)
 
 
