@@ -173,6 +173,9 @@ def download_sra(sra_id, args, work_dir):
         print(prefetch_out.stdout.decode('utf8'))
         print('prefetch stderr:')
         print(prefetch_out.stderr.decode('utf8'))
+    if os.path.exists(os.path.join(work_dir, sra_id+'/', sra_id+'.sra')):
+        subprocess.run(['mv', os.path.join(work_dir, sra_id+'/', sra_id+'.sra'), os.path.join(work_dir, sra_id+'.sra')],
+                        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
 def getfastq_main(args):
     sra_dir = os.path.join(os.path.expanduser("~"), 'ncbi/public/sra')
