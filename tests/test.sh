@@ -47,11 +47,11 @@ amalgkit getfastq \
 --read_name 'trinity' \
 --concat 'yes'
 
-
+# a small-scale sample
 pip install "${dir_repo}"; \
 amalgkit getfastq \
 --entrez_email 'kfuku52@gmail.com' \
---id 'PRJDB4484' \
+--id 'SRR7764276' \
 --threads 8 \
 --work_dir ${dir_repo}/tests/getfastq \
 --save_metadata 'yes' \

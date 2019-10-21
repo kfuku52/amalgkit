@@ -266,14 +266,16 @@ def getfastq_main(args):
         if args.pfd=='yes':
             sra_path = os.path.join(sra_output_dir, sra_id+'.sra')
             download_sra(sra_id, args, sra_output_dir)
-            pfd_command = ['parallel-fastq-dump', '-t', str(args.threads), '--minReadLen', '25', '--qual-filter-1',
+            pfd_command = ['parallel-fastq-dump', '-t', str(args.threads), '--minReadLen', str(args.min_read_length), '--qual-filter-1',
                            '--skip-technical', '--split-3', '--clip', '--gzip', '--outdir', sra_output_dir,
                            '--tmpdir', sra_temp_dir]
             start,end = get_range(max_bp, total_sra_bp, total_spot, num_read_per_sra, offset)
             print('Total sampled bases:', "{:,}".format(spot_length*(end-start+1)), 'bp')
             pfd_command = pfd_command + ['--minSpotId', str(start), '--maxSpotId', str(end)]
-            #pfd_command = pfd_command + ['-s', sra_path]
-            pfd_command = pfd_command + ['-s', sra_id]
+            # If sra_id, not sra_path, is provided, pfd couldn't find pre-downloaded .sra files
+            # and start downloading it to $HOME/ncbi/public/sra/
+            pfd_command = pfd_command + ['-s', sra_path]
+            #pfd_command = pfd_command + ['-s', sra_id]
             print('Command:', ' '.join(pfd_command))
             pfd_out = subprocess.run(pfd_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             if args.pfd_print=='yes':
@@ -289,9 +291,9 @@ def getfastq_main(args):
             bp_rejected += sum(nr) * spot_length
             bp_written += sum(nw) * spot_length
             if (layout=='paired'):
-                unpaired_file = os.path.join(args.work_dir, sra_id+'.fastq.gz')
+                unpaired_file = os.path.join(sra_output_dir, sra_id+'.fastq.gz')
                 if os.path.exists(unpaired_file):
-                    print('Deleting:', unpaired_file)
+                    print('Layout=',layout,'; Deleting unpaired file:', unpaired_file)
                     os.remove(unpaired_file)
                 else:
                     print('Unpaired file not found:', unpaired_file)
@@ -304,9 +306,9 @@ def getfastq_main(args):
                 fastp_thread = 16
             else:
                 fastp_thread = args.threads
-            fp_command = ['fastp', '--thread', str(fastp_thread)] + args.fastp_option.split(' ')
+            fp_command = ['fastp', '--thread', str(fastp_thread), '--length_required', str(args.min_read_length)] + args.fastp_option.split(' ')
             if layout=='single':
-                infile = os.path.join(args.work_dir,sra_id)
+                infile = os.path.join(sra_output_dir,sra_id)
                 fp_command = fp_command + ['--in1',infile+inext,'--out1',infile+outext]
             elif layout=='paired':
                 infile1 = os.path.join(sra_output_dir,sra_id+'_1')
@@ -344,7 +346,7 @@ def getfastq_main(args):
                 os.system(ungz_exe+' -c '+infile1+' | sed -e "s|[[:space:]].*|/1|" | '+gz_exe+' -c > '+inbase1+outext)
                 os.system(ungz_exe+' -c '+infile2+' | sed -e "s|[[:space:]].*|/2|" | '+gz_exe+' -c > '+inbase2+outext)
             if args.remove_tmp=='yes':
-                remove_intermediate_files(sra_id=sra_id, layout=layout, ext=inext, work_dir=args.work_dir)
+                remove_intermediate_files(sra_id=sra_id, layout=layout, ext=inext, work_dir=sra_output_dir)
         if args.pfd=='yes':
             inext = get_newest_intermediate_file_extension(sra_id=sra_id, work_dir=sra_output_dir)
             outext = '.amalgkit.fastq.gz'
@@ -374,7 +376,8 @@ def getfastq_main(args):
                 ext = get_newest_intermediate_file_extension(sra_id=sra_id, work_dir=sra_output_dir)
                 remove_intermediate_files(sra_id=sra_id, layout=layout, ext=ext, work_dir=sra_output_dir)
     if args.remove_sra=='yes':
-        remove_sra_files(metadata, sra_dir=args.work_dir)
+        remove_sra_files(metadata, sra_dir=sra_output_dir)
     else:
         if args.pfd=='yes':
-            print('SRA files not removed:', args.work_dir)
+            print('SRA files not removed:', sra_output_dir)
+
