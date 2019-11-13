@@ -1,6 +1,10 @@
 from Bio import Entrez
 import numpy
 import pandas
+import math
+from nltk.stem import WordNetLemmatizer
+from nltk.corpus import wordnet
+
 
 from urllib.error import HTTPError
 import os
@@ -8,6 +12,7 @@ import re
 import lxml.etree
 import datetime
 import time
+
 
 
 def check_config_dir(args):
@@ -87,11 +92,15 @@ def fetch_sra_xml(species_name, search_term, save_xml=True, read_from_existing_f
             start = int(i*retmax)
             end = int(((i+1)*retmax)-1) if num_record >= int(((i+1)*retmax)-1) else num_record
             print('processing SRA records:', start, '-', end, flush=True)
-            try:
-                handle = Entrez.efetch(db="sra", id=record_ids[start:end], rettype="full", retmode="xml", retmax=retmax)
-            except HTTPError as e:
-                print(e, '- Trying Entrez.efetch() again...')
-                handle = Entrez.efetch(db="sra", id=record_ids[start:end], rettype="full", retmode="xml", retmax=retmax)
+            while True:
+                try:
+                    handle = Entrez.efetch(db="sra", id=record_ids[start:end], rettype="full", retmode="xml", retmax=retmax)
+                except HTTPError as e:
+                    time.sleep(3600)
+                    print(e, '- Trying Entrez.efetch() again...')
+                    #handle = Entrez.efetch(db="sra", id=record_ids[start:end], rettype="full", retmode="xml", retmax=retmax)
+                    continue
+                break
             chunk = lxml.etree.parse(handle).getroot()
             if root is None:
                 root = chunk
@@ -305,6 +314,7 @@ class Metadata:
 
     def correct_orthographical_variants(self):
         self.df.loc[:,"scientific_name"] = [re.sub(r'(.+)(\s)(.+)(\s)(.+)', r"\1\2\3", sp) for sp in self.df["scientific_name"]]
+
         config = pandas.read_csv(self.config_dir+'orthographical_variant.config',
                                  parse_dates=False, infer_datetime_format=False, quotechar='"', sep='\t',
                                  header=None, index_col=None, skip_blank_lines=True, comment='#')
@@ -318,16 +328,56 @@ class Metadata:
 
     def group_tissues(self):
         self.df.loc[:,'tissue_original'] = self.df.loc[:,'tissue']
-        config = pandas.read_csv(self.config_dir+'group_tissue.config',
-                                 parse_dates=False, infer_datetime_format=False, quotechar='"', sep='\t',
-                                 header=None, index_col=None, skip_blank_lines=True, comment='#')
-        config = config.replace(numpy.nan, '')
-        for i in numpy.arange(config.shape[0]):
-            replace_from = config.iloc[i,1]
-            replace_to = config.iloc[i,0]
-            is_matching = self.df['tissue'].str.match(replace_from, case=False, na=False)
-            self.df.loc[is_matching,'tissue'] = replace_to
-        self.df.loc[:,'tissue'] = self.df.loc[:,'tissue'].str.lower()
+        tissues = pandas.read_csv(self.config_dir+'search_term_tissue.config',
+                                  parse_dates=False, infer_datetime_format=False, quotechar='"', sep='\t',
+                                  header=None, index_col=None, skip_blank_lines=True, comment='#').iloc[:,0]
+        tissues = tissues.tolist()
+        lemmatizer = WordNetLemmatizer()
+        content = self.df.loc[:,'tissue']
+        content = ['' if pandas.isnull(x) else x.lower() for x in content]
+        content = [x if pandas.isnull(x) else x.strip() for x in content]
+        lemm = [lemmatizer.lemmatize(i) for i in content]
+
+
+        print(tissues)
+        for i in range(len(lemm)):
+
+            sp = re.sub(r"[^a-zA-Z]+", ' ', lemm[i])
+            sp = re.split('[_,:;" "/]', sp)
+            sp = [lemmatizer.lemmatize(x) for x in sp]
+
+
+
+
+            if len(sp) > 1 :
+                list_set = set(sp)
+                for tissue in tissues:
+                    if tissue in list_set:
+                        lemm[i] = tissue
+                        break
+                    else :
+                        lemm[i] = sp[0]
+                        synonyms = []
+                        for word in sp:
+                            for syn in wordnet.synsets(word):
+                                for l in syn.lemmas():
+                                    synonyms.append(l.name())
+
+                        #print(synonyms)
+
+        self.df.loc[:,'tissue'] = lemm
+
+
+        #config = pandas.read_csv(self.config_dir+'group_tissue.config',
+         #                        parse_dates=False, infer_datetime_format=False, quotechar='"', sep='\t',
+          #                       header=None, index_col=None, skip_blank_lines=True, comment='#')
+        #config = config.replace(numpy.nan, '')
+        #for i in numpy.arange(config.shape[0]):
+         #   replace_from = config.iloc[i,1]
+          #  replace_to = config.iloc[i,0]
+           # is_matching = self.df['tissue'].str.match(replace_from, case=False, na=False)
+            #self.df.loc[is_matching,'tissue'] = replace_to
+       # self.df.loc[:,'tissue'] = self.df.loc[:,'tissue'].str.lower()
 
     def mark_exclude_keywords(self):
         config = pandas.read_csv(self.config_dir+'exclude_keyword.config',
@@ -546,12 +596,13 @@ def metadata_main(args):
     metadata.df.to_csv(os.path.join(metadata_results_dir,multisp_file_name), sep="\t", index=False)
     del metadata_species
 
-    metadata.mark_exclude_ids()
-    metadata.group_attributes()
+
+   # metadata.mark_exclude_ids()
+   # metadata.group_attributes()
     metadata.correct_orthographical_variants()
     metadata.replace_values()
     metadata.give_values()
-    metadata.mark_exclude_keywords()
+    #metadata.mark_exclude_keywords()
     metadata.group_tissues()
     metadata.reorder(omit_misc=False)
     metadata.df.to_csv(os.path.join(metadata_results_dir, 'metadata_02_grouped_'+date_range+'.tsv'), sep='\t', index=False)
