@@ -1,6 +1,5 @@
 from Bio import Entrez
 from amalgkit.metadata import Metadata
-from amalgkit.metadata import create_run_dir
 from urllib.error import HTTPError
 import numpy, pandas
 import time, datetime, lxml, subprocess, os, shutil, gzip, glob
@@ -204,7 +203,10 @@ def getfastq_main(args):
     if not os.path.exists(args.work_dir):
         os.makedirs(args.work_dir)
 
-    output_dir = create_run_dir(os.path.join(args.work_dir, 'getfastq_output'))
+    if not os.path.exists(os.path.join(args.work_dir, 'getfastq_'+args.id)):
+        os.makedirs(os.path.join(args.work_dir, 'getfastq_'+args.id))
+
+    output_dir = os.path.join(args.work_dir, 'getfastq_'+args.id)
 
     if not os.path.exists(os.path.join(output_dir, 'sra_files')):
         os.mkdir(os.path.join(output_dir, 'sra_files'))
