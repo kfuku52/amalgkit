@@ -5,9 +5,9 @@ from urllib.error import HTTPError
 import numpy, pandas
 import time, datetime, lxml, subprocess, os, shutil, gzip, glob
 
-def getfastq_search_term(ncbi_id):
+def getfastq_search_term(ncbi_id, additional_search_term):
     # https://www.ncbi.nlm.nih.gov/books/NBK49540/
-    search_term = ncbi_id+' AND "platform illumina"[Properties] AND "type rnaseq"[Filter] AND "sra biosample"[Filter]'
+    search_term = ncbi_id+' AND '+additional_search_term
     #search_term = '"'+ncbi_id+'"'+'[Accession]'
     return search_term
 
@@ -147,6 +147,7 @@ def download_sra(sra_id, args, work_dir):
         print('Trying to download the SRA file using ascp.')
         sra_site = 'anonftp@ftp.ncbi.nlm.nih.gov:/sra/sra-instant/reads/ByRun/sra/'+sra_id[0:3]+'/'+sra_id[0:6]+'/'+sra_id+'/'+sra_id+'.sra'
         ascp_command = [args.ascp_exe, '-v', '-i', args.ascp_key, '-k', '1', '-T', '-l', '300m', sra_site, work_dir]
+        print('Command:', ' '.join(ascp_command))
         ascp_out = subprocess.run(ascp_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         print('ascp stdout:')
         print(ascp_out.stdout.decode('utf8'))
@@ -156,6 +157,7 @@ def download_sra(sra_id, args, work_dir):
         print('Trying to download the SRA file using prefetch (fasp protocol).')
         prefetch_command = [args.prefetch_exe, '--force', 'no', '--transport', 'fasp', '--max-size', '100G',
                             '--output-directory', work_dir, sra_id]
+        print('Command:', ' '.join(prefetch_command))
         prefetch_out = subprocess.run(prefetch_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         print('prefetch stdout:')
         print(prefetch_out.stdout.decode('utf8'))
@@ -165,11 +167,15 @@ def download_sra(sra_id, args, work_dir):
         print('Trying to download the SRA file using prefetch (http protocol).')
         prefetch_command = [args.prefetch_exe, '--force', 'no', '--transport', 'http', '--max-size', '100G',
                             '--output-directory', work_dir, sra_id]
+        print('Command:', ' '.join(prefetch_command))
         prefetch_out = subprocess.run(prefetch_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         print('prefetch stdout:')
         print(prefetch_out.stdout.decode('utf8'))
         print('prefetch stderr:')
         print(prefetch_out.stderr.decode('utf8'))
+    if os.path.exists(os.path.join(work_dir, sra_id+'/', sra_id+'.sra')):
+        subprocess.run(['mv', os.path.join(work_dir, sra_id+'/', sra_id+'.sra'), os.path.join(work_dir, sra_id+'.sra')],
+                        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
 def getfastq_main(args):
     sra_dir = os.path.join(os.path.expanduser("~"), 'ncbi/public/sra')
@@ -211,7 +217,7 @@ def getfastq_main(args):
     sra_temp_dir = os.path.join(output_dir, 'temp')
 
     Entrez.email = args.entrez_email
-    search_term = getfastq_search_term(args.id)
+    search_term = getfastq_search_term(args.id, args.entrez_additional_search_term)
     print('Entrez search term:', search_term)
     xml_root = getfastq_getxml(search_term)
     metadata = Metadata.from_xml(xml_root)
@@ -263,14 +269,16 @@ def getfastq_main(args):
         if args.pfd=='yes':
             sra_path = os.path.join(sra_output_dir, sra_id+'.sra')
             download_sra(sra_id, args, sra_output_dir)
-            pfd_command = ['parallel-fastq-dump', '-t', str(args.threads), '--minReadLen', '25', '--qual-filter-1',
+            pfd_command = ['parallel-fastq-dump', '-t', str(args.threads), '--minReadLen', str(args.min_read_length), '--qual-filter-1',
                            '--skip-technical', '--split-3', '--clip', '--gzip', '--outdir', sra_output_dir,
                            '--tmpdir', sra_temp_dir]
             start,end = get_range(max_bp, total_sra_bp, total_spot, num_read_per_sra, offset)
             print('Total sampled bases:', "{:,}".format(spot_length*(end-start+1)), 'bp')
             pfd_command = pfd_command + ['--minSpotId', str(start), '--maxSpotId', str(end)]
-            #pfd_command = pfd_command + ['-s', sra_path]
-            pfd_command = pfd_command + ['-s', sra_id]
+            # If sra_id, not sra_path, is provided, pfd couldn't find pre-downloaded .sra files
+            # and start downloading it to $HOME/ncbi/public/sra/
+            pfd_command = pfd_command + ['-s', sra_path]
+            #pfd_command = pfd_command + ['-s', sra_id]
             print('Command:', ' '.join(pfd_command))
             pfd_out = subprocess.run(pfd_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             if args.pfd_print=='yes':
@@ -286,9 +294,9 @@ def getfastq_main(args):
             bp_rejected += sum(nr) * spot_length
             bp_written += sum(nw) * spot_length
             if (layout=='paired'):
-                unpaired_file = os.path.join(args.work_dir, sra_id+'.fastq.gz')
+                unpaired_file = os.path.join(sra_output_dir, sra_id+'.fastq.gz')
                 if os.path.exists(unpaired_file):
-                    print('Deleting:', unpaired_file)
+                    print('Layout=',layout,'; Deleting unpaired file:', unpaired_file)
                     os.remove(unpaired_file)
                 else:
                     print('Unpaired file not found:', unpaired_file)
@@ -296,9 +304,14 @@ def getfastq_main(args):
             print('Running fastp.')
             inext = get_newest_intermediate_file_extension(sra_id=sra_id, work_dir=sra_output_dir)
             outext = '.fastp.fastq.gz'
-            fp_command = ['fastp', '--thread', str(args.threads)] + args.fastp_option.split(' ')
+            if args.threads>16:
+                print('Too many threads for fastp (--threads {}). Use 16 threads only.'.format(args.threads))
+                fastp_thread = 16
+            else:
+                fastp_thread = args.threads
+            fp_command = ['fastp', '--thread', str(fastp_thread), '--length_required', str(args.min_read_length)] + args.fastp_option.split(' ')
             if layout=='single':
-                infile = os.path.join(args.work_dir,sra_id)
+                infile = os.path.join(sra_output_dir,sra_id)
                 fp_command = fp_command + ['--in1',infile+inext,'--out1',infile+outext]
             elif layout=='paired':
                 infile1 = os.path.join(sra_output_dir,sra_id+'_1')
@@ -336,7 +349,7 @@ def getfastq_main(args):
                 os.system(ungz_exe+' -c '+infile1+' | sed -e "s|[[:space:]].*|/1|" | '+gz_exe+' -c > '+inbase1+outext)
                 os.system(ungz_exe+' -c '+infile2+' | sed -e "s|[[:space:]].*|/2|" | '+gz_exe+' -c > '+inbase2+outext)
             if args.remove_tmp=='yes':
-                remove_intermediate_files(sra_id=sra_id, layout=layout, ext=inext, work_dir=args.work_dir)
+                remove_intermediate_files(sra_id=sra_id, layout=layout, ext=inext, work_dir=sra_output_dir)
         if args.pfd=='yes':
             inext = get_newest_intermediate_file_extension(sra_id=sra_id, work_dir=sra_output_dir)
             outext = '.amalgkit.fastq.gz'
@@ -366,7 +379,8 @@ def getfastq_main(args):
                 ext = get_newest_intermediate_file_extension(sra_id=sra_id, work_dir=sra_output_dir)
                 remove_intermediate_files(sra_id=sra_id, layout=layout, ext=ext, work_dir=sra_output_dir)
     if args.remove_sra=='yes':
-        remove_sra_files(metadata, sra_dir=args.work_dir)
+        remove_sra_files(metadata, sra_dir=sra_output_dir)
     else:
         if args.pfd=='yes':
-            print('SRA files not removed:', args.work_dir)
+            print('SRA files not removed:', sra_output_dir)
+

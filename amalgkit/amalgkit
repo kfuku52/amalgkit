@@ -107,6 +107,8 @@ parser_getfastq.add_argument('--threads', metavar='INT', default=1, type=int, re
                              help='default=%(default)s: Number of threads.')
 parser_getfastq.add_argument('--save_metadata', metavar='yes|no', default='yes', type=str, required=False, action='store', choices=['yes','no'],
                              help='default=%(default)s: Save metadata table.')
+parser_getfastq.add_argument('--min_read_length', metavar='INT', default=25, type=int, required=False, action='store',
+                             help='default=%(default)s: Minimum read length.')
 parser_getfastq.add_argument('--pfd', metavar='yes|no', default='yes', type=str, required=False, action='store', choices=['yes','no'],
                              help='default=%(default)s: Run parallel-fastq-dump.')
 parser_getfastq.add_argument('--pfd_exe', metavar='PATH', default='parallel-fastq-dump', type=str, required=False, action='store',
@@ -117,15 +119,15 @@ parser_getfastq.add_argument('--fastp', metavar='yes|no', default='yes', type=st
                              help='default=%(default)s: Run fastp.')
 parser_getfastq.add_argument('--fastp_exe', metavar='PATH', default='fastp', type=str, required=False, action='store',
                              help='default=%(default)s: PATH to fastp executable.')
-parser_getfastq.add_argument('--fastp_option', metavar='STR', default='-j /dev/null -h /dev/null --length_required 25', type=str, required=False, action='store',
-                             help='default=%(default)s: Options to be passed to fastp.')
+parser_getfastq.add_argument('--fastp_option', metavar='STR', default='-j /dev/null -h /dev/null', type=str, required=False, action='store',
+                             help='default=%(default)s: Options to be passed to fastp. Do not include --length_required option here. It can be specified throught --min_read_length in amalgkit. ')
 parser_getfastq.add_argument('--remove_sra', metavar='yes|no', default='yes', type=str, required=False, action='store', choices=['yes','no'],
                              help='default=%(default)s: Remove downloaded SRA files after fastq extraction.')
 parser_getfastq.add_argument('--remove_tmp', metavar='yes|no', default='yes', type=str, required=False, action='store', choices=['yes','no'],
                              help='default=%(default)s: Remove temporary files.')
-parser_getfastq.add_argument('--pfd_print', metavar='yes|no', default='no', type=str, required=False, action='store', choices=['yes','no'],
+parser_getfastq.add_argument('--pfd_print', metavar='yes|no', default='yes', type=str, required=False, action='store', choices=['yes','no'],
                              help='default=%(default)s: Show parallel-fastq-dump stdout and stderr.')
-parser_getfastq.add_argument('--fastp_print', metavar='yes|no', default='no', type=str, required=False, action='store', choices=['yes','no'],
+parser_getfastq.add_argument('--fastp_print', metavar='yes|no', default='yes', type=str, required=False, action='store', choices=['yes','no'],
                              help='default=%(default)s: Show fastp stdout and stderr.')
 parser_getfastq.add_argument('--sci_name', metavar='STR', default=None, type=str, required=False, action='store',
                              help='default=%(default)s: Species name in case the BioProject covers multiple species. Example: "Homo sapiens"')
@@ -141,6 +143,10 @@ parser_getfastq.add_argument('--read_name', metavar='default|trinity', default='
                              help='default=%(default)s: read name formatting for downstream analysis.')
 parser_getfastq.add_argument('--concat', metavar='yes|no', default='no', type=str, required=False, action='store', choices=['yes','no'],
                              help='default=%(default)s: concatenate SRA fastq files (e.g, for assembly).')
+parser_getfastq.add_argument('--entrez_additional_search_term', metavar='STR',
+                             default='"platform illumina"[Properties] AND "type rnaseq"[Filter] AND "sra biosample"[Filter]',
+                             type=str, required=False, action='store',
+                             help='default=%(default)s: Entrez search terms in addition to --id option to further restrict the SRA entry.')
 parser_getfastq.set_defaults(handler=command_getfastq)
 
 
