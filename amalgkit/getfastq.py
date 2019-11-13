@@ -202,11 +202,12 @@ def getfastq_main(args):
             ungz_exe = 'gunzip'
     if not os.path.exists(args.work_dir):
         os.makedirs(args.work_dir)
-
-    if not os.path.exists(os.path.join(args.work_dir, 'getfastq_'+args.id)):
-        os.makedirs(os.path.join(args.work_dir, 'getfastq_'+args.id))
-
-    output_dir = os.path.join(args.work_dir, 'getfastq_'+args.id)
+    if args.auto_dir == 'yes':
+        if not os.path.exists(os.path.join(args.work_dir, 'getfastq_'+args.id)):
+            os.makedirs(os.path.join(args.work_dir, 'getfastq_'+args.id))
+            output_dir = os.path.join(args.work_dir, 'getfastq_'+args.id)
+        else
+            output_dir = args.work_dir
 
     if not os.path.exists(os.path.join(output_dir, 'sra_files')):
         os.mkdir(os.path.join(output_dir, 'sra_files'))
