@@ -326,58 +326,65 @@ class Metadata:
             for col in cols:
                 self.df.loc[:,col] = self.df.loc[:,col].str.replace(replace_from, replace_to, regex=True, case=False)
 
-    def group_tissues(self):
-        self.df.loc[:,'tissue_original'] = self.df.loc[:,'tissue']
-        tissues = pandas.read_csv(self.config_dir+'search_term_tissue.config',
-                                  parse_dates=False, infer_datetime_format=False, quotechar='"', sep='\t',
-                                  header=None, index_col=None, skip_blank_lines=True, comment='#').iloc[:,0]
-        tissues = tissues.tolist()
-        lemmatizer = WordNetLemmatizer()
-        content = self.df.loc[:,'tissue']
-        content = ['' if pandas.isnull(x) else x.lower() for x in content]
-        content = [x if pandas.isnull(x) else x.strip() for x in content]
-        lemm = [lemmatizer.lemmatize(i) for i in content]
+    def group_tissues_auto(self):
 
 
-        print(tissues)
-        for i in range(len(lemm)):
+            self.df.loc[:,'tissue_original'] = self.df.loc[:,'tissue']
+            tissues = pandas.read_csv(self.config_dir+'search_term_tissue.config',
+                                    parse_dates=False, infer_datetime_format=False, quotechar='"', sep='\t',
+                                    header=None, index_col=None, skip_blank_lines=True, comment='#').iloc[:,0]
+            tissues = tissues.tolist()
+            lemmatizer = WordNetLemmatizer()
+            content = self.df.loc[:,'tissue']
+            content = ['' if pandas.isnull(x) else x.lower() for x in content]
+            content = [x if pandas.isnull(x) else x.strip() for x in content]
+            lemm = [lemmatizer.lemmatize(i) for i in content]
 
-            sp = re.sub(r"[^a-zA-Z]+", ' ', lemm[i])
-            sp = re.split('[_,:;" "/]', sp)
-            sp = [lemmatizer.lemmatize(x) for x in sp]
+
+            print(tissues)
+            for i in range(len(lemm)):
+
+                sp = re.sub(r"[^a-zA-Z]+", ' ', lemm[i])
+                sp = re.split('[_,:;" "/]', sp)
+                sp = [lemmatizer.lemmatize(x) for x in sp]
 
 
 
 
-            if len(sp) > 1 :
-                list_set = set(sp)
-                for tissue in tissues:
-                    if tissue in list_set:
-                        lemm[i] = tissue
-                        break
-                    else :
-                        lemm[i] = sp[0]
-                        synonyms = []
-                        for word in sp:
-                            for syn in wordnet.synsets(word):
-                                for l in syn.lemmas():
-                                    synonyms.append(l.name())
+                if len(sp) > 1 :
+
+                    list_set = set(sp)
+                    for tissue in tissues:
+                        if tissue in list_set:
+                            lemm[i] = tissue
+                            break
+                        else:
+
+                            lemm[i] = sp[0]
+                            synonyms = []
+                            for word in sp:
+                                for syn in wordnet.synsets(word):
+                                    for l in syn.lemmas():
+                                        synonyms.append(l.name())
 
                         #print(synonyms)
 
-        self.df.loc[:,'tissue'] = lemm
+            self.df.loc[:,'tissue'] = lemm
+
+    def group_tissues_by_config(self):
+
+            config = pandas.read_csv(self.config_dir+'group_tissue.config',
+                                 parse_dates=False, infer_datetime_format=False, quotechar='"', sep='\t',
+                                 header=None, index_col=None, skip_blank_lines=True, comment='#')
+            config = config.replace(numpy.nan, '')
+            for i in numpy.arange(config.shape[0]):
+                replace_from = config.iloc[i,1]
+                replace_to = config.iloc[i,0]
+                is_matching = self.df['tissue'].str.match(replace_from, case=False, na=False)
+                self.df.loc[is_matching,'tissue'] = replace_to
+            self.df.loc[:,'tissue'] = self.df.loc[:,'tissue'].str.lower()
 
 
-        #config = pandas.read_csv(self.config_dir+'group_tissue.config',
-         #                        parse_dates=False, infer_datetime_format=False, quotechar='"', sep='\t',
-          #                       header=None, index_col=None, skip_blank_lines=True, comment='#')
-        #config = config.replace(numpy.nan, '')
-        #for i in numpy.arange(config.shape[0]):
-         #   replace_from = config.iloc[i,1]
-          #  replace_to = config.iloc[i,0]
-           # is_matching = self.df['tissue'].str.match(replace_from, case=False, na=False)
-            #self.df.loc[is_matching,'tissue'] = replace_to
-       # self.df.loc[:,'tissue'] = self.df.loc[:,'tissue'].str.lower()
 
     def mark_exclude_keywords(self):
         config = pandas.read_csv(self.config_dir+'exclude_keyword.config',
@@ -597,13 +604,27 @@ def metadata_main(args):
     del metadata_species
 
 
-   # metadata.mark_exclude_ids()
-   # metadata.group_attributes()
-    metadata.correct_orthographical_variants()
-    metadata.replace_values()
-    metadata.give_values()
-    #metadata.mark_exclude_keywords()
-    metadata.group_tissues()
+
+    if args.tissue_detect == 'no':
+        metadata.mark_exclude_ids()
+        metadata.group_attributes()
+        metadata.correct_orthographical_variants()
+        metadata.replace_values()
+        metadata.give_values()
+        metadata.mark_exclude_keywords()
+        metadata.group_tissues_auto()
+
+    elif args.tissue_detect == 'yes':
+        # metadata.mark_exclude_ids()
+        # metadata.group_attributes()
+        metadata.correct_orthographical_variants()
+        metadata.replace_values()
+        metadata.give_values()
+        #metadata.mark_exclude_keywords()
+        metadata.group_tissues_by_config()
+    else:
+        raise ValueError("invalid argument to --tissue_detect: ", args.tissue_detect)
+
     metadata.reorder(omit_misc=False)
     metadata.df.to_csv(os.path.join(metadata_results_dir, 'metadata_02_grouped_'+date_range+'.tsv'), sep='\t', index=False)
 
