@@ -222,21 +222,20 @@ def getfastq_main(args):
         args.work_dir = args.work_dir.replace('.', os.getcwd())
     if not os.path.exists(args.work_dir):
         os.makedirs(args.work_dir)
-    output_dir = args.work_dir
     if args.auto_dir == 'yes':
-        if not os.path.exists(os.path.join(args.work_dir, 'getfastq_'+args.id)):
-            os.makedirs(os.path.join(args.work_dir, 'getfastq_'+args.id))
-            output_dir = os.path.join(args.work_dir, 'getfastq_'+args.id)
-
-    if not os.path.exists(os.path.join(output_dir, 'sra_files')):
-        os.mkdir(os.path.join(output_dir, 'sra_files'))
+        output_dir = os.path.join(args.work_dir, 'getfastq_'+args.id)
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+    else:
+        output_dir = args.work_dir
 
     sra_output_dir = os.path.join(output_dir, 'sra_files')
-
-    if not os.path.exists(os.path.join(output_dir, 'temp')):
-        os.mkdir(os.path.join(output_dir, 'temp'))
+    if not os.path.exists(sra_output_dir):
+        os.mkdir(sra_output_dir)
 
     sra_temp_dir = os.path.join(output_dir, 'temp')
+    if not os.path.exists(sra_temp_dir):
+        os.mkdir(sra_temp_dir)
 
     Entrez.email = args.entrez_email
     search_term = getfastq_search_term(args.id, args.entrez_additional_search_term)
