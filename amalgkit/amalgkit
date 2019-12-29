@@ -96,7 +96,7 @@ parser_view.set_defaults(handler=command_view)
 # Sub parser: getfastq
 parser_getfastq = subparsers.add_parser('getfastq', help='see `amalgkit getfastq -h`')
 parser_getfastq.add_argument('-e', '--entrez_email', metavar='aaa@bbb.com', default=None, type=str, required=True, action='store',
-                             help='default=%(default)s: Your email address.')
+                             help='default=%(default)s: Your email address. Necessary for accessing NCBI database.')
 parser_getfastq.add_argument('--work_dir', metavar='PATH', default='./', type=str, required=False, action='store',
                              help='default=%(default)s: Working directory.')
 parser_getfastq.add_argument('--auto_dir', metavar='yes|no', default='no', type=str, required=False, action='store',
@@ -140,7 +140,7 @@ parser_getfastq.add_argument('--ascp', metavar='yes|no', default='no', type=str,
 parser_getfastq.add_argument('--ascp_exe', metavar='PATH', default='ascp', type=str, required=False, action='store',
                              help='default=%(default)s: PATH to ascp executable.')
 parser_getfastq.add_argument('--ascp_key', metavar='PATH', default='', type=str, required=False, action='store',
-                             help='default=%(default)s: PATH to ascp key.')
+                             help='default=%(default)s: PATH to ascp key. See https://www.ncbi.nlm.nih.gov/books/NBK242625/')
 parser_getfastq.add_argument('--ascp_option', metavar='STR', default='-v -k 1 -T -l 300m', type=str, required=False, action='store',
                              help='default=%(default)s: ascp options.')
 parser_getfastq.add_argument('--read_name', metavar='default|trinity', default='default', type=str, required=False, action='store', choices=['default','trinity'],

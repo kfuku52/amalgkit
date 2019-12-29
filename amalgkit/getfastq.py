@@ -59,7 +59,7 @@ def get_range(max_bp, total_sra_bp, total_spot, num_read_per_sra, offset):
             end = total_spot
     return start,end
 
-def concat_fastq(args, metadata):
+def concat_fastq(args, metadata, sra_output_dir):
     layout = get_layout(args, metadata)
     inext = '.amalgkit.fastq.gz'
     print('Concatenating files with the extension:', inext)
@@ -69,8 +69,8 @@ def concat_fastq(args, metadata):
     elif layout=='paired':
         subexts = ['_1','_2',]
     for subext in subexts:
-        infiles = metadata.df['run'].replace('$',subext+inext, regex=True)
-        outfile_path = os.path.join(args.work_dir,args.id+subext+outext)
+        infiles = metadata.df['run'].replace('$', subext+inext, regex=True)
+        outfile_path = os.path.join(sra_output_dir, args.id+subext+outext)
         if os.path.exists(outfile_path):
             os.remove(outfile_path)
         #with gzip.open(outfile_path, 'wb') as outfile:
@@ -80,9 +80,9 @@ def concat_fastq(args, metadata):
         if os.path.exists(outfile_path):
             os.remove(outfile_path)
         for infile in infiles:
-            infile_path = os.path.join(args.work_dir, infile)
+            infile_path = os.path.join(sra_output_dir, infile)
             if os.path.exists(infile_path):
-                os.system('cat '+infile_path+' >> '+outfile_path)
+                os.system('cat "'+infile_path+'" >> "'+outfile_path+'"')
             else:
                 print('Dumped fastq not found:', infile_path)
         print('')
@@ -96,7 +96,7 @@ def remove_sra_files(metadata, sra_dir):
                 print('Deleting:', sra_path)
                 os.remove(sra_path)
         else:
-            print('SRA file not found:', sra_pattern)
+            print('SRA file not found. Pattern searched:', sra_pattern)
     print('')
 
 def get_layout(args, metadata):
@@ -111,7 +111,7 @@ def remove_old_intermediate_files(metadata, work_dir):
     for i in metadata.df.index:
         sra_id = metadata.df.loc[i,'run']
         old_files = os.listdir(work_dir)
-        files = [ f for f in old_files if (f.startswith(sra_id))&(not f.endswith('.sra')) ]
+        files = [ f for f in old_files if (f.startswith(sra_id))&(not f.endswith('.sra')) if os.path.isfile(f) ]
         for f in files:
             f_path = os.path.join(work_dir, f)
             print('Deleting old intermediate file:', f_path)
@@ -126,7 +126,7 @@ def remove_intermediate_files(sra_id, layout, ext, work_dir):
             file_paths.append(os.path.join(work_dir,sra_id+'_'+str(i)+ext))
     for file_path in file_paths:
         if os.path.exists(file_path):
-            print('Deleting:', file_path)
+            print('Deleting intermediate file:', file_path)
             os.remove(file_path)
         else:
             print('Tried to delete but file not found:', file_path)
@@ -134,38 +134,54 @@ def remove_intermediate_files(sra_id, layout, ext, work_dir):
 def get_newest_intermediate_file_extension(sra_id, work_dir):
     # Order is important in this list. More downstream should come first.
     extensions = ['.amalgkit.fastq.gz','.rename.fastq.gz','.fastp.fastq.gz','.fastq.gz']
+    files = os.listdir(work_dir)
     for ext in extensions:
-        if any([ f.endswith(ext) for f in os.listdir(work_dir) if f.startswith(sra_id) ]):
+        if any([ (f.startswith(sra_id))&(f.endswith(ext)) for f in files ]):
             ext_out = ext
             break
+    assert 'ext_out' in locals(), 'Any of expected extensions ('+' '.join(extensions)+') found in '+work_dir
     return ext_out
 
-def download_sra(sra_id, args, work_dir):
+def download_sra(sra_id, args, work_dir, overwrite=False):
     sra_path = os.path.join(work_dir, sra_id+'.sra')
-    if (args.ascp=='yes')&(not os.path.exists(sra_path)):
+    sra_exist = os.path.exists(sra_path)
+    individual_sra_tmp_dir = os.path.join(work_dir, sra_id+'/')
+    if (sra_exist):
+        print('Previously-downloaded sra file was detected.')
+        if (overwrite):
+            print('Removing', sra_path)
+            print('New sra file will be downloaded.')
+            os.remove(sra_path)
+    else:
+        print('Previously-downloaded sra file was not detected. New sra file will be downloaded.')
+    if (args.ascp=='yes')&(not sra_exist):
         print('Trying to download the SRA file using ascp.')
         sra_site = 'anonftp@ftp.ncbi.nlm.nih.gov:/sra/sra-instant/reads/ByRun/sra/'+sra_id[0:3]+'/'+sra_id[0:6]+'/'+sra_id+'/'+sra_id+'.sra'
-        ascp_command = [args.ascp_exe, '-v', '-i', args.ascp_key, '-k', '1', '-T', '-l', '300m', sra_site, work_dir]
+        ascp_command = [args.ascp_exe, '-v', '-i', '"'+args.ascp_key+'"', '-k', '1', '-T', '-l', '300m', sra_site, '"'+work_dir+'"']
         print('Command:', ' '.join(ascp_command))
         ascp_out = subprocess.run(ascp_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         print('ascp stdout:')
         print(ascp_out.stdout.decode('utf8'))
         print('ascp stderr:')
         print(ascp_out.stderr.decode('utf8'))
-    if not os.path.exists(sra_path):
+    if not sra_exist:
         print('Trying to download the SRA file using prefetch (fasp protocol).')
+        if os.path.exists(individual_sra_tmp_dir):
+            shutil.rmtree(individual_sra_tmp_dir)
         prefetch_command = [args.prefetch_exe, '--force', 'no', '--transport', 'fasp', '--max-size', '100G',
-                            '--output-directory', work_dir, sra_id]
+                            '--output-directory', '"'+work_dir+'"', sra_id]
         print('Command:', ' '.join(prefetch_command))
         prefetch_out = subprocess.run(prefetch_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         print('prefetch stdout:')
         print(prefetch_out.stdout.decode('utf8'))
         print('prefetch stderr:')
         print(prefetch_out.stderr.decode('utf8'))
-    if not os.path.exists(sra_path):
+    if not sra_exist:
         print('Trying to download the SRA file using prefetch (http protocol).')
+        if os.path.exists(individual_sra_tmp_dir):
+            shutil.rmtree(individual_sra_tmp_dir)
         prefetch_command = [args.prefetch_exe, '--force', 'no', '--transport', 'http', '--max-size', '100G',
-                            '--output-directory', work_dir, sra_id]
+                            '--output-directory', '"'+work_dir+'"', sra_id]
         print('Command:', ' '.join(prefetch_command))
         prefetch_out = subprocess.run(prefetch_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         print('prefetch stdout:')
@@ -173,11 +189,13 @@ def download_sra(sra_id, args, work_dir):
         print('prefetch stderr:')
         print(prefetch_out.stderr.decode('utf8'))
     if os.path.exists(os.path.join(work_dir, sra_id+'/', sra_id+'.sra')):
-        subprocess.run(['mv', os.path.join(work_dir, sra_id+'/', sra_id+'.sra'), os.path.join(work_dir, sra_id+'.sra')],
+        subprocess.run(['mv', os.path.join(work_dir, sra_id+'/', sra_id+'.sra'), sra_path],
                         stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        shutil.rmtree(individual_sra_tmp_dir)
+    assert os.path.exists(sra_path), 'SRA file download failed: '+sra_id
 
 def getfastq_main(args):
-    sra_dir = os.path.join(os.path.expanduser("~"), 'ncbi/public/sra')
+    #sra_dir = os.path.join(os.path.expanduser("~"), 'ncbi/public/sra')
     assert (args.entrez_email!='aaa@bbb.com'), "Provide your email address. No worry, you won't get spam emails."
     if args.pfd=='yes':
         test_pfd = subprocess.run([args.pfd_exe, '-h'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -200,6 +218,8 @@ def getfastq_main(args):
             print('pigz not found. gzip/gunzip will be used for compression/decompression in read name formatting.')
             gz_exe = 'gzip'
             ungz_exe = 'gunzip'
+    if args.work_dir.startswith('./'):
+        args.work_dir = args.work_dir.replace('.', os.getcwd())
     if not os.path.exists(args.work_dir):
         os.makedirs(args.work_dir)
     output_dir = args.work_dir
@@ -270,7 +290,7 @@ def getfastq_main(args):
         print('Total bases:', "{:,}".format(int(metadata.df.loc[i,'total_bases'])), 'bp')
         if args.pfd=='yes':
             sra_path = os.path.join(sra_output_dir, sra_id+'.sra')
-            download_sra(sra_id, args, sra_output_dir)
+            download_sra(sra_id, args, sra_output_dir, overwrite=False)
             pfd_command = ['parallel-fastq-dump', '-t', str(args.threads), '--minReadLen', str(args.min_read_length), '--qual-filter-1',
                            '--skip-technical', '--split-3', '--clip', '--gzip', '--outdir', sra_output_dir,
                            '--tmpdir', sra_temp_dir]
@@ -341,15 +361,15 @@ def getfastq_main(args):
                 inbase = os.path.join(sra_output_dir,sra_id)
                 if os.path.exists(inbase+inext):
                     infile = inbase+inext
-                os.system(ungz_exe+' -c '+infile+' | sed -e "s|[[:space:]].*|/1|" | '+gz_exe+' -c > '+inbase+outext)
+                os.system(ungz_exe+' -c "'+infile+'" | sed -e "s|[[:space:]].*|/1|" | '+gz_exe+' -c > "'+inbase+outext+'"')
             elif layout=='paired':
                 inbase1 = os.path.join(sra_output_dir,sra_id+'_1')
                 inbase2 = os.path.join(sra_output_dir,sra_id+'_2')
                 if os.path.exists(inbase1+inext):
                     infile1 = inbase1+inext
                     infile2 = inbase2+inext
-                os.system(ungz_exe+' -c '+infile1+' | sed -e "s|[[:space:]].*|/1|" | '+gz_exe+' -c > '+inbase1+outext)
-                os.system(ungz_exe+' -c '+infile2+' | sed -e "s|[[:space:]].*|/2|" | '+gz_exe+' -c > '+inbase2+outext)
+                os.system(ungz_exe+' -c "'+infile1+'" | sed -e "s|[[:space:]].*|/1|" | '+gz_exe+' -c > "'+inbase1+outext+'"')
+                os.system(ungz_exe+' -c "'+infile2+'" | sed -e "s|[[:space:]].*|/2|" | '+gz_exe+' -c > "'+inbase2+outext+'"')
             if args.remove_tmp=='yes':
                 remove_intermediate_files(sra_id=sra_id, layout=layout, ext=inext, work_dir=sra_output_dir)
         if args.pfd=='yes':
@@ -374,7 +394,7 @@ def getfastq_main(args):
             print('Sum of fastp input reads:', "{:,}".format(bp_fastp_in), 'bp')
             print('Sum of fastp output reads:', "{:,}".format(bp_fastp_out), 'bp')
         print('')
-        concat_fastq(args, metadata)
+        concat_fastq(args, metadata, sra_output_dir)
         if args.remove_tmp=='yes':
             for i in metadata.df.index:
                 sra_id = metadata.df.loc[i,'run']
