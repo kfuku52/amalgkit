@@ -203,6 +203,7 @@ def getfastq_main(args):
     if not os.path.exists(args.work_dir):
         os.makedirs(args.work_dir)
     output_dir = args.work_dir
+
     if args.auto_dir == 'yes':
         if not os.path.exists(os.path.join(args.work_dir, 'getfastq_'+args.id)):
             os.makedirs(os.path.join(args.work_dir, 'getfastq_'+args.id))

@@ -13,7 +13,8 @@ import lxml.etree
 import datetime
 import time
 
-
+import networkx
+import obonet
 
 def check_config_dir(args):
     files = os.listdir(args.config_dir)
@@ -61,6 +62,7 @@ def get_search_term(species_name="", bioprojects=[], biosamples=[], tissues=[], 
         search_term = biosample_term
     else:
         search_term = species_term + " AND " + tissue_term + " AND " + other_term + " AND " + date_term + " NOT " + excluded_term
+        # search_term = species_term + " AND " + other_term + " AND " + date_term + " NOT " + excluded_term
     return search_term
 
 def fetch_sra_xml(species_name, search_term, save_xml=True, read_from_existing_file=False, retmax=1000):
@@ -328,20 +330,40 @@ class Metadata:
 
     def group_tissues_auto(self):
 
-
+            # retrieve metadata
             self.df.loc[:,'tissue_original'] = self.df.loc[:,'tissue']
+            # retrieve tissue query from config
             tissues = pandas.read_csv(self.config_dir+'search_term_tissue.config',
                                     parse_dates=False, infer_datetime_format=False, quotechar='"', sep='\t',
                                     header=None, index_col=None, skip_blank_lines=True, comment='#').iloc[:,0]
             tissues = tissues.tolist()
+            # init lemmatizer
             lemmatizer = WordNetLemmatizer()
+            # isolate tissue from metadata, force lower case and remove tailing whitespaces
             content = self.df.loc[:,'tissue']
             content = ['' if pandas.isnull(x) else x.lower() for x in content]
             content = [x if pandas.isnull(x) else x.strip() for x in content]
+            # lemmatize all words in tissue list
             lemm = [lemmatizer.lemmatize(i) for i in content]
 
+            # load ontology
+            graph = obonet.read_obo("http://purl.obolibrary.org/obo/po.obo")
+            dat_list =[]
+
+            # declare functions for later
+
+            id_to_name = {id_: data.get('name') for id_, data in graph.nodes(data=True)}
+            name_to_id = {data['name']: id_ for id_, data in graph.nodes(data=True) if 'name' in data}
+
+            def search(values, searchFor):
+                for k in values:
+                    for v in values[k]:
+                        if searchFor in v:
+                            return k
+                return None
 
             print(tissues)
+            # for each item in the lemmatized tissue list, check if the query can be recovered
             for i in range(len(lemm)):
 
                 sp = re.sub(r"[^a-zA-Z]+", ' ', lemm[i])
@@ -349,9 +371,7 @@ class Metadata:
                 sp = [lemmatizer.lemmatize(x) for x in sp]
 
 
-
-
-                if len(sp) > 1 :
+                if len(sp) > 0 :
 
                     list_set = set(sp)
                     for tissue in tissues:
@@ -359,13 +379,16 @@ class Metadata:
                             lemm[i] = tissue
                             break
                         else:
+                            try:
+                                lemm[i] = graph.node[name_to_id[tissue]]['name']
+                            except Exception as e:
+                                for id, dat in graph.nodes(data=True):
+                                    if search(dat, tissue) != None:
+                                        lemm[i] = dat['name']
 
-                            lemm[i] = sp[0]
-                            synonyms = []
-                            for word in sp:
-                                for syn in wordnet.synsets(word):
-                                    for l in syn.lemmas():
-                                        synonyms.append(l.name())
+
+                        lemm[i] = ''.join(sp)
+
 
                         #print(synonyms)
 
@@ -517,8 +540,13 @@ def metadata_main(args):
         args.work_dir = args.work_dir+'/'
     if not os.path.exists(args.work_dir):
         os.mkdir(args.work_dir)
+    if args.auto_dir == 'yes':
+        if not os.path.exists(os.path.join(args.work_dir, 'metadata_output')):
+            metadata_dir = create_run_dir(os.path.join(args.work_dir, 'metadata_output'))
+    else:
+        if not os.path.exists(os.path.join(args.work_dir)):
+            metadata_dir = os.path.join(args.work_dir, 'metadata_output')
 
-    metadata_dir = create_run_dir(os.path.join(args.work_dir, 'metadata_output'))
     temp_dir = os.path.join(metadata_dir, 'temp')
     res_dir = os.path.join(metadata_dir, 'results')
     metadata_results_dir = os.path.join(res_dir, 'metadata')
@@ -612,7 +640,7 @@ def metadata_main(args):
         metadata.replace_values()
         metadata.give_values()
         metadata.mark_exclude_keywords()
-        metadata.group_tissues_auto()
+        metadata.group_tissues_config()
 
     elif args.tissue_detect == 'yes':
         # metadata.mark_exclude_ids()
@@ -621,7 +649,7 @@ def metadata_main(args):
         metadata.replace_values()
         metadata.give_values()
         #metadata.mark_exclude_keywords()
-        metadata.group_tissues_by_config()
+        metadata.group_tissues_auto()
     else:
         raise ValueError("invalid argument to --tissue_detect: ", args.tissue_detect)
 

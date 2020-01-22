@@ -72,6 +72,8 @@ parser_metadata.add_argument('-c', '--config_dir', metavar='PATH', default='./',
                              help='default=%(default)s: Path to the config directory.')
 parser_metadata.add_argument('-w', '--work_dir', metavar='PATH', default='./', type=str, required=True, action='store',
                              help='default=%(default)s: Path to the directory where intermediate and output files are generated.')
+parser_metadata.add_argument('--auto_dir', metavar='yes|no', default='no', type=str, required=False, action='store',
+                             help='default=%(default)s: Working directory. If "yes", new directory will be created in the working directory according to the scheme "curate_[0-9]*",')
 parser_metadata.add_argument('-e', '--entrez_email', metavar='aaa@bbb.com', default=None, type=str, required=True, action='store',
                              help='default=%(default)s: Your email address.')
 parser_metadata.add_argument('-p', '--publication_date', metavar='YYYY/MM/DD:YYYY/MM/DD', default='1900/01/01:TODAY', type=str, required=False, action='store',
@@ -156,7 +158,7 @@ parser_getfastq.set_defaults(handler=command_getfastq)
 
 
 # Sub parser: quant
-parser_quant = subparsers.add_parser('quant', help='see `amalgkit getfastq -h`')
+parser_quant = subparsers.add_parser('quant', help='see `amalgkit quant -h`')
 
 parser_quant.add_argument('--sci_name', metavar='yes|no', default=None, type=str, required=False, action='store',
                              help='default=%(default)s: Species name in case the BioProject covers multiple species. Example: "Homo sapiens"')
@@ -176,15 +178,19 @@ parser_quant.add_argument('--work_dir', metavar='PATH', default='./', type=str, 
                              help='default=%(default)s: Working directory.')
 parser_quant.add_argument('--out_dir', metavar='PATH', default=None, type=str, required=False, action='store',
                           help='default=work_dir: Working directory.')
+parser_quant.add_argument('--auto_dir', metavar='yes|no', default='no', type=str, required=False, action='store',
+                             help='default=%(default)s: Working directory. If "yes", new directory will be created in the working directory according to the scheme "quant_[0-9]*",')
 parser_quant.set_defaults(handler=command_quant)
 
 # Sub parser: curate
-parser_curate = subparsers.add_parser('curate', help='see `amalgkit getfastq -h`')
+parser_curate = subparsers.add_parser('curate', help='see `amalgkit curate -h`')
 
 parser_curate.add_argument('--work_dir', metavar='PATH', default='./', type=str, required=False, action='store',
                           help='default=%(default)s: Working directory.')
 parser_curate.add_argument('--out_dir', metavar='PATH', default='./', type=str, required=False, action='store',
                            help='default=%(default)s: Output directory.')
+parser_curate.add_argument('--auto_dir', metavar='yes|no', default='no', type=str, required=False, action='store',
+                             help='default=%(default)s: Working directory. If "yes", new directory will be created in the working directory according to the scheme "curate_[0-9]*",')
 parser_curate.add_argument('--infile', metavar='PATH', default=None, type=str, required=True, action='store',
                            help='default=%(default): Name or Path of file to curate.')
 parser_curate.add_argument('--metafile', metavar='PATH', default=None, type=str, required=True, action='store',
@@ -200,7 +206,7 @@ parser_curate.add_argument('--tissues', metavar='STR', default=None, type=str, r
 parser_curate.set_defaults(handler=command_curate)
 
 # Sub parser: curate
-parser_merge = subparsers.add_parser('merge', help='see `amalgkit getfastq -h`')
+parser_merge = subparsers.add_parser('merge', help='see `amalgkit merge -h`')
 
 parser_merge.add_argument('--work_dir', metavar='PATH', default='./', type=str, required=False, action='store',
                            help='default=%(default)s: Working directory.')
