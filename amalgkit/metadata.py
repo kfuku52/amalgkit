@@ -535,10 +535,11 @@ def metadata_main(args):
         if not os.path.exists(os.path.join(args.work_dir, 'metadata_output')):
             metadata_dir = create_run_dir(os.path.join(args.work_dir, 'metadata_output'))
     else:
-        if not os.path.exists(os.path.join(args.work_dir)):
-            metadata_dir = os.path.join(args.work_dir)
+        if not os.path.exists(args.work_dir):
+            os.makedirs(args.work_dir)
+            metadata_dir = args.work_dir
         else:
-            metadata_dir = os.path.join(args.work_dir)
+            metadata_dir = args.work_dir
 
     temp_dir = os.path.join(metadata_dir, 'temp')
     res_dir = os.path.join(metadata_dir, 'results')
