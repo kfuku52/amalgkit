@@ -326,7 +326,7 @@ class Metadata:
     def group_tissues_auto(self):
         from nltk.stem import WordNetLemmatizer
         import obonet
-
+        nltk.download('wordnet')
         # retrieve metadata
         self.df.loc[:,'tissue_original'] = self.df.loc[:,'tissue']
         # retrieve tissue query from config
