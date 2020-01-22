@@ -35,7 +35,7 @@ def quant_main(args):
 
 
     # make results directory, if not already there
-
+    output_dir = ''
     if args.auto_dir == 'yes':
         if not os.path.exists(os.path.join(args.out_dir, 'quant_output')):
             output_dir = create_run_dir(os.path.join(args.out_dir, 'quant_output'+args.id))

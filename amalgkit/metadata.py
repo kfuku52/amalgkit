@@ -1,10 +1,6 @@
 from Bio import Entrez
 import numpy
 import pandas
-import math
-from nltk.stem import WordNetLemmatizer
-from nltk.corpus import wordnet
-
 
 from urllib.error import HTTPError
 import os
@@ -12,9 +8,6 @@ import re
 import lxml.etree
 import datetime
 import time
-
-import networkx
-import obonet
 
 def check_config_dir(args):
     files = os.listdir(args.config_dir)
@@ -329,70 +322,68 @@ class Metadata:
                 self.df.loc[:,col] = self.df.loc[:,col].str.replace(replace_from, replace_to, regex=True, case=False)
 
     def group_tissues_auto(self):
+        from nltk.stem import WordNetLemmatizer
+        import obonet
 
-            # retrieve metadata
-            self.df.loc[:,'tissue_original'] = self.df.loc[:,'tissue']
-            # retrieve tissue query from config
-            tissues = pandas.read_csv(self.config_dir+'search_term_tissue.config',
+        # retrieve metadata
+        self.df.loc[:,'tissue_original'] = self.df.loc[:,'tissue']
+        # retrieve tissue query from config
+        tissues = pandas.read_csv(self.config_dir+'search_term_tissue.config',
                                     parse_dates=False, infer_datetime_format=False, quotechar='"', sep='\t',
                                     header=None, index_col=None, skip_blank_lines=True, comment='#').iloc[:,0]
-            tissues = tissues.tolist()
-            # init lemmatizer
-            lemmatizer = WordNetLemmatizer()
-            # isolate tissue from metadata, force lower case and remove tailing whitespaces
-            content = self.df.loc[:,'tissue']
-            content = ['' if pandas.isnull(x) else x.lower() for x in content]
-            content = [x if pandas.isnull(x) else x.strip() for x in content]
-            # lemmatize all words in tissue list
-            lemm = [lemmatizer.lemmatize(i) for i in content]
+        tissues = tissues.tolist()
+        # init lemmatizer
+        lemmatizer = WordNetLemmatizer()
+        # isolate tissue from metadata, force lower case and remove tailing whitespaces
+        content = self.df.loc[:,'tissue']
+        content = ['' if pandas.isnull(x) else x.lower() for x in content]
+        content = [x if pandas.isnull(x) else x.strip() for x in content]
+        # lemmatize all words in tissue list
+        lemm = [lemmatizer.lemmatize(i) for i in content]
 
-            # load ontology
-            graph = obonet.read_obo("http://purl.obolibrary.org/obo/po.obo")
-            dat_list =[]
+        # load ontology
+        graph = obonet.read_obo("http://purl.obolibrary.org/obo/po.obo")
+        dat_list =[]
 
-            # declare functions for later
+        # declare functions for later
 
-            id_to_name = {id_: data.get('name') for id_, data in graph.nodes(data=True)}
-            name_to_id = {data['name']: id_ for id_, data in graph.nodes(data=True) if 'name' in data}
+        id_to_name = {id_: data.get('name') for id_, data in graph.nodes(data=True)}
+        name_to_id = {data['name']: id_ for id_, data in graph.nodes(data=True) if 'name' in data}
 
-            def search(values, searchFor):
-                for k in values:
-                    for v in values[k]:
-                        if searchFor in v:
-                            return k
-                return None
+        def search(values, searchFor):
+            for k in values:
+                for v in values[k]:
+                    if searchFor in v:
+                       return k
+            return None
 
-            print(tissues)
-            # for each item in the lemmatized tissue list, check if the query can be recovered
-            for i in range(len(lemm)):
+        # for each item in the lemmatized tissue list, check if the query can be recovered
+        for i in range(len(lemm)):
 
-                sp = re.sub(r"[^a-zA-Z]+", ' ', lemm[i])
-                sp = re.split('[_,:;" "/]', sp)
-                sp = [lemmatizer.lemmatize(x) for x in sp]
-
-
-                if len(sp) > 0 :
-
-                    list_set = set(sp)
-                    for tissue in tissues:
-                        if tissue in list_set:
-                            lemm[i] = tissue
-                            break
-                        else:
-                            try:
-                                lemm[i] = graph.node[name_to_id[tissue]]['name']
-                            except Exception as e:
-                                for id, dat in graph.nodes(data=True):
-                                    if search(dat, tissue) != None:
-                                        lemm[i] = dat['name']
+            sp = re.sub(r"[^a-zA-Z]+", ' ', lemm[i])
+            sp = re.split('[_,:;" "/]', sp)
+            sp = [lemmatizer.lemmatize(x) for x in sp]
 
 
-                        lemm[i] = ''.join(sp)
+            if len(sp) > 0 :
+
+                list_set = set(sp)
+                for tissue in tissues:
+                    if tissue in list_set:
+                        lemm[i] = tissue
+                        break
+                    else:
+                        try:
+                            lemm[i] = graph.node[name_to_id[tissue]]['name']
+                        except Exception as e:
+                            for id, dat in graph.nodes(data=True):
+                                if search(dat, tissue) != None:
+                                    lemm[i] = dat['name']
 
 
-                        #print(synonyms)
+                    lemm[i] = ''.join(sp)
 
-            self.df.loc[:,'tissue'] = lemm
+        self.df.loc[:,'tissue'] = lemm
 
     def group_tissues_by_config(self):
 
@@ -531,8 +522,6 @@ class Metadata:
         pivot_reduced = pivot_reduced.loc[index_sort,column_sort]
         return pivot_reduced
 
-
-
 def metadata_main(args):
     if not args.config_dir.endswith('./'):
         args.config_dir = args.config_dir+'/'
@@ -540,12 +529,16 @@ def metadata_main(args):
         args.work_dir = args.work_dir+'/'
     if not os.path.exists(args.work_dir):
         os.mkdir(args.work_dir)
+
+    metadata_dir = ''
     if args.auto_dir == 'yes':
         if not os.path.exists(os.path.join(args.work_dir, 'metadata_output')):
             metadata_dir = create_run_dir(os.path.join(args.work_dir, 'metadata_output'))
     else:
         if not os.path.exists(os.path.join(args.work_dir)):
-            metadata_dir = os.path.join(args.work_dir, 'metadata_output')
+            metadata_dir = os.path.join(args.work_dir)
+        else:
+            metadata_dir = os.path.join(args.work_dir)
 
     temp_dir = os.path.join(metadata_dir, 'temp')
     res_dir = os.path.join(metadata_dir, 'results')
@@ -640,7 +633,7 @@ def metadata_main(args):
         metadata.replace_values()
         metadata.give_values()
         metadata.mark_exclude_keywords()
-        metadata.group_tissues_config()
+        metadata.group_tissues_by_config()
 
     elif args.tissue_detect == 'yes':
         # metadata.mark_exclude_ids()

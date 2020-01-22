@@ -16,12 +16,14 @@ def curate_main(args):
 
     quant_out = os.path.join(args.work_dir, args.infile)
     meta_out = os.path.join(args.work_dir, args.metafile)
-
+    out_dir = ''
     if args.auto_dir == 'yes':
         if not os.path.exists(os.path.join(args.out_dir, 'curate_output')):
             out_dir = create_run_dir(os.path.join(args.out_dir, 'curate_output'))
     else:
         if not os.path.exists(os.path.join(args.out_dir)):
+            out_dir = os.makedirs(os.path.join(args.out_dir))
+        else:
             out_dir = os.path.join(args.out_dir)
     #out_dir = create_run_dir(os.path.join(args.out_dir, 'curate_output'))
     dist_method = args.dist_method
