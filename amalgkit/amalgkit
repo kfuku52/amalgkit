@@ -190,22 +190,22 @@ parser_curate.add_argument('--work_dir', metavar='PATH', default='./', type=str,
 parser_curate.add_argument('--out_dir', metavar='PATH', default='./', type=str, required=False, action='store',
                            help='default=%(default)s: Output directory.')
 parser_curate.add_argument('--auto_dir', metavar='yes|no', default='no', type=str, required=False, action='store',
-                             help='default=%(default)s: Working directory. If "yes", new directory will be created in the working directory according to the scheme "curate_[0-9]*",')
+                           help='default=%(default)s: Working directory. If "yes", new directory will be created in the working directory according to the scheme "curate_[0-9]*".')
 parser_curate.add_argument('--infile', metavar='PATH', default=None, type=str, required=True, action='store',
-                           help='default=%(default): Name or Path of file to curate.')
+                           help='default=%(default)s: Name or Path of file to curate.')
 parser_curate.add_argument('--metafile', metavar='PATH', default=None, type=str, required=True, action='store',
-                           help='default=%(default): Path to metadata file, obtained by amalgkit metadata command.')
+                           help='default=%(default)s: Path to metadata file, obtained by amalgkit metadata command.')
 parser_curate.add_argument('--dist_method', metavar='STR', default='pearson', type=str, required=False, action='store',
-                           help='default=%(default): Method for calculating distance.')
+                           help='default=%(default)s: Method for calculating distance.')
 parser_curate.add_argument('--mapping_rate', metavar='INT', default=0.20, type=int, required=False, action='store',
-                           help='default=%(default): cutoff for mapping rate.')
+                           help='default=%(default)s: cutoff for mapping rate.')
 parser_curate.add_argument('--cleanup', metavar='INT', default=0, type=int, required=False, action='store',
-                           help='default=%(default): Saves intermediate files, if 0.')
+                           help='default=%(default)s: Saves intermediate files, if 0.')
 parser_curate.add_argument('--tissues', metavar='STR', default=None, type=str, required=False, action='store',
-                           help='default=%(default): List of tissues to be included.')
+                           help='default=%(default)s: List of tissues to be included.')
 parser_curate.set_defaults(handler=command_curate)
 
-# Sub parser: curate
+# Sub parser: merge
 parser_merge = subparsers.add_parser('merge', help='see `amalgkit merge -h`')
 
 parser_merge.add_argument('--work_dir', metavar='PATH', default='./', type=str, required=False, action='store',
