@@ -9,6 +9,8 @@ import lxml.etree
 import datetime
 import time
 
+
+
 def check_config_dir(args):
     files = os.listdir(args.config_dir)
     asserted_files = [

@@ -61,23 +61,7 @@ amalgkit getfastq \
 --layout 'auto' \
 --remove_tmp 'yes' \
 --remove_sra 'yes' \
---concat 'no'
+--concat 'no' \
+--ascp 'yes' \
+--ascp_key "${HOME}/Applications/Aspera Connect.app/Contents/Resources/asperaweb_id_dsa.openssh"
 
-
-
-
-# a small-scale sample
-pip install "${dir_repo}"; \
-amalgkit getfastq \
---entrez_email 'kfuku52@gmail.com' \
---id 'SRR7764276' \
---threads 8 \
---work_dir ${dir_repo}/tests/getfastq \
---save_metadata 'yes' \
---pfd 'yes' \
---max_bp '75000' \
---fastp 'yes' \
---layout 'auto' \
---remove_tmp 'yes' \
---remove_sra 'yes' \
---concat 'no'
