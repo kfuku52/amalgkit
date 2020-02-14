@@ -193,6 +193,8 @@ parser_curate.add_argument('--auto_dir', metavar='yes|no', default='no', type=st
                            help='default=%(default)s: Working directory. If "yes", new directory will be created in the working directory according to the scheme "curate_[0-9]*".')
 parser_curate.add_argument('--infile', metavar='PATH', default=None, type=str, required=True, action='store',
                            help='default=%(default)s: Name or Path of file to curate.')
+parser_curate.add_argument('--eff_len_file', metavar='PATH', default=None, type=str, required=True, action='store',
+                           help='default=%(default)s: Name or Path of file to effective length file. Has to have same format as infile.')
 parser_curate.add_argument('--metafile', metavar='PATH', default=None, type=str, required=True, action='store',
                            help='default=%(default)s: Path to metadata file, obtained by amalgkit metadata command.')
 parser_curate.add_argument('--dist_method', metavar='STR', default='pearson', type=str, required=False, action='store',

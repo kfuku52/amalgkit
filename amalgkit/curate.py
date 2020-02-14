@@ -16,6 +16,7 @@ def curate_main(args):
 
     quant_out = os.path.join(args.work_dir, args.infile)
     meta_out = os.path.join(args.work_dir, args.metafile)
+    eff_len_out = os.path.join(args.work_dir, args.eff_len_file)
     out_dir = ''
     if args.auto_dir == 'yes':
         if not os.path.exists(os.path.join(args.out_dir, 'curate_output')):
@@ -34,4 +35,4 @@ def curate_main(args):
     tissues = '|'.join(tissues)
     curate_path = os.path.dirname(os.path.realpath(__file__))
     r_script_path = curate_path+'/transcriptome_curation.r'
-    subprocess.check_call(['Rscript', r_script_path, os.path.realpath(quant_out), os.path.realpath(meta_out), os.path.realpath(out_dir), dist_method, '0', str(mr_cut), str(intermediate), tissues])
+    subprocess.check_call(['Rscript', r_script_path, os.path.realpath(quant_out), os.path.realpath(meta_out), os.path.realpath(out_dir),os.path.realpath(eff_len_out), dist_method, '0', str(mr_cut), str(intermediate), tissues])

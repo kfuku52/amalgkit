@@ -324,6 +324,7 @@ class Metadata:
                 self.df.loc[:,col] = self.df.loc[:,col].str.replace(replace_from, replace_to, regex=True, case=False)
 
     def group_tissues_auto(self):
+        import nltk
         from nltk.stem import WordNetLemmatizer
         import obonet
         nltk.download('wordnet')
