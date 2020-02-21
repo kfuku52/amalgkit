@@ -13,6 +13,9 @@ def quant_main(args):
         print(",<ERROR> kallisto is not installed.")
         sys.exit(1)
 
+    if args.out_dir is None:
+        args.out_dir = args.work_dir
+
     if args.index is None:
         index = args.id + ".idx"
     else:
@@ -35,7 +38,16 @@ def quant_main(args):
 
 
     # make results directory, if not already there
-    output_dir = create_run_dir(os.path.join(args.out_dir, 'quant_output'))
+    output_dir = ''
+    if args.auto_dir == 'yes':
+        if not os.path.exists(os.path.join(args.out_dir, 'quant_output')):
+            output_dir = create_run_dir(os.path.join(args.out_dir, 'quant_output'+args.id))
+    else:
+        if not os.path.exists(args.out_dir):
+            os.makedirs(args.out_dir)
+            output_dir = args.out_dir
+        else:
+            output_dir = args.out_dir
 
     # start quantification process.
     # throws exception, if in_files still empty.
