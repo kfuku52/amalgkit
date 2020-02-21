@@ -511,11 +511,8 @@ class Metadata:
 
 
 def metadata_main(args):
-    if not args.config_dir.endswith('./'):
-        args.config_dir = args.config_dir+'/'
-    if not args.work_dir.endswith('./'):
-        args.work_dir = args.work_dir+'/'
     if not os.path.exists(args.work_dir):
+        print('Creating directory:', args.work_dir)
         os.mkdir(args.work_dir)
 
     metadata_dir = create_run_dir(os.path.join(args.work_dir, 'metadata_output'))
