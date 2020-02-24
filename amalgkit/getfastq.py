@@ -60,14 +60,21 @@ def get_range(max_bp, total_sra_bp, total_spot, num_read_per_sra, offset):
     return start,end
 
 def concat_fastq(args, metadata, sra_output_dir):
+    import re
     layout = get_layout(args, metadata)
     inext = '.amalgkit.fastq.gz'
-    num_inext_files = len([ f for f in os.listdir(sra_output_dir) if f.endswith(inext) ])
+    infiles = [ f for f in os.listdir(sra_output_dir) if f.endswith(inext) ]
+    num_inext_files = len(infiles)
     if (layout=='single')&(num_inext_files==1):
-        print('Only 1', inext, 'file was detected. No concatenation will happen.')
+        print('Only 1', inext, 'file was detected. No concatenation will happen. Just replacing ID in the output file name.')
+        outfile = args.id+inext
+        os.rename(infiles[0], outfile)
         return None
     elif (layout=='paired')&(num_inext_files==2):
-        print('Only 1 pair of', inext, 'files were detected. No concatenation will happen.')
+        print('Only 1 pair of', inext, 'files were detected. No concatenation will happen. Just replacing IDs in the output file names.')
+        for infile in infiles:
+            outfile = args.id+re.sub('.*(_[1-2])', '\g<1>', infile)
+            os.rename(infile, outfile)
         return None
     else:
         print('Concatenating files with the extension:', inext)
