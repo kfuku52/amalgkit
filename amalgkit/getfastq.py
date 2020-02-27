@@ -73,7 +73,9 @@ def concat_fastq(args, metadata, sra_output_dir, num_bp_per_sra):
         outfile = args.id+inext
         if infiles[0]!=outfile:
             print('Replacing ID in the output file name:', infiles[0], outfile)
-            os.rename(infiles[0], outfile)
+            infile_path = os.path.join(sra_output_dir, infiles[0])
+            outfile_path = os.path.join(sra_output_dir, outfile)
+            os.rename(infile_path, outfile_path)
         return None
     elif (layout=='paired')&(num_inext_files==2):
         print('Only 1 pair of', inext, 'files were detected. No concatenation will happen.')
@@ -81,7 +83,9 @@ def concat_fastq(args, metadata, sra_output_dir, num_bp_per_sra):
             outfile = args.id+re.sub('.*(_[1-2])', '\g<1>', infile)
             if infile!=outfile:
                 print('Replacing ID in the output file name:', infile, outfile)
-                os.rename(infile, outfile)
+                infile_path = os.path.join(sra_output_dir, infile)
+                outfile_path = os.path.join(sra_output_dir, outfile)
+                os.rename(infile_path, outfile_path)
         return None
     else:
         print('Concatenating files with the extension:', inext)
@@ -112,6 +116,7 @@ def concat_fastq(args, metadata, sra_output_dir, num_bp_per_sra):
                 sra_stat = get_sra_stat(sra_id, metadata, num_bp_per_sra)
                 ext = get_newest_intermediate_file_extension(sra_stat, work_dir=sra_output_dir)
                 remove_intermediate_files(sra_stat, ext=ext, work_dir=sra_output_dir)
+        return None
 
 def remove_sra_files(metadata, sra_dir):
     for sra_id in metadata.df['run']:
@@ -230,15 +235,15 @@ def download_sra(sra_stat, args, work_dir, overwrite=False):
 def check_getfastq_dependency(args):
     if args.pfd=='yes':
         test_pfd = subprocess.run([args.pfd_exe, '-h'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        assert (test_pfd.returncode==0), "parallel-fastq-dump PATH cannot be found."
+        assert (test_pfd.returncode==0), "parallel-fastq-dump PATH cannot be found: "+args.pfd_exe
         test_prefetch = subprocess.run([args.prefetch_exe, '-h'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        assert (test_prefetch.returncode==0), "prefetch (SRA toolkit) PATH cannot be found."
+        assert (test_prefetch.returncode==0), "prefetch (SRA toolkit) PATH cannot be found: "+args.prefetch_exe
     if args.ascp=='yes':
         test_ascp = subprocess.run([args.ascp_exe, '--help'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        assert (test_ascp.returncode==0), "ascp (Aspera Connect) PATH cannot be found."
+        assert (test_ascp.returncode==0), "ascp (Aspera Connect) PATH cannot be found: "+args.ascp_exe
     if args.fastp=='yes':
         test_fp = subprocess.run([args.fastp_exe, '--help'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        assert (test_fp.returncode==0), "fastp PATH cannot be found."
+        assert (test_fp.returncode==0), "fastp PATH cannot be found: "+args.fastp_exe
     if args.read_name!='default':
         test_pigz = subprocess.run(['pigz', '--help'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         if test_pigz.returncode==0:
