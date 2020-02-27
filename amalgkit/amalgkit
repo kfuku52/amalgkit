@@ -153,6 +153,8 @@ parser_getfastq.add_argument('--entrez_additional_search_term', metavar='STR',
                              default='"platform illumina"[Properties] AND "type rnaseq"[Filter] AND "sra biosample"[Filter]',
                              type=str, required=False, action='store',
                              help='default=%(default)s: Entrez search terms in addition to --id option to further restrict the SRA entry.')
+parser_getfastq.add_argument('--tol', metavar='FLOAT', default=1, type=float, required=False, action='store',
+                          help='default=%(default)s: Acceptable % loss of reads relative to --max_bp. If the 1st-round sequence generation could not produce enough reads, the 2nd-round sequence generation is activated to compensate the loss.')
 parser_getfastq.set_defaults(handler=command_getfastq)
 
 
@@ -173,7 +175,7 @@ parser_quant.add_argument('--build_index', metavar='yes|no', default="yes", type
 parser_quant.add_argument('--threads', metavar='INT', default=4, type=int, required=False, action='store',
                              help='default=%(default)s: Number of threads.')
 parser_quant.add_argument('--fragment_length', metavar='INT', default=None, type=int, required=False, action='store',
-                             help='default=%(default)s: length of the fragment length (not read length). Only required, if single end reads are used.')
+                             help='default=%(default)s: length of the fragment (not read length). Only required, if single end reads are used.')
 parser_quant.add_argument('--work_dir', metavar='PATH', default='./', type=str, required=False, action='store',
                              help='default=%(default)s: Working directory.')
 parser_quant.add_argument('--out_dir', metavar='PATH', default=None, type=str, required=False, action='store',

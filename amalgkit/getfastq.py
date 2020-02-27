@@ -69,15 +69,19 @@ def concat_fastq(args, metadata, sra_output_dir, num_bp_per_sra):
     infiles = [ item for sublist in infiles for item in sublist ]
     num_inext_files = len(infiles)
     if (layout=='single')&(num_inext_files==1):
-        print('Only 1', inext, 'file was detected. No concatenation will happen. Just replacing ID in the output file name.')
+        print('Only 1', inext, 'file was detected. No concatenation will happen.')
         outfile = args.id+inext
-        os.rename(infiles[0], outfile)
+        if infiles[0]!=outfile:
+            print('Replacing ID in the output file name:', infiles[0], outfile)
+            os.rename(infiles[0], outfile)
         return None
     elif (layout=='paired')&(num_inext_files==2):
-        print('Only 1 pair of', inext, 'files were detected. No concatenation will happen. Just replacing IDs in the output file names.')
+        print('Only 1 pair of', inext, 'files were detected. No concatenation will happen.')
         for infile in infiles:
             outfile = args.id+re.sub('.*(_[1-2])', '\g<1>', infile)
-            os.rename(infile, outfile)
+            if infile!=outfile:
+                print('Replacing ID in the output file name:', infile, outfile)
+                os.rename(infile, outfile)
         return None
     else:
         print('Concatenating files with the extension:', inext)
@@ -490,9 +494,11 @@ def getfastq_main(args):
 
     total_bp_remaining = seq_summary['bp_remaining'].sum()
     percent_remaining = total_bp_remaining/max_bp*100
-    if (percent_remaining>3):
-        pr = '{:.2f}'.format(percent_remaining)
-        print(pr, '% dropped in the 1st round. Starting the 2nd-round sequence extraction to compensate the dropped reads.')
+    pr = '{:.2f}'.format(percent_remaining)
+    if (percent_remaining<args.tol):
+        print('Only', pr, '% of reads dropped in the 1st round (tol=', args.tol, '%). Proceeding without 2nd-round sequence extraction.')
+    else:
+        print(pr, '% of reads dropped in the 1st round (tol=', args.tol, '%). Starting the 2nd-round sequence extraction to compensate it.')
         seq_summary = calc_2nd_ranges(args, total_bp_remaining, seq_summary)
         ext_main = '.amalgkit.fastq.gz'
         ext_1st_tmp = '.amalgkit_1st.fastq.gz'
@@ -522,10 +528,6 @@ def getfastq_main(args):
             print('Time elapsed for 2nd-round:', sra_stat['sra_id'], int(time.time()-start_time), '[sec]')
 
     print('')
-    if args.fastp=='yes':
-        print('Sum of fastp input reads:', "{:,}".format(seq_summary['bp_fastp_in'].sum()), 'bp')
-        print('Sum of fastp output reads:', "{:,}".format(seq_summary['bp_fastp_out'].sum()), 'bp')
-    print('')
     if args.concat=='yes':
         concat_fastq(args, metadata, sra_output_dir, num_bp_per_sra)
     if args.remove_sra=='yes':
@@ -534,8 +536,10 @@ def getfastq_main(args):
         if args.pfd=='yes':
             print('SRA files not removed:', sra_output_dir)
     print('max_bp:', "{:,}".format(max_bp), 'bp')
-    print('Sum of fastq_dump dumped reads:', "{:,}".format(seq_summary['bp_dumped'].sum()), 'bp')
-    print('Sum of fastq_dump rejected reads:', "{:,}".format(seq_summary['bp_rejected'].sum()), 'bp')
-    print('Sum of fastq_dump written reads:', "{:,}".format(seq_summary['bp_written'].sum()), 'bp')
-    print('Sum of fastp input reads:', "{:,}".format(seq_summary['bp_fastp_in'].sum()), 'bp')
-    print('Sum of fastp output reads:', "{:,}".format(seq_summary['bp_fastp_out'].sum()), 'bp')
+    if args.pfd:
+        print('Sum of fastq_dump dumped reads:', "{:,}".format(seq_summary['bp_dumped'].sum()), 'bp')
+        print('Sum of fastq_dump rejected reads:', "{:,}".format(seq_summary['bp_rejected'].sum()), 'bp')
+        print('Sum of fastq_dump written reads:', "{:,}".format(seq_summary['bp_written'].sum()), 'bp')
+    if args.fastp=='yes':
+        print('Sum of fastp input reads:', "{:,}".format(seq_summary['bp_fastp_in'].sum()), 'bp')
+        print('Sum of fastp output reads:', "{:,}".format(seq_summary['bp_fastp_out'].sum()), 'bp')
