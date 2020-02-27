@@ -167,9 +167,13 @@ def remove_intermediate_files(sra_stat, ext, work_dir):
 def get_newest_intermediate_file_extension(sra_stat, work_dir):
     # Order is important in this list. More downstream should come first.
     extensions = ['.amalgkit.fastq.gz','.rename.fastq.gz','.fastp.fastq.gz','.fastq.gz']
+    if sra_stat['layout']=='single':
+        subext = ''
+    elif sra_stat['layout']=='paired':
+        subext = '_1'
     files = os.listdir(work_dir)
     for ext in extensions:
-        if any([ (f.startswith(sra_stat['sra_id']))&(f.endswith(ext)) for f in files ]):
+        if any([ f==sra_stat['sra_id']+subext+ext for f in files ]):
             ext_out = ext
             break
     assert 'ext_out' in locals(), 'Any of expected extensions ('+' '.join(extensions)+') found in '+work_dir
