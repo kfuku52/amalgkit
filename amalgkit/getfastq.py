@@ -435,6 +435,26 @@ def calc_2nd_ranges(args, total_bp_remaining, seq_summary):
     seq_summary['end_2nd'] = end_2nds
     return seq_summary
 
+def print_read_stats(args, seq_summary, max_bp, individual=True):
+    print('Target size (--max_bp):', "{:,}".format(max_bp), 'bp')
+    if args.pfd:
+        print('Sum of fastq_dump dumped reads:', "{:,}".format(seq_summary['bp_dumped'].sum()), 'bp')
+        print('Sum of fastq_dump rejected reads:', "{:,}".format(seq_summary['bp_rejected'].sum()), 'bp')
+        print('Sum of fastq_dump written reads:', "{:,}".format(seq_summary['bp_written'].sum()), 'bp')
+    if args.fastp=='yes':
+        print('Sum of fastp input reads:', "{:,}".format(seq_summary['bp_fastp_in'].sum()), 'bp')
+        print('Sum of fastp output reads:', "{:,}".format(seq_summary['bp_fastp_out'].sum()), 'bp')
+    if individual:
+        print('Individual SRA IDs:', seq_summary['bp_dumped'].index.values)
+        if args.pfd:
+            print('Individual fastq_dump dumped reads:', seq_summary['bp_dumped'].values)
+            print('Individual fastq_dump rejected reads:', seq_summary['bp_rejected'].values)
+            print('Individual fastq_dump written reads:', seq_summary['bp_written'].values)
+        if args.fastp=='yes':
+            print('Individual fastp input reads:', seq_summary['bp_fastp_in'].values)
+            print('Individual fastp output reads:', seq_summary['bp_fastp_out'].values)
+    print('')
+
 def getfastq_main(args):
     #sra_dir = os.path.join(os.path.expanduser("~"), 'ncbi/public/sra')
     assert (args.entrez_email!='aaa@bbb.com'), "Provide your email address. No worry, you won't get spam emails."
@@ -492,6 +512,8 @@ def getfastq_main(args):
                                           gz_exe, ungz_exe, total_sra_bp)
         print('Time elapsed for sequence extraction:', sra_stat['sra_id'], int(time.time()-start_time), '[sec]')
 
+    print('\n--- getfastq 1st-round sequence generation report ---')
+    print_read_stats(args, seq_summary, max_bp)
     total_bp_remaining = seq_summary['bp_remaining'].sum()
     percent_remaining = total_bp_remaining/max_bp*100
     pr = '{:.2f}'.format(percent_remaining)
@@ -535,11 +557,6 @@ def getfastq_main(args):
     else:
         if args.pfd=='yes':
             print('SRA files not removed:', sra_output_dir)
-    print('max_bp:', "{:,}".format(max_bp), 'bp')
-    if args.pfd:
-        print('Sum of fastq_dump dumped reads:', "{:,}".format(seq_summary['bp_dumped'].sum()), 'bp')
-        print('Sum of fastq_dump rejected reads:', "{:,}".format(seq_summary['bp_rejected'].sum()), 'bp')
-        print('Sum of fastq_dump written reads:', "{:,}".format(seq_summary['bp_written'].sum()), 'bp')
-    if args.fastp=='yes':
-        print('Sum of fastp input reads:', "{:,}".format(seq_summary['bp_fastp_in'].sum()), 'bp')
-        print('Sum of fastp output reads:', "{:,}".format(seq_summary['bp_fastp_out'].sum()), 'bp')
+    print('\n--- getfastq final report ---')
+    print_read_stats(args, seq_summary, max_bp)
+
