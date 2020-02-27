@@ -114,8 +114,8 @@ def concat_fastq(args, metadata, sra_output_dir, num_bp_per_sra):
                 remove_intermediate_files(sra_stat, ext=ext, work_dir=sra_output_dir)
 
 def remove_sra_files(metadata, sra_dir):
-    for sra_stat['sra_id'] in metadata.df['run']:
-        sra_pattern = os.path.join(sra_dir, sra_stat['sra_id']+'.sra*')
+    for sra_id in metadata.df['run']:
+        sra_pattern = os.path.join(sra_dir, sra_id+'.sra*')
         sra_paths = glob.glob(sra_pattern)
         if len(sra_paths)>0:
             for sra_path in sra_paths:
