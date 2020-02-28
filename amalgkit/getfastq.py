@@ -341,8 +341,13 @@ def run_fastp(sra_stat, args, sra_output_dir, seq_summary):
     if args.remove_tmp=='yes':
         remove_intermediate_files(sra_stat, ext=inext, work_dir=sra_output_dir)
     bps = fp_out.stderr.decode('utf8').split('\n')
-    bp_in = [ int(line.replace('total bases: ','').split(' ')[0]) for line in bps if line.startswith('total bases: ') ][0:2]
-    bp_out = [ int(line.replace('total bases: ','').split(' ')[0]) for line in bps if line.startswith('total bases: ') ][2:4]
+    bp_in = list()
+    bp_out = list()
+    for i in range(len(bps)):
+        if (' before filtering:' in bps[i]):
+            bp_in.append(int(bps[i+2].replace('total bases: ', '')))
+        if (' after filtering:' in bps[i])|(' aftering filtering:' in bps[i]):
+            bp_out.append(int(bps[i+2].replace('total bases: ', '')))
     seq_summary['bp_fastp_in'].loc[sra_stat['sra_id']] += sum(bp_in)
     seq_summary['bp_fastp_out'].loc[sra_stat['sra_id']] += sum(bp_out)
     return seq_summary
@@ -531,11 +536,20 @@ def getfastq_main(args):
     print_read_stats(args, seq_summary, max_bp)
     total_bp_remaining = seq_summary['bp_remaining'].sum()
     percent_remaining = total_bp_remaining/max_bp*100
-    txt = '{:.2f}% of reads were dropped in the 1st round (tol={}%).'.format(percent_remaining, args.tol)
+    if args.pfd=='yes':
+        total_bp_dumped = seq_summary['bp_dumped'].sum()
+        total_bp_out = seq_summary['bp_written'].sum()
+    if args.fastp=='yes':
+        total_bp_out = seq_summary['bp_fastp_out'].sum()
+    percent_dropped = total_bp_out/total_bp_dumped*100
+    txt = '{:.2f}% of reads were dropped in the 1st-round sequence generation.'
+    print(txt.format(percent_remaining, args.tol))
+    txt = 'The amount of generated reads were {:.2f}% ({:,}/{:,}) smaller than the target size (tol={}%).'
+    print(txt.format(percent_remaining, total_bp_out, max_bp, args.tol))
     if (percent_remaining<args.tol):
-        print(txt, 'Proceeding without 2nd-round sequence extraction.')
+        print('Proceeding without 2nd-round sequence extraction.')
     else:
-        print(txt, 'Starting the 2nd-round sequence extraction to compensate it.')
+        print('Starting the 2nd-round sequence extraction to compensate it.')
         seq_summary = calc_2nd_ranges(args, total_bp_remaining, seq_summary)
         ext_main = '.amalgkit.fastq.gz'
         ext_1st_tmp = '.amalgkit_1st.fastq.gz'
