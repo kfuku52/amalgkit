@@ -10,7 +10,7 @@ def command_metadata(args):
     start = time.time()
     from amalgkit.metadata import metadata_main
     metadata_main(args)
-    print('Time elapsed:', int(time.time()-start), '[sec]')
+    print('Time elapsed: {:,} sec'.format(int(time.time()-start)))
     sys.stdout.write('amalgkit metadata: end\n')
 
 def command_view(args):
@@ -19,7 +19,7 @@ def command_view(args):
     #from amalgkit.view import view_main
     #view_main(args)
     print('Hello world!')
-    print('Time elapsed:', int(time.time()-start), '[sec]')
+    print('Time elapsed: {:,} sec'.format(int(time.time()-start)))
     sys.stdout.write('amalgkit view: end\n')
 
 def command_getfastq(args):
@@ -27,7 +27,7 @@ def command_getfastq(args):
     start = time.time()
     from amalgkit.getfastq import getfastq_main
     getfastq_main(args)
-    print('Time elapsed:', int(time.time()-start), '[sec]')
+    print('Time elapsed: {:,} sec'.format(int(time.time()-start)))
     sys.stdout.write('amalgkit getfastq: end\n')
 
 def command_quant(args):
@@ -40,7 +40,7 @@ def command_quant(args):
         print("ERROR: " , err)
         sys.exit(1)
 
-    print('Time elapsed:', int(time.time()-start), '[sec]')
+    print('Time elapsed: {:,} sec'.format(int(time.time()-start)))
     sys.stdout.write('amalgkit quant: end\n')
 
 def command_curate(args):
@@ -48,7 +48,7 @@ def command_curate(args):
     start = time.time()
     from amalgkit.curate import curate_main
     curate_main(args)
-    print('Time elapsed:', int(time.time()-start), '[sec]')
+    print('Time elapsed: {:,} sec'.format(int(time.time()-start)))
     sys.stdout.write('amalgkit curate: end\n')
 
 def command_merge(args):
@@ -56,7 +56,7 @@ def command_merge(args):
     start = time.time()
     from amalgkit.merge import merge_main
     merge_main(args)
-    print('Time elapsed:', int(time.time()-start), '[sec]')
+    print('Time elapsed: {:,} sec'.format(int(time.time()-start)))
     sys.stdout.write('amalgkit merge: end\n')
 
 def command_help(args):

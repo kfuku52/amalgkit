@@ -176,7 +176,7 @@ def get_newest_intermediate_file_extension(sra_stat, work_dir):
         if any([ f==sra_stat['sra_id']+subext+ext for f in files ]):
             ext_out = ext
             break
-    assert 'ext_out' in locals(), 'Any of expected extensions ('+' '.join(extensions)+') found in '+work_dir
+    assert 'ext_out' in locals(), 'None of expected extensions ('+' '.join(extensions)+') found in '+work_dir
     return ext_out
 
 def download_sra(sra_stat, args, work_dir, overwrite=False):
@@ -446,7 +446,7 @@ def calc_2nd_ranges(args, total_bp_remaining, seq_summary):
 
 def print_read_stats(args, seq_summary, max_bp, individual=True):
     print('Target size (--max_bp):', "{:,}".format(max_bp), 'bp')
-    if args.pfd:
+    if args.pfd=='yes':
         print('Sum of fastq_dump dumped reads:', "{:,}".format(seq_summary['bp_dumped'].sum()), 'bp')
         print('Sum of fastq_dump rejected reads:', "{:,}".format(seq_summary['bp_rejected'].sum()), 'bp')
         print('Sum of fastq_dump written reads:', "{:,}".format(seq_summary['bp_written'].sum()), 'bp')
@@ -454,14 +454,20 @@ def print_read_stats(args, seq_summary, max_bp, individual=True):
         print('Sum of fastp input reads:', "{:,}".format(seq_summary['bp_fastp_in'].sum()), 'bp')
         print('Sum of fastp output reads:', "{:,}".format(seq_summary['bp_fastp_out'].sum()), 'bp')
     if individual:
-        print('Individual SRA IDs:', seq_summary['bp_dumped'].index.values)
-        if args.pfd:
-            print('Individual fastq_dump dumped reads:', seq_summary['bp_dumped'].values)
-            print('Individual fastq_dump rejected reads:', seq_summary['bp_rejected'].values)
-            print('Individual fastq_dump written reads:', seq_summary['bp_written'].values)
+        print('Individual SRA IDs:', ' '.join(seq_summary['bp_dumped'].index.values))
+        read_types = list()
+        keys = list()
+        if args.pfd=='yes':
+            read_types = read_types + ['fastq_dump dumped reads', 'fastq_dump rejected reads', 'fastq_dump written reads']
+            keys = keys + ['bp_dumped', 'bp_rejected', 'bp_written']
         if args.fastp=='yes':
-            print('Individual fastp input reads:', seq_summary['bp_fastp_in'].values)
-            print('Individual fastp output reads:', seq_summary['bp_fastp_out'].values)
+            read_types = read_types + ['fastp input reads', 'fastp output reads']
+            keys = keys + ['bp_fastp_in', 'bp_fastp_out']
+        if len(read_types)>0:
+            for rt,key in zip(read_types, keys):
+                values = [ '{:,}'.format(s) for s in seq_summary[key].values ]
+                txt = ' '.join(values)
+                print('Individual {} (bp): {}'.format(rt, txt))
     print('')
 
 def getfastq_main(args):
@@ -493,10 +499,10 @@ def getfastq_main(args):
     num_bp_per_sra = int(max_bp/num_sra)
     total_sra_bp = int(metadata.df['total_bases'].astype(int).sum())
     offset = 10000 # https://edwards.sdsu.edu/research/fastq-dump/
-    print('Number of SRA:', num_sra)
-    print('max_bp:', "{:,}".format(max_bp), 'bp')
+    print('Number of SRAs:', num_sra)
+    print('Total target size (--max_bp):', "{:,}".format(max_bp), 'bp')
     print('Total SRA size:', "{:,}".format(total_sra_bp), 'bp')
-    print('Max size per SRA:', "{:,}".format(num_bp_per_sra), 'bp')
+    print('Target size per SRA:', "{:,}".format(num_bp_per_sra), 'bp')
     for i in metadata.df.index:
         print('Individual SRA size :', metadata.df.loc[i,'run'], ':', "{:,}".format(int(metadata.df.loc[i,'total_bases'])), 'bp')
     sra_ids = metadata.df.loc[:,'run'].values
@@ -519,17 +525,17 @@ def getfastq_main(args):
         start,end = get_range(sra_stat, offset, total_sra_bp, max_bp)
         seq_summary = sequence_extraction(args, sra_stat, start, end, sra_output_dir, sra_temp_dir, seq_summary,
                                           gz_exe, ungz_exe, total_sra_bp)
-        print('Time elapsed for sequence extraction:', sra_stat['sra_id'], int(time.time()-start_time), '[sec]')
+        print('Time elapsed for 1st-round sequence extraction: {}, {:,} sec'.format(sra_stat['sra_id'], int(time.time()-start_time)))
 
     print('\n--- getfastq 1st-round sequence generation report ---')
     print_read_stats(args, seq_summary, max_bp)
     total_bp_remaining = seq_summary['bp_remaining'].sum()
     percent_remaining = total_bp_remaining/max_bp*100
-    pr = '{:.2f}'.format(percent_remaining)
+    txt = '{:.2f}% of reads were dropped in the 1st round (tol={}%).'.format(percent_remaining, args.tol)
     if (percent_remaining<args.tol):
-        print('Only', pr, '% of reads dropped in the 1st round (tol=', args.tol, '%). Proceeding without 2nd-round sequence extraction.')
+        print(txt, 'Proceeding without 2nd-round sequence extraction.')
     else:
-        print(pr, '% of reads dropped in the 1st round (tol=', args.tol, '%). Starting the 2nd-round sequence extraction to compensate it.')
+        print(txt, 'Starting the 2nd-round sequence extraction to compensate it.')
         seq_summary = calc_2nd_ranges(args, total_bp_remaining, seq_summary)
         ext_main = '.amalgkit.fastq.gz'
         ext_1st_tmp = '.amalgkit_1st.fastq.gz'
@@ -540,6 +546,10 @@ def getfastq_main(args):
             sra_stat = get_sra_stat(sra_id, metadata, num_bp_per_sra)
             start = seq_summary['start_2nd'].loc[sra_id]
             end = seq_summary['end_2nd'].loc[sra_id]
+            if (start>=end):
+                txt = '{}: All spots were used in the 1st trial. Cancelling the 2nd trial. start={:,}, end={:,}'
+                print(txt.format(sra_id, start, end))
+                continue
             rename_fastq(sra_stat, sra_output_dir, inext=ext_main, outext=ext_1st_tmp)
             seq_summary = sequence_extraction(args, sra_stat, start, end, sra_output_dir, sra_temp_dir, seq_summary,
                                               gz_exe, ungz_exe, total_sra_bp)
@@ -555,8 +565,7 @@ def getfastq_main(args):
                 os.system('cat "'+adding_path+'" >> "'+added_path+'"')
                 os.remove(adding_path)
                 os.rename(added_path, adding_path)
-
-            print('Time elapsed for 2nd-round:', sra_stat['sra_id'], int(time.time()-start_time), '[sec]')
+            print('Time elapsed for 2nd-round sequence extraction: {}, {:,} sec'.format(sra_stat['sra_id'], int(time.time()-start_time)))
 
     print('')
     if args.concat=='yes':
