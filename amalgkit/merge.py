@@ -5,15 +5,19 @@ import os
 
 def read_4th(fn, column, mode):
 
-    return pandas.read_csv(fn, delim_whitespace=1, usecols=[0,column], index_col=0, header=0,names=[mode,'length_'+fn,'eff-length_'+fn, 'est-counts_'+fn, 'tpm_'+fn])
+    return pandas.read_csv(fn, delim_whitespace=1, usecols=[0, column], index_col=0, header=0,
+                           names=[mode, 'length_'+fn, 'eff-length_'+fn, 'est-counts_'+fn, 'tpm_'+fn])
 
 
-def exec_merge(args,mode):
-
+def exec_merge(args, mode):
+    column = None
     if mode == 'est_counts':
         column = 3
     if mode == 'eff_length':
         column = 2
+    if column is None:
+        raise NameError('mode not set correctly.')
+
     files = glob('*.tsv')
 
     sra_file = pandas.concat([read_4th(fn, column, mode) for fn in files], axis=1)
