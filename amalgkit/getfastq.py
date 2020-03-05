@@ -181,7 +181,7 @@ def download_sra(sra_id, args, work_dir, overwrite=False):
         if os.path.exists(individual_sra_tmp_dir):
             shutil.rmtree(individual_sra_tmp_dir)
         prefetch_command = [args.prefetch_exe, '--force', 'no', '--transport', 'http', '--max-size', '100G',
-                            '--output-directory', '"'+work_dir+'"', sra_id]
+                            '--output-directory', work_dir, sra_id]
         print('Command:', ' '.join(prefetch_command))
         prefetch_out = subprocess.run(prefetch_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         print('prefetch stdout:')
