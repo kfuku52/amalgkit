@@ -2,7 +2,7 @@
 <project version="4">
   <component name="ProjectModuleManager">
     <modules>
-      <module fileurl="file://$PROJECT_DIR$/.idea/amalgkit.iml" filepath="$PROJECT_DIR$/.idea/amalgkit.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/conda base.iml" filepath="$PROJECT_DIR$/.idea/conda base.iml" />
     </modules>
   </component>
 </project>

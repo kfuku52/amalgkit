@@ -14,7 +14,7 @@
 pip install git+https://github.com/kfuku52/amalgkit
 
 # This should show complete options
-amalgkit -h 
+amalgkit -h
 ```
 
 ## `amalgkit metadata` – SRA metadata curation
