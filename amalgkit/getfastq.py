@@ -254,10 +254,10 @@ def check_getfastq_dependency(args):
             print('pigz found. It will be used for compression/decompression in read name formatting.')
             gz_exe = 'pigz -p '+str(args.threads)
             ungz_exe = 'unpigz -p'+str(args.threads)
-        else:
-            print('pigz not found. gzip/gunzip will be used for compression/decompression in read name formatting.')
-            gz_exe = 'gzip'
-            ungz_exe = 'gunzip'
+    else:
+        print('pigz not found. gzip/gunzip will be used for compression/decompression in read name formatting.')
+        gz_exe = 'gzip'
+        ungz_exe = 'gunzip'
     return gz_exe,ungz_exe
 
 def set_getfastq_directories(args):
