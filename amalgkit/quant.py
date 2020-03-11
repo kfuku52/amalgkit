@@ -40,7 +40,7 @@ def quant_main(args):
                 print('kallisto index was detected:', index)
             else:
                 print('kallisto index was not detected. Creating:', index)
-                subprocess.run(["kallisto", "index", "--i", index, args.work_dir + args.ref])
+                subprocess.run(["kallisto", "index", "--i", index, args.ref])
 
     # prefer amalgkit processed files over others.
 
