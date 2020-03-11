@@ -208,6 +208,9 @@ pqu.add_argument('--metadata', metavar='PATH', default=None, type=str, required=
                  help='default=%(default)s: PATH to metadata table. See `amalgkit metadata -h` for details.')
 pqu.add_argument('--batch', metavar='INT', default=None, type=int, required=False, action='store',
                  help='default=%(default)s: Zero-based index of metadata table (--metadata). If set, process only one SRA record. This function is intended for array job processing.')
+pqu.add_argument('--clean_fastq', metavar='yes|no', default='yes', type=str, required=False, action='store',
+                 choices=['yes', 'no'],
+                 help='default=%(default)s: Remove fastq files when quant is successfully completed.')
 pqu.set_defaults(handler=command_quant)
 
 # Sub parser: curate

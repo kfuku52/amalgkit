@@ -110,9 +110,15 @@ def quant_main(args):
             print("fragment length standard deviation set to:", fragment_sd)
             subprocess.run(["kallisto", "quant", "--index", index,  "-o", output_dir, "--single", "-l", str(args.frament_length), "-s", str(fragment_sd), in_files[0]])
 
-
-
     # move output to results with unique name
     os.rename(os.path.join(output_dir, "run_info.json"), os.path.join(output_dir, sra_id + "_run_info.json"))
     os.rename(os.path.join(output_dir, "abundance.tsv"), os.path.join(output_dir, sra_id + "_abundance.tsv"))
     os.rename(os.path.join(output_dir, "abundance.h5"), os.path.join(output_dir, sra_id + "_abundance.h5"))
+
+    if (args.clean_fastq=='yes')&(os.path.exists(os.path.join(output_dir, sra_id + "_abundance.tsv"))):
+        for in_file in in_files:
+            print('Output file detected. Safely removing fastq:', in_file)
+            os.remove(in_file)
+            placeholder = open(in_file+'.safely_removed', "w")
+            placeholder.write("This fastq file was safely removed after `amalgkit quant`.")
+            placeholder.close()
