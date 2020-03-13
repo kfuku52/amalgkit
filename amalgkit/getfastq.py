@@ -1,5 +1,6 @@
 from Bio import Entrez
 from urllib.error import HTTPError
+import itertools
 import numpy, pandas
 import time, datetime, lxml, subprocess, os, shutil, gzip, glob
 from amalgkit.metadata import Metadata
@@ -493,6 +494,23 @@ def getfastq_metadata(args):
         metadata = load_metadata(args)
     return metadata
 
+def is_getfastq_output_present(args, sra_stat, output_dir):
+    if args.concat=='yes':
+        prefixes = [args.id,]
+    else:
+        prefixes = [sra_stat['sra_id'],]
+    if sra_stat['layout']=='single':
+        sub_exts = ''
+    elif sra_stat['layout']=='paired':
+        sub_exts = ['_1', '_2']
+    exts = ['.amalgkit.fastq.gz',]
+    is_output_present = True
+    for prefix,sub_ext,ext in itertools.product(prefixes, sub_exts, exts):
+        out_path1 = os.path.join(output_dir, prefix+sub_ext+ext)
+        out_path2 = os.path.join(output_dir, prefix+sub_ext+ext+'.safely_removed')
+        is_output_present *= (os.path.exists(out_path1)|os.path.exists(out_path2))
+    return is_output_present
+
 def getfastq_main(args):
     #sra_dir = os.path.join(os.path.expanduser("~"), 'ncbi/public/sra')
     gz_exe,ungz_exe = check_getfastq_dependency(args)
@@ -522,6 +540,9 @@ def getfastq_main(args):
         sra_id = metadata.df.loc[i,'run']
         sra_stat = get_sra_stat(sra_id, metadata, num_bp_per_sra)
         output_dir = set_getfastq_directories(args, sra_id)
+        if (is_getfastq_output_present(args, sra_stat, output_dir))&(args.redo=='no'):
+            print('Output file(s) detected. Skipping {}.  Set "--redo yes" for reanalysis.'.format(sra_id))
+            continue
         remove_old_intermediate_files(metadata, work_dir=output_dir)
         print('SRA ID:', sra_stat['sra_id'])
         print('Library layout:', sra_stat['layout'])

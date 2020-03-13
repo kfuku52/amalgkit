@@ -12,5 +12,5 @@ setup(
     packages                = find_packages(),
     install_requires        = ['numpy','pandas','biopython','lxml','nltk','obonet'],
     scripts                 = ['amalgkit/amalgkit',],
-    include_package_data    = True
+include_package_data    = True
 )

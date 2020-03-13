@@ -4,6 +4,11 @@ from amalgkit.getfastq import getfastq_getxml, getfastq_search_term
 from amalgkit.metadata import create_run_dir
 from amalgkit.util import *
 
+def is_quant_output_present(sra_id, output_dir):
+    out_path = os.path.join(output_dir, sra_id+'_abundance.tsv')
+    is_output_present = os.path.exists(out_path)
+    return is_output_present
+
 def quant_main(args):
 
     #check kallisto dependency
@@ -22,8 +27,8 @@ def quant_main(args):
         assert (args.batch is not None), '--batch should be specified.'
         metadata = load_metadata(args)
         sra_id = metadata.df.loc[:,'run'].values[0]
-
     print('SRA ID:', sra_id)
+
     if args.index is None:
         index = args.ref + ".idx"
     else:
@@ -52,6 +57,10 @@ def quant_main(args):
     output_dir = os.path.join(args.work_dir, 'quant', sra_id)
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
+
+    if (is_quant_output_present(sra_id, output_dir))&(args.redo=='no'):
+        print('Output file(s) detected. Exiting. Set "--redo yes" for reanalysis.')
+        sys.exit()
 
     # start quantification process.
     # throws exception, if in_files still empty.
