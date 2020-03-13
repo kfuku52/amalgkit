@@ -2,7 +2,7 @@ from Bio import Entrez
 from urllib.error import HTTPError
 import itertools
 import numpy, pandas
-import time, datetime, lxml, subprocess, os, shutil, gzip, glob
+import time, datetime, lxml, subprocess, os, shutil, gzip, glob, sys
 from amalgkit.metadata import Metadata
 from amalgkit.util import *
 
@@ -541,8 +541,12 @@ def getfastq_main(args):
         sra_stat = get_sra_stat(sra_id, metadata, num_bp_per_sra)
         output_dir = set_getfastq_directories(args, sra_id)
         if (is_getfastq_output_present(args, sra_stat, output_dir))&(args.redo=='no'):
-            print('Output file(s) detected. Skipping {}.  Set "--redo yes" for reanalysis.'.format(sra_id))
-            continue
+            if metadata.df.shape[0]==1:
+                print('Output file(s) detected. Exiting.  Set "--redo yes" for reanalysis.')
+                sys.exit()
+            else:
+                print('Output file(s) detected. Skipping {}.  Set "--redo yes" for reanalysis.'.format(sra_id))
+                continue
         remove_old_intermediate_files(metadata, work_dir=output_dir)
         print('SRA ID:', sra_stat['sra_id'])
         print('Library layout:', sra_stat['layout'])
