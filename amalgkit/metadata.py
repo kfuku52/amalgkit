@@ -530,21 +530,10 @@ def metadata_main(args):
         print('Creating directory:', args.work_dir)
         os.mkdir(args.work_dir)
 
-    metadata_dir = ''
-    if args.auto_dir == 'yes':
-        if not os.path.exists(os.path.join(args.work_dir, 'metadata_output')):
-            metadata_dir = create_run_dir(os.path.join(args.work_dir, 'metadata_output'))
-    else:
-        if not os.path.exists(args.work_dir):
-            os.makedirs(args.work_dir)
-            metadata_dir = args.work_dir
-        else:
-            metadata_dir = args.work_dir
-
+    metadata_dir = os.path.join(args.work_dir, 'metadata')
     temp_dir = os.path.join(metadata_dir, 'temp')
-    res_dir = os.path.join(metadata_dir, 'results')
-    metadata_results_dir = os.path.join(res_dir, 'metadata')
-    pivot_table_dir = os.path.join(res_dir, 'pivot_tables')
+    metadata_results_dir = os.path.join(metadata_dir, 'metadata')
+    pivot_table_dir = os.path.join(metadata_dir, 'pivot_tables')
 
     if not os.path.exists(temp_dir):
         os.makedirs(os.path.join(temp_dir))

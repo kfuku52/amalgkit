@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name                    = 'amalgkit',
-    version                 = "0.3",
+    version                 = "0.4.1",
     description             = 'Tools for transcriptome amalgamation',
     license                 = "BSD 3-clause License",
     author                  = "Kenji Fukushima",
@@ -12,5 +12,5 @@ setup(
     packages                = find_packages(),
     install_requires        = ['numpy','pandas','biopython','lxml','nltk','obonet'],
     scripts                 = ['amalgkit/amalgkit',],
-    include_package_data    = True
+include_package_data    = True
 )

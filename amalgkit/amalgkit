@@ -10,25 +10,28 @@ def command_metadata(args):
     start = time.time()
     from amalgkit.metadata import metadata_main
     metadata_main(args)
-    print('Time elapsed: {:,} sec'.format(int(time.time()-start)))
+    print('Time elapsed: {:,} sec'.format(int(time.time() - start)))
     sys.stdout.write('amalgkit metadata: end\n')
+
 
 def command_view(args):
     sys.stdout.write('amalgkit view: start\n')
     start = time.time()
-    #from amalgkit.view import view_main
-    #view_main(args)
+    # from amalgkit.view import view_main
+    # view_main(args)
     print('Hello world!')
-    print('Time elapsed: {:,} sec'.format(int(time.time()-start)))
+    print('Time elapsed: {:,} sec'.format(int(time.time() - start)))
     sys.stdout.write('amalgkit view: end\n')
+
 
 def command_getfastq(args):
     sys.stdout.write('amalgkit getfastq: start\n')
     start = time.time()
     from amalgkit.getfastq import getfastq_main
     getfastq_main(args)
-    print('Time elapsed: {:,} sec'.format(int(time.time()-start)))
+    print('Time elapsed: {:,} sec'.format(int(time.time() - start)))
     sys.stdout.write('amalgkit getfastq: end\n')
+
 
 def command_quant(args):
     sys.stdout.write('amalgkit quant: start\n')
@@ -37,187 +40,208 @@ def command_quant(args):
     try:
         quant_main(args)
     except ValueError as err:
-        print("ERROR: " , err)
+        print("ERROR: ", err)
         sys.exit(1)
 
-    print('Time elapsed: {:,} sec'.format(int(time.time()-start)))
+    print('Time elapsed: {:,} sec'.format(int(time.time() - start)))
     sys.stdout.write('amalgkit quant: end\n')
+
 
 def command_curate(args):
     sys.stdout.write('amalgkit curate: start\n')
     start = time.time()
     from amalgkit.curate import curate_main
     curate_main(args)
-    print('Time elapsed: {:,} sec'.format(int(time.time()-start)))
+    print('Time elapsed: {:,} sec'.format(int(time.time() - start)))
     sys.stdout.write('amalgkit curate: end\n')
+
 
 def command_merge(args):
     sys.stdout.write('amalgkit merge: start\n')
     start = time.time()
     from amalgkit.merge import merge_main
     merge_main(args)
-    print('Time elapsed: {:,} sec'.format(int(time.time()-start)))
+    print('Time elapsed: {:,} sec'.format(int(time.time() - start)))
     sys.stdout.write('amalgkit merge: end\n')
+
 
 def command_help(args):
     print(parser.parse_args([args.command, '--help']))
+
 
 # Main parser
 parser = argparse.ArgumentParser(description='A toolkit for transcriptome amalgamation')
 subparsers = parser.add_subparsers()
 
 # Sub parser: metadata
-parser_metadata = subparsers.add_parser('metadata', help='see `amalgkit metadata -h`')
-parser_metadata.add_argument('-c', '--config_dir', metavar='PATH', default='./', type=str, required=True, action='store',
-                             help='default=%(default)s: Path to the config directory.')
-parser_metadata.add_argument('-w', '--work_dir', metavar='PATH', default='./', type=str, required=True, action='store',
-                             help='default=%(default)s: Path to the directory where intermediate and output files are generated.')
-parser_metadata.add_argument('--auto_dir', metavar='yes|no', default='no', type=str, required=False, action='store',
-                             help='default=%(default)s: Working directory. If "yes", new directory will be created in the working directory according to the scheme "curate_[0-9]*",')
-parser_metadata.add_argument('-e', '--entrez_email', metavar='aaa@bbb.com', default=None, type=str, required=True, action='store',
-                             help='default=%(default)s: Your email address.')
-parser_metadata.add_argument('-p', '--publication_date', metavar='YYYY/MM/DD:YYYY/MM/DD', default='1900/01/01:TODAY', type=str, required=False, action='store',
-                             help='default=%(default)s: Range of the date that records were made public in Entrez.')
-parser_metadata.add_argument('-n', '--min_nspots', metavar='INT', default=5000000, type=int, required=False, action='store',
-                             help='default=%(default)s: Minimum number of RNA-seq reads per sample.')
-parser_metadata.add_argument('-a', '--tissue_detect', metavar='yes|no', default='no', type=str, required=False, action='store',
-                             help='default=%(default)s: Uses config files for tissue grouping by default. If turned on, uses natural language processing to group tissues automatically.')
-parser_metadata.add_argument('-s', '--max_sample', metavar='INT', default=99999, type=int, required=False, action='store',
-                             help='default=%(default)s: Maximum number of RNA-seq data sampled for one tissue in a species.')
-parser_metadata.add_argument('-o', '--overwrite', metavar='no|yes', default='no', type=str,
-                             required=False, action='store', choices=['no','yes'],
-                             help='default=%(default)s: Overwrite existing intermediate files.')
-parser_metadata.set_defaults(handler=command_metadata)
+pme = subparsers.add_parser('metadata', help='see `amalgkit metadata -h`')
+pme.add_argument('-c', '--config_dir', metavar='PATH', default='./', type=str, required=True, action='store',
+                 help='default=%(default)s: Path to the config directory.')
+pme.add_argument('-w', '--work_dir', metavar='PATH', default='./', type=str, required=True, action='store',
+                 help='default=%(default)s: Path to the directory where intermediate and output files are generated.')
+pme.add_argument('-e', '--entrez_email', metavar='aaa@bbb.com', default=None, type=str, required=True, action='store',
+                 help='default=%(default)s: Your email address.')
+pme.add_argument('-p', '--publication_date', metavar='YYYY/MM/DD:YYYY/MM/DD', default='1900/01/01:TODAY', type=str,
+                 required=False, action='store',
+                 help='default=%(default)s: Range of the date that records were made public in Entrez.')
+pme.add_argument('-n', '--min_nspots', metavar='INT', default=5000000, type=int, required=False, action='store',
+                 help='default=%(default)s: Minimum number of RNA-seq reads per sample.')
+pme.add_argument('-a', '--tissue_detect', metavar='yes|no', default='no', type=str, required=False, action='store',
+                 help='default=%(default)s: Uses config files for tissue grouping by default. If turned on, uses natural language processing to group tissues automatically.')
+pme.add_argument('-s', '--max_sample', metavar='INT', default=99999, type=int, required=False, action='store',
+                 help='default=%(default)s: Maximum number of RNA-seq data sampled for one tissue in a species.')
+pme.add_argument('-o', '--overwrite', metavar='no|yes', default='no', type=str,
+                 required=False, action='store', choices=['no', 'yes'],
+                 help='default=%(default)s: Overwrite existing intermediate files.')
+pme.set_defaults(handler=command_metadata)
 
 # Sub parser: view
-parser_view = subparsers.add_parser('view', help='see `amalgkit view -h`')
-parser_view.add_argument('-t', '--taxid', metavar='3400', default=None, type=int, required=True, action='store',
-                         help='default=%(default)s: NCBI Taxid (e.g., 3400 for Magnoliales).')
-parser_view.set_defaults(handler=command_view)
+pvi = subparsers.add_parser('view', help='see `amalgkit view -h`')
+pvi.add_argument('-t', '--taxid', metavar='3400', default=None, type=int, required=True, action='store',
+                 help='default=%(default)s: NCBI Taxid (e.g., 3400 for Magnoliales).')
+pvi.set_defaults(handler=command_view)
 
 # Sub parser: getfastq
-parser_getfastq = subparsers.add_parser('getfastq', help='see `amalgkit getfastq -h`')
-parser_getfastq.add_argument('-e', '--entrez_email', metavar='aaa@bbb.com', default=None, type=str, required=True, action='store',
-                             help='default=%(default)s: Your email address. Necessary for accessing NCBI database.')
-parser_getfastq.add_argument('--work_dir', metavar='PATH', default='./', type=str, required=False, action='store',
-                             help='default=%(default)s: Working directory.')
-parser_getfastq.add_argument('--auto_dir', metavar='yes|no', default='no', type=str, required=False, action='store',
-                             help='default=%(default)s: Working directory. If "yes", new directory will be created in the working directory according to the scheme "getfastq_SRA-run-ID"')
-parser_getfastq.add_argument('--id', metavar='XXXXX0000', default=None, type=str, required=True, action='store',
-                             help='default=%(default)s: BioProject/BioSample/SRR ID.')
-parser_getfastq.add_argument('--layout', metavar='single|paired|auto', default='auto', type=str, required=False, action='store', choices=['single','paired','auto'],
-                             help='default=%(default)s: Library layout of RNA-seq data to be dumped. "auto" prioritizes paird-end libraries if both types are available.')
-parser_getfastq.add_argument('--max_bp', metavar='INT', default='7,500,000,000', type=str, required=False, action='store',
-                             help='default=%(default)s: Target sequence size (bp) to be dumped.')
-parser_getfastq.add_argument('--threads', metavar='INT', default=1, type=int, required=False, action='store',
-                             help='default=%(default)s: Number of threads.')
-parser_getfastq.add_argument('--save_metadata', metavar='yes|no', default='yes', type=str, required=False, action='store', choices=['yes','no'],
-                             help='default=%(default)s: Save metadata table.')
-parser_getfastq.add_argument('--min_read_length', metavar='INT', default=25, type=int, required=False, action='store',
-                             help='default=%(default)s: Minimum read length.')
-parser_getfastq.add_argument('--pfd', metavar='yes|no', default='yes', type=str, required=False, action='store', choices=['yes','no'],
-                             help='default=%(default)s: Run parallel-fastq-dump.')
-parser_getfastq.add_argument('--pfd_exe', metavar='PATH', default='parallel-fastq-dump', type=str, required=False, action='store',
-                             help='default=%(default)s: PATH to parallel-fastq-dump executable.')
-parser_getfastq.add_argument('--prefetch_exe', metavar='PATH', default='prefetch', type=str, required=False, action='store',
-                             help='default=%(default)s: PATH to prefetch executable.')
-parser_getfastq.add_argument('--fastp', metavar='yes|no', default='yes', type=str, required=False, action='store', choices=['yes','no'],
-                             help='default=%(default)s: Run fastp.')
-parser_getfastq.add_argument('--fastp_exe', metavar='PATH', default='fastp', type=str, required=False, action='store',
-                             help='default=%(default)s: PATH to fastp executable.')
-parser_getfastq.add_argument('--fastp_option', metavar='STR', default='-j /dev/null -h /dev/null', type=str, required=False, action='store',
-                             help='default=%(default)s: Options to be passed to fastp. Do not include --length_required option here. It can be specified throught --min_read_length in amalgkit. ')
-parser_getfastq.add_argument('--remove_sra', metavar='yes|no', default='yes', type=str, required=False, action='store', choices=['yes','no'],
-                             help='default=%(default)s: Remove downloaded SRA files after fastq extraction.')
-parser_getfastq.add_argument('--remove_tmp', metavar='yes|no', default='yes', type=str, required=False, action='store', choices=['yes','no'],
-                             help='default=%(default)s: Remove temporary files.')
-parser_getfastq.add_argument('--pfd_print', metavar='yes|no', default='yes', type=str, required=False, action='store', choices=['yes','no'],
-                             help='default=%(default)s: Show parallel-fastq-dump stdout and stderr.')
-parser_getfastq.add_argument('--fastp_print', metavar='yes|no', default='yes', type=str, required=False, action='store', choices=['yes','no'],
-                             help='default=%(default)s: Show fastp stdout and stderr.')
-parser_getfastq.add_argument('--sci_name', metavar='STR', default=None, type=str, required=False, action='store',
-                             help='default=%(default)s: Species name in case the BioProject covers multiple species. Example: "Homo sapiens"')
-parser_getfastq.add_argument('--ascp', metavar='yes|no', default='no', type=str, required=False, action='store', choices=['yes','no'],
-                             help='default=%(default)s: Download SRA files using ascp instead of http protocol.')
-parser_getfastq.add_argument('--ascp_exe', metavar='PATH', default='ascp', type=str, required=False, action='store',
-                             help='default=%(default)s: PATH to ascp executable.')
-parser_getfastq.add_argument('--ascp_key', metavar='PATH', default='', type=str, required=False, action='store',
-                             help='default=%(default)s: PATH to ascp key. See https://www.ncbi.nlm.nih.gov/books/NBK242625/')
-parser_getfastq.add_argument('--ascp_option', metavar='STR', default='-v -k 1 -T -l 300m', type=str, required=False, action='store',
-                             help='default=%(default)s: ascp options.')
-parser_getfastq.add_argument('--read_name', metavar='default|trinity', default='default', type=str, required=False, action='store', choices=['default','trinity'],
-                             help='default=%(default)s: read name formatting for downstream analysis.')
-parser_getfastq.add_argument('--concat', metavar='yes|no', default='no', type=str, required=False, action='store', choices=['yes','no'],
-                             help='default=%(default)s: concatenate SRA fastq files (e.g, for assembly).')
-parser_getfastq.add_argument('--entrez_additional_search_term', metavar='STR',
-                             default='"platform illumina"[Properties] AND "type rnaseq"[Filter] AND "sra biosample"[Filter]',
-                             type=str, required=False, action='store',
-                             help='default=%(default)s: Entrez search terms in addition to --id option to further restrict the SRA entry.')
-parser_getfastq.add_argument('--tol', metavar='FLOAT', default=1, type=float, required=False, action='store',
-                          help='default=%(default)s: Acceptable % loss of reads relative to --max_bp. If the 1st-round sequence generation could not produce enough reads, the 2nd-round sequence generation is activated to compensate the loss.')
-parser_getfastq.set_defaults(handler=command_getfastq)
-
-
+pge = subparsers.add_parser('getfastq', help='see `amalgkit getfastq -h`')
+pge.add_argument('-e', '--entrez_email', metavar='aaa@bbb.com', default=None, type=str, required=True, action='store',
+                 help='default=%(default)s: Your email address. Necessary for accessing NCBI database.')
+pge.add_argument('--work_dir', metavar='PATH', default='./', type=str, required=False, action='store',
+                 help='default=%(default)s: Working directory.')
+pge.add_argument('--id', metavar='XXXXX0000', default=None, type=str, required=False, action='store',
+                 help='default=%(default)s: BioProject/BioSample/SRR ID.')
+pge.add_argument('--layout', metavar='single|paired|auto', default='auto', type=str, required=False, action='store',
+                 choices=['single', 'paired', 'auto'],
+                 help='default=%(default)s: Library layout of RNA-seq data to be dumped. "auto" prioritizes paird-end libraries if both types are available.')
+pge.add_argument('--max_bp', metavar='INT', default='999,999,999,999,999', type=str, required=False, action='store',
+                 help='default=%(default)s: Target sequence size (bp) to be dumped.')
+pge.add_argument('--threads', metavar='INT', default=1, type=int, required=False, action='store',
+                 help='default=%(default)s: Number of threads.')
+pge.add_argument('--save_metadata', metavar='yes|no', default='yes', type=str, required=False, action='store',
+                 choices=['yes', 'no'],
+                 help='default=%(default)s: Save metadata table.')
+pge.add_argument('--min_read_length', metavar='INT', default=25, type=int, required=False, action='store',
+                 help='default=%(default)s: Minimum read length.')
+pge.add_argument('--pfd', metavar='yes|no', default='yes', type=str, required=False, action='store',
+                 choices=['yes', 'no'],
+                 help='default=%(default)s: Run parallel-fastq-dump.')
+pge.add_argument('--pfd_exe', metavar='PATH', default='parallel-fastq-dump', type=str, required=False, action='store',
+                 help='default=%(default)s: PATH to parallel-fastq-dump executable.')
+pge.add_argument('--prefetch_exe', metavar='PATH', default='prefetch', type=str, required=False, action='store',
+                 help='default=%(default)s: PATH to prefetch executable.')
+pge.add_argument('--fastp', metavar='yes|no', default='yes', type=str, required=False, action='store',
+                 choices=['yes', 'no'],
+                 help='default=%(default)s: Run fastp.')
+pge.add_argument('--fastp_exe', metavar='PATH', default='fastp', type=str, required=False, action='store',
+                 help='default=%(default)s: PATH to fastp executable.')
+pge.add_argument('--fastp_option', metavar='STR', default='-j /dev/null -h /dev/null', type=str, required=False,
+                 action='store',
+                 help='default=%(default)s: Options to be passed to fastp. Do not include --length_required option here. It can be specified throught --min_read_length in amalgkit. ')
+pge.add_argument('--remove_sra', metavar='yes|no', default='yes', type=str, required=False, action='store',
+                 choices=['yes', 'no'],
+                 help='default=%(default)s: Remove downloaded SRA files after fastq extraction.')
+pge.add_argument('--remove_tmp', metavar='yes|no', default='yes', type=str, required=False, action='store',
+                 choices=['yes', 'no'],
+                 help='default=%(default)s: Remove temporary files.')
+pge.add_argument('--pfd_print', metavar='yes|no', default='yes', type=str, required=False, action='store',
+                 choices=['yes', 'no'],
+                 help='default=%(default)s: Show parallel-fastq-dump stdout and stderr.')
+pge.add_argument('--fastp_print', metavar='yes|no', default='yes', type=str, required=False, action='store',
+                 choices=['yes', 'no'],
+                 help='default=%(default)s: Show fastp stdout and stderr.')
+pge.add_argument('--sci_name', metavar='STR', default=None, type=str, required=False, action='store',
+                 help='default=%(default)s: Species name in case the BioProject covers multiple species. Example: "Homo sapiens"')
+pge.add_argument('--ascp', metavar='yes|no', default='no', type=str, required=False, action='store',
+                 choices=['yes', 'no'],
+                 help='default=%(default)s: Download SRA files using ascp instead of http protocol.')
+pge.add_argument('--ascp_exe', metavar='PATH', default='ascp', type=str, required=False, action='store',
+                 help='default=%(default)s: PATH to ascp executable.')
+pge.add_argument('--ascp_key', metavar='PATH', default='', type=str, required=False, action='store',
+                 help='default=%(default)s: PATH to ascp key. See https://www.ncbi.nlm.nih.gov/books/NBK242625/')
+pge.add_argument('--ascp_option', metavar='STR', default='-v -k 1 -T -l 300m', type=str, required=False, action='store',
+                 help='default=%(default)s: ascp options.')
+pge.add_argument('--read_name', metavar='default|trinity', default='default', type=str, required=False, action='store',
+                 choices=['default', 'trinity'],
+                 help='default=%(default)s: read name formatting for downstream analysis.')
+pge.add_argument('--concat', metavar='yes|no', default='no', type=str, required=False, action='store', choices=['yes', 'no'],
+                 help='default=%(default)s: concatenate SRA fastq files (e.g, for assembly).')
+pge.add_argument('--entrez_additional_search_term', metavar='STR',
+                 default='"platform illumina"[Properties] AND "type rnaseq"[Filter] AND "sra biosample"[Filter]',
+                 type=str, required=False, action='store',
+                 help='default=%(default)s: Entrez search terms in addition to --id option to further restrict the SRA entry.')
+pge.add_argument('--tol', metavar='FLOAT', default=1, type=float, required=False, action='store',
+                 help='default=%(default)s: Acceptable % loss of reads relative to --max_bp. If the 1st-round sequence generation could not produce enough reads, the 2nd-round sequence generation is activated to compensate the loss.')
+pge.add_argument('--metadata', metavar='PATH', default=None, type=str, required=False, action='store',
+                 help='default=%(default)s: PATH to metadata table. See `amalgkit metadata -h` for details.')
+pge.add_argument('--batch', metavar='INT', default=None, type=int, required=False, action='store',
+                 help='default=%(default)s: Zero-based index of metadata table (--metadata). If set, process only one SRA record. This function is intended for array job processing.')
+pge.add_argument('--redo', metavar='yes|no', default='no', type=str, required=False, action='store', choices=['yes', 'no'],
+                 help='default=%(default)s: Redo the analysis even if *.amalgkit.fastq.gz is detected.')
+pge.set_defaults(handler=command_getfastq)
 
 # Sub parser: quant
-parser_quant = subparsers.add_parser('quant', help='see `amalgkit quant -h`')
+pqu = subparsers.add_parser('quant', help='see `amalgkit quant -h`')
 
-parser_quant.add_argument('--sci_name', metavar='yes|no', default=None, type=str, required=False, action='store',
-                             help='default=%(default)s: Species name in case the BioProject covers multiple species. Example: "Homo sapiens"')
-parser_quant.add_argument('--ref', metavar='PATH', default=None, type=str, required=False, action='store',
-                             help='default=%(default)s: path to the reference genome FASTA file. Required for Index building.')
-parser_quant.add_argument('--id', metavar='PATH', default=None, type=str, required=True, action='store',
-                             help='default=%(default)s: path to .fastq or .fastq.gz file(s) to quantify.')
-parser_quant.add_argument('--index', metavar='PATH', default=None, type=str, required=False, action='store',
-                             help='default=%(default)s: path/name of kallisto index file to create.')
-parser_quant.add_argument('--build_index', metavar='yes|no', default="yes", type=str, required=False, action='store',
-                             help='default=%(default)s: builds the kallisto index from a set of reference sequences. Index needs to be provided if this is set to "no".')
-parser_quant.add_argument('--threads', metavar='INT', default=4, type=int, required=False, action='store',
-                             help='default=%(default)s: Number of threads.')
-parser_quant.add_argument('--fragment_length', metavar='INT', default=None, type=int, required=False, action='store',
-                             help='default=%(default)s: length of the fragment (not read length). Only required, if single end reads are used.')
-parser_quant.add_argument('--work_dir', metavar='PATH', default='./', type=str, required=False, action='store',
-                             help='default=%(default)s: Working directory.')
-parser_quant.add_argument('--out_dir', metavar='PATH', default=None, type=str, required=False, action='store',
-                          help='default=work_dir: Working directory.')
-parser_quant.add_argument('--auto_dir', metavar='yes|no', default='no', type=str, required=False, action='store',
-                             help='default=%(default)s: Working directory. If "yes", new directory will be created in the working directory according to the scheme "quant_[0-9]*",')
-parser_quant.set_defaults(handler=command_quant)
+# TODO: Is this necessary?
+pqu.add_argument('--sci_name', metavar='STR', default=None, type=str, required=False, action='store',
+                 help='default=%(default)s: Species name in case the BioProject covers multiple species. Example: "Homo sapiens"')
+
+
+pqu.add_argument('--ref', metavar='PATH', default=None, type=str, required=False, action='store',
+                 help='default=%(default)s: path to the reference transcriptome FASTA file. Required for Index building.')
+pqu.add_argument('--id', metavar='XXXXX0000', default=None, type=str, required=False, action='store',
+                 help='default=%(default)s: SRA ID. quant automatically search .fastq or .fastq.gz file(s)')
+pqu.add_argument('--index', metavar='PATH', default=None, type=str, required=False, action='store',
+                 help='default=%(default)s: path/name of kallisto index file to create.')
+
+# TODO: Is this necessary? We will be able to know this by checking --index. i.e., (args.index is None)
+pqu.add_argument('--build_index', metavar='yes|no', default="yes", type=str, required=False, action='store',
+                 help='default=%(default)s: builds the kallisto index from a set of reference sequences. Index needs to be provided if this is set to "no".')
+
+
+pqu.add_argument('--threads', metavar='INT', default=4, type=int, required=False, action='store',
+                 help='default=%(default)s: Number of threads.')
+pqu.add_argument('--fragment_length', metavar='INT', default=None, type=int, required=False, action='store',
+                 help='default=%(default)s: length of the fragment (not read length). Only required, if single end reads are used.')
+pqu.add_argument('--work_dir', metavar='PATH', default='./', type=str, required=False, action='store',
+                 help='default=%(default)s: Working directory.')
+pqu.add_argument('--metadata', metavar='PATH', default=None, type=str, required=False, action='store',
+                 help='default=%(default)s: PATH to metadata table. See `amalgkit metadata -h` for details.')
+pqu.add_argument('--batch', metavar='INT', default=None, type=int, required=False, action='store',
+                 help='default=%(default)s: Zero-based index of metadata table (--metadata). If set, process only one SRA record. This function is intended for array job processing.')
+pqu.add_argument('--clean_fastq', metavar='yes|no', default='yes', type=str, required=False, action='store', choices=['yes', 'no'],
+                 help='default=%(default)s: Remove fastq files when quant is successfully completed.')
+pqu.add_argument('--redo', metavar='yes|no', default='no', type=str, required=False, action='store', choices=['yes', 'no'],
+                 help='default=%(default)s: Redo the analysis even if *_abundance.tsv is detected.')
+pqu.set_defaults(handler=command_quant)
 
 # Sub parser: curate
-parser_curate = subparsers.add_parser('curate', help='see `amalgkit curate -h`')
+pcu = subparsers.add_parser('curate', help='see `amalgkit curate -h`')
 
-parser_curate.add_argument('--work_dir', metavar='PATH', default='./', type=str, required=False, action='store',
-                          help='default=%(default)s: Working directory.')
-parser_curate.add_argument('--out_dir', metavar='PATH', default='./', type=str, required=False, action='store',
-                           help='default=%(default)s: Output directory.')
-parser_curate.add_argument('--auto_dir', metavar='yes|no', default='no', type=str, required=False, action='store',
-                           help='default=%(default)s: Working directory. If "yes", new directory will be created in the working directory according to the scheme "curate_[0-9]*".')
-parser_curate.add_argument('--infile', metavar='PATH', default=None, type=str, required=True, action='store',
-                           help='default=%(default)s: Name or Path of file to curate.')
-parser_curate.add_argument('--eff_len_file', metavar='PATH', default=None, type=str, required=True, action='store',
-                           help='default=%(default)s: Name or Path of file to effective length file. Has to have same format as infile.')
-parser_curate.add_argument('--metafile', metavar='PATH', default=None, type=str, required=True, action='store',
-                           help='default=%(default)s: Path to metadata file, obtained by amalgkit metadata command.')
-parser_curate.add_argument('--dist_method', metavar='STR', default='pearson', type=str, required=False, action='store',
-                           help='default=%(default)s: Method for calculating distance.')
-parser_curate.add_argument('--mapping_rate', metavar='INT', default=0.20, type=int, required=False, action='store',
-                           help='default=%(default)s: cutoff for mapping rate.')
-parser_curate.add_argument('--cleanup', metavar='INT', default=0, type=int, required=False, action='store',
-                           help='default=%(default)s: Saves intermediate files, if 0.')
-parser_curate.add_argument('--tissues', metavar='STR', default=None, type=str, required=False, action='store',
-                           help='default=%(default)s: List of tissues to be included.')
-parser_curate.set_defaults(handler=command_curate)
+pcu.add_argument('--work_dir', metavar='PATH', default='./', type=str, required=False, action='store',
+                 help='default=%(default)s: Working directory.')
+pcu.add_argument('--infile', metavar='PATH', default=None, type=str, required=True, action='store',
+                 help='default=%(default)s: Name or Path of file to curate.')
+pcu.add_argument('--eff_len_file', metavar='PATH', default=None, type=str, required=True, action='store',
+                 help='default=%(default)s: Name or Path of file to effective length file. Has to have same format as infile.')
+pcu.add_argument('--metafile', metavar='PATH', default=None, type=str, required=True, action='store',
+                 help='default=%(default)s: Path to metadata file, obtained by amalgkit metadata command.')
+pcu.add_argument('--dist_method', metavar='STR', default='pearson', type=str, required=False, action='store',
+                 help='default=%(default)s: Method for calculating distance.')
+pcu.add_argument('--mapping_rate', metavar='INT', default=0.20, type=int, required=False, action='store',
+                 help='default=%(default)s: cutoff for mapping rate.')
+pcu.add_argument('--cleanup', metavar='INT', default=0, type=int, required=False, action='store',
+                 help='default=%(default)s: Saves intermediate files, if 0.')
+pcu.add_argument('--tissues', metavar='STR', default=None, type=str, required=False, action='store',
+                 help='default=%(default)s: List of tissues to be included.')
+pcu.set_defaults(handler=command_curate)
 
 # Sub parser: merge
-parser_merge = subparsers.add_parser('merge', help='see `amalgkit merge -h`')
+pmg = subparsers.add_parser('merge', help='see `amalgkit merge -h`')
 
-parser_merge.add_argument('--work_dir', metavar='PATH', default='./', type=str, required=False, action='store',
-                           help='default=%(default)s: Working directory.')
-parser_merge.add_argument('--out_name', metavar='PATH', default='.=', type=str, required=False, action='store',
-                           help='default=%(default)s: Output directory.')
+pmg.add_argument('--work_dir', metavar='PATH', default='./', type=str, required=False, action='store',
+                 help='default=%(default)s: Working directory.')
 
-parser_merge.set_defaults(handler=command_merge)
+pmg.set_defaults(handler=command_merge)
 
 # Sub parser: help
 parser_help = subparsers.add_parser('help', help='see `help -h`')
