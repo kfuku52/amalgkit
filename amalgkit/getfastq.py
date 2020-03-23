@@ -179,8 +179,8 @@ def get_newest_intermediate_file_extension(sra_stat, work_dir):
     assert 'ext_out' in locals(), 'None of expected extensions ('+' '.join(extensions)+') found in '+work_dir
     return ext_out
 
-def download_sra(sra_stat, args, work_dir, overwrite=False):
-    sra_path = os.path.join(work_dir, sra_stat['sra_id']+'.sra')
+def download_sra(sra_stat, args, work_dir,temp_dir, overwrite=False):
+    sra_path = os.path.join(temp_dir, sra_stat['sra_id']+'.sra')
     individual_sra_tmp_dir = os.path.join(work_dir, sra_stat['sra_id']+'/')
     if os.path.exists(sra_path):
         print('Previously-downloaded sra file was detected.')
@@ -205,7 +205,7 @@ def download_sra(sra_stat, args, work_dir, overwrite=False):
         if os.path.exists(individual_sra_tmp_dir):
             shutil.rmtree(individual_sra_tmp_dir)
         prefetch_command = [args.prefetch_exe, '--force', 'no', '--transport', 'fasp', '--max-size', '100G',
-                            '--output-directory', './', sra_stat['sra_id']]
+                            '--output-directory', temp_dir , sra_stat['sra_id']]
         print('Command:', ' '.join(prefetch_command))
         prefetch_out = subprocess.run(prefetch_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         print('prefetch stdout:')
@@ -217,7 +217,7 @@ def download_sra(sra_stat, args, work_dir, overwrite=False):
         if os.path.exists(individual_sra_tmp_dir):
             shutil.rmtree(individual_sra_tmp_dir)
         prefetch_command = [args.prefetch_exe, '--force', 'no', '--transport', 'http', '--max-size', '100G',
-                            '--output-directory', './', sra_stat['sra_id']]
+                            '--output-directory', temp_dir, sra_stat['sra_id']]
         print('Command:', ' '.join(prefetch_command))
         prefetch_out = subprocess.run(prefetch_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         print('prefetch stdout:')
@@ -526,7 +526,7 @@ def getfastq_main(args):
         print('Number of reads:', "{:,}".format(sra_stat['total_spot']))
         print('Single/Paired read length:', sra_stat['spot_length'], 'bp')
         print('Total bases:', "{:,}".format(int(metadata.df.loc[i,'total_bases'])), 'bp')
-        download_sra(sra_stat, args, sra_output_dir, overwrite=False)
+        download_sra(sra_stat, args, sra_output_dir,sra_temp_dir, overwrite=False)
         start,end = get_range(sra_stat, offset, total_sra_bp, max_bp)
         seq_summary = sequence_extraction(args, sra_stat, start, end, sra_output_dir, sra_temp_dir, seq_summary,
                                           gz_exe, ungz_exe, total_sra_bp)
