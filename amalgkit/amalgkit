@@ -109,6 +109,8 @@ pge.add_argument('--work_dir', metavar='PATH', default='./', type=str, required=
                  help='default=%(default)s: Working directory.')
 pge.add_argument('--id', metavar='XXXXX0000', default=None, type=str, required=False, action='store',
                  help='default=%(default)s: BioProject/BioSample/SRR ID.')
+pge.add_argument('--id_list', metavar='PATH', default=None, type=str, required=False, action='store',
+                 help='default=%(default)s: Location of file containing a list of SRA IDs. Otherwise works like --id')
 pge.add_argument('--layout', metavar='single|paired|auto', default='auto', type=str, required=False, action='store',
                  choices=['single', 'paired', 'auto'],
                  help='default=%(default)s: Library layout of RNA-seq data to be dumped. "auto" prioritizes paird-end libraries if both types are available.')

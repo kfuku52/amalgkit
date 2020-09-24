@@ -262,11 +262,14 @@ def check_getfastq_dependency(args):
     return gz_exe,ungz_exe
 
 def set_getfastq_directories(args, sra_id):
+
     if args.work_dir.startswith('./'):
         args.work_dir = args.work_dir.replace('.', os.getcwd())
     if args.id is not None:
         output_dir = os.path.join(args.work_dir, 'getfastq', args.id)
     elif args.metadata is not None:
+        output_dir = os.path.join(args.work_dir, 'getfastq', sra_id)
+    elif args.id_list is not None:
         output_dir = os.path.join(args.work_dir, 'getfastq', sra_id)
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
@@ -469,17 +472,19 @@ def print_read_stats(args, seq_summary, max_bp, individual=True):
     print('')
 
 def getfastq_metadata(args):
-    assert (args.id is None)!=(args.metadata is None), 'Either --id or --metadata should be specified.'
+    assert (args.id is None and args.id_list is None)!=(args.metadata is None), 'Either --id, --id_list or --metadata should be specified.'
     if args.id is not None:
         print('--id is specified. Downloading SRA metadata from Entrez.')
         assert (args.entrez_email!='aaa@bbb.com'), "Provide your email address. No worry, you won't get spam emails."
         Entrez.email = args.entrez_email
+        sra_id = args.id
+        output_dir = set_getfastq_directories(args, sra_id)
         search_term = getfastq_search_term(sra_id, args.entrez_additional_search_term)
         print('Entrez search term:', search_term)
         xml_root = getfastq_getxml(search_term)
         metadata = Metadata.from_xml(xml_root)
-        if args.save_metadata:
-            metadata.df.to_csv(os.path.join(output_dir,'metadata_all.tsv'), sep='\t', index=False)
+       # if args.save_metadata:
+            #metadata.df.to_csv(os.path.join(output_dir,'metadata_all.tsv'), sep='\t', index=False)
         print('Filtering SRA entry with --layout:', args.layout)
         layout = get_layout(args, metadata)
         metadata.df = metadata.df.loc[(metadata.df['lib_layout']==layout),:]
@@ -487,7 +492,29 @@ def getfastq_metadata(args):
             print('Filtering SRA entry with --sci_name:', args.sci_name)
             metadata.df = metadata.df.loc[(metadata.df['scientific_name']==args.sci_name),:]
         if args.save_metadata:
-            metadata.df.to_csv(os.path.join(output_dir,'metadata_target.tsv'), sep='\t', index=False)
+            metadata.df.to_csv(os.path.join(output_dir,'metadata_',sra_id,'.tsv'), sep='\t', index=False)
+    if args.id_list is not None:
+        print('--id is specified. Downloading SRA metadata from Entrez.')
+        assert (args.entrez_email!='aaa@bbb.com'), "Provide your email address. No worry, you won't get spam emails."
+        Entrez.email = args.entrez_email
+        sra_id_list = [line.rstrip('\n') for line in open(args.id_list)]
+        for sra_id in sra_id_list:
+            output_dir = set_getfastq_directories(args, sra_id)
+            search_term = getfastq_search_term(sra_id, args.entrez_additional_search_term)
+            print('Entrez search term:', search_term)
+            xml_root = getfastq_getxml(search_term)
+            metadata = Metadata.from_xml(xml_root)
+            #if args.save_metadata:
+             #   metadata.df.to_csv(os.path.join(output_dir,'metadata_all.tsv'), sep='\t', index=False)
+            print('Filtering SRA entry with --layout:', args.layout)
+            layout = get_layout(args, metadata)
+            metadata.df = metadata.df.loc[(metadata.df['lib_layout']==layout),:]
+            if args.sci_name is not None:
+                print('Filtering SRA entry with --sci_name:', args.sci_name)
+                metadata.df = metadata.df.loc[(metadata.df['scientific_name']==args.sci_name),:]
+            if args.save_metadata:
+                metadata.df.to_csv(os.path.join(output_dir,'metadata_',sra_id,'.tsv'), sep='\t', index=False)
+
     if args.metadata is not None:
         print('--metadata is specified. Reading existing metadata table.')
         assert args.concat=='no', '--concat should be set "no" when --metadata is specified.'
