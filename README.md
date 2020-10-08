@@ -80,7 +80,7 @@ amalgkit getfastq \
 #### Contents of working directory:
 - `SRR8819967_1.amalgkit.fastq.gz`
 - `SRR8819967_2.amalgkit.fastq.gz`
-- `arabidopsis_thaliana.fasta` <- this is a reference genome
+- `arabidopsis_thaliana.fasta` (this is a reference genome)
 
 ```
 amalgkit quant \
@@ -131,8 +131,10 @@ amalgkit curate\
 
 
 
-## What comes next?
-After metadata curation, expression level quantification and further curations had been done in the [paper](https://www.biorxiv.org/content/10.1101/409888v1) where we described the transcriptome amalgamation. The downstream analyses will be added to **amalgkit** as sub-commands in future. Meanwhile, unpackaged scripts we used in the paper are available in `/amalgkit/util/`. For example, **kallisto_20180207.sh** is the quantification step we performed immediately after the metadata curation.
+## Reference
+Although **amalgkit** supports novel, unpublished functions, metadata curation, expression level quantification and further curation steps have been described in this paper, in which we described the transcriptome amalgamation in vertebrate species.
+
+Fukushima K*, Pollock DD*. 2020. Amalgamated cross-species transcriptomes reveal organ-specific propensity in gene expression evolution. Nature Communications 11: 4459 (DOI: 10.1038/s41467-020-18090-8) [open access](https://www.nature.com/articles/s41467-020-18090-8)
 
 ## Licensing
 **amalgkit** is BSD-licensed (3 clause). See [LICENSE](LICENSE) for details.
