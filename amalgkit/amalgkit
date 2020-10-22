@@ -47,6 +47,14 @@ def command_quant(args):
     sys.stdout.write('amalgkit quant: end\n')
 
 
+def command_cstmm(args):
+    sys.stdout.write('amalgkit cstmm: start\n')
+    start = time.time()
+    from amalgkit.cstmm import cstmm_main
+    cstmm_main(args)
+    print('Time elapsed: {:,} sec'.format(int(time.time() - start)))
+    sys.stdout.write('amalgkit cstmm: end\n')
+
 def command_curate(args):
     sys.stdout.write('amalgkit curate: start\n')
     start = time.time()
@@ -216,16 +224,31 @@ pqu.add_argument('--redo', metavar='yes|no', default='no', type=str, required=Fa
                  help='default=%(default)s: Redo the analysis even if *_abundance.tsv is detected.')
 pqu.set_defaults(handler=command_quant)
 
+# Sub parser: cstmm
+# TODO: look for a better name
+pcs = subparsers.add_parser('cstmm', help='see `amalgkit cstmm -h`')
+pcs.add_argument('--work_dir', metavar='PATH', default='./', type=str, required=False, action='store',
+                 help='default=%(default)s: Working directory.')
+pcs.add_argument('--ortho', metavar='PATH', default='./', type=str, required=True, action='store',
+                 help='default=%(default)s: OrthoFinder results directory.')
+pcs.add_argument('--count', metavar='PATH', default='./', type=str, required=True, action='store',
+                 help='default=%(default)s: Folder path to where count data is stored.')
+pcs.set_defaults(handler=command_cstmm)
+
 # Sub parser: curate
 pcu = subparsers.add_parser('curate', help='see `amalgkit curate -h`')
 
+pcu.add_argument('-ssm','--single_species_mode', metavar='STR', default=None, type=str, required=False, action='store',
+                 help='default=%(default)s: Single species mode.')
+pcu.add_argument('-msm','--multiple_species_mode', metavar='STR', default=None, type=str, required=False, action='store',
+                 help='default=%(default)s: Multiple species mode.')
 pcu.add_argument('--work_dir', metavar='PATH', default='./', type=str, required=False, action='store',
                  help='default=%(default)s: Working directory.')
-pcu.add_argument('--infile', metavar='PATH', default=None, type=str, required=True, action='store',
+pcu.add_argument('--infile', metavar='PATH', default=None, type=str, required=False, action='store',
                  help='default=%(default)s: Name or Path of file to curate.')
-pcu.add_argument('--eff_len_file', metavar='PATH', default=None, type=str, required=True, action='store',
+pcu.add_argument('--eff_len_file', metavar='PATH', default=None, type=str, required=False, action='store',
                  help='default=%(default)s: Name or Path of file to effective length file. Has to have same format as infile.')
-pcu.add_argument('--metafile', metavar='PATH', default=None, type=str, required=True, action='store',
+pcu.add_argument('--metafile', metavar='PATH', default=None, type=str, required=False, action='store',
                  help='default=%(default)s: Path to metadata file, obtained by amalgkit metadata command.')
 pcu.add_argument('--dist_method', metavar='STR', default='pearson', type=str, required=False, action='store',
                  help='default=%(default)s: Method for calculating distance.')
