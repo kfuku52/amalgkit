@@ -238,15 +238,17 @@ pcs.set_defaults(handler=command_cstmm)
 # Sub parser: curate
 pcu = subparsers.add_parser('curate', help='see `amalgkit curate -h`')
 
-pcu.add_argument('-ssm','--single_species_mode', metavar='STR', default=None, type=str, required=False, action='store',
-                 help='default=%(default)s: Single species mode.')
-pcu.add_argument('-msm','--multiple_species_mode', metavar='STR', default=None, type=str, required=False, action='store',
-                 help='default=%(default)s: Multiple species mode.')
+pcu.add_argument('--batch', metavar='INT', default=None, type=int, required=False, action='store',
+                 help='default=%(default)s: If set, need to provide --infile_dir and/or --eff_len_dir. Automatically scans input directories based on Metadata file and sends batch job do cluster (SLURM only, currently)')
 pcu.add_argument('--work_dir', metavar='PATH', default='./', type=str, required=False, action='store',
                  help='default=%(default)s: Working directory.')
 pcu.add_argument('--infile', metavar='PATH', default=None, type=str, required=False, action='store',
                  help='default=%(default)s: Name or Path of file to curate.')
 pcu.add_argument('--eff_len_file', metavar='PATH', default=None, type=str, required=False, action='store',
+                 help='default=%(default)s: Name or Path of file to effective length file. Has to have same format as infile.')
+pcu.add_argument('--infile_dir', metavar='PATH', default=None, type=str, required=False, action='store',
+                 help='default=%(default)s: Name or Path of file to curate.')
+pcu.add_argument('--eff_len_dir', metavar='PATH', default=None, type=str, required=False, action='store',
                  help='default=%(default)s: Name or Path of file to effective length file. Has to have same format as infile.')
 pcu.add_argument('--metafile', metavar='PATH', default=None, type=str, required=False, action='store',
                  help='default=%(default)s: Path to metadata file, obtained by amalgkit metadata command.')
