@@ -260,6 +260,8 @@ pcu.add_argument('--cleanup', metavar='INT', default=0, type=int, required=False
                  help='default=%(default)s: Saves intermediate files, if 0.')
 pcu.add_argument('--tissues', metavar='STR', default=None, type=str, required=False, action='store',
                  help='default=%(default)s: List of tissues to be included.')
+pcu.add_argument('--norm', metavar='fpkm|tpm|none', default="fpkm", type=str, required=False, action='store',
+                 help='default=%(default)s: Algorithm performs log-fpkm, or log-tpm transformation on raw counts. If you select "none", please make sure to provide log-normalized input counts of some sort.')
 pcu.set_defaults(handler=command_curate)
 
 # Sub parser: merge

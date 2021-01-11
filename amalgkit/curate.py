@@ -4,8 +4,7 @@ import os
 import sys
 
 def curate_main(args):
-    #TODO implement FPKM/TPM/none into Rscript. Mostly done, just needs conditional decision.
-    args.norm = "FPKM"
+
     try:
         subprocess.run(['Rscript', '--help'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     except FileNotFoundError as e:
@@ -58,7 +57,8 @@ def curate_main(args):
                                '0',
                                str(mr_cut),
                                str(intermediate),
-                               tissues])
+                               tissues],
+                              args.norm)
     # if multiple species mode active
     if args.batch is not None:
 
@@ -83,7 +83,7 @@ def curate_main(args):
         if args.infile_dir and not args.eff_len_dir:
             print("Batch mode")
             print("Only expression values provided.")
-            print("Assuming normalized expression values (like fpkm or tpm).")
+            print("Assuming normalized expression values (like log-fpkm or log-tpm).")
             quant_dir = os.path.join(args.work_dir, args.infile_dir)
             eff_len_dir = "NA"
             if not os.path.isdir(quant_dir):
@@ -108,7 +108,7 @@ def curate_main(args):
                 len_file = len_file[0]
             if len(count_file) > 1:
                 count_file = len_file[0]
-            export_string=" --export=QUANT=" + os.path.realpath(str(count_file)) + ",META=" + os.path.realpath(meta_out) + ",WORK=" + os.path.realpath(args.work_dir) + ",LEN=" + os.path.realpath(str(len_file)) + ",DIST=" + dist_method + ",CUT=" + str(mr_cut) + ",INTER=" + str(intermediate) + ",TISSUES=" +f'"{tissues}"' + " " + batch_script_path
+            export_string=" --export=QUANT=" + os.path.realpath(str(count_file)) + ",META=" + os.path.realpath(meta_out) + ",WORK=" + os.path.realpath(args.work_dir) + ",LEN=" + os.path.realpath(str(len_file)) + ",DIST=" + dist_method + ",CUT=" + str(mr_cut) + ",INTER=" + str(intermediate) + ",TISSUES=" +f'"{tissues}"' + " " + batch_script_path + ",NORM=" +str(args.norm)
             #print(export_string)
 
             submit_command = ("sbatch " + "--job-name=" + sp +export_string)
