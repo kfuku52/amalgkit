@@ -6,9 +6,12 @@ import time, datetime, lxml, subprocess, os, shutil, gzip, glob, sys
 from amalgkit.metadata import Metadata
 from amalgkit.util import *
 
-def getfastq_search_term(ncbi_id, additional_search_term):
+def getfastq_search_term(ncbi_id, additional_search_term=None):
     # https://www.ncbi.nlm.nih.gov/books/NBK49540/
-    search_term = ncbi_id+' AND '+additional_search_term
+    if additional_search_term is None:
+        search_term = ncbi_id
+    else:
+        search_term = ncbi_id+' AND '+additional_search_term
     #search_term = '"'+ncbi_id+'"'+'[Accession]'
     return search_term
 
@@ -527,7 +530,7 @@ def is_getfastq_output_present(args, sra_stat, output_dir):
     else:
         prefixes = [sra_stat['sra_id'],]
     if sra_stat['layout']=='single':
-        sub_exts = ''
+        sub_exts = ['',]
     elif sra_stat['layout']=='paired':
         sub_exts = ['_1', '_2']
     exts = ['.amalgkit.fastq.gz',]
@@ -535,6 +538,7 @@ def is_getfastq_output_present(args, sra_stat, output_dir):
     for prefix,sub_ext,ext in itertools.product(prefixes, sub_exts, exts):
         out_path1 = os.path.join(output_dir, prefix+sub_ext+ext)
         out_path2 = os.path.join(output_dir, prefix+sub_ext+ext+'.safely_removed')
+        print(out_path1)
         is_output_present *= (os.path.exists(out_path1)|os.path.exists(out_path2))
     return is_output_present
 

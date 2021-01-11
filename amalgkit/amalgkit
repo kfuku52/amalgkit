@@ -4,6 +4,7 @@ import argparse
 import sys
 import time
 
+from amalgkit.__init__ import __version__
 
 def command_metadata(args):
     sys.stdout.write('amalgkit metadata: start\n')
@@ -14,7 +15,7 @@ def command_metadata(args):
     sys.stdout.write('amalgkit metadata: end\n')
 
 
-def command_view(args):
+def command_view(args): # TODO: Do we still need this?
     sys.stdout.write('amalgkit view: start\n')
     start = time.time()
     # from amalgkit.view import view_main
@@ -79,6 +80,7 @@ def command_help(args):
 
 # Main parser
 parser = argparse.ArgumentParser(description='A toolkit for transcriptome amalgamation')
+parser.add_argument('--version', action='version', version='amalgkit version ' + __version__)
 subparsers = parser.add_subparsers()
 
 # Sub parser: metadata
