@@ -49,6 +49,7 @@ if (debug_mode=="debug") {
     #selected_tissues = strsplit('root|flower|leaf', '\\|')[[1]]
 } else if (debug_mode=="batch") {
     args = commandArgs(trailingOnly=TRUE)
+    print(args)
     infile = args[1]
     srafile = args[2]
     dir_work = args[3]

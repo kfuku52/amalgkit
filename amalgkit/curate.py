@@ -57,8 +57,8 @@ def curate_main(args):
                                '0',
                                str(mr_cut),
                                str(intermediate),
-                               tissues],
-                              args.norm)
+                               tissues,
+                               str(args.norm)])
     # if multiple species mode active
     if args.batch is not None:
 
@@ -116,6 +116,6 @@ def curate_main(args):
             print(submit_command)  # Uncomment this line when done testing to use the submit command created
             # uncomment the following 3 lines when done testing to submit the jobs
             exit_status = subprocess.call(submit_command, shell=True)
-            if exit_status is 1:  # Check to make sure the job submitted
+            if exit_status == 1:  # Check to make sure the job submitted
                 print("Job failed to submit".format(submit_command))
         print("Done submitting jobs!")
