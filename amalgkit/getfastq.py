@@ -495,7 +495,7 @@ def getfastq_metadata(args):
             print('Filtering SRA entry with --sci_name:', args.sci_name)
             metadata.df = metadata.df.loc[(metadata.df['scientific_name']==args.sci_name),:]
         if args.save_metadata:
-            metadata.df.to_csv(os.path.join(output_dir,'metadata_',sra_id,'.tsv'), sep='\t', index=False)
+            metadata.df.to_csv(os.path.join(output_dir,'metadata_'+sra_id+'.tsv'), sep='\t', index=False)
     if args.id_list is not None:
         print('--id is specified. Downloading SRA metadata from Entrez.')
         assert (args.entrez_email!='aaa@bbb.com'), "Provide your email address. No worry, you won't get spam emails."
@@ -542,11 +542,21 @@ def is_getfastq_output_present(args, sra_stat, output_dir):
         is_output_present *= (os.path.exists(out_path1)|os.path.exists(out_path2))
     return is_output_present
 
+def remove_experiment_without_run(metadata):
+    num_all_run = metadata.df.shape[0]
+    is_missing_run = (metadata.df.loc[:,'run']=='')
+    num_missing_run = is_missing_run.sum()
+    if (num_missing_run>0):
+        print('There are {} out of {} Experiments without Run ID. Removing.'.format(num_missing_run, num_all_run))
+        metadata.df = metadata.df.loc[~is_missing_run,:]
+    return metadata
+
 def getfastq_main(args):
     #sra_dir = os.path.join(os.path.expanduser("~"), 'ncbi/public/sra')
     gz_exe,ungz_exe = check_getfastq_dependency(args)
     metadata = getfastq_metadata(args)
     assert metadata.df.shape[0] > 0, 'No SRA entry found. Make sure if --id is compatible with --sci_name and --layout.'
+    metadata = remove_experiment_without_run(metadata)
     print('SRA IDs:', ' '.join(metadata.df['run'].tolist()))
     max_bp = int(args.max_bp.replace(',',''))
     num_sra = metadata.df.shape[0]
