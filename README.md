@@ -120,11 +120,11 @@ amalgkit quant \
 ### Usage example
 
 ```
-amalgkit curate\
---infile transcriptome.tsv
---metafile metadata.tsv
---dist_method 'pearson'
---tissues brain liver heart embryo
+amalgkit curate \
+--infile transcriptome.tsv \
+--metafile metadata.tsv \
+--dist_method 'pearson' \
+--tissues brain liver heart embryo \
 --work_dir './'
 ```
 #### Output
@@ -132,7 +132,7 @@ amalgkit curate\
 
 
 ## Reference
-Although **amalgkit** supports novel, unpublished functions, metadata curation, expression level quantification and further curation steps have been described in this paper, in which we described the transcriptome amalgamation in vertebrate species.
+Although **amalgkit** supports novel, unpublished functions, metadata curation, expression level quantification and further curation steps have been described in this paper, in which we described the transcriptome amalgamation of 21 vertebrate species.
 
 Fukushima K*, Pollock DD*. 2020. Amalgamated cross-species transcriptomes reveal organ-specific propensity in gene expression evolution. Nature Communications 11: 4459 (DOI: 10.1038/s41467-020-18090-8) [open access](https://www.nature.com/articles/s41467-020-18090-8)
 

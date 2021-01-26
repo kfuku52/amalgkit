@@ -1,9 +1,8 @@
 from Bio import Entrez
 from urllib.error import HTTPError
 import itertools
-import numpy, pandas
-import time, datetime, lxml, subprocess, os, shutil, gzip, glob, sys
-from amalgkit.metadata import Metadata
+import numpy
+import time, lxml, subprocess, os, shutil, gzip, glob, sys, re
 from amalgkit.util import *
 
 def getfastq_search_term(ncbi_id, additional_search_term=None):
@@ -65,7 +64,6 @@ def get_range(sra_stat, offset, total_sra_bp, max_bp):
     return start,end
 
 def concat_fastq(args, metadata, output_dir, num_bp_per_sra):
-    import re
     layout = get_layout(args, metadata)
     inext = '.amalgkit.fastq.gz'
     infiles = list()
@@ -74,8 +72,8 @@ def concat_fastq(args, metadata, output_dir, num_bp_per_sra):
     infiles = [ item for sublist in infiles for item in sublist ]
     num_inext_files = len(infiles)
     if (layout=='single')&(num_inext_files==1):
-        print('Only 1', inext, 'file was detected. No concatenation will happen.')
-        outfile = sra_id+inext
+        print('Only 1', inext, 'file was detected. No concatenation will happen.', flush=True)
+        outfile = args.id+inext
         if infiles[0]!=outfile:
             print('Replacing ID in the output file name:', infiles[0], outfile)
             infile_path = os.path.join(output_dir, infiles[0])
@@ -83,9 +81,9 @@ def concat_fastq(args, metadata, output_dir, num_bp_per_sra):
             os.rename(infile_path, outfile_path)
         return None
     elif (layout=='paired')&(num_inext_files==2):
-        print('Only 1 pair of', inext, 'files were detected. No concatenation will happen.')
+        print('Only 1 pair of', inext, 'files were detected. No concatenation will happen.', flush=True)
         for infile in infiles:
-            outfile = sra_id+re.sub('.*(_[1-2])', '\g<1>', infile)
+            outfile = args.id+re.sub('.*(_[1-2])', '\g<1>', infile)
             if infile!=outfile:
                 print('Replacing ID in the output file name:', infile, outfile)
                 infile_path = os.path.join(output_dir, infile)
@@ -101,7 +99,7 @@ def concat_fastq(args, metadata, output_dir, num_bp_per_sra):
             subexts = ['_1','_2',]
         for subext in subexts:
             infiles = metadata.df['run'].replace('$', subext+inext, regex=True)
-            outfile_path = os.path.join(output_dir, sra_id+subext+outext)
+            outfile_path = os.path.join(output_dir, args.id+subext+outext)
             if os.path.exists(outfile_path):
                 os.remove(outfile_path)
             #with gzip.open(outfile_path, 'wb') as outfile:
@@ -113,6 +111,7 @@ def concat_fastq(args, metadata, output_dir, num_bp_per_sra):
             for infile in infiles:
                 infile_path = os.path.join(output_dir, infile)
                 assert os.path.exists(infile_path), 'Dumped fastq not found: '+infile_path
+                print('Concatenated file:', infile_path, flush=True)
                 os.system('cat "'+infile_path+'" >> "'+outfile_path+'"')
             print('')
         if args.remove_tmp=='yes':
@@ -145,15 +144,13 @@ def get_layout(args, metadata):
         layout = args.layout
     return layout
 
-def remove_old_intermediate_files(metadata, work_dir):
-    for i in metadata.df.index:
-        sra_id = metadata.df.loc[i,'run']
-        old_files = os.listdir(work_dir)
-        files = [ f for f in old_files if (f.startswith(sra_id))&(not f.endswith('.sra'))&(os.path.isfile(os.path.join(work_dir,f))) ]
-        for f in files:
-            f_path = os.path.join(work_dir, f)
-            print('Deleting old intermediate file:', f_path)
-            os.remove(f_path)
+def remove_old_intermediate_files(sra_id, work_dir):
+    old_files = os.listdir(work_dir)
+    files = [ f for f in old_files if (f.startswith(sra_id))&(not f.endswith('.sra'))&(os.path.isfile(os.path.join(work_dir,f))) ]
+    for f in files:
+        f_path = os.path.join(work_dir, f)
+        print('Deleting old intermediate file:', f_path)
+        os.remove(f_path)
 
 def remove_intermediate_files(sra_stat, ext, work_dir):
     file_paths = list()
@@ -265,7 +262,6 @@ def check_getfastq_dependency(args):
     return gz_exe,ungz_exe
 
 def set_getfastq_directories(args, sra_id):
-
     if args.work_dir.startswith('./'):
         args.work_dir = args.work_dir.replace('.', os.getcwd())
     if args.id is not None:
@@ -306,7 +302,7 @@ def run_pfd(sra_stat, args, output_dir, seq_summary, start, end):
     if (sra_stat['layout']=='paired'):
         unpaired_file = os.path.join(output_dir, sra_stat['sra_id']+'.fastq.gz')
         if os.path.exists(unpaired_file):
-            print('layout =', sra_stat['layout'], '; Deleting unpaired file:', unpaired_file)
+            print('layout = {}; Deleting unpaired file: {}'.format(sra_stat['layout'], unpaired_file))
             os.remove(unpaired_file)
         else:
             print('Unpaired file not found:', unpaired_file)
@@ -417,7 +413,7 @@ def sequence_extraction(args, sra_stat, start, end, output_dir, seq_summary, gz_
     seq_summary['end_1st'].loc[sra_id] = end
     return seq_summary
 
-def calc_2nd_ranges(args, total_bp_remaining, seq_summary):
+def calc_2nd_ranges(total_bp_remaining, seq_summary):
     sra_target_bp = total_bp_remaining / len(seq_summary['bp_remaining'])
     sra_target_reads = (sra_target_bp / seq_summary['spot_length']).astype(int)
     start_2nds = seq_summary['end_1st'] + 1
@@ -439,10 +435,10 @@ def calc_2nd_ranges(args, total_bp_remaining, seq_summary):
         all_equal_total_spots = all([ e2==ts for e2,ts in zip(end_2nds,total_spots) ])
         is_enough_read = (current_total_bp>=total_bp_remaining)
         if all_equal_total_spots:
-            print('Reached total spots in all SRAs.')
+            print('Reached total spots in all SRAs.', flush=True)
             break
         if is_enough_read:
-            print('Enough read numbers were assigned for the 2nd round sequence extraction.')
+            print('Enough read numbers were assigned for the 2nd round sequence extraction.', flush=True)
             break
     seq_summary['start_2nd'] = start_2nds
     seq_summary['end_2nd'] = end_2nds
@@ -588,7 +584,7 @@ def getfastq_main(args):
             else:
                 print('Output file(s) detected. Skipping {}.  Set "--redo yes" for reanalysis.'.format(sra_id))
                 continue
-        remove_old_intermediate_files(metadata, work_dir=output_dir)
+        remove_old_intermediate_files(sra_id=sra_id, work_dir=output_dir)
         print('SRA ID:', sra_stat['sra_id'])
         print('Library layout:', sra_stat['layout'])
         print('Number of reads:', "{:,}".format(sra_stat['total_spot']))
@@ -618,7 +614,7 @@ def getfastq_main(args):
         print('Proceeding without 2nd-round sequence extraction.')
     else:
         print('Starting the 2nd-round sequence extraction to compensate it.')
-        seq_summary = calc_2nd_ranges(args, total_bp_remaining, seq_summary)
+        seq_summary = calc_2nd_ranges(total_bp_remaining, seq_summary)
         ext_main = '.amalgkit.fastq.gz'
         ext_1st_tmp = '.amalgkit_1st.fastq.gz'
         for i in metadata.df.index:
@@ -629,7 +625,7 @@ def getfastq_main(args):
             start = seq_summary['start_2nd'].loc[sra_id]
             end = seq_summary['end_2nd'].loc[sra_id]
             if (start>=end):
-                txt = '{}: All spots were used in the 1st trial. Cancelling the 2nd trial. start={:,}, end={:,}'
+                txt = '{}: All spots have been extracted in the 1st trial. Cancelling the 2nd trial. start={:,}, end={:,}'
                 print(txt.format(sra_id, start, end))
                 continue
             rename_fastq(sra_stat, output_dir, inext=ext_main, outext=ext_1st_tmp)
