@@ -11,7 +11,7 @@ def getfastq_search_term(ncbi_id, additional_search_term=None):
         search_term = ncbi_id
     else:
         search_term = ncbi_id+' AND '+additional_search_term
-    #search_term = '"'+ncbi_id+'"'+'[Accession]'
+    #   search_term = '"'+ncbi_id+'"'+'[Accession]'
     return search_term
 
 def getfastq_getxml(search_term, save_xml=True, retmax=1000):
@@ -184,6 +184,7 @@ def get_newest_intermediate_file_extension(sra_stat, work_dir):
 def download_sra(sra_stat, args, work_dir, overwrite=False):
     sra_path = os.path.join(work_dir, sra_stat['sra_id']+'.sra')
     individual_sra_tmp_dir = os.path.join(work_dir, sra_stat['sra_id']+'/')
+
     if os.path.exists(sra_path):
         print('Previously-downloaded sra file was detected.')
         if (overwrite):
@@ -206,10 +207,16 @@ def download_sra(sra_stat, args, work_dir, overwrite=False):
         print('Trying to download the SRA file using prefetch (fasp protocol).')
         if os.path.exists(individual_sra_tmp_dir):
             shutil.rmtree(individual_sra_tmp_dir)
-        prefetch_command = [args.prefetch_exe, '--force', 'no', '--transport', 'fasp', '--max-size', '100G',
-                            '--output-directory', './', sra_stat['sra_id']]
+        prefetch_command = [args.prefetch_exe, '--force', 'no', '--transport', 'http', '--max-size', '100G',
+                            '--output-directory', './', str(sra_stat['sra_id'])]
         print('Command:', ' '.join(prefetch_command))
         prefetch_out = subprocess.run(prefetch_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        # In newer versions of prefetch, --output-directory is obsolete and will throw an error
+        # print(prefetch_out.returncode)
+        if (prefetch_out.returncode):
+            prefetch_command = [args.prefetch_exe, '--force', 'no', '--transport', 'http', '--max-size', '100G',
+                                sra_stat['sra_id']]
+            prefetch_out = subprocess.run(prefetch_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         print('prefetch stdout:')
         print(prefetch_out.stdout.decode('utf8'))
         print('prefetch stderr:')
@@ -218,10 +225,14 @@ def download_sra(sra_stat, args, work_dir, overwrite=False):
         print('Trying to download the SRA file using prefetch (http protocol).')
         if os.path.exists(individual_sra_tmp_dir):
             shutil.rmtree(individual_sra_tmp_dir)
-        prefetch_command = [args.prefetch_exe, '--force', 'no', '--transport', 'http', '--max-size', '100G',
-                            '--output-directory', './', sra_stat['sra_id']]
+        prefetch_command = [args.prefetch_exe, '--force', 'no', '--transport', 'http', '--max-size', '100G', str(sra_stat['sra_id'])]
         print('Command:', ' '.join(prefetch_command))
         prefetch_out = subprocess.run(prefetch_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+       #  In newer versions of prefetch, --output-directory is obsolete and will throw an error
+        if (prefetch_out.returncode):
+            prefetch_command = [args.prefetch_exe, '--force', 'no', '--transport', 'http', '--max-size', '100G',
+                                sra_stat['sra_id']]
+            prefetch_out = subprocess.run(prefetch_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         print('prefetch stdout:')
         print(prefetch_out.stdout.decode('utf8'))
         print('prefetch stderr:')
@@ -231,6 +242,9 @@ def download_sra(sra_stat, args, work_dir, overwrite=False):
         subprocess.run(['mv', os.path.join('./', sra_stat['sra_id']+'/', sra_stat['sra_id']+'.sra'), sra_path],
                        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         shutil.rmtree(os.path.join('./', sra_stat['sra_id']+'/'))
+    elif os.path.exists(os.path.expanduser(os.path.join('~/ncbi/public/sra/', sra_stat['sra_id'] + '.sra'))):
+        subprocess.run(['mv', os.path.expanduser(os.path.join('~/ncbi/public/sra/', sra_stat['sra_id'] + '.sra')), sra_path],
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     # Move files downloaded by ascp
     if os.path.exists(os.path.join(individual_sra_tmp_dir, sra_stat['sra_id']+'.sra')):
         subprocess.run(['mv', os.path.join(individual_sra_tmp_dir, sra_stat['sra_id']+'.sra'), sra_path],
