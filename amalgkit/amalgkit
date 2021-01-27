@@ -181,7 +181,9 @@ pge.add_argument('--entrez_additional_search_term', metavar='STR',
                  type=str, required=False, action='store',
                  help='default=%(default)s: Entrez search terms in addition to --id option to further restrict the SRA entry.')
 pge.add_argument('--tol', metavar='FLOAT', default=1, type=float, required=False, action='store',
-                 help='default=%(default)s: Acceptable % loss of reads relative to --max_bp. If the 1st-round sequence generation could not produce enough reads, the 2nd-round sequence generation is activated to compensate the loss.')
+                 help='default=%(default)s: Acceptable percentage loss of reads relative to --max_bp. If the 1st-round sequence '
+                      'generation could not produce enough reads, the 2nd-round sequence generation is activated to '
+                      'compensate the loss.')
 pge.add_argument('--metadata', metavar='PATH', default=None, type=str, required=False, action='store',
                  help='default=%(default)s: PATH to metadata table. See `amalgkit metadata -h` for details.')
 pge.add_argument('--batch', metavar='INT', default=None, type=int, required=False, action='store',
