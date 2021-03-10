@@ -199,6 +199,8 @@ def download_sra(sra_stat, args, work_dir, overwrite=False):
         ascp_command = [args.ascp_exe, '-v', '-i', '"'+args.ascp_key+'"', '-k', '1', '-T', '-l', '300m', sra_site, '"'+work_dir+'"']
         print('Command:', ' '.join(ascp_command))
         ascp_out = subprocess.run(ascp_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        #TODO: Switch to try/except for error handling
+        assert (ascp_out.returncode == 0), "ASCP did not finish safely: {}".format(ascp_out.stdout.decode('utf8'))
         print('ascp stdout:')
         print(ascp_out.stdout.decode('utf8'))
         print('ascp stderr:')
@@ -217,6 +219,8 @@ def download_sra(sra_stat, args, work_dir, overwrite=False):
             prefetch_command = [args.prefetch_exe, '--force', 'no', '--transport', 'http', '--max-size', '100G',
                                 sra_stat['sra_id']]
             prefetch_out = subprocess.run(prefetch_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        # TODO: Switch to try/except for error handling
+        assert (prefetch_out.returncode == 0), "prefetch did not finish safely: {}".format(prefetch_out.stdout.decode('utf8'))
         print('prefetch stdout:')
         print(prefetch_out.stdout.decode('utf8'))
         print('prefetch stderr:')
@@ -233,6 +237,9 @@ def download_sra(sra_stat, args, work_dir, overwrite=False):
             prefetch_command = [args.prefetch_exe, '--force', 'no', '--transport', 'http', '--max-size', '100G',
                                 sra_stat['sra_id']]
             prefetch_out = subprocess.run(prefetch_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+        # TODO: Switch to try/except for error handling
+        assert (prefetch_out.returncode == 0), "prefetch did not finish safely: {}".format(prefetch_out.stdout.decode('utf8'))
         print('prefetch stdout:')
         print(prefetch_out.stdout.decode('utf8'))
         print('prefetch stderr:')
@@ -301,6 +308,9 @@ def run_pfd(sra_stat, args, output_dir, seq_summary, start, end):
     #pfd_command = pfd_command + ['-s', sra_stat['sra_id']]
     print('Command:', ' '.join(pfd_command))
     pfd_out = subprocess.run(pfd_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    # TODO: Switch to try/except for error handling
+    assert (pfd_out.returncode == 0), "pfd did not finish safely: {}".format(
+        pfd_out.stdout.decode('utf8'))
     if args.pfd_print=='yes':
         print('parallel-fastq-dump stdout:')
         print(pfd_out.stdout.decode('utf8'))
@@ -341,7 +351,10 @@ def run_fastp(sra_stat, args, output_dir, seq_summary):
         fp_command = fp_command + ['--in1',infile1+inext,'--out1',infile1+outext,'--in2',infile2+inext,'--out2',infile2+outext]
     fp_command = [ fc for fc in fp_command if fc!='' ]
     print('Command:', ' '.join(fp_command))
-    fp_out = subprocess.run(fp_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        fp_out = subprocess.run(fp_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError("command '{}' returned with error (code {}): {}".format(e.cmd, e.returncode, e.output))
     if args.fastp_print=='yes':
         print('fastp stdout:')
         print(fp_out.stdout.decode('utf8'))

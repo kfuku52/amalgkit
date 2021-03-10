@@ -1,7 +1,6 @@
 import re, glob, subprocess, os, sys
 from Bio import Entrez
 from amalgkit.getfastq import getfastq_getxml, getfastq_search_term
-from amalgkit.metadata import create_run_dir
 from amalgkit.util import *
 
 def is_quant_output_present(sra_id, output_dir):
@@ -45,7 +44,9 @@ def quant_main(args):
                 print('kallisto index was detected:', index)
             else:
                 print('kallisto index was not detected. Creating:', index)
-                subprocess.run(["kallisto", "index", "--i", index, args.ref])
+                kallisto_out = subprocess.run(["kallisto", "index", "--i", index, args.ref])
+                # TODO: Switch to try/except for error handling
+                assert (kallisto_out.returncode == 0), "kallisto did not finish safely: {}".format(kallisto_out.stdout.decode('utf8'))
 
     # prefer amalgkit processed files over others.
 
@@ -69,7 +70,10 @@ def quant_main(args):
     # paired end read kallisto quant, if in_files == 2
     if len(in_files) == 2:
         print("paired end reads detected. Running in paired read mode.")
-        subprocess.run(["kallisto", "quant", "-i", index, "-o", output_dir, in_files[0], in_files[1]])
+        kallisto_out = subprocess.run(["kallisto", "quant", "-i", index, "-o", output_dir, in_files[0], in_files[1]])
+        # TODO: Switch to try/except for error handling
+        assert (kallisto_out.returncode == 0), "kallisto did not finish safely: {}".format(
+            kallisto_out.stdout.decode('utf8'))
 
     # throws exception, if more than 2 files in in_files. Could be expanded to handle more than 2 files.
     elif len(in_files) > 2:
@@ -110,15 +114,19 @@ def quant_main(args):
             print("fragment length set to: ", nominal_length)
             fragment_sd = nominal_length/10
             print("fragment length standard deviation set to:", fragment_sd)
-            subprocess.run(["kallisto", "quant", "--index", index, "-o", output_dir, "--single", "-l", str(nominal_length), "-s", str(fragment_sd), in_files[0]])
-
+            kallisto_out = subprocess.run(["kallisto", "quant", "--index", index, "-o", output_dir, "--single", "-l", str(nominal_length), "-s", str(fragment_sd), in_files[0]])
+            # TODO: Switch to try/except for error handling
+            assert (kallisto_out.returncode == 0), "kallisto did not finish safely: {}".format(
+                kallisto_out.stdout.decode('utf8'))
         # if fragment length is supplied by the user, kallisto quant can be run immediately
         else:
             print("fragment length set to: ", args.fragment_length)
             fragment_sd = args.fragment_length/10
             print("fragment length standard deviation set to:", fragment_sd)
-            subprocess.run(["kallisto", "quant", "--index", index,  "-o", output_dir, "--single", "-l", str(args.frament_length), "-s", str(fragment_sd), in_files[0]])
-
+            kallisto_out = subprocess.run(["kallisto", "quant", "--index", index,  "-o", output_dir, "--single", "-l", str(args.frament_length), "-s", str(fragment_sd), in_files[0]])
+            # TODO: Switch to try/except for error handling
+            assert (kallisto_out.returncode == 0), "kallisto did not finish safely: {}".format(
+                kallisto_out.stdout.decode('utf8'))
     # move output to results with unique name
     os.rename(os.path.join(output_dir, "run_info.json"), os.path.join(output_dir, sra_id + "_run_info.json"))
     os.rename(os.path.join(output_dir, "abundance.tsv"), os.path.join(output_dir, sra_id + "_abundance.tsv"))

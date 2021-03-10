@@ -2,7 +2,7 @@ library(limma)
 library(tidyr)
 library(dplyr)
 
-if (length(commandArgs(trailingOnly=TRUE))==1) {
+if (length(commandArgs(trailingOnly=TRUE))==0) {
   mode = "debug"
 } else {
   mode = "batch"
@@ -11,7 +11,7 @@ if (length(commandArgs(trailingOnly=TRUE))==1) {
 if (mode=="debug") {
 
   dir_work = '/Users/s229181/MSN/'
-  dir_ortho = paste0(dir_work, "OrthoFinder/Orthogroups")
+  dir_ortho = paste0(dir_work, "OrthoFinder/Results_Feb09_2/Orthogroups")
   dir_count = paste0(dir_work, "counts/")
   
   file_singlecopy = paste0(dir_ortho, '/Orthogroups_SingleCopyOrthologues.txt')
@@ -60,9 +60,9 @@ if (!file.exists(dir_tmm)) {
 
 
 
-for (col in 1:ncol(df_singleog)) {
-  df_singleog[,col] = sub('.*_', '', df_singleog[,col])
-}
+ # for (col in 1:ncol(df_singleog)) {
+ #   df_singleog[,col] = sub('.*_', '', df_singleog[,col])
+ # }
 df_og = NULL
 spp_filled = colnames(df_singleog)
 spp = sub('_', ' ', spp_filled)
@@ -83,7 +83,7 @@ for (sp in spp_filled) {
   infile_path = paste0(dir_count, infile[1])
   if (file.exists(infile_path)) {
     cat('Input file found, reading:', infile[1], '\n')
-    dat = read.delim(infile_path, header=TRUE, row.names=1, sep='\t')
+    dat = read.delim(infile_path,header = T,row.names=1, sep='\t')
     dat = dat[,(colnames(dat)!='length')]
     genus_cap = tolower(substring(sp,1,1))
     spec_name = strsplit(sp,'_')[[1]][2]
@@ -97,7 +97,7 @@ for (sp in spp_filled) {
 
 
 df_sog = df_sog[,-(1:num_selected_spp)]
-df_sog = apply(df_sog, 2, as.integer)
+#df_sog = apply(df_sog, 2, as.integer)
 rownames(df_sog) = rownames(df_singleog)
 
 df_nonzero = df_sog[,apply(df_sog, 2, sum)!=0]

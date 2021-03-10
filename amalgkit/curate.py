@@ -116,6 +116,6 @@ def curate_main(args):
             print(submit_command)  # Uncomment this line when done testing to use the submit command created
             # uncomment the following 3 lines when done testing to submit the jobs
             exit_status = subprocess.call(submit_command, shell=True)
-            if exit_status == 1:  # Check to make sure the job submitted
+            if exit_status != 0:  # Check to make sure the job submitted
                 print("Job failed to submit".format(submit_command))
         print("Done submitting jobs!")
