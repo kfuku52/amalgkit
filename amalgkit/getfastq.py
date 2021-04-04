@@ -509,8 +509,6 @@ def getfastq_metadata(args):
         print('Entrez search term:', search_term)
         xml_root = getfastq_getxml(search_term)
         metadata = Metadata.from_xml(xml_root)
-       # if args.save_metadata:
-            #metadata.df.to_csv(os.path.join(output_dir,'metadata_all.tsv'), sep='\t', index=False)
         print('Filtering SRA entry with --layout:', args.layout)
         layout = get_layout(args, metadata)
         metadata.df = metadata.df.loc[(metadata.df['lib_layout']==layout),:]
@@ -530,8 +528,6 @@ def getfastq_metadata(args):
             print('Entrez search term:', search_term)
             xml_root = getfastq_getxml(search_term)
             metadata = Metadata.from_xml(xml_root)
-            #if args.save_metadata:
-             #   metadata.df.to_csv(os.path.join(output_dir,'metadata_all.tsv'), sep='\t', index=False)
             print('Filtering SRA entry with --layout:', args.layout)
             layout = get_layout(args, metadata)
             metadata.df = metadata.df.loc[(metadata.df['lib_layout']==layout),:]
