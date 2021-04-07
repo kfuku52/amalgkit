@@ -61,7 +61,7 @@ def quant_main(args):
             else:
                 output_dir = os.path.join(args.work_dir, '/quant')
 
-            subprocess.run('sbatch', '--array', join(1, "-", args.batch), batch_script_path,args.work_dir, metadata_filtered_path, output_dir, args.index_dir)
+            subprocess.run('sbatch', '--array', "".join(1, "-", args.batch), batch_script_path,args.work_dir, metadata_filtered_path, output_dir, args.index_dir)
 
             print("job array submitted")
             sys.exit()
