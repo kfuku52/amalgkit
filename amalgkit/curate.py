@@ -1,7 +1,19 @@
+from amalgkit.util import *
+
 import re
 import subprocess
 import os
 import sys
+
+def get_tissues(args):
+    if args.tissues is None:
+        metadata = load_metadata(args)
+        tissues = metadata.df.loc[:,'tissue'].dropna().unique()
+    else:
+        tissues = re.findall(r"[\w]+", args.tissues)
+    tissues = '|'.join(tissues)
+    print('Tissues to be included: {}'.format(', '.join(tissues)))
+    return tissues
 
 def curate_main(args):
 
@@ -12,18 +24,15 @@ def curate_main(args):
         print(",<ERROR> Rscript is not installed.")
         sys.exit(1)
 
+    meta_out = os.path.join(args.work_dir, args.metadata)
 
     dist_method = args.dist_method
     mr_cut = args.mapping_rate
     intermediate = args.cleanup
-    tissues = re.findall(r"[\w]+", args.tissues)
-    tissues = '|'.join(tissues)
-    tissues = str(tissues)
+    tissues = get_tissues(args)
     curate_path = os.path.dirname(os.path.realpath(__file__))
     r_script_path = curate_path + '/transcriptome_curation.r'
     batch_script_path = curate_path + '/batch_curate.sh'
-
-    meta_out = os.path.join(args.work_dir, args.metafile)
 
     # Input checks #
     # if single species mode active

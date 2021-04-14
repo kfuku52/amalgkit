@@ -254,7 +254,7 @@ pcu.add_argument('--infile_dir', metavar='PATH', default=None, type=str, require
                  help='default=%(default)s: Name or Path of file to curate.')
 pcu.add_argument('--eff_len_dir', metavar='PATH', default=None, type=str, required=False, action='store',
                  help='default=%(default)s: Name or Path of file to effective length file. Has to have same format as infile.')
-pcu.add_argument('--metafile', metavar='PATH', default=None, type=str, required=False, action='store',
+pcu.add_argument('--metadata', metavar='PATH', default=None, type=str, required=False, action='store',
                  help='default=%(default)s: Path to metadata file, obtained by amalgkit metadata command.')
 pcu.add_argument('--dist_method', metavar='STR', default='pearson', type=str, required=False, action='store',
                  help='default=%(default)s: Method for calculating distance.')

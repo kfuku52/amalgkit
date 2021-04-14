@@ -1,6 +1,6 @@
-#! /usr/bin/Rscript
+#!/usr/bin/env Rscript
 
-library(Biobase)
+#library(Biobase)
 library(pcaMethods)
 library(colorspace)
 library(RColorBrewer)
@@ -11,17 +11,15 @@ library(dendextend)
 library(amap)
 library(pvclust)
 library(Rtsne)
-library(vioplot)
-
-
 
 
 if (length(commandArgs(trailingOnly=TRUE))==0) {
     debug_mode = "debug"
 } else {
-   debug_mode = "batch"
+    debug_mode = "batch"
 }
-
+log_prefix = 'transcriptome_curation.r:'
+cat(log_prefix,  'mode =', debug_mode, '\n')
 if (debug_mode=="debug") {
     infile = '/Users/s229181/MSN/counts/Zea_mays_est_counts.tsv'
     eff_file = '/Users/s229181/MSN/eff_length/Zea_mays_eff_length.tsv'
@@ -67,9 +65,8 @@ if (!endsWith(dir_work, '/')) {
 }
 
 # set directory
-if (!file.exists(dir_work)) {
-    dir.create(dir_work)
-}
+cat(log_prefix,  'dir_work =', dir_work, '\n')
+dir.create(dir_work, showWarnings=FALSE)
 setwd(dir_work)
 
 tc_sra_intersect = function(tc, sra) {
@@ -566,14 +563,19 @@ save_plot = function(tc, sra, sva_out, dist_method, file, selected_tissues, font
     par(mar=rep(0.1,4)); draw_legend(sra, new=TRUE, pos="center", fontsize=fontsize, nlabel.in.col=8)
     graphics.off()
 }
+
 get_mapping_rate = function(tc, sra){
   out = tc_sra_intersect(tc, sra) ; tc = out[['tc']] ; sra = out[['sra']]
-  sra$total_counts_raw<-NA
-  sra$mapping_rate<-NA
+  sra[,'total_counts_raw'] = NA
+  sra[,'mapping_rate'] = NA
   for(i in 1:length(tc)){
-    total_counts_raw<-sum(tc[,i])
-    sra$total_counts_raw[sra$run == colnames(tc)[i]]<-total_counts_raw
-    sra$mapping_rate[sra$run == colnames(tc)[i]]<-total_counts_raw/sra$num_read_fastp[sra$run == colnames(tc)[i]]
+    sra_run = colnames(tc)[i]
+    is_srr = (sra[['run']] == sra_run)
+    is_srr[is.na(is_srr)] = FALSE
+    total_counts_raw = sum(tc[,i])
+    total_counts_fastp = sra[is_srr, 'num_read_fastp']
+    sra[is_srr, 'total_counts_raw'] = total_counts_raw
+    sra[is_srr, 'mapping_rate'] = total_counts_raw/total_counts_fastp
     }
   return(sra)
   
@@ -645,6 +647,23 @@ if (any(conditions)) {
 }
 
 # save target_IDs as row.names in transcriptome
+
+
+# Quick workaround for missing num_read_fastp.
+# When activated, all samples pass the mapping rate cutoff
+# Remove this codeblock when fixed.
+if (FALSE) {
+    print(dim(tc))
+    sra[,'num_read_fastp'] = NA
+    sra[,'num_read_unfiltered'] = NA
+    for (i in 2:ncol(tc)) {
+        total_count = sum(tc[,i])
+        srr = colnames(tc)[i]
+        is_srr = (sra[,'run']==srr)
+        sra[is_srr,'num_read_fastp'] = total_count
+        sra[is_srr,'num_read_unfiltered'] = total_count
+    }
+}
 
 tc = tc[,sra[sra$exclusion=='no','run']]
 out = sort_tc_and_sra(tc, sra) ; tc = out[["tc"]] ; sra = out[["sra"]]
@@ -774,8 +793,7 @@ write.table(tc_tau, file=paste0(sub(' ', '_', scientific_name), '.tau.tsv'), sep
 #                    "dendextend", 
 #                    "amap", 
 #                    "pvclust",
-#                    "Rtsne", 
-#                    "vioplot")
+#                    "Rtsne")
 #   
 #   species_names = unique(sra_all[,'scientific_name'])
 #   cat("Species in the provided metadata file: ", species_names, "\n")
