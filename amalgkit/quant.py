@@ -1,4 +1,4 @@
-import re, glob, subprocess, os, sys, numpy, pandas
+import re, glob, subprocess, os, sys
 from Bio import Entrez
 from amalgkit.getfastq import getfastq_getxml, getfastq_search_term
 from amalgkit.util import *
@@ -21,50 +21,11 @@ def quant_main(args):
     if args.id is not None:
         print('--id is specified.')
         sra_id = args.id
-    # BATCHMODE
-
-    if args.batch is not None:
-        assert (args.metadata is not None), '--metadata should be specified.'
-        if os.path.exists(args.metadata):
-            "Running amalgkit quant in batch mode"
-            quant_path = os.path.dirname(os.path.realpath(__file__))
-            batch_script_path = quant_path + '/batch_curate.sh'
-            metadata = load_metadata(args)
-            species_array = numpy.unique(metadata.df.loc[:,'species'].values)
-            species_with_index = []
-
-            for species in species_array:
-                species_split = species.split()
-                index_filename="_".join(species_split) + '.idx'
-                if os.path.exists(os.path.join(args.index_dir, index_filename)):
-                    print("found index file for species: ",species)
-                    species_with_index.append(species)
-                else:
-                    print("could not find index file for species: ",species,"(expecting file: ",os.path.join(args.index_dir, index_filename),". Skipping.")
-
-            metadata_filtered=metadata.loc[metadata['species'].isin(species_with_index)]
-            SRR_array = numpy.unique(metadata.df.loc[:,'experiment'])
-            SRR_with_data = []
-            for SRR in SRR_array:
-                if os.path.exists(os.path.join(args.work_dir,'getfastq',SRR,'"*.fastq*"')):
-                    print("Found data for experiment ID: ", SRR)
-                    SRR_with_data.append(SRR)
-                else:
-                    print("could not find fastq file for experiment ID: ",SRR,". Skipping.")
-            metadata_filtered=metadata_filtered.loc[metadata_filtered['experiment'].isin(SRR_with_data)]
-            print("writing temporary metadata file")
-            metadata_filtered_path = os.path.join(args.work_dir, 'metadata_tmp.tsv')
-            metadata_filtered.to_csv(metadata_filtered_path, sep='\t', index=False)
-
-            if args.output_dir:
-                output_dir = args.output_dir
-            else:
-                output_dir = os.path.join(args.work_dir, '/quant')
-
-            subprocess.run('sbatch', batch_script_path,args.work_dir, metadata_filtered_path, output_dir, args.index_dir)
-
-            print("job array submitted")
-            sys.exit()
+    if args.metadata is not None:
+        print('--metadata is specified. Reading existing metadata table.')
+        assert (args.batch is not None), '--batch should be specified.'
+        metadata = load_metadata(args)
+        sra_id = metadata.df.loc[:,'run'].values[0]
     print('SRA ID:', sra_id)
 
     if args.index is None:
@@ -92,16 +53,12 @@ def quant_main(args):
     in_files = glob.glob(os.path.join(args.work_dir, 'getfastq', sra_id, sra_id + "*.amalgkit.fastq.gz"))
     if not in_files:
         in_files = glob.glob(os.path.join(args.work_dir, sra_id) + "*.fastq*")
-        if not in_files:
-            print('could not find input data. Exiting.')
-            sys.exit()
+
     # make results directory, if not already there
-    if args.output_dir:
-        output_dir = args.output_dir
-    else:
-        output_dir = os.path.join(args.work_dir, '/quant', sra_id)
+    output_dir = os.path.join(args.work_dir, 'quant', sra_id)
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
+
     if (is_quant_output_present(sra_id, output_dir))&(args.redo=='no'):
         print('Output file(s) detected. Exiting. Set "--redo yes" for reanalysis.')
         sys.exit()
