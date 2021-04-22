@@ -679,3 +679,6 @@ def getfastq_main(args):
     print('\n--- getfastq final report ---')
     print_read_stats(args, seq_summary, max_bp)
 
+    if args.save_metadata == 'yes':
+        metadata.df.to_csv(os.path.join(output_dir, 'metadata_' + sra_id + '.tsv'), sep='\t', index=False)
+
