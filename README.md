@@ -122,7 +122,7 @@ amalgkit quant \
 ```
 amalgkit curate \
 --infile transcriptome.tsv \
---metafile metadata.tsv \
+--metadata metadata.tsv \
 --dist_method 'pearson' \
 --tissues brain liver heart embryo \
 --work_dir './'
