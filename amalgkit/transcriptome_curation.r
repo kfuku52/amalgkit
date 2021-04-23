@@ -21,8 +21,8 @@ if (length(commandArgs(trailingOnly=TRUE))==0) {
 log_prefix = 'transcriptome_curation.r:'
 cat(log_prefix,  'mode =', debug_mode, '\n')
 if (debug_mode=="debug") {
-    infile = '/Users/s229181/MSN/counts/Zea_mays_est_counts.tsv'
-    eff_file = '/Users/s229181/MSN/eff_length/Zea_mays_eff_length.tsv'
+    infile = '/Users/s229181/MSN/counts/Citrullus_lanatus_est_counts.tsv'
+    eff_file = '/Users/s229181/MSN/eff_length/Citrullus_lanatus_eff_length.tsv'
     dist_method="pearson"
     mapping_rate_cutoff = 0.2
     min_dif = 0
@@ -33,31 +33,51 @@ if (debug_mode=="debug") {
     mode = 'msm'
     transform_method='fpkm'
     #tmm norm debug
-    
+
     tmm_norm = 'yes'
     dir_work = '/Users/s229181/MSN/'
-    srafile = '/Users/s229181/MSN/Metadata_all.tsv'
+    srafile = '/Users/s229181/MSN/Metadata_all_2.tsv'
     dist_method="pearson"
     mapping_rate_cutoff = 0.2
     min_dif = 0
     plot_intermediate = 1
     selected_tissues = c('root', 'flower', 'leaf')
     stop_after_tmm = TRUE
+
     
     #selected_tissues = strsplit('root|flower|leaf', '\\|')[[1]]
 } else if (debug_mode=="batch") {
     args = commandArgs(trailingOnly=TRUE)
-    print(args)
     infile = args[1]
+    cat("infile: ", infile, "\n")
+
     srafile = args[2]
+    cat("metadata: ", srafile, "\n")
+
     dir_work = args[3]
+    cat("working directory: ", dir_work, "\n")
+
     eff_file = args[4]
+    cat("gene length file: ", eff_file, "\n")
+
+
     dist_method = args[5]
+    cat("distance method: ", dist_method, "\n")
+
     mapping_rate_cutoff = as.numeric(args[6])
+    cat("mapping rate cutoff: ", mapping_rate_cutoff, "\n")
+
     min_dif = as.numeric(args[7])
+    cat("min diff: ", min_dif, "\n")
+
     plot_intermediate = as.integer(args[8])
+    cat("plot intermediate: ", plot_intermediate, "\n")
+
     selected_tissues = strsplit(args[9], '\\|')[[1]]
+    cat("tissues: ", selected_tissues, "\n")
+
     transform_method = args[10]
+    cat("transformation method: ", transform_method, "\n")
     
 }
 if (!endsWith(dir_work, '/')) {
@@ -435,16 +455,23 @@ draw_sva_summary = function(sva_out, tc, sra, fontsize) {
     } else {
         out = tc_sra_intersect(tc, sra) ; tc = out[['tc']] ; sra = out[['sra']]
         out = sort_tc_and_sra(tc, sra) ; tc = out[["tc"]] ; sra = out[["sra"]]
-        sra$fraction_lost_fastp = 1 - (sra$num_read_fastp / sra$num_read_unfiltered)
-        sra$fraction_lost_mask = 0 # 1 - (sra$num_read_mask / sra$num_read_fastp)
+        if ("num_read_fastp" %in% colnames(sra)){
+            sra$fraction_lost_fastp = 1 - (sra$num_read_fastp / sra$num_read_unfiltered)
+            cols = c('tissue','bioproject','lib_selection','instrument','num_read_fastp','fraction_lost_fastp','mapping_rate')
+            label_cols = c('organ','BioProject','library selection','instrument','number of read',
+                      '% lost, fastp','mapping rate')
+        }
+        else {
+
+            cols = c('tissue','bioproject','lib_selection','instrument','num_read_unfiltered','mapping_rate')
+            label_cols = c('organ','BioProject','library selection','instrument','number of read', 'mapping rate')
+        }
+        # sra$fraction_lost_mask = 0 # 1 - (sra$num_read_mask / sra$num_read_fastp)
         #cols = c('tissue','bioproject','lib_selection','layout','instrument','num_read_masked','fraction_lost_fastp',
          #        'fraction_lost_mask','min_read_len_masked','avg_read_len_masked','max_read_len_masked','mapping_rate')
-        cols = c('tissue','bioproject','lib_selection','instrument','num_read_fastp','fraction_lost_fastp','mapping_rate')
-        
         #label_cols = c('organ','BioProject','library selection','library layout','instrument','number of read','% lost, fastp',
         #              '% lost, misc feature','minimum read length','average read length','maximum read length','mapping rate')
-        label_cols = c('organ','BioProject','library selection','instrument','number of read',
-                      '% lost, fastp','mapping rate')
+
         
         num_sv = sva_out$n.sv
         df = data.frame(matrix(NA, num_sv, length(cols)))
@@ -573,9 +600,19 @@ get_mapping_rate = function(tc, sra){
     is_srr = (sra[['run']] == sra_run)
     is_srr[is.na(is_srr)] = FALSE
     total_counts_raw = sum(tc[,i])
-    total_counts_fastp = sra[is_srr, 'num_read_fastp']
     sra[is_srr, 'total_counts_raw'] = total_counts_raw
+    if("num_read_fastp" %in% colnames(sra)){
+    #print("using num_read_fastp for mapping rate calculation")
+    total_counts_fastp = sra[is_srr, 'num_read_fastp']
     sra[is_srr, 'mapping_rate'] = total_counts_raw/total_counts_fastp
+    }
+    else {
+    #print("using num_read_fastq_written for mapping rate calculation")
+    total_counts_fastq = sra[is_srr, 'num_read_fastq_written']
+    sra[is_srr, 'mapping_rate'] = total_counts_raw/total_counts_fastq
+    }
+
+
     }
   return(sra)
   
@@ -652,18 +689,18 @@ if (any(conditions)) {
 # Quick workaround for missing num_read_fastp.
 # When activated, all samples pass the mapping rate cutoff
 # Remove this codeblock when fixed.
-if (FALSE) {
-    print(dim(tc))
-    sra[,'num_read_fastp'] = NA
-    sra[,'num_read_unfiltered'] = NA
-    for (i in 2:ncol(tc)) {
-        total_count = sum(tc[,i])
-        srr = colnames(tc)[i]
-        is_srr = (sra[,'run']==srr)
-        sra[is_srr,'num_read_fastp'] = total_count
-        sra[is_srr,'num_read_unfiltered'] = total_count
-    }
-}
+#if (FALSE) {
+#    print(dim(tc))
+#    sra[,'num_read_fastp'] = NA
+#    sra[,'num_read_unfiltered'] = NA
+#    for (i in 2:ncol(tc)) {
+#        total_count = sum(tc[,i])
+#        srr = colnames(tc)[i]
+#        is_srr = (sra[,'run']==srr)
+#        sra[is_srr,'num_read_fastp'] = total_count
+#        sra[is_srr,'num_read_unfiltered'] = total_count
+#    }
+#}
 
 tc = tc[,sra[sra$exclusion=='no','run']]
 out = sort_tc_and_sra(tc, sra) ; tc = out[["tc"]] ; sra = out[["sra"]]

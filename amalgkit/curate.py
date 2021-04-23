@@ -56,18 +56,19 @@ def curate_main(args):
             print("No expression data provided. Please set Either --infile or --infile AND --eff_len_file")
             sys.exit(1)
 
-        subprocess.check_call(['Rscript',
+        proc=subprocess.Popen(['Rscript',
                                r_script_path,
                                os.path.realpath(quant_out),
                                os.path.realpath(meta_out),
                                os.path.realpath(args.work_dir),
                                os.path.realpath(eff_len_out),
                                dist_method,
-                               '0',
                                str(mr_cut),
+                               '0',
                                str(intermediate),
                                tissues,
                                str(args.norm)])
+        print("the commandline is {}".format(proc.args))
     # if multiple species mode active
     if args.batch is not None:
 

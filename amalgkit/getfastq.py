@@ -506,7 +506,7 @@ def dump_read_stats(args, metadata, seq_summary, output_dir, sra_id):
     if args.fastp=='yes':
         metadata.df.loc[metadata.df['run'] == sra_id, 'num_read_fastp_input'] = seq_summary['bp_fastp_in'].sum()
         metadata.df.loc[metadata.df['run'] == sra_id, 'num_read_fastp'] = seq_summary['bp_fastp_out'].sum()
-
+    metadata.df.loc[metadata.df['run'] == sra_id, 'num_read_unfiltered'] = metadata.df.loc[metadata.df['run'] == sra_id, 'total_spots']
     metadata.df.to_csv(os.path.join(output_dir, 'metadata_' + sra_id + '.tsv'), sep='\t', index=False)
 
 
