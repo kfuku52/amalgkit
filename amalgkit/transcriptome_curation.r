@@ -456,14 +456,14 @@ draw_sva_summary = function(sva_out, tc, sra, fontsize) {
         out = tc_sra_intersect(tc, sra) ; tc = out[['tc']] ; sra = out[['sra']]
         out = sort_tc_and_sra(tc, sra) ; tc = out[["tc"]] ; sra = out[["sra"]]
         if ("num_read_fastp" %in% colnames(sra)){
-            sra$fraction_lost_fastp = 1 - (sra$num_read_fastp / sra$num_read_unfiltered)
+            sra$fraction_lost_fastp = 1 - (sra$num_read_fastp / sra$num_read_fastq_dumped)
             cols = c('tissue','bioproject','lib_selection','instrument','num_read_fastp','fraction_lost_fastp','mapping_rate')
             label_cols = c('organ','BioProject','library selection','instrument','number of read',
                       '% lost, fastp','mapping rate')
         }
         else {
-
-            cols = c('tissue','bioproject','lib_selection','instrument','num_read_unfiltered','mapping_rate')
+            sra$fraction_lost_fastq = 1 - (sra$num_read_fastq_written / sra$num_read_fastq_dumped)
+            cols = c('tissue','bioproject','lib_selection','instrument','num_read_fastq_dumped','mapping_rate')
             label_cols = c('organ','BioProject','library selection','instrument','number of read', 'mapping rate')
         }
         # sra$fraction_lost_mask = 0 # 1 - (sra$num_read_mask / sra$num_read_fastp)
@@ -682,25 +682,6 @@ if (any(conditions)) {
     cat('Failed quantification:', sra[conditions,'run'], '\n')
     sra[conditions,'exclusion'] = 'failed_quantification'
 }
-
-# save target_IDs as row.names in transcriptome
-
-
-# Quick workaround for missing num_read_fastp.
-# When activated, all samples pass the mapping rate cutoff
-# Remove this codeblock when fixed.
-#if (FALSE) {
-#    print(dim(tc))
-#    sra[,'num_read_fastp'] = NA
-#    sra[,'num_read_unfiltered'] = NA
-#    for (i in 2:ncol(tc)) {
-#        total_count = sum(tc[,i])
-#        srr = colnames(tc)[i]
-#        is_srr = (sra[,'run']==srr)
-#        sra[is_srr,'num_read_fastp'] = total_count
-#        sra[is_srr,'num_read_unfiltered'] = total_count
-#    }
-#}
 
 tc = tc[,sra[sra$exclusion=='no','run']]
 out = sort_tc_and_sra(tc, sra) ; tc = out[["tc"]] ; sra = out[["sra"]]
