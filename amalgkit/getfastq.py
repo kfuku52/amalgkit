@@ -497,6 +497,19 @@ def print_read_stats(args, seq_summary, max_bp, individual=True):
                 print('Individual {} (bp): {}'.format(rt, txt))
     print('')
 
+
+def dump_read_stats(args, metadata, seq_summary, output_dir, sra_id):
+    if args.pfd=='yes':
+        metadata.df.loc[metadata.df['run'] == sra_id, 'num_read_fastq_dumped'] = seq_summary['bp_dumped'].sum()
+        metadata.df.loc[metadata.df['run'] == sra_id, 'num_read_fastq_rejected'] = seq_summary['bp_rejected'].sum()
+        metadata.df.loc[metadata.df['run'] == sra_id, 'num_read_fastq_written'] = seq_summary['bp_written'].sum()
+    if args.fastp=='yes':
+        metadata.df.loc[metadata.df['run'] == sra_id, 'num_read_fastp_input'] = seq_summary['bp_fastp_in'].sum()
+        metadata.df.loc[metadata.df['run'] == sra_id, 'num_read_fastp'] = seq_summary['bp_fastp_out'].sum()
+
+    metadata.df.to_csv(os.path.join(output_dir, 'metadata_' + sra_id + '.tsv'), sep='\t', index=False)
+
+
 def getfastq_metadata(args):
     assert (args.id is None and args.id_list is None)!=(args.metadata is None), 'Either --id, --id_list or --metadata should be specified.'
     if args.id is not None:
@@ -515,8 +528,6 @@ def getfastq_metadata(args):
         if args.sci_name is not None:
             print('Filtering SRA entry with --sci_name:', args.sci_name)
             metadata.df = metadata.df.loc[(metadata.df['scientific_name']==args.sci_name),:]
-        if args.save_metadata:
-            metadata.df.to_csv(os.path.join(output_dir,'metadata_'+sra_id+'.tsv'), sep='\t', index=False)
     if args.id_list is not None:
         print('--id is specified. Downloading SRA metadata from Entrez.')
         assert (args.entrez_email!='aaa@bbb.com'), "Provide your email address. No worry, you won't get spam emails."
@@ -534,8 +545,6 @@ def getfastq_metadata(args):
             if args.sci_name is not None:
                 print('Filtering SRA entry with --sci_name:', args.sci_name)
                 metadata.df = metadata.df.loc[(metadata.df['scientific_name']==args.sci_name),:]
-            if args.save_metadata:
-                metadata.df.to_csv(os.path.join(output_dir,'metadata_',sra_id,'.tsv'), sep='\t', index=False)
 
     if args.metadata is not None:
         print('--metadata is specified. Reading existing metadata table.')
@@ -628,6 +637,8 @@ def getfastq_main(args):
         total_bp_out = seq_summary['bp_written'].sum()
     if args.fastp=='yes':
         total_bp_out = seq_summary['bp_fastp_out'].sum()
+        metadata.df.loc[metadata.df['run']==sra_id,'num_read_fastp'] = total_bp_out
+        metadata.df.loc[metadata.df['run'] == sra_id, 'num_read_fastp_input'] = total_bp_out
     percent_dropped = total_bp_out/total_bp_dumped*100
     txt = '{:.2f}% of reads were dropped in the 1st-round sequence generation.'
     print(txt.format(percent_remaining, args.tol))
@@ -679,6 +690,6 @@ def getfastq_main(args):
     print('\n--- getfastq final report ---')
     print_read_stats(args, seq_summary, max_bp)
 
-    if args.save_metadata == 'yes':
-        metadata.df.to_csv(os.path.join(output_dir, 'metadata_' + sra_id + '.tsv'), sep='\t', index=False)
+    # Dump metadata with updated fastp & fastq stats
+    dump_read_stats(args,metadata, seq_summary, output_dir, sra_id)
 

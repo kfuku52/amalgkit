@@ -128,8 +128,6 @@ pge.add_argument('--max_bp', metavar='INT', default='999,999,999,999,999', type=
                  help='default=%(default)s: Target sequence size (bp) to be dumped.')
 pge.add_argument('--threads', metavar='INT', default=1, type=int, required=False, action='store',
                  help='default=%(default)s: Number of threads.')
-pge.add_argument('--save_metadata', metavar='yes|no', default="yes", type=str, required=False, action='store',
-                 help='default=%(default)s: Save metadata table.')
 pge.add_argument('--min_read_length', metavar='INT', default=25, type=int, required=False, action='store',
                  help='default=%(default)s: Minimum read length.')
 pge.add_argument('--pfd', metavar='yes|no', default='yes', type=str, required=False, action='store',
