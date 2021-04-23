@@ -458,13 +458,12 @@ draw_sva_summary = function(sva_out, tc, sra, fontsize) {
         if ("num_read_fastp" %in% colnames(sra)){
             sra$fraction_lost_fastp = 1 - (sra$num_read_fastp / sra$num_read_fastq_dumped)
             cols = c('tissue','bioproject','lib_selection','instrument','num_read_fastp','fraction_lost_fastp','mapping_rate')
-            label_cols = c('organ','BioProject','library selection','instrument','number of read',
-                      '% lost, fastp','mapping rate')
+            label_cols = c('organ','BioProject','library selection','instrument','number of read','% lost, fastp','mapping rate')
         }
         else {
             sra$fraction_lost_fastq = 1 - (sra$num_read_fastq_written / sra$num_read_fastq_dumped)
-            cols = c('tissue','bioproject','lib_selection','instrument','num_read_fastq_dumped','mapping_rate')
-            label_cols = c('organ','BioProject','library selection','instrument','number of read', 'mapping rate')
+            cols = c('tissue','bioproject','lib_selection','instrument','num_read_fastq_dumped','fraction_lost_fastq', 'mapping_rate')
+            label_cols = c('organ','BioProject','library selection','instrument','number of read','% lost, fastq', 'mapping rate')
         }
         # sra$fraction_lost_mask = 0 # 1 - (sra$num_read_mask / sra$num_read_fastp)
         #cols = c('tissue','bioproject','lib_selection','layout','instrument','num_read_masked','fraction_lost_fastp',
