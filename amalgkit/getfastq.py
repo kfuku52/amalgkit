@@ -508,7 +508,7 @@ def dump_read_stats(args, metadata, seq_summary, output_dir, sra_id):
         metadata.df.loc[metadata.df['run'] == sra_id, 'num_read_fastp'] = seq_summary['bp_fastp_out'].sum()
     metadata.df.loc[metadata.df['run'] == sra_id, 'num_read_unfiltered'] = seq_summary['bp_dumped'].sum()
     metadata.df.loc[metadata.df['run'] == sra_id, 'spot_length'] = seq_summary['spot_length'].loc[sra_id]
-    
+
     metadata_output_dir = os.path.join(args.work_dir,'metadata', 'updated_metadata')
     if not os.path.exists(metadata_output_dir):
         os.makedirs(metadata_output_dir)

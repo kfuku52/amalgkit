@@ -241,6 +241,8 @@ pcu.add_argument('--batch', metavar='INT', default=None, type=int, required=Fals
                  help='default=%(default)s: If set, need to provide --infile_dir and/or --eff_len_dir. Automatically scans input directories based on Metadata file and sends batch job do cluster (SLURM only, currently)')
 pcu.add_argument('--work_dir', metavar='PATH', default='./', type=str, required=False, action='store',
                  help='default=%(default)s: Working directory.')
+pcu.add_argument('--updated_metadata_dir', metavar='PATH', default='./metadata/updated_metadata/', type=str, required=True, action='store',
+                 help='default=%(default)s: Directory containing metadata.tsv files as put out by amalgkit getfastq.')
 pcu.add_argument('--infile', metavar='PATH', default=None, type=str, required=False, action='store',
                  help='default=%(default)s: Name or Path of file to curate.')
 pcu.add_argument('--eff_len_file', metavar='PATH', default=None, type=str, required=False, action='store',

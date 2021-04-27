@@ -30,54 +30,49 @@ if (debug_mode=="debug") {
     selected_tissues = c('root', 'flower', 'leaf')
     dir_count='counts/'
     dir_eff_length='eff_length/'
+    dir_updated_metadata='metadata/updated_metadata/'
     mode = 'msm'
     transform_method='fpkm'
     #tmm norm debug
 
     tmm_norm = 'yes'
     dir_work = '/Users/s229181/MSN/'
-    srafile = '/Users/s229181/MSN/Metadata_all_2.tsv'
+    srafile = '/Users/s229181/MSN/metadata/Metadata_all_2.tsv'
     dist_method="pearson"
     mapping_rate_cutoff = 0.2
     min_dif = 0
     plot_intermediate = 1
     selected_tissues = c('root', 'flower', 'leaf')
     stop_after_tmm = TRUE
-
+    
     
     #selected_tissues = strsplit('root|flower|leaf', '\\|')[[1]]
 } else if (debug_mode=="batch") {
     args = commandArgs(trailingOnly=TRUE)
+    
     infile = args[1]
-    cat("infile: ", infile, "\n")
-
     srafile = args[2]
-    cat("metadata: ", srafile, "\n")
-
     dir_work = args[3]
-    cat("working directory: ", dir_work, "\n")
-
     eff_file = args[4]
-    cat("gene length file: ", eff_file, "\n")
-
-
     dist_method = args[5]
-    cat("distance method: ", dist_method, "\n")
-
     mapping_rate_cutoff = as.numeric(args[6])
-    cat("mapping rate cutoff: ", mapping_rate_cutoff, "\n")
-
     min_dif = as.numeric(args[7])
-    cat("min diff: ", min_dif, "\n")
-
     plot_intermediate = as.integer(args[8])
-    cat("plot intermediate: ", plot_intermediate, "\n")
-
     selected_tissues = strsplit(args[9], '\\|')[[1]]
-    cat("tissues: ", selected_tissues, "\n")
-
     transform_method = args[10]
+    dir_updated_metadata = args[11]
+    
+    cat("metadata: ", srafile, "\n")
+    cat("infile: ", infile, "\n")
+    cat("working directory: ", dir_work, "\n")
+    cat("gene length file: ", eff_file, "\n")
+    cat("distance method: ", dist_method, "\n")
+    cat("mapping rate cutoff: ", mapping_rate_cutoff, "\n")
+    cat("plot intermediate: ", plot_intermediate, "\n")
+    cat("min diff: ", min_dif, "\n")
+    cat("tissues: ", selected_tissues, "\n")
     cat("transformation method: ", transform_method, "\n")
+    cat("updated metadata directory: ", dir_updated_metadata, "\n")
     
 }
 if (!endsWith(dir_work, '/')) {
@@ -455,7 +450,7 @@ draw_sva_summary = function(sva_out, tc, sra, fontsize) {
     } else {
         out = tc_sra_intersect(tc, sra) ; tc = out[['tc']] ; sra = out[['sra']]
         out = sort_tc_and_sra(tc, sra) ; tc = out[["tc"]] ; sra = out[["sra"]]
-        if ("num_read_fastp" %in% colnames(sra)){
+        if (any(is.na(sra$num_read_fastp))==FALSE){
             sra$fraction_lost_fastp = 1 - (sra$num_read_fastp / sra$num_read_fastq_dumped)
             cols = c('tissue','bioproject','lib_selection','instrument','num_read_fastp','fraction_lost_fastp','mapping_rate')
             label_cols = c('organ','BioProject','library selection','instrument','number of read','% lost, fastp','mapping rate')
@@ -600,13 +595,13 @@ get_mapping_rate = function(tc, sra){
     is_srr[is.na(is_srr)] = FALSE
     total_counts_raw = sum(tc[,i])
     sra[is_srr, 'total_counts_raw'] = total_counts_raw
-    if("num_read_fastp" %in% colnames(sra)){
-    #print("using num_read_fastp for mapping rate calculation")
+    if(any(is.na(sra$num_read_fastp))==FALSE){
+    print("using num_read_fastp for mapping rate calculation")
     total_counts_fastp = sra[is_srr, 'num_read_fastp']
     sra[is_srr, 'mapping_rate'] = total_counts_raw/total_counts_fastp
     }
     else {
-    #print("using num_read_fastq_written for mapping rate calculation")
+    print("using num_read_fastq_written for mapping rate calculation")
     total_counts_fastq = sra[is_srr, 'num_read_fastq_written']
     sra[is_srr, 'mapping_rate'] = total_counts_raw/total_counts_fastq
     }
@@ -649,6 +644,47 @@ get_tmm_scaled_fpkm = function(dat, df_nf, efflen) {
 }
 
 
+read_metadata_directory = function(sra, dir_updated_metadata) {
+  not_excluded_SRR <- sra$run[sra$exclusion == 'no']
+  file_pattern<-paste(not_excluded_SRR, collapse ='|')
+  files <- list.files(path = dir_updated_metadata, pattern = file_pattern, full.names = T)
+  updated_metadata <- lapply(files,read.table,sep="\t", header=T)
+  names(updated_metadata)<-list.files(path = dir_updated_metadata, pattern = file_pattern, full.names = F)
+  names(updated_metadata) <- gsub(".tsv","",
+                         names(updated_metadata),
+                         fixed = TRUE)
+  names(updated_metadata) <- gsub("metadata_","",
+                         names(updated_metadata),
+                         fixed = TRUE)
+  # sra$num_read_fastp<-NA
+  # sra$num_read_fastq_written<-NA
+  for(sra_id in updated_metadata){
+    run_ID<-as.character(sra_id$run)
+    if("num_read_fastp" %in% colnames(sra_id)){
+      num_read_fastp<-sra_id$num_readfastp
+    }
+    else{
+      num_read_fastp<-NA
+    }
+    if("num_read_fastq_written" %in% colnames(sra_id)){
+      num_read_fastq_written<-sra_id$num_read_fastq_written
+    }
+    else{
+      num_read_fastq_written<-NA
+    }
+    if("num_read_fastq_dumped" %in% colnames(sra_id)){
+      num_read_fastq_dumped<-sra_id$num_read_fastq_dumped
+    }
+    else{
+      num_read_fastq_dumped<-NA
+    }
+    sra$num_read_fastp[sra$run == run_ID]<-num_read_fastp
+    sra$num_read_fastq_written[sra$run == run_ID]<-num_read_fastq_written
+    sra$num_read_fastq_dumped[sra$run == run_ID]<-num_read_fastq_dumped
+  }
+  return(sra)
+}
+
 ####################END OF FUNCTION DECLARATION####################################################
 
 ################################################# START OF SVA CORRECTION ########################################################
@@ -662,6 +698,7 @@ fontsize = 7
 sra_all = read.table(srafile, sep="\t", header=TRUE, quote="", fill=TRUE, comment.char="", stringsAsFactors=FALSE)
 sra_all$instrument[sra_all$instrument==""] = "not_provided"
 sra_all$bioproject[sra_all$bioproject==""] = "not_provided"
+
 
 tc <- read.table(infile, sep="\t", stringsAsFactors=FALSE, header = T, quote="", fill =F)
 tc_eff_length <- read.table(eff_file, sep="\t", stringsAsFactors=FALSE, header = T, quote="", fill =F)
@@ -684,6 +721,9 @@ if (any(conditions)) {
 
 tc = tc[,sra[sra$exclusion=='no','run']]
 out = sort_tc_and_sra(tc, sra) ; tc = out[["tc"]] ; sra = out[["sra"]]
+
+sra = read_metadata_directory(sra, dir_updated_metadata)
+
 sra = get_mapping_rate(tc,sra)
 
 # log transform AFTER mappingrate
@@ -753,110 +793,3 @@ write.table(tc_tissue, file=paste0(sub(' ', '_', scientific_name), '.tissue.mean
 tc_tau = tissue2tau(tc_tissue, rich.annotation=TRUE, unlog=TRUE)
 write.table(tc_tau, file=paste0(sub(' ', '_', scientific_name), '.tau.tsv'), sep="\t", row.names=TRUE, col.names=TRUE, quote=FALSE)
 
-# 
-# 
-# par_sva = function(i, species_names, dir_count, dir_eff_length) {
-#   species = species_names[i]
-#   cat("Files found for", species, ": ")
-#   species = sub(' ', '_', species)
-#   infile = list.files(dir_count, pattern = species)[1]
-#   infile = paste0(dir_count, infile)
-#   if(exists("dir_eff_length")){
-#     eff_file = list.files(dir_eff_length, pattern = species)[1]
-#     eff_file = paste0(dir_eff_length, eff_file)
-#     cat(infile, eff_file, "\n")
-#   }
-#   else{
-#     cat(infile, "\n")
-#     eff_file = NA
-#   }
-#   
-#   tc <- read.table(infile, sep="\t", stringsAsFactors=FALSE, header = T, quote="", fill =F)
-#   tc_eff_length <- read.table(eff_file, sep="\t", stringsAsFactors=FALSE, header = T, quote="", fill =F)
-#   row.names(tc)<-tc[,1]
-#   tc<-tc[,-1]
-#   row.names(tc_eff_length)<-tc_eff_length[,1]
-#   tc_eff_length<-tc_eff_length[,-1]
-#   tc_eff_length = tc_eff_length[,colnames(tc)]
-#   # calculate tpm and log transform transcriptome (adds pseudocount +1), important to do AFTER get_mapping_rate()
-#   tc = transform_raw_to_fpkm(tc, tc_eff_length)
-#   main_sva()    
-# }
-# 
-
-
-#}
-# 
-# if(mode == 'msm'){
-#   #########################
-#   # read SRA table
-#   sra_all = read.table(srafile, sep="\t", header=TRUE, quote="", fill=TRUE, comment.char="", stringsAsFactors=FALSE)
-#   sra_all$instrument[sra_all$instrument==""] = "not_provided"
-#   sra_all$bioproject[sra_all$bioproject==""] = "not_provided"
-#   
-#   #setup parallel backend to use many processors
-#   cores=detectCores()
-#   #cl <- makeCluster(cores[1]-1) #not to overload your computer
-#   cl <- parallel::makeCluster(cores[1]-1, setup_strategy = "sequential")
-#   
-#   registerDoParallel(cl)
-#   req_packages = c("Biobase", 
-#                    "pcaMethods", 
-#                    "colorspace", 
-#                    "RColorBrewer", 
-#                    "sva", 
-#                    "MASS",
-#                    "NMF", 
-#                    "dendextend", 
-#                    "amap", 
-#                    "pvclust",
-#                    "Rtsne")
-#   
-#   species_names = unique(sra_all[,'scientific_name'])
-#   cat("Species in the provided metadata file: ", species_names, "\n")
-#   
-#   
-# 
-#   
-#     
-#   out = list()
-#   foreach(i=1:length(species_names), .packages = req_packages) %dopar%{
-#     out[[species_names[i]]] = par_sva(i, species_names, dir_count, dir_eff_length)
-#   }
-#   
-#   
-#   
-#  stopCluster()  
-#   # 
-  # foreach(i=1:length(species_names), .packages = req_packages) %dopar%{
-  #   species = species_names[i]
-  #   cat("Files found for", species, ": ")
-  #   species = sub(' ', '_', species)
-  #   infile = list.files(dir_count, pattern = species)[1]
-  #   infile = paste0(dir_count, infile)
-  #   if(exists("dir_eff_length")){
-  #   eff_file = list.files(dir_eff_length, pattern = species)[1]
-  #   eff_file = paste0(dir_eff_length, eff_file)
-  #   cat(infile, eff_file, "\n")
-  #   }
-  #   else{
-  #   cat(infile, "\n")
-  #   eff_file = NA
-  #   }
-  #   
-  #   tc <- read.table(infile, sep="\t", stringsAsFactors=FALSE, header = T, quote="", fill =F)
-  #   tc_eff_length <- read.table(eff_file, sep="\t", stringsAsFactors=FALSE, header = T, quote="", fill =F)
-  #   row.names(tc)<-tc[,1]
-  #   tc<-tc[,-1]
-  #   row.names(tc_eff_length)<-tc_eff_length[,1]
-  #   tc_eff_length<-tc_eff_length[,-1]
-  #   tc_eff_length = tc_eff_length[,colnames(tc)]
-  #   # calculate tpm and log transform transcriptome (adds pseudocount +1), important to do AFTER get_mapping_rate()
-  #   tc = transform_raw_to_fpkm(tc, tc_eff_length)
-  #   main_sva()
-  # }
-  # 
-  # stopCluster()
-  # 
-  
-#}

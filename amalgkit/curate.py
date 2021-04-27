@@ -25,6 +25,7 @@ def curate_main(args):
         sys.exit(1)
 
     meta_out = os.path.join(args.work_dir, args.metadata)
+    updated_metadata_dir = os.path.join(args.work_dir, args.updated_metadata_dir)
 
     dist_method = args.dist_method
     mr_cut = args.mapping_rate
@@ -33,6 +34,7 @@ def curate_main(args):
     curate_path = os.path.dirname(os.path.realpath(__file__))
     r_script_path = curate_path + '/transcriptome_curation.r'
     batch_script_path = curate_path + '/batch_curate.sh'
+
 
     # Input checks #
     # if single species mode active
@@ -56,7 +58,7 @@ def curate_main(args):
             print("No expression data provided. Please set Either --infile or --infile AND --eff_len_file")
             sys.exit(1)
 
-        proc=subprocess.Popen(['Rscript',
+        proc=subprocess.call(['Rscript',
                                r_script_path,
                                os.path.realpath(quant_out),
                                os.path.realpath(meta_out),
@@ -67,8 +69,8 @@ def curate_main(args):
                                '0',
                                str(intermediate),
                                tissues,
-                               str(args.norm)])
-        print("the commandline is {}".format(proc.args))
+                               str(args.norm),
+                               os.path.realpath(updated_metadata_dir)])
     # if multiple species mode active
     if args.batch is not None:
 
