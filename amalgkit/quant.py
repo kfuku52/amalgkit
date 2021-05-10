@@ -24,7 +24,7 @@ def quant_main(args):
     if args.metadata is not None:
         print('--metadata is specified. Reading existing metadata table.')
         assert (args.batch is not None), '--batch should be specified.'
-        metadata = load_metadata(args)
+        metadata = load_metadata(args) # loads single-row metadata according to --batch
         sra_id = metadata.df.loc[:,'run'].values[0]
     print('SRA ID:', sra_id)
 

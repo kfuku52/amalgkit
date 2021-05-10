@@ -123,7 +123,8 @@ pge.add_argument('--id_list', metavar='PATH', default=None, type=str, required=F
                  help='default=%(default)s: Location of file containing a list of SRA IDs. Otherwise works like --id')
 pge.add_argument('--layout', metavar='single|paired|auto', default='auto', type=str, required=False, action='store',
                  choices=['single', 'paired', 'auto'],
-                 help='default=%(default)s: Library layout of RNA-seq data to be dumped. "auto" prioritizes paird-end libraries if both types are available.')
+                 help='default=%(default)s: Library layout of RNA-seq data to be dumped. '
+                      '"auto" prioritizes paird-end libraries if both types are available.')
 pge.add_argument('--max_bp', metavar='INT', default='999,999,999,999,999', type=str, required=False, action='store',
                  help='default=%(default)s: Target sequence size (bp) to be dumped.')
 pge.add_argument('--threads', metavar='INT', default=1, type=int, required=False, action='store',
@@ -146,7 +147,8 @@ pge.add_argument('--fastp_exe', metavar='PATH', default='fastp', type=str, requi
                  help='default=%(default)s: PATH to fastp executable.')
 pge.add_argument('--fastp_option', metavar='STR', default='-j /dev/null -h /dev/null', type=str, required=False,
                  action='store',
-                 help='default=%(default)s: Options to be passed to fastp. Do not include --length_required option here. It can be specified throught --min_read_length in amalgkit. ')
+                 help='default=%(default)s: Options to be passed to fastp. Do not include --length_required option here. '
+                      'It can be specified throught --min_read_length in amalgkit. ')
 pge.add_argument('--remove_sra', metavar='yes|no', default='yes', type=str, required=False, action='store',
                  choices=['yes', 'no'],
                  help='default=%(default)s: Remove downloaded SRA files after fastq extraction.')
@@ -273,7 +275,8 @@ pmg = subparsers.add_parser('merge', help='see `amalgkit merge -h`')
 
 pmg.add_argument('--work_dir', metavar='PATH', default='./', type=str, required=False, action='store',
                  help='default=%(default)s: Working directory.')
-
+pmg.add_argument('--metadata', metavar='PATH', default=None, type=str, required=False, action='store',
+                 help='default=%(default)s: PATH to metadata table. See `amalgkit metadata -h` for details.')
 pmg.set_defaults(handler=command_merge)
 
 # Sub parser: help

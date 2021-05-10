@@ -12,7 +12,7 @@ def get_tissues(args):
     else:
         tissues = re.findall(r"[\w]+", args.tissues)
     tissues = '|'.join(tissues)
-    print('Tissues to be included: {}'.format(', '.join(tissues)))
+    print('Tissues to be included: {}'.format(tissues))
     return tissues
 
 def curate_main(args):
@@ -55,19 +55,20 @@ def curate_main(args):
         if not args.infile:
             print("No expression data provided. Please set Either --infile or --infile AND --eff_len_file")
             sys.exit(1)
-
-        subprocess.check_call(['Rscript',
-                               r_script_path,
-                               os.path.realpath(quant_out),
-                               os.path.realpath(meta_out),
-                               os.path.realpath(args.work_dir),
-                               os.path.realpath(eff_len_out),
-                               dist_method,
-                               '0',
-                               str(mr_cut),
-                               str(intermediate),
-                               tissues,
-                               str(args.norm)])
+        r_command = ['Rscript',
+                     r_script_path,
+                     os.path.realpath(quant_out),
+                     os.path.realpath(meta_out),
+                     os.path.realpath(args.work_dir),
+                     os.path.realpath(eff_len_out),
+                     dist_method,
+                     '0',
+                     str(mr_cut),
+                     str(intermediate),
+                     tissues,
+                     str(args.norm)]
+        print('Starting R command: {}'.format(' '.join(r_command)))
+        subprocess.check_call(r_command)
     # if multiple species mode active
     if args.batch is not None:
 

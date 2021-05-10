@@ -1,38 +1,38 @@
-library(limma)
-library(tidyr)
-library(dplyr)
+library(edgeR, quietly=TRUE)
+library(limma, quietly=TRUE)
+library(tidyr, quietly=TRUE)
+library(dplyr, quietly=TRUE)
 
-if (length(commandArgs(trailingOnly=TRUE))==0) {
-  mode = "debug"
-} else {
-  mode = "batch"
-}
+mode = ifelse(length(commandArgs(trailingOnly=TRUE))==1, 'debug', 'batch')
 
 if (mode=="debug") {
 
-  dir_work = '/Users/s229181/MSN/'
-  dir_ortho = paste0(dir_work, "OrthoFinder/Results_Feb09_2/Orthogroups")
-  dir_count = paste0(dir_work, "counts/")
-  
+  #dir_work = '/Users/s229181/MSN/'
+  #dir_ortho = paste0(dir_work, "OrthoFinder/Results_Feb09_2/Orthogroups")
+  #dir_count = paste0(dir_work, "counts/")
+  dir_work = '/Users/kef74yk/Dropbox_p/collaborators/Ken Naito/20210509_Vigna/gfe_data'
+  dir_ortho = "/Users/kf/Dropbox_p/collaborators/Ken Naito/20210509_Vigna/gfe_data/Orthogroups"
+  dir_count = "/Users/kf/Dropbox_p/collaborators/Ken Naito/20210509_Vigna/gfe_data/merge"
+  setwd(dir_work)
+
   file_singlecopy = paste0(dir_ortho, '/Orthogroups_SingleCopyOrthologues.txt')
   file_orthogroup = paste0(dir_ortho, '/Orthogroups.tsv')
   single_orthogroups = read.table(file_singlecopy, header=FALSE)$V1
   df_og = read.table(file_orthogroup, header=TRUE, sep='\t', row.names=1)
   df_singleog = df_og[(rownames(df_og) %in% single_orthogroups),]
-  
-  
+
 } else if (mode=="batch") {
   args = commandArgs(trailingOnly=TRUE)
   dir_count = args[1]
   dir_orthofinder_results = args[2]
   dir_work = args[3]
-  
+
   file_singlecopy = paste0(dir_orthofinder_results, '/Orthogroups_SingleCopyOrthologues.txt')
   file_orthogroup = paste0(dir_orthofinder_results, '/Orthogroups.tsv')
   single_orthogroups = read.table(file_singlecopy, header=FALSE)$V1
   df_og = read.table(file_orthogroup, header=TRUE, sep='\t', row.names=1)
   df_singleog = df_og[(rownames(df_og) %in% single_orthogroups),]
-  
+
 }
 
 if (!endsWith(dir_count, '/')) {
@@ -60,25 +60,25 @@ if (!file.exists(dir_tmm)) {
 
 
 
- # for (col in 1:ncol(df_singleog)) {
- #   df_singleog[,col] = sub('.*_', '', df_singleog[,col])
- # }
+# for (col in 1:ncol(df_singleog)) {
+#   df_singleog[,col] = sub('.*_', '', df_singleog[,col])
+# }
 df_og = NULL
 spp_filled = colnames(df_singleog)
 spp = sub('_', ' ', spp_filled)
-num_selected_spp = length(spp)
-cat('num selected species:', num_selected_spp, '\n')
-cat('selected species:', spp, '\n')
 
 uncorrected = list()
 df_sog = df_singleog
-
+excluded_spp = c()
 for (sp in spp_filled) {
-  
+
   infile = list.files(path = dir_count, pattern=paste0(sp,".*count.\\.tsv"))
   if (length(infile)> 1){
-    cat("Multiple files found for: ", sp ,"\n")
-    cat("Trying: ",infile[1], ".\n")
+    stop(paste0("Multiple *count.tsv files found for: ", sp ,"\n"))
+  } else if (length(infile)==0) {
+    warning(paste0("Skipping. No *count.tsv files found for: ", sp ,"\n"))
+    excluded_spp = c(excluded_spp, sp)
+    next
   }
   infile_path = paste0(dir_count, infile[1])
   if (file.exists(infile_path)) {
@@ -95,12 +95,19 @@ for (sp in spp_filled) {
   }
 }
 
-
-df_sog = df_sog[,-(1:num_selected_spp)]
+df_sog = df_sog[,-(1:length(spp))]
 #df_sog = apply(df_sog, 2, as.integer)
 rownames(df_sog) = rownames(df_singleog)
+spp_filled = spp_filled[!spp_filled%in%excluded_spp]
+num_selected_spp = length(spp_filled)
+cat('num selected species:', num_selected_spp, '\n')
+cat('selected species: ', spp_filled, '\n')
 
-df_nonzero = df_sog[,apply(df_sog, 2, sum)!=0]
+is_na_containing_row = apply(df_sog, 1, function(x){any(is.na(x))})
+cat('Removing', sum(is_na_containing_row), 'out of', nrow(df_sog), 'orthogroups because missing values are observed in at least 1 species.\n')
+is_no_count_col = apply(df_sog, 2, function(x){sum(x, na.rm=TRUE)==0})
+cat('Removing', sum(is_no_count_col), 'out of', ncol(df_sog), 'RNA-seq samples because no read mapping values are all zero.\n')
+df_nonzero = df_sog[!is_na_containing_row,!is_no_count_col]
 cnf_in = edgeR::DGEList(counts = df_nonzero)
 
 cnf_out1 = edgeR::calcNormFactors(cnf_in, method='TMM', refColumn=NULL)
@@ -128,37 +135,30 @@ hist(x, xlab='log2(TMM normalization factor)', ylab='Count', main=NULL, col='bla
 graphics.off()
 
 for (sp in names(uncorrected)) {
-  infile = list.files(path = dir_count, pattern=paste0(sp,".*count.\\.tsv"))
-  if (length(infile) > 1){
-    cat("Multiple files found for: ", sp , "\n")
-    cat("Trying: ",infile[1], ".\n")
-  }
-  infile_path = paste0(dir_count, infile[1])
-  if (file.exists(infile_path)) {
-    cat('Input file found, reading:', infile[1], '\n')
-    dat = read.delim(infile_path, header=TRUE, row.names=1, sep='\t')
-    dat = dat[,(colnames(dat)!='length')]
-    df_nf_sp = cnf_out2[[2]][startsWith(rownames(cnf_out2[[2]]),sp),]
-    
-    for (i in 1:length(df_nf_sp[,1])){
-        # check if dat colnames start with the species name
-        # and modify SRR variable to match the format of dat colnames
-      
-        if(all(startsWith(colnames(dat), sp))){
-          SRR = as.character(row.names(df_nf_sp[i]))
-        }
-        else{
-          SRR = as.character(strsplit(row.names(df_nf_sp[i,]),'_')[[1]][3])
-        }
-        # manually apply normfactor
-          dat[,SRR]<-dat[,SRR]/as.double(df_nf_sp[i,"norm.factors"])
-          
-        }
-  
-   write.table(dat,paste0(dir_tmm,sp,"_cstmm_counts.tsv") , sep='\t', row.names=TRUE, col.names=TRUE, quote=FALSE)
-  }
+  cat('Applying TMM normalization factors:', sp, '\n')
+  dat = uncorrected[[sp]]
+  df_nf_sp = cnf_out2[[2]][startsWith(rownames(cnf_out2[[2]]),sp),]
 
+  for (i in 1:length(df_nf_sp[,1])){
+    # check if dat colnames start with the species name
+    # and modify SRR variable to match the format of dat colnames
+    # TODO: is this necessary? Is there any situation where the species name prefix is missing?
+    if(all(startsWith(colnames(dat), sp))){
+      SRR = as.character(row.names(df_nf_sp[i,]))
+    }
+    else{
+      SRR = as.character(strsplit(row.names(df_nf_sp[i,]),'_')[[1]][3])
+    }
+    # manually apply normfactor
+    tmm_normalization_factor = as.double(df_nf_sp[i,"norm.factors"])
+    dat[,SRR] = dat[,SRR]/tmm_normalization_factor
+
+  }
+  dat_out = cbind(target_id=rownames(dat), dat)
+  rownames(dat_out) = NULL
+  colnames(dat_out) = sub(paste0(sp, '_'), '', colnames(dat_out))
+  file_name = paste0(dir_tmm,sp,"_cstmm_counts.tsv")
+  write.table(dat_out, file_name, sep='\t', row.names=FALSE, col.names=TRUE, quote=FALSE)
 
 }
-  
-  
+cat('Done!\n')
