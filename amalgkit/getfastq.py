@@ -166,21 +166,6 @@ def remove_intermediate_files(sra_stat, ext, work_dir):
         else:
             print('Tried to delete but file not found:', file_path)
 
-def get_newest_intermediate_file_extension(sra_stat, work_dir):
-    # Order is important in this list. More downstream should come first.
-    extensions = ['.amalgkit.fastq.gz','.rename.fastq.gz','.fastp.fastq.gz','.fastq.gz']
-    if sra_stat['layout']=='single':
-        subext = ''
-    elif sra_stat['layout']=='paired':
-        subext = '_1'
-    files = os.listdir(work_dir)
-    for ext in extensions:
-        if any([ f==sra_stat['sra_id']+subext+ext for f in files ]):
-            ext_out = ext
-            break
-    assert 'ext_out' in locals(), 'None of expected extensions ('+' '.join(extensions)+') found in '+work_dir
-    return ext_out
-
 def download_sra(sra_stat, args, work_dir, overwrite=False):
     sra_path = os.path.join(work_dir, sra_stat['sra_id']+'.sra')
     individual_sra_tmp_dir = os.path.join(work_dir, sra_stat['sra_id']+'/')
@@ -403,21 +388,7 @@ def rename_fastq(sra_stat, output_dir, inext, outext):
         os.rename(inbase1+inext, inbase1+outext)
         os.rename(inbase2+inext, inbase2+outext)
 
-def get_sra_stat(sra_id, metadata, num_bp_per_sra):
-    sra_stat = dict()
-    sra_stat['sra_id'] = sra_id
-    is_sra = (metadata.df.loc[:,'run']==sra_id)
-    assert is_sra.sum()==1, 'There are multiple metadata rows with the same SRA ID: '+sra_id
-    sra_stat['layout'] = metadata.df.loc[is_sra,'lib_layout'].values[0]
-    sra_stat['total_spot'] = int(metadata.df.loc[is_sra,'total_spots'].values[0])
-    try:
-        sra_stat['spot_length'] = int(metadata.df.loc[is_sra,'spot_length'].values[0])
-    except ValueError as e:
-        sra_stat['spot_length'] = int(int(metadata.df.loc[is_sra,'total_bases'].values[0])/int(sra_stat['total_spot']))
-        print('spot_length cannot be obtained directly from the metadata.')
-        print('Using total_bases/total_spots ( =', str(sra_stat['spot_length']), ') instead.')
-    sra_stat['num_read_per_sra'] = int(num_bp_per_sra/sra_stat['spot_length'])
-    return sra_stat
+
 
 def sequence_extraction(args, sra_stat, start, end, output_dir, seq_summary, gz_exe, ungz_exe, total_sra_bp):
     sra_id = sra_stat['sra_id']
