@@ -6,42 +6,54 @@ library(dplyr, quietly=TRUE)
 mode = ifelse(length(commandArgs(trailingOnly=TRUE))==1, 'debug', 'batch')
 
 if (mode=="debug") {
-
   #dir_work = '/Users/s229181/MSN/'
   #dir_ortho = paste0(dir_work, "OrthoFinder/Results_Feb09_2/Orthogroups")
   #dir_count = paste0(dir_work, "counts/")
   dir_work = '/Users/kef74yk/Dropbox_p/collaborators/Ken Naito/20210509_Vigna/gfe_data'
-  dir_ortho = "/Users/kf/Dropbox_p/collaborators/Ken Naito/20210509_Vigna/gfe_data/Orthogroups"
-  dir_count = "/Users/kf/Dropbox_p/collaborators/Ken Naito/20210509_Vigna/gfe_data/merge"
+  dir_ortho = "/Users/kef74yk/Dropbox_p/collaborators/Ken Naito/20210509_Vigna/gfe_data/Orthogroups"
+  dir_count = "/Users/kef74yk/Dropbox_p/collaborators/Ken Naito/20210509_Vigna/gfe_data/merge"
   setwd(dir_work)
-
-  file_singlecopy = paste0(dir_ortho, '/Orthogroups_SingleCopyOrthologues.txt')
-  file_orthogroup = paste0(dir_ortho, '/Orthogroups.tsv')
-  single_orthogroups = read.table(file_singlecopy, header=FALSE)$V1
-  df_og = read.table(file_orthogroup, header=TRUE, sep='\t', row.names=1)
-  df_singleog = df_og[(rownames(df_og) %in% single_orthogroups),]
-
 } else if (mode=="batch") {
   args = commandArgs(trailingOnly=TRUE)
   dir_count = args[1]
-  dir_orthofinder_results = args[2]
+  dir_ortho = args[2]
   dir_work = args[3]
-
-  file_singlecopy = paste0(dir_orthofinder_results, '/Orthogroups_SingleCopyOrthologues.txt')
-  file_orthogroup = paste0(dir_orthofinder_results, '/Orthogroups.tsv')
-  single_orthogroups = read.table(file_singlecopy, header=FALSE)$V1
-  df_og = read.table(file_orthogroup, header=TRUE, sep='\t', row.names=1)
-  df_singleog = df_og[(rownames(df_og) %in% single_orthogroups),]
-
 }
 
-if (!endsWith(dir_count, '/')) {
-  dir_count = paste0(dir_count, '/')
+get_spp_filled = function(dir_count, df_gc) {
+  spp_filled = list.files(path=dir_count, pattern=".*count.\\.tsv")
+  spp_filled = sub('_', '|', spp_filled)
+  spp_filled = sub('_.*', '', spp_filled)
+  spp_filled = sub('\\|', '_', spp_filled)
+  is_missing_in_genecount = (!spp_filled %in% colnames(df_gc))
+  if (sum(is_missing_in_genecount)) {
+    for (sp in spp_filled[is_missing_in_genecount]) {
+      warning(paste0('Species excluded. Not found in OrthoFinder\'s GeneCount table: ', sp))
+    }
+  }
+  spp_filled = spp_filled[!is_missing_in_genecount]
+  cat('Detected species:', spp_filled, '\n')
+  return(spp_filled)
 }
 
-if (!endsWith(dir_work, '/')) {
-  dir_work = paste0(dir_work, '/')
+get_singlecopy_og = function(df_gc, spp_filled) {
+  is_singlecopy = TRUE
+  for (sp in spp_filled) {
+    is_singlecopy = is_singlecopy & (df_gc[,sp]==1)
+  }
+  sc_og = df_gc[is_singlecopy,'Orthogroup']
+  cat(length(sc_og), 'single-copy orthogroups were detected for the', length(spp_filled), 'species.\n')
+  return(sc_og)
 }
+
+file_genecount = file.path(dir_ortho, 'Orthogroups.GeneCount.tsv')
+file_orthogroup = file.path(dir_ortho, 'Orthogroups.tsv')
+
+df_gc = read.table(file_genecount, header=TRUE, sep='\t')
+spp_filled = get_spp_filled(dir_count, df_gc)
+single_orthogroups = get_singlecopy_og(df_gc, spp_filled)
+df_og = read.table(file_orthogroup, header=TRUE, sep='\t', row.names=1)
+df_singleog = df_og[(rownames(df_og) %in% single_orthogroups),]
 
 # set directory
 if (!file.exists(dir_work)) {
@@ -51,18 +63,12 @@ setwd(dir_work)
 
 
 # set output directory and create if not already there
-dir_tmm = paste0(dir_work, 'cross_species_tmm_normalized_counts/')
+dir_tmm = file.path(dir_work, 'cross_species_tmm_normalized_counts')
 if (!file.exists(dir_tmm)) {
-
   dir.create(dir_tmm)
 }
 
 
-
-
-# for (col in 1:ncol(df_singleog)) {
-#   df_singleog[,col] = sub('.*_', '', df_singleog[,col])
-# }
 df_og = NULL
 spp_filled = colnames(df_singleog)
 spp = sub('_', ' ', spp_filled)
@@ -80,7 +86,7 @@ for (sp in spp_filled) {
     excluded_spp = c(excluded_spp, sp)
     next
   }
-  infile_path = paste0(dir_count, infile[1])
+  infile_path = file.path(dir_count, infile[1])
   if (file.exists(infile_path)) {
     cat('Input file found, reading:', infile[1], '\n')
     dat = read.delim(infile_path,header = T,row.names=1, sep='\t')
@@ -157,8 +163,8 @@ for (sp in names(uncorrected)) {
   dat_out = cbind(target_id=rownames(dat), dat)
   rownames(dat_out) = NULL
   colnames(dat_out) = sub(paste0(sp, '_'), '', colnames(dat_out))
-  file_name = paste0(dir_tmm,sp,"_cstmm_counts.tsv")
-  write.table(dat_out, file_name, sep='\t', row.names=FALSE, col.names=TRUE, quote=FALSE)
+  file_path = file.path(dir_tmm, paste0(sp, "_cstmm_counts.tsv"))
+  write.table(dat_out, file_path, sep='\t', row.names=FALSE, col.names=TRUE, quote=FALSE)
 
 }
 cat('Done!\n')
