@@ -724,6 +724,10 @@ if (transform_method == "tpm") {
     tc <- log(tc + 1)
 }
 
+file_name = paste0(sub(" ", "_", scientific_name), ".uncorrected.tc.tsv")
+write.table(tc, file = file_name,
+            sep = "\t", row.names = TRUE, col.names = TRUE, quote = FALSE)
+
 tc_tissue_uncorrected = tissue_mean(tc, sra, selected_tissues)
 file_name = paste0(sub(" ", "_", scientific_name), ".uncorrected.tissue.mean.tsv")
 write.table(tc_tissue_uncorrected, file = file_name,
