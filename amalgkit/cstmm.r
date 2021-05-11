@@ -46,21 +46,11 @@ get_singlecopy_og = function(df_gc, spp_filled) {
   return(sc_og)
 }
 
-file_genecount = file.path(dir_ortho, 'Orthogroups.GeneCount.tsv')
-file_orthogroup = file.path(dir_ortho, 'Orthogroups.tsv')
-
-df_gc = read.table(file_genecount, header=TRUE, sep='\t')
-spp_filled = get_spp_filled(dir_count, df_gc)
-single_orthogroups = get_singlecopy_og(df_gc, spp_filled)
-df_og = read.table(file_orthogroup, header=TRUE, sep='\t', row.names=1)
-df_singleog = df_og[(rownames(df_og) %in% single_orthogroups),]
-
 # set directory
 if (!file.exists(dir_work)) {
   dir.create(dir_work)
 }
 setwd(dir_work)
-
 
 # set output directory and create if not already there
 dir_tmm = file.path(dir_work, 'cross_species_tmm_normalized_counts')
@@ -68,22 +58,24 @@ if (!file.exists(dir_tmm)) {
   dir.create(dir_tmm)
 }
 
+file_genecount = file.path(dir_ortho, 'Orthogroups.GeneCount.tsv')
+file_orthogroup = file.path(dir_ortho, 'Orthogroups.tsv')
 
+df_gc = read.table(file_genecount, header=TRUE, sep='\t')
+spp_filled = get_spp_filled(dir_count, df_gc)
+single_orthogroups = get_singlecopy_og(df_gc, spp_filled)
+df_og = read.table(file_orthogroup, header=TRUE, sep='\t', row.names=1)
+df_singleog = df_og[(rownames(df_og) %in% single_orthogroups),spp_filled]
 df_og = NULL
-spp_filled = colnames(df_singleog)
-spp = sub('_', ' ', spp_filled)
 
 uncorrected = list()
 df_sog = df_singleog
-excluded_spp = c()
 for (sp in spp_filled) {
-
   infile = list.files(path = dir_count, pattern=paste0(sp,".*count.\\.tsv"))
   if (length(infile)> 1){
     stop(paste0("Multiple *count.tsv files found for: ", sp ,"\n"))
   } else if (length(infile)==0) {
     warning(paste0("Skipping. No *count.tsv files found for: ", sp ,"\n"))
-    excluded_spp = c(excluded_spp, sp)
     next
   }
   infile_path = file.path(dir_count, infile[1])
@@ -96,18 +88,15 @@ for (sp in spp_filled) {
     colnames(dat) = paste(sp, colnames(dat), sep='_')
     uncorrected[[sp]] = dat
     df_sog = merge(df_sog, dat, by.x=sp, by.y="row.names", all.x=TRUE, all.y=FALSE, sort=FALSE)
+    if (all(is.na(df_sog[,colnames(dat)]))) {
+      warning('Gene IDs may not match between OrthoFinder outputs and amalgkit merge outputs. Please check.')
+    }
   } else {
     cat('Input file not found:', infile, '\n')
   }
 }
-
-df_sog = df_sog[,-(1:length(spp))]
-#df_sog = apply(df_sog, 2, as.integer)
+df_sog = df_sog[,-(1:length(spp_filled))]
 rownames(df_sog) = rownames(df_singleog)
-spp_filled = spp_filled[!spp_filled%in%excluded_spp]
-num_selected_spp = length(spp_filled)
-cat('num selected species:', num_selected_spp, '\n')
-cat('selected species: ', spp_filled, '\n')
 
 is_na_containing_row = apply(df_sog, 1, function(x){any(is.na(x))})
 cat('Removing', sum(is_na_containing_row), 'out of', nrow(df_sog), 'orthogroups because missing values are observed in at least 1 species.\n')
