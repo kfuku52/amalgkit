@@ -596,12 +596,12 @@ get_mapping_rate = function(tc, sra){
     total_counts_raw = sum(tc[,i])
     sra[is_srr, 'total_counts_raw'] = total_counts_raw
     if(any(is.na(sra$num_read_fastp))==FALSE){
-    print("using num_read_fastp for mapping rate calculation")
+   # print("using num_read_fastp for mapping rate calculation")
     total_counts_fastp = sra[is_srr, 'num_read_fastp']
     sra[is_srr, 'mapping_rate'] = total_counts_raw/total_counts_fastp
     }
     else {
-    print("using num_read_fastq_written for mapping rate calculation")
+   # print("using num_read_fastq_written for mapping rate calculation")
     total_counts_fastq = sra[is_srr, 'num_read_fastq_written']
     sra[is_srr, 'mapping_rate'] = total_counts_raw/total_counts_fastq
     }
@@ -614,8 +614,8 @@ get_mapping_rate = function(tc, sra){
 
 transform_raw_to_fpkm = function(counts, effective_lengths){
   
-  res = exp(log(counts+1) - log(effective_lengths) - log(sum(counts)) + log(1E9))
-    
+  res = exp(log(counts) - log(effective_lengths) - log(sum(counts)) + log(1E9))
+  res[!is.finite(res)] <- 0
   return(as.data.frame(res))
 }
 
