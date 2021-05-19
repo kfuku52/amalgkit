@@ -24,7 +24,7 @@ def curate_main(args):
         print(",<ERROR> Rscript is not installed.")
         sys.exit(1)
 
-    meta_out = os.path.join(args.work_dir, args.metadata)
+    meta_out = os.path.realpath( args.metadata)
     if args.updated_metadata_dir == "inferred":
         updated_metadata_dir = os.path.join(args.work_dir, args.updated_metadata_dir)
     else:
@@ -48,13 +48,13 @@ def curate_main(args):
             print("Single species mode")
             print("Both counts and effective length provided.")
             print("Calculating: ", args.norm)
-            quant_out = os.path.join(args.work_dir, args.infile)
-            eff_len_out = os.path.join(args.work_dir, args.eff_len_file)
+            quant_out = os.path.realpath(args.infile)
+            eff_len_out = os.path.realpath(args.eff_len_file)
         if args.infile and not args.eff_len_file:
             print("Single species mode")
             print("Only expression values provided. ")
             print("Assuming normalized expression values (like fpkm or tpm).")
-            quant_out = os.path.join(args.work_dir, args.infile)
+            quant_out = os.path.realpath(args.infile)
             eff_len_out = "NA"
         if not args.infile:
             print("No expression data provided. Please set Either --infile or --infile AND --eff_len_file")
@@ -62,10 +62,10 @@ def curate_main(args):
 
         proc=subprocess.call(['Rscript',
                                r_script_path,
-                               os.path.realpath(quant_out),
-                               os.path.realpath(meta_out),
+                               quant_out,
+                               meta_out,
                                os.path.realpath(args.work_dir),
-                               os.path.realpath(eff_len_out),
+                               eff_len_out,
                                dist_method,
                                str(mr_cut),
                                '0',
@@ -82,8 +82,8 @@ def curate_main(args):
             print("Batch mode")
             print("Both counts and effective length provided. ")
             print("Calculating: ", args.norm)
-            quant_dir = os.path.join(args.work_dir, args.infile_dir)
-            eff_len_dir = os.path.join(args.work_dir, args.eff_len_dir)
+            quant_dir = os.path.realpath(infile_dir)
+            eff_len_dir = os.path.realpath(args.eff_len_dir)
 
             if not os.path.isdir(quant_dir):
                 print(quant_dir, " is no directory")
@@ -98,7 +98,7 @@ def curate_main(args):
             print("Batch mode")
             print("Only expression values provided.")
             print("Assuming normalized expression values (like log-fpkm or log-tpm).")
-            quant_dir = os.path.join(args.work_dir, args.infile_dir)
+            quant_dir = os.path.realpath(args.infile_dir)
             eff_len_dir = "NA"
             if not os.path.isdir(quant_dir):
                 print(quant_dir, " is no directory")
