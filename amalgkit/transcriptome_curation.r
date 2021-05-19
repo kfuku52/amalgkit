@@ -644,8 +644,7 @@ get_mapping_rate = function(tc, sra){
 
 transform_raw_to_fpkm = function(counts, effective_lengths) {
 
-    res = exp(log(counts) - log(effective_lengths) - log(sum(counts)) + log(1e+09))
-    res[sapply(res, simplify = 'matrix', is.infinite)] <- 0
+    res = counts - effective_lengths - sum(counts) + 1e+09
     return(as.data.frame(res))
 }
 
