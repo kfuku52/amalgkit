@@ -82,7 +82,7 @@ def curate_main(args):
             print("Batch mode")
             print("Both counts and effective length provided. ")
             print("Calculating: ", args.norm)
-            quant_dir = os.path.realpath(infile_dir)
+            quant_dir = os.path.realpath(args.infile_dir)
             eff_len_dir = os.path.realpath(args.eff_len_dir)
 
             if not os.path.isdir(quant_dir):
