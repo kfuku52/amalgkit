@@ -644,7 +644,7 @@ get_mapping_rate = function(tc, sra){
 
 transform_raw_to_fpkm = function(counts, effective_lengths) {
 
-    res = counts/effective_lengths/sum(counts) * 1e+09
+    res = counts / effective_lengths / sum(counts) * 1e+09
     return(as.data.frame(res))
 }
 
@@ -757,11 +757,11 @@ row.names(tc_eff_length) <- tc_eff_length[, 1]
 tc_eff_length <- tc_eff_length[, colnames(tc)]
 if (transform_method == "fpkm") {
     tc <- transform_raw_to_fpkm(tc, tc_eff_length)
-    tc <- log(tc + 1)
+    tc <- log(tc)
 }
 if (transform_method == "tpm") {
     tc <- transform_raw_to_tpm(tc, tc_eff_length)
-    tc <- log(tc + 1)
+    tc <- log(tc)
 }
 
 file_name = paste0(sub(" ", "_", scientific_name), ".uncorrected.tc.tsv")
