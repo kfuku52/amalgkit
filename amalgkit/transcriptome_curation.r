@@ -18,10 +18,10 @@ debug_mode = ifelse(length(commandArgs(trailingOnly = TRUE)) == 1, "debug", "bat
 log_prefix = "transcriptome_curation.r:"
 cat(log_prefix, "mode =", debug_mode, "\n")
 if (debug_mode == "debug") {
-    # infile = '/Users/s229181/MSN/counts/Zea_mays_est_counts.tsv' eff_file =
-    # '/Users/s229181/MSN/eff_length/Zea_mays_eff_length.tsv'
-    infile = "/Users/kf/Dropbox (Personal)/collaborators/Ken Naito/20210509_Vigna/gfe_data/cross_species_tmm_normalized_counts/Vigna_angularis_cstmm_counts.tsv"
-    eff_file = "/Users/kf/Dropbox (Personal)/collaborators/Ken Naito/20210509_Vigna/gfe_data/merge/Vigna_angularis_eff_length.tsv"
+    infile = '/Users/s229181/MSN/counts/Zea_mays_est_counts.tsv'
+    eff_file = '/Users/s229181/MSN/eff_length/Zea_mays_eff_length.tsv'
+   # infile = "/Users/kf/Dropbox (Personal)/collaborators/Ken Naito/20210509_Vigna/gfe_data/cross_species_tmm_normalized_counts/Vigna_angularis_cstmm_counts.tsv"
+    #eff_file = "/Users/kf/Dropbox (Personal)/collaborators/Ken Naito/20210509_Vigna/gfe_data/merge/Vigna_angularis_eff_length.tsv"
     dist_method = "pearson"
     mapping_rate_cutoff = 0.2
     min_dif = 0
@@ -34,9 +34,10 @@ if (debug_mode == "debug") {
     # tmm norm debug
 
     tmm_norm = "yes"
-    # dir_work = '/Users/s229181/MSN/' srafile = '/Users/s229181/MSN/Metadata_all.tsv'
-    dir_work = "/Users/kf/Dropbox (Personal)/collaborators/Ken Naito/20210509_Vigna/gfe_data"
-    srafile = "/Users/kf/Dropbox (Personal)/collaborators/Ken Naito/20210509_Vigna/gfe_data/metadata/metadata/metadata_manual.tsv"
+    dir_work = '/Users/s229181/MSN/'
+    srafile = '/Users/s229181/MSN/Metadata_all_2.tsv'
+   # dir_work = "/Users/kf/Dropbox (Personal)/collaborators/Ken Naito/20210509_Vigna/gfe_data"
+   # srafile = "/Users/kf/Dropbox (Personal)/collaborators/Ken Naito/20210509_Vigna/gfe_data/metadata/metadata/metadata_manual.tsv"
 
     dist_method = "pearson"
     mapping_rate_cutoff = 0.2
@@ -59,6 +60,7 @@ if (debug_mode == "debug") {
     plot_intermediate = as.integer(args[8])
     selected_tissues = strsplit(args[9], "\\|")[[1]]
     transform_method = args[10]
+    dir_updated_metadata = args[11]
 
 }
 if (!endsWith(dir_work, "/")) {
@@ -643,7 +645,7 @@ get_mapping_rate = function(tc, sra){
 transform_raw_to_fpkm = function(counts, effective_lengths) {
 
     res = exp(log(counts + 1) - log(effective_lengths) - log(sum(counts)) + log(1e+09))
-
+    res[sapply(res, simplify = 'matrix', is.infinite)] <- 0
     return(as.data.frame(res))
 }
 

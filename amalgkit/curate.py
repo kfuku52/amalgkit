@@ -25,10 +25,10 @@ def curate_main(args):
         sys.exit(1)
 
     meta_out = os.path.join(args.work_dir, args.metadata)
-    if(args.updated_metadata_dir == "inferred")
+    if args.updated_metadata_dir == "inferred":
         updated_metadata_dir = os.path.join(args.work_dir, args.updated_metadata_dir)
-    else
-        updated_metadata_dir = os.path.realpath(updated_metadata_dir)
+    else:
+        updated_metadata_dir = os.path.realpath(args.updated_metadata_dir)
 
     dist_method = args.dist_method
     mr_cut = args.mapping_rate
