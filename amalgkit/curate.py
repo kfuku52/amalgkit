@@ -38,7 +38,6 @@ def curate_main(args):
     r_script_path = curate_path + '/transcriptome_curation.r'
     batch_script_path = curate_path + '/batch_curate.sh'
 
-
     # Input checks #
     # if single species mode active
     if args.batch is None:

@@ -24,7 +24,7 @@ def quant_main(args):
     if args.metadata is not None:
         print('--metadata is specified. Reading existing metadata table.')
         assert (args.batch is not None), '--batch should be specified.'
-        metadata = load_metadata(args)
+        metadata = load_metadata(args) # loads single-row metadata according to --batch
         sra_id = metadata.df.loc[:,'run'].values[0]
     print('SRA ID:', sra_id)
 
@@ -49,10 +49,10 @@ def quant_main(args):
                 assert (kallisto_out.returncode == 0), "kallisto did not finish safely: {}".format(kallisto_out.stdout.decode('utf8'))
 
     # prefer amalgkit processed files over others.
-
-    in_files = glob.glob(os.path.join(args.work_dir, 'getfastq', sra_id, sra_id + "*.amalgkit.fastq.gz"))
-    if not in_files:
-        in_files = glob.glob(os.path.join(args.work_dir, sra_id) + "*.fastq*")
+    sra_stat = get_sra_stat(sra_id, metadata, num_bp_per_sra=None)
+    output_dir_getfastq = os.path.join(args.work_dir, 'getfastq', sra_id)
+    ext = get_newest_intermediate_file_extension(sra_stat, work_dir=output_dir_getfastq)
+    in_files = glob.glob(os.path.join(args.work_dir, 'getfastq', sra_id, sra_id + "*" + ext))
 
     # make results directory, if not already there
     output_dir = os.path.join(args.work_dir, 'quant', sra_id)
@@ -86,13 +86,14 @@ def quant_main(args):
         # if there is none supplied, check if ID matches SRA ID
         if args.fragment_length is None:
 
+            # TODO This block can be obsoleted as the fragment length can be obtained from the metadata table which should be already created.
             print("No fragment length set.")
             SRA_ID_pattern= re.compile("[DES]R[RXP][0-9]{7}")
             # if it does match an SRA ID pattern, try to fetch fragment length from metadata.
             # this uses getfastq_getxml and getfastq_search_term from getfastq, as well as Metadata from metadata
             if SRA_ID_pattern.match(sra_id):
                 print("SRA-ID detected. Trying to fetch fragment length from metadata.")
-                Entrez.email = "test@test.com"
+                Entrez.email = "test@test.com" # TODO shouldn't use a dummy email.
                 search_term = getfastq_search_term(sra_id)
                 print('Entrez search term:', search_term)
                 xml_root = getfastq_getxml(search_term)
