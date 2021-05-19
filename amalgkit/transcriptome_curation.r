@@ -757,11 +757,11 @@ row.names(tc_eff_length) <- tc_eff_length[, 1]
 tc_eff_length <- tc_eff_length[, colnames(tc)]
 if (transform_method == "fpkm") {
     tc <- transform_raw_to_fpkm(tc, tc_eff_length)
-    tc <- log(tc)
+    tc <- log(tc + 1)
 }
 if (transform_method == "tpm") {
     tc <- transform_raw_to_tpm(tc, tc_eff_length)
-    tc <- log(tc)
+    tc <- log(tc + 1)
 }
 
 file_name = paste0(sub(" ", "_", scientific_name), ".uncorrected.tc.tsv")
