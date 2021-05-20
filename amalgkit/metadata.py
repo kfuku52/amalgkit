@@ -231,7 +231,10 @@ class Metadata:
             items.append(["total_spots", entry.xpath('./RUN_SET/RUN/@total_spots')])
             items.append(["total_bases", entry.xpath('./RUN_SET/RUN/@total_bases')])
             items.append(["size", entry.xpath('./RUN_SET/RUN/@size')])
-            items.append(["is_protected", is_protected])
+            items.append(["NCBI_Link", entry.xpath('./RUN_SET/RUN/SRAFiles/SRAFile[@supertype="Primary ETL"]/Alternatives[@org="NCBI"]/@url')])
+            items.append(["AWS_Link", entry.xpath('./RUN_SET/RUN/SRAFiles/SRAFile[@supertype="Primary ETL"]/Alternatives[@org="AWS"]/@url')])
+            items.append(["GCP_Link", entry.xpath('./RUN_SET/RUN/SRAFiles/SRAFile[@supertype="Primary ETL"]/Alternatives[@org="GCP"]/@url')])
+
             row = []
             for item in items:
                 try:
