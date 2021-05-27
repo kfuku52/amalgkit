@@ -11,8 +11,8 @@ def get_tissues(args):
         tissues = metadata.df.loc[:,'tissue'].dropna().unique()
     else:
         tissues = re.findall(r"[\w]+", args.tissues)
-    tissues = '|'.join(tissues)
     print('Tissues to be included: {}'.format(', '.join(tissues)))
+    tissues = '|'.join(tissues)
     return tissues
 
 def curate_main(args):
@@ -26,7 +26,7 @@ def curate_main(args):
 
     meta_out = os.path.realpath( args.metadata)
     if args.updated_metadata_dir == "inferred":
-        updated_metadata_dir = os.path.join(args.work_dir, args.updated_metadata_dir)
+        updated_metadata_dir = os.path.join(args.work_dir, 'metadata/updated_metadata')
     else:
         updated_metadata_dir = os.path.realpath(args.updated_metadata_dir)
 

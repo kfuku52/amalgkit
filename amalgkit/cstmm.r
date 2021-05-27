@@ -61,11 +61,11 @@ if (!file.exists(dir_tmm)) {
 file_genecount = file.path(dir_ortho, 'Orthogroups.GeneCount.tsv')
 file_orthogroup = file.path(dir_ortho, 'Orthogroups.tsv')
 
-df_gc = read.table(file_genecount, header=TRUE, sep='\t')
+df_gc = read.table(file_genecount, header=TRUE, sep='\t', check.names=FALSE)
 spp_filled = get_spp_filled(dir_count, df_gc)
 single_orthogroups = get_singlecopy_og(df_gc, spp_filled)
-df_og = read.table(file_orthogroup, header=TRUE, sep='\t', row.names=1)
-df_singleog = df_og[(rownames(df_og) %in% single_orthogroups),spp_filled]
+df_og = read.table(file_orthogroup, header=TRUE, sep='\t', row.names=1, check.names=FALSE)
+df_singleog = df_og[(rownames(df_og) %in% single_orthogroups), spp_filled, drop=FALSE]
 df_og = NULL
 
 uncorrected = list()
@@ -81,7 +81,7 @@ for (sp in spp_filled) {
   infile_path = file.path(dir_count, infile[1])
   if (file.exists(infile_path)) {
     cat('Input file found, reading:', infile[1], '\n')
-    dat = read.delim(infile_path,header = T,row.names=1, sep='\t')
+    dat = read.delim(infile_path, header = T, row.names=1, sep='\t', check.names=FALSE)
     dat = dat[,(colnames(dat)!='length')]
     genus_cap = tolower(substring(sp,1,1))
     spec_name = strsplit(sp,'_')[[1]][2]
