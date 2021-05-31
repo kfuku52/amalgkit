@@ -673,43 +673,24 @@ get_tmm_scaled_fpkm = function(dat, df_nf, efflen) {
 }
 
 
-read_metadata_directory = function(sra, dir_updated_metadata) {
-  not_excluded_SRR <- sra$run[sra$exclusion == 'no']
+update_metadata = function(sra, dir_updated_metadata) {
+  not_excluded_SRR <- sra[sra$exclusion == 'no', 'run']
   file_pattern<-paste(not_excluded_SRR, collapse ='|')
   files <- list.files(path = dir_updated_metadata, pattern = file_pattern, full.names = T)
-  updated_metadata <- lapply(files,read.table,sep="\t", header=T)
-  names(updated_metadata)<-list.files(path = dir_updated_metadata, pattern = file_pattern, full.names = F)
-  names(updated_metadata) <- gsub(".tsv","",
-                         names(updated_metadata),
-                         fixed = TRUE)
-  names(updated_metadata) <- gsub("metadata_","",
-                         names(updated_metadata),
-                         fixed = TRUE)
+  cat("Number of SRA row files in", dir_updated_metadata, ':', length(files), '\n')
+  updated_metadata <- lapply(files, read.table, sep="\t", header=T)
+  names(updated_metadata) <- list.files(path = dir_updated_metadata, pattern = file_pattern, full.names = F)
+  names(updated_metadata) <- gsub(".tsv", "", names(updated_metadata), fixed = TRUE)
+  names(updated_metadata) <- gsub("metadata_", "", names(updated_metadata), fixed = TRUE)
   # sra$num_read_fastp<-NA
   # sra$num_read_fastq_written<-NA
-  for(sra_id in updated_metadata){
-    run_ID<-as.character(sra_id$run)
-    if("num_read_fastp" %in% colnames(sra_id)){
-      num_read_fastp<-sra_id$num_readfastp
+  for(sra_row in updated_metadata){
+    run_ID <- as.character(sra_row$run)
+    is_run = (sra$run == run_ID)
+    for (stat in c('num_read_fastp', 'num_read_fastq_written', 'num_read_fastq_dumped')) {
+      new_value = ifelse(stat %in% colnames(sra_row), sra_row[,stat], NA)
+      sra[is_run,stat] = new_value
     }
-    else{
-      num_read_fastp<-NA
-    }
-    if("num_read_fastq_written" %in% colnames(sra_id)){
-      num_read_fastq_written<-sra_id$num_read_fastq_written
-    }
-    else{
-      num_read_fastq_written<-NA
-    }
-    if("num_read_fastq_dumped" %in% colnames(sra_id)){
-      num_read_fastq_dumped<-sra_id$num_read_fastq_dumped
-    }
-    else{
-      num_read_fastq_dumped<-NA
-    }
-    sra$num_read_fastp[sra$run == run_ID]<-num_read_fastp
-    sra$num_read_fastq_written[sra$run == run_ID]<-num_read_fastq_written
-    sra$num_read_fastq_dumped[sra$run == run_ID]<-num_read_fastq_dumped
   }
   return(sra)
 }
@@ -723,21 +704,22 @@ fontsize = 7
 
 # read SRA table
 sra_all = read.table(srafile, sep = "\t", header = TRUE, quote = "", fill = TRUE, comment.char = "",
-                     stringsAsFactors = FALSE)
+                     stringsAsFactors = FALSE, check.names=FALSE)
 for (col in c('instrument','bioproject')) {
     is_missing = (sra_all[,col] == "")|(is.na(sra_all[,col]))
     sra_all[is_missing, col] = "not_provided"
 }
 
-tc <- read.table(infile, sep = "\t", stringsAsFactors = FALSE, header = TRUE, quote = "", fill = FALSE, row.names = 1)
-tc_eff_length <- read.table(eff_file, sep = "\t", stringsAsFactors = FALSE, header = TRUE, quote = "", fill = FALSE)
+tc <- read.table(infile, sep = "\t", stringsAsFactors = FALSE, header = TRUE, quote = "", fill = FALSE, row.names = 1, check.names=FALSE)
+tc_eff_length <- read.table(eff_file, sep = "\t", stringsAsFactors = FALSE, header = TRUE, quote = "", fill = FALSE, check.names=FALSE)
 # row.names(tc)<-tc[,1] tc <- tc[,-1]
-
 
 # read transcriptome
 scientific_name = unique(sra_all[sra_all$run %in% colnames(tc), "scientific_name"])
-is_sp = (sra_all$scientific_name == scientific_name)
-is_tissue = (sra_all$tissue %in% selected_tissues)
+is_sp = (sra_all[,'scientific_name'] == scientific_name)
+is_tissue = (sra_all[,'tissue'] %in% selected_tissues)
+cat('Number of SRA runs for this species:', sum(is_sp), '\n')
+cat('Number of SRA runs for selected tisssues:', sum(is_tissue), '\n')
 sra = sra_all[(is_sp & is_tissue),]
 conditions = (sra$exclusion == "no") & (!sra$run %in% colnames(tc))
 if (any(conditions)) {
@@ -745,11 +727,11 @@ if (any(conditions)) {
     sra[conditions, "exclusion"] = "failed_quantification"
 }
 
-tc = tc[,sra[sra$exclusion=='no','run']]
+is_not_excluded = (sra$exclusion=='no')
+cat('Number of non-excluded SRA runs (exclusion=="no"):', sum(is_not_excluded), '\n')
+tc = tc[,sra[is_not_excluded,'run']]
 out = sort_tc_and_sra(tc, sra) ; tc = out[["tc"]] ; sra = out[["sra"]]
-
-sra = read_metadata_directory(sra, dir_updated_metadata)
-
+sra = update_metadata(sra, dir_updated_metadata)
 sra = get_mapping_rate(tc,sra)
 
 # log transform AFTER mappingrate
