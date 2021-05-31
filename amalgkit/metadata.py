@@ -24,18 +24,18 @@ def check_config_dir(args):
         'search_term_exclusion.config',
         'search_term_other.config',
         'search_term_species.config',
-        'search_term_tissue.config',
+        'search_term_keyword.config',
         'orthographical_variant.config',
     ]
     for af in asserted_files:
         assert (af in files), 'config file not found: '+af
 
-def get_search_term(species_name="", bioprojects=[], biosamples=[], tissues=[], publication_date='',
+def get_search_term(species_name="", bioprojects=[], biosamples=[], keywords=[], publication_date='',
                     other_conditions=pandas.DataFrame(), excluded_conditions=pandas.DataFrame()):
     assert ((len(bioprojects)>0)+(len(biosamples)>0))!=2, "bioprojects and biosamples cannot be specified simultaneously."
 
     species_term = '"'+species_name+'"'+"[Organism]"
-    tissue_term = "(" + " OR ".join(tissues) + ")"
+    keyword_term = "(" + " OR ".join(keywords) + ")"
 
     other_terms = list()
     for i in numpy.arange(other_conditions.shape[0]):
@@ -56,7 +56,7 @@ def get_search_term(species_name="", bioprojects=[], biosamples=[], tissues=[], 
         biosample_term = "(" + " OR ".join(biosamples) + ")"
         search_term = biosample_term
     else:
-        search_term = species_term + " AND " + tissue_term + " AND " + other_term + " AND " + date_term + " NOT " + excluded_term
+        search_term = species_term + " AND " + keyword_term + " AND " + other_term + " AND " + date_term + " NOT " + excluded_term
         # search_term = species_term + " AND " + other_term + " AND " + date_term + " NOT " + excluded_term
     return search_term
 
@@ -344,7 +344,7 @@ class Metadata:
         # retrieve metadata
         self.df.loc[:,'tissue_original'] = self.df.loc[:,'tissue']
         # retrieve tissue query from config
-        tissues = pandas.read_csv(os.path.join(self.config_dir, 'search_term_tissue.config'),
+        tissues = pandas.read_csv(os.path.join(self.config_dir, 'search_term_keyword.config'),
                                     parse_dates=False, infer_datetime_format=False, quotechar='"', sep='\t',
                                     header=None, index_col=None, skip_blank_lines=True, comment='#').iloc[:,0]
         tissues = tissues.tolist()
@@ -583,11 +583,11 @@ def metadata_main(args):
     print(search_spp.tolist())
     print('')
 
-    search_tissues = pandas.read_csv(os.path.join(args.config_dir, 'search_term_tissue.config'),
+    search_keywords = pandas.read_csv(os.path.join(args.config_dir, 'search_term_keyword.config'),
                         parse_dates=False, infer_datetime_format=False, quotechar='"', sep='\t',
                         header=None, index_col=None, skip_blank_lines=True, comment='#').iloc[:,0]
-    print('Number of tissues for Entrez search:', len(search_tissues))
-    print(search_tissues.tolist())
+    print('Number of keywords for Entrez search:', len(search_keywords))
+    print(search_keywords.tolist())
     print('')
 
     other_conditions = pandas.read_csv(os.path.join(args.config_dir, 'search_term_other.config'),
@@ -616,7 +616,7 @@ def metadata_main(args):
             else:
                 print(sp, ': empty tsv file. skipped.')
         else:
-            search_term = get_search_term(species_name=sp, bioprojects=bioprojects, biosamples=[], tissues=search_tissues,
+            search_term = get_search_term(species_name=sp, bioprojects=bioprojects, biosamples=[], keywords=search_keywords,
                                           other_conditions=other_conditions, excluded_conditions=excluded_conditions,
                                           publication_date=args.publication_date)
             print('Entrez search term:', search_term)
