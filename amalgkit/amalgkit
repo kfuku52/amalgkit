@@ -87,7 +87,7 @@ subparsers = parser.add_subparsers()
 pme = subparsers.add_parser('metadata', help='see `amalgkit metadata -h`')
 pme.add_argument('-c', '--config_dir', metavar='PATH', default='./', type=str, required=True, action='store',
                  help='default=%(default)s: Path to the config directory.')
-pme.add_argument('-w', '--work_dir', metavar='PATH', default='./', type=str, required=False, action='store',
+pme.add_argument('-w','--out_dir', metavar='PATH', default='./', type=str, required=False, action='store',
                  help='default=%(default)s: Path to the directory where intermediate and output files are generated.')
 pme.add_argument('-e', '--entrez_email', metavar='aaa@bbb.com', default=None, type=str, required=True, action='store',
                  help='default=%(default)s: Your email address.')
@@ -115,8 +115,8 @@ pvi.set_defaults(handler=command_view)
 pge = subparsers.add_parser('getfastq', help='see `amalgkit getfastq -h`')
 pge.add_argument('-e', '--entrez_email', metavar='aaa@bbb.com', default=None, type=str, required=True, action='store',
                  help='default=%(default)s: Your email address. Necessary for accessing NCBI database.')
-pge.add_argument('--work_dir', metavar='PATH', default='./', type=str, required=False, action='store',
-                 help='default=%(default)s: Working directory.')
+pge.add_argument('-w','--out_dir', metavar='PATH', default='./', type=str, required=False, action='store',
+                 help='default=%(default)s: output directory.')
 pge.add_argument('--id', metavar='XXXXX0000', default=None, type=str, required=False, action='store',
                  help='default=%(default)s: BioProject/BioSample/SRR ID.')
 pge.add_argument('--id_list', metavar='PATH', default=None, type=str, required=False, action='store',
@@ -213,8 +213,8 @@ pqu.add_argument('-o','--output_dir', metavar='PATH', default=None, type=str, re
                  help='default=%(default)s: Working_directory/quant/SRA_ID/.')
 pqu.add_argument('--fragment_length', metavar='INT', default=None, type=int, required=False, action='store',
                  help='default=%(default)s: length of the fragment (not read length). Only required, if single end reads are used.')
-pqu.add_argument('--work_dir', metavar='PATH', default='./', type=str, required=False, action='store',
-                 help='default=%(default)s: Working directory.')
+pqu.add_argument('-w','--out_dir', metavar='PATH', default='./', type=str, required=False, action='store',
+                 help='default=%(default)s: output directory.')
 pqu.add_argument('--metadata', metavar='PATH', default=None, type=str, required=False, action='store',
                  help='default=%(default)s: PATH to metadata table. See `amalgkit metadata -h` for details.')
 pqu.add_argument('--batch', metavar='INT', default=None, type=int, required=False, action='store',
@@ -228,8 +228,8 @@ pqu.set_defaults(handler=command_quant)
 # Sub parser: cstmm
 # TODO: look for a better name
 pcs = subparsers.add_parser('cstmm', help='see `amalgkit cstmm -h`')
-pcs.add_argument('--work_dir', metavar='PATH', default='./', type=str, required=False, action='store',
-                 help='default=%(default)s: Working directory.')
+pcs.add_argument('-w','--out_dir', metavar='PATH', default='./', type=str, required=False, action='store',
+                 help='default=%(default)s: output directory.')
 pcs.add_argument('--ortho', metavar='PATH', default='./', type=str, required=True, action='store',
                  help='default=%(default)s: OrthoFinder results directory.')
 pcs.add_argument('--count', metavar='PATH', default='./', type=str, required=True, action='store',
@@ -241,8 +241,8 @@ pcu = subparsers.add_parser('curate', help='see `amalgkit curate -h`')
 
 pcu.add_argument('--batch', metavar='INT', default=None, type=int, required=False, action='store',
                  help='default=%(default)s: If set, need to provide --infile_dir and/or --eff_len_dir. Automatically scans input directories based on Metadata file and sends batch job do cluster (SLURM only, currently)')
-pcu.add_argument('--work_dir', metavar='PATH', default='./', type=str, required=False, action='store',
-                 help='default=%(default)s: Working directory.')
+pcu.add_argument('-w','--out_dir', metavar='PATH', default='./', type=str, required=False, action='store',
+                 help='default=%(default)s: output directory.')
 pcu.add_argument('--updated_metadata_dir', metavar='PATH', default='inferred', type=str, required=False, action='store',
                  help='default=%(default)s: Directory containing metadata.tsv files as put out by amalgkit getfastq.')
 pcu.add_argument('--infile', metavar='PATH', default=None, type=str, required=False, action='store',
@@ -270,8 +270,8 @@ pcu.set_defaults(handler=command_curate)
 # Sub parser: merge
 pmg = subparsers.add_parser('merge', help='see `amalgkit merge -h`')
 
-pmg.add_argument('--work_dir', metavar='PATH', default='./', type=str, required=False, action='store',
-                 help='default=%(default)s: Working directory.')
+pmg.add_argument('-w','--out_dir', metavar='PATH', default='./', type=str, required=False, action='store',
+                 help='default=%(default)s: output directory.')
 pmg.add_argument('--metadata', metavar='PATH', default=None, type=str, required=False, action='store',
                  help='default=%(default)s: PATH to metadata table. See `amalgkit metadata -h` for details.')
 pmg.set_defaults(handler=command_merge)

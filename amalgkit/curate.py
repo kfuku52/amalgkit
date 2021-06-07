@@ -26,7 +26,7 @@ def curate_main(args):
 
     meta_out = os.path.realpath( args.metadata)
     if args.updated_metadata_dir == "inferred":
-        updated_metadata_dir = os.path.join(args.work_dir, 'metadata/updated_metadata')
+        updated_metadata_dir = os.path.join(args.out_dir, 'metadata/updated_metadata')
     else:
         updated_metadata_dir = os.path.realpath(args.updated_metadata_dir)
 
@@ -64,7 +64,7 @@ def curate_main(args):
                                r_script_path,
                                quant_out,
                                meta_out,
-                               os.path.realpath(args.work_dir),
+                               os.path.realpath(args.out_dir),
                                eff_len_out,
                                dist_method,
                                str(mr_cut),
@@ -122,7 +122,7 @@ def curate_main(args):
                 len_file = len_file[0]
             if len(count_file) > 1:
                 count_file = len_file[0]
-            export_string=" --export=QUANT=" + os.path.realpath(str(count_file)) + ",META=" + os.path.realpath(meta_out) + ",WORK=" + os.path.realpath(args.work_dir) + ",LEN=" + os.path.realpath(str(len_file)) + ",DIST=" + dist_method + ",CUT=" + str(mr_cut) + ",INTER=" + str(intermediate) + ",TISSUES=" +f'"{tissues}"' + " " + batch_script_path + ",NORM=" +str(args.norm)
+            export_string=" --export=QUANT=" + os.path.realpath(str(count_file)) + ",META=" + os.path.realpath(meta_out) + ",WORK=" + os.path.realpath(args.out_dir) + ",LEN=" + os.path.realpath(str(len_file)) + ",DIST=" + dist_method + ",CUT=" + str(mr_cut) + ",INTER=" + str(intermediate) + ",TISSUES=" +f'"{tissues}"' + " " + batch_script_path + ",NORM=" +str(args.norm)
             #print(export_string)
 
             submit_command = ("sbatch " + "--job-name=" + sp +export_string)

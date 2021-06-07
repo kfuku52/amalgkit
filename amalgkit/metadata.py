@@ -543,11 +543,11 @@ class Metadata:
         return pivot_reduced
 
 def metadata_main(args):
-    if not os.path.exists(args.work_dir):
-        print('Creating directory:', args.work_dir)
-        os.mkdir(args.work_dir)
+    if not os.path.exists(args.out_dir):
+        print('Creating directory:', args.out_dir)
+        os.mkdir(args.out_dir)
 
-    metadata_dir = os.path.join(args.work_dir, 'metadata')
+    metadata_dir = os.path.join(args.out_dir, 'metadata')
     temp_dir = os.path.join(metadata_dir, 'temp')
     metadata_results_dir = os.path.join(metadata_dir, 'metadata')
     pivot_table_dir = os.path.join(metadata_dir, 'pivot_tables')

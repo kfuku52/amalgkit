@@ -50,12 +50,12 @@ def quant_main(args):
 
     # prefer amalgkit processed files over others.
     sra_stat = get_sra_stat(sra_id, metadata, num_bp_per_sra=None)
-    output_dir_getfastq = os.path.join(args.work_dir, 'getfastq', sra_id)
+    output_dir_getfastq = os.path.join(args.out_dir, 'getfastq', sra_id)
     ext = get_newest_intermediate_file_extension(sra_stat, work_dir=output_dir_getfastq)
-    in_files = glob.glob(os.path.join(args.work_dir, 'getfastq', sra_id, sra_id + "*" + ext))
+    in_files = glob.glob(os.path.join(args.out_dir, 'getfastq', sra_id, sra_id + "*" + ext))
 
     # make results directory, if not already there
-    output_dir = os.path.join(args.work_dir, 'quant', sra_id)
+    output_dir = os.path.join(args.out_dir, 'quant', sra_id)
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
 

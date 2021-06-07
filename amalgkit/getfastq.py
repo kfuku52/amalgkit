@@ -104,7 +104,7 @@ def concat_fastq(args, metadata, output_dir, num_bp_per_sra):
                 os.remove(outfile_path)
             #with gzip.open(outfile_path, 'wb') as outfile:
             #    for each_infile in infiles:
-            #        with gzip.open(os.path.join(args.work_dir, each_infile), 'rb') as infile:
+            #        with gzip.open(os.path.join(args.out_dir, each_infile), 'rb') as infile:
             #            shutil.copyfileobj(infile, outfile) # unacceptably slow
             if os.path.exists(outfile_path):
                 os.remove(outfile_path)
@@ -268,14 +268,14 @@ def check_getfastq_dependency(args):
     return gz_exe,ungz_exe
 
 def set_getfastq_directories(args, sra_id):
-    if args.work_dir.startswith('./'):
-        args.work_dir = args.work_dir.replace('.', os.getcwd())
+    if args.out_dir.startswith('./'):
+        args.out_dir = args.out_dir.replace('.', os.getcwd())
     if args.id is not None:
-        output_dir = os.path.join(args.work_dir, 'getfastq', args.id)
+        output_dir = os.path.join(args.out_dir, 'getfastq', args.id)
     elif args.metadata is not None:
-        output_dir = os.path.join(args.work_dir, 'getfastq', sra_id)
+        output_dir = os.path.join(args.out_dir, 'getfastq', sra_id)
     elif args.id_list is not None:
-        output_dir = os.path.join(args.work_dir, 'getfastq', sra_id)
+        output_dir = os.path.join(args.out_dir, 'getfastq', sra_id)
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
     return output_dir
@@ -480,7 +480,7 @@ def dump_read_stats(args, metadata, seq_summary, output_dir, sra_id):
     metadata.df.loc[metadata.df['run'] == sra_id, 'num_read_unfiltered'] = seq_summary['bp_dumped'].sum()
     metadata.df.loc[metadata.df['run'] == sra_id, 'spot_length'] = seq_summary['spot_length'].loc[sra_id]
 
-    metadata_output_dir = os.path.join(args.work_dir,'metadata', 'updated_metadata')
+    metadata_output_dir = os.path.join(args.out_dir,'metadata', 'updated_metadata')
     if not os.path.exists(metadata_output_dir):
         os.makedirs(metadata_output_dir)
 

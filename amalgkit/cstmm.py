@@ -14,9 +14,9 @@ def cstmm_main(args):
         print(e)
         raise Exception("R (Rscript) is not installed.")
 
-    dir_count = os.path.join(args.work_dir, args.count)
-    dir_ortho = os.path.join(args.work_dir, args.ortho)
-    dir_work = args.work_dir
+    dir_count = os.path.join(args.out_dir, args.count)
+    dir_ortho = os.path.join(args.out_dir, args.ortho)
+    dir_work = args.out_dir
     count_files = [f for f in listdir(dir_count) if isfile(join(dir_count, f))&(f.endswith('counts.tsv'))]
 
     print("Trying to identify species in raw count directory ", dir_count, " :")
