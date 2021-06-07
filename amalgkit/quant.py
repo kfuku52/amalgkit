@@ -70,7 +70,7 @@ def quant_main(args):
     # paired end read kallisto quant, if in_files == 2
     if len(in_files) == 2:
         print("paired end reads detected. Running in paired read mode.")
-        kallisto_out = subprocess.run(["kallisto", "quant", "-i", index, "-o", output_dir, in_files[0], in_files[1]])
+        kallisto_out = subprocess.run(["kallisto", "quant", "--threads",args.threads, "-i", index, "-o", output_dir, in_files[0], in_files[1]])
         # TODO: Switch to try/except for error handling
         assert (kallisto_out.returncode == 0), "kallisto did not finish safely: {}".format(
             kallisto_out.stdout.decode('utf8'))
@@ -115,7 +115,7 @@ def quant_main(args):
             print("fragment length set to: ", nominal_length)
             fragment_sd = nominal_length/10
             print("fragment length standard deviation set to:", fragment_sd)
-            kallisto_out = subprocess.run(["kallisto", "quant", "--index", index, "-o", output_dir, "--single", "-l", str(nominal_length), "-s", str(fragment_sd), in_files[0]])
+            kallisto_out = subprocess.run(["kallisto", "quant","--threads",args.threads, "--index", index, "-o", output_dir, "--single", "-l", str(nominal_length), "-s", str(fragment_sd), in_files[0]])
             # TODO: Switch to try/except for error handling
             assert (kallisto_out.returncode == 0), "kallisto did not finish safely: {}".format(
                 kallisto_out.stdout.decode('utf8'))
@@ -124,7 +124,7 @@ def quant_main(args):
             print("fragment length set to: ", args.fragment_length)
             fragment_sd = args.fragment_length/10
             print("fragment length standard deviation set to:", fragment_sd)
-            kallisto_out = subprocess.run(["kallisto", "quant", "--index", index,  "-o", output_dir, "--single", "-l", str(args.frament_length), "-s", str(fragment_sd), in_files[0]])
+            kallisto_out = subprocess.run(["kallisto", "quant", "--threads", args.threads, "--index", index,  "-o", output_dir, "--single", "-l", str(args.frament_length), "-s", str(fragment_sd), in_files[0]])
             # TODO: Switch to try/except for error handling
             assert (kallisto_out.returncode == 0), "kallisto did not finish safely: {}".format(
                 kallisto_out.stdout.decode('utf8'))
