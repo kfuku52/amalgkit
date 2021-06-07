@@ -52,8 +52,12 @@ if (!file.exists(dir_work)) {
 }
 setwd(dir_work)
 
+dir_cstmm = file.path(dir_work,'cstmm')
+if (!file.exists(dir_cstmm)) {
+  dir.create(dir_cstmm)
+}
 # set output directory and create if not already there
-dir_tmm = file.path(dir_work, 'cross_species_tmm_normalized_counts')
+dir_tmm = file.path(dir_work,'cstmm','cross_species_tmm_normalized_counts')
 if (!file.exists(dir_tmm)) {
   dir.create(dir_tmm)
 }
@@ -117,11 +121,11 @@ cat('Round 2: Median normalization factor =', median(cnf_out2[[2]][['norm.factor
 df_nf = cnf_out2[[2]]
 df_nf[['sample']] = rownames(df_nf)
 df_nf = df_nf[,c('sample','group','lib.size','norm.factors')]
-write.table(df_nf, 'normalization_factor.tsv', row.names=FALSE, sep='\t')
+write.table(df_nf, 'cstmm/normalization_factor.tsv', row.names=FALSE, sep='\t')
 
 xlim = c(-2,2)
 bins = seq(-2,2,0.1)
-file_name='normalization_factor_histogram.pdf'
+file_name='cstmm/normalization_factor_histogram.pdf'
 pdf(file_name, height=3.3, width=7.2) # full figure size = 9.7 x 7.2
 x = log2(cnf_out2[[2]][['norm.factors']])
 x[x>xlim[2]] = xlim[2]
