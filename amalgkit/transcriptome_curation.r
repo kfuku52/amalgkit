@@ -70,7 +70,26 @@ if (!endsWith(dir_work, "/")) {
 # set directory
 cat(log_prefix, "dir_work =", dir_work, "\n")
 dir.create(dir_work, showWarnings = FALSE)
-setwd(dir_work)
+
+dir_curate = file.path(dir_work,'curate')
+if (!file.exists(dir_curate)) {
+  dir.create(dir_curate)
+}
+setwd(dir_curate)
+
+# create output directories
+dir_pdf = file.path(dir_curate,'plots')
+if (!file.exists(dir_pdf)) {
+  dir.create(dir_pdf)
+}
+dir_rdata = file.path(dir_curate,'rdata')
+if (!file.exists(dir_rdata)) {
+  dir.create(dir_rdata)
+}
+dir_tsv = file.path(dir_curate,'tables')
+if (!file.exists(dir_tsv)) {
+  dir.create(dir_tsv)
+}
 
 tc_sra_intersect = function(tc, sra) {
     sra_run = sra$run
@@ -575,7 +594,7 @@ save_plot = function(tc, sra, sva_out, dist_method, file, selected_tissues, font
     out = sort_tc_and_sra(tc, sra)
     tc = out[["tc"]]
     sra = out[["sra"]]
-    pdf(paste0(file, ".pdf"), height = 8, width = 7.2, fonts = "Helvetica", pointsize = fontsize)
+    pdf(paste0(dir_pdf,'/',file, ".pdf"), height = 8, width = 7.2, fonts = "Helvetica", pointsize = fontsize)
     layout_matrix = matrix(c(2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1,
                              2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 1, 1,
                              1, 1, 1, 1, 1, 3, 3, 3, 4, 4, 4, 5, 5, 5, 6, 6, 6, 3, 3, 3, 4, 4, 4, 5, 5, 5, 6, 6, 6, 3, 3,
@@ -608,7 +627,7 @@ save_plot = function(tc, sra, sva_out, dist_method, file, selected_tissues, font
     par(mar = rep(0.1, 4))
     df_r2 = draw_sva_summary(sva_out, tc, sra, fontsize)
     if (!all(is.na(df_r2))) {
-        write.table(df_r2, paste0(file, ".r2.tsv"), sep = "\t", row.names = FALSE)
+        write.table(df_r2, paste0(dir_tsv,'/',file, ".r2.tsv"), sep = "\t", row.names = FALSE)
     }
     par(mar = rep(0.1, 4))
     draw_legend(sra, new = TRUE, pos = "center", fontsize = fontsize, nlabel.in.col = 8)
@@ -746,12 +765,12 @@ if (transform_method == "tpm") {
     tc <- log(tc + 1)
 }
 
-file_name = paste0(sub(" ", "_", scientific_name), ".uncorrected.tc.tsv")
+file_name = paste0(dir_tsv,'/',sub(" ", "_", scientific_name), ".uncorrected.tc.tsv")
 write.table(tc, file = file_name,
             sep = "\t", row.names = TRUE, col.names = TRUE, quote = FALSE)
 
 tc_tissue_uncorrected = tissue_mean(tc, sra, selected_tissues)
-file_name = paste0(sub(" ", "_", scientific_name), ".uncorrected.tissue.mean.tsv")
+file_name = paste0(dir_tsv,'/',sub(" ", "_", scientific_name), ".uncorrected.tissue.mean.tsv")
 write.table(tc_tissue_uncorrected, file = file_name,
             sep = "\t", row.names = TRUE, col.names = TRUE, quote = FALSE)
 
@@ -764,7 +783,7 @@ save_plot(log(tc + 1), sra, NULL, dist_method, paste0(sub(" ", "_", scientific_n
 out = sva_subtraction(tc, sra)
 tc_sva = out[["tc"]]
 sva_out = out[["sva"]]
-save(sva_out, file = paste0(sub(" ", "_", scientific_name), ".sva.", round, ".RData"))
+save(sva_out, file = paste0(dir_rdata,'/', sub(" ", "_", scientific_name), ".sva.", round, ".RData"))
 save_plot(tc_sva, sra, sva_out, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".original.sva"),
           selected_tissues, fontsize)
 
@@ -780,7 +799,7 @@ save_plot(tc, sra, NULL, dist_method, paste0(sub(" ", "_", scientific_name), "."
 out = sva_subtraction(tc, sra)
 tc_sva = out[["tc"]]
 sva_out = out[["sva"]]
-save(sva_out, file = paste0(sub(" ", "_", scientific_name), ".sva.", round, ".RData"))
+save(sva_out, file = paste0(dir_rdata,'/',sub(" ", "_", scientific_name), ".sva.", round, ".RData"))
 save_plot(tc_sva, sra, sva_out, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".mapping_cutoff.sva"),
           selected_tissues, fontsize)
 
@@ -800,7 +819,7 @@ while (end_flag == 0) {
         out = sva_subtraction(tc_cwtc, sra)
         tc_sva = out[["tc"]]
         sva_out = out[["sva"]]
-        save(sva_out, file = paste0(sub(" ", "_", scientific_name), ".sva.", round, ".RData"))
+        save(sva_out, file = paste0(dir_rdata,'/',sub(" ", "_", scientific_name), ".sva.", round, ".RData"))
         save_plot(tc_cwtc, sra, NULL, dist_method, paste0(sub(" ", "_", scientific_name), ".", round,
                                                           ".correlation_cutoff"), selected_tissues, fontsize)
         save_plot(tc_sva, sra, sva_out, dist_method, paste0(sub(" ", "_", scientific_name), ".", round,
@@ -817,15 +836,15 @@ while (end_flag == 0) {
     round = round + 1
 }
 cat("finished checking within-tissue correlation.\n")
-write.table(sra, file = paste0(sub(" ", "_", scientific_name), ".sra.tsv"), sep = "\t", row.names = FALSE,
+write.table(sra, file = paste0(dir_tsv,'/',sub(" ", "_", scientific_name), ".sra.tsv"), sep = "\t", row.names = FALSE,
             col.names = TRUE, quote = FALSE)
-write.table(tc_sva, file = paste0(sub(" ", "_", scientific_name), ".tc.tsv"), sep = "\t", row.names = TRUE,
+write.table(tc_sva, file = paste0(dir_tsv,'/',sub(" ", "_", scientific_name), ".tc.tsv"), sep = "\t", row.names = TRUE,
             col.names = TRUE, quote = FALSE)
 tc_tissue = tissue_mean(tc_sva, sra, selected_tissues)
-write.table(tc_tissue, file = paste0(sub(" ", "_", scientific_name), ".tissue.mean.tsv"), sep = "\t",
+write.table(tc_tissue, file = paste0(dir_tsv,'/',sub(" ", "_", scientific_name), ".tissue.mean.tsv"), sep = "\t",
             row.names = TRUE, col.names = TRUE, quote = FALSE)
 tc_tau = tissue2tau(tc_tissue, rich.annotation = TRUE, unlog = TRUE)
-write.table(tc_tau, file = paste0(sub(" ", "_", scientific_name), ".tau.tsv"), sep = "\t", row.names = TRUE,
+write.table(tc_tau, file = paste0(dir_tsv,'/',sub(" ", "_", scientific_name), ".tau.tsv"), sep = "\t", row.names = TRUE,
             col.names = TRUE, quote = FALSE)
 cat("Done!\n")
 
