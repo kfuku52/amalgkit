@@ -1,7 +1,4 @@
 library(edgeR, quietly=TRUE)
-library(limma, quietly=TRUE)
-library(tidyr, quietly=TRUE)
-library(dplyr, quietly=TRUE)
 
 mode = ifelse(length(commandArgs(trailingOnly=TRUE))==1, 'debug', 'batch')
 
