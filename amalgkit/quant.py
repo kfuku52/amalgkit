@@ -48,6 +48,7 @@ def quant_main(args):
                 # TODO: Switch to try/except for error handling
                 assert (kallisto_out.returncode == 0), "kallisto did not finish safely: {}".format(kallisto_out.stdout.decode('utf8'))
 
+    print(args.threads)
     # prefer amalgkit processed files over others.
     if args.metadata is not None:
         sra_stat = get_sra_stat(sra_id, metadata, num_bp_per_sra=None)
