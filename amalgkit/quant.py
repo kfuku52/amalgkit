@@ -49,10 +49,15 @@ def quant_main(args):
                 assert (kallisto_out.returncode == 0), "kallisto did not finish safely: {}".format(kallisto_out.stdout.decode('utf8'))
 
     # prefer amalgkit processed files over others.
-    sra_stat = get_sra_stat(sra_id, metadata, num_bp_per_sra=None)
-    output_dir_getfastq = os.path.join(args.out_dir, 'getfastq', sra_id)
-    ext = get_newest_intermediate_file_extension(sra_stat, work_dir=output_dir_getfastq)
-    in_files = glob.glob(os.path.join(args.out_dir, 'getfastq', sra_id, sra_id + "*" + ext))
+    if args.metadata:
+        sra_stat = get_sra_stat(sra_id, metadata, num_bp_per_sra=None)
+        output_dir_getfastq = os.path.join(args.out_dir, 'getfastq', sra_id)
+        ext = get_newest_intermediate_file_extension(sra_stat, work_dir=output_dir_getfastq)
+        in_files = glob.glob(os.path.join(args.out_dir, 'getfastq', sra_id, sra_id + "*" + ext))
+
+    else:
+        ext = ".fastq.gz"
+        in_files = glob.glob(os.path.join(args.out_dir, 'getfastq', sra_id, sra_id + "*" + ext))
 
     # make results directory, if not already there
     output_dir = os.path.join(args.out_dir, 'quant', sra_id)
@@ -70,7 +75,7 @@ def quant_main(args):
     # paired end read kallisto quant, if in_files == 2
     if len(in_files) == 2:
         print("paired end reads detected. Running in paired read mode.")
-        kallisto_out = subprocess.run(["kallisto", "quant", "--threads",args.threads, "-i", index, "-o", output_dir, in_files[0], in_files[1]])
+        kallisto_out = subprocess.run(["kallisto", "quant","--threads", str(args.threads), "-i", index, "-o", output_dir, in_files[0], in_files[1]])
         # TODO: Switch to try/except for error handling
         assert (kallisto_out.returncode == 0), "kallisto did not finish safely: {}".format(
             kallisto_out.stdout.decode('utf8'))
@@ -115,7 +120,7 @@ def quant_main(args):
             print("fragment length set to: ", nominal_length)
             fragment_sd = nominal_length/10
             print("fragment length standard deviation set to:", fragment_sd)
-            kallisto_out = subprocess.run(["kallisto", "quant","--threads",args.threads, "--index", index, "-o", output_dir, "--single", "-l", str(nominal_length), "-s", str(fragment_sd), in_files[0]])
+            kallisto_out = subprocess.run(["kallisto", "quant","--threads", str(args.threads), "--index", index, "-o", output_dir, "--single", "-l", str(nominal_length), "-s", str(fragment_sd), in_files[0]])
             # TODO: Switch to try/except for error handling
             assert (kallisto_out.returncode == 0), "kallisto did not finish safely: {}".format(
                 kallisto_out.stdout.decode('utf8'))
@@ -124,7 +129,7 @@ def quant_main(args):
             print("fragment length set to: ", args.fragment_length)
             fragment_sd = args.fragment_length/10
             print("fragment length standard deviation set to:", fragment_sd)
-            kallisto_out = subprocess.run(["kallisto", "quant", "--threads", args.threads, "--index", index,  "-o", output_dir, "--single", "-l", str(args.frament_length), "-s", str(fragment_sd), in_files[0]])
+            kallisto_out = subprocess.run(["kallisto", "quant","--threads", str(args.threads), "--index", index,  "-o", output_dir, "--single", "-l", str(args.frament_length), "-s", str(fragment_sd), in_files[0]])
             # TODO: Switch to try/except for error handling
             assert (kallisto_out.returncode == 0), "kallisto did not finish safely: {}".format(
                 kallisto_out.stdout.decode('utf8'))
