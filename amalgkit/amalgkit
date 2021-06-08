@@ -195,6 +195,9 @@ pge.set_defaults(handler=command_getfastq)
 # Sub parser: quant
 pqu = subparsers.add_parser('quant', help='see `amalgkit quant -h`')
 
+# TODO: Is this necessary?
+pqu.add_argument('--sci_name', metavar='STR', default=None, type=str, required=False, action='store',
+                 help='default=%(default)s: Species name in case the BioProject covers multiple species. Example: "Homo sapiens"')
 
 
 pqu.add_argument('--ref', metavar='PATH', default=None, type=str, required=False, action='store',
@@ -207,10 +210,8 @@ pqu.add_argument('--index', metavar='PATH', default=None, type=str, required=Fal
 # TODO: Is this necessary? We will be able to know this by checking --index. i.e., (args.index is None)
 pqu.add_argument('--build_index', metavar='yes|no', default="no", type=str, required=False, action='store',
                  help='default=%(default)s: builds the kallisto index from a set of reference sequences. Index needs to be provided if this is set to "no".')
-pqu.add_argument('--index_dir', metavar='PATH', default=None, type=str, required=False, action='store',
-                 help='default=%(default)s: Working_directory/Index/.')
-pqu.add_argument('-o','--output_dir', metavar='PATH', default=None, type=str, required=False, action='store',
-                 help='default=%(default)s: Working_directory/quant/SRA_ID/.')
+pge.add_argument('--threads', metavar='INT', default=1, type=int, required=False, action='store',
+                 help='default=%(default)s: Number of threads.')
 pqu.add_argument('--fragment_length', metavar='INT', default=None, type=int, required=False, action='store',
                  help='default=%(default)s: length of the fragment (not read length). Only required, if single end reads are used.')
 pqu.add_argument('-w','--out_dir', metavar='PATH', default='./', type=str, required=False, action='store',
