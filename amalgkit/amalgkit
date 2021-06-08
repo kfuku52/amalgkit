@@ -205,7 +205,7 @@ pqu.add_argument('--index', metavar='PATH', default=None, type=str, required=Fal
                  help='default=%(default)s: path/name of kallisto index file to create.')
 
 # TODO: Is this necessary? We will be able to know this by checking --index. i.e., (args.index is None)
-pqu.add_argument('--build_index', metavar='yes|no', default="yes", type=str, required=False, action='store',
+pqu.add_argument('--build_index', metavar='yes|no', default="no", type=str, required=False, action='store',
                  help='default=%(default)s: builds the kallisto index from a set of reference sequences. Index needs to be provided if this is set to "no".')
 pqu.add_argument('--index_dir', metavar='PATH', default=None, type=str, required=False, action='store',
                  help='default=%(default)s: Working_directory/Index/.')

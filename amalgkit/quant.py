@@ -29,7 +29,7 @@ def quant_main(args):
     print('SRA ID:', sra_id)
 
     if args.index is None:
-        index = args.ref + ".idx"
+        index = args.ref
     else:
         index = args.index
 
