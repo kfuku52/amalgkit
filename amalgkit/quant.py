@@ -49,7 +49,7 @@ def quant_main(args):
                 assert (kallisto_out.returncode == 0), "kallisto did not finish safely: {}".format(kallisto_out.stdout.decode('utf8'))
 
     # prefer amalgkit processed files over others.
-    if args.metadata:
+    if args.metadata is not None:
         sra_stat = get_sra_stat(sra_id, metadata, num_bp_per_sra=None)
         output_dir_getfastq = os.path.join(args.out_dir, 'getfastq', sra_id)
         ext = get_newest_intermediate_file_extension(sra_stat, work_dir=output_dir_getfastq)
