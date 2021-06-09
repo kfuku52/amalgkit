@@ -73,6 +73,14 @@ def command_merge(args):
     print('Time elapsed: {:,} sec'.format(int(time.time() - start)))
     sys.stdout.write('amalgkit merge: end\n')
 
+def command_sanity(args):
+    sys.stdout.write('amalgkit sanity: start\n')
+    start = time.time()
+    from amalgkit.sanity import sanity_main
+    sanity_main(args)
+    print('Time elapsed: {:,} sec'.format(int(time.time() - start)))
+    sys.stdout.write('amalgkit sanity: end\n')
+
 
 def command_help(args):
     print(parser.parse_args([args.command, '--help']))
@@ -265,6 +273,40 @@ pmg.add_argument('-w','--out_dir', metavar='PATH', default='./', type=str, requi
 pmg.add_argument('--metadata', metavar='PATH', default=None, type=str, required=False, action='store',
                  help='default=%(default)s: PATH to metadata table. See `amalgkit metadata -h` for details.')
 pmg.set_defaults(handler=command_merge)
+
+# Sub parser: sanity
+psa = subparsers.add_parser('sanity', help='see `amalgkit sanity -h`')
+
+psa.add_argument('-w','--out_dir', metavar='PATH', default='./', type=str, required=False, action='store',
+                 help='default=%(default)s: output directory.')
+psa.add_argument('--metadata', metavar='PATH', default=None, type=str, required=True, action='store',
+                 help='default=%(default)s: PATH to metadata table. See `amalgkit metadata -h` for details.')
+psa.add_argument('--index', required=False, action='store_true',
+                 help='set this option if you want to check for availability of Index files '
+                      'based on species name in metadata file.')
+psa.add_argument('--quant', required=False, action='store_true',
+                 help='set this option if you want to check for availability quant output files '
+                      'based on SRA IDs in metadata file.')
+psa.add_argument('--getfastq', required=False, action='store_true',
+                 help='set this option if you want to check for availability of getfastq output files '
+                      'based on SRA IDs in metadata file.')
+psa.add_argument('--all', required=False, action='store_true',
+                 help='setting this option runs amalgkit sanity as if --index, --quant, --getfastq were set')
+psa.add_argument('--index_dir', metavar='PATH', default=None, type=str, required=False, action='store',
+                 help='default=%(default)s: custom path to Index directory. Only required if Index directory is not'
+                      'output_directory/Index/')
+psa.add_argument('--quant_dir', metavar='PATH', default=None, type=str, required=False, action='store',
+                 help='default=%(default)s: custom path to quant directory. Only required if quant directory is not'
+                      'output_directory/quant/')
+psa.add_argument('--getfastq_dir', metavar='PATH', default=None, type=str, required=False, action='store',
+                 help='default=%(default)s: custom path to Index directory. Only required if getfastq directory is not'
+                      'output_directory/getfastq/')
+psa.add_argument('--updated_metadata_dir', metavar='PATH', default=None, type=str, required=False, action='store',
+                 help='default=%(default)s: custom path to updated metadata directory. Only required if updated metadata'
+                      ' directory is not out_directory/metadata/updated_metadata/')
+
+psa.set_defaults(handler=command_sanity)
+
 
 # Sub parser: help
 parser_help = subparsers.add_parser('help', help='see `help -h`')
