@@ -54,7 +54,14 @@ def check_getfastq_outputs(args, sra_ids, metadata, output_dir):
             sra_path = os.path.join(getfastq_path, sra_id)
             if os.path.exists(sra_path):
                 sra_stat = get_sra_stat(sra_id, metadata)
-                ext = get_newest_intermediate_file_extension(sra_stat, sra_path)
+                try:
+                    ext = get_newest_intermediate_file_extension(sra_stat, sra_path)
+                except AssertionError:
+                    print("could not find any fastq files for ", sra_id,
+                          "Please make sure amalgkit getfastq ran properly")
+                    data_unavailable.append(sra_id)
+                    continue
+
                 files = glob.glob(os.path.join(sra_path, sra_id + "*" + ext))
                 print("found: ", files)
                 data_available.append(sra_id)
