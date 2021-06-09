@@ -65,11 +65,12 @@ def check_getfastq_outputs(args, sra_ids, metadata, output_dir):
                 files = glob.glob(os.path.join(sra_path, sra_id + "*" + ext))
                 print("found: ", files)
                 data_available.append(sra_id)
-                if args.updated_metadata_dir is not None:
+                if args.updated_metadata_dir:
                     updated_metadata_path = os.path.join(args.updated_metadata_dir, '/metadata_' + sra_id + '.tsv')
                 else:
-                    updated_metadata_path = os.path.join(args.out_dir, '/metadata/updated_metadata/', '/metadata_'
+                    updated_metadata_path = os.path.join(args.out_dir, '/metadata/updated_metadata/metadata_'
                                                          + sra_id + '.tsv')
+
                 print("checking for updated metadata in: ", updated_metadata_path)
                 if os.path.exists(updated_metadata_path):
                     print("found updated metadata!")
