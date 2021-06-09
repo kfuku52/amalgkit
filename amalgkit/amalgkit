@@ -195,28 +195,17 @@ pge.set_defaults(handler=command_getfastq)
 # Sub parser: quant
 pqu = subparsers.add_parser('quant', help='see `amalgkit quant -h`')
 
-# TODO: Is this necessary?
-pqu.add_argument('--sci_name', metavar='STR', default=None, type=str, required=False, action='store',
-                 help='default=%(default)s: Species name in case the BioProject covers multiple species. Example: "Homo sapiens"')
-
-
-pqu.add_argument('--ref', metavar='PATH', default=None, type=str, required=False, action='store',
-                 help='default=%(default)s: path to the reference transcriptome FASTA file. Required for Index building.')
 pqu.add_argument('--id', metavar='XXXXX0000', default=None, type=str, required=False, action='store',
                  help='default=%(default)s: SRA ID. quant automatically search .fastq or .fastq.gz file(s)')
 pqu.add_argument('--index', metavar='PATH', default=None, type=str, required=False, action='store',
-                 help='default=%(default)s: path/name of kallisto index file to create.')
-
-# TODO: Is this necessary? We will be able to know this by checking --index. i.e., (args.index is None)
-pqu.add_argument('--build_index', metavar='yes|no', default="yes", type=str, required=False, action='store',
-                 help='default=%(default)s: builds the kallisto index from a set of reference sequences. Index needs to be provided if this is set to "no".')
+                 help='default=%(default)s: path/name of index file built from cds fasta sequences, like genome or transcriptome.')
 pqu.add_argument('--threads', metavar='INT', default=1, type=int, required=False, action='store',
                  help='default=%(default)s: Number of threads.')
 pqu.add_argument('--fragment_length', metavar='INT', default=None, type=int, required=False, action='store',
                  help='default=%(default)s: length of the fragment (not read length). Only required, if single end reads are used.')
 pqu.add_argument('-w','--out_dir', metavar='PATH', default='./', type=str, required=False, action='store',
                  help='default=%(default)s: output directory.')
-pqu.add_argument('--metadata', metavar='PATH', default=None, type=str, required=False, action='store',
+pqu.add_argument('--metadata', metavar='PATH', default=None, type=str, required=True, action='store',
                  help='default=%(default)s: PATH to metadata table. See `amalgkit metadata -h` for details.')
 pqu.add_argument('--batch', metavar='INT', default=None, type=int, required=False, action='store',
                  help='default=%(default)s: Zero-based index of metadata table (--metadata). If set, process only one SRA record. This function is intended for array job processing.')
