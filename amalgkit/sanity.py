@@ -187,6 +187,7 @@ def check_quant_output(args, sra_ids, output_dir):
                         abundance_h_file):
                     print("All quant output files present for, ", sra_id, " !")
                     data_available.append(sra_id)
+                    continue
                 elif not os.path.exists(abundance_file):
                     print(abundance_file, " is missing! Please check if quant ran correctly")
                     warned = True
