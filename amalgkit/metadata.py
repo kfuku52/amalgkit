@@ -34,7 +34,10 @@ def get_search_term(species_name="", bioprojects=[], biosamples=[], keywords=[],
                     other_conditions=pandas.DataFrame(), excluded_conditions=pandas.DataFrame()):
     assert ((len(bioprojects)>0)+(len(biosamples)>0))!=2, "bioprojects and biosamples cannot be specified simultaneously."
 
-    species_term = '"'+species_name+'"'+"[Organism]"
+    if species_name == '':
+        species_term = ''
+    else:
+        species_term = '"'+species_name+'"'+"[Organism]"
     keyword_term = "(" + " OR ".join(keywords) + ")"
 
     other_terms = list()
@@ -542,6 +545,17 @@ class Metadata:
         pivot_reduced = pivot_reduced.loc[index_sort,column_sort]
         return pivot_reduced
 
+def read_config_file(file_name, dir_path):
+    try:
+        df = pandas.read_csv(os.path.join(dir_path, file_name),
+                             parse_dates=False, infer_datetime_format=False, quotechar='"', sep='\t',
+                             header=None, index_col=None, skip_blank_lines=True, comment='#')
+    except:
+        df = pandas.DataFrame([])
+    if df.shape[1]==1:
+        df = df.iloc[:,0]
+    return df
+
 def metadata_main(args):
     if not os.path.exists(args.out_dir):
         print('Creating directory:', args.out_dir)
@@ -576,33 +590,19 @@ def metadata_main(args):
     print('Entrez publication date for search:', args.publication_date)
     print('')
 
-    search_spp = pandas.read_csv(os.path.join(args.config_dir, 'search_term_species.config'),
-                        parse_dates=False, infer_datetime_format=False, quotechar='"', sep='\t',
-                        header=None, index_col=None, skip_blank_lines=True, comment='#').iloc[:,0]
-    print('Number of species for Entrez search:', len(search_spp))
-    print(search_spp.tolist())
-    print('')
+    search_spp = read_config_file(file_name='search_term_species.config', dir_path=args.config_dir)
+    print('Number of species for Entrez search: {:,}'.format(search_spp.shape[0]))
+    if search_spp.shape[0]==0:
+        search_spp = pandas.Series(['',])
 
-    search_keywords = pandas.read_csv(os.path.join(args.config_dir, 'search_term_keyword.config'),
-                        parse_dates=False, infer_datetime_format=False, quotechar='"', sep='\t',
-                        header=None, index_col=None, skip_blank_lines=True, comment='#').iloc[:,0]
-    print('Number of keywords for Entrez search:', len(search_keywords))
-    print(search_keywords.tolist())
-    print('')
+    search_keywords = read_config_file(file_name='search_term_keyword.config', dir_path=args.config_dir)
+    print('Number of free keywords for Entrez search: {:,}'.format(search_keywords.shape[0]))
 
-    other_conditions = pandas.read_csv(os.path.join(args.config_dir, 'search_term_other.config'),
-                        parse_dates=False, infer_datetime_format=False, quotechar='"', sep='\t',
-                        header=None, index_col=None, skip_blank_lines=True, comment='#')
-    print('Number of other conditions for Entrez search:', other_conditions.shape[0])
-    print(other_conditions)
-    print('')
+    other_conditions = read_config_file(file_name='search_term_other.config', dir_path=args.config_dir)
+    print('Number of other conditions for Entrez search: {:,}'.format(other_conditions.shape[0]))
 
-    excluded_conditions = pandas.read_csv(os.path.join(args.config_dir, 'search_term_exclusion.config'),
-                        parse_dates=False, infer_datetime_format=False, quotechar='"', sep='\t',
-                        header=None, index_col=None, skip_blank_lines=True, comment='#')
-    print('Number of excluded conditions for Entrez search:', excluded_conditions.shape[0])
-    print(excluded_conditions)
-    print('')
+    excluded_conditions = read_config_file(file_name='search_term_exclusion.config', dir_path=args.config_dir)
+    print('Number of excluded conditions for Entrez search: {:,}'.format(excluded_conditions.shape[0]))
 
     metadata_species = dict()
     for sp in search_spp:
@@ -634,16 +634,7 @@ def metadata_main(args):
         print('No entry was found/survived in the metadata processing. Please check the config files.')
         return None
 
-    if args.tissue_detect == 'no':
-        metadata.mark_exclude_ids()
-        metadata.group_attributes()
-        metadata.correct_orthographical_variants()
-        metadata.replace_values()
-        metadata.give_values()
-        metadata.mark_exclude_keywords()
-        metadata.group_tissues_by_config()
-
-    elif args.tissue_detect == 'yes':
+    if args.tissue_detect:
         # metadata.mark_exclude_ids() # TODO to Matthias, this should be activated even when --tissue_detect yes. Any conflicting feature?
         # metadata.group_attributes() # TODO to Matthias, this should be activated even when --tissue_detect yes. Any conflicting feature?
         metadata.correct_orthographical_variants()
@@ -652,7 +643,13 @@ def metadata_main(args):
         #metadata.mark_exclude_keywords() # TODO to Matthias, this should be activated even when --tissue_detect yes. Any conflicting feature?
         metadata.group_tissues_auto()
     else:
-        raise ValueError("invalid argument to --tissue_detect: ", args.tissue_detect)
+        metadata.mark_exclude_ids()
+        metadata.group_attributes()
+        metadata.correct_orthographical_variants()
+        metadata.replace_values()
+        metadata.give_values()
+        metadata.mark_exclude_keywords()
+        metadata.group_tissues_by_config()
 
     metadata.reorder(omit_misc=False)
     metadata.df.to_csv(os.path.join(metadata_results_dir, 'metadata_02_grouped_'+date_range+'.tsv'), sep='\t', index=False)
