@@ -170,10 +170,11 @@ def check_quant_output(args, sra_ids, output_dir):
     quant_path = os.path.join(args.out_dir, "quant")
     data_available = []
     data_unavailable = []
-    warned = False
+
     if os.path.exists(quant_path):
         print("amalgkit quant output folder detected. Checking presence of output files.")
         for sra_id in sra_ids:
+            warned = []
             print("\n")
             print("Looking for ", sra_id)
             sra_path = os.path.join(quant_path, sra_id)
