@@ -6,8 +6,8 @@ from amalgkit.util import *
 
 
 def merge_main(args):
-    quant_dir = os.path.join(args.work_dir, 'quant')
-    merge_dir = os.path.join(args.work_dir, 'merge')
+    quant_dir = os.path.join(args.out_dir, 'quant')
+    merge_dir = os.path.join(args.out_dir, 'merge')
     if not os.path.exists(merge_dir):
         os.makedirs(os.path.join(merge_dir))
 
