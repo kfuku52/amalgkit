@@ -261,7 +261,8 @@ pcu.add_argument('--mapping_rate', metavar='INT', default=0.20, type=int, requir
 pcu.add_argument('--cleanup', metavar='INT', default=0, type=int, required=False, action='store',
                  help='default=%(default)s: Saves intermediate files, if 0.')
 pcu.add_argument('--curate_group', metavar='STR', default=None, type=str, required=False, action='store',
-                 help='default=%(default)s: List of curate_group values of the curate_group metadata column to be included .')
+                 help='default=%(default)s: "comma separated list of values contained in the curate_group metadata column to be included in the analysis. '
+                      'Example input may look like "root,flower,leaf" or "heat stressed,cold stressed,light stressed".')
 pcu.add_argument('--norm', metavar='fpkm|tpm|none', default='fpkm', type=str, required=False, action='store',
                  help='default=%(default)s: Algorithm performs log-fpkm, or log-tpm transformation on raw counts. If you select "none", please make sure to provide log-normalized input counts of some sort.')
 pcu.set_defaults(handler=command_curate)
