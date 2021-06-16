@@ -18,8 +18,8 @@ debug_mode = ifelse(length(commandArgs(trailingOnly = TRUE)) == 1, "debug", "bat
 log_prefix = "transcriptome_curation.r:"
 cat(log_prefix, "mode =", debug_mode, "\n")
 if (debug_mode == "debug") {
-    infile = '/Users/s229181/MSN/counts/Zea_mays_est_counts.tsv'
-    eff_file = '/Users/s229181/MSN/eff_length/Zea_mays_eff_length.tsv'
+    infile = '/Users/s229181/Desktop/projects/curate/merge_dir/Amaranthus_hypochondriacus/merge/Amaranthus_hypochondriacus_est_counts.tsv'
+    eff_file = '/Users/s229181/Desktop/projects/curate/merge_dir/Amaranthus_hypochondriacus/merge/Amaranthus_hypochondriacus_eff_length.tsv'
    # infile = "/Users/kf/Dropbox (Personal)/collaborators/Ken Naito/20210509_Vigna/gfe_data/cross_species_tmm_normalized_counts/Vigna_angularis_cstmm_counts.tsv"
     #eff_file = "/Users/kf/Dropbox (Personal)/collaborators/Ken Naito/20210509_Vigna/gfe_data/merge/Vigna_angularis_eff_length.tsv"
     dist_method = "pearson"
@@ -34,8 +34,9 @@ if (debug_mode == "debug") {
     # tmm norm debug
 
     tmm_norm = "yes"
-    dir_work = '/Users/s229181/MSN/'
-    srafile = '/Users/s229181/MSN/Metadata_all_2.tsv'
+    dir_work = '/Users/s229181/Desktop/projects/curate/merge_dir/Amaranthus_hypochondriacus/curate/'
+    srafile = '/Users/s229181/Desktop/projects/curate/metadata/metadata_may2021_updated.tsv'
+    dir_updated_metadata = '/Users/s229181/Desktop/projects/curate/metadata/updated_metadata/'
    # dir_work = "/Users/kf/Dropbox (Personal)/collaborators/Ken Naito/20210509_Vigna/gfe_data"
    # srafile = "/Users/kf/Dropbox (Personal)/collaborators/Ken Naito/20210509_Vigna/gfe_data/metadata/metadata/metadata_manual.tsv"
 

@@ -159,6 +159,11 @@ class Metadata:
             misc_columns = [ col for col in self.df.columns if col not in column_names ]
             self.df = self.df.loc[:,column_names+misc_columns]
         self.df.loc[:,'exclusion'] = self.df.loc[:,'exclusion'].replace('', 'no')
+        # reorder curate_group to the front
+        if 'curate_group' in self.df.columns:
+            cols = list(self.df)
+            cols.insert(1, cols.pop(cols.index('curate_group')))
+            self.df = self.df.loc[:, cols]
 
     def from_DataFrame(df):
         metadata = Metadata()
@@ -416,6 +421,8 @@ class Metadata:
                 is_matching = self.df.loc[:,'tissue'].str.match(replace_from, case=False, na=False)
                 self.df.loc[is_matching,'tissue'] = replace_to
             self.df.loc[:,'tissue'] = self.df.loc[:,'tissue'].str.lower()
+            self.df.loc[:, 'curate_group'] = self.df.loc[:, 'tissue']
+
 
 
 

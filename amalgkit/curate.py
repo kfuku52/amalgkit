@@ -5,18 +5,19 @@ import subprocess
 import os
 import sys
 
-def get_tissues(args):
-    if args.tissues is None:
+
+def get_curate_group(args):
+    if args.curate_group is None:
         metadata = load_metadata(args)
-        tissues = metadata.df.loc[:,'tissue'].dropna().unique()
+        curate_group = metadata.df.loc[:, 'curate_group'].dropna().unique()
     else:
-        tissues = re.findall(r"[\w]+", args.tissues)
-    print('Tissues to be included: {}'.format(', '.join(tissues)))
-    tissues = '|'.join(tissues)
-    return tissues
+        curate_group = re.findall(r"[\w]+", args.curate_group)
+    print('Tissues to be included: {}'.format(', '.join(curate_group)))
+    curate_group = '|'.join(curate_group)
+    return curate_group
+
 
 def curate_main(args):
-
     try:
         subprocess.run(['Rscript', '--help'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     except FileNotFoundError as e:
@@ -24,7 +25,7 @@ def curate_main(args):
         print(",<ERROR> Rscript is not installed.")
         sys.exit(1)
 
-    meta_out = os.path.realpath( args.metadata)
+    meta_out = os.path.realpath(args.metadata)
     if args.updated_metadata_dir == "inferred":
         updated_metadata_dir = os.path.join(args.out_dir, 'metadata/updated_metadata')
     else:
@@ -33,11 +34,14 @@ def curate_main(args):
     dist_method = args.dist_method
     mr_cut = args.mapping_rate
     intermediate = args.cleanup
-    tissues = get_tissues(args)
+    curate_group = get_curate_group(args)
     curate_path = os.path.dirname(os.path.realpath(__file__))
     r_script_path = curate_path + '/transcriptome_curation.r'
     batch_script_path = curate_path + '/batch_curate.sh'
-
+    quant_out = os.path.realpath(args.infile)
+    eff_len_out = "NA"
+    len_files = []
+    count_files = []
     # Input checks #
     # if single species mode active
     if args.batch is None:
@@ -48,31 +52,29 @@ def curate_main(args):
             print("Single species mode")
             print("Both counts and effective length provided.")
             print("Calculating: ", args.norm)
-            quant_out = os.path.realpath(args.infile)
             eff_len_out = os.path.realpath(args.eff_len_file)
         if args.infile and not args.eff_len_file:
             print("Single species mode")
             print("Only expression values provided. ")
             print("Assuming normalized expression values (like fpkm or tpm).")
-            quant_out = os.path.realpath(args.infile)
-            eff_len_out = "NA"
+
         if not args.infile:
             print("No expression data provided. Please set Either --infile or --infile AND --eff_len_file")
             sys.exit(1)
 
-        proc=subprocess.call(['Rscript',
-                               r_script_path,
-                               quant_out,
-                               meta_out,
-                               os.path.realpath(args.out_dir),
-                               eff_len_out,
-                               dist_method,
-                               str(mr_cut),
-                               '0',
-                               str(intermediate),
-                               tissues,
-                               str(args.norm),
-                               os.path.realpath(updated_metadata_dir)])
+        subprocess.call(['Rscript',
+                         r_script_path,
+                         quant_out,
+                         meta_out,
+                         os.path.realpath(args.out_dir),
+                         eff_len_out,
+                         dist_method,
+                         str(mr_cut),
+                         '0',
+                         str(intermediate),
+                         curate_group,
+                         str(args.norm),
+                         os.path.realpath(updated_metadata_dir)])
     # if multiple species mode active
     if args.batch is not None:
 
@@ -99,7 +101,7 @@ def curate_main(args):
             print("Only expression values provided.")
             print("Assuming normalized expression values (like log-fpkm or log-tpm).")
             quant_dir = os.path.realpath(args.infile_dir)
-            eff_len_dir = "NA"
+
             if not os.path.isdir(quant_dir):
                 print(quant_dir, " is no directory")
                 sys.exit(1)
@@ -108,8 +110,7 @@ def curate_main(args):
             print("No expression data provided. Please set Either --infile_dir or --infile_dir AND --eff_len_file_dir")
             sys.exit(1)
 
-
-        #print("Trying to identify species in raw count directory ", quant_dir, " :")
+        # print("Trying to identify species in raw count directory ", quant_dir, " :")
         for f in count_files:
             split_fn = f.split("_")
             species = split_fn[0] + " " + split_fn[1]
@@ -122,10 +123,14 @@ def curate_main(args):
                 len_file = len_file[0]
             if len(count_file) > 1:
                 count_file = len_file[0]
-            export_string=" --export=QUANT=" + os.path.realpath(str(count_file)) + ",META=" + os.path.realpath(meta_out) + ",WORK=" + os.path.realpath(args.out_dir) + ",LEN=" + os.path.realpath(str(len_file)) + ",DIST=" + dist_method + ",CUT=" + str(mr_cut) + ",INTER=" + str(intermediate) + ",TISSUES=" +f'"{tissues}"' + " " + batch_script_path + ",NORM=" +str(args.norm)
-            #print(export_string)
+            export_string = " --export=QUANT=" + os.path.realpath(str(count_file)) + ",META=" + os.path.realpath(
+                meta_out) + ",WORK=" + os.path.realpath(args.out_dir) + ",LEN=" + os.path.realpath(
+                str(len_file)) + ",DIST=" + dist_method + ",CUT=" + str(mr_cut) + ",INTER=" + str(
+                intermediate) + ",CURATE_GROUP=" + f'"{curate_group}"' + " " + batch_script_path + ",NORM=" + str(
+                args.norm)
+            # print(export_string)
 
-            submit_command = ("sbatch " + "--job-name=" + sp +export_string)
+            submit_command = ("sbatch " + "--job-name=" + sp + export_string)
 
             print(submit_command)  # Uncomment this line when done testing to use the submit command created
             # uncomment the following 3 lines when done testing to submit the jobs
