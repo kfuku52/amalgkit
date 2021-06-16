@@ -21,6 +21,10 @@ def merge_main(args):
               "the --metadata option, but not done yet. Use --metadata for now.")
 
     for sp in spp:
+        if not os.path.exists(os.path.join(merge_dir, sp)):
+            os.makedirs(os.path.join(os.path.join(merge_dir, sp)))
+            merge_species_dir = os.path.join(os.path.join(merge_dir, sp))
+
         print('processing: {}'.format(sp), flush=True)
         sp_filled = sp.replace(' ', '_')
         is_sp = (metadata.df.loc[:,'scientific_name']==sp)
@@ -37,6 +41,8 @@ def merge_main(args):
             else:
                 print('quant outfile not found:', quant_out_path)
         print('{:,} quant outfiles were detected.'.format(len(quant_out_paths)))
+        if len(quant_out_paths) == 0:
+            continue
         for col in ['eff_length','est_counts','tpm']:
             out = pandas.read_csv(quant_out_paths[0], header=0, sep='\t').loc[:,['target_id',]]
             values = [ pandas.read_csv(p, header=0, sep='\t').loc[:,[col,]] for p in quant_out_paths ]
@@ -44,6 +50,6 @@ def merge_main(args):
                 value.columns = [sra_id,]
             out = pandas.concat([out,]+values, axis=1, ignore_index=False, sort=False)
             outfile_name = sp_filled+'_'+col+'.tsv'
-            outfile = os.path.join(merge_dir, outfile_name)
+            outfile = os.path.join(merge_species_dir, outfile_name)
             print('Writing output file:', outfile)
             out.to_csv(outfile, sep='\t', index=False)
