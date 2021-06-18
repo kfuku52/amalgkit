@@ -219,13 +219,25 @@ def download_sra(metadata, sra_stat, args, work_dir, overwrite=False):
                 urllib.request.urlretrieve(str(sra_source), os.path.join(work_dir, (str(sra_id + '.sra'))))
                 dl_status = 'success'
             except urllib.error.URLError:
+                print("ERROR: urllib.request did not work. Trying wget")
+                try:
+                    import wget
+                    wget.download(str(sra_source), os.path.join(work_dir, (str(sra_id + '.sra'))))
+                except ModuleNotFoundError:
+                    print("ERROR: Could not find wget")
+                except urllib.error.URLError:
+                    print(
+                        "ERROR: Could not download from " + sra_source + ". This service may not be publicly available in your country.")
+                    dl_status = 'failed'
+                    continue
+
                 print(
-                    "ERROR: Could not download via " + sra_source + ". This service may not be publicly available in your country.")
+                    "ERROR: Could not download from " + sra_source + ". This service may not be publicly available in your country.")
                 dl_status = 'failed'
                 continue
 
         if dl_status == 'failed':
-            print("All sources exhausted, trying prefetch.")
+            print("Exhausted all Sources, trying prefetch.")
         else:
             print("done!")
             assert os.path.exists(sra_path), 'SRA file download failed: ' + sra_stat['sra_id']
