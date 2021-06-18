@@ -201,7 +201,6 @@ def download_sra(metadata, sra_stat, args, work_dir, overwrite=False):
             sra_source_list.append(metadata.df.loc[metadata.df['run'] == sra_id]['GCP_Link'].values[0])
 
         if args.aws:
-            print("test")
             source.append('AWS')
             sra_source_list.append(metadata.df.loc[metadata.df['run'] == sra_id]['AWS_Link'].values[0])
 
