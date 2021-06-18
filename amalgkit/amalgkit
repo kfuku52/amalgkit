@@ -173,14 +173,11 @@ pge.add_argument('--sci_name', metavar='STR', default=None, type=str, required=F
 pge.add_argument('--ncbi', metavar='yes|no', default='no', type=str, required=False, action='store',
                  choices=['yes', 'no'],
                  help='default=%(default)s: Download SRA files using wget from NCBI cloud, if available.')
-pge.add_argument('--aws', metavar='yes|no', default='no', type=str, required=False, action='store',
-                 choices=['yes', 'no'],
+pge.add_argument('--aws', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
                  help='default=%(default)s: Download SRA files from Amazon Cloud (AWS), if available.')
-pge.add_argument('--gcp', metavar='yes|no', default='no', type=str, required=False, action='store',
-                 choices=['yes', 'no'],
+pge.add_argument('--gcp', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
                  help='default=%(default)s: Download SRA files from Google Cloud (GCP), if available.')
-pge.add_argument('--ascp', metavar='yes|no', default='no', type=str, required=False, action='store',
-                 choices=['yes', 'no'],
+pge.add_argument('--ascp', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
                  help='default=%(default)s: Download SRA files using ascp instead of http protocol.')
 pge.add_argument('--ascp_exe', metavar='PATH', default='ascp', type=str, required=False, action='store',
                  help='default=%(default)s: PATH to ascp executable.')
