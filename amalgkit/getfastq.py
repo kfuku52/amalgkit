@@ -196,15 +196,16 @@ def download_sra(metadata, sra_stat, args, work_dir, overwrite=False):
         sra_source_list = []
         sra_id = sra_stat['sra_id']
 
-        if args.gcp == 'yes':
+        if args.gcp:
             source.append('GCP')
             sra_source_list.append(metadata.df.loc[metadata.df['run'] == sra_id]['GCP_Link'].values[0])
 
-        if args.aws == 'yes':
+        if args.aws:
+            print("test")
             source.append('AWS')
             sra_source_list.append(metadata.df.loc[metadata.df['run'] == sra_id]['AWS_Link'].values[0])
 
-        if args.ncbi == 'yes':
+        if args.ncbi:
             source.append('NCBI')
             sra_source_list.append(metadata.df.loc[metadata.df['run'] == sra_id]['NCBI_Link'].values[0])
 
