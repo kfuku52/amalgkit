@@ -3,6 +3,8 @@ from urllib.error import HTTPError
 import itertools
 import numpy
 import time, lxml, subprocess, os, shutil, gzip, glob, sys, re
+import urllib.request
+
 from amalgkit.util import *
 
 def getfastq_search_term(ncbi_id, additional_search_term=None):
@@ -166,7 +168,7 @@ def remove_intermediate_files(sra_stat, ext, work_dir):
         else:
             print('Tried to delete but file not found:', file_path)
 
-def download_sra(sra_stat, args, work_dir, overwrite=False):
+def download_sra(metadata, sra_stat, args, work_dir, overwrite=False):
     sra_path = os.path.join(work_dir, sra_stat['sra_id']+'.sra')
     individual_sra_tmp_dir = os.path.join(work_dir, sra_stat['sra_id']+'/')
 
@@ -178,6 +180,38 @@ def download_sra(sra_stat, args, work_dir, overwrite=False):
             os.remove(sra_path)
     else:
         print('Previously-downloaded sra file was not detected. New sra file will be downloaded.')
+
+
+
+    if((args.aws == 'yes') or (args.ncbi == 'yes') or (args.gcp == 'yes')):
+        source = []
+        if (args.aws == 'yes'):
+            source.append('AWS')
+            sra_id = sra_stat['sra_id']
+            sra_source = metadata.df.loc[metadata.df['run'] == sra_id]['AWS_Link'].values[0]
+        elif (args.ncbi == 'yes'):
+            source.append('NCBI')
+            sra_id = sra_stat['sra_id']
+            sra_source = metadata.df.loc[metadata.df['run'] == sra_id]['NCBI_Link'].values[0]
+        elif (args.gcp == 'yes'):
+            source.append('GCP')
+            sra_id = sra_stat['sra_id']
+            sra_source = metadata.df.loc[metadata.df['run'] == sra_id]['GCP_Link'].values[0]
+
+        if len(source) > 1:
+            print("you have set more than 1 direct download sources to 'yes'. Will try only one.")
+
+        source = source[0]
+        print("fetching ", sra_id, "from ", sra_source)
+        try:
+            urllib.request.urlretrieve(str(sra_source), os.path.join(work_dir, (str(sra_id + '.sra'))))
+        except urllib.error.URLError:
+            print("ERROR: Could not download via " + source + ". This service may not be publicly available in your country.")
+            sys.exit()
+        print("done!")
+        assert os.path.exists(sra_path), 'SRA file download failed: ' + sra_stat['sra_id']
+        return
+
     if (args.ascp=='yes')&(not os.path.exists(sra_path)):
         print('Trying to download the SRA file using ascp.')
         sra_site = 'anonftp@ftp.ncbi.nlm.nih.gov:/sra/sra-instant/reads/ByRun/sra/'+sra_stat['sra_id'][0:3]+'/'+sra_stat['sra_id'][0:6]+'/'+sra_stat['sra_id']+'/'+sra_stat['sra_id']+'.sra'
@@ -599,7 +633,7 @@ def getfastq_main(args):
         print('Number of reads:', "{:,}".format(sra_stat['total_spot']))
         print('Single/Paired read length:', sra_stat['spot_length'], 'bp')
         print('Total bases:', "{:,}".format(int(metadata.df.loc[i,'total_bases'])), 'bp')
-        download_sra(sra_stat, args, output_dir, overwrite=False)
+        download_sra(metadata, sra_stat, args, output_dir, overwrite=False)
         start,end = get_range(sra_stat, offset, total_sra_bp, max_bp)
         seq_summary = sequence_extraction(args, sra_stat, start, end, output_dir, seq_summary,
                                           gz_exe, ungz_exe, total_sra_bp)
