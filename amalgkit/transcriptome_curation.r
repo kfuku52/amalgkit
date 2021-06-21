@@ -12,14 +12,13 @@ library(amap, quietly = TRUE)
 library(pvclust, quietly = TRUE)
 library(Rtsne, quietly = TRUE)
 
-
 debug_mode = ifelse(length(commandArgs(trailingOnly = TRUE)) == 1, "debug", "batch")
 
 log_prefix = "transcriptome_curation.r:"
 cat(log_prefix, "mode =", debug_mode, "\n")
 if (debug_mode == "debug") {
-    infile = '/Users/s229181/Desktop/projects/curate/merge_dir/Amaranthus_hypochondriacus/merge/Amaranthus_hypochondriacus_est_counts.tsv'
-    eff_file = '/Users/s229181/Desktop/projects/curate/merge_dir/Amaranthus_hypochondriacus/merge/Amaranthus_hypochondriacus_eff_length.tsv'
+    infile = '/Users/s229181/MSN/cstmm/cross_species_tmm_normalized_counts/Zea_mays_cstmm_counts.tsv'
+    eff_file = '/Users/s229181/MSN/eff_length/Zea_mays_eff_length.tsv'
    # infile = "/Users/kf/Dropbox (Personal)/collaborators/Ken Naito/20210509_Vigna/gfe_data/cross_species_tmm_normalized_counts/Vigna_angularis_cstmm_counts.tsv"
     #eff_file = "/Users/kf/Dropbox (Personal)/collaborators/Ken Naito/20210509_Vigna/gfe_data/merge/Vigna_angularis_eff_length.tsv"
     dist_method = "pearson"
@@ -34,9 +33,9 @@ if (debug_mode == "debug") {
     # tmm norm debug
 
     tmm_norm = "yes"
-    dir_work = '/Users/s229181/Desktop/projects/curate/merge_dir/Amaranthus_hypochondriacus/curate/'
-    srafile = '/Users/s229181/Desktop/projects/curate/metadata/metadata_may2021_updated.tsv'
-    dir_updated_metadata = '/Users/s229181/Desktop/projects/curate/metadata/updated_metadata/'
+    dir_work = '/Users/s229181/MSN/'
+    srafile = '/Users/s229181/MSN/metadata/Metadata_all_2.tsv'
+    dir_updated_metadata = '/Users/s229181/MSN/metadata/updated_metadata/'
    # dir_work = "/Users/kf/Dropbox (Personal)/collaborators/Ken Naito/20210509_Vigna/gfe_data"
    # srafile = "/Users/kf/Dropbox (Personal)/collaborators/Ken Naito/20210509_Vigna/gfe_data/metadata/metadata/metadata_manual.tsv"
 
@@ -698,7 +697,7 @@ update_metadata = function(sra, dir_updated_metadata) {
   file_pattern<-paste(not_excluded_SRR, collapse ='|')
   files <- list.files(path = dir_updated_metadata, pattern = file_pattern, full.names = T)
   cat("Number of SRA row files in", dir_updated_metadata, ':', length(files), '\n')
-  updated_metadata <- lapply(files, read.table, sep="\t", header=T)
+  updated_metadata <- lapply(files, read.table, sep="\t", header=T, fill = TRUE)
   names(updated_metadata) <- list.files(path = dir_updated_metadata, pattern = file_pattern, full.names = F)
   names(updated_metadata) <- gsub(".tsv", "", names(updated_metadata), fixed = TRUE)
   names(updated_metadata) <- gsub("metadata_", "", names(updated_metadata), fixed = TRUE)
@@ -779,7 +778,7 @@ write.table(tc_tissue_uncorrected, file = file_name,
 round = 0
 sva_out = NULL
 tc_sva = NULL
-save_plot(log(tc + 1), sra, NULL, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".original"),
+save_plot(tc, sra, NULL, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".original"),
           selected_tissues, fontsize)
 out = sva_subtraction(tc, sra)
 tc_sva = out[["tc"]]

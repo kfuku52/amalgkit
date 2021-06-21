@@ -82,6 +82,14 @@ def command_sanity(args):
     print('Time elapsed: {:,} sec'.format(int(time.time() - start)))
     sys.stdout.write('amalgkit sanity: end\n')
 
+def command_csca(args):
+    sys.stdout.write('amalgkit csca: start\n')
+    start = time.time()
+    from amalgkit.csca import csca_main
+    csca_main(args)
+    print('Time elapsed: {:,} sec'.format(int(time.time() - start)))
+    sys.stdout.write('amalgkit csca: end\n')
+
 
 def command_help(args):
     print(parser.parse_args([args.command, '--help']))
@@ -239,6 +247,31 @@ pcs.add_argument('--ortho', metavar='PATH', default='./', type=str, required=Tru
 pcs.add_argument('--count', metavar='PATH', default='./', type=str, required=True, action='store',
                  help='default=%(default)s: Folder path to where count data is stored.')
 pcs.set_defaults(handler=command_cstmm)
+
+# Sub parser: csca
+pca = subparsers.add_parser('csca', help='see `amalgkit cstmm -h`')
+pca.add_argument('-w','--out_dir', metavar='PATH', default='./', type=str, required=False, action='store',
+                 help='default=%(default)s: output directory.')
+pca.add_argument('--dir_uncorrected_curate_group_mean', metavar='PATH', default='inferred', type=str, required=False, action='store',
+                 help='default=%(default)s: In an unaltered amalgkit curate output, this would be curate/tables/. If left at default "inferred" this value will be set to out_dir/curate/tables/')
+pca.add_argument('--dir_curate_group_mean', metavar='PATH', default='inferred', type=str, required=False, action='store',
+                 help='default=%(default)s: In an unaltered amalgkit curate output, this would be curate/tables/. If left at default "inferred" this value will be set to out_dir/curate/tables/')
+pca.add_argument('--dir_sra', metavar='PATH', default='inferred', type=str, required=False, action='store',
+                 help='default=%(default)s: In an unaltered amalgkit curate output, this would be curate/tables/. If left at default "inferred" this value will be set to out_dir/curate/tables/')
+pca.add_argument('--dir_tc', metavar='PATH', default='inferred', type=str, required=False, action='store',
+                 help='default=%(default)s: In an unaltered amalgkit curate output, this would be curate/tables/. If left at default "inferred" this value will be set to out_dir/curate/tables/')
+pca.add_argument('--file_singlecopy', metavar='PATH', default=None, type=str, required=True, action='store',
+                 help='default=%(default)s: ')
+pca.add_argument('--file_orthogroup', metavar='PATH', default=None, type=str, required=True, action='store',
+                 help='default=%(default)s: ')
+pca.add_argument('--file_species_tree', metavar='PATH', default=None, type=str, required=True, action='store',
+                 help='default=%(default)s: ')
+pca.add_argument('--curate_group', metavar='STR', default=None, type=str, required=False, action='store',
+                 help='default=%(default)s: "comma separated list of primary condition or tissue used in curate analysis.'
+                      'Example input may look like "root,flower,leaf" or "heat stressed,cold stressed,light stressed".'
+                      'Please refer to your amalgkit curate outputs.')
+
+pca.set_defaults(handler=command_csca)
 
 # Sub parser: curate
 pcu = subparsers.add_parser('curate', help='see `amalgkit curate -h`')
