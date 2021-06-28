@@ -1,10 +1,20 @@
 import glob, subprocess,sys, numpy
 from amalgkit.util import *
 
-def is_quant_output_present(sra_id, output_dir):
+def check_quant_output(sra_id, output_dir, args):
     out_path = os.path.join(output_dir, sra_id+'_abundance.tsv')
     is_output_present = os.path.exists(out_path)
-    return is_output_present
+    if is_output_present:
+        print('Output file detected: {}'.format(out_path))
+        if (args.redo=='yes'):
+            print('Continued. The output will be overwritten. Set "--redo no" to exit.')
+            return None
+        else:
+            print('Exiting. Set "--redo yes" to overwrite.')
+            sys.exit()
+    else:
+        print('Output file was not detected: {}'.format(out_path))
+        return None
 
 def call_kallisto(args,in_files,metadata,sra_id, output_dir, index):
 
@@ -27,8 +37,9 @@ def call_kallisto(args,in_files,metadata,sra_id, output_dir, index):
             fragment_sd = nominal_length / 10
             print("fragment length standard deviation set to:", fragment_sd)
 
-            kallisto_out = subprocess.run(["kallisto", "quant", "--threads", str(args.threads), "--index",
-                                           index, "-o", output_dir, "--single", "-l", str(nominal_length), "-s", str(fragment_sd), in_files[0]])
+            kallist_cmd = ["kallisto", "quant", "--threads", str(args.threads), "--index", index, "-o", output_dir,
+                           "--single", "-l", str(nominal_length), "-s", str(fragment_sd), in_files[0]]
+            kallisto_out = subprocess.run(kallist_cmd)
         else:
             raise ValueError("Library layout: ",lib_layout," and expected 1 input file. Received ",len(in_files)," input file[s]. Please check your inputs and metadata.")
     elif lib_layout == 'paired':
@@ -67,25 +78,21 @@ def quant_main(args):
             sra_id = metadata.df.loc[:,'run'].values[0]
         else:
             sra_id = args.id
-    print('SRA ID:', sra_id)
+    print('SRA Run ID: {}'.format(sra_id))
 
     index = args.index
-
-    # prefer amalgkit processed files over others.
-
-    sra_stat = get_sra_stat(sra_id, metadata, num_bp_per_sra=None)
-    output_dir_getfastq = os.path.join(args.out_dir, 'getfastq', sra_id)
-    ext = get_newest_intermediate_file_extension(sra_stat, work_dir=output_dir_getfastq)
-    in_files = glob.glob(os.path.join(args.out_dir, 'getfastq', sra_id, sra_id + "*" + ext))
 
     # make results directory, if not already there
     output_dir = os.path.join(args.out_dir, 'quant', sra_id)
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
 
-    if (is_quant_output_present(sra_id, output_dir))&(args.redo=='no'):
-        print('Output file(s) detected. Exiting. Set "--redo yes" for reanalysis.')
-        sys.exit()
+    check_quant_output(sra_id, output_dir, args)
+
+    sra_stat = get_sra_stat(sra_id, metadata, num_bp_per_sra=None)
+    output_dir_getfastq = os.path.join(args.out_dir, 'getfastq', sra_id)
+    ext = get_newest_intermediate_file_extension(sra_stat, work_dir=output_dir_getfastq)
+    in_files = glob.glob(os.path.join(args.out_dir, 'getfastq', sra_id, sra_id + "*" + ext))
 
     # start quantification process.
     # throws exception, if in_files still empty.
