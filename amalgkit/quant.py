@@ -18,13 +18,13 @@ def check_quant_output(sra_id, output_dir, args):
 
 def call_kallisto(args,in_files,metadata,sra_id, output_dir, index):
 
-    lib_layout = metadata.df.loc[(metadata.df['run'] == sra_id), 'lib_layout']
+    lib_layout = metadata.df.loc[(metadata.df.loc[:,'run'] == sra_id), 'lib_layout']
     lib_layout = lib_layout.iloc[0]
     print(lib_layout)
     if lib_layout == 'single':
         print("single end reads detected. Proceeding in single mode")
         if len(in_files) == 1:
-            nominal_length = metadata.df['nominal_length'][0]
+            nominal_length = metadata.df.loc[:,'nominal_length'].values[0]
             # set nominal length to 200 if below 200 ...
             if nominal_length:
                 if nominal_length < 200 or numpy.isnan(nominal_length):
@@ -41,14 +41,18 @@ def call_kallisto(args,in_files,metadata,sra_id, output_dir, index):
                            "--single", "-l", str(nominal_length), "-s", str(fragment_sd), in_files[0]]
             kallisto_out = subprocess.run(kallist_cmd)
         else:
-            raise ValueError("Library layout: ",lib_layout," and expected 1 input file. Received ",len(in_files)," input file[s]. Please check your inputs and metadata.")
+            txt = "Library layout: {} and expected 1 input file. " \
+                  "Received {} input file[s]. Please check your inputs and metadata."
+            raise ValueError(txt.format(lib_layout, len(in_files)))
     elif lib_layout == 'paired':
         if len(in_files) == 2:
             print("paired end reads detected. Running in paired read mode.")
             kallisto_out = subprocess.run( ["kallisto", "quant", "--threads", str(args.threads), "-i", index, "-o",
-                                            output_dir, in_files[0],in_files[1]])
+                                            output_dir, in_files[0], in_files[1]])
         else:
-            raise ValueError("Library layout: ",lib_layout," and expected 2 input files. Received ",len(in_files)," input file[s]. Please check your inputs and metadata.")
+            txt = "Library layout: {} and expected 2 input files. " \
+                  "Received {} input file[s]. Please check your inputs and metadata."
+            raise ValueError(txt.format(lib_layout, len(in_files)))
 
     # TODO: Switch to try/except for error handling
     assert (kallisto_out.returncode == 0), "kallisto did not finish safely: {}".format(kallisto_out.stdout.decode('utf8'))
