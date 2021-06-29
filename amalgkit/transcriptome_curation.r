@@ -13,18 +13,17 @@ library(pvclust, quietly = TRUE)
 library(Rtsne, quietly = TRUE)
 
 debug_mode = ifelse(length(commandArgs(trailingOnly = TRUE)) == 1, "debug", "batch")
-
 log_prefix = "transcriptome_curation.r:"
 cat(log_prefix, "mode =", debug_mode, "\n")
 if (debug_mode == "debug") {
-    infile = '/Users/s229181/MSN/cstmm/cross_species_tmm_normalized_counts/Zea_mays_cstmm_counts.tsv'
-    eff_file = '/Users/s229181/MSN/eff_length/Zea_mays_eff_length.tsv'
+    infile = '/Users/s229181/MSN/cstmm/cross_species_tmm_normalized_counts/Helianthus_annuus_cstmm_counts.tsv'
+    eff_file = '/Users/s229181/MSN/eff_length/Helianthus_annuus_eff_length.tsv'
    # infile = "/Users/kf/Dropbox (Personal)/collaborators/Ken Naito/20210509_Vigna/gfe_data/cross_species_tmm_normalized_counts/Vigna_angularis_cstmm_counts.tsv"
     #eff_file = "/Users/kf/Dropbox (Personal)/collaborators/Ken Naito/20210509_Vigna/gfe_data/merge/Vigna_angularis_eff_length.tsv"
     dist_method = "pearson"
-    mapping_rate_cutoff = 0.2
+    mapping_rate_cutoff = 0
     min_dif = 0
-    plot_intermediate = 1
+    plot_intermediate = 0
     selected_tissues = c("root", "flower", "leaf")
     dir_count = "counts/"
     dir_eff_length = "eff_length/"
@@ -34,13 +33,12 @@ if (debug_mode == "debug") {
 
     tmm_norm = "yes"
     dir_work = '/Users/s229181/MSN/'
-    srafile = '/Users/s229181/MSN/metadata/Metadata_all_2.tsv'
+    srafile = '/Users/s229181/MSN/metadata/metadata_may2021_updated.tsv'
     dir_updated_metadata = '/Users/s229181/MSN/metadata/updated_metadata/'
    # dir_work = "/Users/kf/Dropbox (Personal)/collaborators/Ken Naito/20210509_Vigna/gfe_data"
    # srafile = "/Users/kf/Dropbox (Personal)/collaborators/Ken Naito/20210509_Vigna/gfe_data/metadata/metadata/metadata_manual.tsv"
 
     dist_method = "pearson"
-    mapping_rate_cutoff = 0.2
     min_dif = 0
     plot_intermediate = 1
     selected_tissues = c("root", "flower", "leaf")
@@ -61,6 +59,8 @@ if (debug_mode == "debug") {
     selected_tissues = strsplit(args[9], "\\|")[[1]]
     transform_method = args[10]
     dir_updated_metadata = args[11]
+    one_outlier_per_iteration = args[12]
+    
 
 }
 if (!endsWith(dir_work, "/")) {
@@ -251,10 +251,11 @@ check_mapping_rate = function(tc, sra, mapping_rate_cutoff) {
     return(list(tc = tc, sra = sra))
 }
 
-check_within_tissue_correlation = function(tc, sra, dist_method, min_dif, selected_tissues) {
+check_within_tissue_correlation = function(tc, sra, dist_method, min_dif, selected_tissues, one_out_per_iter = TRUE) {
     out = tc_sra_intersect(tc, sra)
     tc = out[["tc"]]
     sra2 = out[["sra"]]
+    
     sra2$num_other_run_same_bp_tissue = 0
     selected_tissues = selected_tissues[selected_tissues %in% unique(sra2$tissue)]
     num_tissue = length(selected_tissues)
@@ -268,39 +269,73 @@ check_within_tissue_correlation = function(tc, sra, dist_method, min_dif, select
         num_other_run_same_bp_tissue = length(unique(sra2[(sra2$bioproject != my_bioproject) & (sra2$tissue ==
           my_tissue), "bioproject"]))
         sra2[(sra2$run == sra_run), "num_other_run_same_bp_tissue"] = num_other_run_same_bp_tissue
-        if (length(unique(sra2[sra2$bioproject %in% colnames(tc_other_bp), "tissue"])) == num_tissue) {
-            tc_ave = tissue_mean(tc_other_bp, sra2, selected_tissues)
-        } else {
-            tc_ave = tissue_mean(tc, sra2, selected_tissues)
+        sra2_run_other_bp <- sra2[sra2$run %in% run_other_bp,]
+        
+        # If one tissue is completely sourced from the same bioproject, we can't remove the whole bioproject for tc_ave_other_bp
+        if (length(unique(sra2_run_other_bp[sra2_run_other_bp$tissue == my_tissue])) > 0) {
+            tc_ave_other_bp = tissue_mean(tc_other_bp, sra2, selected_tissues)
         }
+        else {
+            tc_ave_other_bp = tissue_mean(tc, sra2, selected_tissues)
+        }
+        tc_ave = tissue_mean(tc, sra2, selected_tissues)
         coef = c()
+        coef_other_bp = c()
         for (tissue in selected_tissues) {
             tmp_coef = cor(tc[, sra_run], tc_ave[, tissue], method = dist_method)
+            if (length(unique(sra2_run_other_bp[sra2_run_other_bp$tissue == my_tissue])) == 0 & tissue == my_tissue) {
+              tmp_coef_other_bp = cor(tc[, sra_run], tc_ave[, tissue], method = dist_method)
+            }
+            else{
+              tmp_coef_other_bp = cor(tc[, sra_run], tc_ave_other_bp[, tissue], method = dist_method)
+            }
+            
             if (tissue == my_tissue) {
                 tmp_coef = tmp_coef - min_dif
+                tmp_coef_other_bp = tmp_coef_other_bp - min_dif
+
             }
             coef = c(coef, tmp_coef)
+            coef_other_bp = c(coef_other_bp, tmp_coef_other_bp)
         }
         names(coef) = selected_tissues
-        if (max(coef) != coef[my_tissue]) {
+        names(coef_other_bp) = selected_tissues
+        if (max(coef) != coef[my_tissue] | coef_other_bp[my_tissue] < 0.2) {
             exclude_runs = c(exclude_runs, sra_run)
         }
     }
     if (length(exclude_runs)) {
+      if(one_out_per_iter == TRUE){
+          cat("Excluding only one outlier per bioproject or same tissue. \n")
+          exclude_run_bps_and_tissue = sra2[(sra2$run %in% exclude_runs), c("bioproject", "run", "tissue")]
+          first_bp_hit = exclude_run_bps_and_tissue[match(unique(exclude_run_bps_and_tissue$bioproject), exclude_run_bps_and_tissue$bioproject),]
+          first_same_tissue_hit = exclude_run_bps_and_tissue[match(unique(exclude_run_bps_and_tissue$tissue), exclude_run_bps_and_tissue$tissue),]
+          # if a first_same_tissue_hit is part of the same bioproject as the other removal candidates, ommit the same tissue candidates
+          if(any(first_same_tissue_hit$bioproject %in% first_bp_hit$bioproject)){
+            exclude_runs_tmp = c(first_bp_hit$run,first_same_tissue_hit[!first_same_tissue_hit$bioproject %in% first_bp_hit$bioproject]$run)
+          }else{
+            exclude_runs_tmp = c(first_bp_hit$run,first_same_tissue_hit$run)
+          }
+          exclude_runs = unique(exclude_runs_tmp)
+          exclude_bps = exclude_run_bps_and_tissue[exclude_run_bps_and_tissue$run %in% exclude_runs, "bioproject"]
+      }
+      else{
         exclude_run_bps = sra2[(sra2$run %in% exclude_runs), c("bioproject", "run", "num_other_run_same_bp_tissue")]
         exclude_bp_counts = data.frame(table(exclude_run_bps$bioproject))
         exclude_run_bps = merge(exclude_run_bps, exclude_bp_counts, by.x = "bioproject", by.y = "Var1")
         exclude_run_bps = exclude_run_bps[order(exclude_run_bps$num_other_run_same_bp_tissue, exclude_run_bps$Freq),
-        ]
+                                          ]
         rownames(exclude_run_bps) = 1:nrow(exclude_run_bps)
         min_other_run_same_bp_tissue = exclude_run_bps[1, "num_other_run_same_bp_tissue"]
         semimin_bp_count = exclude_run_bps[1, "Freq"]
         cat("minimum number of other BioProjects within tissue:", min_other_run_same_bp_tissue, "\n")
         cat("semi-minimum count of exclusion-candidate BioProjects:", semimin_bp_count, "\n")
         conditions = (exclude_run_bps$Freq == semimin_bp_count) & (exclude_run_bps$num_other_run_same_bp_tissue ==
-          min_other_run_same_bp_tissue)
+                                                                     min_other_run_same_bp_tissue)
         exclude_bps = unique(exclude_run_bps[conditions, "bioproject"])
         exclude_runs = exclude_run_bps[(exclude_run_bps$bioproject %in% exclude_bps), "run"]
+      }
+        
     }
     if (length(exclude_runs)) {
         cat("Partially removed BioProjects due to low within-tissue correlation:\n")
@@ -557,13 +592,13 @@ draw_tau_histogram = function(tc, sra, selected_tissues, fontsize = 7) {
     text(0, max(hist_out$counts) * 0.85, text_noexp, pos = 4)
 }
 
-draw_exp_level_histogram = function(tc, sra, selected_tissues, fontsize = 7) {
+draw_exp_level_histogram = function(tc, sra, selected_tissues, fontsize = 7, transform_method) {
     tc_tissue = tissue_mean(tc, sra, selected_tissues)
     xmax = apply(tc_tissue, 1, max)
     xmax[xmax < 0] = 0
     xmax[xmax > 15] = 15
     breaks = seq(0, 15, 1)
-    hist_out = hist(xmax, breaks = breaks, las = 1, xlab = "Max expression (log TPM+1)", ylab = "Gene count",
+    hist_out = hist(xmax, breaks = breaks, las = 1, xlab = paste0("Max expression (log ",transform_method,"+1)"), ylab = "Gene count",
                     main = "", col = "gray")
 }
 
@@ -586,7 +621,7 @@ draw_legend = function(sra, new = TRUE, pos = "center", fontsize = 7, nlabel.in.
            text.font = legend_font, ncol = ncol, bty = "n")
 }
 
-save_plot = function(tc, sra, sva_out, dist_method, file, selected_tissues, fontsize = 7) {
+save_plot = function(tc, sra, sva_out, dist_method, file, selected_tissues, fontsize = 7, transform_method) {
     out = tc_sra_intersect(tc, sra)
     tc = out[["tc"]]
     sra = out[["sra"]]
@@ -621,7 +656,7 @@ save_plot = function(tc, sra, sva_out, dist_method, file, selected_tissues, font
     par(mar = c(4, 5, 0.1, 1))
     draw_boxplot(sra, tc_dist_matrix, fontsize)
     par(mar = c(4, 4, 1, 1))
-    draw_exp_level_histogram(tc, sra, selected_tissues, fontsize)
+    draw_exp_level_histogram(tc, sra, selected_tissues, fontsize, transform_method)
     par(mar = c(4, 4, 1, 1))
     draw_tau_histogram(tc, sra, selected_tissues, fontsize)
     par(mar = rep(0.1, 4))
@@ -730,6 +765,7 @@ for (col in c('instrument','bioproject')) {
 }
 
 tc <- read.table(infile, sep = "\t", stringsAsFactors = FALSE, header = TRUE, quote = "", fill = FALSE, row.names = 1, check.names=FALSE)
+
 tc_eff_length <- read.table(eff_file, sep = "\t", stringsAsFactors = FALSE, header = TRUE, quote = "", fill = FALSE, check.names=FALSE)
 # row.names(tc)<-tc[,1] tc <- tc[,-1]
 
@@ -750,6 +786,7 @@ is_not_excluded = (sra$exclusion=='no')
 cat('Number of non-excluded SRA runs (exclusion=="no"):', sum(is_not_excluded), '\n')
 tc = tc[,sra[is_not_excluded,'run']]
 out = sort_tc_and_sra(tc, sra) ; tc = out[["tc"]] ; sra = out[["sra"]]
+
 sra = update_metadata(sra, dir_updated_metadata)
 sra = get_mapping_rate(tc,sra)
 
@@ -765,10 +802,11 @@ if (transform_method == "tpm") {
     tc <- log(tc + 1)
 }
 
+
 file_name = paste0(dir_tsv,'/',sub(" ", "_", scientific_name), ".uncorrected.tc.tsv")
 write.table(tc, file = file_name,
             sep = "\t", row.names = TRUE, col.names = TRUE, quote = FALSE)
-
+tc_uncorrected = tc
 tc_tissue_uncorrected = tissue_mean(tc, sra, selected_tissues)
 file_name = paste0(dir_tsv,'/',sub(" ", "_", scientific_name), ".uncorrected.tissue.mean.tsv")
 write.table(tc_tissue_uncorrected, file = file_name,
@@ -779,13 +817,13 @@ round = 0
 sva_out = NULL
 tc_sva = NULL
 save_plot(tc, sra, NULL, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".original"),
-          selected_tissues, fontsize)
+          selected_tissues, fontsize, transform_method)
 out = sva_subtraction(tc, sra)
 tc_sva = out[["tc"]]
 sva_out = out[["sva"]]
 save(sva_out, file = paste0(dir_rdata,'/', sub(" ", "_", scientific_name), ".sva.", round, ".RData"))
 save_plot(tc_sva, sra, sva_out, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".original.sva"),
-          selected_tissues, fontsize)
+          selected_tissues, fontsize, transform_method)
 
 round = 1
 sva_out = NULL
@@ -795,13 +833,13 @@ tc = out[["tc"]]
 sra = out[["sra"]]
 tc = tc[, sra[sra$exclusion == "no", "run"]]
 save_plot(tc, sra, NULL, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".mapping_cutoff"),
-          selected_tissues, fontsize)
+          selected_tissues, fontsize, transform_method)
 out = sva_subtraction(tc, sra)
 tc_sva = out[["tc"]]
 sva_out = out[["sva"]]
 save(sva_out, file = paste0(dir_rdata,'/',sub(" ", "_", scientific_name), ".sva.", round, ".RData"))
 save_plot(tc_sva, sra, sva_out, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".mapping_cutoff.sva"),
-          selected_tissues, fontsize)
+          selected_tissues, fontsize, transform_method)
 
 round = 2
 end_flag = 0
@@ -809,7 +847,7 @@ while (end_flag == 0) {
     cat("iteratively checking within-tissue correlation, round:", round, "\n")
     tc_cwtc = NULL
     num_run_before = sum(sra$exclusion == "no")
-    out = check_within_tissue_correlation(tc, sra, dist_method, min_dif, selected_tissues)
+    out = check_within_tissue_correlation(tc, sra, dist_method, min_dif, selected_tissues, one_outlier_per_iteration)
     tc_cwtc = out[["tc"]]
     sra = out[["sra"]]
     num_run_after = sum(sra$exclusion == "no")
@@ -821,12 +859,12 @@ while (end_flag == 0) {
         sva_out = out[["sva"]]
         save(sva_out, file = paste0(dir_rdata,'/',sub(" ", "_", scientific_name), ".sva.", round, ".RData"))
         save_plot(tc_cwtc, sra, NULL, dist_method, paste0(sub(" ", "_", scientific_name), ".", round,
-                                                          ".correlation_cutoff"), selected_tissues, fontsize)
+                                                          ".correlation_cutoff"), selected_tissues, fontsize, transform_method)
         save_plot(tc_sva, sra, sva_out, dist_method, paste0(sub(" ", "_", scientific_name), ".", round,
-                                                            ".correlation_cutoff.sva"), selected_tissues, fontsize)
+                                                            ".correlation_cutoff.sva"), selected_tissues, fontsize, transform_method)
     }
-    # out = check_within_tissue_correlation(tc_sva, sra, dist_method, min_dif, selected_tissues) ; tc_sva
-    # = out[['tc']] ; sra = out[['sra']]
+    # out = check_within_tissue_correlation(tc_sva, sra, dist_method, min_dif, selected_tissues) ; tc_sva= out[['tc']] ; sra = out[['sra']]
+    
     cat("round:", round, ": # before =", num_run_before, ": # after =", num_run_after, "\n\n")
     # tc = tc[,colnames(tc_sva)]
     if (num_run_before == num_run_after) {

@@ -4,7 +4,7 @@ import re
 import subprocess
 import os
 import sys
-
+import warnings
 
 def get_curate_group(args):
     if args.curate_group is None:
@@ -33,7 +33,7 @@ def curate_main(args):
 
     dist_method = args.dist_method
     mr_cut = args.mapping_rate
-    intermediate = args.cleanup
+    intermediate = args.plot_intermediate
     curate_group = get_curate_group(args)
     curate_path = os.path.dirname(os.path.realpath(__file__))
     r_script_path = curate_path + '/transcriptome_curation.r'
@@ -42,6 +42,18 @@ def curate_main(args):
     eff_len_out = "NA"
     len_files = []
     count_files = []
+
+    # check if cstmm output is used when --norm == tpm, because TPM undoes tmm normalization
+    if args.norm == 'tpm':
+        substring = "cstmm"
+        try:
+            quant_out.index(substring)
+        except ValueError:
+            warnings.warn("WARNING: TPM NORMALIZATION AND TMM NORMALIZATION ARE INCOMPATIBLE. IF INPUT DATA IS TMM NORMALIZED, PLEASE SWITCH --norm TO 'fpkm' INSTEAD.")
+        else:
+            raise ValueError("ERROR: AMALGKIT CSTMM NORMALIZED INPUT FILES DETECTED WHILE NORMALIZATION METHOD IS 'TPM'. TMM NORMALIZATION AND TPM NORMALIZATION ARE INCOMPATIBLE! PLEASE SWITCH --norm TO 'fpkm' INSTEAD." )
+
+
     # Input checks #
     # if single species mode active
     if args.batch is None:
@@ -74,7 +86,9 @@ def curate_main(args):
                          str(intermediate),
                          curate_group,
                          str(args.norm),
-                         os.path.realpath(updated_metadata_dir)])
+                         os.path.realpath(updated_metadata_dir),
+                         str(args.one_outlier_per_iter)])
+
     # if multiple species mode active
     if args.batch is not None:
 

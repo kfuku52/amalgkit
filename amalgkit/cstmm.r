@@ -3,12 +3,12 @@ library(edgeR, quietly=TRUE)
 mode = ifelse(length(commandArgs(trailingOnly=TRUE))==1, 'debug', 'batch')
 
 if (mode=="debug") {
-  #dir_work = '/Users/s229181/MSN/'
-  #dir_ortho = paste0(dir_work, "OrthoFinder/Results_Feb09_2/Orthogroups")
-  #dir_count = paste0(dir_work, "counts/")
-  dir_work = '/Users/kef74yk/Dropbox_p/collaborators/Ken Naito/20210509_Vigna/gfe_data'
-  dir_ortho = "/Users/kef74yk/Dropbox_p/collaborators/Ken Naito/20210509_Vigna/gfe_data/Orthogroups"
-  dir_count = "/Users/kef74yk/Dropbox_p/collaborators/Ken Naito/20210509_Vigna/gfe_data/merge"
+  dir_work = '/Users/s229181/MSN/'
+  dir_ortho = paste0(dir_work, "OrthoFinder/Results_Jun22/Orthogroups")
+  dir_count = paste0(dir_work, "counts/")
+  #dir_work = '/Users/kef74yk/Dropbox_p/collaborators/Ken Naito/20210509_Vigna/gfe_data'
+  #dir_ortho = "/Users/kef74yk/Dropbox_p/collaborators/Ken Naito/20210509_Vigna/gfe_data/Orthogroups"
+  #dir_count = "/Users/kef74yk/Dropbox_p/collaborators/Ken Naito/20210509_Vigna/gfe_data/merge"
   setwd(dir_work)
 } else if (mode=="batch") {
   args = commandArgs(trailingOnly=TRUE)

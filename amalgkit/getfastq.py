@@ -243,20 +243,6 @@ def download_sra(metadata, sra_stat, args, work_dir, overwrite=False):
             assert os.path.exists(sra_path), 'SRA file download failed: ' + sra_stat['sra_id']
             return
 
-    if (args.ascp == 'yes') & (not os.path.exists(sra_path)):
-        print('Trying to download the SRA file using ascp.')
-        sra_site = 'anonftp@ftp.ncbi.nlm.nih.gov:/sra/sra-instant/reads/ByRun/sra/' + sra_stat['sra_id'][0:3] + '/' + \
-                   sra_stat['sra_id'][0:6] + '/' + sra_stat['sra_id'] + '/' + sra_stat['sra_id'] + '.sra'
-        ascp_command = [args.ascp_exe, '-v', '-i', '"' + args.ascp_key + '"', '-k', '1', '-T', '-l', '300m', sra_site,
-                        '"' + work_dir + '"']
-        print('Command:', ' '.join(ascp_command))
-        ascp_out = subprocess.run(ascp_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        # TODO: Switch to try/except for error handling
-        assert (ascp_out.returncode == 0), "ASCP did not finish safely: {}".format(ascp_out.stdout.decode('utf8'))
-        print('ascp stdout:')
-        print(ascp_out.stdout.decode('utf8'))
-        print('ascp stderr:')
-        print(ascp_out.stderr.decode('utf8'))
     if not os.path.exists(sra_path):
         print('Trying to download the SRA file using prefetch (fasp protocol).')
         if os.path.exists(individual_sra_tmp_dir):
@@ -323,9 +309,6 @@ def check_getfastq_dependency(args):
         assert (test_pfd.returncode == 0), "parallel-fastq-dump PATH cannot be found: " + args.pfd_exe
         test_prefetch = subprocess.run([args.prefetch_exe, '-h'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         assert (test_prefetch.returncode == 0), "prefetch (SRA toolkit) PATH cannot be found: " + args.prefetch_exe
-    if args.ascp == 'yes':
-        test_ascp = subprocess.run([args.ascp_exe, '--help'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        assert (test_ascp.returncode == 0), "ascp (Aspera Connect) PATH cannot be found: " + args.ascp_exe
     if args.fastp == 'yes':
         test_fp = subprocess.run([args.fastp_exe, '--help'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         assert (test_fp.returncode == 0), "fastp PATH cannot be found: " + args.fastp_exe
@@ -574,7 +557,8 @@ def dump_read_stats(args, metadata, seq_summary, output_dir, sra_id):
     if not os.path.exists(metadata_output_dir):
         os.makedirs(metadata_output_dir)
 
-    metadata.df.to_csv(os.path.join(metadata_output_dir, 'metadata_' + sra_id + '.tsv'), sep='\t', index=False)
+    metadata_updated = metadata.df.loc[:, ['scientific_name', 'tissue', 'run', 'bioproject', 'num_read_fastq_dumped','num_read_fastq_written', 'num_read_fastp_input' , 'num_read_fastp', 'num_read_unfiltered', 'spot_length', 'nominal_length']]
+    metadata_updated.to_csv(os.path.join(metadata_output_dir, 'metadata_' + sra_id + '.tsv'), sep='\t', index=False)
 
 
 def getfastq_metadata(args):

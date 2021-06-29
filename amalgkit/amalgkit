@@ -184,14 +184,6 @@ pge.add_argument('--aws', metavar='yes|no', default='no', type=strtobool, requir
                  help='default=%(default)s: Download SRA files from Amazon Cloud (AWS), if available.')
 pge.add_argument('--gcp', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
                  help='default=%(default)s: Download SRA files from Google Cloud (GCP), if available.')
-pge.add_argument('--ascp', metavar='yes|no', default='no', type=str, required=False, action='store',
-                 help='default=%(default)s: Download SRA files using ascp instead of http protocol.')
-pge.add_argument('--ascp_exe', metavar='PATH', default='ascp', type=str, required=False, action='store',
-                 help='default=%(default)s: PATH to ascp executable.')
-pge.add_argument('--ascp_key', metavar='PATH', default='', type=str, required=False, action='store',
-                 help='default=%(default)s: PATH to ascp key. See https://www.ncbi.nlm.nih.gov/books/NBK242625/')
-pge.add_argument('--ascp_option', metavar='STR', default='-v -k 1 -T -l 300m', type=str, required=False, action='store',
-                 help='default=%(default)s: ascp options.')
 pge.add_argument('--read_name', metavar='default|trinity', default='default', type=str, required=False, action='store',
                  choices=['default', 'trinity'],
                  help='default=%(default)s: read name formatting for downstream analysis.')
@@ -296,8 +288,10 @@ pcu.add_argument('--dist_method', metavar='STR', default='pearson', type=str, re
                  help='default=%(default)s: Method for calculating distance.')
 pcu.add_argument('--mapping_rate', metavar='INT', default=0.20, type=int, required=False, action='store',
                  help='default=%(default)s: cutoff for mapping rate.')
-pcu.add_argument('--cleanup', metavar='INT', default=0, type=int, required=False, action='store',
-                 help='default=%(default)s: Saves intermediate files, if 0.')
+pcu.add_argument('--plot_intermediate', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
+                 help='default=%(default)s: If yes, calculates and plots SVA correction after each iteration of outlier removal. Drastically increases computing times!')
+pcu.add_argument('--one_outlier_per_iter', metavar='yes|no', default='yes', type=strtobool, required=False, action='store',
+                 help='default=%(default)s: If yes, allows curate to remove only 1 sample per same-tissue or same-bioproject. Increases computing times!')
 pcu.add_argument('--curate_group', metavar='STR', default=None, type=str, required=False, action='store',
                  help='default=%(default)s: "comma separated list of values contained in the curate_group metadata column to be included in the analysis. '
                       'Example input may look like "root,flower,leaf" or "heat stressed,cold stressed,light stressed".')
