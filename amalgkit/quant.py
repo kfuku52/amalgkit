@@ -16,8 +16,9 @@ def check_quant_output(sra_id, output_dir, args):
         print('Output file was not detected: {}'.format(out_path))
         return None
 
-def call_kallisto(args,in_files,metadata,sra_id, output_dir, index):
-
+def call_kallisto(args ,in_files, metadata, sra_id, output_dir, index):
+    if not os.path.isdir(output_dir):
+        os.mkdir(output_dir)
     lib_layout = metadata.df.loc[(metadata.df.loc[:,'run'] == sra_id), 'lib_layout']
     lib_layout = lib_layout.iloc[0]
     print(lib_layout)
@@ -49,17 +50,16 @@ def call_kallisto(args,in_files,metadata,sra_id, output_dir, index):
         kallisto_cmd = ["kallisto", "quant", "--threads", str(args.threads), "-i", index, "-o",
                        output_dir, in_files[0], in_files[1]]
 
-    print('kallisto command: {}'.format(' '.join(kallisto_cmd)))
+    print('Command: {}'.format(' '.join(kallisto_cmd)))
     kallisto_out = subprocess.run(kallisto_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     print('kallisto stdout:')
     print(kallisto_out.stdout.decode('utf8'))
-    print('')
     print('kallisto stderr:')
     print(kallisto_out.stderr.decode('utf8'))
-    print('')
-
-    # TODO: Switch to try/except for error handling
-    assert (kallisto_out.returncode == 0), "kallisto did not finish safely."
+    if (kallisto_out.returncode != 0):
+        print("kallisto did not finish safely.")
+        if 'zero reads pseudoaligned' in kallisto_out.stderr.decode('utf8'):
+            print('No reads are mapped to the reference. This sample will be removed by `amalgkit curate`.')
 
     # move output to results with unique name
     os.rename(os.path.join(output_dir, "run_info.json"), os.path.join(output_dir, sra_id + "_run_info.json"))
