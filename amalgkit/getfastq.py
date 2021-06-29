@@ -370,8 +370,7 @@ def run_pfd(sra_stat, args, output_dir, seq_summary, start, end):
     print('Command:', ' '.join(pfd_command))
     pfd_out = subprocess.run(pfd_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     # TODO: Switch to try/except for error handling
-    assert (pfd_out.returncode == 0), "pfd did not finish safely: {}".format(
-        pfd_out.stdout.decode('utf8'))
+    assert (pfd_out.returncode == 0), "pfd did not finish safely: {}".format(pfd_out.stdout.decode('utf8'))
     if args.pfd_print == 'yes':
         print('parallel-fastq-dump stdout:')
         print(pfd_out.stdout.decode('utf8'))

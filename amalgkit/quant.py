@@ -23,39 +23,43 @@ def call_kallisto(args,in_files,metadata,sra_id, output_dir, index):
     print(lib_layout)
     if lib_layout == 'single':
         print("single end reads detected. Proceeding in single mode")
-        if len(in_files) == 1:
-            nominal_length = metadata.df.loc[:,'nominal_length'].values[0]
-            # set nominal length to 200 if below 200 ...
-            if nominal_length:
-                if nominal_length < 200 or numpy.isnan(nominal_length):
-                    nominal_length = 200
-            # ...or if undefined.
-            else:
-                print("Could not find nominal length in metadata. Assuming fragment length.")
-                nominal_length = 200
-            print("fragment length set to: ", nominal_length)
-            fragment_sd = nominal_length / 10
-            print("fragment length standard deviation set to:", fragment_sd)
-
-            kallist_cmd = ["kallisto", "quant", "--threads", str(args.threads), "--index", index, "-o", output_dir,
-                           "--single", "-l", str(nominal_length), "-s", str(fragment_sd), in_files[0]]
-            kallisto_out = subprocess.run(kallist_cmd)
-        else:
+        if len(in_files)!=1:
             txt = "Library layout: {} and expected 1 input file. " \
                   "Received {} input file[s]. Please check your inputs and metadata."
             raise ValueError(txt.format(lib_layout, len(in_files)))
-    elif lib_layout == 'paired':
-        if len(in_files) == 2:
-            print("paired end reads detected. Running in paired read mode.")
-            kallisto_out = subprocess.run( ["kallisto", "quant", "--threads", str(args.threads), "-i", index, "-o",
-                                            output_dir, in_files[0], in_files[1]])
+        nominal_length = metadata.df.loc[:,'nominal_length'].values[0]
+        if nominal_length:
+            print('Nominal length in metadata is unusually small ({}). Setting it to 200.'.format(nominal_length))
+            if nominal_length < 200 or numpy.isnan(nominal_length):
+                nominal_length = 200
         else:
+            print("Could not find nominal length in metadata. Assuming fragment length.")
+            nominal_length = 200
+        print("Fragment length set to: {}".format(nominal_length))
+        fragment_sd = nominal_length / 10
+        print("Fragment length standard deviation set to: {}".format(fragment_sd))
+        kallisto_cmd = ["kallisto", "quant", "--threads", str(args.threads), "--index", index, "-o", output_dir,
+                       "--single", "-l", str(nominal_length), "-s", str(fragment_sd), in_files[0]]
+    elif lib_layout == 'paired':
+        if len(in_files)!=2:
             txt = "Library layout: {} and expected 2 input files. " \
                   "Received {} input file[s]. Please check your inputs and metadata."
             raise ValueError(txt.format(lib_layout, len(in_files)))
+        print("paired end reads detected. Running in paired read mode.")
+        kallisto_cmd = ["kallisto", "quant", "--threads", str(args.threads), "-i", index, "-o",
+                       output_dir, in_files[0], in_files[1]]
+
+    print('kallisto command: {}'.format(' '.join(kallisto_cmd)))
+    kallisto_out = subprocess.run(kallisto_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    print('kallisto stdout:')
+    print(kallisto_out.stdout.decode('utf8'))
+    print('')
+    print('kallisto stderr:')
+    print(kallisto_out.stderr.decode('utf8'))
+    print('')
 
     # TODO: Switch to try/except for error handling
-    assert (kallisto_out.returncode == 0), "kallisto did not finish safely: {}".format(kallisto_out.stdout.decode('utf8'))
+    assert (kallisto_out.returncode == 0), "kallisto did not finish safely."
 
     # move output to results with unique name
     os.rename(os.path.join(output_dir, "run_info.json"), os.path.join(output_dir, sra_id + "_run_info.json"))
