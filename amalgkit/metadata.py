@@ -534,6 +534,12 @@ class Metadata:
         self.df = df_labeled
         self.reorder(omit_misc=False)
 
+    def remove_linebreak(self):
+        for col,dtype in zip(self.df.dtypes.index, self.df.dtypes.values):
+            if any([ key in str(dtype) for key in ['str','object'] ]):
+                self.df.loc[:,col] = self.df[col].replace('\r','',regex=True)
+                self.df.loc[:,col] = self.df[col].replace('\n','',regex=True)
+
     def pivot(self, n_sp_cutoff=0, qualified_only=True, sampled_only=False):
         df = self.df
         if qualified_only:
@@ -642,6 +648,7 @@ def metadata_main(args):
         return None
 
     if args.tissue_detect:
+        metadata.remove_linebreak()
         # metadata.mark_exclude_ids() # TODO to Matthias, this should be activated even when --tissue_detect yes. Any conflicting feature?
         # metadata.group_attributes() # TODO to Matthias, this should be activated even when --tissue_detect yes. Any conflicting feature?
         metadata.correct_orthographical_variants()
@@ -650,6 +657,7 @@ def metadata_main(args):
         #metadata.mark_exclude_keywords() # TODO to Matthias, this should be activated even when --tissue_detect yes. Any conflicting feature?
         metadata.group_tissues_auto()
     else:
+        metadata.remove_linebreak()
         metadata.mark_exclude_ids()
         metadata.group_attributes()
         metadata.correct_orthographical_variants()
@@ -680,5 +688,3 @@ def metadata_main(args):
     sra_qualified_pivot.to_csv(os.path.join(pivot_table_dir, 'pivot_04_qualified_'+date_range+'.tsv'), sep='\t')
     sra_selected_pivot = metadata.pivot(n_sp_cutoff=0, qualified_only=True, sampled_only=True)
     sra_selected_pivot.to_csv(os.path.join(pivot_table_dir, 'pivot_05_selected_'+date_range+'.tsv'), sep='\t')
-
-

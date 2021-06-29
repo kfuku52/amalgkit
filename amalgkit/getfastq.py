@@ -659,15 +659,17 @@ def getfastq_main(args):
     max_bp = int(args.max_bp.replace(',', ''))
     num_sra = metadata.df.shape[0]
     num_bp_per_sra = int(max_bp / num_sra)
-    total_sra_bp = int(metadata.df['total_bases'].astype(int).sum())
+    if metadata.df.loc[:,'total_bases'].isna().any():
+        raise Exception('Empty value(s) of total_bases were detected in the metadata table.')
+    total_sra_bp = metadata.df.loc[:,'total_bases'].sum().astype(int)
     offset = 10000  # https://edwards.sdsu.edu/research/fastq-dump/
     print('Number of SRAs:', num_sra)
     print('Total target size (--max_bp):', "{:,}".format(max_bp), 'bp')
     print('Total SRA size:', "{:,}".format(total_sra_bp), 'bp')
     print('Target size per SRA:', "{:,}".format(num_bp_per_sra), 'bp')
     for i in metadata.df.index:
-        print('Individual SRA size :', metadata.df.loc[i, 'run'], ':',
-              "{:,}".format(int(metadata.df.loc[i, 'total_bases'])), 'bp')
+        txt = 'Individual SRA size of {}: {:,}'
+        print(txt.format(metadata.df.at[i, 'run'], metadata.df.at[i, 'total_bases']))
     sra_ids = metadata.df.loc[:, 'run'].values
     seq_summary = dict()
     keys = ['bp_dumped', 'bp_rejected', 'bp_written', 'bp_fastp_in', 'bp_fastp_out', 'bp_remaining',
