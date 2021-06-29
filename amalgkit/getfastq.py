@@ -1,12 +1,19 @@
 from Bio import Entrez
-from urllib.error import HTTPError
 import itertools
 import numpy
-import time, lxml, subprocess, os, shutil, gzip, glob, sys, re
-import urllib.request
 
 from amalgkit.util import *
 
+import glob
+import lxml
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+import urllib.request
+from urllib.error import HTTPError
 
 def getfastq_search_term(ncbi_id, additional_search_term=None):
     # https://www.ncbi.nlm.nih.gov/books/NBK49540/
@@ -368,13 +375,18 @@ def run_pfd(sra_stat, args, output_dir, seq_summary, start, end):
     seq_summary['bp_rejected'].loc[sra_stat['sra_id']] += sum(nr) * sra_stat['spot_length']
     seq_summary['bp_written'].loc[sra_stat['sra_id']] += sum(nw) * sra_stat['spot_length']
     if (sra_stat['layout'] == 'paired'):
+        fastq_files = glob.glob(os.path.join(output_dir, sra_stat['sra_id']+'*.fastq*'))
         unpaired_file = os.path.join(output_dir, sra_stat['sra_id'] + '.fastq.gz')
-        if os.path.exists(unpaired_file):
+        if (os.path.exists(unpaired_file))&(len(fastq_files)==3):
             print('layout = {}; Deleting unpaired file: {}'.format(sra_stat['layout'], unpaired_file))
             os.remove(unpaired_file)
+        elif (os.path.exists(unpaired_file))&(len(fastq_files)==1):
+            sys.stderr.write('Single-end fastq was generated even though layout = {}\n'.format(sra_stat['layout']))
+            sys.stderr.write('This sample will be treated as single-end sequencing.\n')
+            sra_stat['layout'] = 'single'
         else:
             print('Unpaired file not found:', unpaired_file)
-    return seq_summary
+    return seq_summary,sra_stat
 
 
 def run_fastp(sra_stat, args, output_dir, seq_summary):
@@ -459,7 +471,7 @@ def rename_fastq(sra_stat, output_dir, inext, outext):
 def sequence_extraction(args, sra_stat, start, end, output_dir, seq_summary, gz_exe, ungz_exe, total_sra_bp):
     sra_id = sra_stat['sra_id']
     if args.pfd == 'yes':
-        seq_summary = run_pfd(sra_stat, args, output_dir, seq_summary, start, end)
+        seq_summary,sra_stat = run_pfd(sra_stat, args, output_dir, seq_summary, start, end)
         seq_summary['bp_remaining'].loc[sra_id] = seq_summary['bp_dumped'].loc[sra_id] - seq_summary['bp_written'].loc[
             sra_id]
     if args.fastp == 'yes':
@@ -568,7 +580,6 @@ def getfastq_metadata(args):
         assert (args.entrez_email != 'aaa@bbb.com'), "Provide your email address. No worry, you won't get spam emails."
         Entrez.email = args.entrez_email
         sra_id = args.id
-        output_dir = set_getfastq_directories(args, sra_id)
         search_term = getfastq_search_term(sra_id, args.entrez_additional_search_term)
         print('Entrez search term:', search_term)
         xml_root = getfastq_getxml(search_term)
@@ -585,7 +596,6 @@ def getfastq_metadata(args):
         Entrez.email = args.entrez_email
         sra_id_list = [line.rstrip('\n') for line in open(args.id_list)]
         for sra_id in sra_id_list:
-            output_dir = set_getfastq_directories(args, sra_id)
             search_term = getfastq_search_term(sra_id, args.entrez_additional_search_term)
             print('Entrez search term:', search_term)
             xml_root = getfastq_getxml(search_term)
@@ -664,7 +674,7 @@ def getfastq_main(args):
     for i in metadata.df.index:
         print('')
         start_time = time.time()
-        sra_id = metadata.df.loc[i, 'run']
+        sra_id = metadata.df.at[i, 'run']
         sra_stat = get_sra_stat(sra_id, metadata, num_bp_per_sra)
         output_dir = set_getfastq_directories(args, sra_id)
         if (is_getfastq_output_present(args, sra_stat, output_dir)) & (args.redo == 'no'):
@@ -684,8 +694,8 @@ def getfastq_main(args):
         start, end = get_range(sra_stat, offset, total_sra_bp, max_bp)
         seq_summary = sequence_extraction(args, sra_stat, start, end, output_dir, seq_summary,
                                           gz_exe, ungz_exe, total_sra_bp)
-        print('Time elapsed for 1st-round sequence extraction: {}, {:,} sec'.format(sra_stat['sra_id'],
-                                                                                    int(time.time() - start_time)))
+        txt = 'Time elapsed for 1st-round sequence extraction: {}, {:,} sec'
+        print(txt.format(sra_stat['sra_id'], int(time.time() - start_time)))
 
     print('\n--- getfastq 1st-round sequence generation report ---')
     print_read_stats(args, seq_summary, max_bp)

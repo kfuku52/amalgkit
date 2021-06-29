@@ -16,12 +16,9 @@ def check_quant_output(sra_id, output_dir, args):
         print('Output file was not detected: {}'.format(out_path))
         return None
 
-def call_kallisto(args ,in_files, metadata, sra_id, output_dir, index):
-    if not os.path.isdir(output_dir):
-        os.mkdir(output_dir)
-    lib_layout = metadata.df.loc[(metadata.df.loc[:,'run'] == sra_id), 'lib_layout']
-    lib_layout = lib_layout.iloc[0]
-    print(lib_layout)
+def call_kallisto(args ,in_files, metadata, sra_stat, output_dir, index):
+    sra_id = sra_stat['sra_id']
+    lib_layout = sra_stat['layout']
     if lib_layout == 'single':
         print("single end reads detected. Proceeding in single mode")
         if len(in_files)!=1:
@@ -68,14 +65,23 @@ def call_kallisto(args ,in_files, metadata, sra_id, output_dir, index):
 
     return kallisto_out
 
-def quant_main(args):
-
-    #check kallisto dependency
+def check_kallisto_dependency():
     try:
         subprocess.run(['kallisto', '-h'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     except FileNotFoundError as e:
-        print(",<ERROR> kallisto is not installed.")
-        sys.exit(1)
+        raise Exception("kallisto is not installed.")
+
+def check_layout_mismatch(sra_stat, output_dir):
+    if (sra_stat['layout'] == 'paired'):
+        fastq_files = glob.glob(os.path.join(output_dir, sra_stat['sra_id']+'*.fastq*'))
+        if (len(fastq_files)==1):
+            sys.stderr.write('Single-end fastq was detected even though layout = {}\n'.format(sra_stat['layout']))
+            sys.stderr.write('This sample will be treated as single-end sequencing.\n')
+            sra_stat['layout'] = 'single'
+    return sra_stat
+
+def quant_main(args):
+    check_kallisto_dependency()
     if args.id is not None:
         print('--id is specified.')
         sra_id = args.id
@@ -97,8 +103,9 @@ def quant_main(args):
 
     check_quant_output(sra_id, output_dir, args)
 
-    sra_stat = get_sra_stat(sra_id, metadata, num_bp_per_sra=None)
     output_dir_getfastq = os.path.join(args.out_dir, 'getfastq', sra_id)
+    sra_stat = get_sra_stat(sra_id, metadata, num_bp_per_sra=None)
+    sra_stat = check_layout_mismatch(sra_stat, output_dir_getfastq)
     ext = get_newest_intermediate_file_extension(sra_stat, work_dir=output_dir_getfastq)
     in_files = glob.glob(os.path.join(args.out_dir, 'getfastq', sra_id, sra_id + "*" + ext))
 
@@ -107,7 +114,7 @@ def quant_main(args):
     assert in_files, '{}: Fastq file not found. Check {}'.format(sra_id, output_dir)
     print('Input fastq detected:', ', '.join(in_files))
 
-    call_kallisto(args, in_files, metadata,sra_id,output_dir,index)
+    call_kallisto(args, in_files, metadata, sra_stat, output_dir, index)
 
     if (args.clean_fastq=='yes')&(os.path.exists(os.path.join(output_dir, sra_id + "_abundance.tsv"))):
         for in_file in in_files:
