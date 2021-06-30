@@ -1,5 +1,6 @@
 from amalgkit.metadata import Metadata
 
+import numpy
 import pandas
 
 import glob
@@ -30,12 +31,15 @@ def get_sra_stat(sra_id, metadata, num_bp_per_sra=None):
     assert is_sra.sum()==1, 'There are multiple metadata rows with the same SRA ID: '+sra_id
     sra_stat['layout'] = metadata.df.loc[is_sra,'lib_layout'].values[0]
     sra_stat['total_spot'] = int(metadata.df.loc[is_sra,'total_spots'].values[0])
-    try:
-        sra_stat['spot_length'] = int(metadata.df.loc[is_sra,'spot_length'].values[0])
-    except ValueError as e:
-        sra_stat['spot_length'] = int(int(metadata.df.loc[is_sra,'total_bases'].values[0])/int(sra_stat['total_spot']))
+    original_spot_len = metadata.df.loc[is_sra,'spot_length'].values[0]
+    if (numpy.isnan(original_spot_len))|(original_spot_len==0):
+        inferred_spot_len = metadata.df.loc[is_sra,'total_bases'].values[0] / sra_stat['total_spot']
+        sra_stat['spot_length'] = int(inferred_spot_len)
         print('spot_length cannot be obtained directly from the metadata.')
-        print('Using total_bases/total_spots (={:,}) instead.'.format(sra_stat['spot_length']))
+        print('Using total_bases/total_spots instead: {:,}'.format(sra_stat['spot_length']))
+    else:
+        sra_stat['spot_length'] = int(original_spot_len)
+
     if num_bp_per_sra is not None:
         sra_stat['num_read_per_sra'] = int(num_bp_per_sra/sra_stat['spot_length'])
     return sra_stat
