@@ -2,7 +2,9 @@ from amalgkit.metadata import Metadata
 
 import pandas
 
+import glob
 import os
+import sys
 
 def load_metadata(args):
     df = pandas.read_csv(args.metadata, sep='\t', header=0)
@@ -31,7 +33,7 @@ def get_sra_stat(sra_id, metadata, num_bp_per_sra=None):
     except ValueError as e:
         sra_stat['spot_length'] = int(int(metadata.df.loc[is_sra,'total_bases'].values[0])/int(sra_stat['total_spot']))
         print('spot_length cannot be obtained directly from the metadata.')
-        print('Using total_bases/total_spots ( =', str(sra_stat['spot_length']), ') instead.')
+        print('Using total_bases/total_spots (={:,}) instead.'.format(sra_stat['spot_length']))
     if num_bp_per_sra is not None:
         sra_stat['num_read_per_sra'] = int(num_bp_per_sra/sra_stat['spot_length'])
     return sra_stat
@@ -48,5 +50,13 @@ def get_newest_intermediate_file_extension(sra_stat, work_dir):
         if any([ f==sra_stat['sra_id']+subext+ext for f in files ]):
             ext_out = ext
             break
-    assert 'ext_out' in locals(), 'None of expected extensions ('+' '.join(extensions)+') found in '+work_dir
+    if not 'ext_out' in locals():
+        safe_delete_files = glob.glob(os.path.join(work_dir, sra_stat['sra_id']+"*.safely_removed"))
+        if len(safe_delete_files):
+            txt = 'getfastq safely_removed flag was detected. `amalgkit quant` has been completed in this sample: {}\n'
+            sys.stderr.write(txt.format(work_dir))
+            for safe_delete_file in safe_delete_files:
+                sys.stderr.write('{}\n'.format(safe_delete_file))
+        sys.stderr.write('getfastq output could not be found in: {}\n'.format(work_dir))
+        sys.exit(0)
     return ext_out

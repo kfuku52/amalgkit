@@ -628,8 +628,25 @@ def is_getfastq_output_present(args, sra_stat, output_dir):
     for prefix, sub_ext, ext in itertools.product(prefixes, sub_exts, exts):
         out_path1 = os.path.join(output_dir, prefix + sub_ext + ext)
         out_path2 = os.path.join(output_dir, prefix + sub_ext + ext + '.safely_removed')
-        print(out_path1)
-        is_output_present *= (os.path.exists(out_path1) | os.path.exists(out_path2))
+        is_out1 = os.path.exists(out_path1)
+        is_out2 = os.path.exists(out_path2)
+        if is_out1:
+            print('getfastq output detected: {}'.format(out_path1))
+        if is_out2:
+            print('getfastq output detected: {}'.format(out_path2))
+        if (sra_stat['layout'] == 'paired')&(not(is_out1 | is_out2)):
+            sub_exts = ['', ]
+            for prefix, sub_ext, ext in itertools.product(prefixes, sub_exts, exts):
+                out_path_single_like1 = os.path.join(output_dir, prefixes[0] + sub_ext + exts[0])
+                out_path_single_like2 = os.path.join(output_dir, prefixes[0] + sub_ext + exts[0] + '.safely_removed')
+                is_out1 = os.path.exists(out_path_single_like1)
+                is_out2 = os.path.exists(out_path_single_like2)
+                txt = 'Single-end getfastq output was generated even though layout = paired: {}'
+                if is_out1:
+                    print(txt.format(out_path_single_like1))
+                if is_out2:
+                    print(txt.format(out_path_single_like2))
+        is_output_present *= (is_out1 | is_out2)
     return is_output_present
 
 
