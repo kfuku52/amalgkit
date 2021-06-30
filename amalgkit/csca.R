@@ -1,4 +1,4 @@
-if (FALSE) {
+if (FALSE) { 
   library(devtools)
   library(httr)
   set_config(config(ssl_verifypeer = 0L))
@@ -51,8 +51,6 @@ if (debug_mode == "debug") {
   file_species_tree = args[7]
   file_singlecopy = args[8]
   file_orthogroup = args[9]
-  
-  
 }
 
 if (!endsWith(dir_work, "/")) {
@@ -112,7 +110,7 @@ add_color_to_sra = function(df, selected_tissues) {
     tissue_color = rainbow_hcl(length(selected_tissues), c=100)
     sp_color = rainbow_hcl(length(unique(scientific_name)), c=150)
   }
-  df_tissue = data.frame(tissue=tissue_unique, tissue_color=tissue_color[1:length(tissue_unique)], stringsAsFactors=FALSE)
+  df_tissue = data.frame(tissue=sort(tissue_unique), tissue_color=tissue_color[1:length(tissue_unique)], stringsAsFactors=FALSE)
   df_sp = data.frame(scientific_name=scientific_name_unique, sp_color=sp_color[1:length(scientific_name_unique)], stringsAsFactors=FALSE)
   df = merge(df, df_sp, sort=FALSE, all.y=FALSE)
   df = merge(df, df_tissue, sort=FALSE, all.y=FALSE)
@@ -300,6 +298,11 @@ draw_multisp_legend = function(df_label) {
   legend("right", legend=legend_text, pt.cex=1, pch=legend_pch, lty=0, lwd=2, pt.bg=legend_bg, col=legend_fg, cex=cex_axis, text.font=legend_font)
   
 }
+
+
+
+
+
 files = list.files(dir_sra, pattern = ".*sra.*")
 df_sra = data.frame()
 for (file in files) {
@@ -867,6 +870,6 @@ pdf(file_name, height=2, width=2.5) # full figure size = 9.7 x 7.2
 tpm = 'corrected'
 tc = ortholog[[tpm]]
 df_label = df_labels[[tpm]]
-par(mar=c(2.5,2.5,0.3,0.1), cex=1, ps=8, mgp=c(1.5, 0.7, 0)); draw_multisp_tsne(tc=tc, df_label=df_label)
+par(mar=c(2.5,2.5,0.3,0.1), cex=1, ps=8, mgp=c(1.5, 0.7, 0)); draw_multisp_tsne(tc=tc, df_label=df_label$sp_color)
 dev.off()
 
