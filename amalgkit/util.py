@@ -18,7 +18,7 @@ def load_metadata(args):
             assert args.batch<is_sampled.sum(), '--batch ({}) is too large.'.format(args.batch)
             metadata.df = metadata.df.loc[is_sampled,:]
             metadata.df = metadata.df.reset_index()
-            metadata.df = metadata.df.loc[[args.batch,],:]
+            metadata.df = metadata.df.loc[[args.batch-1,],:]
     return metadata
 
 def get_sra_stat(sra_id, metadata, num_bp_per_sra=None):
