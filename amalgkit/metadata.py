@@ -534,11 +534,14 @@ class Metadata:
         self.df = df_labeled
         self.reorder(omit_misc=False)
 
-    def remove_linebreak(self):
+    def remove_specialchars(self):
         for col,dtype in zip(self.df.dtypes.index, self.df.dtypes.values):
             if any([ key in str(dtype) for key in ['str','object'] ]):
                 self.df.loc[:,col] = self.df[col].replace('\r','',regex=True)
                 self.df.loc[:,col] = self.df[col].replace('\n','',regex=True)
+                self.df.loc[:,col] = self.df[col].replace('\'','',regex=True)
+                self.df.loc[:,col] = self.df[col].replace('\"','',regex=True)
+                self.df.loc[:,col] = self.df[col].replace('\|','',regex=True)
 
     def pivot(self, n_sp_cutoff=0, qualified_only=True, sampled_only=False):
         df = self.df
@@ -657,7 +660,7 @@ def metadata_main(args):
         #metadata.mark_exclude_keywords() # TODO to Matthias, this should be activated even when --tissue_detect yes. Any conflicting feature?
         metadata.group_tissues_auto()
     else:
-        metadata.remove_linebreak()
+        metadata.remove_specialchars()
         metadata.mark_exclude_ids()
         metadata.group_attributes()
         metadata.correct_orthographical_variants()

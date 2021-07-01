@@ -874,16 +874,16 @@ while (end_flag == 0) {
     round = round + 1
 }
 cat("finished checking within-tissue correlation.\n")
-write.table(sra, file = paste0(dir_tsv,'/',sub(" ", "_", scientific_name), ".sra.tsv"), sep = "\t", row.names = FALSE,
-            col.names = TRUE, quote = FALSE)
-write.table(tc_sva, file = paste0(dir_tsv,'/',sub(" ", "_", scientific_name), ".tc.tsv"), sep = "\t", row.names = TRUE,
-            col.names = TRUE, quote = FALSE)
+file = paste0(dir_tsv,'/',sub(" ", "_", scientific_name), ".sra.tsv")
+write.table(sra, file = file, sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
+file = paste0(dir_tsv,'/',sub(" ", "_", scientific_name), ".tc.tsv")
+write.table(tc_sva, file = file, sep = "\t", row.names = TRUE, col.names = TRUE, quote = FALSE)
 tc_tissue = tissue_mean(tc_sva, sra, selected_tissues)
-write.table(tc_tissue, file = paste0(dir_tsv,'/',sub(" ", "_", scientific_name), ".tissue.mean.tsv"), sep = "\t",
-            row.names = TRUE, col.names = TRUE, quote = FALSE)
+file = paste0(dir_tsv,'/',sub(" ", "_", scientific_name), ".tissue.mean.tsv")
+write.table(tc_tissue, file = file, sep = "\t", row.names = TRUE, col.names = TRUE, quote = FALSE)
 tc_tau = tissue2tau(tc_tissue, rich.annotation = TRUE, unlog = TRUE)
-write.table(tc_tau, file = paste0(dir_tsv,'/',sub(" ", "_", scientific_name), ".tau.tsv"), sep = "\t", row.names = TRUE,
-            col.names = TRUE, quote = FALSE)
+file = paste0(dir_tsv,'/',sub(" ", "_", scientific_name), ".tau.tsv")
+write.table(tc_tau, file = file, sep = "\t", row.names = TRUE, col.names = TRUE, quote = FALSE)
 cat("Done!\n")
 
 
