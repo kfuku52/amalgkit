@@ -86,7 +86,7 @@ def curate_main(args):
                          str(intermediate),
                          curate_group,
                          str(args.norm),
-                         os.path.realpath(updated_metadata_dir),
+                         updated_metadata_dir,
                          str(args.one_outlier_per_iter)])
 
     # if multiple species mode active

@@ -553,22 +553,25 @@ def print_read_stats(args, seq_summary, max_bp, individual=True):
     print('')
 
 
-def dump_read_stats(args, metadata, seq_summary, output_dir, sra_id):
+def wirte_updated_metadata(args, metadata, seq_summary, sra_id):
+    is_sra = (metadata.df['run'] == sra_id)
     if args.pfd == 'yes':
-        metadata.df.loc[metadata.df['run'] == sra_id, 'num_read_fastq_dumped'] = seq_summary['bp_dumped'].sum()
-        metadata.df.loc[metadata.df['run'] == sra_id, 'num_read_fastq_rejected'] = seq_summary['bp_rejected'].sum()
-        metadata.df.loc[metadata.df['run'] == sra_id, 'num_read_fastq_written'] = seq_summary['bp_written'].sum()
+        metadata.df.loc[is_sra, 'num_read_fastq_dumped'] = seq_summary['bp_dumped'].sum()
+        metadata.df.loc[is_sra, 'num_read_fastq_rejected'] = seq_summary['bp_rejected'].sum()
+        metadata.df.loc[is_sra, 'num_read_fastq_written'] = seq_summary['bp_written'].sum()
     if args.fastp == 'yes':
-        metadata.df.loc[metadata.df['run'] == sra_id, 'num_read_fastp_input'] = seq_summary['bp_fastp_in'].sum()
-        metadata.df.loc[metadata.df['run'] == sra_id, 'num_read_fastp'] = seq_summary['bp_fastp_out'].sum()
-    metadata.df.loc[metadata.df['run'] == sra_id, 'num_read_unfiltered'] = seq_summary['bp_dumped'].sum()
-    metadata.df.loc[metadata.df['run'] == sra_id, 'spot_length'] = seq_summary['spot_length'].loc[sra_id]
+        metadata.df.loc[is_sra, 'num_read_fastp_input'] = seq_summary['bp_fastp_in'].sum()
+        metadata.df.loc[is_sra, 'num_read_fastp'] = seq_summary['bp_fastp_out'].sum()
+    metadata.df.loc[is_sra, 'num_read_unfiltered'] = seq_summary['bp_dumped'].sum()
+    metadata.df.loc[is_sra, 'spot_length'] = seq_summary['spot_length'].loc[sra_id]
 
     metadata_output_dir = os.path.join(args.out_dir, 'metadata', 'updated_metadata')
     if not os.path.exists(metadata_output_dir):
         os.makedirs(metadata_output_dir)
 
-    metadata_updated = metadata.df.loc[:, ['scientific_name', 'tissue', 'run', 'bioproject', 'num_read_fastq_dumped','num_read_fastq_written', 'num_read_fastp_input' , 'num_read_fastp', 'num_read_unfiltered', 'spot_length', 'nominal_length']]
+    cols = ['scientific_name', 'tissue', 'run', 'bioproject', 'num_read_fastq_dumped', 'num_read_fastq_written',
+            'num_read_fastp_input', 'num_read_fastp', 'num_read_unfiltered', 'spot_length', 'nominal_length']
+    metadata_updated = metadata.df.loc[:,cols]
     metadata_updated.to_csv(os.path.join(metadata_output_dir, 'metadata_' + sra_id + '.tsv'), sep='\t', index=False)
 
 
@@ -775,8 +778,6 @@ def getfastq_main(args):
     else:
         if args.pfd == 'yes':
             print('SRA files not removed:', output_dir)
+    wirte_updated_metadata(args, metadata, seq_summary, sra_id)
     print('\n--- getfastq final report ---')
     print_read_stats(args, seq_summary, max_bp)
-
-    # Dump metadata with updated fastp & fastq stats
-    dump_read_stats(args, metadata, seq_summary, output_dir, sra_id)
