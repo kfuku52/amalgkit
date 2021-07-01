@@ -290,7 +290,7 @@ pcu.add_argument('--mapping_rate', metavar='INT', default=0.20, type=int, requir
                  help='default=%(default)s: cutoff for mapping rate.')
 pcu.add_argument('--plot_intermediate', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
                  help='default=%(default)s: If yes, calculates and plots SVA correction after each iteration of outlier removal. Drastically increases computing times!')
-pcu.add_argument('--one_outlier_per_iter', metavar='yes|no', default='yes', type=strtobool, required=False, action='store',
+pcu.add_argument('--one_outlier_per_iter', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
                  help='default=%(default)s: If yes, allows curate to remove only 1 sample per same-tissue or same-bioproject. Increases computing times!')
 pcu.add_argument('--curate_group', metavar='STR', default=None, type=str, required=False, action='store',
                  help='default=%(default)s: "comma separated list of values contained in the curate_group metadata column to be included in the analysis. '

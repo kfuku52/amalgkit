@@ -27,7 +27,7 @@ def curate_main(args):
 
     meta_out = os.path.realpath(args.metadata)
     if args.updated_metadata_dir == "inferred":
-        updated_metadata_dir = os.path.join(args.out_dir, 'metadata/updated_metadata')
+        updated_metadata_dir = os.path.realpath(os.path.join(args.out_dir, 'metadata/updated_metadata'))
     else:
         updated_metadata_dir = os.path.realpath(args.updated_metadata_dir)
 
