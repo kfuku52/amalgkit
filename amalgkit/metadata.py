@@ -140,7 +140,7 @@ class Metadata:
                     'lib_selection','instrument','total_spots','total_bases','size','nominal_length','nominal_sdev',
                     'spot_length','read_index','read_class','read_type','base_coord','lab','center','submitter_id',
                     'pubmed_id','taxid','published_date','biomaterial_provider','cell','location','antibody','batch',
-                    'misc']
+                    'misc','NCBI_Link','AWS_Link','GCP_Link',]
     id_cols = ['bioproject','biosample','experiment','run','sra_primary','sra_sample','sra_study']
 
     def __init__(self, column_names=column_names):

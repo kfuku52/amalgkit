@@ -15,19 +15,18 @@ def merge_main(args):
         real_path = os.path.realpath(args.metadata)
         print('Loading metadata from: {}'.format(real_path), flush=True)
         metadata = load_metadata(args)
-        spp = metadata.df.loc[:,'scientific_name'].unique()
+        spp = metadata.df.loc[:,'scientific_name'].dropna().unique()
     else:
         raise Exception("If getfastq outputs are restructured like /getfastq/species_name/SRR00000,"
               "species names can be obtained from the directory names. Such change can drop "
               "the --metadata option, but not done yet. Use --metadata for now.")
 
     for sp in spp:
+        print('processing: {}'.format(sp), flush=True)
         sp_filled = sp.replace(' ', '_')
         merge_species_dir = os.path.join(os.path.join(merge_dir, sp_filled))
         if not os.path.exists(merge_species_dir):
             os.makedirs(merge_species_dir)
-
-        print('processing: {}'.format(sp), flush=True)
         is_sp = (metadata.df.loc[:,'scientific_name']==sp)
         sra_ids = metadata.df.loc[is_sp,'run'].values
         is_sampled = metadata.df.loc[:,'is_sampled']=='Yes'

@@ -1,16 +1,16 @@
 #!/usr/bin/env Rscript
 
 # library(Biobase)
-library(pcaMethods, quietly = TRUE)
-library(colorspace, quietly = TRUE)
-library(RColorBrewer, quietly = TRUE)
-library(sva, quietly = TRUE)
-library(MASS, quietly = TRUE)
-library(NMF, quietly = TRUE)
-library(dendextend, quietly = TRUE)
-library(amap, quietly = TRUE)
-library(pvclust, quietly = TRUE)
-library(Rtsne, quietly = TRUE)
+suppressPackageStartupMessages(library(pcaMethods, quietly = TRUE))
+suppressPackageStartupMessages(library(colorspace, quietly = TRUE))
+suppressPackageStartupMessages(library(RColorBrewer, quietly = TRUE))
+suppressPackageStartupMessages(library(sva, quietly = TRUE))
+suppressPackageStartupMessages(library(MASS, quietly = TRUE))
+suppressPackageStartupMessages(library(NMF, quietly = TRUE))
+suppressPackageStartupMessages(library(dendextend, quietly = TRUE))
+suppressPackageStartupMessages(library(amap, quietly = TRUE))
+suppressPackageStartupMessages(library(pvclust, quietly = TRUE))
+suppressPackageStartupMessages(library(Rtsne, quietly = TRUE))
 
 debug_mode = ifelse(length(commandArgs(trailingOnly = TRUE)) == 1, "debug", "batch")
 log_prefix = "transcriptome_curation.r:"
@@ -107,28 +107,28 @@ remove_nonexpressed_gene = function(tc) {
 
 add_color_to_sra = function(sra, selected_tissues) {
     sra = sra[, (!names(sra) %in% c("bp_color", "sp_color", "tissue_color"))]
-    bioproject = as.character(sra$bioproject)
-    scientific_name = as.character(sra$scientific_name)
-    tissue = as.character(sra$tissue)
+    bioproject = as.character(sra[['bioproject']])
+    bioproject_u = sort(unique(bioproject))
+    scientific_name = as.character(sra[['scientific_name']])
+    scientific_name_u = sort(unique(scientific_name))
+    tissue = as.character(sra[['tissue']])
+    tissue_u = sort(unique(tissue))
     if (length(selected_tissues) <= 8) {
-        tissue_color = brewer.pal(length(unique(tissue)), "Dark2")
-        bp_color = rainbow_hcl(length(unique(bioproject)), c = 50)
-        sp_color = rainbow_hcl(length(unique(scientific_name)), c = 100)
+        tissue_color = brewer.pal(length(tissue_u), "Dark2")
+        bp_color = rainbow_hcl(length(bioproject_u), c = 50)
+        sp_color = rainbow_hcl(length(scientific_name_u), c = 100)
     } else if (length(selected_tissues) <= 12) {
         tissue_color = brewer.pal(length(unique(tissue)), "Paired")
-        bp_color = rainbow_hcl(length(unique(bioproject)), c = 50)
-        sp_color = rainbow_hcl(length(unique(scientific_name)), c = 100)
+        bp_color = rainbow_hcl(length(bioproject_u), c = 50)
+        sp_color = rainbow_hcl(length(scientific_name_u), c = 100)
     } else {
         tissue_color = rainbow_hcl(length(selected_tissues), c = 100)
-        bp_color = rainbow_hcl(length(unique(bioproject)), c = 50)
-        sp_color = rainbow_hcl(length(unique(scientific_name)), c = 150)
+        bp_color = rainbow_hcl(length(bioproject_u), c = 50)
+        sp_color = rainbow_hcl(length(scientific_name_u), c = 150)
     }
-    df_tissue = data.frame(tissue = sort(unique(tissue)), tissue_color = tissue_color[1:length(sort(unique(tissue)))],
-                           stringsAsFactors = FALSE)
-    df_bp = data.frame(bioproject = sort(unique(bioproject)), bp_color = bp_color[1:length(sort(unique(bioproject)))],
-                       stringsAsFactors = FALSE)
-    df_sp = data.frame(scientific_name = sort(unique(scientific_name)), sp_color = sp_color[1:length(sort(unique(scientific_name)))],
-                       stringsAsFactors = FALSE)
+    df_tissue = data.frame(tissue=tissue_u, tissue_color=tissue_color[1:length(tissue_u)], stringsAsFactors = FALSE)
+    df_bp = data.frame(bioproject=bioproject_u, bp_color=bp_color[1:length(bioproject_u)], stringsAsFactors = FALSE)
+    df_sp = data.frame(scientific_name=scientific_name_u, sp_color=sp_color[1:length(scientific_name_u)], stringsAsFactors = FALSE)
     sra = merge(sra, df_bp, sort = FALSE, all.y = FALSE)
     sra = merge(sra, df_sp, sort = FALSE, all.y = FALSE)
     sra = merge(sra, df_tissue, sort = FALSE, all.y = FALSE)
@@ -139,7 +139,8 @@ sort_tc_and_sra = function(tc, sra, sort_columns = c("tissue", "scientific_name"
     for (column in rev(sort_columns)) {
         sra = sra[order(sra[column]), ]
     }
-    tc = tc[, sra$run[sra$run %in% colnames(tc)]]
+    sra_intersection = sra[(sra[['run']] %in% colnames(tc)),'run']
+    tc = tc[, sra_intersection]
     return(list(tc = tc, sra = sra))
 }
 
@@ -170,27 +171,32 @@ tissue_mean = function(tc, sra, selected_tissues = NA, balance.bp = FALSE) {
     # if the data are SVA-corrected, balance.bp would not be necessary because project-specfic effects
     # were removed in SVA already.
     if (all(is.na(selected_tissues))) {
-        sp_tissues = unique(sra$tissue)
+        sp_tissues = unique(sra[['tissue']])
     } else {
-        sp_tissues = selected_tissues[selected_tissues %in% unique(sra$tissue)]
+        sp_tissues = selected_tissues[selected_tissues %in% unique(sra[['tissue']])]
     }
     tc_ave = data.frame(matrix(rep(NA, length(sp_tissues) * nrow(tc)), nrow = nrow(tc)))
     colnames(tc_ave) = sp_tissues
     rownames(tc_ave) = rownames(tc)
     for (tissue in sp_tissues) {
-        run_tissue = sra$run[sra$tissue == tissue]
+        run_tissue = sra[(sra[['tissue']] == tissue),'run']
         run_tissue = run_tissue[run_tissue %in% colnames(tc)]
         if (length(run_tissue) == 1) {
             exp_tissue = tc[, run_tissue]
         } else {
             if (balance.bp) {
-                bps = unique(sra[(sra$run %in% colnames(tc)) & (sra$tissue == tissue) & (sra$exclusion ==
-                  "no"), "bioproject"])
+                is_run = (sra[['run']] %in% colnames(tc))
+                is_tissue = (sra[['tissue']] == tissue)
+                is_no_exclusion = (sra[['exclusion']] == "no")
+                bps = unique(sra[is_run & is_tissue & is_no_exclusion, "bioproject"])
                 df_tmp = data.frame(matrix(rep(NA, nrow(tc) * length(bps)), nrow = nrow(tc), ncol = length(bps)))
                 colnames(df_tmp) = bps
                 for (bp in bps) {
-                    tc_bp = tc[, sra[(sra$bioproject == bp) & (sra$tissue == tissue) & (sra$exclusion ==
-                      "no"), "run"]]
+                    is_bp = (sra[['bioproject']] == bp)
+                    is_tissue = (sra[['tissue']] == tissue)
+                    is_no_exclusion = (sra[['exclusion']] == "no")
+                    sra_ids = sra[is_bp & is_tissue & is_no_exclusion, "run"]
+                    tc_bp = tc[, sra_ids]
                     if (class(tc_bp) == "numeric") {
                         df_tmp[bp] = tc_bp
                     } else {
@@ -221,7 +227,7 @@ tissue2tau = function(tc_tissue, rich.annotation = TRUE, unlog = FALSE) {
         tc_tissue[tc_tissue < 0] = 0
     }
     xmax = apply(tc_tissue, 1, max)
-    df_tau$tau = apply((1 - (tc_tissue/xmax))/(ncol(tc_tissue) - 1), 1, sum)
+    df_tau[,'tau'] = apply((1 - (tc_tissue/xmax))/(ncol(tc_tissue) - 1), 1, sum)
     if (rich.annotation) {
         tc_tissue[is.na(tc_tissue)] = 0
         for (i in 1:nrow(tc_tissue)) {
@@ -238,16 +244,22 @@ tissue2tau = function(tc_tissue, rich.annotation = TRUE, unlog = FALSE) {
 }
 
 check_mapping_rate = function(tc, sra, mapping_rate_cutoff) {
-    is_mapping_good = (sra$mapping_rate >= mapping_rate_cutoff)
+    cat(paste0('Mapping rate cutoff: ', mapping_rate_cutoff*100, '%\n'))
+    is_mapping_good = (sra[['mapping_rate']] >= mapping_rate_cutoff)
     is_mapping_good[is.na(is_mapping_good)] = TRUE
     if (any(!is_mapping_good)) {
         cat("Removed due to low mapping rate:\n")
-        print(sra[!is_mapping_good, "run"])
+        df_tmp = sra[!is_mapping_good,]
+        for (i in rownames(df_tmp)) {
+            sra_id = df_tmp[i,'run']
+            mapping_rate = df_tmp[i,'mapping_rate']
+            cat(paste0(sra_id, ': mapping rate = ', mapping_rate*100, '%\n'))
+        }
         tc = tc[, colnames(tc) %in% sra[is_mapping_good, "run"]]
     } else {
         cat("No entry removed due to low mapping rate.\n")
     }
-    sra[sra$run %in% sra[!is_mapping_good, "run"], "exclusion"] = "low_mapping_rate"
+    sra[!is_mapping_good, "exclusion"] = "low_mapping_rate"
     return(list(tc = tc, sra = sra))
 }
 
@@ -256,23 +268,26 @@ check_within_tissue_correlation = function(tc, sra, dist_method, min_dif, select
     tc = out[["tc"]]
     sra2 = out[["sra"]]
     
-    sra2$num_other_run_same_bp_tissue = 0
+    sra2[,'num_other_run_same_bp_tissue'] = 0
     selected_tissues = selected_tissues[selected_tissues %in% unique(sra2$tissue)]
     num_tissue = length(selected_tissues)
     exclude_runs = c()
     for (sra_run in colnames(tc)) {
-        my_tissue = sra2[sra2$run == sra_run, "tissue"]
-        my_bioproject = sra2[sra2$run == sra_run, "bioproject"]
-        run_other_bp = sra2[(sra2$bioproject != my_bioproject) | (sra2$tissue != my_tissue), "run"]
+        is_sra = (sra2[['run']] == sra_run)
+        my_tissue = sra2[is_sra, "tissue"]
+        my_bioproject = sra2[is_sra, "bioproject"]
+        is_not_my_bp = (sra2[['bioproject']] != my_bioproject)
+        is_my_tissue = (sra2[['tissue']] == my_tissue)
+        run_other_bp = sra2[(is_not_my_bp | !is_my_tissue), "run"]
         run_other_bp = run_other_bp[run_other_bp %in% colnames(tc)]
         tc_other_bp = tc[, run_other_bp]
-        num_other_run_same_bp_tissue = length(unique(sra2[(sra2$bioproject != my_bioproject) & (sra2$tissue ==
-          my_tissue), "bioproject"]))
-        sra2[(sra2$run == sra_run), "num_other_run_same_bp_tissue"] = num_other_run_same_bp_tissue
-        sra2_run_other_bp <- sra2[sra2$run %in% run_other_bp,]
+        num_other_run_same_bp_tissue = length(unique(sra2[(is_not_my_bp & is_my_tissue), "bioproject"]))
+        sra2[is_sra, "num_other_run_same_bp_tissue"] = num_other_run_same_bp_tissue
+        sra2_other_bp <- sra2[sra2[['run']] %in% run_other_bp,]
         
         # If one tissue is completely sourced from the same bioproject, we can't remove the whole bioproject for tc_ave_other_bp
-        if (length(unique(sra2_run_other_bp[sra2_run_other_bp$tissue == my_tissue])) > 0) {
+
+        if (length(unique(sra2_other_bp[sra2_other_bp[['tissue']] == my_tissue])) > 0) {
             tc_ave_other_bp = tissue_mean(tc_other_bp, sra2, selected_tissues)
         }
         else {
@@ -283,7 +298,7 @@ check_within_tissue_correlation = function(tc, sra, dist_method, min_dif, select
         coef_other_bp = c()
         for (tissue in selected_tissues) {
             tmp_coef = cor(tc[, sra_run], tc_ave[, tissue], method = dist_method)
-            if (length(unique(sra2_run_other_bp[sra2_run_other_bp$tissue == my_tissue])) == 0 & tissue == my_tissue) {
+            if (length(unique(sra2_other_bp[sra2_other_bp[['tissue']] == my_tissue])) == 0 & tissue == my_tissue) {
               tmp_coef_other_bp = cor(tc[, sra_run], tc_ave[, tissue], method = dist_method)
             }
             else{
@@ -673,31 +688,23 @@ get_mapping_rate = function(tc, sra){
   out = tc_sra_intersect(tc, sra) ; tc = out[['tc']] ; sra = out[['sra']]
   sra[,"total_counts_raw"] = NA
   sra[,"mapping_rate"] = NA
-  for(i in 1:length(tc)){
+  for(i in 1:ncol(tc)){
     sra_run = colnames(tc)[i]
     is_srr = (sra[["run"]] == sra_run)
     is_srr[is.na(is_srr)] = FALSE
     total_counts_raw = sum(tc[,i])
     sra[is_srr, "total_counts_raw"] = total_counts_raw
-    if(any(is.na(sra$num_read_fastp))==FALSE){
-   # print("using num_read_fastp for mapping rate calculation")
-    total_counts_fastp = sra[is_srr, "num_read_fastp"]
-    sra[is_srr, "mapping_rate"] = total_counts_raw/total_counts_fastp
-    }
-    else {
-   # print("using num_read_fastq_written for mapping rate calculation")
-    total_counts_fastq = sra[is_srr, "num_read_fastq_written"]
-    sra[is_srr, "mapping_rate"] = total_counts_raw/total_counts_fastq
-    }
-
-
+    for (col in c('num_read_fastp','num_read_fastq_written')) {
+        total_count = sra[is_srr, col]
+        if (!is.na(total_count)) {
+            sra[is_srr, "mapping_rate"] = total_counts_raw/total_count
+            break
+        }
     }
     return(sra)
-
 }
 
 transform_raw_to_fpkm = function(counts, effective_lengths) {
-
     res = counts / effective_lengths / sum(counts) * 1e+09
     return(as.data.frame(res))
 }
@@ -736,8 +743,6 @@ update_metadata = function(sra, dir_updated_metadata) {
   names(updated_metadata) <- list.files(path = dir_updated_metadata, pattern = file_pattern, full.names = F)
   names(updated_metadata) <- gsub(".tsv", "", names(updated_metadata), fixed = TRUE)
   names(updated_metadata) <- gsub("metadata_", "", names(updated_metadata), fixed = TRUE)
-  # sra$num_read_fastp<-NA
-  # sra$num_read_fastq_written<-NA
   for(sra_row in updated_metadata){
     run_ID <- as.character(sra_row$run)
     is_run = (sra$run == run_ID)

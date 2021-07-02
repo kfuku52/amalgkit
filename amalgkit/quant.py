@@ -1,4 +1,8 @@
-import glob, subprocess,sys, numpy
+import numpy
+
+import glob
+import subprocess
+import sys
 from amalgkit.util import *
 
 def check_quant_output(sra_id, output_dir, args):
@@ -16,7 +20,7 @@ def check_quant_output(sra_id, output_dir, args):
         print('Output file was not detected: {}'.format(out_path))
         return None
 
-def call_kallisto(args ,in_files, metadata, sra_stat, output_dir, index):
+def call_kallisto(args, in_files, metadata, sra_stat, output_dir, index):
     sra_id = sra_stat['sra_id']
     lib_layout = sra_stat['layout']
     if lib_layout == 'single':
@@ -54,9 +58,9 @@ def call_kallisto(args ,in_files, metadata, sra_stat, output_dir, index):
     print('kallisto stderr:')
     print(kallisto_out.stderr.decode('utf8'))
     if (kallisto_out.returncode != 0):
-        print("kallisto did not finish safely.")
+        sys.stderr.write("kallisto did not finish safely.\n")
         if 'zero reads pseudoaligned' in kallisto_out.stderr.decode('utf8'):
-            print('No reads are mapped to the reference. This sample will be removed by `amalgkit curate`.')
+            sys.stderr.write('No reads are mapped to the reference. This sample will be removed by `amalgkit curate`.')
 
     # move output to results with unique name
     os.rename(os.path.join(output_dir, "run_info.json"), os.path.join(output_dir, sra_id + "_run_info.json"))

@@ -195,6 +195,8 @@ def download_sra(metadata, sra_stat, args, work_dir, overwrite=False):
             print('Removing', sra_path)
             print('New sra file will be downloaded.')
             os.remove(sra_path)
+        else:
+            return None
     else:
         print('Previously-downloaded sra file was not detected. New sra file will be downloaded.')
 
@@ -221,7 +223,7 @@ def download_sra(metadata, sra_stat, args, work_dir, overwrite=False):
         dl_status = 'failed'
 
         for sra_source in sra_source_list:
-            print("trying to fetch ", sra_id, "from ", sra_source)
+            print("trying to fetch {} from {}".format(sra_id, sra_source))
             try:
                 urllib.request.urlretrieve(str(sra_source), os.path.join(work_dir, (str(sra_id + '.sra'))))
                 dl_status = 'success'
@@ -251,48 +253,30 @@ def download_sra(metadata, sra_stat, args, work_dir, overwrite=False):
             return
 
     if not os.path.exists(sra_path):
-        print('Trying to download the SRA file using prefetch (fasp protocol).')
+        print('Trying to download the SRA file using prefetch.')
         if os.path.exists(individual_sra_tmp_dir):
             shutil.rmtree(individual_sra_tmp_dir)
-        prefetch_command = [args.prefetch_exe, '--force', 'no', '--transport', 'http', '--max-size', '100G',
+        prefetch_command = [args.prefetch_exe, '--force', 'no', '--max-size', '100G',
                             '--output-directory', './', str(sra_stat['sra_id'])]
         print('Command:', ' '.join(prefetch_command))
         prefetch_out = subprocess.run(prefetch_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        # In newer versions of prefetch, --output-directory is obsolete and will throw an error
-        # print(prefetch_out.returncode)
-        if (prefetch_out.returncode):
-            prefetch_command = [args.prefetch_exe, '--force', 'no', '--transport', 'http', '--max-size', '100G',
-                                sra_stat['sra_id']]
-            prefetch_out = subprocess.run(prefetch_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        # TODO: Switch to try/except for error handling
-        assert (prefetch_out.returncode == 0), "prefetch did not finish safely: {}".format(
-            prefetch_out.stdout.decode('utf8'))
         print('prefetch stdout:')
         print(prefetch_out.stdout.decode('utf8'))
         print('prefetch stderr:')
         print(prefetch_out.stderr.decode('utf8'))
-    if (not os.path.exists(sra_path)) & (
-    not os.path.exists(os.path.join(work_dir, sra_stat['sra_id'] + '/', sra_stat['sra_id'] + '.sra'))):
-        print('Trying to download the SRA file using prefetch (http protocol).')
-        if os.path.exists(individual_sra_tmp_dir):
-            shutil.rmtree(individual_sra_tmp_dir)
-        prefetch_command = [args.prefetch_exe, '--force', 'no', '--transport', 'http', '--max-size', '100G',
-                            str(sra_stat['sra_id'])]
-        print('Command:', ' '.join(prefetch_command))
-        prefetch_out = subprocess.run(prefetch_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        #  In newer versions of prefetch, --output-directory is obsolete and will throw an error
+        if (prefetch_out.returncode !=0):
+            sys.stderr.write("prefetch did not finish safely.\n")
         if (prefetch_out.returncode):
-            prefetch_command = [args.prefetch_exe, '--force', 'no', '--transport', 'http', '--max-size', '100G',
+            sys.stderr.write('Trying prefetch again...\n')
+            prefetch_command = [args.prefetch_exe, '--force', 'no', '--max-size', '100G',
                                 sra_stat['sra_id']]
             prefetch_out = subprocess.run(prefetch_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-
-        # TODO: Switch to try/except for error handling
-        assert (prefetch_out.returncode == 0), "prefetch did not finish safely: {}".format(
-            prefetch_out.stdout.decode('utf8'))
-        print('prefetch stdout:')
-        print(prefetch_out.stdout.decode('utf8'))
-        print('prefetch stderr:')
-        print(prefetch_out.stderr.decode('utf8'))
+            print('prefetch stdout:')
+            print(prefetch_out.stdout.decode('utf8'))
+            print('prefetch stderr:')
+            print(prefetch_out.stderr.decode('utf8'))
+            if (prefetch_out.returncode !=0):
+                sys.stderr.write("prefetch did not finish safely.\n")
     # Move files downloaded by prefetch. This is necessary because absolute path didn't work for prefetch --output-directory
     if os.path.exists(os.path.join('./', sra_stat['sra_id'] + '/', sra_stat['sra_id'] + '.sra')):
         subprocess.run(['mv', os.path.join('./', sra_stat['sra_id'] + '/', sra_stat['sra_id'] + '.sra'), sra_path],
@@ -359,18 +343,21 @@ def run_pfd(sra_stat, args, output_dir, seq_summary, start, end):
     # pfd_command = pfd_command + ['-s', sra_stat['sra_id']]
     print('Command:', ' '.join(pfd_command))
     pfd_out = subprocess.run(pfd_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    # TODO: Switch to try/except for error handling
-    assert (pfd_out.returncode == 0), "pfd did not finish safely: {}".format(pfd_out.stdout.decode('utf8'))
     if args.pfd_print == 'yes':
         print('parallel-fastq-dump stdout:')
         print(pfd_out.stdout.decode('utf8'))
         print('parallel-fastq-dump stderr:')
         print(pfd_out.stderr.decode('utf8'))
+    if (pfd_out.returncode != 0):
+        sys.stderr.write("pfd did not finish safely.\n")
+        sys.exit(1)
     stdout = pfd_out.stdout.decode('utf8')
     nd = [int(line.replace('Read ', '').split(' ')[0]) for line in stdout.split('\n') if line.startswith('Read')]
-    nr = [int(line.replace('Rejected ', '').split(' ')[0]) for line in stdout.split('\n') if
-          line.startswith('Rejected')]
+    nr = [int(line.replace('Rejected ', '').split(' ')[0]) for line in stdout.split('\n') if line.startswith('Rejected')]
     nw = [int(line.replace('Written ', '').split(' ')[0]) for line in stdout.split('\n') if line.startswith('Written')]
+    seq_summary['num_dumped'].loc[sra_stat['sra_id']] += sum(nd)
+    seq_summary['num_rejected'].loc[sra_stat['sra_id']] += sum(nr)
+    seq_summary['num_written'].loc[sra_stat['sra_id']] += sum(nw)
     seq_summary['bp_dumped'].loc[sra_stat['sra_id']] += sum(nd) * sra_stat['spot_length']
     seq_summary['bp_rejected'].loc[sra_stat['sra_id']] += sum(nr) * sra_stat['spot_length']
     seq_summary['bp_written'].loc[sra_stat['sra_id']] += sum(nw) * sra_stat['spot_length']
@@ -386,6 +373,7 @@ def run_pfd(sra_stat, args, output_dir, seq_summary, start, end):
             sra_stat['layout'] = 'single'
         else:
             print('Unpaired file not found:', unpaired_file)
+    seq_summary['layout'].loc[sra_stat['sra_id']] = sra_stat['layout']
     return seq_summary,sra_stat
 
 
@@ -422,13 +410,19 @@ def run_fastp(sra_stat, args, output_dir, seq_summary):
     if args.remove_tmp == 'yes':
         remove_intermediate_files(sra_stat, ext=inext, work_dir=output_dir)
     bps = fp_out.stderr.decode('utf8').split('\n')
+    num_in = list()
+    num_out = list()
     bp_in = list()
     bp_out = list()
     for i in range(len(bps)):
         if (' before filtering:' in bps[i]):
+            num_in.append(int(bps[i + 1].replace('total reads: ', '')))
             bp_in.append(int(bps[i + 2].replace('total bases: ', '')))
         if (' after filtering:' in bps[i]) | (' aftering filtering:' in bps[i]):
+            num_out.append(int(bps[i + 1].replace('total reads: ', '')))
             bp_out.append(int(bps[i + 2].replace('total bases: ', '')))
+    seq_summary['num_fastp_in'].loc[sra_stat['sra_id']] += sum(num_in)
+    seq_summary['num_fastp_out'].loc[sra_stat['sra_id']] += sum(num_out)
     seq_summary['bp_fastp_in'].loc[sra_stat['sra_id']] += sum(bp_in)
     seq_summary['bp_fastp_out'].loc[sra_stat['sra_id']] += sum(bp_out)
     return seq_summary
@@ -472,12 +466,12 @@ def sequence_extraction(args, sra_stat, start, end, output_dir, seq_summary, gz_
     sra_id = sra_stat['sra_id']
     if args.pfd == 'yes':
         seq_summary,sra_stat = run_pfd(sra_stat, args, output_dir, seq_summary, start, end)
-        seq_summary['bp_remaining'].loc[sra_id] = seq_summary['bp_dumped'].loc[sra_id] - seq_summary['bp_written'].loc[
-            sra_id]
+        bp_remaining = seq_summary['bp_dumped'].loc[sra_id] - seq_summary['bp_written'].loc[sra_id]
+        seq_summary['bp_remaining'].loc[sra_id] = bp_remaining
     if args.fastp == 'yes':
         seq_summary = run_fastp(sra_stat, args, output_dir, seq_summary)
-        seq_summary['bp_remaining'].loc[sra_id] = seq_summary['bp_dumped'].loc[sra_id] - \
-                                                  seq_summary['bp_fastp_out'].loc[sra_id]
+        bp_remaining = seq_summary['bp_dumped'].loc[sra_id] - seq_summary['bp_fastp_out'].loc[sra_id]
+        seq_summary['bp_remaining'].loc[sra_id] = bp_remaining
     if args.read_name == 'trinity':
         rename_reads(sra_stat, args, output_dir, gz_exe, ungz_exe)
     inext = get_newest_intermediate_file_extension(sra_stat, work_dir=output_dir)
@@ -553,26 +547,29 @@ def print_read_stats(args, seq_summary, max_bp, individual=True):
     print('')
 
 
-def wirte_updated_metadata(args, metadata, seq_summary, sra_id):
+def write_updated_metadata(args, metadata, seq_summary, sra_id):
     is_sra = (metadata.df['run'] == sra_id)
+    if seq_summary['layout'].at[sra_id]=='single':
+        denom = 1
+    elif seq_summary['layout'].at[sra_id]=='paired':
+        denom = 2
     if args.pfd == 'yes':
-        metadata.df.loc[is_sra, 'num_read_fastq_dumped'] = seq_summary['bp_dumped'].sum()
-        metadata.df.loc[is_sra, 'num_read_fastq_rejected'] = seq_summary['bp_rejected'].sum()
-        metadata.df.loc[is_sra, 'num_read_fastq_written'] = seq_summary['bp_written'].sum()
+        metadata.df.loc[is_sra, 'num_read_fastq_dumped'] = seq_summary['num_dumped'].at[sra_id] / denom
+        metadata.df.loc[is_sra, 'num_read_fastq_rejected'] = seq_summary['num_rejected'].at[sra_id] / denom
+        metadata.df.loc[is_sra, 'num_read_fastq_written'] = seq_summary['num_written'].at[sra_id] / denom
     if args.fastp == 'yes':
-        metadata.df.loc[is_sra, 'num_read_fastp_input'] = seq_summary['bp_fastp_in'].sum()
-        metadata.df.loc[is_sra, 'num_read_fastp'] = seq_summary['bp_fastp_out'].sum()
-    metadata.df.loc[is_sra, 'num_read_unfiltered'] = seq_summary['bp_dumped'].sum()
-    metadata.df.loc[is_sra, 'spot_length'] = seq_summary['spot_length'].loc[sra_id]
-
+        metadata.df.loc[is_sra, 'num_read_fastp_input'] = seq_summary['num_fastp_in'].at[sra_id] / denom
+        metadata.df.loc[is_sra, 'num_read_fastp'] = seq_summary['num_fastp_out'].at[sra_id] / denom
+    metadata.df.loc[is_sra, 'spot_length'] = seq_summary['spot_length'].at[sra_id]
     metadata_output_dir = os.path.join(args.out_dir, 'metadata', 'updated_metadata')
     if not os.path.exists(metadata_output_dir):
         os.makedirs(metadata_output_dir)
-
-    cols = ['scientific_name', 'tissue', 'run', 'bioproject', 'num_read_fastq_dumped', 'num_read_fastq_written',
-            'num_read_fastp_input', 'num_read_fastp', 'num_read_unfiltered', 'spot_length', 'nominal_length']
-    metadata_updated = metadata.df.loc[:,cols]
-    metadata_updated.to_csv(os.path.join(metadata_output_dir, 'metadata_' + sra_id + '.tsv'), sep='\t', index=False)
+    cols = ['scientific_name', 'tissue', 'run', 'bioproject', 'num_read_fastq_dumped', 'num_read_fastq_rejected',
+            'num_read_fastq_written', 'num_read_fastp_input', 'num_read_fastp', 'spot_length', 'nominal_length']
+    metadata_updated = metadata.df.loc[is_sra, cols]
+    outpath = os.path.join(metadata_output_dir, 'metadata_' + sra_id + '.tsv')
+    print('Writing updated metadata: {}'.format(outpath))
+    metadata_updated.to_csv(outpath, sep='\t', index=False)
 
 
 def getfastq_metadata(args):
@@ -662,6 +659,19 @@ def remove_experiment_without_run(metadata):
         metadata.df = metadata.df.loc[~is_missing_run, :]
     return metadata
 
+def initialize_seq_summary(metadata):
+    sra_ids = metadata.df.loc[:, 'run'].values
+    seq_summary = dict()
+    keys = ['num_dumped', 'num_rejected', 'num_written', 'num_fastp_in', 'num_fastp_out',
+            'bp_dumped', 'bp_rejected', 'bp_written', 'bp_fastp_in', 'bp_fastp_out', 'bp_remaining',
+            'bp_still_available', 'layout',
+            'spot_length', 'total_spot', 'rate_passed', 'start_1st', 'end_1st', 'start_2nd', 'end_2nd', ]
+    for key in keys:
+        if key=='layout':
+            seq_summary[key] = pandas.Series('', index=sra_ids)
+        else:
+            seq_summary[key] = pandas.Series(0, index=sra_ids)
+    return seq_summary
 
 def getfastq_main(args):
     # sra_dir = os.path.join(os.path.expanduser("~"), 'ncbi/public/sra')
@@ -675,7 +685,7 @@ def getfastq_main(args):
     num_bp_per_sra = int(max_bp / num_sra)
     if metadata.df.loc[:,'total_bases'].isna().any():
         raise Exception('Empty value(s) of total_bases were detected in the metadata table.')
-    total_sra_bp = metadata.df.loc[:,'total_bases'].sum().astype(int)
+    total_sra_bp = metadata.df.loc[:,'total_bases'].sum()
     offset = 10000  # https://edwards.sdsu.edu/research/fastq-dump/
     print('Number of SRAs:', num_sra)
     print('Total target size (--max_bp):', "{:,}".format(max_bp), 'bp')
@@ -684,13 +694,7 @@ def getfastq_main(args):
     for i in metadata.df.index:
         txt = 'Individual SRA size of {}: {:,}'
         print(txt.format(metadata.df.at[i, 'run'], metadata.df.at[i, 'total_bases']))
-    sra_ids = metadata.df.loc[:, 'run'].values
-    seq_summary = dict()
-    keys = ['bp_dumped', 'bp_rejected', 'bp_written', 'bp_fastp_in', 'bp_fastp_out', 'bp_remaining',
-            'bp_still_available',
-            'spot_length', 'total_spot', 'rate_passed', 'start_1st', 'end_1st', 'start_2nd', 'end_2nd', ]
-    for key in keys:
-        seq_summary[key] = pandas.Series(0, index=sra_ids)
+    seq_summary = initialize_seq_summary(metadata)
     for i in metadata.df.index:
         print('')
         start_time = time.time()
@@ -721,20 +725,16 @@ def getfastq_main(args):
     print_read_stats(args, seq_summary, max_bp)
     total_bp_remaining = seq_summary['bp_remaining'].sum()
     percent_remaining = total_bp_remaining / max_bp * 100
-    if args.pfd == 'yes':
-        total_bp_dumped = seq_summary['bp_dumped'].sum()
-        total_bp_out = seq_summary['bp_written'].sum()
     if args.fastp == 'yes':
         total_bp_out = seq_summary['bp_fastp_out'].sum()
-        metadata.df.loc[metadata.df['run'] == sra_id, 'num_read_fastp'] = total_bp_out
-        metadata.df.loc[metadata.df['run'] == sra_id, 'num_read_fastp_input'] = total_bp_out
-    percent_dropped = total_bp_out / total_bp_dumped * 100
-    txt = '{:.2f}% of reads were dropped in the 1st-round sequence generation.'
+    else:
+        total_bp_out = seq_summary['bp_written'].sum()
+    txt = '{:.2f}% of reads were obtained in the 1st-round sequence generation.'
     print(txt.format(percent_remaining, args.tol))
     txt = 'The amount of generated reads were {:.2f}% ({:,}/{:,}) smaller than the target size (tol={}%).'
     print(txt.format(percent_remaining, total_bp_out, max_bp, args.tol))
     if (percent_remaining < args.tol):
-        print('Proceeding without 2nd-round sequence extraction.')
+        print('There is not enough remaining spots. Proceeding without 2nd-round sequence extraction.')
     else:
         print('Starting the 2nd-round sequence extraction to compensate it.')
         seq_summary = calc_2nd_ranges(total_bp_remaining, seq_summary)
@@ -767,8 +767,11 @@ def getfastq_main(args):
                 os.system('cat "' + adding_path + '" >> "' + added_path + '"')
                 os.remove(adding_path)
                 os.rename(added_path, adding_path)
-            print('Time elapsed for 2nd-round sequence extraction: {}, {:,} sec'.format(sra_stat['sra_id'],
-                                                                                        int(time.time() - start_time)))
+            txt = 'Time elapsed for 2nd-round sequence extraction: {}, {:,} sec'
+            print(txt.format(sra_stat['sra_id'], int(time.time() - start_time)))
+
+    for sra_id in metadata.df.loc[:,'run'].values:
+        write_updated_metadata(args, metadata, seq_summary, sra_id)
 
     print('')
     if args.concat == 'yes':
@@ -778,6 +781,5 @@ def getfastq_main(args):
     else:
         if args.pfd == 'yes':
             print('SRA files not removed:', output_dir)
-    wirte_updated_metadata(args, metadata, seq_summary, sra_id)
     print('\n--- getfastq final report ---')
     print_read_stats(args, seq_summary, max_bp)
