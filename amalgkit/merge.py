@@ -1,9 +1,9 @@
 import pandas
+
 import os
 import warnings
 
 from amalgkit.util import *
-
 
 def merge_main(args):
     quant_dir = os.path.join(args.out_dir, 'quant')

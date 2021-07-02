@@ -34,7 +34,6 @@ if (debug_mode == "debug") {
     tmm_norm = "yes"
     dir_work = '/Users/s229181/MSN/'
     srafile = '/Users/s229181/MSN/metadata/metadata_may2021_updated.tsv'
-    dir_updated_metadata = '/Users/s229181/MSN/metadata/updated_metadata/'
    # dir_work = "/Users/kf/Dropbox (Personal)/collaborators/Ken Naito/20210509_Vigna/gfe_data"
    # srafile = "/Users/kf/Dropbox (Personal)/collaborators/Ken Naito/20210509_Vigna/gfe_data/metadata/metadata/metadata_manual.tsv"
 
@@ -58,8 +57,7 @@ if (debug_mode == "debug") {
     plot_intermediate = as.integer(args[8])
     selected_tissues = strsplit(args[9], "\\|")[[1]]
     transform_method = args[10]
-    dir_updated_metadata = args[11]
-    one_outlier_per_iteration = args[12]
+    one_outlier_per_iteration = args[11]
     
 
 }
@@ -245,7 +243,7 @@ tissue2tau = function(tc_tissue, rich.annotation = TRUE, unlog = FALSE) {
 
 check_mapping_rate = function(tc, sra, mapping_rate_cutoff) {
     cat(paste0('Mapping rate cutoff: ', mapping_rate_cutoff*100, '%\n'))
-    is_mapping_good = (sra[['mapping_rate']] >= mapping_rate_cutoff)
+    is_mapping_good = (sra[['mapping_rate']] >= mapping_rate_cutoff*100)
     is_mapping_good[is.na(is_mapping_good)] = TRUE
     if (any(!is_mapping_good)) {
         cat("Removed due to low mapping rate:\n")
@@ -253,7 +251,7 @@ check_mapping_rate = function(tc, sra, mapping_rate_cutoff) {
         for (i in rownames(df_tmp)) {
             sra_id = df_tmp[i,'run']
             mapping_rate = df_tmp[i,'mapping_rate']
-            cat(paste0(sra_id, ': mapping rate = ', mapping_rate*100, '%\n'))
+            cat(paste0(sra_id, ': mapping rate = ', mapping_rate, '%\n'))
         }
         tc = tc[, colnames(tc) %in% sra[is_mapping_good, "run"]]
     } else {
@@ -536,22 +534,8 @@ draw_sva_summary = function(sva_out, tc, sra, fontsize) {
         out = sort_tc_and_sra(tc, sra)
         tc = out[["tc"]]
         sra = out[["sra"]]
-        if (any(is.na(sra$num_read_fastp))==FALSE){
-            sra$fraction_lost_fastp = 1 - (sra$num_read_fastp / sra$num_read_fastq_dumped)
-            cols = c("tissue","bioproject","lib_selection","instrument","num_read_fastp","fraction_lost_fastp","mapping_rate")
-            label_cols = c("organ","BioProject","library selection","instrument","number of read","% lost, fastp","mapping rate")
-        }
-        else {
-            sra$fraction_lost_fastq = 1 - (sra$num_read_fastq_written / sra$num_read_fastq_dumped)
-            cols = c("tissue","bioproject","lib_selection","instrument","num_read_fastq_dumped","fraction_lost_fastq", "mapping_rate")
-            label_cols = c("organ","BioProject","library selection","instrument","number of read","% lost, fastq", "mapping rate")
-        }
-        # sra$fraction_lost_mask = 0 # 1 - (sra$num_read_mask / sra$num_read_fastp)
-        #cols = c('tissue','bioproject','lib_selection','layout','instrument','num_read_masked','fraction_lost_fastp',
-         #        'fraction_lost_mask','min_read_len_masked','avg_read_len_masked','max_read_len_masked','mapping_rate')
-        #label_cols = c('organ','BioProject','library selection','library layout','instrument','number of read','% lost, fastp',
-        #              '% lost, misc feature','minimum read length','average read length','maximum read length','mapping rate')
-
+        cols = c("tissue","bioproject","lib_selection","instrument","mapping_rate")
+        label_cols = c("organ","BioProject","library selection","instrument","mapping rate")
 
         num_sv = sva_out$n.sv
         df = data.frame(matrix(NA, num_sv, length(cols)))
@@ -684,26 +668,6 @@ save_plot = function(tc, sra, sva_out, dist_method, file, selected_tissues, font
     graphics.off()
 }
 
-get_mapping_rate = function(tc, sra){
-  out = tc_sra_intersect(tc, sra) ; tc = out[['tc']] ; sra = out[['sra']]
-  sra[,"total_counts_raw"] = NA
-  sra[,"mapping_rate"] = NA
-  for(i in 1:ncol(tc)){
-    sra_run = colnames(tc)[i]
-    is_srr = (sra[["run"]] == sra_run)
-    is_srr[is.na(is_srr)] = FALSE
-    total_counts_raw = sum(tc[,i])
-    sra[is_srr, "total_counts_raw"] = total_counts_raw
-    for (col in c('num_read_fastp','num_read_fastq_written')) {
-        total_count = sra[is_srr, col]
-        if (!is.na(total_count)) {
-            sra[is_srr, "mapping_rate"] = total_counts_raw/total_count
-            break
-        }
-    }
-    return(sra)
-}
-
 transform_raw_to_fpkm = function(counts, effective_lengths) {
     res = counts / effective_lengths / sum(counts) * 1e+09
     return(as.data.frame(res))
@@ -733,26 +697,6 @@ get_tmm_scaled_fpkm = function(dat, df_nf, efflen) {
     return(dat_fpkm)
 }
 
-
-update_metadata = function(sra, dir_updated_metadata) {
-  not_excluded_SRR <- sra[sra$exclusion == 'no', 'run']
-  file_pattern<-paste(not_excluded_SRR, collapse ='|')
-  files <- list.files(path = dir_updated_metadata, pattern = file_pattern, full.names = T)
-  cat("Number of SRA row files in", dir_updated_metadata, ':', length(files), '\n')
-  updated_metadata <- lapply(files, read.table, sep="\t", header=T, fill = TRUE)
-  names(updated_metadata) <- list.files(path = dir_updated_metadata, pattern = file_pattern, full.names = F)
-  names(updated_metadata) <- gsub(".tsv", "", names(updated_metadata), fixed = TRUE)
-  names(updated_metadata) <- gsub("metadata_", "", names(updated_metadata), fixed = TRUE)
-  for(sra_row in updated_metadata){
-    run_ID <- as.character(sra_row$run)
-    is_run = (sra$run == run_ID)
-    for (stat in c('num_read_fastp', 'num_read_fastq_written', 'num_read_fastq_dumped')) {
-      new_value = ifelse(stat %in% colnames(sra_row), sra_row[,stat], NA)
-      sra[is_run,stat] = new_value
-    }
-  }
-  return(sra)
-}
 
 ####################END OF FUNCTION DECLARATION####################################################
 
@@ -791,9 +735,6 @@ is_not_excluded = (sra$exclusion=='no')
 cat('Number of non-excluded SRA runs (exclusion=="no"):', sum(is_not_excluded), '\n')
 tc = tc[,sra[is_not_excluded,'run']]
 out = sort_tc_and_sra(tc, sra) ; tc = out[["tc"]] ; sra = out[["sra"]]
-
-sra = update_metadata(sra, dir_updated_metadata)
-sra = get_mapping_rate(tc,sra)
 
 # log transform AFTER mappingrate
 row.names(tc_eff_length) <- tc_eff_length[, 1]
