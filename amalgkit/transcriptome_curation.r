@@ -57,7 +57,7 @@ if (debug_mode == "debug") {
     plot_intermediate = as.integer(args[8])
     selected_tissues = strsplit(args[9], "\\|")[[1]]
     transform_method = args[10]
-    one_outlier_per_iteration = args[11]
+    one_outlier_per_iteration = as.integer(args[11])
     
 
 }
@@ -90,9 +90,9 @@ if (!file.exists(dir_tsv)) {
 }
 
 tc_sra_intersect = function(tc, sra) {
-    sra_run = sra$run
+    sra_run = sra[['run']]
     tc = tc[, colnames(tc) %in% sra_run]
-    sra = sra[sra$run %in% colnames(tc), ]
+    sra = sra[sra[['run']] %in% colnames(tc), ]
     return(list(tc = tc, sra = sra))
 }
 
@@ -267,7 +267,7 @@ check_within_tissue_correlation = function(tc, sra, dist_method, min_dif, select
     sra2 = out[["sra"]]
     
     sra2[,'num_other_run_same_bp_tissue'] = 0
-    selected_tissues = selected_tissues[selected_tissues %in% unique(sra2$tissue)]
+    selected_tissues = selected_tissues[selected_tissues %in% unique(sra2[['tissue']])]
     num_tissue = length(selected_tissues)
     exclude_runs = c()
     for (sra_run in colnames(tc)) {
@@ -285,35 +285,39 @@ check_within_tissue_correlation = function(tc, sra, dist_method, min_dif, select
         
         # If one tissue is completely sourced from the same bioproject, we can't remove the whole bioproject for tc_ave_other_bp
 
-        if (length(unique(sra2_other_bp[sra2_other_bp[['tissue']] == my_tissue])) > 0) {
-            tc_ave_other_bp = tissue_mean(tc_other_bp, sra2, selected_tissues)
-        }
-        else {
+        num_other_bp_same_tissue = sum(sra2_other_bp[['tissue']] == my_tissue, na.rm=TRUE)
+        if (num_other_bp_same_tissue == 0) {
             tc_ave_other_bp = tissue_mean(tc, sra2, selected_tissues)
+        } else {
+            tc_ave_other_bp = tissue_mean(tc_other_bp, sra2, selected_tissues)
         }
         tc_ave = tissue_mean(tc, sra2, selected_tissues)
         coef = c()
         coef_other_bp = c()
         for (tissue in selected_tissues) {
             tmp_coef = cor(tc[, sra_run], tc_ave[, tissue], method = dist_method)
-            if (length(unique(sra2_other_bp[sra2_other_bp[['tissue']] == my_tissue])) == 0 & tissue == my_tissue) {
+
+            if ((num_other_bp_same_tissue == 0) & (tissue == my_tissue)) {
               tmp_coef_other_bp = cor(tc[, sra_run], tc_ave[, tissue], method = dist_method)
-            }
-            else{
+            } else {
               tmp_coef_other_bp = cor(tc[, sra_run], tc_ave_other_bp[, tissue], method = dist_method)
             }
             
             if (tissue == my_tissue) {
                 tmp_coef = tmp_coef - min_dif
                 tmp_coef_other_bp = tmp_coef_other_bp - min_dif
-
             }
             coef = c(coef, tmp_coef)
             coef_other_bp = c(coef_other_bp, tmp_coef_other_bp)
         }
         names(coef) = selected_tissues
         names(coef_other_bp) = selected_tissues
-        if (max(coef) != coef[my_tissue] | coef_other_bp[my_tissue] < 0.2) {
+        if (max(coef) != coef[my_tissue]) {
+            cat('Registered as a candidate for exclusion. Better correlation to other categories:', sra_run, '\n')
+            exclude_runs = c(exclude_runs, sra_run)
+        }
+        if (coef_other_bp[my_tissue] < 0.2) {
+            cat('Registered as a candidate for exclusion. Low within-category correlation:', sra_run, '\n')
             exclude_runs = c(exclude_runs, sra_run)
         }
     }
@@ -325,28 +329,27 @@ check_within_tissue_correlation = function(tc, sra, dist_method, min_dif, select
           first_same_tissue_hit = exclude_run_bps_and_tissue[match(unique(exclude_run_bps_and_tissue$tissue), exclude_run_bps_and_tissue$tissue),]
           # if a first_same_tissue_hit is part of the same bioproject as the other removal candidates, ommit the same tissue candidates
           if(any(first_same_tissue_hit$bioproject %in% first_bp_hit$bioproject)){
-            exclude_runs_tmp = c(first_bp_hit$run,first_same_tissue_hit[!first_same_tissue_hit$bioproject %in% first_bp_hit$bioproject]$run)
+              exclude_runs_tmp = c(first_bp_hit$run,first_same_tissue_hit[!first_same_tissue_hit$bioproject %in% first_bp_hit$bioproject]$run)
           }else{
-            exclude_runs_tmp = c(first_bp_hit$run,first_same_tissue_hit$run)
+              exclude_runs_tmp = c(first_bp_hit$run,first_same_tissue_hit$run)
           }
           exclude_runs = unique(exclude_runs_tmp)
+          # TODO This boolean vector should be all TRUE by definition. ???: exclude_run_bps_and_tissue$run %in% exclude_runs
           exclude_bps = exclude_run_bps_and_tissue[exclude_run_bps_and_tissue$run %in% exclude_runs, "bioproject"]
-      }
-      else{
-        exclude_run_bps = sra2[(sra2$run %in% exclude_runs), c("bioproject", "run", "num_other_run_same_bp_tissue")]
-        exclude_bp_counts = data.frame(table(exclude_run_bps$bioproject))
+      } else {
+        exclude_run_bps = sra2[(sra2[['run']] %in% exclude_runs), c("bioproject", "run", "num_other_run_same_bp_tissue")]
+        exclude_bp_counts = data.frame(table(exclude_run_bps[['bioproject']]))
         exclude_run_bps = merge(exclude_run_bps, exclude_bp_counts, by.x = "bioproject", by.y = "Var1")
-        exclude_run_bps = exclude_run_bps[order(exclude_run_bps$num_other_run_same_bp_tissue, exclude_run_bps$Freq),
-                                          ]
+        exclude_run_bps = exclude_run_bps[order(exclude_run_bps[['num_other_run_same_bp_tissue']], exclude_run_bps[['Freq']]),]
         rownames(exclude_run_bps) = 1:nrow(exclude_run_bps)
         min_other_run_same_bp_tissue = exclude_run_bps[1, "num_other_run_same_bp_tissue"]
         semimin_bp_count = exclude_run_bps[1, "Freq"]
         cat("minimum number of other BioProjects within tissue:", min_other_run_same_bp_tissue, "\n")
         cat("semi-minimum count of exclusion-candidate BioProjects:", semimin_bp_count, "\n")
-        conditions = (exclude_run_bps$Freq == semimin_bp_count) & (exclude_run_bps$num_other_run_same_bp_tissue ==
-                                                                     min_other_run_same_bp_tissue)
+        conditions = (exclude_run_bps[['Freq']] == semimin_bp_count)
+        conditions = conditions & (exclude_run_bps[['num_other_run_same_bp_tissue']] == min_other_run_same_bp_tissue)
         exclude_bps = unique(exclude_run_bps[conditions, "bioproject"])
-        exclude_runs = exclude_run_bps[(exclude_run_bps$bioproject %in% exclude_bps), "run"]
+        exclude_runs = exclude_run_bps[(exclude_run_bps[['bioproject']] %in% exclude_bps), "run"]
       }
         
     }
@@ -357,7 +360,7 @@ check_within_tissue_correlation = function(tc, sra, dist_method, min_dif, select
         print(exclude_runs)
     }
     tc = tc[, !colnames(tc) %in% exclude_runs]
-    sra[(sra$run %in% exclude_runs), "exclusion"] = "low_within_tissue_correlation"
+    sra[(sra[['run']] %in% exclude_runs), "exclusion"] = "low_within_tissue_correlation"
     return(list(tc = tc, sra = sra))
 }
 
@@ -377,7 +380,7 @@ sva_subtraction = function(tc, sra) {
     sva1 = try(sva(dat = as.matrix(tc), mod = mod, mod0 = mod0, B = 10))
     if (class(sva1) != "try-error") {
         cat("SVA correction was correctly performed.\n")
-        tc = cleanY(y = tc, mod = mod, svs = sva1$sv)
+        tc = cleanY(y = tc, mod = mod, svs = sva1[['sv']])
         tc = rbind(tc, tc_ne)
     } else {
         cat("SVA correction failed. Returning the original transcriptome data.\n")
@@ -393,16 +396,16 @@ map_color = function(redundant_variables, c) {
     df_redundant = data.frame(var = redundant_variables, order = seq(1, length(redundant_variables)),
                               stringsAsFactors = FALSE)
     df_redundant = merge(df_redundant, df_unique, by = "var", all.x = TRUE, stringsAsFactors = FALSE)
-    df_redundant = df_redundant[order(df_redundant$order), ]
-    return(df_redundant$col)
+    df_redundant = df_redundant[order(df_redundant[['order']]), ]
+    return(df_redundant[['col']])
 }
 
 draw_heatmap = function(sra, tc_dist_matrix, legend = TRUE, fontsize = 7) {
     bp_fac = factor(sub(";.*", "", sra[, c("bioproject")]))
     tissue_fac = factor(sra[, c("tissue")])
     ann_label = data.frame(bioproject = bp_fac, tissue = tissue_fac)
-    bp_col_uniq = unique(sra$bp_color[order(sra$bioproject)])
-    tissue_col_uniq = unique(sra$tissue_color[order(sra$tissue)])
+    bp_col_uniq = unique(sra[order(sra[['bioproject']]), 'bp_color'])
+    tissue_col_uniq = unique(sra[order(sra[['tissue']]), 'tissue_color'])
     ann_color = list(bioproject = bp_col_uniq, tissue = tissue_col_uniq)
     breaks = c(0, seq(0.3, 1, 0.01))
     aheatmap(tc_dist_matrix, color = "-RdYlBu2:71", Rowv = NA, Colv = NA, revC = TRUE, legend = TRUE,
@@ -412,11 +415,11 @@ draw_heatmap = function(sra, tc_dist_matrix, legend = TRUE, fontsize = 7) {
 
 color_children2parent = function(node) {
     if (length(node) == 2) {
-        child1_color = attributes(node[[1]])$edgePar[["col"]]
-        child2_color = attributes(node[[2]])$edgePar[["col"]]
+        child1_color = attributes(node[[1]])[['edgePar']][["col"]]
+        child2_color = attributes(node[[2]])[['edgePar']][["col"]]
         if ((!is.null(child1_color)) & (!is.null(child2_color))) {
             if (child1_color == child2_color) {
-                attributes(node)$edgePar[["col"]] = child1_color
+                attributes(node)[['edgePar']][["col"]] = child1_color
             }
         }
     }
@@ -425,9 +428,9 @@ color_children2parent = function(node) {
 
 draw_dendrogram = function(sra, tc_dist_dist, fontsize = 7) {
     dend <- as.dendrogram(hclust(tc_dist_dist))
-    dend_colors = sra$tissue_color[order.dendrogram(dend)]
+    dend_colors = sra[order.dendrogram(dend),'tissue_color']
     labels_colors(dend) <- dend_colors
-    dend_labels <- sra$run[order.dendrogram(dend)]
+    dend_labels <- sra[order.dendrogram(dend), 'run']
     dend <- color_branches(dend, labels = dend_labels, col = dend_colors)
     dend <- set(dend, "branches_lwd", 1)
     for (i in 1:ncol(tc)) {
@@ -440,17 +443,26 @@ draw_dendrogram = function(sra, tc_dist_dist, fontsize = 7) {
     axis(side = 2, line = 0, las = 1)
     mtext("Distance", side = 2, line = 8.5, outer = FALSE)
     n = nrow(sra)
-    symbols(1:n, rep(0, n), circles = rep(1, n), add = TRUE, inches = 0.02, xpd = TRUE, lwd = 1, bg = sra$tissue_color[order.dendrogram(dend)],
-            fg = sra$bp_color[order.dendrogram(dend)])
+    symbols(
+      1:n,
+      rep(0, n),
+      circles = rep(1, n),
+      add = TRUE,
+      inches = 0.02,
+      xpd = TRUE,
+      lwd = 1,
+      bg = sra[order.dendrogram(dend), 'tissue_color'],
+      fg = sra[order.dendrogram(dend), 'bp_color']
+    )
 }
 
 draw_dendrogram_pvclust = function(sra, tc, nboot, pvclust_file, fontsize = 7) {
     dist_fun = function(x) {
         Dist(t(x), method = "pearson")
     }
-    sp = sub(" ", "_", sra$scientific_name[1])
+    sp = sub(" ", "_", sra[['scientific_name']][1])
     if (file.exists(pvclust_file)) {
-        if (file.info(pvclust_file)$size) {
+        if (file.info(pvclust_file)[['size']]) {
             print("pvclust file found.")
             load(pvclust_file)
         }
@@ -460,9 +472,9 @@ draw_dendrogram_pvclust = function(sra, tc, nboot, pvclust_file, fontsize = 7) {
         save(result, file = pvclust_file)
     }
     dend = as.dendrogram(result)
-    dend_colors = sra$tissue_color[order.dendrogram(dend)]
+    dend_colors = sra[order.dendrogram(dend), 'tissue_color']
     labels_colors(dend) = dend_colors
-    dend_labels = sra$run[order.dendrogram(dend)]
+    dend_labels = sra[order.dendrogram(dend), 'run']
     dend = color_branches(dend, labels = dend_labels, col = dend_colors)
     dend = set(dend, "branches_lwd", 2)
     for (i in 1:ncol(tc)) {
@@ -473,18 +485,37 @@ draw_dendrogram_pvclust = function(sra, tc, nboot, pvclust_file, fontsize = 7) {
     plot(dend, las = 1, ylab = "Distance", cex.axis = 1/cex.xlab, cex.lab = 1/cex.xlab)
     par(cex = 1)
     n = nrow(sra)
-    symbols(1:n, rep(0, n), circles = rep(1, n), add = TRUE, inches = 0.04, xpd = TRUE, lwd = 2, bg = sra$tissue_color[order.dendrogram(dend)],
-            fg = sra$bp_color[order.dendrogram(dend)])
+    symbols(
+      1:n,
+      rep(0, n),
+      circles = rep(1, n),
+      add = TRUE,
+      inches = 0.04,
+      xpd = TRUE,
+      lwd = 2,
+      bg = sra[order.dendrogram(dend), 'tissue_color'],
+      fg = sra[order.dendrogram(dend), 'bp_color']
+    )
     text(result, print.num = FALSE, cex = 1, col.pv = "black")
 }
 
 draw_pca = function(sra, tc_dist_matrix, fontsize = 7) {
     set.seed(1)
     pca = prcomp(tc_dist_matrix)
-    xlabel = paste0("PC 1 (", round(summary(pca)$importance[2, 1] * 100, digits = 1), "%)")
-    ylabel = paste0("PC 2 (", round(summary(pca)$importance[2, 2] * 100, digits = 1), "%)")
-    plot(pca$rotation[, 1], pca$rotation[, 2], pch = 21, cex = 2, lwd = 1, bg = sra$tissue_color, col = sra$bp_color,
-         xlab = xlabel, ylab = ylabel, las = 1)
+    xlabel = paste0("PC 1 (", round(summary(pca)[['importance']][2, 1] * 100, digits = 1), "%)")
+    ylabel = paste0("PC 2 (", round(summary(pca)[['importance']][2, 2] * 100, digits = 1), "%)")
+    plot(
+      pca[['rotation']][, 1],
+      pca[['rotation']][, 2],
+      pch = 21,
+      cex = 2,
+      lwd = 1,
+      bg = sra[['tissue_color']],
+      col = sra[['bp_color']],
+      xlab = xlabel,
+      ylab = ylabel,
+      las = 1
+    )
     # plot(pca$x[,1], pca$x[,2], pch=21, cex=2, lwd=2, bg=sra$tissue_color, col=sra$bp_color, main=title,
     # xlab=xlabel, ylab=ylabel, las=1)
 }
@@ -501,8 +532,18 @@ draw_mds = function(sra, tc_dist_dist, fontsize = 7) {
         plot(c(0, 1), c(0, 1), ann = F, bty = "n", type = "n", xaxt = "n", yaxt = "n")
     } else {
         mds <- try_out
-        plot(mds$points[, 1], mds$points[, 2], pch = 21, cex = 2, lwd = 1, bg = sra$tissue_color, col = sra$bp_color,
-             xlab = "MDS dimension 1", ylab = "MDS dimension 2", las = 1)
+        plot(
+          mds[['points']][, 1],
+          mds[['points']][, 2],
+          pch = 21,
+          cex = 2,
+          lwd = 1,
+          bg = sra[['tissue_color']],
+          col = sra[['bp_color']],
+          xlab = "MDS dimension 1",
+          ylab = "MDS dimension 2",
+          las = 1
+        )
     }
 }
 
@@ -512,8 +553,18 @@ draw_tsne = function(sra, tc, fontsize = 7) {
     out_tsne = Rtsne(as.matrix(t(tc)), theta = 0, check_duplicates = FALSE, verbose = FALSE, perplexity = perplexity,
                      dims = 2)
     try_out = tryCatch({
-        plot(out_tsne$Y[, 1], out_tsne$Y[, 2], pch = 21, cex = 2, lwd = 1, bg = sra$tissue_color, col = sra$bp_color,
-             xlab = "t-SNE dimension 1", ylab = "t-SNE dimension 2", las = 1)
+        plot(
+          out_tsne[['Y']][, 1],
+          out_tsne[['Y']][, 2],
+          pch = 21,
+          cex = 2,
+          lwd = 1,
+          bg = sra[['tissue_color']],
+          col = sra[['bp_color']],
+          xlab = "t-SNE dimension 1",
+          ylab = "t-SNE dimension 2",
+          las = 1
+        )
     }, error = function(a) {
         return("t-SNE plot failed.")
     })
@@ -537,7 +588,7 @@ draw_sva_summary = function(sva_out, tc, sra, fontsize) {
         cols = c("tissue","bioproject","lib_selection","instrument","mapping_rate")
         label_cols = c("organ","BioProject","library selection","instrument","mapping rate")
 
-        num_sv = sva_out$n.sv
+        num_sv = sva_out[['n.sv']]
         df = data.frame(matrix(NA, num_sv, length(cols)))
         colnames(df) = cols
         rownames(df) = paste0("SV", 1:nrow(df))
@@ -546,7 +597,8 @@ draw_sva_summary = function(sva_out, tc, sra, fontsize) {
                 if (length(unique(sra[, cols[i]])) == 1) {
                     df[j, i] = NA
                 } else {
-                    df[j, i] = summary(lm(sva_out$sv[, j] ~ sra[, cols[i]]))$adj.r.squared
+                    lm_summary = summary(lm(sva_out[['sv']][, j] ~ sra[, cols[i]]))
+                    df[j, i] = lm_summary[['adj.r.squared']]
                 }
             }
         }
@@ -561,10 +613,10 @@ draw_sva_summary = function(sva_out, tc, sra, fontsize) {
 }
 
 draw_boxplot = function(sra, tc_dist_matrix, fontsize = 7) {
-    is_same_bp = outer(sra$bioproject, sra$bioproject, function(x, y) {
+    is_same_bp = outer(sra[['bioproject']], sra[['bioproject']], function(x, y) {
         x == y
     })
-    is_same_tissue = outer(sra$tissue, sra$tissue, function(x, y) {
+    is_same_tissue = outer(sra[['tissue']], sra[['tissue']], function(x, y) {
         x == y
     })
     plot(c(0.5, 4.5), c(0, 1), type = "n", xlab = "", ylab = "Pearson's correlation\ncoefficient", las = 1,
@@ -581,14 +633,14 @@ draw_boxplot = function(sra, tc_dist_matrix, fontsize = 7) {
 
 draw_tau_histogram = function(tc, sra, selected_tissues, fontsize = 7) {
     df_tau = tissue2tau(tissue_mean(tc, sra, selected_tissues), rich.annotation = FALSE, unlog = TRUE)
-    hist_out = hist(df_tau$tau, breaks = seq(0, 1, 0.05), las = 1, xlab = "Tau (expression specificity)",
+    hist_out = hist(df_tau[['tau']], breaks = seq(0, 1, 0.05), las = 1, xlab = "Tau (expression specificity)",
                     ylab = "Gene count", main = "", col = "gray")
-    num_noexp = sum(is.na(df_tau$tau))
+    num_noexp = sum(is.na(df_tau[['tau']]))
     num_all = nrow(df_tau)
     # num_exp = nrow(df_tau) - num_noexp text_noexp = paste('Expressed genes:', num_exp,
     # '\nNon-expressed genes:', num_noexp)
     text_noexp = paste0("Excluded due to\nno expression:\n", num_noexp, "/", num_all, " genes")
-    text(0, max(hist_out$counts) * 0.85, text_noexp, pos = 4)
+    text(0, max(hist_out[['counts']]) * 0.85, text_noexp, pos = 4)
 }
 
 draw_exp_level_histogram = function(tc, sra, selected_tissues, fontsize = 7, transform_method) {
@@ -605,10 +657,10 @@ draw_legend = function(sra, new = TRUE, pos = "center", fontsize = 7, nlabel.in.
     if (new) {
         plot.new()
     }
-    tissue_unique = unique(sra$tissue)
-    bp_unique = unique(sub(";.*", "", sra$bioproject))
-    tissue_color_unique = unique(sra$tissue_color)
-    bp_color_unique = unique(sra$bp_color)
+    tissue_unique = unique(sra[['tissue']])
+    bp_unique = unique(sub(";.*", "", sra[['bioproject']]))
+    tissue_color_unique = unique(sra[['tissue_color']])
+    bp_color_unique = unique(sra[['bp_color']])
     ncol = ceiling((length(tissue_unique) + length(bp_unique) + 2)/nlabel.in.col)
     legend_text = c("Organ", as.character(tissue_unique), "", "BioProject", as.character(bp_unique))
     legend_color = c(rgb(1, 1, 1, 0), rep(rgb(1, 1, 1, 0), length(tissue_color_unique)), rgb(1, 1, 1,
@@ -719,19 +771,19 @@ tc_eff_length <- read.table(eff_file, sep = "\t", stringsAsFactors = FALSE, head
 # row.names(tc)<-tc[,1] tc <- tc[,-1]
 
 # read transcriptome
-scientific_name = unique(sra_all[sra_all$run %in% colnames(tc), "scientific_name"])
+scientific_name = unique(sra_all[sra_all[['run']] %in% colnames(tc), "scientific_name"])
 is_sp = (sra_all[,'scientific_name'] == scientific_name)
 is_tissue = (sra_all[,'tissue'] %in% selected_tissues)
 cat('Number of SRA runs for this species:', sum(is_sp), '\n')
 cat('Number of SRA runs for selected tisssues:', sum(is_tissue), '\n')
 sra = sra_all[(is_sp & is_tissue),]
-conditions = (sra$exclusion == "no") & (!sra$run %in% colnames(tc))
+conditions = (sra[['exclusion']] == "no") & (!sra[['run']] %in% colnames(tc))
 if (any(conditions)) {
     cat("Failed quantification:", sra[conditions, "run"], "\n")
     sra[conditions, "exclusion"] = "failed_quantification"
 }
 
-is_not_excluded = (sra$exclusion=='no')
+is_not_excluded = (sra[['exclusion']]=='no')
 cat('Number of non-excluded SRA runs (exclusion=="no"):', sum(is_not_excluded), '\n')
 tc = tc[,sra[is_not_excluded,'run']]
 out = sort_tc_and_sra(tc, sra) ; tc = out[["tc"]] ; sra = out[["sra"]]
@@ -777,7 +829,7 @@ tc_sva = NULL
 out = check_mapping_rate(tc, sra, mapping_rate_cutoff)
 tc = out[["tc"]]
 sra = out[["sra"]]
-tc = tc[, sra[sra$exclusion == "no", "run"]]
+tc = tc[, sra[sra[['exclusion']] == "no", "run"]]
 save_plot(tc, sra, NULL, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".mapping_cutoff"),
           selected_tissues, fontsize, transform_method)
 out = sva_subtraction(tc, sra)
@@ -792,11 +844,11 @@ end_flag = 0
 while (end_flag == 0) {
     cat("iteratively checking within-tissue correlation, round:", round, "\n")
     tc_cwtc = NULL
-    num_run_before = sum(sra$exclusion == "no")
+    num_run_before = sum(sra[['exclusion']] == "no")
     out = check_within_tissue_correlation(tc, sra, dist_method, min_dif, selected_tissues, one_outlier_per_iteration)
     tc_cwtc = out[["tc"]]
     sra = out[["sra"]]
-    num_run_after = sum(sra$exclusion == "no")
+    num_run_after = sum(sra[['exclusion']] == "no")
     if ((num_run_before == num_run_after) | (plot_intermediate)) {
         sva_out = NULL
         tc_sva = NULL
