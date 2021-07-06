@@ -1,10 +1,13 @@
-from amalgkit.util import *
+import pandas
 
+import json
 import re
-import subprocess
 import os
+import subprocess
 import sys
 import warnings
+
+from amalgkit.util import *
 
 def get_curate_group(args):
     if args.curate_group is None:
@@ -16,8 +19,52 @@ def get_curate_group(args):
     curate_group = '|'.join(curate_group)
     return curate_group
 
+def write_updated_metadata(metadata, outpath, args):
+    if os.path.exists(outpath):
+        print('Updated metadata file was detected and will not be overwritten.')
+        return None
+    else:
+        print('Updated metadata file was not detected. Preparing...')
+    if args.updated_metadata_dir == "inferred":
+        updated_metadata_dir = os.path.realpath(os.path.join(args.out_dir, 'metadata/updated_metadata'))
+    else:
+        updated_metadata_dir = os.path.realpath(args.updated_metadata_dir)
+    metadata = get_updated_metadata(metadata, updated_metadata_dir)
+    quant_dir = os.path.join(args.out_dir, 'quant')
+    metadata = get_mapping_rate(metadata, quant_dir)
+    print('Writing updated metadata: {}'.format(outpath))
+    metadata.df.to_csv(outpath, sep='\t', index=False)
 
-def curate_main(args):
+def get_updated_metadata(metadata, updated_metadata_dir):
+    files = os.listdir(updated_metadata_dir)
+    updated_metadata_files = [ f for f in files if f.startswith('metadata')&f.endswith('.tsv') ]
+    metadata_rows = list()
+    for file in updated_metadata_files:
+        file_path = os.path.join(updated_metadata_dir, file)
+        tmp = pandas.read_csv(file_path, header=0, index_col=None, sep='\t')
+        metadata_rows.append(tmp)
+    tmp_concat = pandas.concat(metadata_rows, axis=0, ignore_index=True)
+    cols = ['run',] + [ col for col in tmp_concat.columns if (col not in metadata.df.columns)&(col!='index') ]
+    metadata.df = pandas.merge(metadata.df, tmp_concat.loc[:,cols], on='run', how='left')
+    return metadata
+
+def get_mapping_rate(metadata, quant_dir):
+    metadata.df.loc[:,'mapping_rate'] = numpy.nan
+    sra_ids = metadata.df.loc[:,'run'].values
+    sra_dirs = [ d for d in os.listdir(quant_dir) if d in sra_ids ]
+    print('Number of quant sub-directories that matched to metadata: {:,}'.format(len(sra_dirs)))
+    for sra_id in sra_dirs:
+        run_info_path = os.path.join(quant_dir, sra_id, sra_id+'_run_info.json')
+        if not os.path.exists(run_info_path):
+            sys.stderr.write('run_info.json not found. Skipping {}.\n'.format(sra_id))
+            continue
+        is_sra = (metadata.df.loc[:,'run']==sra_id)
+        with open(run_info_path) as f:
+            run_info = json.load(f)
+        metadata.df.loc[is_sra,'mapping_rate'] = run_info['p_pseudoaligned']
+    return metadata
+
+def check_rscript():
     try:
         subprocess.run(['Rscript', '--help'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     except FileNotFoundError as e:
@@ -25,12 +72,14 @@ def curate_main(args):
         print(",<ERROR> Rscript is not installed.")
         sys.exit(1)
 
-    meta_out = os.path.realpath(args.metadata)
-    if args.updated_metadata_dir == "inferred":
-        updated_metadata_dir = os.path.join(args.out_dir, 'metadata/updated_metadata')
-    else:
-        updated_metadata_dir = os.path.realpath(args.updated_metadata_dir)
-
+def curate_main(args):
+    check_rscript()
+    metadata = load_metadata(args)
+    curate_dir = os.path.join(args.out_dir, 'curate')
+    if not os.path.exists(curate_dir):
+        os.mkdir(curate_dir)
+    new_metadata_path = os.path.realpath(os.path.join(curate_dir, 'metadata.tsv'))
+    write_updated_metadata(metadata, new_metadata_path, args)
     dist_method = args.dist_method
     mr_cut = args.mapping_rate
     intermediate = args.plot_intermediate
@@ -77,7 +126,7 @@ def curate_main(args):
         subprocess.call(['Rscript',
                          r_script_path,
                          quant_out,
-                         meta_out,
+                         new_metadata_path,
                          os.path.realpath(args.out_dir),
                          eff_len_out,
                          dist_method,
@@ -86,7 +135,6 @@ def curate_main(args):
                          str(intermediate),
                          curate_group,
                          str(args.norm),
-                         os.path.realpath(updated_metadata_dir),
                          str(args.one_outlier_per_iter)])
 
     # if multiple species mode active
@@ -137,8 +185,8 @@ def curate_main(args):
                 len_file = len_file[0]
             if len(count_file) > 1:
                 count_file = len_file[0]
-            export_string = " --export=QUANT=" + os.path.realpath(str(count_file)) + ",META=" + os.path.realpath(
-                meta_out) + ",WORK=" + os.path.realpath(args.out_dir) + ",LEN=" + os.path.realpath(
+            path_metadata = os.path.realpath(args.metadata)
+            export_string = " --export=QUANT=" + os.path.realpath(str(count_file)) + ",META=" + path_metadata + ",WORK=" + os.path.realpath(args.out_dir) + ",LEN=" + os.path.realpath(
                 str(len_file)) + ",DIST=" + dist_method + ",CUT=" + str(mr_cut) + ",INTER=" + str(
                 intermediate) + ",CURATE_GROUP=" + f'"{curate_group}"' + " " + batch_script_path + ",NORM=" + str(
                 args.norm)

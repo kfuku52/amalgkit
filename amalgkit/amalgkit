@@ -201,7 +201,7 @@ pge.add_argument('--tol', metavar='FLOAT', default=1, type=float, required=False
 pge.add_argument('--metadata', metavar='PATH', default=None, type=str, required=False, action='store',
                  help='default=%(default)s: PATH to metadata table. See `amalgkit metadata -h` for details.')
 pge.add_argument('--batch', metavar='INT', default=None, type=int, required=False, action='store',
-                 help='default=%(default)s: Zero-based index of metadata table (--metadata). If set, process only one SRA record. This function is intended for array job processing.')
+                 help='default=%(default)s: One-based index of metadata table (--metadata). If set, process only one SRA record. This function is intended for array job processing.')
 pge.add_argument('--redo', metavar='yes|no', default='no', type=str, required=False, action='store', choices=['yes', 'no'],
                  help='default=%(default)s: Redo the analysis even if *.amalgkit.fastq.gz is detected.')
 pge.set_defaults(handler=command_getfastq)
@@ -222,7 +222,7 @@ pqu.add_argument('-w','--out_dir', metavar='PATH', default='./', type=str, requi
 pqu.add_argument('--metadata', metavar='PATH', default=None, type=str, required=True, action='store',
                  help='default=%(default)s: PATH to metadata table. See `amalgkit metadata -h` for details.')
 pqu.add_argument('--batch', metavar='INT', default=None, type=int, required=False, action='store',
-                 help='default=%(default)s: Zero-based index of metadata table (--metadata). If set, process only one SRA record. This function is intended for array job processing.')
+                 help='default=%(default)s: One-based index of metadata table (--metadata). If set, process only one SRA record. This function is intended for array job processing.')
 pqu.add_argument('--clean_fastq', metavar='yes|no', default='yes', type=str, required=False, action='store', choices=['yes', 'no'],
                  help='default=%(default)s: Remove fastq files when quant is successfully completed.')
 pqu.add_argument('--redo', metavar='yes|no', default='no', type=str, required=False, action='store', choices=['yes', 'no'],
@@ -290,7 +290,7 @@ pcu.add_argument('--mapping_rate', metavar='INT', default=0.20, type=int, requir
                  help='default=%(default)s: cutoff for mapping rate.')
 pcu.add_argument('--plot_intermediate', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
                  help='default=%(default)s: If yes, calculates and plots SVA correction after each iteration of outlier removal. Drastically increases computing times!')
-pcu.add_argument('--one_outlier_per_iter', metavar='yes|no', default='yes', type=strtobool, required=False, action='store',
+pcu.add_argument('--one_outlier_per_iter', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
                  help='default=%(default)s: If yes, allows curate to remove only 1 sample per same-tissue or same-bioproject. Increases computing times!')
 pcu.add_argument('--curate_group', metavar='STR', default=None, type=str, required=False, action='store',
                  help='default=%(default)s: "comma separated list of values contained in the curate_group metadata column to be included in the analysis. '
