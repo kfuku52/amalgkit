@@ -82,6 +82,7 @@ def curate_main(args):
     write_updated_metadata(metadata, new_metadata_path, args)
     dist_method = args.dist_method
     mr_cut = args.mapping_rate
+    correlation_threshold = args.correlation_threshold
     intermediate = args.plot_intermediate
     curate_group = get_curate_group(args)
     curate_path = os.path.dirname(os.path.realpath(__file__))
@@ -135,7 +136,8 @@ def curate_main(args):
                          str(intermediate),
                          curate_group,
                          str(args.norm),
-                         str(args.one_outlier_per_iter)])
+                         str(args.one_outlier_per_iter),
+                         str(correlation_threshold)])
 
     # if multiple species mode active
     if args.batch is not None:

@@ -286,8 +286,10 @@ pcu.add_argument('--metadata', metavar='PATH', default=None, type=str, required=
                  help='default=%(default)s: Path to metadata file, obtained by amalgkit metadata command.')
 pcu.add_argument('--dist_method', metavar='STR', default='pearson', type=str, required=False, action='store',
                  help='default=%(default)s: Method for calculating distance.')
-pcu.add_argument('--mapping_rate', metavar='INT', default=0.20, type=int, required=False, action='store',
+pcu.add_argument('--mapping_rate', metavar='FLOAT', default=0.20, type=float, required=False, action='store',
                  help='default=%(default)s: cutoff for mapping rate.')
+pcu.add_argument('--correlation_threshold', metavar='FLOAT', default=0.30, type=float, required=False, action='store',
+                 help='default=%(default)s: lower cutoff for pearson r during outlier removal.')
 pcu.add_argument('--plot_intermediate', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
                  help='default=%(default)s: If yes, calculates and plots SVA correction after each iteration of outlier removal. Drastically increases computing times!')
 pcu.add_argument('--one_outlier_per_iter', metavar='yes|no', default='no', type=strtobool, required=False, action='store',

@@ -30,7 +30,7 @@ if (debug_mode == "debug") {
     mode = "msm"
     transform_method = "fpkm"
     # tmm norm debug
-
+    correlation_threshold = 0.4
     tmm_norm = "yes"
     dir_work = '/Users/s229181/MSN/'
     srafile = '/Users/s229181/MSN/metadata/metadata_may2021_updated.tsv'
@@ -58,6 +58,7 @@ if (debug_mode == "debug") {
     selected_tissues = strsplit(args[9], "\\|")[[1]]
     transform_method = args[10]
     one_outlier_per_iteration = as.integer(args[11])
+    correlation_threshold = as.numeric(args[12])
     
 
 }
@@ -261,7 +262,7 @@ check_mapping_rate = function(tc, sra, mapping_rate_cutoff) {
     return(list(tc = tc, sra = sra))
 }
 
-check_within_tissue_correlation = function(tc, sra, dist_method, min_dif, selected_tissues, one_out_per_iter = TRUE) {
+check_within_tissue_correlation = function(tc, sra, dist_method, min_dif, selected_tissues, one_out_per_iter = TRUE, correlation_threshold) {
     out = tc_sra_intersect(tc, sra)
     tc = out[["tc"]]
     sra2 = out[["sra"]]
@@ -316,7 +317,7 @@ check_within_tissue_correlation = function(tc, sra, dist_method, min_dif, select
             cat('Registered as a candidate for exclusion. Better correlation to other categories:', sra_run, '\n')
             exclude_runs = c(exclude_runs, sra_run)
         }
-        if (coef_other_bp[my_tissue] < 0.2) {
+        if (coef_other_bp[my_tissue] < correlation_threshold) {
             cat('Registered as a candidate for exclusion. Low within-category correlation:', sra_run, '\n')
             exclude_runs = c(exclude_runs, sra_run)
         }
@@ -845,7 +846,7 @@ while (end_flag == 0) {
     cat("iteratively checking within-tissue correlation, round:", round, "\n")
     tc_cwtc = NULL
     num_run_before = sum(sra[['exclusion']] == "no")
-    out = check_within_tissue_correlation(tc, sra, dist_method, min_dif, selected_tissues, one_outlier_per_iteration)
+    out = check_within_tissue_correlation(tc, sra, dist_method, min_dif, selected_tissues, one_outlier_per_iteration, correlation_threshold)
     tc_cwtc = out[["tc"]]
     sra = out[["sra"]]
     num_run_after = sum(sra[['exclusion']] == "no")
