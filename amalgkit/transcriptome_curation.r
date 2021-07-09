@@ -1,6 +1,5 @@
 #!/usr/bin/env Rscript
 
-# library(Biobase)
 suppressPackageStartupMessages(library(pcaMethods, quietly = TRUE))
 suppressPackageStartupMessages(library(colorspace, quietly = TRUE))
 suppressPackageStartupMessages(library(RColorBrewer, quietly = TRUE))
@@ -587,7 +586,7 @@ draw_sva_summary = function(sva_out, tc, sra, fontsize) {
         tc = out[["tc"]]
         sra = out[["sra"]]
         cols = c("tissue","bioproject","lib_selection","instrument","mapping_rate")
-        label_cols = c("organ","BioProject","library selection","instrument","mapping rate")
+        label_cols = c("tissue","BioProject","library selection","instrument","mapping rate")
 
         num_sv = sva_out[['n.sv']]
         df = data.frame(matrix(NA, num_sv, length(cols)))
@@ -628,7 +627,7 @@ draw_boxplot = function(sra, tc_dist_matrix, fontsize = 7) {
     boxplot(tc_dist_matrix[(is_same_bp) & (is_same_tissue)], at = 4, add = TRUE, col = "gray", yaxt = "n")
     labels = c("bw\nbw", "bw\nwi", "wi\nbw", "wi\nwi")
     axis(side = 1, at = c(1, 2, 3, 4), labels = labels, padj = 0.5)
-    axis(side = 1, at = 0.35, labels = "Organ\nBioProject", padj = 0.5, hadj = 1, tick = FALSE)
+    axis(side = 1, at = 0.35, labels = "Tissue\nBioProject", padj = 0.5, hadj = 1, tick = FALSE)
 
 }
 
@@ -663,7 +662,7 @@ draw_legend = function(sra, new = TRUE, pos = "center", fontsize = 7, nlabel.in.
     tissue_color_unique = unique(sra[['tissue_color']])
     bp_color_unique = unique(sra[['bp_color']])
     ncol = ceiling((length(tissue_unique) + length(bp_unique) + 2)/nlabel.in.col)
-    legend_text = c("Organ", as.character(tissue_unique), "", "BioProject", as.character(bp_unique))
+    legend_text = c("Tissue", as.character(tissue_unique), "", "BioProject", as.character(bp_unique))
     legend_color = c(rgb(1, 1, 1, 0), rep(rgb(1, 1, 1, 0), length(tissue_color_unique)), rgb(1, 1, 1,
                                                                                              0), rgb(1, 1, 1, 0), bp_color_unique)
     legend_bg = c(rgb(1, 1, 1, 0), tissue_color_unique, rgb(1, 1, 1, 0), rgb(1, 1, 1, 0), rep(rgb(1,
