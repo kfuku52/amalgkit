@@ -1,5 +1,6 @@
 #!/usr/bin/env Rscript
 
+# library(Biobase)
 suppressPackageStartupMessages(library(pcaMethods, quietly = TRUE))
 suppressPackageStartupMessages(library(colorspace, quietly = TRUE))
 suppressPackageStartupMessages(library(RColorBrewer, quietly = TRUE))
@@ -23,7 +24,7 @@ if (debug_mode == "debug") {
     mapping_rate_cutoff = 0
     min_dif = 0
     plot_intermediate = 0
-    selected_tissues = c("root", "flower", "leaf")
+    selected_curate_group = c("root", "flower", "leaf")
     dir_count = "counts/"
     dir_eff_length = "eff_length/"
     mode = "msm"
@@ -39,10 +40,10 @@ if (debug_mode == "debug") {
     dist_method = "pearson"
     min_dif = 0
     plot_intermediate = 1
-    selected_tissues = c("root", "flower", "leaf")
+    selected_curate_groups = c("root", "flower", "leaf")
     stop_after_tmm = TRUE
 
-    # selected_tissues = strsplit('root|flower|leaf', '\\|')[[1]]
+    # selected_curate_groups = strsplit('root|flower|leaf', '\\|')[[1]]
 } else if (debug_mode == "batch") {
     args = commandArgs(trailingOnly = TRUE)
     print(args)
@@ -54,11 +55,10 @@ if (debug_mode == "debug") {
     mapping_rate_cutoff = as.numeric(args[6])
     min_dif = as.numeric(args[7])
     plot_intermediate = as.integer(args[8])
-    selected_tissues = strsplit(args[9], "\\|")[[1]]
+    selected_curate_groups = strsplit(args[9], "\\|")[[1]]
     transform_method = args[10]
     one_outlier_per_iteration = as.integer(args[11])
     correlation_threshold = as.numeric(args[12])
-    
 
 }
 if (!endsWith(dir_work, "/")) {
@@ -103,37 +103,37 @@ remove_nonexpressed_gene = function(tc) {
     return(list(tc_ex = tc_ex, tc_ne = tc_ne))
 }
 
-add_color_to_sra = function(sra, selected_tissues) {
-    sra = sra[, (!names(sra) %in% c("bp_color", "sp_color", "tissue_color"))]
+add_color_to_sra = function(sra, selected_curate_groups) {
+    sra = sra[, (!names(sra) %in% c("bp_color", "sp_color", "curate_group_color"))]
     bioproject = as.character(sra[['bioproject']])
     bioproject_u = sort(unique(bioproject))
     scientific_name = as.character(sra[['scientific_name']])
     scientific_name_u = sort(unique(scientific_name))
-    tissue = as.character(sra[['tissue']])
-    tissue_u = sort(unique(tissue))
-    if (length(selected_tissues) <= 8) {
-        tissue_color = brewer.pal(length(tissue_u), "Dark2")
+    curate_group = as.character(sra[['curate_group']])
+    curate_group_u = sort(unique(curate_group))
+    if (length(selected_curate_groups) <= 8) {
+        curate_group_color = brewer.pal(length(curate_group_u), "Dark2")
         bp_color = rainbow_hcl(length(bioproject_u), c = 50)
         sp_color = rainbow_hcl(length(scientific_name_u), c = 100)
-    } else if (length(selected_tissues) <= 12) {
-        tissue_color = brewer.pal(length(unique(tissue)), "Paired")
+    } else if (length(selected_curate_groups) <= 12) {
+        curate_group_color = brewer.pal(length(unique(curate_group)), "Paired")
         bp_color = rainbow_hcl(length(bioproject_u), c = 50)
         sp_color = rainbow_hcl(length(scientific_name_u), c = 100)
     } else {
-        tissue_color = rainbow_hcl(length(selected_tissues), c = 100)
+        curate_group_color = rainbow_hcl(length(selected_curate_groups), c = 100)
         bp_color = rainbow_hcl(length(bioproject_u), c = 50)
         sp_color = rainbow_hcl(length(scientific_name_u), c = 150)
     }
-    df_tissue = data.frame(tissue=tissue_u, tissue_color=tissue_color[1:length(tissue_u)], stringsAsFactors = FALSE)
+    df_curate_group = data.frame(curate_group=curate_group_u, curate_group_color=curate_group_color[1:length(curate_group_u)], stringsAsFactors = FALSE)
     df_bp = data.frame(bioproject=bioproject_u, bp_color=bp_color[1:length(bioproject_u)], stringsAsFactors = FALSE)
     df_sp = data.frame(scientific_name=scientific_name_u, sp_color=sp_color[1:length(scientific_name_u)], stringsAsFactors = FALSE)
     sra = merge(sra, df_bp, sort = FALSE, all.y = FALSE)
     sra = merge(sra, df_sp, sort = FALSE, all.y = FALSE)
-    sra = merge(sra, df_tissue, sort = FALSE, all.y = FALSE)
+    sra = merge(sra, df_curate_group, sort = FALSE, all.y = FALSE)
     return(sra)
 }
 
-sort_tc_and_sra = function(tc, sra, sort_columns = c("tissue", "scientific_name", "bioproject")) {
+sort_tc_and_sra = function(tc, sra, sort_columns = c("curate_group", "scientific_name", "bioproject")) {
     for (column in rev(sort_columns)) {
         sra = sra[order(sra[column]), ]
     }
@@ -146,13 +146,13 @@ sort_averaged_tc = function(tc) {
     split_colnames = strsplit(colnames(tc), "_")
     genus_names = c()
     specific_names = c()
-    tissue_names = c()
+    curate_group_names = c()
     for (i in 1:length(split_colnames)) {
         genus_names = c(genus_names, split_colnames[[i]][1])
         specific_names = c(specific_names, split_colnames[[i]][2])
-        tissue_names = c(tissue_names, split_colnames[[i]][3])
+        curate_group_names = c(curate_group_names, split_colnames[[i]][3])
     }
-    colname_order = order(tissue_names, genus_names, specific_names)
+    colname_order = order(curate_group_names, genus_names, specific_names)
     tc = tc[, colname_order]
     return(tc)
 }
@@ -165,35 +165,35 @@ cleanY = function(y, mod, svs) {
     return(y - t(as.matrix(X[, -c(1:P)]) %*% beta[-c(1:P), ]))
 }
 
-tissue_mean = function(tc, sra, selected_tissues = NA, balance.bp = FALSE) {
+curate_group_mean = function(tc, sra, selected_curate_groups = NA, balance.bp = FALSE) {
     # if the data are SVA-corrected, balance.bp would not be necessary because project-specfic effects
     # were removed in SVA already.
-    if (all(is.na(selected_tissues))) {
-        sp_tissues = unique(sra[['tissue']])
+    if (all(is.na(selected_curate_groups))) {
+        sp_curate_groups = unique(sra[['curate_group']])
     } else {
-        sp_tissues = selected_tissues[selected_tissues %in% unique(sra[['tissue']])]
+        sp_curate_groups = selected_curate_groups[selected_curate_groups %in% unique(sra[['curate_group']])]
     }
-    tc_ave = data.frame(matrix(rep(NA, length(sp_tissues) * nrow(tc)), nrow = nrow(tc)))
-    colnames(tc_ave) = sp_tissues
+    tc_ave = data.frame(matrix(rep(NA, length(sp_curate_groups) * nrow(tc)), nrow = nrow(tc)))
+    colnames(tc_ave) = sp_curate_groups
     rownames(tc_ave) = rownames(tc)
-    for (tissue in sp_tissues) {
-        run_tissue = sra[(sra[['tissue']] == tissue),'run']
-        run_tissue = run_tissue[run_tissue %in% colnames(tc)]
-        if (length(run_tissue) == 1) {
-            exp_tissue = tc[, run_tissue]
+    for (curate_group in sp_curate_groups) {
+        run_curate_group = sra[(sra[['curate_group']] == curate_group),'run']
+        run_curate_group = run_curate_group[run_curate_group %in% colnames(tc)]
+        if (length(run_curate_group) == 1) {
+            exp_curate_group = tc[, run_curate_group]
         } else {
             if (balance.bp) {
                 is_run = (sra[['run']] %in% colnames(tc))
-                is_tissue = (sra[['tissue']] == tissue)
+                is_curate_group = (sra[['curate_group']] == curate_group)
                 is_no_exclusion = (sra[['exclusion']] == "no")
-                bps = unique(sra[is_run & is_tissue & is_no_exclusion, "bioproject"])
+                bps = unique(sra[is_run & is_curate_group & is_no_exclusion, "bioproject"])
                 df_tmp = data.frame(matrix(rep(NA, nrow(tc) * length(bps)), nrow = nrow(tc), ncol = length(bps)))
                 colnames(df_tmp) = bps
                 for (bp in bps) {
                     is_bp = (sra[['bioproject']] == bp)
-                    is_tissue = (sra[['tissue']] == tissue)
+                    is_curate_group = (sra[['curate_group']] == curate_group)
                     is_no_exclusion = (sra[['exclusion']] == "no")
-                    sra_ids = sra[is_bp & is_tissue & is_no_exclusion, "run"]
+                    sra_ids = sra[is_bp & is_curate_group & is_no_exclusion, "run"]
                     tc_bp = tc[, sra_ids]
                     if (class(tc_bp) == "numeric") {
                         df_tmp[bp] = tc_bp
@@ -201,40 +201,40 @@ tissue_mean = function(tc, sra, selected_tissues = NA, balance.bp = FALSE) {
                         df_tmp[bp] = rowMeans(tc_bp)
                     }
                 }
-                exp_tissue = rowMeans(df_tmp)
+                exp_curate_group = rowMeans(df_tmp)
             } else {
-                exp_tissue = rowMeans(tc[, run_tissue])
+                exp_curate_group = rowMeans(tc[, run_curate_group])
             }
         }
-        tc_ave[, tissue] = exp_tissue
+        tc_ave[, curate_group] = exp_curate_group
     }
     return(tc_ave)
 }
 
-tissue2tau = function(tc_tissue, rich.annotation = TRUE, unlog = FALSE) {
+curate_group2tau = function(tc_curate_group, rich.annotation = TRUE, unlog = FALSE) {
     if (rich.annotation) {
         cols = c("tau", "highest", "order")
     } else {
         cols = c("tau")
     }
-    df_tau = data.frame(matrix(rep(NA, length(cols) * nrow(tc_tissue)), nrow = nrow(tc_tissue)))
+    df_tau = data.frame(matrix(rep(NA, length(cols) * nrow(tc_curate_group)), nrow = nrow(tc_curate_group)))
     colnames(df_tau) = cols
-    rownames(df_tau) = rownames(tc_tissue)
+    rownames(df_tau) = rownames(tc_curate_group)
     if (unlog) {
-        tc_tissue = exp(tc_tissue) - 1
-        tc_tissue[tc_tissue < 0] = 0
+        tc_curate_group = exp(tc_curate_group) - 1
+        tc_curate_group[tc_curate_group < 0] = 0
     }
-    xmax = apply(tc_tissue, 1, max)
-    df_tau[,'tau'] = apply((1 - (tc_tissue/xmax))/(ncol(tc_tissue) - 1), 1, sum)
+    xmax = apply(tc_curate_group, 1, max)
+    df_tau[,'tau'] = apply((1 - (tc_curate_group/xmax))/(ncol(tc_curate_group) - 1), 1, sum)
     if (rich.annotation) {
-        tc_tissue[is.na(tc_tissue)] = 0
-        for (i in 1:nrow(tc_tissue)) {
-            is_nonzero = tc_tissue[i, ] > 0
+        tc_curate_group[is.na(tc_curate_group)] = 0
+        for (i in 1:nrow(tc_curate_group)) {
+            is_nonzero = tc_curate_group[i, ] > 0
             if (sum(is_nonzero) > 0) {
-                exp_order = order(tc_tissue[i, is_nonzero], decreasing = TRUE)
-                tissue_ordered = colnames(tc_tissue)[is_nonzero][exp_order]
-                df_tau[i, "highest"] = tissue_ordered[1]
-                df_tau[i, "order"] = paste(tissue_ordered, collapse = "|")
+                exp_order = order(tc_curate_group[i, is_nonzero], decreasing = TRUE)
+                curate_group_ordered = colnames(tc_curate_group)[is_nonzero][exp_order]
+                df_tau[i, "highest"] = curate_group_ordered[1]
+                df_tau[i, "order"] = paste(curate_group_ordered, collapse = "|")
             }
         }
     }
@@ -261,106 +261,106 @@ check_mapping_rate = function(tc, sra, mapping_rate_cutoff) {
     return(list(tc = tc, sra = sra))
 }
 
-check_within_tissue_correlation = function(tc, sra, dist_method, min_dif, selected_tissues, one_out_per_iter = TRUE, correlation_threshold) {
+check_within_curate_group_correlation = function(tc, sra, dist_method, min_dif, selected_curate_groups, one_out_per_iter = TRUE, correlation_threshold) {
     out = tc_sra_intersect(tc, sra)
     tc = out[["tc"]]
     sra2 = out[["sra"]]
     
-    sra2[,'num_other_run_same_bp_tissue'] = 0
-    selected_tissues = selected_tissues[selected_tissues %in% unique(sra2[['tissue']])]
-    num_tissue = length(selected_tissues)
+    sra2[,'num_other_run_same_bp_curate_group'] = 0
+    selected_curate_groups = selected_curate_groups[selected_curate_groups %in% unique(sra2[['curate_group']])]
+    num_curate_group = length(selected_curate_groups)
     exclude_runs = c()
     for (sra_run in colnames(tc)) {
         is_sra = (sra2[['run']] == sra_run)
-        my_tissue = sra2[is_sra, "tissue"]
+        my_curate_group = sra2[is_sra, "curate_group"]
         my_bioproject = sra2[is_sra, "bioproject"]
         is_not_my_bp = (sra2[['bioproject']] != my_bioproject)
-        is_my_tissue = (sra2[['tissue']] == my_tissue)
-        run_other_bp = sra2[(is_not_my_bp | !is_my_tissue), "run"]
+        is_my_curate_group = (sra2[['curate_group']] == my_curate_group)
+        run_other_bp = sra2[(is_not_my_bp | !is_my_curate_group), "run"]
         run_other_bp = run_other_bp[run_other_bp %in% colnames(tc)]
         tc_other_bp = tc[, run_other_bp]
-        num_other_run_same_bp_tissue = length(unique(sra2[(is_not_my_bp & is_my_tissue), "bioproject"]))
-        sra2[is_sra, "num_other_run_same_bp_tissue"] = num_other_run_same_bp_tissue
+        num_other_run_same_bp_curate_group = length(unique(sra2[(is_not_my_bp & is_my_curate_group), "bioproject"]))
+        sra2[is_sra, "num_other_run_same_bp_curate_group"] = num_other_run_same_bp_curate_group
         sra2_other_bp <- sra2[sra2[['run']] %in% run_other_bp,]
         
-        # If one tissue is completely sourced from the same bioproject, we can't remove the whole bioproject for tc_ave_other_bp
+        # If one curate_group is completely sourced from the same bioproject, we can't remove the whole bioproject for tc_ave_other_bp
 
-        num_other_bp_same_tissue = sum(sra2_other_bp[['tissue']] == my_tissue, na.rm=TRUE)
-        if (num_other_bp_same_tissue == 0) {
-            tc_ave_other_bp = tissue_mean(tc, sra2, selected_tissues)
+        num_other_bp_same_curate_group = sum(sra2_other_bp[['curate_group']] == my_curate_group, na.rm=TRUE)
+        if (num_other_bp_same_curate_group == 0) {
+            tc_ave_other_bp = curate_group_mean(tc, sra2, selected_curate_groups)
         } else {
-            tc_ave_other_bp = tissue_mean(tc_other_bp, sra2, selected_tissues)
+            tc_ave_other_bp = curate_group_mean(tc_other_bp, sra2, selected_curate_groups)
         }
-        tc_ave = tissue_mean(tc, sra2, selected_tissues)
+        tc_ave = curate_group_mean(tc, sra2, selected_curate_groups)
         coef = c()
         coef_other_bp = c()
-        for (tissue in selected_tissues) {
-            tmp_coef = cor(tc[, sra_run], tc_ave[, tissue], method = dist_method)
+        for (curate_group in selected_curate_groups) {
+            tmp_coef = cor(tc[, sra_run], tc_ave[, curate_group], method = dist_method)
 
-            if ((num_other_bp_same_tissue == 0) & (tissue == my_tissue)) {
-              tmp_coef_other_bp = cor(tc[, sra_run], tc_ave[, tissue], method = dist_method)
+            if ((num_other_bp_same_curate_group == 0) & (curate_group == my_curate_group)) {
+              tmp_coef_other_bp = cor(tc[, sra_run], tc_ave[, curate_group], method = dist_method)
             } else {
-              tmp_coef_other_bp = cor(tc[, sra_run], tc_ave_other_bp[, tissue], method = dist_method)
+              tmp_coef_other_bp = cor(tc[, sra_run], tc_ave_other_bp[, curate_group], method = dist_method)
             }
             
-            if (tissue == my_tissue) {
+            if (curate_group == my_curate_group) {
                 tmp_coef = tmp_coef - min_dif
                 tmp_coef_other_bp = tmp_coef_other_bp - min_dif
             }
             coef = c(coef, tmp_coef)
             coef_other_bp = c(coef_other_bp, tmp_coef_other_bp)
         }
-        names(coef) = selected_tissues
-        names(coef_other_bp) = selected_tissues
-        if (max(coef) != coef[my_tissue]) {
+        names(coef) = selected_curate_groups
+        names(coef_other_bp) = selected_curate_groups
+        if (max(coef) != coef[my_curate_group]) {
             cat('Registered as a candidate for exclusion. Better correlation to other categories:', sra_run, '\n')
             exclude_runs = c(exclude_runs, sra_run)
         }
-        if (coef_other_bp[my_tissue] < correlation_threshold) {
+        if (coef_other_bp[my_curate_group] < correlation_threshold) {
             cat('Registered as a candidate for exclusion. Low within-category correlation:', sra_run, '\n')
             exclude_runs = c(exclude_runs, sra_run)
         }
     }
     if (length(exclude_runs)) {
       if(one_out_per_iter == TRUE){
-          cat("Excluding only one outlier per bioproject or same tissue. \n")
-          exclude_run_bps_and_tissue = sra2[(sra2$run %in% exclude_runs), c("bioproject", "run", "tissue")]
-          first_bp_hit = exclude_run_bps_and_tissue[match(unique(exclude_run_bps_and_tissue$bioproject), exclude_run_bps_and_tissue$bioproject),]
-          first_same_tissue_hit = exclude_run_bps_and_tissue[match(unique(exclude_run_bps_and_tissue$tissue), exclude_run_bps_and_tissue$tissue),]
-          # if a first_same_tissue_hit is part of the same bioproject as the other removal candidates, ommit the same tissue candidates
-          if(any(first_same_tissue_hit$bioproject %in% first_bp_hit$bioproject)){
-              exclude_runs_tmp = c(first_bp_hit$run,first_same_tissue_hit[!first_same_tissue_hit$bioproject %in% first_bp_hit$bioproject]$run)
+          cat("Excluding only one outlier per bioproject or same curate_group. \n")
+          exclude_run_bps_and_curate_group = sra2[(sra2$run %in% exclude_runs), c("bioproject", "run", "curate_group")]
+          first_bp_hit = exclude_run_bps_and_curate_group[match(unique(exclude_run_bps_and_curate_group$bioproject), exclude_run_bps_and_curate_group$bioproject),]
+          first_same_curate_group_hit = exclude_run_bps_and_curate_group[match(unique(exclude_run_bps_and_curate_group$curate_group), exclude_run_bps_and_curate_group$curate_group),]
+          # if a first_same_curate_group_hit is part of the same bioproject as the other removal candidates, ommit the same curate_group candidates
+          if(any(first_same_curate_group_hit$bioproject %in% first_bp_hit$bioproject)){
+              exclude_runs_tmp = c(first_bp_hit$run,first_same_curate_group_hit[!first_same_curate_group_hit$bioproject %in% first_bp_hit$bioproject]$run)
           }else{
-              exclude_runs_tmp = c(first_bp_hit$run,first_same_tissue_hit$run)
+              exclude_runs_tmp = c(first_bp_hit$run,first_same_curate_group_hit$run)
           }
           exclude_runs = unique(exclude_runs_tmp)
-          # TODO This boolean vector should be all TRUE by definition. ???: exclude_run_bps_and_tissue$run %in% exclude_runs
-          exclude_bps = exclude_run_bps_and_tissue[exclude_run_bps_and_tissue$run %in% exclude_runs, "bioproject"]
+          # TODO This boolean vector should be all TRUE by definition. ???: exclude_run_bps_and_curate_group$run %in% exclude_runs
+          exclude_bps = exclude_run_bps_and_curate_group[exclude_run_bps_and_curate_group$run %in% exclude_runs, "bioproject"]
       } else {
-        exclude_run_bps = sra2[(sra2[['run']] %in% exclude_runs), c("bioproject", "run", "num_other_run_same_bp_tissue")]
+        exclude_run_bps = sra2[(sra2[['run']] %in% exclude_runs), c("bioproject", "run", "num_other_run_same_bp_curate_group")]
         exclude_bp_counts = data.frame(table(exclude_run_bps[['bioproject']]))
         exclude_run_bps = merge(exclude_run_bps, exclude_bp_counts, by.x = "bioproject", by.y = "Var1")
-        exclude_run_bps = exclude_run_bps[order(exclude_run_bps[['num_other_run_same_bp_tissue']], exclude_run_bps[['Freq']]),]
+        exclude_run_bps = exclude_run_bps[order(exclude_run_bps[['num_other_run_same_bp_curate_group']], exclude_run_bps[['Freq']]),]
         rownames(exclude_run_bps) = 1:nrow(exclude_run_bps)
-        min_other_run_same_bp_tissue = exclude_run_bps[1, "num_other_run_same_bp_tissue"]
+        min_other_run_same_bp_curate_group = exclude_run_bps[1, "num_other_run_same_bp_curate_group"]
         semimin_bp_count = exclude_run_bps[1, "Freq"]
-        cat("minimum number of other BioProjects within tissue:", min_other_run_same_bp_tissue, "\n")
+        cat("minimum number of other BioProjects within curate_group:", min_other_run_same_bp_curate_group, "\n")
         cat("semi-minimum count of exclusion-candidate BioProjects:", semimin_bp_count, "\n")
         conditions = (exclude_run_bps[['Freq']] == semimin_bp_count)
-        conditions = conditions & (exclude_run_bps[['num_other_run_same_bp_tissue']] == min_other_run_same_bp_tissue)
+        conditions = conditions & (exclude_run_bps[['num_other_run_same_bp_curate_group']] == min_other_run_same_bp_curate_group)
         exclude_bps = unique(exclude_run_bps[conditions, "bioproject"])
         exclude_runs = exclude_run_bps[(exclude_run_bps[['bioproject']] %in% exclude_bps), "run"]
       }
         
     }
     if (length(exclude_runs)) {
-        cat("Partially removed BioProjects due to low within-tissue correlation:\n")
+        cat("Partially removed BioProjects due to low within-curate_group correlation:\n")
         print(exclude_bps)
-        cat("Removed Runs due to low within-tissue correlation:\n")
+        cat("Removed Runs due to low within-curate_group correlation:\n")
         print(exclude_runs)
     }
     tc = tc[, !colnames(tc) %in% exclude_runs]
-    sra[(sra[['run']] %in% exclude_runs), "exclusion"] = "low_within_tissue_correlation"
+    sra[(sra[['run']] %in% exclude_runs), "exclusion"] = "low_within_curate_group_correlation"
     return(list(tc = tc, sra = sra))
 }
 
@@ -374,7 +374,7 @@ sva_subtraction = function(tc, sra) {
     out = remove_nonexpressed_gene(tc)
     tc = out[["tc_ex"]]
     tc_ne = out[["tc_ne"]]
-    mod = model.matrix(~tissue, data = sra)
+    mod = model.matrix(~curate_group, data = sra)
     mod0 = model.matrix(~1, data = sra)
     set.seed(1)
     sva1 = try(sva(dat = as.matrix(tc), mod = mod, mod0 = mod0, B = 10))
@@ -402,11 +402,11 @@ map_color = function(redundant_variables, c) {
 
 draw_heatmap = function(sra, tc_dist_matrix, legend = TRUE, fontsize = 7) {
     bp_fac = factor(sub(";.*", "", sra[, c("bioproject")]))
-    tissue_fac = factor(sra[, c("tissue")])
-    ann_label = data.frame(bioproject = bp_fac, tissue = tissue_fac)
+    curate_group_fac = factor(sra[, c("curate_group")])
+    ann_label = data.frame(bioproject = bp_fac, curate_group = curate_group_fac)
     bp_col_uniq = unique(sra[order(sra[['bioproject']]), 'bp_color'])
-    tissue_col_uniq = unique(sra[order(sra[['tissue']]), 'tissue_color'])
-    ann_color = list(bioproject = bp_col_uniq, tissue = tissue_col_uniq)
+    curate_group_col_uniq = unique(sra[order(sra[['curate_group']]), 'curate_group_color'])
+    ann_color = list(bioproject = bp_col_uniq, curate_group = curate_group_col_uniq)
     breaks = c(0, seq(0.3, 1, 0.01))
     aheatmap(tc_dist_matrix, color = "-RdYlBu2:71", Rowv = NA, Colv = NA, revC = TRUE, legend = TRUE,
              breaks = breaks, annCol = ann_label, annRow = ann_label, annColors = ann_color, annLegend = legend,
@@ -428,7 +428,7 @@ color_children2parent = function(node) {
 
 draw_dendrogram = function(sra, tc_dist_dist, fontsize = 7) {
     dend <- as.dendrogram(hclust(tc_dist_dist))
-    dend_colors = sra[order.dendrogram(dend),'tissue_color']
+    dend_colors = sra[order.dendrogram(dend),'curate_group_color']
     labels_colors(dend) <- dend_colors
     dend_labels <- sra[order.dendrogram(dend), 'run']
     dend <- color_branches(dend, labels = dend_labels, col = dend_colors)
@@ -451,7 +451,7 @@ draw_dendrogram = function(sra, tc_dist_dist, fontsize = 7) {
       inches = 0.02,
       xpd = TRUE,
       lwd = 1,
-      bg = sra[order.dendrogram(dend), 'tissue_color'],
+      bg = sra[order.dendrogram(dend), 'curate_group_color'],
       fg = sra[order.dendrogram(dend), 'bp_color']
     )
 }
@@ -472,7 +472,7 @@ draw_dendrogram_pvclust = function(sra, tc, nboot, pvclust_file, fontsize = 7) {
         save(result, file = pvclust_file)
     }
     dend = as.dendrogram(result)
-    dend_colors = sra[order.dendrogram(dend), 'tissue_color']
+    dend_colors = sra[order.dendrogram(dend), 'curate_group_color']
     labels_colors(dend) = dend_colors
     dend_labels = sra[order.dendrogram(dend), 'run']
     dend = color_branches(dend, labels = dend_labels, col = dend_colors)
@@ -493,7 +493,7 @@ draw_dendrogram_pvclust = function(sra, tc, nboot, pvclust_file, fontsize = 7) {
       inches = 0.04,
       xpd = TRUE,
       lwd = 2,
-      bg = sra[order.dendrogram(dend), 'tissue_color'],
+      bg = sra[order.dendrogram(dend), 'curate_group_color'],
       fg = sra[order.dendrogram(dend), 'bp_color']
     )
     text(result, print.num = FALSE, cex = 1, col.pv = "black")
@@ -510,13 +510,13 @@ draw_pca = function(sra, tc_dist_matrix, fontsize = 7) {
       pch = 21,
       cex = 2,
       lwd = 1,
-      bg = sra[['tissue_color']],
+      bg = sra[['curate_group_color']],
       col = sra[['bp_color']],
       xlab = xlabel,
       ylab = ylabel,
       las = 1
     )
-    # plot(pca$x[,1], pca$x[,2], pch=21, cex=2, lwd=2, bg=sra$tissue_color, col=sra$bp_color, main=title,
+    # plot(pca$x[,1], pca$x[,2], pch=21, cex=2, lwd=2, bg=sra$curate_group_color, col=sra$bp_color, main=title,
     # xlab=xlabel, ylab=ylabel, las=1)
 }
 
@@ -538,7 +538,7 @@ draw_mds = function(sra, tc_dist_dist, fontsize = 7) {
           pch = 21,
           cex = 2,
           lwd = 1,
-          bg = sra[['tissue_color']],
+          bg = sra[['curate_group_color']],
           col = sra[['bp_color']],
           xlab = "MDS dimension 1",
           ylab = "MDS dimension 2",
@@ -559,7 +559,7 @@ draw_tsne = function(sra, tc, fontsize = 7) {
           pch = 21,
           cex = 2,
           lwd = 1,
-          bg = sra[['tissue_color']],
+          bg = sra[['curate_group_color']],
           col = sra[['bp_color']],
           xlab = "t-SNE dimension 1",
           ylab = "t-SNE dimension 2",
@@ -585,8 +585,8 @@ draw_sva_summary = function(sva_out, tc, sra, fontsize) {
         out = sort_tc_and_sra(tc, sra)
         tc = out[["tc"]]
         sra = out[["sra"]]
-        cols = c("tissue","bioproject","lib_selection","instrument","mapping_rate")
-        label_cols = c("tissue","BioProject","library selection","instrument","mapping rate")
+        cols = c("curate_group","bioproject","lib_selection","instrument","mapping_rate")
+        label_cols = c("organ","BioProject","library selection","instrument","mapping rate")
 
         num_sv = sva_out[['n.sv']]
         df = data.frame(matrix(NA, num_sv, length(cols)))
@@ -616,23 +616,23 @@ draw_boxplot = function(sra, tc_dist_matrix, fontsize = 7) {
     is_same_bp = outer(sra[['bioproject']], sra[['bioproject']], function(x, y) {
         x == y
     })
-    is_same_tissue = outer(sra[['tissue']], sra[['tissue']], function(x, y) {
+    is_same_curate_group = outer(sra[['curate_group']], sra[['curate_group']], function(x, y) {
         x == y
     })
     plot(c(0.5, 4.5), c(0, 1), type = "n", xlab = "", ylab = "Pearson's correlation\ncoefficient", las = 1,
          xaxt = "n")
-    boxplot(tc_dist_matrix[(!is_same_bp) & (!is_same_tissue)], at = 1, add = TRUE, col = "gray", yaxt = "n")
-    boxplot(tc_dist_matrix[(is_same_bp) & (!is_same_tissue)], at = 2, add = TRUE, col = "gray", yaxt = "n")
-    boxplot(tc_dist_matrix[(!is_same_bp) & (is_same_tissue)], at = 3, add = TRUE, col = "gray", yaxt = "n")
-    boxplot(tc_dist_matrix[(is_same_bp) & (is_same_tissue)], at = 4, add = TRUE, col = "gray", yaxt = "n")
+    boxplot(tc_dist_matrix[(!is_same_bp) & (!is_same_curate_group)], at = 1, add = TRUE, col = "gray", yaxt = "n")
+    boxplot(tc_dist_matrix[(is_same_bp) & (!is_same_curate_group)], at = 2, add = TRUE, col = "gray", yaxt = "n")
+    boxplot(tc_dist_matrix[(!is_same_bp) & (is_same_curate_group)], at = 3, add = TRUE, col = "gray", yaxt = "n")
+    boxplot(tc_dist_matrix[(is_same_bp) & (is_same_curate_group)], at = 4, add = TRUE, col = "gray", yaxt = "n")
     labels = c("bw\nbw", "bw\nwi", "wi\nbw", "wi\nwi")
     axis(side = 1, at = c(1, 2, 3, 4), labels = labels, padj = 0.5)
-    axis(side = 1, at = 0.35, labels = "Tissue\nBioProject", padj = 0.5, hadj = 1, tick = FALSE)
+    axis(side = 1, at = 0.35, labels = "Organ\nBioProject", padj = 0.5, hadj = 1, tick = FALSE)
 
 }
 
-draw_tau_histogram = function(tc, sra, selected_tissues, fontsize = 7) {
-    df_tau = tissue2tau(tissue_mean(tc, sra, selected_tissues), rich.annotation = FALSE, unlog = TRUE)
+draw_tau_histogram = function(tc, sra, selected_curate_groups, fontsize = 7) {
+    df_tau = curate_group2tau(curate_group_mean(tc, sra, selected_curate_groups), rich.annotation = FALSE, unlog = TRUE)
     hist_out = hist(df_tau[['tau']], breaks = seq(0, 1, 0.05), las = 1, xlab = "Tau (expression specificity)",
                     ylab = "Gene count", main = "", col = "gray")
     num_noexp = sum(is.na(df_tau[['tau']]))
@@ -643,9 +643,9 @@ draw_tau_histogram = function(tc, sra, selected_tissues, fontsize = 7) {
     text(0, max(hist_out[['counts']]) * 0.85, text_noexp, pos = 4)
 }
 
-draw_exp_level_histogram = function(tc, sra, selected_tissues, fontsize = 7, transform_method) {
-    tc_tissue = tissue_mean(tc, sra, selected_tissues)
-    xmax = apply(tc_tissue, 1, max)
+draw_exp_level_histogram = function(tc, sra, selected_curate_groups, fontsize = 7, transform_method) {
+    tc_curate_group = curate_group_mean(tc, sra, selected_curate_groups)
+    xmax = apply(tc_curate_group, 1, max)
     xmax[xmax < 0] = 0
     xmax[xmax > 15] = 15
     breaks = seq(0, 15, 1)
@@ -657,26 +657,26 @@ draw_legend = function(sra, new = TRUE, pos = "center", fontsize = 7, nlabel.in.
     if (new) {
         plot.new()
     }
-    tissue_unique = unique(sra[['tissue']])
+    curate_group_unique = unique(sra[['curate_group']])
     bp_unique = unique(sub(";.*", "", sra[['bioproject']]))
-    tissue_color_unique = unique(sra[['tissue_color']])
+    curate_group_color_unique = unique(sra[['curate_group_color']])
     bp_color_unique = unique(sra[['bp_color']])
-    ncol = ceiling((length(tissue_unique) + length(bp_unique) + 2)/nlabel.in.col)
-    legend_text = c("Tissue", as.character(tissue_unique), "", "BioProject", as.character(bp_unique))
-    legend_color = c(rgb(1, 1, 1, 0), rep(rgb(1, 1, 1, 0), length(tissue_color_unique)), rgb(1, 1, 1,
+    ncol = ceiling((length(curate_group_unique) + length(bp_unique) + 2)/nlabel.in.col)
+    legend_text = c("Organ", as.character(curate_group_unique), "", "BioProject", as.character(bp_unique))
+    legend_color = c(rgb(1, 1, 1, 0), rep(rgb(1, 1, 1, 0), length(curate_group_color_unique)), rgb(1, 1, 1,
                                                                                              0), rgb(1, 1, 1, 0), bp_color_unique)
-    legend_bg = c(rgb(1, 1, 1, 0), tissue_color_unique, rgb(1, 1, 1, 0), rgb(1, 1, 1, 0), rep(rgb(1,
+    legend_bg = c(rgb(1, 1, 1, 0), curate_group_color_unique, rgb(1, 1, 1, 0), rgb(1, 1, 1, 0), rep(rgb(1,
                                                                                                   1, 1, 0), length(bp_color_unique)))
-    legend_font = c(2, rep(1, length(tissue_color_unique)), 1, 2, rep(1, length(bp_color_unique)))
+    legend_font = c(2, rep(1, length(curate_group_color_unique)), 1, 2, rep(1, length(bp_color_unique)))
     legend(pos, legend = legend_text, pch = 21, lwd = 1, lty = 0, col = legend_color, pt.bg = legend_bg,
            text.font = legend_font, ncol = ncol, bty = "n")
 }
 
-save_plot = function(tc, sra, sva_out, dist_method, file, selected_tissues, fontsize = 7, transform_method) {
+save_plot = function(tc, sra, sva_out, dist_method, file, selected_curate_groups, fontsize = 7, transform_method) {
     out = tc_sra_intersect(tc, sra)
     tc = out[["tc"]]
     sra = out[["sra"]]
-    sra = add_color_to_sra(sra, selected_tissues)
+    sra = add_color_to_sra(sra, selected_curate_groups)
     out = sort_tc_and_sra(tc, sra)
     tc = out[["tc"]]
     sra = out[["sra"]]
@@ -707,9 +707,9 @@ save_plot = function(tc, sra, sva_out, dist_method, file, selected_tissues, font
     par(mar = c(4, 5, 0.1, 1))
     draw_boxplot(sra, tc_dist_matrix, fontsize)
     par(mar = c(4, 4, 1, 1))
-    draw_exp_level_histogram(tc, sra, selected_tissues, fontsize, transform_method)
+    draw_exp_level_histogram(tc, sra, selected_curate_groups, fontsize, transform_method)
     par(mar = c(4, 4, 1, 1))
-    draw_tau_histogram(tc, sra, selected_tissues, fontsize)
+    draw_tau_histogram(tc, sra, selected_curate_groups, fontsize)
     par(mar = rep(0.1, 4))
     df_r2 = draw_sva_summary(sva_out, tc, sra, fontsize)
     if (!all(is.na(df_r2))) {
@@ -773,10 +773,10 @@ tc_eff_length <- read.table(eff_file, sep = "\t", stringsAsFactors = FALSE, head
 # read transcriptome
 scientific_name = unique(sra_all[sra_all[['run']] %in% colnames(tc), "scientific_name"])
 is_sp = (sra_all[,'scientific_name'] == scientific_name)
-is_tissue = (sra_all[,'tissue'] %in% selected_tissues)
+is_curate_group = (sra_all[,'curate_group'] %in% selected_curate_groups)
 cat('Number of SRA runs for this species:', sum(is_sp), '\n')
-cat('Number of SRA runs for selected tisssues:', sum(is_tissue), '\n')
-sra = sra_all[(is_sp & is_tissue),]
+cat('Number of SRA runs for selected tisssues:', sum(is_curate_group), '\n')
+sra = sra_all[(is_sp & is_curate_group),]
 conditions = (sra[['exclusion']] == "no") & (!sra[['run']] %in% colnames(tc))
 if (any(conditions)) {
     cat("Failed quantification:", sra[conditions, "run"], "\n")
@@ -805,9 +805,9 @@ file_name = paste0(dir_tsv,'/',sub(" ", "_", scientific_name), ".uncorrected.tc.
 write.table(tc, file = file_name,
             sep = "\t", row.names = TRUE, col.names = TRUE, quote = FALSE)
 tc_uncorrected = tc
-tc_tissue_uncorrected = tissue_mean(tc, sra, selected_tissues)
-file_name = paste0(dir_tsv,'/',sub(" ", "_", scientific_name), ".uncorrected.tissue.mean.tsv")
-write.table(tc_tissue_uncorrected, file = file_name,
+tc_curate_group_uncorrected = curate_group_mean(tc, sra, selected_curate_groups)
+file_name = paste0(dir_tsv,'/',sub(" ", "_", scientific_name), ".uncorrected.curate_group.mean.tsv")
+write.table(tc_curate_group_uncorrected, file = file_name,
             sep = "\t", row.names = TRUE, col.names = TRUE, quote = FALSE)
 
 
@@ -815,13 +815,13 @@ round = 0
 sva_out = NULL
 tc_sva = NULL
 save_plot(tc, sra, NULL, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".original"),
-          selected_tissues, fontsize, transform_method)
+          selected_curate_groups, fontsize, transform_method)
 out = sva_subtraction(tc, sra)
 tc_sva = out[["tc"]]
 sva_out = out[["sva"]]
 save(sva_out, file = paste0(dir_rdata,'/', sub(" ", "_", scientific_name), ".sva.", round, ".RData"))
 save_plot(tc_sva, sra, sva_out, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".original.sva"),
-          selected_tissues, fontsize, transform_method)
+          selected_curate_groups, fontsize, transform_method)
 
 round = 1
 sva_out = NULL
@@ -831,21 +831,21 @@ tc = out[["tc"]]
 sra = out[["sra"]]
 tc = tc[, sra[sra[['exclusion']] == "no", "run"]]
 save_plot(tc, sra, NULL, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".mapping_cutoff"),
-          selected_tissues, fontsize, transform_method)
+          selected_curate_groups, fontsize, transform_method)
 out = sva_subtraction(tc, sra)
 tc_sva = out[["tc"]]
 sva_out = out[["sva"]]
 save(sva_out, file = paste0(dir_rdata,'/',sub(" ", "_", scientific_name), ".sva.", round, ".RData"))
 save_plot(tc_sva, sra, sva_out, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".mapping_cutoff.sva"),
-          selected_tissues, fontsize, transform_method)
+          selected_curate_groups, fontsize, transform_method)
 
 round = 2
 end_flag = 0
 while (end_flag == 0) {
-    cat("iteratively checking within-tissue correlation, round:", round, "\n")
+    cat("iteratively checking within-curate_group correlation, round:", round, "\n")
     tc_cwtc = NULL
     num_run_before = sum(sra[['exclusion']] == "no")
-    out = check_within_tissue_correlation(tc, sra, dist_method, min_dif, selected_tissues, one_outlier_per_iteration, correlation_threshold)
+    out = check_within_curate_group_correlation(tc, sra, dist_method, min_dif, selected_curate_groups, one_outlier_per_iteration, correlation_threshold)
     tc_cwtc = out[["tc"]]
     sra = out[["sra"]]
     num_run_after = sum(sra[['exclusion']] == "no")
@@ -857,11 +857,11 @@ while (end_flag == 0) {
         sva_out = out[["sva"]]
         save(sva_out, file = paste0(dir_rdata,'/',sub(" ", "_", scientific_name), ".sva.", round, ".RData"))
         save_plot(tc_cwtc, sra, NULL, dist_method, paste0(sub(" ", "_", scientific_name), ".", round,
-                                                          ".correlation_cutoff"), selected_tissues, fontsize, transform_method)
+                                                          ".correlation_cutoff"), selected_curate_groups, fontsize, transform_method)
         save_plot(tc_sva, sra, sva_out, dist_method, paste0(sub(" ", "_", scientific_name), ".", round,
-                                                            ".correlation_cutoff.sva"), selected_tissues, fontsize, transform_method)
+                                                            ".correlation_cutoff.sva"), selected_curate_groups, fontsize, transform_method)
     }
-    # out = check_within_tissue_correlation(tc_sva, sra, dist_method, min_dif, selected_tissues) ; tc_sva= out[['tc']] ; sra = out[['sra']]
+    # out = check_within_curate_group_correlation(tc_sva, sra, dist_method, min_dif, selected_curate_groups) ; tc_sva= out[['tc']] ; sra = out[['sra']]
     
     cat("round:", round, ": # before =", num_run_before, ": # after =", num_run_after, "\n\n")
     # tc = tc[,colnames(tc_sva)]
@@ -871,15 +871,15 @@ while (end_flag == 0) {
     tc = tc_cwtc
     round = round + 1
 }
-cat("finished checking within-tissue correlation.\n")
+cat("finished checking within-curate_group correlation.\n")
 file = paste0(dir_tsv,'/',sub(" ", "_", scientific_name), ".sra.tsv")
 write.table(sra, file = file, sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
 file = paste0(dir_tsv,'/',sub(" ", "_", scientific_name), ".tc.tsv")
 write.table(tc_sva, file = file, sep = "\t", row.names = TRUE, col.names = TRUE, quote = FALSE)
-tc_tissue = tissue_mean(tc_sva, sra, selected_tissues)
-file = paste0(dir_tsv,'/',sub(" ", "_", scientific_name), ".tissue.mean.tsv")
-write.table(tc_tissue, file = file, sep = "\t", row.names = TRUE, col.names = TRUE, quote = FALSE)
-tc_tau = tissue2tau(tc_tissue, rich.annotation = TRUE, unlog = TRUE)
+tc_curate_group = curate_group_mean(tc_sva, sra, selected_curate_groups)
+file = paste0(dir_tsv,'/',sub(" ", "_", scientific_name), ".curate_group.mean.tsv")
+write.table(tc_curate_group, file = file, sep = "\t", row.names = TRUE, col.names = TRUE, quote = FALSE)
+tc_tau = curate_group2tau(tc_curate_group, rich.annotation = TRUE, unlog = TRUE)
 file = paste0(dir_tsv,'/',sub(" ", "_", scientific_name), ".tau.tsv")
 write.table(tc_tau, file = file, sep = "\t", row.names = TRUE, col.names = TRUE, quote = FALSE)
 cat("Done!\n")
