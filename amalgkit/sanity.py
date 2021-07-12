@@ -79,7 +79,8 @@ def check_getfastq_outputs(args, sra_ids, metadata, output_dir):
                           sra_id)
                     metadata_unavailable.append(sra_id)
             else:
-                print("Could not find getfastq output for: ", sra_id)
+                print("Could not find getfastq output for: ", sra_id, "\n")
+                print("Suggested command for rerun: getfastq -e email@adress.com --id ", sra_id, " -w ", args.out_dir, "--redo yes --gcp yes --aws yes --ncbi yes")
                 data_unavailable.append(sra_id)
 
     else:
