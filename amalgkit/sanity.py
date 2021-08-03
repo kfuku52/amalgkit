@@ -85,6 +85,7 @@ def check_getfastq_outputs(args, sra_ids, metadata, output_dir):
 
     else:
         print("Could not find getfastq output folder ", getfastq_path, ". Have you run getfastq yet?")
+        data_unavailable = metadata.df['run'].tolist()
 
     if data_unavailable:
         print("writing SRA IDs without getfastq output to: ", os.path.join(output_dir, "SRA_IDs_without_fastq.txt"))
@@ -102,8 +103,6 @@ def check_getfastq_outputs(args, sra_ids, metadata, output_dir):
         for sra_id in metadata_unavailable:
             file.write(sra_id + "\n")
         file.close()
-    else:
-        print("Updated metadata found for all SRA IDs in ", args.metadata, " !")
 
     return data_available, data_unavailable
 

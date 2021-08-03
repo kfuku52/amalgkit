@@ -82,6 +82,14 @@ def command_sanity(args):
     print('Time elapsed: {:,} sec'.format(int(time.time() - start)))
     sys.stdout.write('amalgkit sanity: end\n')
 
+def command_integrate(args):
+    sys.stdout.write('amalgkit integrate: start\n')
+    start = time.time()
+    from amalgkit.integrate import integrate_main
+    integrate_main(args)
+    print('Time elapsed: {:,} sec'.format(int(time.time() - start)))
+    sys.stdout.write('amalgkit integrate: end\n')
+
 def command_csca(args):
     sys.stdout.write('amalgkit csca: start\n')
     start = time.time()
@@ -155,8 +163,7 @@ pge.add_argument('--pfd_exe', metavar='PATH', default='parallel-fastq-dump', typ
                  help='default=%(default)s: PATH to parallel-fastq-dump executable.')
 pge.add_argument('--prefetch_exe', metavar='PATH', default='prefetch', type=str, required=False, action='store',
                  help='default=%(default)s: PATH to prefetch executable.')
-pge.add_argument('--fastp', metavar='yes|no', default='yes', type=str, required=False, action='store',
-                 choices=['yes', 'no'],
+pge.add_argument('--fastp', metavar='yes|no', default='yes', type=strtobool, required=False, action='store',
                  help='default=%(default)s: Run fastp.')
 pge.add_argument('--fastp_exe', metavar='PATH', default='fastp', type=str, required=False, action='store',
                  help='default=%(default)s: PATH to fastp executable.')
@@ -187,6 +194,8 @@ pge.add_argument('--gcp', metavar='yes|no', default='no', type=strtobool, requir
 pge.add_argument('--read_name', metavar='default|trinity', default='default', type=str, required=False, action='store',
                  choices=['default', 'trinity'],
                  help='default=%(default)s: read name formatting for downstream analysis.')
+pge.add_argument('--private_fastq', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
+                 help='default=%(default)s: .')
 pge.add_argument('--concat', metavar='yes|no', default='no', type=str, required=False, action='store', choices=['yes', 'no'],
                  help='default=%(default)s: concatenate SRA fastq files (e.g, for assembly).')
 pge.add_argument('--entrez_additional_search_term', metavar='STR',
@@ -230,7 +239,6 @@ pqu.add_argument('--redo', metavar='yes|no', default='no', type=str, required=Fa
 pqu.set_defaults(handler=command_quant)
 
 # Sub parser: cstmm
-# TODO: look for a better name
 pcs = subparsers.add_parser('cstmm', help='see `amalgkit cstmm -h`')
 pcs.add_argument('-w','--out_dir', metavar='PATH', default='./', type=str, required=False, action='store',
                  help='default=%(default)s: output directory.')
@@ -340,8 +348,24 @@ psa.add_argument('--getfastq_dir', metavar='PATH', default=None, type=str, requi
 psa.add_argument('--updated_metadata_dir', metavar='PATH', default=None, type=str, required=False, action='store',
                  help='default=%(default)s: custom path to updated metadata directory. Only required if updated metadata'
                       ' directory is not out_directory/metadata/updated_metadata/')
-
 psa.set_defaults(handler=command_sanity)
+
+# Sub parser: proc
+pin = subparsers.add_parser('integrate', help='see `amalgkit proc -h`')
+
+pin.add_argument('-w','--out_dir', metavar='PATH', default='./', type=str, required=False, action='store',
+                 help='default=%(default)s: output directory.')
+pin.add_argument('--metadata', metavar='PATH', default=None, type=str, required=False, action='store',
+                 help='default=%(default)s: PATH to metadata table. See `amalgkit metadata -h` for details.')
+pin.add_argument('--fastq_dir', metavar='PATH', default=None, type=str, required=False, action='store',
+                 help='default=%(default)s: custom path to fastq directory.')
+pin.add_argument('--threads', metavar='INT', default=1, type=int, required=False, action='store',
+                 help='default=%(default)s: Number of threads.')
+pin.add_argument('--getfastq_dir', metavar='PATH', default=None, type=str, required=False, action='store',
+                 help='default=%(default)s: custom path to Index directory. Only required if getfastq directory is not'
+                      'output_directory/getfastq/')
+
+pin.set_defaults(handler=command_integrate)
 
 
 # Sub parser: help
