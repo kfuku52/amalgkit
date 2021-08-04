@@ -194,8 +194,6 @@ pge.add_argument('--gcp', metavar='yes|no', default='no', type=strtobool, requir
 pge.add_argument('--read_name', metavar='default|trinity', default='default', type=str, required=False, action='store',
                  choices=['default', 'trinity'],
                  help='default=%(default)s: read name formatting for downstream analysis.')
-pge.add_argument('--private_fastq', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
-                 help='default=%(default)s: .')
 pge.add_argument('--concat', metavar='yes|no', default='no', type=str, required=False, action='store', choices=['yes', 'no'],
                  help='default=%(default)s: concatenate SRA fastq files (e.g, for assembly).')
 pge.add_argument('--entrez_additional_search_term', metavar='STR',
