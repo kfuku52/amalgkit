@@ -63,9 +63,12 @@ def call_kallisto(args, in_files, metadata, sra_stat, output_dir, index):
             sys.stderr.write('No reads are mapped to the reference. This sample will be removed by `amalgkit curate`.')
 
     # move output to results with unique name
-    os.rename(os.path.join(output_dir, "run_info.json"), os.path.join(output_dir, sra_id + "_run_info.json"))
-    os.rename(os.path.join(output_dir, "abundance.tsv"), os.path.join(output_dir, sra_id + "_abundance.tsv"))
-    os.rename(os.path.join(output_dir, "abundance.h5"), os.path.join(output_dir, sra_id + "_abundance.h5"))
+    try:
+        os.rename(os.path.join(output_dir, "run_info.json"), os.path.join(output_dir, sra_id + "_run_info.json"))
+        os.rename(os.path.join(output_dir, "abundance.tsv"), os.path.join(output_dir, sra_id + "_abundance.tsv"))
+        os.rename(os.path.join(output_dir, "abundance.h5"), os.path.join(output_dir, sra_id + "_abundance.h5"))
+    except FileNotFoundError:
+        pass
 
     return kallisto_out
 
@@ -84,22 +87,7 @@ def check_layout_mismatch(sra_stat, output_dir):
             sra_stat['layout'] = 'single'
     return sra_stat
 
-def quant_main(args):
-    check_kallisto_dependency()
-    if args.id is not None:
-        print('--id is specified.')
-        sra_id = args.id
-    if args.metadata is not None:
-        print('--metadata is specified. Reading existing metadata table.')
-        metadata = load_metadata(args) # loads single-row metadata according to --batch
-        if args.batch is not None:
-            sra_id = metadata.df.loc[:,'run'].values[0]
-        else:
-            sra_id = args.id
-    print('SRA Run ID: {}'.format(sra_id))
-
-    index = args.index
-
+def run_quant(args, metadata, sra_id, index):
     # make results directory, if not already there
     output_dir = os.path.join(args.out_dir, 'quant', sra_id)
     if not os.path.exists(output_dir):
@@ -127,3 +115,68 @@ def quant_main(args):
             placeholder = open(in_file+'.safely_removed', "w")
             placeholder.write("This fastq file was safely removed after `amalgkit quant`.")
             placeholder.close()
+
+def check_index(args, sci_name):
+    if args.index_dir is not None:
+        if os.path.exists(args.index_dir):
+            index = glob.glob(os.path.join(args.index_dir, sci_name + '.*'))
+            if len(index) > 1:
+                raise ValueError(
+                    "found multiple index files for species. Please make sure there is only one index file for this species.")
+            elif len(index) == 0:
+                raise FileNotFoundError("Could not find Index file.")
+            index = index[0]
+        else:
+            raise FileNotFoundError("could not find index folder")
+
+    else:
+        if os.path.exists(os.path.join(args.out_dir, 'Index')):
+            index = glob.glob(os.path.join(args.out_dir, 'Index', sci_name + '.*'))
+            print("Index file found: ", index[0])
+            if len(index) > 1:
+                raise ValueError(
+                    "found multiple index files for species. Please make sure there is only one index file for this species.")
+            elif len(index) == 0:
+                raise FileNotFoundError("Could not find Index file.")
+            index = index[0]
+        else:
+            raise FileNotFoundError("could not find Index folder")
+
+    return index
+
+def quant_main(args):
+    check_kallisto_dependency()
+    metadata = load_metadata(args) # loads single-row metadata according to --batch
+    if args.batch is not None:
+        sra_id = metadata.df.loc[:,'run'].values[0]
+        sci_name = metadata.df.loc[:,'scientific_name'].values[0]
+        print('Species: {}'.format(sci_name))
+        print('Run ID: {}'.format(sra_id))
+        sci_name = sci_name.replace(" ", "_")
+        check_index(args, sci_name)
+        run_quant(args, metadata, sra_id, args.index)
+    else:
+        # if args.id is not specified, it will run the whole metadata sheet one by one
+        if args.id is None:
+            for i in metadata.df.index:
+                print('')
+                sra_id = metadata.df.at[i, 'run']
+                sci_name = metadata.df.at[i, 'scientific_name']
+                print('Species: {}'.format(sci_name))
+                print('Run ID: {}'.format(sra_id))
+                sci_name = sci_name.replace(" ", "_")
+                print('looking for index folder in ', args.out_dir)
+                index = check_index(args, sci_name)
+                run_quant(args, metadata, sra_id, index)
+        # if args.id is not specified, it will run the whole metadata sheed one by one
+        else:
+            sra_id = args.id
+            sci_name = metadata.df.loc[metadata.df['run'] == args.id, 'scientific_name']
+            print('Species: {}'.format(sci_name))
+            print('Run ID: {}'.format(sra_id))
+            sci_name = sci_name.replace(" ", "_")
+            index = check_index(args, sci_name)
+            run_quant(args, metadata, sra_id, index)
+
+
+

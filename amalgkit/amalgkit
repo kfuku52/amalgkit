@@ -218,8 +218,9 @@ pqu = subparsers.add_parser('quant', help='see `amalgkit quant -h`')
 
 pqu.add_argument('--id', metavar='XXXXX0000', default=None, type=str, required=False, action='store',
                  help='default=%(default)s: SRA ID. quant automatically search .fastq or .fastq.gz file(s)')
-pqu.add_argument('--index', metavar='PATH', default=None, type=str, required=False, action='store',
-                 help='default=%(default)s: path/name of index file built from cds fasta sequences, like genome or transcriptome.')
+pqu.add_argument('--index_dir', metavar='PATH', default=None, type=str, required=False, action='store',
+                 help='default=%(default)s: custom path to Index directory. Only required if Index directory is not'
+                      'output_directory/Index/')
 pqu.add_argument('--threads', metavar='INT', default=1, type=int, required=False, action='store',
                  help='default=%(default)s: Number of threads.')
 pqu.add_argument('--fragment_length', metavar='INT', default=None, type=int, required=False, action='store',

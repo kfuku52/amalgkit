@@ -133,7 +133,7 @@ def create_run_dir(run_path, run_no=1):
             return create_run_dir(run_path, run_no)
 
 class Metadata:
-    column_names = ['scientific_name','tissue','tissue_original','genotype','sex','age','treatment','source_name',
+    column_names = ['scientific_name','tissue','curate_group','tissue_original','genotype','sex','age','treatment','source_name',
                     'is_sampled','is_qualified','exclusion','protocol','bioproject','biosample',
                     'experiment','run','sra_primary','sra_sample','sra_study','study_title','exp_title','design',
                     'sample_title','sample_description','lib_name','lib_layout','lib_strategy','lib_source',
@@ -415,6 +415,7 @@ class Metadata:
                                  parse_dates=False, infer_datetime_format=False, quotechar='"', sep='\t',
                                  header=None, index_col=None, skip_blank_lines=True, comment='#')
             config = config.replace(numpy.nan, '')
+            self.df.loc[:, 'tissue_original'] = self.df.loc[:, 'tissue']
             for i in numpy.arange(config.shape[0]):
                 replace_from = config.iloc[i,1]
                 replace_to = config.iloc[i,0]

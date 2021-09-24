@@ -13,6 +13,7 @@ suppressPackageStartupMessages(library(pvclust, quietly = TRUE))
 suppressPackageStartupMessages(library(Rtsne, quietly = TRUE))
 
 debug_mode = ifelse(length(commandArgs(trailingOnly = TRUE)) == 1, "debug", "batch")
+
 log_prefix = "transcriptome_curation.r:"
 cat(log_prefix, "mode =", debug_mode, "\n")
 if (debug_mode == "debug") {
@@ -454,6 +455,40 @@ draw_dendrogram = function(sra, tc_dist_dist, fontsize = 7) {
       bg = sra[order.dendrogram(dend), 'curate_group_color'],
       fg = sra[order.dendrogram(dend), 'bp_color']
     )
+}
+
+draw_dendrogram_ggplot = function(sra, tc_dist_dist, fontsize = 7) {
+  
+  cg_col = unique(sra[,c('curate_group', 'curate_group_color')])
+  bp_col = unique(sra[,c('bioproject', 'bp_color')])
+  colnames(cg_col) = c('Group', 'Color')
+  colnames(bp_col) = c('Group', 'Color')
+  sra_colors = rbind(cg_col,bp_col)
+  
+  group_colors <-  data.table(Group=sra_colors$Group, Color=sra_colors$Color, key="Group")
+  group_colors <- transpose(group_colors, make.names = "Group")
+  
+  hc       <- hclust(tc_dist_dist)           # heirarchal clustering
+  dendr    <- dendro_data(hc, type="rectangle") # convert for ggplot
+  clust.df <- data.frame(label=sra$run, curate_group=factor(sra[sra$run %in% dendr$labels$label,'curate_group']), bioproject = factor(sra[sra$run %in% dendr$labels$label,'bioproject']))
+  dendr[["labels"]] <- merge(dendr[["labels"]],clust.df, by="label")
+  ggplot() + 
+    geom_segment(data=dendr$segments, aes(x=x, y=y, xend=xend, yend=yend), size = .8, show.legend = FALSE) + 
+    geom_segment(data=merge(dendr$segments[dendr$segments$yend==0,], dendr$labels[,c('label', 'curate_group', 'x')], by = 'x'), aes(x=x, y=y, xend=xend, yend=yend, color = curate_group), size = .8, show.legend = FALSE) + 
+    geom_text(data=dendr$labels, aes(x, y - .008, label=label, hjust=0, angle = 270, color = curate_group ), size=3, show.legend = FALSE) +
+    scale_y_continuous(expand = c(.2, .1)) +
+    geom_point(data = dendr$labels, aes(x,y, color = bioproject), size = 3, show.legend = FALSE) +
+    geom_point(data = dendr$labels, aes(x,y, color = curate_group), size = 2, show.legend = FALSE) +
+    theme(axis.line.x=element_blank(),
+          axis.ticks.x=element_blank(),
+          axis.text.x=element_blank(),
+          axis.title.x=element_blank(),
+          axis.title.y=element_blank(),
+          axis.ticks.y=element_blank(),
+          axis.text.y=element_blank(),
+          panel.background=element_rect(fill="white"),
+          panel.grid=element_blank() 
+    ) + scale_color_manual(values=group_colors)
 }
 
 draw_dendrogram_pvclust = function(sra, tc, nboot, pvclust_file, fontsize = 7) {
