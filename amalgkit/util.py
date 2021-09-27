@@ -50,7 +50,7 @@ def get_newest_intermediate_file_extension(sra_stat, work_dir):
     if sra_stat['layout']=='single':
         subext = ''
     elif sra_stat['layout']=='paired':
-        subext = '_R1'
+        subext = '_1'
     files = os.listdir(work_dir)
     for ext in extensions:
         if any([ f==sra_stat['sra_id']+subext+ext for f in files ]):

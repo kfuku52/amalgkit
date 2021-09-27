@@ -2,15 +2,14 @@
 <module type="JAVA_MODULE" version="4">
   <component name="FacetManager">
     <facet type="Python" name="Python">
-      <configuration sdkName="Python 3.8 (base)" />
+      <configuration sdkName="" />
     </facet>
   </component>
   <component name="NewModuleRootManager">
     <content url="file://$MODULE_DIR$" />
-    <orderEntry type="jdk" jdkName="Python 3.8 (base)" jdkType="Python SDK" />
+    <orderEntry type="jdk" jdkName="Python 3.8 (dev) (3)" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />
     <orderEntry type="library" exported="" name="R Skeletons" level="application" />
     <orderEntry type="library" name="R User Library" level="project" />
-    <orderEntry type="library" name="Python 3.8 (base) interpreter library" level="application" />
   </component>
 </module>
