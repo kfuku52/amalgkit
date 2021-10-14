@@ -350,7 +350,6 @@ class Metadata:
         import obonet
         nltk.download('wordnet')
         # retrieve metadata
-        self.df.loc[:,'tissue_original'] = self.df.loc[:,'tissue']
         # retrieve tissue query from config
         tissues = pandas.read_csv(os.path.join(self.config_dir, 'search_term_keyword.config'),
                                     parse_dates=False, infer_datetime_format=False, quotechar='"', sep='\t',
@@ -415,7 +414,6 @@ class Metadata:
                                  parse_dates=False, infer_datetime_format=False, quotechar='"', sep='\t',
                                  header=None, index_col=None, skip_blank_lines=True, comment='#')
             config = config.replace(numpy.nan, '')
-            self.df.loc[:, 'tissue_original'] = self.df.loc[:, 'tissue']
             for i in numpy.arange(config.shape[0]):
                 replace_from = config.iloc[i,1]
                 replace_to = config.iloc[i,0]
@@ -650,7 +648,7 @@ def metadata_main(args):
     if metadata.df.shape[0]==0:
         print('No entry was found/survived in the metadata processing. Please check the config files.')
         return None
-
+    metadata.df.loc[:, 'tissue_original'] = metadata.df.loc[:, 'tissue']
     if args.tissue_detect:
         metadata.remove_linebreak()
         # metadata.mark_exclude_ids() # TODO to Matthias, this should be activated even when --tissue_detect yes. Any conflicting feature?
