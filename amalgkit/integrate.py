@@ -63,8 +63,11 @@ def get_fastq_stats(args):
                     tmp_metadata.loc[row, 'scientific_name'] = 'Please add in format: Genus species'
                     tmp_metadata.loc[row,'curate_group'] = 'Please add'
                     tmp_metadata.loc[row,'run'] = tmp_stat_df.loc[0,'id']
-                    tmp_metadata.loc[row,'read1_path']= tmp_stat_df.loc[0,'file']
-                    tmp_metadata.loc[row,'read2_path']= tmp_stat_df.loc[0,'file2']
+                    tmp_metadata.loc[row,'read1_path']= os.path.abspath(tmp_stat_df.loc[0,'file'])
+                    if tmp_stat_df.loc[0, 'file2'] != 'no path':
+                        tmp_metadata.loc[row,'read2_path']= os.path.abspath(tmp_stat_df.loc[0,'file2'])
+                    else:
+                        tmp_metadata.loc[row, 'read2_path'] = 'no path'
                     tmp_metadata.loc[row,'is_sampled']= 'yes'
                     tmp_metadata.loc[row,'is_qualified']= 'yes'
                     tmp_metadata.loc[row, 'exclusion'] = 'no'
