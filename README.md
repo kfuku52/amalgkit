@@ -11,7 +11,7 @@
 ## Installation
 ```
 # Installation with pip
-pip install -U git+https://github.com/kfuku52/amalgkit
+pip install git+https://github.com/kfuku52/amalgkit
 
 # This should show complete options
 amalgkit -h

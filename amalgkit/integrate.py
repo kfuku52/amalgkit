@@ -4,6 +4,7 @@ from amalgkit.util import *
 import glob
 import subprocess
 import time
+import os
 
 def check_seqkit_dependency():
     print("checking SeqKit dependency")
@@ -45,20 +46,20 @@ def get_fastq_stats(args):
 
                     fastq_files = glob.glob(os.path.join(args.fastq_dir, id + "*"))
 
-                    print("Found ",id_dict[id], " file[s] for ID ", id,". Lib-layout: ", lib_layout)
-                    print("Getting sequence statistics.")
-                    tmp_file = os.path.join(args.out_dir, 'seqkit_stats.tmp')
+                    print("Found {} file(s) for ID {}. Lib-layout: {}".format(id_dict[id], id,lib_layout), flush=True)
+                    print("Getting sequence statistics.", flush=True)
+                    tmp_file = os.path.join(args.out_dir, id+'_seqkit_stats.tmp')
                     seqkit_stdout = open(tmp_file, 'w')
                     subprocess.run(['seqkit','stats', '-T', '-j', str(args.threads), fastq_files[0]], stdout=seqkit_stdout)
+                    seqkit_stdout.close()
 
                     tmp_stat_df = pandas.read_csv(tmp_file, sep='\t', header=0)
+                    os.remove(tmp_file)
                     tmp_stat_df.loc[0,'id'] = id
                     try:
                         tmp_stat_df.loc[0, 'file2'] = fastq_files[1]
                     except IndexError:
                         tmp_stat_df.loc[0, 'file2'] = 'no path'
-
-                    subprocess.run(['rm', tmp_file])
 
                     tmp_metadata.loc[row, 'scientific_name'] = 'Please add in format: Genus species'
                     tmp_metadata.loc[row,'curate_group'] = 'Please add'
