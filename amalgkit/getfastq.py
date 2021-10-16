@@ -173,24 +173,10 @@ def remove_old_intermediate_files(sra_id, work_dir):
 def remove_intermediate_files(sra_stat, ext, work_dir):
     file_paths = list()
     if sra_stat['layout'] == 'single':
-        try:
-            if sra_stat['private_file'] == 'yes':
-                file_paths.append(sra_stat['read1_path'].split(os.extsep, 1)[0] + ext)
-            else:
-                file_paths.append(os.path.join(work_dir, sra_stat['sra_id'] + ext))
-        except KeyError:
-            file_paths.append(os.path.join(work_dir, sra_stat['sra_id'] + ext))
+        file_paths.append(os.path.join(work_dir, sra_stat['sra_id'] + ext))
     elif sra_stat['layout'] == 'paired':
-        try:
-            if sra_stat['private_file'] == 'yes':
-                for i in ['read1_path', 'read2_path']:
-                    file_paths.append(sra_stat[i].split(os.extsep, 1)[0] + ext)
-            else:
-                for i in [1, 2]:
-                    file_paths.append(os.path.join(work_dir, sra_stat['sra_id'] + '_' + str(i) + ext))
-        except KeyError:
-            for i in [1, 2]:
-                file_paths.append(os.path.join(work_dir, sra_stat['sra_id'] + '_' + str(i) + ext))
+        for i in [1, 2]:
+            file_paths.append(os.path.join(work_dir, sra_stat['sra_id'] + '_' + str(i) + ext))
     for file_path in file_paths:
         if os.path.exists(file_path):
             print('Deleting intermediate file:', file_path)
@@ -392,19 +378,9 @@ def run_pfd(sra_stat, args, output_dir, seq_summary, start, end):
     return seq_summary,sra_stat
 
 
-def run_fastp(sra_stat, args, output_dir, seq_summary, private_fastq):
+def run_fastp(sra_stat, args, output_dir, seq_summary):
     print('Running fastp.')
-    if private_fastq:
-        if sra_stat['private_file'] == 'no':
-            inext = get_newest_intermediate_file_extension(sra_stat, work_dir=output_dir)
-            infile1 = os.path.join(output_dir, sra_stat['sra_id'] + '_1')
-            infile2 = os.path.join(output_dir, sra_stat['sra_id'] + '_2')
-        else:
-            infile1 = sra_stat['read1_path'].split(os.extsep,1)[0]
-            infile2 = sra_stat['read2_path'].split(os.extsep,1)[0]
-            inext = '.' + sra_stat['read1_path'].split(os.extsep,1)[1]
-    else:
-        inext = get_newest_intermediate_file_extension(sra_stat, work_dir=output_dir)
+    inext = get_newest_intermediate_file_extension(sra_stat, work_dir=output_dir)
     outext = '.fastp.fastq.gz'
     if args.threads > 16:
         print('Too many threads for fastp (--threads {}). Only 16 threads will be used.'.format(args.threads))
@@ -414,13 +390,11 @@ def run_fastp(sra_stat, args, output_dir, seq_summary, private_fastq):
     fp_command = ['fastp', '--thread', str(fastp_thread), '--length_required',
                   str(args.min_read_length)] + args.fastp_option.split(' ')
     if sra_stat['layout'] == 'single':
-        if not private_fastq:
-            infile1 = os.path.join(output_dir, sra_stat['sra_id'])
-        fp_command = fp_command + ['--in1', infile1 + inext, '--out1', infile1 + outext]
+        infile = os.path.join(output_dir, sra_stat['sra_id'])
+        fp_command = fp_command + ['--in1', infile + inext, '--out1', infile + outext]
     elif sra_stat['layout'] == 'paired':
-        if not private_fastq:
-            infile1 = os.path.join(output_dir, sra_stat['sra_id'] + '_1')
-            infile2 = os.path.join(output_dir, sra_stat['sra_id'] + '_2')
+        infile1 = os.path.join(output_dir, sra_stat['sra_id'] + '_1')
+        infile2 = os.path.join(output_dir, sra_stat['sra_id'] + '_2')
         fp_command = fp_command + ['--in1', infile1 + inext, '--out1', infile1 + outext, '--in2', infile2 + inext,
                                    '--out2', infile2 + outext]
     fp_command = [fc for fc in fp_command if fc != '']
@@ -435,12 +409,7 @@ def run_fastp(sra_stat, args, output_dir, seq_summary, private_fastq):
         print('fastp stderr:')
         print(fp_out.stderr.decode('utf8'))
     if args.remove_tmp == 'yes':
-        # don't remove private files
-        try:
-            if sra_stat['private_file'] == 'no':
-                remove_intermediate_files(sra_stat, ext=inext, work_dir=output_dir)
-        except KeyError:
-            remove_intermediate_files(sra_stat, ext=inext, work_dir=output_dir)
+        remove_intermediate_files(sra_stat, ext=inext, work_dir=output_dir)
     bps = fp_out.stderr.decode('utf8').split('\n')
     num_in = list()
     num_out = list()
@@ -484,55 +453,29 @@ def rename_reads(sra_stat, args, output_dir, gz_exe, ungz_exe):
 
 
 def rename_fastq(sra_stat, output_dir, inext, outext):
-    try:
-        if sra_stat['private_file'] == 'yes':
-            inbase = sra_stat['read1_path'].split(os.extsep,1)[0]
-            inbase1 = sra_stat['read1_path'].split(os.extsep,1)[0]
-            inbase2 = sra_stat['read2_path'].split(os.extsep,1)[0]
-        else:
-            inbase = os.path.join(output_dir, sra_stat['sra_id'])
-            inbase1 = os.path.join(output_dir, sra_stat['sra_id'] + '_1')
-            inbase2 = os.path.join(output_dir, sra_stat['sra_id'] + '_2')
-        if sra_stat['layout'] == 'single':
-            os.rename(inbase + inext, inbase + outext)
-        elif sra_stat['layout'] == 'paired':
-            os.rename(inbase1 + inext, inbase1 + outext)
-            os.rename(inbase2 + inext, inbase2 + outext)
-    except KeyError:
-        if sra_stat['layout'] == 'single':
-            inbase = os.path.join(output_dir, sra_stat['sra_id'])
-            os.rename(inbase + inext, inbase + outext)
-        elif sra_stat['layout'] == 'paired':
-            inbase1 = os.path.join(output_dir, sra_stat['sra_id'] + '_1')
-            inbase2 = os.path.join(output_dir, sra_stat['sra_id'] + '_2')
-            os.rename(inbase1 + inext, inbase1 + outext)
-            os.rename(inbase2 + inext, inbase2 + outext)
+    if sra_stat['layout'] == 'single':
+        inbase = os.path.join(output_dir, sra_stat['sra_id'])
+        os.rename(inbase + inext, inbase + outext)
+    elif sra_stat['layout'] == 'paired':
+        inbase1 = os.path.join(output_dir, sra_stat['sra_id'] + '_1')
+        inbase2 = os.path.join(output_dir, sra_stat['sra_id'] + '_2')
+        os.rename(inbase1 + inext, inbase1 + outext)
+        os.rename(inbase2 + inext, inbase2 + outext)
 
 
-
-
-def sequence_extraction(args, sra_stat, start, end, output_dir, seq_summary, gz_exe, ungz_exe, total_sra_bp, is_private_fastq_file, private_fastq):
+def sequence_extraction(args, sra_stat, start, end, output_dir, seq_summary, gz_exe, ungz_exe, total_sra_bp):
     sra_id = sra_stat['sra_id']
-    if args.pfd == 'yes' and is_private_fastq_file == False:
+    if args.pfd == 'yes':
         seq_summary,sra_stat = run_pfd(sra_stat, args, output_dir, seq_summary, start, end)
         bp_remaining = seq_summary['bp_dumped'].loc[sra_id] - seq_summary['bp_written'].loc[sra_id]
         seq_summary['bp_remaining'].loc[sra_id] = bp_remaining
     if args.fastp:
-        seq_summary = run_fastp(sra_stat, args, output_dir, seq_summary, private_fastq)
+        seq_summary = run_fastp(sra_stat, args, output_dir, seq_summary)
         bp_remaining = seq_summary['bp_dumped'].loc[sra_id] - seq_summary['bp_fastp_out'].loc[sra_id]
         seq_summary['bp_remaining'].loc[sra_id] = bp_remaining
     if args.read_name == 'trinity':
         rename_reads(sra_stat, args, output_dir, gz_exe, ungz_exe)
-    if private_fastq:
-        if sra_stat['private_file'] == 'yes':
-            if args.fastp:
-                inext = '.fastp.fastq.gz'
-            else:
-                inext = '.' + sra_stat['read1_path'].split(os.extsep,1)[1]
-        else:
-            inext = get_newest_intermediate_file_extension(sra_stat, work_dir=output_dir)
-    else:
-        inext = get_newest_intermediate_file_extension(sra_stat, work_dir=output_dir)
+    inext = get_newest_intermediate_file_extension(sra_stat, work_dir=output_dir)
     outext = '.amalgkit.fastq.gz'
     rename_fastq(sra_stat, output_dir, inext, outext)
     seq_summary['bp_still_available'].loc[sra_id] = sra_stat['spot_length'] * (sra_stat['total_spot'] - end)
@@ -544,14 +487,14 @@ def sequence_extraction(args, sra_stat, start, end, output_dir, seq_summary, gz_
     return seq_summary
 
 
-def calc_2nd_ranges(total_bp_remaining, seq_summary):
-    sra_target_bp = total_bp_remaining / len(seq_summary['bp_remaining'])
+def calc_2nd_ranges(seq_summary):
+    sra_target_bp = seq_summary['total_bp_remaining'] / len(seq_summary['bp_remaining'])
     sra_target_reads = (sra_target_bp / seq_summary['spot_length']).astype(int)
     start_2nds = seq_summary['end_1st'] + 1
     end_2nds = start_2nds + (sra_target_reads / seq_summary['rate_passed']).astype(int)
     total_spots = seq_summary['total_spot']
     spot_lengths = seq_summary['spot_length']
-    pooled_missing_bp = total_bp_remaining
+    pooled_missing_bp = seq_summary['total_bp_remaining']
     for dummy in range(1000):
         current_total_bp = 0
         for sra_id in end_2nds.index:
@@ -565,7 +508,7 @@ def calc_2nd_ranges(total_bp_remaining, seq_summary):
                 end_2nds.loc[sra_id] = total_spots.loc[sra_id]
             current_total_bp += end_2nds.loc[sra_id] * spot_lengths.loc[sra_id]
         all_equal_total_spots = all([e2 == ts for e2, ts in zip(end_2nds, total_spots)])
-        is_enough_read = (current_total_bp >= total_bp_remaining)
+        is_enough_read = (current_total_bp >= seq_summary['total_bp_remaining'])
         if all_equal_total_spots:
             print('Reached total spots in all SRAs.', flush=True)
             break
@@ -607,9 +550,9 @@ def print_read_stats(args, seq_summary, max_bp, individual=True):
 
 def write_updated_metadata(args, metadata, seq_summary, sra_id):
     is_sra = (metadata.df['run'] == sra_id)
-    if metadata.df.loc[(metadata.df['run'] == sra_id), 'lib_layout'].values[0]=='single':
+    if metadata.df.loc[is_sra, 'lib_layout'].values[0] == 'single':
         denom = 1
-    elif metadata.df.loc[(metadata.df['run'] == sra_id), 'lib_layout'].values[0]=='paired':
+    elif metadata.df.loc[is_sra, 'lib_layout'].values[0] == 'paired':
         denom = 2
     if args.pfd == 'yes':
         metadata.df.loc[is_sra, 'num_read_fastq_dumped'] = seq_summary['num_dumped'].at[sra_id] / denom
@@ -622,12 +565,9 @@ def write_updated_metadata(args, metadata, seq_summary, sra_id):
     metadata_output_dir = os.path.join(args.out_dir, 'metadata', 'updated_metadata')
     if not os.path.exists(metadata_output_dir):
         os.makedirs(metadata_output_dir)
-    cols = ['scientific_name', 'tissue', 'run', 'bioproject', 'num_read_fastq_dumped', 'num_read_fastq_rejected',
-            'num_read_fastq_written', 'num_read_fastp_input', 'num_read_fastp', 'spot_length', 'nominal_length']
-    metadata_updated = metadata.df.loc[is_sra, cols]
     outpath = os.path.join(metadata_output_dir, 'metadata_' + sra_id + '.tsv')
     print('Writing updated metadata: {}'.format(outpath))
-    metadata_updated.to_csv(outpath, sep='\t', index=False)
+    metadata.df.to_csv(outpath, sep='\t', index=False)
 
 def getfastq_metadata(args):
    # assert (args.id is None and args.id_list is None) != (
@@ -669,32 +609,6 @@ def getfastq_metadata(args):
         assert args.concat == 'no', '--concat should be set "no" when --metadata is specified.'
         metadata = load_metadata(args)
     return metadata
-
-def move_private_files(args, metadata):
-    print('moving output files of private fastq')
-    ext = '.amalgkit.fastq.gz'
-    for i in metadata.df.index:
-        if metadata.df.at[i ,'private_file'] == 'yes':
-            base_path_read1 = metadata.df.at[i,'read1_path'].split(os.extsep, 1)[0]
-            read2_exists = False
-            if metadata.df.at[i ,'read2_path'] != 'no path':
-                base_path_read2 = metadata.df.at[i,'read2_path'].split(os.extsep, 1)[0]
-                read2_exists = True
-
-            target_folder = os.path.join(args.out_dir, 'getfastq', metadata.df.at[i ,'run'])
-
-            if not os.path.exists(target_folder):
-                os.makedirs(target_folder)
-
-            print('moving ', base_path_read1 + ext, 'to ', target_folder)
-            subprocess.run(['cp', base_path_read1 + ext, target_folder])
-            subprocess.run(['rm', base_path_read1 + ext])
-
-            if read2_exists:
-                print('moving ', base_path_read2 + ext, 'to ', target_folder)
-                subprocess.run(['cp', base_path_read2 + ext, target_folder])
-                subprocess.run(['rm', base_path_read2 + ext])
-
 
 
 def is_getfastq_output_present(args, sra_stat, output_dir):
@@ -756,6 +670,82 @@ def initialize_seq_summary(metadata):
             seq_summary[key] = pandas.Series(0, index=sra_ids)
     return seq_summary
 
+def sequence_extraction_1st_round(args, sra_stat, output_dir, seq_summary, gz_exe, ungz_exe, total_sra_bp, max_bp):
+    offset = 10000  # https://edwards.sdsu.edu/research/fastq-dump/
+    start, end = get_range(sra_stat, offset, total_sra_bp, max_bp)
+    seq_summary = sequence_extraction(args, sra_stat, start, end, output_dir, seq_summary,
+                                      gz_exe, ungz_exe, total_sra_bp)
+    txt = 'Time elapsed for 1st-round sequence extraction: {}, {:,} sec'
+    print(txt.format(sra_stat['sra_id'], int(time.time() - seq_summary['start_time'])))
+
+    print('\n--- getfastq 1st-round sequence generation report ---')
+    print_read_stats(args, seq_summary, max_bp)
+    seq_summary['total_bp_remaining'] = seq_summary['bp_remaining'].sum()
+    seq_summary['percent_remaining'] = seq_summary['total_bp_remaining'] / max_bp * 100
+    if args.fastp:
+        seq_summary['total_bp_out'] = seq_summary['bp_fastp_out'].sum()
+    else:
+        seq_summary['total_bp_out'] = seq_summary['bp_written'].sum()
+    txt = '{:.2f}% of reads were obtained in the 1st-round sequence generation.'
+    print(txt.format(100-seq_summary['percent_remaining']), flush=True)
+    txt = 'The amount of generated reads were {:.2f}% ({:,}/{:,}) smaller than the target size (tol={}%).'
+    print(txt.format(seq_summary['percent_remaining'], seq_summary['total_bp_out'], max_bp, args.tol), flush=True)
+    return seq_summary
+
+def sequence_extraction_2st_round(args, sra_stat, output_dir, seq_summary, gz_exe, ungz_exe, total_sra_bp, max_bp):
+    print('Starting the 2nd-round sequence extraction to compensate it.')
+    seq_summary = calc_2nd_ranges(seq_summary)
+    ext_main = '.amalgkit.fastq.gz'
+    ext_1st_tmp = '.amalgkit_1st.fastq.gz'
+
+    print('')
+    seq_summary['start_time_2nd'] = time.time()
+    sra_id = sra_stat['sra_id']
+    start = seq_summary['start_2nd'].loc[sra_id]
+    end = seq_summary['end_2nd'].loc[sra_id]
+    layout = sra_stat['layout']
+    if (start >= end):
+        txt = '{}: All spots have been extracted in the 1st trial. Cancelling the 2nd trial. start={:,}, end={:,}'
+        print(txt.format(sra_id, start, end))
+        return seq_summary
+    rename_fastq(sra_stat, output_dir, inext=ext_main, outext=ext_1st_tmp)
+    seq_summary = sequence_extraction(args, sra_stat, start, end, output_dir, seq_summary,
+                                      gz_exe, ungz_exe, total_sra_bp)
+    if (layout == 'single'):
+        subexts = ['']
+    elif (layout == 'paired'):
+        subexts = ['_1', '_2']
+    for subext in subexts:
+        added_path = os.path.join(output_dir, sra_id + subext + ext_1st_tmp)
+        adding_path = os.path.join(output_dir, sra_id + subext + ext_main)
+        assert os.path.exists(added_path), 'Dumped fastq not found: ' + added_path
+        assert os.path.exists(adding_path), 'Dumped fastq not found: ' + adding_path
+        os.system('cat "' + adding_path + '" >> "' + added_path + '"')
+        os.remove(adding_path)
+        os.rename(added_path, adding_path)
+    txt = 'Time elapsed for 2nd-round sequence extraction: {}, {:,} sec'
+    print(txt.format(sra_stat['sra_id'], int(time.time() - seq_summary['start_time_2nd'])))
+    return seq_summary
+
+def sequence_extraction_private(i, metadata, sra_stat, seq_summary, output_dir, args):
+    for col in ['read1_path','read2_path']:
+        path_from = metadata.df.at[i,col]
+        path_to = os.path.join(output_dir, os.path.basename(path_from))
+        path_to = path_to.replace('.fq', '.fastq')
+        if not path_to.endswith('.gz'):
+            path_to = path_to+'.gz' # .gz is necessary even if the original file is not compressed.
+        if os.path.exists(path_from):
+            if os.path.lexists(path_to):
+                os.remove(path_to)
+            os.symlink(src=path_from, dst=path_to)
+        else:
+            sys.stderr.write('Private fastq file not found: {}\n'.format(path_from))
+    if args.fastp:
+        run_fastp(sra_stat, args, output_dir, seq_summary)
+    inext = get_newest_intermediate_file_extension(sra_stat, work_dir=output_dir)
+    outext = '.amalgkit.fastq.gz'
+    rename_fastq(sra_stat, output_dir, inext, outext)
+
 def getfastq_main(args):
     # sra_dir = os.path.join(os.path.expanduser("~"), 'ncbi/public/sra')
     gz_exe, ungz_exe = check_getfastq_dependency(args)
@@ -769,26 +759,17 @@ def getfastq_main(args):
     if metadata.df.loc[:,'total_bases'].isna().any():
         raise Exception('Empty value(s) of total_bases were detected in the metadata table.')
     total_sra_bp = metadata.df.loc[:,'total_bases'].sum()
-    offset = 10000  # https://edwards.sdsu.edu/research/fastq-dump/
     print('Number of SRAs:', num_sra)
     print('Total target size (--max_bp):', "{:,}".format(max_bp), 'bp')
     print('Total SRA size:', "{:,}".format(total_sra_bp), 'bp')
     print('Target size per SRA:', "{:,}".format(num_bp_per_sra), 'bp')
-    # detect presence of private fastq metadata
-    if set(['private_file','read1_path','read2_path']).issubset(metadata.df.columns):
-        private_fastq = True
-        print('Detected private fastq files in metadata.')
-    else:
-        private_fastq = False
-
     for i in metadata.df.index:
         txt = 'Individual SRA size of {}: {:,}'
         print(txt.format(metadata.df.at[i, 'run'], metadata.df.at[i, 'total_bases']))
-    seq_summary = initialize_seq_summary(metadata)
-
     for i in metadata.df.index:
         print('')
-        start_time = time.time()
+        seq_summary = initialize_seq_summary(metadata)
+        seq_summary['start_time'] = time.time()
         sra_id = metadata.df.at[i, 'run']
         sra_stat = get_sra_stat(sra_id, metadata, num_bp_per_sra)
         output_dir = set_getfastq_directories(args, sra_id)
@@ -805,84 +786,24 @@ def getfastq_main(args):
         print('Number of reads:', "{:,}".format(sra_stat['total_spot']))
         print('Single/Paired read length:', sra_stat['spot_length'], 'bp')
         print('Total bases:', "{:,}".format(int(metadata.df.loc[i, 'total_bases'])), 'bp')
-        is_private_fastq_file = False
-        if private_fastq:
-            if metadata.df.at[i,'private_file'] == 'no' and metadata.df.at[i,'data_available'] == 'yes':
-                if args.redo == 'no':
-                    print('fastq files for ', sra_id, 'already obtained according to metadata. Skipping download.')
-                    continue
-                else:
-                    print('fastq files for ', sra_id, 'already obtained according to metadata. --redo option set. Downloading.')
-                    download_sra(metadata, sra_stat, args, output_dir, overwrite=False)
-            elif metadata.df.at[i,'private_file'] == 'yes':
-                is_private_fastq_file = True
-                sra_stat['read1_path'] = metadata.df.at[i,'read1_path']
-                sra_stat['read2_path'] = metadata.df.at[i, 'read2_path']
-                sra_stat['private_file'] = metadata.df.at[i, 'private_file']
-            elif metadata.df.at[i,'private_file'] == 'no' and metadata.df.at[i,'data_available'] == 'no':
-                sra_stat['private_file'] = metadata.df.at[i, 'private_file']
-                download_sra(metadata, sra_stat, args, output_dir, overwrite=False)
-        else:
+        flag_private_file = False
+        if 'private_file' in metadata.df.columns:
+            if metadata.df.at[i,'private_file']=='yes':
+                print('Processing {} as private data. --max_bp is disabled.'.format(sra_id), flush=True)
+                flag_private_file = True
+                sequence_extraction_private(i, metadata, sra_stat, seq_summary, output_dir, args)
+        if not flag_private_file:
+            print('Processing {} as publicly available data from SRA.'.format(sra_id), flush=True)
             download_sra(metadata, sra_stat, args, output_dir, overwrite=False)
-        start, end = get_range(sra_stat, offset, total_sra_bp, max_bp)
-        seq_summary = sequence_extraction(args, sra_stat, start, end, output_dir, seq_summary,
-                                          gz_exe, ungz_exe, total_sra_bp, is_private_fastq_file, private_fastq)
-        txt = 'Time elapsed for 1st-round sequence extraction: {}, {:,} sec'
-        print(txt.format(sra_stat['sra_id'], int(time.time() - start_time)))
-
-    print('\n--- getfastq 1st-round sequence generation report ---')
-    print_read_stats(args, seq_summary, max_bp)
-    total_bp_remaining = seq_summary['bp_remaining'].sum()
-    percent_remaining = total_bp_remaining / max_bp * 100
-    if args.fastp:
-        total_bp_out = seq_summary['bp_fastp_out'].sum()
-    else:
-        total_bp_out = seq_summary['bp_written'].sum()
-    txt = '{:.2f}% of reads were obtained in the 1st-round sequence generation.'
-    print(txt.format(percent_remaining, args.tol))
-    txt = 'The amount of generated reads were {:.2f}% ({:,}/{:,}) smaller than the target size (tol={}%).'
-    print(txt.format(percent_remaining, total_bp_out, max_bp, args.tol))
-    if (percent_remaining < args.tol):
-        print('There is not enough remaining spots. Proceeding without 2nd-round sequence extraction.')
-    else:
-        print('Starting the 2nd-round sequence extraction to compensate it.')
-        seq_summary = calc_2nd_ranges(total_bp_remaining, seq_summary)
-        ext_main = '.amalgkit.fastq.gz'
-        ext_1st_tmp = '.amalgkit_1st.fastq.gz'
-        for i in metadata.df.index:
-            print('')
-            start_time = time.time()
-            sra_id = metadata.df.loc[i, 'run']
-            sra_stat = get_sra_stat(sra_id, metadata, num_bp_per_sra)
-            start = seq_summary['start_2nd'].loc[sra_id]
-            end = seq_summary['end_2nd'].loc[sra_id]
-            layout = sra_stat['layout']
-            if (start >= end):
-                txt = '{}: All spots have been extracted in the 1st trial. Cancelling the 2nd trial. start={:,}, end={:,}'
-                print(txt.format(sra_id, start, end))
-                continue
-            rename_fastq(sra_stat, output_dir, inext=ext_main, outext=ext_1st_tmp)
-            seq_summary = sequence_extraction(args, sra_stat, start, end, output_dir, output_dir, seq_summary,
-                                              gz_exe, ungz_exe, total_sra_bp)
-            if (layout == 'single'):
-                subexts = ['']
-            elif (layout == 'paired'):
-                subexts = ['_1', '_2']
-            for subext in subexts:
-                added_path = os.path.join(output_dir, sra_id + subext + ext_1st_tmp)
-                adding_path = os.path.join(output_dir, sra_id + subext + ext_main)
-                assert os.path.exists(added_path), 'Dumped fastq not found: ' + added_path
-                assert os.path.exists(adding_path), 'Dumped fastq not found: ' + adding_path
-                os.system('cat "' + adding_path + '" >> "' + added_path + '"')
-                os.remove(adding_path)
-                os.rename(added_path, adding_path)
-            txt = 'Time elapsed for 2nd-round sequence extraction: {}, {:,} sec'
-            print(txt.format(sra_stat['sra_id'], int(time.time() - start_time)))
-
+            seq_summary = sequence_extraction_1st_round(args, sra_stat, output_dir, seq_summary,
+                                                        gz_exe, ungz_exe, total_sra_bp, max_bp)
+            if (seq_summary['percent_remaining'] < args.tol):
+                print('Enough data were obtained in the 1st-round sequence extraction. Proceeding without the 2nd round.')
+            else:
+                seq_summary = sequence_extraction_2st_round(args, sra_stat, output_dir, seq_summary, gz_exe, ungz_exe,
+                                                            total_sra_bp, max_bp)
     for sra_id in metadata.df.loc[:,'run'].values:
         write_updated_metadata(args, metadata, seq_summary, sra_id)
-    if private_fastq:
-        move_private_files(args,metadata)
     print('')
     if args.concat == 'yes':
         concat_fastq(args, metadata, output_dir, num_bp_per_sra)

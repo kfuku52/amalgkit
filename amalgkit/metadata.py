@@ -85,7 +85,7 @@ def fetch_sra_xml(species_name, search_term, save_xml=True, read_from_existing_f
         record_ids = sra_record["IdList"]
         num_record = len(record_ids)
         print('Number of SRA records:', num_record)
-        start_time = time.time()
+        seq_summary['start_time'] = time.time()
         query_search_time = datetime.datetime.now().strftime('%Y/%m/%d %H:%M:%S')
         root = None
         for i in numpy.arange(numpy.ceil(num_record//retmax)+1):
@@ -111,7 +111,7 @@ def fetch_sra_xml(species_name, search_term, save_xml=True, read_from_existing_f
                 root = chunk
             else:
                 root.append(chunk)
-        elapsed_time = int(time.time() - start_time)
+        elapsed_time = int(time.time() - seq_summary['start_time'])
         xml_string = lxml.etree.tostring(root, pretty_print=True)
         for line in str(xml_string).split('\n'):
             if '<Error>' in line:
