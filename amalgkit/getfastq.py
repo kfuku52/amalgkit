@@ -578,14 +578,14 @@ def calc_2nd_ranges(total_bp_remaining, seq_summary):
 
 
 def print_read_stats(args, seq_summary, max_bp, individual=True):
-    print('Target size (--max_bp):', "{:,}".format(max_bp), 'bp')
+    print('Target size (--max_bp): {:,} bp'.format(max_bp))
     if args.pfd == 'yes':
-        print('Sum of fastq_dump dumped reads:', "{:,}".format(seq_summary['bp_dumped'].sum()), 'bp')
-        print('Sum of fastq_dump rejected reads:', "{:,}".format(seq_summary['bp_rejected'].sum()), 'bp')
-        print('Sum of fastq_dump written reads:', "{:,}".format(seq_summary['bp_written'].sum()), 'bp')
+        print('Sum of fastq_dump dumped reads: {:,} bp'.format(seq_summary['bp_dumped'].sum()))
+        print('Sum of fastq_dump rejected reads: {:,} bp'.format(seq_summary['bp_rejected'].sum()))
+        print('Sum of fastq_dump written reads: {:,} bp'.format(seq_summary['bp_written'].sum()))
     if args.fastp:
-        print('Sum of fastp input reads:', "{:,}".format(seq_summary['bp_fastp_in'].sum()), 'bp')
-        print('Sum of fastp output reads:', "{:,}".format(seq_summary['bp_fastp_out'].sum()), 'bp')
+        print('Sum of fastp input reads: {:,} bp'.format(seq_summary['bp_fastp_in'].sum()))
+        print('Sum of fastp output reads: {:,} bp'.format(seq_summary['bp_fastp_out'].sum()))
     if individual:
         print('Individual SRA IDs:', ' '.join(seq_summary['bp_dumped'].index.values))
         read_types = list()

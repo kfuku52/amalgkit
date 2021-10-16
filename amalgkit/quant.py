@@ -118,30 +118,20 @@ def run_quant(args, metadata, sra_id, index):
 
 def check_index(args, sci_name):
     if args.index_dir is not None:
-        if os.path.exists(args.index_dir):
-            index = glob.glob(os.path.join(args.index_dir, sci_name + '.*'))
-            if len(index) > 1:
-                raise ValueError(
-                    "found multiple index files for species. Please make sure there is only one index file for this species.")
-            elif len(index) == 0:
-                raise FileNotFoundError("Could not find Index file.")
-            index = index[0]
-        else:
-            raise FileNotFoundError("could not find index folder")
-
+        index_dir = args.index_dir
     else:
-        if os.path.exists(os.path.join(args.out_dir, 'Index')):
-            index = glob.glob(os.path.join(args.out_dir, 'Index', sci_name + '.*'))
-            print("Index file found: ", index[0])
-            if len(index) > 1:
-                raise ValueError(
-                    "found multiple index files for species. Please make sure there is only one index file for this species.")
-            elif len(index) == 0:
-                raise FileNotFoundError("Could not find Index file.")
-            index = index[0]
-        else:
-            raise FileNotFoundError("could not find Index folder")
-
+        index_dir = os.path.join(args.out_dir, 'Index')
+    if os.path.exists(index_dir):
+        index = glob.glob(os.path.join(args.index_dir, sci_name + '.*'))
+        if len(index) > 1:
+            raise ValueError(
+                "found multiple index files for species. Please make sure there is only one index file for this species.")
+        elif len(index) == 0:
+            raise FileNotFoundError("Could not find Index file.")
+        index = index[0]
+    else:
+        raise FileNotFoundError("could not find index folder")
+    print("Index file found: {}".format(index))
     return index
 
 def quant_main(args):
