@@ -32,7 +32,7 @@ def get_sra_stat(sra_id, metadata, num_bp_per_sra=None):
     sra_stat['layout'] = metadata.df.loc[is_sra,'lib_layout'].values[0]
     sra_stat['total_spot'] = int(metadata.df.loc[is_sra,'total_spots'].values[0])
     original_spot_len = metadata.df.loc[is_sra,'spot_length'].values[0]
-    if ((not original_spot_len) | (original_spot_len==0)):
+    if (numpy.isnan(original_spot_len) | (original_spot_len==0)):
         inferred_spot_len = int(metadata.df.loc[is_sra,'total_bases'].values[0]) / int(sra_stat['total_spot'])
         sra_stat['spot_length'] = int(inferred_spot_len)
         print('spot_length cannot be obtained directly from the metadata.')
