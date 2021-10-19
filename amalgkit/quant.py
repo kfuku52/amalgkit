@@ -116,32 +116,22 @@ def run_quant(args, metadata, sra_id, index):
             placeholder.write("This fastq file was safely removed after `amalgkit quant`.")
             placeholder.close()
 
-def check_index(args, sci_name):
+def get_index(args, sci_name):
     if args.index_dir is not None:
-        if os.path.exists(args.index_dir):
-            index = glob.glob(os.path.join(args.index_dir, sci_name + '.*'))
-            if len(index) > 1:
-                raise ValueError(
-                    "found multiple index files for species. Please make sure there is only one index file for this species.")
-            elif len(index) == 0:
-                raise FileNotFoundError("Could not find Index file.")
-            index = index[0]
-        else:
-            raise FileNotFoundError("could not find index folder")
-
+        index_dir = args.index_dir
     else:
-        if os.path.exists(os.path.join(args.out_dir, 'Index')):
-            index = glob.glob(os.path.join(args.out_dir, 'Index', sci_name + '.*'))
-            print("Index file found: ", index[0])
-            if len(index) > 1:
-                raise ValueError(
-                    "found multiple index files for species. Please make sure there is only one index file for this species.")
-            elif len(index) == 0:
-                raise FileNotFoundError("Could not find Index file.")
-            index = index[0]
-        else:
-            raise FileNotFoundError("could not find Index folder")
-
+        index_dir = os.path.join(args.out_dir, 'Index')
+    if os.path.exists(index_dir):
+        index = glob.glob(os.path.join(index_dir, sci_name + '*'))
+        if len(index) > 1:
+            raise ValueError(
+                "found multiple index files for species. Please make sure there is only one index file for this species.")
+        elif len(index) == 0:
+            raise FileNotFoundError("Could not find Index file.")
+        index = index[0]
+    else:
+        raise FileNotFoundError("could not find index folder")
+    print("Index file found: {}".format(index))
     return index
 
 def quant_main(args):
@@ -153,8 +143,8 @@ def quant_main(args):
         print('Species: {}'.format(sci_name))
         print('Run ID: {}'.format(sra_id))
         sci_name = sci_name.replace(" ", "_")
-        check_index(args, sci_name)
-        run_quant(args, metadata, sra_id, args.index)
+        index = get_index(args, sci_name)
+        run_quant(args, metadata, sra_id, index)
     else:
         # if args.id is not specified, it will run the whole metadata sheet one by one
         if args.id is None:
@@ -166,7 +156,7 @@ def quant_main(args):
                 print('Run ID: {}'.format(sra_id))
                 sci_name = sci_name.replace(" ", "_")
                 print('looking for index folder in ', args.out_dir)
-                index = check_index(args, sci_name)
+                index = get_index(args, sci_name)
                 run_quant(args, metadata, sra_id, index)
         # if args.id is not specified, it will run the whole metadata sheed one by one
         else:
@@ -175,7 +165,7 @@ def quant_main(args):
             print('Species: {}'.format(sci_name))
             print('Run ID: {}'.format(sra_id))
             sci_name = sci_name.replace(" ", "_")
-            index = check_index(args, sci_name)
+            index = get_index(args, sci_name)
             run_quant(args, metadata, sra_id, index)
 
 
