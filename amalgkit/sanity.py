@@ -63,7 +63,8 @@ def check_getfastq_outputs(args, sra_ids, metadata, output_dir):
                     continue
 
                 files = glob.glob(os.path.join(sra_path, sra_id + "*" + ext))
-                print("found: ", files)
+                if ext != '.safely_removed':
+                    print("found: ", files)
                 data_available.append(sra_id)
                 if args.updated_metadata_dir:
                     updated_metadata_path = os.path.join(args.updated_metadata_dir, "metadata_" + sra_id + ".tsv")

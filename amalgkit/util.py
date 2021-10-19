@@ -60,9 +60,10 @@ def get_newest_intermediate_file_extension(sra_stat, work_dir):
         safe_delete_files = glob.glob(os.path.join(work_dir, sra_stat['sra_id']+"*.safely_removed"))
         if len(safe_delete_files):
             txt = 'getfastq safely_removed flag was detected. `amalgkit quant` has been completed in this sample: {}\n'
-            sys.stderr.write(txt.format(work_dir))
+            sys.stdout.write(txt.format(work_dir))
             for safe_delete_file in safe_delete_files:
-                sys.stderr.write('{}\n'.format(safe_delete_file))
+                sys.stdout.write('{}\n'.format(safe_delete_file))
+            return '.safely_removed'
         sys.stderr.write('getfastq output could not be found in: {}\n'.format(work_dir))
         sys.exit(0)
     return ext_out
