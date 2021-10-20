@@ -19,7 +19,7 @@ def load_metadata(args):
             for idx in metadata.df.index:
                 is_sampled = numpy.append(is_sampled, strtobool(metadata.df['is_sampled'].loc[idx]))
             txt = 'This is {:,}th job. In total, {:,} jobs will be necessary for this metadata table. {:,} SRAs were excluded.'
-            print(txt.format(args.batch, sum(is_sampled), sum(numpy.where(is_sampled == False)[0])))
+            print(txt.format(args.batch, sum(is_sampled), len(numpy.where(is_sampled == False)[0])))
             if args.batch>sum(is_sampled):
                 sys.stderr.write('--batch {} is too large. Exiting.\n'.format(args.batch))
                 sys.exit(0)
