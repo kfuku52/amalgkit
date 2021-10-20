@@ -88,8 +88,8 @@ def get_fastq_stats(args):
                         tmp_metadata.loc[row,'read2_path']= os.path.abspath(tmp_stat_df.loc[0,'file2'])
                     else:
                         tmp_metadata.loc[row, 'read2_path'] = 'no path'
-                    tmp_metadata.loc[row,'is_sampled']= 'yes'
-                    tmp_metadata.loc[row,'is_qualified']= 'yes'
+                    tmp_metadata.loc[row,'is_sampled']= 'Yes'
+                    tmp_metadata.loc[row,'is_qualified']= 'Yes'
                     tmp_metadata.loc[row, 'exclusion'] = 'no'
                     tmp_metadata.loc[row,'lib_layout']= lib_layout
                     tmp_metadata.loc[row,'spot_length']= tmp_stat_df.loc[0,'avg_len']
