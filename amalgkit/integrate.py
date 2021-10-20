@@ -5,6 +5,7 @@ import glob
 import subprocess
 import time
 import os
+import platform
 
 def check_seqkit_dependency():
     print("checking SeqKit dependency")
@@ -49,11 +50,29 @@ def get_fastq_stats(args):
                     print("Found {} file(s) for ID {}. Lib-layout: {}".format(id_dict[id], id,lib_layout), flush=True)
                     print("Getting sequence statistics.", flush=True)
                     tmp_file = os.path.join(args.out_dir, id+'_seqkit_stats.tmp')
-                    seqkit_stdout = open(tmp_file, 'w')
-                    subprocess.run(['seqkit','stats', '-T', '-j', str(args.threads), fastq_files[0]], stdout=seqkit_stdout)
-                    seqkit_stdout.close()
+                    OS = platform.system()
+
+                    if OS == 'Darwin':
+                        seqkit_command = 'zcat < ' + fastq_files[0] + ' | head -n 4000 | seqkit stats -T -j ' + str(args.threads)
+                        total_spots_command = 'echo $(zcat < ' + str(fastq_files[0]) + ' | wc -l)/4|bc'
+                        seqkit_stdout = open(tmp_file, 'w')
+                        subprocess.run(seqkit_command,shell=True, stdout=seqkit_stdout)
+                        seqkit_stdout.close()
+
+                    elif OS == 'Linux':
+                        seqkit_command = 'zcat ' + fastq_files[0] + ' | head -n 4000 | seqkit stats'
+                        total_spots_command = 'echo $(zcat ' + str(fastq_files[0]) + ' | wc -l)/4|bc'
+                        seqkit_stdout = open(tmp_file, 'w')
+                        subprocess.run(seqkit_command,shell=True, stdout=seqkit_stdout)
+                        seqkit_stdout.close()
+                    else:
+                        raise OSError('This OS is not supported.')
+
+                    total_spots = int(subprocess.check_output(total_spots_command, shell=True))
+
 
                     tmp_stat_df = pandas.read_csv(tmp_file, sep='\t', header=0)
+
                     os.remove(tmp_file)
                     tmp_stat_df.loc[0,'id'] = id
                     try:
@@ -64,7 +83,7 @@ def get_fastq_stats(args):
                     tmp_metadata.loc[row, 'scientific_name'] = 'Please add in format: Genus species'
                     tmp_metadata.loc[row,'curate_group'] = 'Please add'
                     tmp_metadata.loc[row,'run'] = tmp_stat_df.loc[0,'id']
-                    tmp_metadata.loc[row,'read1_path']= os.path.abspath(tmp_stat_df.loc[0,'file'])
+                    tmp_metadata.loc[row,'read1_path']= os.path.abspath(fastq_files[0])
                     if tmp_stat_df.loc[0, 'file2'] != 'no path':
                         tmp_metadata.loc[row,'read2_path']= os.path.abspath(tmp_stat_df.loc[0,'file2'])
                     else:
@@ -74,8 +93,13 @@ def get_fastq_stats(args):
                     tmp_metadata.loc[row, 'exclusion'] = 'no'
                     tmp_metadata.loc[row,'lib_layout']= lib_layout
                     tmp_metadata.loc[row,'spot_length']= tmp_stat_df.loc[0,'avg_len']
-                    tmp_metadata.loc[row,'total_spots']= tmp_stat_df.loc[0,'num_seqs']
-                    tmp_metadata.loc[row,'total_bases']= tmp_stat_df.loc[0,'sum_len']
+
+                    total_bases = total_spots * int(tmp_stat_df.loc[0,'avg_len'])
+                    if lib_layout == 'paired':
+                        total_bases = total_bases * 2
+
+                    tmp_metadata.loc[row,'total_spots']= total_spots
+                    tmp_metadata.loc[row,'total_bases']= total_bases
                     tmp_metadata.loc[row,'size']= os.path.getsize(fastq_files[0])
                     tmp_metadata.loc[row, 'private_file'] = 'yes'
 
