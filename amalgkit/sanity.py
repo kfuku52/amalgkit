@@ -66,9 +66,9 @@ def check_getfastq_outputs(args, sra_ids, metadata, output_dir):
                 if ext != '.safely_removed':
                     print("found: ", files)
                 data_available.append(sra_id)
-                if args.updated_metadata_dir:
+                try:
                     updated_metadata_path = os.path.join(args.updated_metadata_dir, "metadata_" + sra_id + ".tsv")
-                else:
+                except:
                     updated_metadata_path = os.path.join(args.out_dir, "metadata/updated_metadata/metadata_"
                                                          + sra_id + ".tsv")
 
@@ -184,10 +184,9 @@ def check_quant_output(args, sra_ids, output_dir):
                 print("Checking for output files.")
                 abundance_file = os.path.join(sra_path, sra_id + "_abundance.tsv")
                 run_info_file = os.path.join(sra_path, sra_id + "_run_info.json")
-                abundance_h_file = os.path.join(sra_path, sra_id + "_abundance.h5")
-                if os.path.exists(abundance_file) and os.path.exists(run_info_file) and os.path.exists(
-                        abundance_h_file):
-                    print("All quant output files present for, ", sra_id, " !")
+
+                if os.path.exists(abundance_file) and os.path.exists(run_info_file):
+                    print("All quant output files present for", sra_id, "!")
                     data_available.append(sra_id)
                     continue
                 elif not os.path.exists(abundance_file):
@@ -195,9 +194,6 @@ def check_quant_output(args, sra_ids, output_dir):
                     warned = True
                 elif not os.path.exists(run_info_file):
                     print(run_info_file, " is missing! Please check if quant ran correctly")
-                    warned = True
-                elif not os.path.exists(abundance_h_file):
-                    print(abundance_h_file, " is missing! Please check if quant ran correctly")
                     warned = True
 
                 if warned:

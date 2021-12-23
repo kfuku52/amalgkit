@@ -7,16 +7,20 @@ import glob
 import os
 import sys
 
+from distutils.util import strtobool
+
 def load_metadata(args):
     df = pandas.read_csv(args.metadata, sep='\t', header=0)
     metadata = Metadata.from_DataFrame(df)
     if 'batch' in dir(args):
         if args.batch is not None:
             print('--batch is specified. Processing one SRA per job.')
-            is_sampled = (metadata.df.loc[:,'is_sampled']=='Yes')
+            is_sampled = numpy.array([])
+            for idx in metadata.df.index:
+                is_sampled = numpy.append(is_sampled, strtobool(metadata.df['is_sampled'].loc[idx]))
             txt = 'This is {:,}th job. In total, {:,} jobs will be necessary for this metadata table. {:,} SRAs were excluded.'
-            print(txt.format(args.batch, is_sampled.sum(), (is_sampled==False).sum()))
-            if args.batch>is_sampled.sum():
+            print(txt.format(args.batch, sum(is_sampled), len(numpy.where(is_sampled == False)[0])))
+            if args.batch>sum(is_sampled):
                 sys.stderr.write('--batch {} is too large. Exiting.\n'.format(args.batch))
                 sys.exit(0)
             metadata.df = metadata.df.loc[is_sampled,:]
