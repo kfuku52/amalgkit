@@ -34,11 +34,11 @@ config_dir="./config/test"
 
 amalgkit metadata \
 --config_dir ${config_dir} \
---work_dir . \
+--out_dir . \
 --entrez_email 'aaa@bbb.com' # Use your own email address. Don't worry, you won't get spam messages.
 ```
 
-If you get a network connection error, simply rerun the same analysis. The program will resume the analysis using intermediate files in `--work_dir`.
+If you get a network connection error, simply rerun the same analysis. The program will resume the analysis using intermediate files in `--out_dir`.
 
 #### Output
 * **metadata_01_raw_YYYY_MM_DD-YYYY_MM_DD.tsv**: This table is a reformatted version of SRA metadata in the xml format.
@@ -61,7 +61,7 @@ amalgkit getfastq \
 --entrez_email 'aaa@bbb.com' \
 --id 'PRJDB4514' \
 --threads 2 \
---work_dir ./fastq_files \
+--out_dir ./fastq_files \
 --max_bp '75,000'
 ```
 ## `amalgkit quant` - quantification of RNAseq data
@@ -87,7 +87,7 @@ amalgkit quant \
 --id SRR8819967 \
 --index arabidopsis_thaliana.idx \
 --ref arabidopsis_thaliana.fasta \
---work_dir ./fastq_files
+--out_dir ./fastq_files
 ```
 
 #### Output
@@ -125,7 +125,7 @@ amalgkit curate \
 --metadata metadata.tsv \
 --dist_method 'pearson' \
 --tissues brain liver heart embryo \
---work_dir './'
+--out_dir './'
 ```
 #### Output
 
