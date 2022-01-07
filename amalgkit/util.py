@@ -43,7 +43,6 @@ def get_sra_stat(sra_id, metadata, num_bp_per_sra=None):
         print('Using total_bases/total_spots instead: {:,}'.format(sra_stat['spot_length']))
     else:
         sra_stat['spot_length'] = int(original_spot_len)
-
     if num_bp_per_sra is not None:
         sra_stat['num_read_per_sra'] = int(num_bp_per_sra/sra_stat['spot_length'])
     return sra_stat

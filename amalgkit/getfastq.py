@@ -96,7 +96,10 @@ def concat_fastq(args, metadata, output_dir, num_bp_per_sra):
     elif (layout == 'paired') & (num_inext_files == 2):
         print('Only 1 pair of', inext, 'files were detected. No concatenation will happen.', flush=True)
         for infile in infiles:
-            outfile = args.id + re.sub('.*(_[1-2])', '\g<1>', infile)
+            if args.id is not None:
+                outfile = args.id + re.sub('.*(_[1-2])', '\g<1>', infile)
+            elif args.id_list is not None:
+                outfile = os.path.basename(args.id_list) + re.sub('.*(_[1-2])', '\g<1>', infile)
             if infile != outfile:
                 print('Replacing ID in the output file name:', infile, outfile)
                 infile_path = os.path.join(output_dir, infile)
@@ -112,7 +115,10 @@ def concat_fastq(args, metadata, output_dir, num_bp_per_sra):
             subexts = ['_1', '_2', ]
         for subext in subexts:
             infiles = metadata.df['run'].replace('$', subext + inext, regex=True)
-            outfile_path = os.path.join(output_dir, args.id + subext + outext)
+            if args.id is not None:
+                outfile_path = os.path.join(output_dir, args.id + subext + outext)
+            elif args.id_list is not None:
+                outfile_path = os.path.join(output_dir, os.path.basename(args.id_list) + subext + outext)
             if os.path.exists(outfile_path):
                 os.remove(outfile_path)
             # with gzip.open(outfile_path, 'wb') as outfile:
@@ -299,8 +305,9 @@ def check_getfastq_dependency(args):
     if args.pfd == 'yes':
         test_pfd = subprocess.run([args.pfd_exe, '-h'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         assert (test_pfd.returncode == 0), "parallel-fastq-dump PATH cannot be found: " + args.pfd_exe
-        test_prefetch = subprocess.run([args.prefetch_exe, '-h'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        assert (test_prefetch.returncode == 0), "prefetch (SRA toolkit) PATH cannot be found: " + args.prefetch_exe
+        # commented out because prefetch is often not activatable in containers and no longer strictly required for getfastq.
+        #test_prefetch = subprocess.run([args.prefetch_exe, '-h'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        #assert (test_prefetch.returncode == 0), "prefetch (SRA toolkit) PATH cannot be found: " + args.prefetch_exe
     if args.fastp:
         test_fp = subprocess.run([args.fastp_exe, '--help'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         assert (test_fp.returncode == 0), "fastp PATH cannot be found: " + args.fastp_exe
@@ -323,7 +330,9 @@ def set_getfastq_directories(args, sra_id):
         output_dir = os.path.join(args.out_dir, 'getfastq', args.id)
     elif args.metadata is not None:
         output_dir = os.path.join(args.out_dir, 'getfastq', sra_id)
-    elif args.id_list is not None:
+    elif (args.id_list is not None) & (args.concat == 'yes'):
+        output_dir = os.path.join(args.out_dir, 'getfastq', os.path.basename(args.id_list))
+    elif (args.id_list is not None) & (args.concat != 'yes'):
         output_dir = os.path.join(args.out_dir, 'getfastq', sra_id)
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
@@ -588,32 +597,40 @@ def getfastq_metadata(args):
             print('Filtering SRA entry with --sci_name:', args.sci_name)
             metadata.df = metadata.df.loc[(metadata.df['scientific_name'] == args.sci_name), :]
     if args.id_list is not None:
-        print('--id is specified. Downloading SRA metadata from Entrez.')
+        print('--id_list is specified. Downloading SRA metadata from Entrez.')
         assert (args.entrez_email != 'aaa@bbb.com'), "Provide your email address. No worry, you won't get spam emails."
         Entrez.email = args.entrez_email
         sra_id_list = [line.rstrip('\n') for line in open(args.id_list)]
+        metadata_dict = dict()
         for sra_id in sra_id_list:
             search_term = getfastq_search_term(sra_id, args.entrez_additional_search_term)
             print('Entrez search term:', search_term)
             xml_root = getfastq_getxml(search_term)
-            metadata = Metadata.from_xml(xml_root)
+            metadata_dict[sra_id] = Metadata.from_xml(xml_root)
             print('Filtering SRA entry with --layout:', args.layout)
-            layout = get_layout(args, metadata)
-            metadata.df = metadata.df.loc[(metadata.df['lib_layout'] == layout), :]
+            layout = get_layout(args, metadata_dict[sra_id])
+            metadata_dict[sra_id].df = metadata_dict[sra_id].df.loc[(metadata_dict[sra_id].df['lib_layout'] == layout), :]
             if args.sci_name is not None:
                 print('Filtering SRA entry with --sci_name:', args.sci_name)
-                metadata.df = metadata.df.loc[(metadata.df['scientific_name'] == args.sci_name), :]
+                metadata_dict[sra_id].df = metadata_dict[sra_id].df.loc[(metadata_dict[sra_id].df['scientific_name'] == args.sci_name), :]
+        metadata = list(metadata_dict.values())[0]
+        metadata.df = pandas.concat([ v.df for v in metadata_dict.values() ], ignore_index=True)
 
     if args.metadata is not None:
         print('--metadata is specified. Reading existing metadata table.')
         assert args.concat == 'no', '--concat should be set "no" when --metadata is specified.'
         metadata = load_metadata(args)
+    metadata.df.loc[:,'total_bases'] = metadata.df.loc[:,'total_bases'].replace('', numpy.nan).astype(float)
+    metadata.df.loc[:, 'spot_length'] = metadata.df.loc[:, 'spot_length'].replace('', numpy.nan).astype(float)
     return metadata
 
 
 def is_getfastq_output_present(args, sra_stat, output_dir):
     if args.concat == 'yes':
-        prefixes = [args.id, ]
+        if args.id is not None:
+            prefixes = [args.id, ]
+        elif args.id_list is not None:
+            prefixes = [os.path.basename(args.id_list), ]
     else:
         prefixes = [sra_stat['sra_id'], ]
     if sra_stat['layout'] == 'single':
@@ -760,17 +777,18 @@ def getfastq_main(args):
         raise Exception('Empty value(s) of total_bases were detected in the metadata table.')
     total_sra_bp = metadata.df.loc[:,'total_bases'].sum()
     print('Number of SRAs:', num_sra)
-    print('Total target size (--max_bp):', "{:,}".format(max_bp), 'bp')
-    print('Total SRA size:', "{:,}".format(total_sra_bp), 'bp')
-    print('Target size per SRA:', "{:,}".format(num_bp_per_sra), 'bp')
+    print('Total target size (--max_bp): {:,} bp'.format(max_bp))
+    print('Total SRA size: {:,} bp'.format(total_sra_bp))
+    print('Target size per SRA: {:,} bp'.format(num_bp_per_sra))
+    seq_summary = initialize_seq_summary(metadata)
+    seq_summary['start_time'] = time.time()
     for i in metadata.df.index:
         txt = 'Individual SRA size of {}: {:,}'
         print(txt.format(metadata.df.at[i, 'run'], metadata.df.at[i, 'total_bases']))
     for i in metadata.df.index:
         print('')
-        seq_summary = initialize_seq_summary(metadata)
-        seq_summary['start_time'] = time.time()
         sra_id = metadata.df.at[i, 'run']
+        print('Processing: {}'.format(sra_id))
         sra_stat = get_sra_stat(sra_id, metadata, num_bp_per_sra)
         output_dir = set_getfastq_directories(args, sra_id)
         if (is_getfastq_output_present(args, sra_stat, output_dir)) & (args.redo == 'no'):
