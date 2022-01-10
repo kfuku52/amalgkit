@@ -226,6 +226,10 @@ def download_sra(metadata, sra_stat, args, work_dir, overwrite=False):
         if len(sra_source_list) > 1:
             print("Multiple sources set. Trying one by one.")
 
+        sra_source_list = [ item for item in sra_source_list if item!='' ]
+        if len(sra_source_list)==0:
+            print('No source URL is available. Check whether --aws, --gcp, and --ncbi are properly set.')
+
         dl_status = 'failed'
 
         for sra_source in sra_source_list:
@@ -579,8 +583,6 @@ def write_updated_metadata(args, metadata, seq_summary, sra_id):
     metadata.df.to_csv(outpath, sep='\t', index=False)
 
 def getfastq_metadata(args):
-   # assert (args.id is None and args.id_list is None) != (
-    #            args.metadata is None), 'Either --id, --id_list or --metadata should be specified.'
     if args.id is not None:
         print('--id is specified. Downloading SRA metadata from Entrez.')
         assert (args.entrez_email != 'aaa@bbb.com'), "Provide your email address. No worry, you won't get spam emails."
@@ -600,7 +602,7 @@ def getfastq_metadata(args):
         print('--id_list is specified. Downloading SRA metadata from Entrez.')
         assert (args.entrez_email != 'aaa@bbb.com'), "Provide your email address. No worry, you won't get spam emails."
         Entrez.email = args.entrez_email
-        sra_id_list = [line.rstrip('\n') for line in open(args.id_list)]
+        sra_id_list = [line.rstrip('\n') for line in open(args.id_list) if not line.startswith('#')]
         metadata_dict = dict()
         for sra_id in sra_id_list:
             search_term = getfastq_search_term(sra_id, args.entrez_additional_search_term)
@@ -710,7 +712,7 @@ def sequence_extraction_1st_round(args, sra_stat, output_dir, seq_summary, gz_ex
     return seq_summary
 
 def sequence_extraction_2st_round(args, sra_stat, output_dir, seq_summary, gz_exe, ungz_exe, total_sra_bp, max_bp):
-    print('Starting the 2nd-round sequence extraction to compensate it.')
+    print('Starting the 2nd-round sequence extraction.')
     seq_summary = calc_2nd_ranges(seq_summary)
     ext_main = '.amalgkit.fastq.gz'
     ext_1st_tmp = '.amalgkit_1st.fastq.gz'
@@ -767,7 +769,7 @@ def getfastq_main(args):
     # sra_dir = os.path.join(os.path.expanduser("~"), 'ncbi/public/sra')
     gz_exe, ungz_exe = check_getfastq_dependency(args)
     metadata = getfastq_metadata(args)
-    assert metadata.df.shape[0] > 0, 'No SRA entry found. Make sure if --id is compatible with --sci_name and --layout.'
+    assert metadata.df.shape[0] > 0, 'No SRA entry found. Make sure whether --id or --id_list is compatible with --sci_name and --layout.'
     metadata = remove_experiment_without_run(metadata)
     print('SRA IDs:', ' '.join(metadata.df['run'].tolist()))
     max_bp = int(args.max_bp.replace(',', ''))
