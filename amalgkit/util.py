@@ -23,6 +23,9 @@ def load_metadata(args):
             if args.batch>sum(is_sampled):
                 sys.stderr.write('--batch {} is too large. Exiting.\n'.format(args.batch))
                 sys.exit(0)
+            if is_sampled.sum()==0:
+                print('No sample is "sampled". Please check the "is_sampled" column in the metadata. Exiting.')
+                sys.exit(1)
             metadata.df = metadata.df.loc[is_sampled,:]
             metadata.df = metadata.df.reset_index()
             metadata.df = metadata.df.loc[[args.batch-1,],:]

@@ -349,7 +349,7 @@ psa.add_argument('--updated_metadata_dir', metavar='PATH', default=None, type=st
                       ' directory is not out_directory/metadata/updated_metadata/')
 psa.set_defaults(handler=command_sanity)
 
-# Sub parser: proc
+# Sub parser: integrate
 pin = subparsers.add_parser('integrate', help='see `amalgkit proc -h`')
 
 pin.add_argument('-w','--out_dir', metavar='PATH', default='./', type=str, required=False, action='store',
