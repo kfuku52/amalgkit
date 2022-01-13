@@ -26,8 +26,8 @@ if (debug_mode == "debug") {
     min_dif = 0
     plot_intermediate = 0
     #selected_curate_groups = c("root", "flower", "leaf")
-    #selected_curate_groups = c("adipose_W","brain_M","brain_Q","brain_W","hypopharyngeal_glands_W","antennae_W","malpighian_tubule_W","mandibular_gland_W","midgut_W","nasonov_gland_W","second_thoracic_ganglia_W","skeletal_muscle_W","sting_gland_W","ovary_W","mushroom_bodies_M","mushroom_bodies_W","larval_gut_W","adipose_Q","mandibular_gland_Q","head_and_thorax_Q","embryo_M")
-    selected_curate_groups = c("adipose_W","brain_M","brain_Q","brain_W","hypopharyngeal_glands_W","antennae_W")
+    selected_curate_groups = c("adipose_W","brain_M","brain_Q","brain_W","hypopharyngeal_glands_W","antennae_W","malpighian_tubule_W","mandibular_gland_W","midgut_W","nasonov_gland_W","second_thoracic_ganglia_W","skeletal_muscle_W","sting_gland_W","ovary_W","mushroom_bodies_M","mushroom_bodies_W","larval_gut_W","adipose_Q","mandibular_gland_Q","head_and_thorax_Q","embryo_M")
+    #selected_curate_groups = c("adipose_W","brain_M","brain_Q","brain_W","hypopharyngeal_glands_W","antennae_W")
     dir_count = "counts/"
     dir_eff_length = "eff_length/"
     mode = "msm"
@@ -37,7 +37,7 @@ if (debug_mode == "debug") {
     correlation_threshold = 0.4
     tmm_norm = "no"
     dir_work = '/Users/s229181/Desktop/projects/apis/'
-    srafile = '/Users/s229181/Desktop/projects/apis/metadata/metadata_2.tsv'
+    srafile = '/Users/s229181/Desktop/projects/apis/metadata/metadata.tsv'
    # dir_work = "/Users/kf/Dropbox (Personal)/collaborators/Ken Naito/20210509_Vigna/gfe_data"
    # srafile = "/Users/kf/Dropbox (Personal)/collaborators/Ken Naito/20210509_Vigna/gfe_data/metadata/metadata/metadata_manual.tsv"
 
@@ -256,7 +256,7 @@ curate_group2tau = function(tc_curate_group, rich.annotation = TRUE, unlog = FAL
 
 check_mapping_rate = function(tc, sra, mapping_rate_cutoff) {
     cat(paste0('Mapping rate cutoff: ', mapping_rate_cutoff*100, '%\n'))
-    is_mapping_good = (sra[['mapping_rate']] >= mapping_rate_cutoff*100)
+    is_mapping_good = (sra[['mapping_rate']] > mapping_rate_cutoff*100)
     is_mapping_good[is.na(is_mapping_good)] = TRUE
     if (any(!is_mapping_good)) {
         cat("Removed due to low mapping rate:\n")
@@ -863,6 +863,10 @@ write.table(data.frame("GeneID"=rownames(tc_curate_group_uncorrected), tc_curate
 round = 0
 sva_out = NULL
 tc_sva = NULL
+cat("removing entries with mapping rate of 0")
+out = check_mapping_rate(tc, sra, 0)
+tc = out[["tc"]]
+sra = out[["sra"]]
 save_plot(tc, sra, NULL, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".original"),
           selected_curate_groups, fontsize, transform_method)
 out = sva_subtraction(tc, sra)
