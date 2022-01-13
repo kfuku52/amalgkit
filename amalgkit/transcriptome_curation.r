@@ -13,35 +13,37 @@ suppressPackageStartupMessages(library(pvclust, quietly = TRUE))
 suppressPackageStartupMessages(library(Rtsne, quietly = TRUE))
 
 debug_mode = ifelse(length(commandArgs(trailingOnly = TRUE)) == 1, "debug", "batch")
-
+#debug_mode = "debug"
 log_prefix = "transcriptome_curation.r:"
 cat(log_prefix, "mode =", debug_mode, "\n")
 if (debug_mode == "debug") {
-    infile = '/Users/s229181/MSN/cstmm/cross_species_tmm_normalized_counts/Helianthus_annuus_cstmm_counts.tsv'
-    eff_file = '/Users/s229181/MSN/eff_length/Helianthus_annuus_eff_length.tsv'
+    infile = '/Users/s229181/Desktop/projects/apis/est_count/Apis_mellifera_est_counts.tsv'
+    eff_file = '/Users/s229181/Desktop/projects/apis/read_length/Apis_mellifera_eff_length.tsv'
    # infile = "/Users/kf/Dropbox (Personal)/collaborators/Ken Naito/20210509_Vigna/gfe_data/cross_species_tmm_normalized_counts/Vigna_angularis_cstmm_counts.tsv"
     #eff_file = "/Users/kf/Dropbox (Personal)/collaborators/Ken Naito/20210509_Vigna/gfe_data/merge/Vigna_angularis_eff_length.tsv"
     dist_method = "pearson"
-    mapping_rate_cutoff = 0
+    mapping_rate_cutoff = .20
     min_dif = 0
     plot_intermediate = 0
-    selected_curate_group = c("root", "flower", "leaf")
+    #selected_curate_groups = c("root", "flower", "leaf")
+    #selected_curate_groups = c("adipose_W","brain_M","brain_Q","brain_W","hypopharyngeal_glands_W","antennae_W","malpighian_tubule_W","mandibular_gland_W","midgut_W","nasonov_gland_W","second_thoracic_ganglia_W","skeletal_muscle_W","sting_gland_W","ovary_W","mushroom_bodies_M","mushroom_bodies_W","larval_gut_W","adipose_Q","mandibular_gland_Q","head_and_thorax_Q","embryo_M")
+    selected_curate_groups = c("adipose_W","brain_M","brain_Q","brain_W","hypopharyngeal_glands_W","antennae_W")
     dir_count = "counts/"
     dir_eff_length = "eff_length/"
     mode = "msm"
     transform_method = "fpkm"
+    one_outlier_per_iteration = "no"
     # tmm norm debug
     correlation_threshold = 0.4
-    tmm_norm = "yes"
-    dir_work = '/Users/s229181/MSN/'
-    srafile = '/Users/s229181/MSN/metadata/metadata_may2021_updated.tsv'
+    tmm_norm = "no"
+    dir_work = '/Users/s229181/Desktop/projects/apis/'
+    srafile = '/Users/s229181/Desktop/projects/apis/metadata/metadata_2.tsv'
    # dir_work = "/Users/kf/Dropbox (Personal)/collaborators/Ken Naito/20210509_Vigna/gfe_data"
    # srafile = "/Users/kf/Dropbox (Personal)/collaborators/Ken Naito/20210509_Vigna/gfe_data/metadata/metadata/metadata_manual.tsv"
 
     dist_method = "pearson"
     min_dif = 0
     plot_intermediate = 1
-    selected_curate_groups = c("root", "flower", "leaf")
     stop_after_tmm = TRUE
 
     # selected_curate_groups = strsplit('root|flower|leaf', '\\|')[[1]]
@@ -171,17 +173,26 @@ curate_group_mean = function(tc, sra, selected_curate_groups = NA, balance.bp = 
     # were removed in SVA already.
     if (all(is.na(selected_curate_groups))) {
         sp_curate_groups = unique(sra[['curate_group']])
-    } else {
+    }else{
         sp_curate_groups = selected_curate_groups[selected_curate_groups %in% unique(sra[['curate_group']])]
     }
     tc_ave = data.frame(matrix(rep(NA, length(sp_curate_groups) * nrow(tc)), nrow = nrow(tc)))
     colnames(tc_ave) = sp_curate_groups
     rownames(tc_ave) = rownames(tc)
+    
     for (curate_group in sp_curate_groups) {
+        exclusion_curate_group = sra[(sra[['curate_group']] == curate_group),'exclusion']
         run_curate_group = sra[(sra[['curate_group']] == curate_group),'run']
         run_curate_group = run_curate_group[run_curate_group %in% colnames(tc)]
+        if (all(exclusion_curate_group!= "no")){
+          warning_message = paste0('All samples of curate_group ', curate_group, ' are marked for exclusion. This curate_group will be omitted from further analysis.')
+          selected_curate_groups = selected_curate_groups[!selected_curate_groups==curate_group]
+          tc_ave = tc_ave[, !names(tc_ave) %in% c(curate_group)]
+          warning(warning_message)
+          next
+        }
         if (length(run_curate_group) == 1) {
-            exp_curate_group = tc[, run_curate_group]
+            exp_curate_group = tc[,run_curate_group]
         } else {
             if (balance.bp) {
                 is_run = (sra[['run']] %in% colnames(tc))
@@ -209,7 +220,8 @@ curate_group_mean = function(tc, sra, selected_curate_groups = NA, balance.bp = 
         }
         tc_ave[, curate_group] = exp_curate_group
     }
-    return(tc_ave)
+    
+    return(list(tc_ave = tc_ave,selected_curate_groups = selected_curate_groups))
 }
 
 curate_group2tau = function(tc_curate_group, rich.annotation = TRUE, unlog = FALSE) {
@@ -288,11 +300,11 @@ check_within_curate_group_correlation = function(tc, sra, dist_method, min_dif, 
 
         num_other_bp_same_curate_group = sum(sra2_other_bp[['curate_group']] == my_curate_group, na.rm=TRUE)
         if (num_other_bp_same_curate_group == 0) {
-            tc_ave_other_bp = curate_group_mean(tc, sra2, selected_curate_groups)
+            tc_ave_other_bp = curate_group_mean(tc, sra2, selected_curate_groups)[['tc_ave']]
         } else {
-            tc_ave_other_bp = curate_group_mean(tc_other_bp, sra2, selected_curate_groups)
+            tc_ave_other_bp = curate_group_mean(tc_other_bp, sra2, selected_curate_groups)[['tc_ave']]
         }
-        tc_ave = curate_group_mean(tc, sra2, selected_curate_groups)
+        tc_ave = curate_group_mean(tc, sra2, selected_curate_groups)[['tc_ave']]
         coef = c()
         coef_other_bp = c()
         for (curate_group in selected_curate_groups) {
@@ -667,7 +679,7 @@ draw_boxplot = function(sra, tc_dist_matrix, fontsize = 7) {
 }
 
 draw_tau_histogram = function(tc, sra, selected_curate_groups, fontsize = 7) {
-    df_tau = curate_group2tau(curate_group_mean(tc, sra, selected_curate_groups), rich.annotation = FALSE, unlog = TRUE)
+    df_tau = curate_group2tau(curate_group_mean(tc, sra, selected_curate_groups)[['tc_ave']], rich.annotation = FALSE, unlog = TRUE)
     hist_out = hist(df_tau[['tau']], breaks = seq(0, 1, 0.05), las = 1, xlab = "Tau (expression specificity)",
                     ylab = "Gene count", main = "", col = "gray")
     num_noexp = sum(is.na(df_tau[['tau']]))
@@ -679,7 +691,7 @@ draw_tau_histogram = function(tc, sra, selected_curate_groups, fontsize = 7) {
 }
 
 draw_exp_level_histogram = function(tc, sra, selected_curate_groups, fontsize = 7, transform_method) {
-    tc_curate_group = curate_group_mean(tc, sra, selected_curate_groups)
+    tc_curate_group = curate_group_mean(tc, sra, selected_curate_groups)[['tc_ave']]
     xmax = apply(tc_curate_group, 1, max)
     xmax[xmax < 0] = 0
     xmax[xmax > 15] = 15
@@ -837,13 +849,15 @@ if (transform_method == "tpm") {
 
 
 file_name = paste0(dir_tsv,'/',sub(" ", "_", scientific_name), ".uncorrected.tc.tsv")
-write.table(tc, file = file_name,
-            sep = "\t", row.names = TRUE, col.names = TRUE, quote = FALSE)
+write.table(data.frame("GeneID"=rownames(tc), tc), file = file_name,
+            sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
 tc_uncorrected = tc
-tc_curate_group_uncorrected = curate_group_mean(tc, sra, selected_curate_groups)
+out = curate_group_mean(tc, sra, selected_curate_groups)
+tc_curate_group_uncorrected = out[['tc_ave']]
+selected_curate_groups = out[['selected_curate_groups']]
 file_name = paste0(dir_tsv,'/',sub(" ", "_", scientific_name), ".uncorrected.curate_group.mean.tsv")
-write.table(tc_curate_group_uncorrected, file = file_name,
-            sep = "\t", row.names = TRUE, col.names = TRUE, quote = FALSE)
+write.table(data.frame("GeneID"=rownames(tc_curate_group_uncorrected), tc_curate_group_uncorrected), file = file_name,
+            sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
 
 
 round = 0
@@ -910,13 +924,14 @@ cat("finished checking within-curate_group correlation.\n")
 file = paste0(dir_tsv,'/',sub(" ", "_", scientific_name), ".sra.tsv")
 write.table(sra, file = file, sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
 file = paste0(dir_tsv,'/',sub(" ", "_", scientific_name), ".tc.tsv")
-write.table(tc_sva, file = file, sep = "\t", row.names = TRUE, col.names = TRUE, quote = FALSE)
-tc_curate_group = curate_group_mean(tc_sva, sra, selected_curate_groups)
+write.table(data.frame("GeneID"=rownames(tc_sva),tc_sva), file = file, sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
+out = curate_group_mean(tc_sva, sra, selected_curate_groups)
+tc_curate_group = out[['tc_ave']]
 file = paste0(dir_tsv,'/',sub(" ", "_", scientific_name), ".curate_group.mean.tsv")
-write.table(tc_curate_group, file = file, sep = "\t", row.names = TRUE, col.names = TRUE, quote = FALSE)
+write.table(data.frame("GeneID"=rownames(tc_curate_group), tc_curate_group), file = file, sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
 tc_tau = curate_group2tau(tc_curate_group, rich.annotation = TRUE, unlog = TRUE)
 file = paste0(dir_tsv,'/',sub(" ", "_", scientific_name), ".tau.tsv")
-write.table(tc_tau, file = file, sep = "\t", row.names = TRUE, col.names = TRUE, quote = FALSE)
+write.table(data.frame("GeneID"=rownames(tc_tau), tc_tau), file = file, sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
 cat("Done!\n")
 
 
@@ -1027,3 +1042,4 @@ cat("Done!\n")
 #
 
 #}
+
