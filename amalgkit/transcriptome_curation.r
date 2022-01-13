@@ -13,7 +13,7 @@ suppressPackageStartupMessages(library(pvclust, quietly = TRUE))
 suppressPackageStartupMessages(library(Rtsne, quietly = TRUE))
 
 debug_mode = ifelse(length(commandArgs(trailingOnly = TRUE)) == 1, "debug", "batch")
-debug_mode = "debug"
+#debug_mode = "debug"
 log_prefix = "transcriptome_curation.r:"
 cat(log_prefix, "mode =", debug_mode, "\n")
 if (debug_mode == "debug") {
