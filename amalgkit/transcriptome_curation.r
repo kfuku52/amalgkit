@@ -13,7 +13,7 @@ suppressPackageStartupMessages(library(pvclust, quietly = TRUE))
 suppressPackageStartupMessages(library(Rtsne, quietly = TRUE))
 
 debug_mode = ifelse(length(commandArgs(trailingOnly = TRUE)) == 1, "debug", "batch")
-#debug_mode = "debug"
+debug_mode = "debug"
 log_prefix = "transcriptome_curation.r:"
 cat(log_prefix, "mode =", debug_mode, "\n")
 if (debug_mode == "debug") {
@@ -863,7 +863,7 @@ write.table(data.frame("GeneID"=rownames(tc_curate_group_uncorrected), tc_curate
 round = 0
 sva_out = NULL
 tc_sva = NULL
-cat("removing entries with mapping rate of 0")
+cat("removing entries with mapping rate of 0. \n")
 out = check_mapping_rate(tc, sra, 0)
 tc = out[["tc"]]
 sra = out[["sra"]]
