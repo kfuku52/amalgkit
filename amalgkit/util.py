@@ -23,6 +23,9 @@ def load_metadata(args):
             if args.batch>sum(is_sampled):
                 sys.stderr.write('--batch {} is too large. Exiting.\n'.format(args.batch))
                 sys.exit(0)
+            if is_sampled.sum()==0:
+                print('No sample is "sampled". Please check the "is_sampled" column in the metadata. Exiting.')
+                sys.exit(1)
             metadata.df = metadata.df.loc[is_sampled,:]
             metadata.df = metadata.df.reset_index()
             metadata.df = metadata.df.loc[[args.batch-1,],:]
@@ -43,7 +46,6 @@ def get_sra_stat(sra_id, metadata, num_bp_per_sra=None):
         print('Using total_bases/total_spots instead: {:,}'.format(sra_stat['spot_length']))
     else:
         sra_stat['spot_length'] = int(original_spot_len)
-
     if num_bp_per_sra is not None:
         sra_stat['num_read_per_sra'] = int(num_bp_per_sra/sra_stat['spot_length'])
     return sra_stat

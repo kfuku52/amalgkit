@@ -85,7 +85,7 @@ def fetch_sra_xml(species_name, search_term, save_xml=True, read_from_existing_f
         record_ids = sra_record["IdList"]
         num_record = len(record_ids)
         print('Number of SRA records:', num_record)
-        seq_summary['start_time'] = time.time()
+        start_time = time.time()
         query_search_time = datetime.datetime.now().strftime('%Y/%m/%d %H:%M:%S')
         root = None
         for i in numpy.arange(numpy.ceil(num_record//retmax)+1):
@@ -111,7 +111,7 @@ def fetch_sra_xml(species_name, search_term, save_xml=True, read_from_existing_f
                 root = chunk
             else:
                 root.append(chunk)
-        elapsed_time = int(time.time() - seq_summary['start_time'])
+        elapsed_time = int(time.time() - start_time)
         xml_string = lxml.etree.tostring(root, pretty_print=True)
         for line in str(xml_string).split('\n'):
             if '<Error>' in line:
@@ -327,7 +327,7 @@ class Metadata:
                 self.df.loc[(~is_from_empty)&(is_to_empty), aggregate_to] = new_annotations
                 new_annotations = self.df.loc[(~is_from_empty)&(~is_to_empty), aggregate_to].astype(str)+"; "+self.df.loc[(~is_from_empty)&(~is_to_empty), aggregate_from].astype(str)+'['+aggregate_from+']'
                 self.df.loc[(~is_from_empty)&(~is_to_empty), aggregate_to] = new_annotations
-                self.df = self.df.drop(aggregate_from, 1)
+                self.df = self.df.drop(labels=aggregate_from, axis=1)
         self.reorder(omit_misc=False)
 
     def correct_orthographical_variants(self):
@@ -409,7 +409,6 @@ class Metadata:
         self.df.loc[:,'tissue'] = lemm
 
     def group_tissues_by_config(self):
-
             config = pandas.read_csv(os.path.join(self.config_dir, 'group_tissue.config'),
                                  parse_dates=False, infer_datetime_format=False, quotechar='"', sep='\t',
                                  header=None, index_col=None, skip_blank_lines=True, comment='#')
@@ -421,9 +420,6 @@ class Metadata:
                 self.df.loc[is_matching,'tissue'] = replace_to
             self.df.loc[:,'tissue'] = self.df.loc[:,'tissue'].str.lower()
             self.df.loc[:, 'curate_group'] = self.df.loc[:, 'tissue']
-
-
-
 
     def mark_exclude_keywords(self):
         config = pandas.read_csv(os.path.join(self.config_dir, 'exclude_keyword.config'),
