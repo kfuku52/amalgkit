@@ -15,9 +15,7 @@ def load_metadata(args):
     if 'batch' in dir(args):
         if args.batch is not None:
             print('--batch is specified. Processing one SRA per job.')
-            is_sampled = numpy.array([])
-            for idx in metadata.df.index:
-                is_sampled = numpy.append(is_sampled, strtobool(metadata.df['is_sampled'].loc[idx]))
+            is_sampled = numpy.array([strtobool(yn) for yn in df.loc[:, 'is_sampled']], dtype=bool)
             txt = 'This is {:,}th job. In total, {:,} jobs will be necessary for this metadata table. {:,} SRAs were excluded.'
             print(txt.format(args.batch, sum(is_sampled), len(numpy.where(is_sampled == False)[0])))
             if args.batch>sum(is_sampled):
