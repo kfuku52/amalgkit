@@ -592,13 +592,20 @@ def getfastq_metadata(args):
             search_term = getfastq_search_term(sra_id, args.entrez_additional_search_term)
             print('Entrez search term:', search_term)
             xml_root = getfastq_getxml(search_term)
-            metadata_dict[sra_id] = Metadata.from_xml(xml_root)
+            metadata_dict_tmp = Metadata.from_xml(xml_root)
+            if metadata_dict_tmp.df.shape[0]==0:
+                print('No associated SRA. Skipping {}'.format(sra_id))
+                continue
+            metadata_dict[sra_id] = metadata_dict_tmp
             print('Filtering SRA entry with --layout:', args.layout)
             layout = get_layout(args, metadata_dict[sra_id])
             metadata_dict[sra_id].df = metadata_dict[sra_id].df.loc[(metadata_dict[sra_id].df['lib_layout'] == layout), :]
             if args.sci_name is not None:
                 print('Filtering SRA entry with --sci_name:', args.sci_name)
                 metadata_dict[sra_id].df = metadata_dict[sra_id].df.loc[(metadata_dict[sra_id].df['scientific_name'] == args.sci_name), :]
+        if len(metadata_dict)==0:
+            print('No associated SRA is found with --id_list. Exiting.')
+            sys.exit(1)
         metadata = list(metadata_dict.values())[0]
         metadata.df = pandas.concat([ v.df for v in metadata_dict.values() ], ignore_index=True)
 
