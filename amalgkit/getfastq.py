@@ -55,7 +55,7 @@ def getfastq_getxml(search_term, save_xml=True, retmax=1000):
     for line in str(xml_string).split('\n'):
         if '<Error>' in line:
             print(line)
-            raise Exception(species_name, ': <Error> found in the xml.')
+            raise Exception('\<Error> found in the xml. Search term: '+search_term)
     return root
 
 
@@ -86,7 +86,10 @@ def concat_fastq(args, metadata, output_dir, g):
     num_inext_files = len(infiles)
     if (layout == 'single') & (num_inext_files == 1):
         print('Only 1', inext, 'file was detected. No concatenation will happen.', flush=True)
-        outfile = args.id + inext
+        if args.id is not None:
+            outfile = args.id + infiles[0]
+        elif args.id_list is not None:
+            outfile = os.path.basename(args.id_list) + infiles[0]
         if infiles[0] != outfile:
             print('Replacing ID in the output file name:', infiles[0], outfile)
             infile_path = os.path.join(output_dir, infiles[0])
@@ -350,7 +353,7 @@ def run_pfd(sra_stat, args, metadata, start, end):
                    '--skip-technical', '--split-3', '--clip', '--gzip', '--outdir', sra_stat['output_dir'],
                    '--tmpdir', sra_stat['output_dir']]
     print('Total sampled bases:', "{:,}".format(sra_stat['spot_length'] * (end - start + 1)), 'bp')
-    pfd_command = pfd_command + ['--minSpotId', str(start), '--maxSpotId', str(end)]
+    pfd_command = pfd_command + ['--minSpotId', str(int(start)), '--maxSpotId', str(int(end))]
     # If sra_stat['sra_id'], not sra_path, is provided, pfd couldn't find pre-downloaded .sra files
     # and start downloading it to $HOME/ncbi/public/sra/
     pfd_command = pfd_command + ['-s', sra_path]
