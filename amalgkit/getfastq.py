@@ -486,7 +486,16 @@ def calc_2nd_ranges(metadata):
     rate_obtained = metadata.df.loc[:,'rate_obtained']
     spot_lengths = metadata.df.loc[:,'spot_length_amalgkit']
     total_spots = metadata.df.loc[:,'total_spots']
-    sra_target_reads = ((sra_target_bp/spot_lengths)/rate_obtained).astype(int)+1
+    #sra_target_reads = ((sra_target_bp/spot_lengths)/rate_obtained).astype(int)+1
+
+    sra_target_reads = numpy.zeros_like(sra_target_bp)
+    for i in numpy.arange(sra_target_reads.shape[0]):
+        if numpy.isnan(rate_obtained[i]):
+            sra_target_reads[i] = (sra_target_bp[i]/spot_lengths[i]).astype(int)+1 # If no read was extracted in 1st.
+        else:
+            sra_target_reads[i] = ((sra_target_bp[i]/spot_lengths[i])/rate_obtained[i]).astype(int)+1
+
+
     start_2nds = metadata.df.loc[:,'spot_end_1st'] + 1
     end_2nds = start_2nds + sra_target_reads
     pooled_missing_bp = metadata.df.loc[:,'bp_until_target_size'].sum()
@@ -695,6 +704,9 @@ def sequence_extraction(args, sra_stat, metadata, g, start, end):
         metadata,sra_stat = run_pfd(sra_stat, args, metadata, start, end)
         bp_discarded = metadata.df.at[ind_sra,'bp_dumped'] - metadata.df.at[ind_sra,'bp_written']
         metadata.df.at[ind_sra,'bp_discarded'] += bp_discarded
+    no_read_written = (metadata.df.loc[(metadata.df.loc[:,'run']==sra_id),'num_written'].values[0]==0)
+    if no_read_written:
+        return metadata
     if args.fastp:
         metadata = run_fastp(sra_stat, args, sra_stat['output_dir'], metadata)
         bp_discarded = metadata.df.at[ind_sra,'bp_dumped'] - metadata.df.at[ind_sra,'bp_fastp_out']
@@ -754,7 +766,12 @@ def sequence_extraction_2nd_round(args, sra_stat, metadata, g):
         txt = '{}: All spots have been extracted in the 1st trial. Cancelling the 2nd trial. start={:,}, end={:,}'
         print(txt.format(sra_id, start, end))
         return metadata
-    rename_fastq(sra_stat, sra_stat['output_dir'], inext=ext_main, outext=ext_1st_tmp)
+    no_read_in_1st = (metadata.df.loc[(metadata.df.loc[:,'run']==sra_id),'bp_written'].values[0]==0)
+    if no_read_in_1st:
+        print('No read was extracted in 1st round. Skipping 2nd round: {}'.format(sra_id))
+        return metadata
+    else:
+        rename_fastq(sra_stat, sra_stat['output_dir'], inext=ext_main, outext=ext_1st_tmp)
     metadata = sequence_extraction(args, sra_stat, metadata, g, start, end)
     if (layout == 'single'):
         subexts = ['']

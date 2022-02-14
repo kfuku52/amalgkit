@@ -68,6 +68,6 @@ def get_newest_intermediate_file_extension(sra_stat, work_dir):
             for safe_delete_file in safe_delete_files:
                 sys.stdout.write('{}\n'.format(safe_delete_file))
             return '.safely_removed'
-        sys.stderr.write('getfastq output could not be found in: {}, layout = {}\n'.format(work_dir, sra_stat['layout']))
+        sys.stderr.write('getfastq output not found in: {}, layout = {}\n'.format(work_dir, sra_stat['layout']))
         sys.exit(0)
     return ext_out

@@ -275,8 +275,10 @@ class Metadata:
                             row_df = pandas.concat([row_df,sa_df], axis=1)
             df = pandas.concat([df, row_df], ignore_index=True, sort=False)
         if "scientific_name" in df.columns and len(df.loc[(df.loc[:,"scientific_name"]==""), "scientific_name"]):
-            species_name = df.loc[~(df.loc[:,"scientific_name"]==""), "scientific_name"].iloc[0]
-            df.loc[(df.loc[:,"scientific_name"]==""), "scientific_name"] = species_name
+            species_names = df.loc[~(df.loc[:,"scientific_name"]==""), "scientific_name"]
+            if species_names.shape[0]>0:
+                species_name = species_names.iloc[0]
+                df.loc[(df.loc[:,"scientific_name"]==""), "scientific_name"] = species_name
         metadata = Metadata()
         metadata.df = df
         metadata.reorder(omit_misc=False)
