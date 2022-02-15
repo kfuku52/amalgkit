@@ -137,36 +137,23 @@ def get_index(args, sci_name):
 def quant_main(args):
     check_kallisto_dependency()
     metadata = load_metadata(args) # loads single-row metadata according to --batch
-    if args.batch is not None:
-        sra_id = metadata.df.loc[:,'run'].values[0]
-        sci_name = metadata.df.loc[:,'scientific_name'].values[0]
+    if args.id is None:
+        for i in metadata.df.index:
+            print('')
+            sra_id = metadata.df.at[i, 'run']
+            sci_name = metadata.df.at[i, 'scientific_name']
+            print('Species: {}'.format(sci_name))
+            print('Run ID: {}'.format(sra_id))
+            sci_name = sci_name.replace(" ", "_")
+            print('looking for index folder in ', args.out_dir)
+            index = get_index(args, sci_name)
+            run_quant(args, metadata, sra_id, index)
+    # if args.id is not specified, it will run the whole metadata sheed one by one
+    else:
+        sra_id = args.id
+        sci_name = metadata.df.loc[metadata.df['run'] == args.id, 'scientific_name']
         print('Species: {}'.format(sci_name))
         print('Run ID: {}'.format(sra_id))
         sci_name = sci_name.replace(" ", "_")
         index = get_index(args, sci_name)
         run_quant(args, metadata, sra_id, index)
-    else:
-        # if args.id is not specified, it will run the whole metadata sheet one by one
-        if args.id is None:
-            for i in metadata.df.index:
-                print('')
-                sra_id = metadata.df.at[i, 'run']
-                sci_name = metadata.df.at[i, 'scientific_name']
-                print('Species: {}'.format(sci_name))
-                print('Run ID: {}'.format(sra_id))
-                sci_name = sci_name.replace(" ", "_")
-                print('looking for index folder in ', args.out_dir)
-                index = get_index(args, sci_name)
-                run_quant(args, metadata, sra_id, index)
-        # if args.id is not specified, it will run the whole metadata sheed one by one
-        else:
-            sra_id = args.id
-            sci_name = metadata.df.loc[metadata.df['run'] == args.id, 'scientific_name']
-            print('Species: {}'.format(sci_name))
-            print('Run ID: {}'.format(sra_id))
-            sci_name = sci_name.replace(" ", "_")
-            index = get_index(args, sci_name)
-            run_quant(args, metadata, sra_id, index)
-
-
-
