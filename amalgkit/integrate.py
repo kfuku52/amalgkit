@@ -72,8 +72,8 @@ def get_fastq_stats(args):
 
 
                     tmp_stat_df = pandas.read_csv(tmp_file, sep='\t', header=0)
-
-                    os.remove(tmp_file)
+                    if args.remove_tmp:
+                        os.remove(tmp_file)
                     tmp_stat_df.loc[0,'id'] = id
                     try:
                         tmp_stat_df.loc[0, 'file2'] = fastq_files[1]

@@ -244,8 +244,8 @@ def download_sra(metadata, sra_stat, args, work_dir, overwrite=False):
             except urllib.error.URLError:
                 print("ERROR: urllib.request did not work. Trying wget")
                 try:
-                    import wget
-                    wget.download(str(sra_source), os.path.join(work_dir, (str(sra_id + '.sra'))))
+                    wget_command = ['wget', str(sra_source), os.path.join(work_dir, (str(sra_id + '.sra')))]
+                    subprocess.run(wget_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 except ModuleNotFoundError:
                     print("ERROR: Could not find wget")
                 except urllib.error.URLError:
