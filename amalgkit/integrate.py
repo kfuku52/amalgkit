@@ -59,12 +59,11 @@ def get_fastq_stats(args):
                         zcat_command = 'zcat '
                         sys.stderr.write('zcat may not be supported by this OS: {}\n'.format(OS))
                     seqkit_command = zcat_command + fastq_files[0] + ' | head -n 4000 | seqkit stats -T -j ' + str(args.threads)
-                    total_spots_command = 'echo $[$(' + zcat_command + str(fastq_files[0]) + ' | wc -l)/4]'
+                    total_spots_command = 'echo $(' + zcat_command + str(fastq_files[0]) + ' | wc -l)'
                     seqkit_stdout = open(tmp_file, 'w')
                     subprocess.run(seqkit_command,shell=True, stdout=seqkit_stdout)
                     seqkit_stdout.close()
-
-                    total_spots = int(subprocess.check_output(total_spots_command, shell=True))
+                    total_spots = int(subprocess.check_output(total_spots_command, shell=True)/4)
 
                     tmp_stat_df = pandas.read_csv(tmp_file, sep='\t', header=0)
                     if args.remove_tmp:
