@@ -54,9 +54,9 @@ def get_fastq_stats(args):
                     if OS == 'Darwin':
                         zcat_command = 'zcat < '
                     elif OS == 'Linux':
-                        seqkit_command = 'zcat '
+                        zcat_command = 'zcat '
                     else:
-                        seqkit_command = 'zcat '
+                        zcat_command = 'zcat '
                         sys.stderr.write('zcat may not be supported by this OS: {}\n'.format(OS))
                     seqkit_command = zcat_command + fastq_files[0] + ' | head -n 4000 | seqkit stats -T -j ' + str(args.threads)
                     total_spots_command = 'echo $[$(' + zcat_command + str(fastq_files[0]) + ' | wc -l)/4]'
