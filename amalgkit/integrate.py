@@ -51,25 +51,20 @@ def get_fastq_stats(args):
                     print("Getting sequence statistics.", flush=True)
                     tmp_file = os.path.join(args.out_dir, id+'_seqkit_stats.tmp')
                     OS = platform.system()
-
                     if OS == 'Darwin':
-                        seqkit_command = 'zcat < ' + fastq_files[0] + ' | head -n 4000 | seqkit stats -T -j ' + str(args.threads)
-                        total_spots_command = 'echo $(zcat < ' + str(fastq_files[0]) + ' | wc -l)/4|bc'
-                        seqkit_stdout = open(tmp_file, 'w')
-                        subprocess.run(seqkit_command,shell=True, stdout=seqkit_stdout)
-                        seqkit_stdout.close()
-
+                        zcat_command = 'zcat < '
                     elif OS == 'Linux':
-                        seqkit_command = 'zcat ' + fastq_files[0] + ' | head -n 4000 | seqkit stats -T -j ' + str(args.threads)
-                        total_spots_command = 'echo $(zcat ' + str(fastq_files[0]) + ' | wc -l)/4|bc'
-                        seqkit_stdout = open(tmp_file, 'w')
-                        subprocess.run(seqkit_command,shell=True, stdout=seqkit_stdout)
-                        seqkit_stdout.close()
+                        seqkit_command = 'zcat '
                     else:
-                        raise OSError('This OS is not supported.')
+                        seqkit_command = 'zcat '
+                        sys.stderr.write('zcat may not be supported by this OS: {}\n'.format(OS))
+                    seqkit_command = zcat_command + fastq_files[0] + ' | head -n 4000 | seqkit stats -T -j ' + str(args.threads)
+                    total_spots_command = 'echo $[$(' + zcat_command + str(fastq_files[0]) + ' | wc -l)/4]'
+                    seqkit_stdout = open(tmp_file, 'w')
+                    subprocess.run(seqkit_command,shell=True, stdout=seqkit_stdout)
+                    seqkit_stdout.close()
 
                     total_spots = int(subprocess.check_output(total_spots_command, shell=True))
-
 
                     tmp_stat_df = pandas.read_csv(tmp_file, sep='\t', header=0)
                     if args.remove_tmp:
