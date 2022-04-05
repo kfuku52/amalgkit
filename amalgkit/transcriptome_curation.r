@@ -94,7 +94,7 @@ if (!file.exists(dir_tsv)) {
 
 tc_sra_intersect = function(tc, sra) {
     sra_run = sra[['run']]
-    tc = tc[, colnames(tc) %in% sra_run]
+    tc = tc[, colnames(tc) %in% sra_run, drop=FALSE]
     sra = sra[sra[['run']] %in% colnames(tc), ]
     return(list(tc = tc, sra = sra))
 }
@@ -127,6 +127,13 @@ add_color_to_sra = function(sra, selected_curate_groups) {
         bp_color = rainbow_hcl(length(bioproject_u), c = 50)
         sp_color = rainbow_hcl(length(scientific_name_u), c = 150)
     }
+
+    print(head(sra))
+    print(curate_group)
+    print(curate_group_u)
+    print(curate_group_color)
+    print(curate_group_color[1:length(curate_group_u)])
+
     df_curate_group = data.frame(curate_group=curate_group_u, curate_group_color=curate_group_color[1:length(curate_group_u)], stringsAsFactors = FALSE)
     df_bp = data.frame(bioproject=bioproject_u, bp_color=bp_color[1:length(bioproject_u)], stringsAsFactors = FALSE)
     df_sp = data.frame(scientific_name=scientific_name_u, sp_color=sp_color[1:length(scientific_name_u)], stringsAsFactors = FALSE)
@@ -141,7 +148,7 @@ sort_tc_and_sra = function(tc, sra, sort_columns = c("curate_group", "scientific
         sra = sra[order(sra[column]), ]
     }
     sra_intersection = sra[(sra[['run']] %in% colnames(tc)),'run']
-    tc = tc[, sra_intersection]
+    tc = tc[, sra_intersection, drop=FALSE]
     return(list(tc = tc, sra = sra))
 }
 
@@ -156,7 +163,7 @@ sort_averaged_tc = function(tc) {
         curate_group_names = c(curate_group_names, split_colnames[[i]][3])
     }
     colname_order = order(curate_group_names, genus_names, specific_names)
-    tc = tc[, colname_order]
+    tc = tc[, colname_order, drop=FALSE]
     return(tc)
 }
 
@@ -255,22 +262,26 @@ curate_group2tau = function(tc_curate_group, rich.annotation = TRUE, unlog = FAL
 }
 
 check_mapping_rate = function(tc, sra, mapping_rate_cutoff) {
-    cat(paste0('Mapping rate cutoff: ', mapping_rate_cutoff*100, '%\n'))
-    is_mapping_good = (sra[['mapping_rate']] > mapping_rate_cutoff*100)
-    is_mapping_good[is.na(is_mapping_good)] = TRUE
-    if (any(!is_mapping_good)) {
-        cat("Removed due to low mapping rate:\n")
-        df_tmp = sra[!is_mapping_good,]
-        for (i in rownames(df_tmp)) {
-            sra_id = df_tmp[i,'run']
-            mapping_rate = df_tmp[i,'mapping_rate']
-            cat(paste0(sra_id, ': mapping rate = ', mapping_rate, '%\n'))
+    if ('mapping_rate' %in% colnames(sra)) {
+        cat(paste0('Mapping rate cutoff: ', mapping_rate_cutoff*100, '%\n'))
+        is_mapping_good = (sra[['mapping_rate']] > mapping_rate_cutoff*100)
+        is_mapping_good[is.na(is_mapping_good)] = TRUE
+        if (any(!is_mapping_good)) {
+            cat("Removed due to low mapping rate:\n")
+            df_tmp = sra[!is_mapping_good,]
+            for (i in rownames(df_tmp)) {
+                sra_id = df_tmp[i,'run']
+                mapping_rate = df_tmp[i,'mapping_rate']
+                cat(paste0(sra_id, ': mapping rate = ', mapping_rate, '%\n'))
+            }
+            tc = tc[, colnames(tc) %in% sra[is_mapping_good, "run"], drop=FALSE]
+        } else {
+            cat("No entry removed due to low mapping rate.\n")
         }
-        tc = tc[, colnames(tc) %in% sra[is_mapping_good, "run"]]
+        sra[!is_mapping_good, "exclusion"] = "low_mapping_rate"
     } else {
-        cat("No entry removed due to low mapping rate.\n")
+        cat('Mapping rate cutoff will not be applied.\n')
     }
-    sra[!is_mapping_good, "exclusion"] = "low_mapping_rate"
     return(list(tc = tc, sra = sra))
 }
 
@@ -372,12 +383,16 @@ check_within_curate_group_correlation = function(tc, sra, dist_method, min_dif, 
         cat("Removed Runs due to low within-curate_group correlation:\n")
         print(exclude_runs)
     }
-    tc = tc[, !colnames(tc) %in% exclude_runs]
+    tc = tc[, !colnames(tc) %in% exclude_runs, drop=FALSE]
     sra[(sra[['run']] %in% exclude_runs), "exclusion"] = "low_within_curate_group_correlation"
     return(list(tc = tc, sra = sra))
 }
 
 sva_subtraction = function(tc, sra) {
+    if (ncol(tc)==1) {
+        cat('Only 1 sample is available. Skipping SVA.\n')
+        return(list(tc = tc, sva = NULL))
+    }
     out = tc_sra_intersect(tc, sra)
     tc = out[["tc"]]
     sra = out[["sra"]]
@@ -720,6 +735,10 @@ draw_legend = function(sra, new = TRUE, pos = "center", fontsize = 7, nlabel.in.
 }
 
 save_plot = function(tc, sra, sva_out, dist_method, file, selected_curate_groups, fontsize = 7, transform_method) {
+    if (ncol(tc)==1) {
+        cat('Only 1 sample is available. Skipping the plot.\n')
+        return()
+    }
     out = tc_sra_intersect(tc, sra)
     tc = out[["tc"]]
     sra = out[["sra"]]
@@ -832,7 +851,7 @@ if (any(conditions)) {
 
 is_not_excluded = (sra[['exclusion']]=='no')
 cat('Number of non-excluded SRA runs (exclusion=="no"):', sum(is_not_excluded), '\n')
-tc = tc[,sra[is_not_excluded,'run']]
+tc = tc[,sra[is_not_excluded,'run'], drop=FALSE]
 out = sort_tc_and_sra(tc, sra) ; tc = out[["tc"]] ; sra = out[["sra"]]
 
 # log transform AFTER mappingrate
@@ -840,11 +859,11 @@ row.names(tc_eff_length) <- tc_eff_length[, 1]
 tc_eff_length <- tc_eff_length[, colnames(tc)]
 if (transform_method == "fpkm") {
     tc <- transform_raw_to_fpkm(tc, tc_eff_length)
-    tc <- log(tc + 1)
+    tc <- log2(tc + 1)
 }
 if (transform_method == "tpm") {
     tc <- transform_raw_to_tpm(tc, tc_eff_length)
-    tc <- log(tc + 1)
+    tc <- log2(tc + 1)
 }
 
 
@@ -872,7 +891,9 @@ save_plot(tc, sra, NULL, dist_method, paste0(sub(" ", "_", scientific_name), "."
 out = sva_subtraction(tc, sra)
 tc_sva = out[["tc"]]
 sva_out = out[["sva"]]
-save(sva_out, file = paste0(dir_rdata,'/', sub(" ", "_", scientific_name), ".sva.", round, ".RData"))
+if (!is.null(sva_out)) {
+    save(sva_out, file = paste0(dir_rdata,'/', sub(" ", "_", scientific_name), ".sva.", round, ".RData"))
+}
 save_plot(tc_sva, sra, sva_out, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".original.sva"),
           selected_curate_groups, fontsize, transform_method)
 
@@ -882,13 +903,15 @@ tc_sva = NULL
 out = check_mapping_rate(tc, sra, mapping_rate_cutoff)
 tc = out[["tc"]]
 sra = out[["sra"]]
-tc = tc[, sra[sra[['exclusion']] == "no", "run"]]
+tc = tc[, sra[sra[['exclusion']] == "no", "run"], drop=FALSE]
 save_plot(tc, sra, NULL, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".mapping_cutoff"),
           selected_curate_groups, fontsize, transform_method)
 out = sva_subtraction(tc, sra)
 tc_sva = out[["tc"]]
 sva_out = out[["sva"]]
-save(sva_out, file = paste0(dir_rdata,'/',sub(" ", "_", scientific_name), ".sva.", round, ".RData"))
+if (!is.null(sva_out)) {
+    save(sva_out, file = paste0(dir_rdata,'/',sub(" ", "_", scientific_name), ".sva.", round, ".RData"))
+}
 save_plot(tc_sva, sra, sva_out, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".mapping_cutoff.sva"),
           selected_curate_groups, fontsize, transform_method)
 
@@ -908,7 +931,9 @@ while (end_flag == 0) {
         out = sva_subtraction(tc_cwtc, sra)
         tc_sva = out[["tc"]]
         sva_out = out[["sva"]]
-        save(sva_out, file = paste0(dir_rdata,'/',sub(" ", "_", scientific_name), ".sva.", round, ".RData"))
+        if (!is.null(sva_out)) {
+            save(sva_out, file = paste0(dir_rdata,'/',sub(" ", "_", scientific_name), ".sva.", round, ".RData"))
+        }
         save_plot(tc_cwtc, sra, NULL, dist_method, paste0(sub(" ", "_", scientific_name), ".", round,
                                                           ".correlation_cutoff"), selected_curate_groups, fontsize, transform_method)
         save_plot(tc_sva, sra, sva_out, dist_method, paste0(sub(" ", "_", scientific_name), ".", round,
