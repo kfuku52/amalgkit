@@ -241,7 +241,7 @@ curate_group2tau = function(tc_curate_group, rich.annotation = TRUE, unlog = FAL
     colnames(df_tau) = cols
     rownames(df_tau) = rownames(tc_curate_group)
     if (unlog) {
-        tc_curate_group = exp(tc_curate_group) - 1
+        tc_curate_group = 2**tc_curate_group - 1
         tc_curate_group[tc_curate_group < 0] = 0
     }
     xmax = apply(tc_curate_group, 1, max)
