@@ -302,8 +302,16 @@ pcu.add_argument('--one_outlier_per_iter', metavar='yes|no', default='no', type=
 pcu.add_argument('--curate_group', metavar='STR', default=None, type=str, required=False, action='store',
                  help='default=%(default)s: "comma separated list of values contained in the curate_group metadata column to be included in the analysis. '
                       'Example input may look like "root,flower,leaf" or "heat stressed,cold stressed,light stressed".')
-pcu.add_argument('--norm', metavar='fpkm|tpm|none', default='fpkm', type=str, required=False, action='store',
-                 help='default=%(default)s: Algorithm performs log-fpkm, or log-tpm transformation on raw counts. If you select "none", please make sure to provide log-normalized input counts of some sort.')
+pcu.add_argument('--norm', metavar='(logn|log2|lognp1|log2p1|none)-(fpkm|tpm|none)',
+                 default='log2p1-fpkm', type=str, required=False, action='store',
+                 help='default=%(default)s: Expression level transformation before SVA. '
+                      'SVA is best performed with log-transformed values. '
+                      'logn: log_n normalization after FPKM/TPM transformation. '
+                      'log2: log_2 normalization after FPKM/TPM transformation. '
+                      'lognp1: log_n(x+1) normalization after FPKM/TPM transformation. '
+                      'log2p1: log_2(x+1) normalization after FPKM/TPM transformation. '
+                      'fpkm/tpm/none: FPKM, TPM, or no transformation. '
+                      )
 pcu.set_defaults(handler=command_curate)
 
 # Sub parser: merge

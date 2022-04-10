@@ -31,7 +31,7 @@ if (debug_mode == "debug") {
     dir_count = "counts/"
     dir_eff_length = "eff_length/"
     mode = "msm"
-    transform_method = "fpkm"
+    transform_method = "log2p1-fpkm"
     one_outlier_per_iteration = "no"
     # tmm norm debug
     correlation_threshold = 0.4
@@ -231,7 +231,7 @@ curate_group_mean = function(tc, sra, selected_curate_groups = NA, balance.bp = 
     return(list(tc_ave = tc_ave,selected_curate_groups = selected_curate_groups))
 }
 
-curate_group2tau = function(tc_curate_group, rich.annotation = TRUE, unlog = FALSE) {
+curate_group2tau = function(tc_curate_group, rich.annotation = TRUE, transform_method) {
     if (rich.annotation) {
         cols = c("tau", "highest", "order")
     } else {
@@ -240,10 +240,16 @@ curate_group2tau = function(tc_curate_group, rich.annotation = TRUE, unlog = FAL
     df_tau = data.frame(matrix(rep(NA, length(cols) * nrow(tc_curate_group)), nrow = nrow(tc_curate_group)))
     colnames(df_tau) = cols
     rownames(df_tau) = rownames(tc_curate_group)
-    if (unlog) {
+    if (grepl('logn-', transform_method)) {
+        tc_curate_group = exp(tc_curate_group)
+    } else if (grepl('log2-', transform_method)) {
+        tc_curate_group = 2**tc_curate_group
+    } else if (grepl('lognp1-', transform_method)) {
+        tc_curate_group = exp(tc_curate_group) - 1
+    } else if (grepl('log2p1-', transform_method)) {
         tc_curate_group = 2**tc_curate_group - 1
-        tc_curate_group[tc_curate_group < 0] = 0
     }
+    tc_curate_group[tc_curate_group < 0] = 0
     xmax = apply(tc_curate_group, 1, max)
     df_tau[,'tau'] = apply((1 - (tc_curate_group/xmax))/(ncol(tc_curate_group) - 1), 1, sum)
     if (rich.annotation) {
@@ -693,8 +699,8 @@ draw_boxplot = function(sra, tc_dist_matrix, fontsize = 7) {
 
 }
 
-draw_tau_histogram = function(tc, sra, selected_curate_groups, fontsize = 7) {
-    df_tau = curate_group2tau(curate_group_mean(tc, sra, selected_curate_groups)[['tc_ave']], rich.annotation = FALSE, unlog = TRUE)
+draw_tau_histogram = function(tc, sra, selected_curate_groups, fontsize = 7, transform_method) {
+    df_tau = curate_group2tau(curate_group_mean(tc, sra, selected_curate_groups)[['tc_ave']], rich.annotation = FALSE, transform_method)
     hist_out = hist(df_tau[['tau']], breaks = seq(0, 1, 0.05), las = 1, xlab = "Tau (expression specificity)",
                     ylab = "Gene count", main = "", col = "gray")
     num_noexp = sum(is.na(df_tau[['tau']]))
@@ -711,7 +717,7 @@ draw_exp_level_histogram = function(tc, sra, selected_curate_groups, fontsize = 
     xmax[xmax < 0] = 0
     xmax[xmax > 15] = 15
     breaks = seq(0, 15, 1)
-    hist_out = hist(xmax, breaks = breaks, las = 1, xlab = paste0("Max expression (log ",transform_method,"+1)"), ylab = "Gene count",
+    hist_out = hist(xmax, breaks = breaks, las = 1, xlab = paste0("Max expression (",transform_method,")"), ylab = "Gene count",
                     main = "", col = "gray")
 }
 
@@ -775,7 +781,7 @@ save_plot = function(tc, sra, sva_out, dist_method, file, selected_curate_groups
     par(mar = c(4, 4, 1, 1))
     draw_exp_level_histogram(tc, sra, selected_curate_groups, fontsize, transform_method)
     par(mar = c(4, 4, 1, 1))
-    draw_tau_histogram(tc, sra, selected_curate_groups, fontsize)
+    draw_tau_histogram(tc, sra, selected_curate_groups, fontsize, transform_method)
     par(mar = rep(0.1, 4))
     df_r2 = draw_sva_summary(sva_out, tc, sra, fontsize)
     if (!all(is.na(df_r2))) {
@@ -857,15 +863,30 @@ out = sort_tc_and_sra(tc, sra) ; tc = out[["tc"]] ; sra = out[["sra"]]
 # log transform AFTER mappingrate
 row.names(tc_eff_length) <- tc_eff_length[, 1]
 tc_eff_length <- tc_eff_length[, colnames(tc)]
-if (transform_method == "fpkm") {
-    tc <- transform_raw_to_fpkm(tc, tc_eff_length)
-    tc <- log2(tc + 1)
+if (grepl('fpkm', transform_method)) {
+    cat('Applying FPKM transformation.\n')
+    tc = transform_raw_to_fpkm(tc, tc_eff_length)
+} else if (grepl('tpm', transform_method)) {
+    cat('Applying TPM transformation.\n')
+    tc = transform_raw_to_tpm(tc, tc_eff_length)
+} else {
+    cat('Applying neither FPKM nor TPM transformation.\n')
 }
-if (transform_method == "tpm") {
-    tc <- transform_raw_to_tpm(tc, tc_eff_length)
-    tc <- log2(tc + 1)
+if (grepl('logn-', transform_method)) {
+    cat('Applying log_n(x) normalization.\n')
+    tc = log(tc)
+} else if (grepl('log2-', transform_method)) {
+    cat('Applying log_2(x) normalization.\n')
+    tc = log2(tc)
+} else if (grepl('lognp1-', transform_method)) {
+    cat('Applying log_n(x+1) normalization.\n')
+    tc = log(tc + 1)
+} else if (grepl('log2p1-', transform_method)) {
+    cat('Applying log_2(x+1) normalization.\n')
+    tc = log2(tc + 1)
+} else {
+    cat('Applying no log normalization.\n')
 }
-
 
 file_name = paste0(dir_tsv,'/',sub(" ", "_", scientific_name), ".uncorrected.tc.tsv")
 write.table(data.frame("GeneID"=rownames(tc), tc), file = file_name,
@@ -958,7 +979,7 @@ out = curate_group_mean(tc_sva, sra, selected_curate_groups)
 tc_curate_group = out[['tc_ave']]
 file = paste0(dir_tsv,'/',sub(" ", "_", scientific_name), ".curate_group.mean.tsv")
 write.table(data.frame("GeneID"=rownames(tc_curate_group), tc_curate_group), file = file, sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
-tc_tau = curate_group2tau(tc_curate_group, rich.annotation = TRUE, unlog = TRUE)
+tc_tau = curate_group2tau(tc_curate_group, rich.annotation = TRUE, transform_method)
 file = paste0(dir_tsv,'/',sub(" ", "_", scientific_name), ".tau.tsv")
 write.table(data.frame("GeneID"=rownames(tc_tau), tc_tau), file = file, sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
 cat("Done!\n")

@@ -147,7 +147,8 @@ def curate_main(args):
                          curate_group,
                          str(args.norm),
                          str(args.one_outlier_per_iter),
-                         str(correlation_threshold)])
+                         str(correlation_threshold),
+                         ])
 
     # if multiple species mode active
     if args.batch is not None:
@@ -157,7 +158,7 @@ def curate_main(args):
         if args.infile_dir and args.eff_len_dir:
             print("Batch mode")
             print("Both counts and effective length provided. ")
-            print("Calculating: ", args.norm)
+            print("Transformation method:", args.norm)
             quant_dir = os.path.realpath(args.infile_dir)
             eff_len_dir = os.path.realpath(args.eff_len_dir)
 
