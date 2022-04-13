@@ -276,19 +276,13 @@ pca.set_defaults(handler=command_csca)
 pcu = subparsers.add_parser('curate', help='see `amalgkit curate -h`')
 
 pcu.add_argument('--batch', metavar='INT', default=None, type=int, required=False, action='store',
-                 help='default=%(default)s: If set, need to provide --infile_dir and/or --eff_len_dir. Automatically scans input directories based on Metadata file and sends batch job do cluster (SLURM only, currently)')
+                 help='default=%(default)s: One-based index of metadata table (--metadata). If set, processes only one species. This function is intended for array job processing.')
 pcu.add_argument('-w','--out_dir', metavar='PATH', default='./', type=str, required=False, action='store',
                  help='default=%(default)s: output directory.')
 pcu.add_argument('--updated_metadata_dir', metavar='PATH', default='inferred', type=str, required=False, action='store',
                  help='default=%(default)s: Directory containing metadata.tsv files as put out by amalgkit getfastq.')
-pcu.add_argument('--infile', metavar='PATH', default=None, type=str, required=False, action='store',
-                 help='default=%(default)s: Name or Path of file to curate.')
-pcu.add_argument('--eff_len_file', metavar='PATH', default=None, type=str, required=False, action='store',
-                 help='default=%(default)s: Name or Path of file to effective length file. Has to have same format as infile.')
-pcu.add_argument('--infile_dir', metavar='PATH', default=None, type=str, required=False, action='store',
-                 help='default=%(default)s: Name or Path of file to curate.')
-pcu.add_argument('--eff_len_dir', metavar='PATH', default=None, type=str, required=False, action='store',
-                 help='default=%(default)s: Name or Path of file to effective length file. Has to have same format as infile.')
+pcu.add_argument('--input_dir', metavar='PATH', default=None, type=str, required=False, action='store',
+                 help='default=%(default)s: Path to `amalgkit merge` or `amalgkit cstmm` folder. Assumes `merge` folder if no input is given.')
 pcu.add_argument('--metadata', metavar='PATH', default=None, type=str, required=False, action='store',
                  help='default=%(default)s: Path to metadata file, obtained by amalgkit metadata command.')
 pcu.add_argument('--dist_method', metavar='STR', default='pearson', type=str, required=False, action='store',

@@ -1,5 +1,5 @@
+from amalgkit.metadata import Metadata
 import pandas
-
 import json
 import re
 import os
@@ -9,9 +9,9 @@ import warnings
 
 from amalgkit.util import *
 
-def get_curate_group(args):
+def get_curate_group(args, metadata):
     if args.curate_group is None:
-        metadata = load_metadata(args)
+        #metadata = load_metadata(args)
         curate_group = metadata.df.loc[:, 'curate_group'].dropna().unique()
     else:
         curate_group = re.findall(r"[\w]+", args.curate_group)
@@ -72,64 +72,37 @@ def check_rscript():
         print(",<ERROR> Rscript is not installed.")
         sys.exit(1)
 
-def curate_main(args):
-    check_rscript()
-    metadata = load_metadata(args)
-    curate_dir = os.path.join(args.out_dir, 'curate')
-    if not os.path.exists(curate_dir):
-        os.mkdir(curate_dir)
-    new_metadata_path = os.path.realpath(os.path.join(curate_dir, 'metadata.tsv'))
-    write_updated_metadata(metadata, new_metadata_path, args)
+def run_curate_r_script(args, new_metadata_path, metadata, sp):
     dist_method = args.dist_method
     mr_cut = args.mapping_rate
     correlation_threshold = args.correlation_threshold
     intermediate = args.plot_intermediate
-    curate_group = get_curate_group(args)
+    curate_group = get_curate_group(args, metadata)
     curate_path = os.path.dirname(os.path.realpath(__file__))
     r_script_path = curate_path + '/transcriptome_curation.r'
-    batch_script_path = curate_path + '/batch_curate.sh'
-    quant_out = os.path.realpath(args.infile)
-    eff_len_out = "NA"
-    len_files = []
-    count_files = []
+    if args.input_dir is None:
+        input_dir = os.path.join(args.out_dir, 'merge')
+        print("no input_dir given. Assuming path is: ", input_dir)
+    else:
+        input_dir = args.input_dir
 
-    # check if cstmm output is used when --norm == tpm, because TPM undoes tmm normalization
-    if args.norm == 'tpm':
-        substring = "cstmm"
-        try:
-            quant_out.index(substring)
-        except ValueError:
-            warnings.warn("WARNING: TPM NORMALIZATION AND TMM NORMALIZATION ARE INCOMPATIBLE. IF INPUT DATA IS TMM NORMALIZED, PLEASE SWITCH --norm TO 'fpkm' INSTEAD.")
-        else:
-            raise ValueError("ERROR: AMALGKIT CSTMM NORMALIZED INPUT FILES DETECTED WHILE NORMALIZATION METHOD IS 'TPM'. TMM NORMALIZATION AND TPM NORMALIZATION ARE INCOMPATIBLE! PLEASE SWITCH --norm TO 'fpkm' INSTEAD." )
+    len_file = os.path.join(input_dir,sp,sp+'_eff_length.tsv')
+    count_file = os.path.join(input_dir,sp,sp+'_est_counts.tsv')
 
+    if os.path.exists(count_file) and os.path.exists(count_file):
+        print("Both counts and effective length files found.")
+        print("Calculating: ", args.norm)
 
-    # Input checks #
-    # if single species mode active
-    if args.batch is None:
-        # Here, the user needs to provide single files for counts and effective lengths,
-        # or just one file for abundances if the user already calculated fpkm/tpm
-        # so there needs to be a warning, if there are insufficient user inputs
-        if args.infile and args.eff_len_file:
-            print("Single species mode")
-            print("Both counts and effective length provided.")
-            print("Calculating: ", args.norm)
-            eff_len_out = os.path.realpath(args.eff_len_file)
-        if args.infile and not args.eff_len_file:
-            print("Single species mode")
-            print("Only expression values provided. ")
-            print("Assuming normalized expression values (like fpkm or tpm).")
+    else:
+        print("No expression data found. Please make sure `amalgkit merge` or `amalgkit cstmm` ran correctly and you provided the correct directory path")
+        sys.exit(1)
 
-        if not args.infile:
-            print("No expression data provided. Please set Either --infile or --infile AND --eff_len_file")
-            sys.exit(1)
-
-        subprocess.call(['Rscript',
+    subprocess.call(['Rscript',
                          r_script_path,
-                         quant_out,
+                         count_file,
                          new_metadata_path,
                          os.path.realpath(args.out_dir),
-                         eff_len_out,
+                         len_file,
                          dist_method,
                          str(mr_cut),
                          '0',
@@ -138,67 +111,50 @@ def curate_main(args):
                          str(args.norm),
                          str(args.one_outlier_per_iter),
                          str(correlation_threshold)])
+    return
 
-    # if multiple species mode active
-    if args.batch is not None:
+def curate_main(args):
+    check_rscript()
+    # load metadata
+    df = pandas.read_csv(args.metadata, sep='\t', header=0)
+    metadata = Metadata.from_DataFrame(df)
+    # figure out unique species
+    spp = metadata.df.loc[:, 'scientific_name'].drop_duplicates().values
+    # make directory
+    curate_dir = os.path.join(args.out_dir, 'curate')
+    if not os.path.exists(curate_dir):
+        os.mkdir(curate_dir)
+    new_metadata_path = os.path.realpath(os.path.join(curate_dir, 'metadata.tsv'))
 
-        # Here, we still need arguments for counts and effective lengths,
-        # But they need to be directories
-        if args.infile_dir and args.eff_len_dir:
-            print("Batch mode")
-            print("Both counts and effective length provided. ")
-            print("Calculating: ", args.norm)
-            quant_dir = os.path.realpath(args.infile_dir)
-            eff_len_dir = os.path.realpath(args.eff_len_dir)
+    # check if cstmm output is used when --norm == tpm, because TPM undoes tmm normalization
+    if args.norm == 'tpm':
+        substring = "cstmm"
+        try:
+            args.input_dir.index(substring)
+        except ValueError:
+            warnings.warn("WARNING: TPM NORMALIZATION AND TMM NORMALIZATION ARE INCOMPATIBLE. IF INPUT DATA IS TMM NORMALIZED, PLEASE SWITCH --norm TO 'fpkm' INSTEAD.")
+        else:
+            raise ValueError("ERROR: AMALGKIT CSTMM NORMALIZED INPUT FILES DETECTED WHILE NORMALIZATION METHOD IS 'TPM'. TMM NORMALIZATION AND TPM NORMALIZATION ARE INCOMPATIBLE! PLEASE SWITCH --norm TO 'fpkm' INSTEAD." )
+    print('Found a total number of ', len(spp), ' species in this metadata table:')
+    print('____________________________')
+    for sp in spp:
+        print(sp)
+    print('____________________________')
 
-            if not os.path.isdir(quant_dir):
-                print(quant_dir, " is no directory")
-                sys.exit(1)
-            if not os.path.isdir(eff_len_dir):
-                print(eff_len_dir, " is no directory")
-                sys.exit(1)
-            count_files = [f for f in os.listdir(quant_dir) if os.path.isfile(os.path.join(quant_dir, f))]
-            len_files = [f for f in os.listdir(eff_len_dir) if os.path.isfile(os.path.join(eff_len_dir, f))]
-
-        if args.infile_dir and not args.eff_len_dir:
-            print("Batch mode")
-            print("Only expression values provided.")
-            print("Assuming normalized expression values (like log-fpkm or log-tpm).")
-            quant_dir = os.path.realpath(args.infile_dir)
-
-            if not os.path.isdir(quant_dir):
-                print(quant_dir, " is no directory")
-                sys.exit(1)
-
-        if not args.infile_dir:
-            print("No expression data provided. Please set Either --infile_dir or --infile_dir AND --eff_len_file_dir")
-            sys.exit(1)
-
-        # print("Trying to identify species in raw count directory ", quant_dir, " :")
-        for f in count_files:
-            split_fn = f.split("_")
-            species = split_fn[0] + " " + split_fn[1]
-            print("Species detected: ", species)
-            sp = split_fn[0] + "_" + split_fn[1]
-            len_file = [x for x in len_files if re.match(sp, x)]
-            count_file = [x for x in count_files if re.match(sp, x)]
-            print(count_file)
-            if len(len_file) > 1:
-                len_file = len_file[0]
-            if len(count_file) > 1:
-                count_file = len_file[0]
-            path_metadata = os.path.realpath(args.metadata)
-            export_string = " --export=QUANT=" + os.path.realpath(str(count_file)) + ",META=" + path_metadata + ",WORK=" + os.path.realpath(args.out_dir) + ",LEN=" + os.path.realpath(
-                str(len_file)) + ",DIST=" + dist_method + ",CUT=" + str(mr_cut) + ",INTER=" + str(
-                intermediate) + ",CURATE_GROUP=" + f'"{curate_group}"' + " " + batch_script_path + ",NORM=" + str(
-                args.norm)
-            # print(export_string)
-
-            submit_command = ("sbatch " + "--job-name=" + sp + export_string)
-
-            print(submit_command)  # Uncomment this line when done testing to use the submit command created
-            # uncomment the following 3 lines when done testing to submit the jobs
-            exit_status = subprocess.call(submit_command, shell=True)
-            if exit_status != 0:  # Check to make sure the job submitted
-                print("Job failed to submit".format(submit_command))
-        print("Done submitting jobs!")
+    if args.batch is None:
+        write_updated_metadata(metadata, new_metadata_path, args)
+        # enter "normal" mode. Process all species, 1 at a time
+        for sp in spp:
+            sp = sp.replace(" ", "_")
+            run_curate_r_script(args, new_metadata_path, metadata, sp)
+    else:
+        # enter Batch mode, only process 1 species
+        print('Entering --batch mode. processing 1 species')
+        txt = 'This is {:,}th job. In total, {:,} jobs will be necessary for this metadata table.'
+        print(txt.format(args.batch, len(spp)))
+        sp = spp[args.batch - 1]
+        print('processing species number ',args.batch, ' : ', sp)
+        metadata.df = metadata.df.loc[metadata.df['scientific_name'] == sp]
+        sp = sp.replace(" ", "_")
+        write_updated_metadata(metadata, new_metadata_path, args)
+        run_curate_r_script(args, new_metadata_path, metadata, sp)
