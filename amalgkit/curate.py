@@ -121,7 +121,8 @@ def run_curate_r_script(args, new_metadata_path, metadata, sp):
                          curate_group,
                          str(args.norm),
                          str(args.one_outlier_per_iter),
-                         str(correlation_threshold)])
+                         str(correlation_threshold),
+                     ])
     return
 
 def curate_main(args):
