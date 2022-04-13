@@ -51,25 +51,21 @@ def get_fastq_stats(args):
                     print("Getting sequence statistics.", flush=True)
                     tmp_file = os.path.join(args.out_dir, id+'_seqkit_stats.tmp')
                     OS = platform.system()
-
                     if OS == 'Darwin':
-                        seqkit_command = 'zcat < ' + fastq_files[0] + ' | head -n 4000 | seqkit stats -T -j ' + str(args.threads)
-                        total_spots_command = 'echo $(zcat < ' + str(fastq_files[0]) + ' | wc -l)/4|bc'
-                        seqkit_stdout = open(tmp_file, 'w')
-                        subprocess.run(seqkit_command,shell=True, stdout=seqkit_stdout)
-                        seqkit_stdout.close()
-
+                        zcat_command = 'zcat < '
                     elif OS == 'Linux':
-                        seqkit_command = 'zcat ' + fastq_files[0] + ' | head -n 4000 | seqkit stats'
-                        total_spots_command = 'echo $(zcat ' + str(fastq_files[0]) + ' | wc -l)/4|bc'
-                        seqkit_stdout = open(tmp_file, 'w')
-                        subprocess.run(seqkit_command,shell=True, stdout=seqkit_stdout)
-                        seqkit_stdout.close()
+                        zcat_command = 'zcat '
                     else:
-                        raise OSError('This OS is not supported.')
-
-                    total_spots = int(subprocess.check_output(total_spots_command, shell=True))
-
+                        zcat_command = 'zcat '
+                        sys.stderr.write('zcat may not be supported by this OS: {}\n'.format(OS))
+                    seqkit_command = zcat_command + fastq_files[0] + ' | head -n 4000 | seqkit stats -T -j ' + str(args.threads)
+                    total_lines_command = 'echo $(' + zcat_command + str(fastq_files[0]) + ' | wc -l)'
+                    seqkit_stdout = open(tmp_file, 'w')
+                    subprocess.run(seqkit_command,shell=True, stdout=seqkit_stdout)
+                    seqkit_stdout.close()
+                    total_lines_bytes = subprocess.check_output(total_lines_command, shell=True)
+                    total_lines = int(total_lines_bytes.decode().replace('\n', ''))
+                    total_spots = int(total_lines/4)
 
                     tmp_stat_df = pandas.read_csv(tmp_file, sep='\t', header=0)
                     if args.remove_tmp:
@@ -78,30 +74,28 @@ def get_fastq_stats(args):
                     try:
                         tmp_stat_df.loc[0, 'file2'] = fastq_files[1]
                     except IndexError:
-                        tmp_stat_df.loc[0, 'file2'] = 'no path'
+                        tmp_stat_df.loc[0, 'file2'] = 'unavailable'
 
                     tmp_metadata.loc[row, 'scientific_name'] = 'Please add in format: Genus species'
                     tmp_metadata.loc[row,'curate_group'] = 'Please add'
                     tmp_metadata.loc[row,'run'] = tmp_stat_df.loc[0,'id']
-                    tmp_metadata.loc[row,'read1_path']= os.path.abspath(fastq_files[0])
-                    if tmp_stat_df.loc[0, 'file2'] != 'no path':
-                        tmp_metadata.loc[row,'read2_path']= os.path.abspath(tmp_stat_df.loc[0,'file2'])
+                    tmp_metadata.loc[row,'read1_path'] = os.path.abspath(fastq_files[0])
+                    if tmp_stat_df.loc[0, 'file2'] != 'unavailable':
+                        tmp_metadata.loc[row,'read2_path'] = os.path.abspath(tmp_stat_df.loc[0,'file2'])
                     else:
-                        tmp_metadata.loc[row, 'read2_path'] = 'no path'
-                    tmp_metadata.loc[row,'is_sampled']= 'Yes'
-                    tmp_metadata.loc[row,'is_qualified']= 'Yes'
+                        tmp_metadata.loc[row, 'read2_path'] = 'unavailable'
+                    tmp_metadata.loc[row,'is_sampled'] = 'Yes'
+                    tmp_metadata.loc[row,'is_qualified'] = 'Yes'
                     tmp_metadata.loc[row, 'exclusion'] = 'no'
-                    tmp_metadata.loc[row,'lib_layout']= lib_layout
-                    tmp_metadata.loc[row,'spot_length']= tmp_stat_df.loc[0,'avg_len']
-
+                    tmp_metadata.loc[row,'lib_layout'] = lib_layout
+                    tmp_metadata.loc[row,'total_spots'] = total_spots
+                    tmp_metadata.loc[row,'size'] = os.path.getsize(fastq_files[0])
+                    tmp_metadata.loc[row, 'private_file'] = 'yes'
+                    tmp_metadata.loc[row,'spot_length'] = int(tmp_stat_df.loc[0,'avg_len'])
                     total_bases = total_spots * int(tmp_stat_df.loc[0,'avg_len'])
                     if lib_layout == 'paired':
                         total_bases = total_bases * 2
-
-                    tmp_metadata.loc[row,'total_spots']= total_spots
-                    tmp_metadata.loc[row,'total_bases']= total_bases
-                    tmp_metadata.loc[row,'size']= os.path.getsize(fastq_files[0])
-                    tmp_metadata.loc[row, 'private_file'] = 'yes'
+                    tmp_metadata.loc[row,'total_bases'] = total_bases
 
                     row += 1
 

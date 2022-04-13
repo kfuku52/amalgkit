@@ -219,12 +219,10 @@ pqu = subparsers.add_parser('quant', help='see `amalgkit quant -h`')
 pqu.add_argument('--id', metavar='XXXXX0000', default=None, type=str, required=False, action='store',
                  help='default=%(default)s: SRA ID. quant automatically search .fastq or .fastq.gz file(s)')
 pqu.add_argument('--index_dir', metavar='PATH', default=None, type=str, required=False, action='store',
-                 help='default=%(default)s: custom path to Index directory. Only required if Index directory is not'
-                      'output_directory/Index/')
+                 help='default=%(default)s: custom path to Index directory. Only required if Index directory is not '
+                      'out_dir/Index/')
 pqu.add_argument('--threads', metavar='INT', default=1, type=int, required=False, action='store',
                  help='default=%(default)s: Number of threads.')
-pqu.add_argument('--fragment_length', metavar='INT', default=None, type=int, required=False, action='store',
-                 help='default=%(default)s: length of the fragment (not read length). Only required, if single end reads are used.')
 pqu.add_argument('-w','--out_dir', metavar='PATH', default='./', type=str, required=False, action='store',
                  help='default=%(default)s: output directory.')
 pqu.add_argument('--metadata', metavar='PATH', default=None, type=str, required=True, action='store',
@@ -298,8 +296,16 @@ pcu.add_argument('--one_outlier_per_iter', metavar='yes|no', default='no', type=
 pcu.add_argument('--curate_group', metavar='STR', default=None, type=str, required=False, action='store',
                  help='default=%(default)s: "comma separated list of values contained in the curate_group metadata column to be included in the analysis. '
                       'Example input may look like "root,flower,leaf" or "heat stressed,cold stressed,light stressed".')
-pcu.add_argument('--norm', metavar='fpkm|tpm|none', default='fpkm', type=str, required=False, action='store',
-                 help='default=%(default)s: Algorithm performs log-fpkm, or log-tpm transformation on raw counts. If you select "none", please make sure to provide log-normalized input counts of some sort.')
+pcu.add_argument('--norm', metavar='(logn|log2|lognp1|log2p1|none)-(fpkm|tpm|none)',
+                 default='log2p1-fpkm', type=str, required=False, action='store',
+                 help='default=%(default)s: Expression level transformation before SVA. '
+                      'SVA is best performed with log-transformed values. '
+                      'logn: log_n normalization after FPKM/TPM transformation. '
+                      'log2: log_2 normalization after FPKM/TPM transformation. '
+                      'lognp1: log_n(x+1) normalization after FPKM/TPM transformation. '
+                      'log2p1: log_2(x+1) normalization after FPKM/TPM transformation. '
+                      'fpkm/tpm/none: FPKM, TPM, or no transformation. '
+                      )
 pcu.set_defaults(handler=command_curate)
 
 # Sub parser: merge
@@ -330,14 +336,14 @@ psa.add_argument('--getfastq', required=False, action='store_true',
 psa.add_argument('--all', required=False, action='store_true',
                  help='setting this option runs amalgkit sanity as if --index, --quant, --getfastq were set')
 psa.add_argument('--index_dir', metavar='PATH', default=None, type=str, required=False, action='store',
-                 help='default=%(default)s: custom path to Index directory. Only required if Index directory is not'
-                      'output_directory/Index/')
+                 help='default=%(default)s: custom path to Index directory. Only required if Index directory is not '
+                      'out_dir/Index/')
 psa.add_argument('--quant_dir', metavar='PATH', default=None, type=str, required=False, action='store',
-                 help='default=%(default)s: custom path to quant directory. Only required if quant directory is not'
-                      'output_directory/quant/')
+                 help='default=%(default)s: custom path to quant directory. Only required if quant directory is not '
+                      'out_dir/quant/')
 psa.add_argument('--getfastq_dir', metavar='PATH', default=None, type=str, required=False, action='store',
-                 help='default=%(default)s: custom path to Index directory. Only required if getfastq directory is not'
-                      'output_directory/getfastq/')
+                 help='default=%(default)s: custom path to Index directory. Only required if getfastq directory is not '
+                      'out_dir/getfastq/')
 psa.add_argument('--updated_metadata_dir', metavar='PATH', default=None, type=str, required=False, action='store',
                  help='default=%(default)s: custom path to updated metadata directory. Only required if updated metadata'
                       ' directory is not out_directory/metadata/updated_metadata/')
@@ -355,8 +361,8 @@ pin.add_argument('--fastq_dir', metavar='PATH', default=None, type=str, required
 pin.add_argument('--threads', metavar='INT', default=1, type=int, required=False, action='store',
                  help='default=%(default)s: Number of threads.')
 pin.add_argument('--getfastq_dir', metavar='PATH', default=None, type=str, required=False, action='store',
-                 help='default=%(default)s: custom path to Index directory. Only required if getfastq directory is not'
-                      'output_directory/getfastq/')
+                 help='default=%(default)s: custom path to Index directory. Only required if getfastq directory is not '
+                      'out_dir/getfastq/')
 pin.add_argument('--remove_tmp', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
                  help='default=%(default)s: Remove temporary files.')
 

@@ -31,7 +31,7 @@ if (debug_mode == "debug") {
     dir_count = "counts/"
     dir_eff_length = "eff_length/"
     mode = "msm"
-    transform_method = "fpkm"
+    transform_method = "log2p1-fpkm"
     one_outlier_per_iteration = "no"
     # tmm norm debug
     correlation_threshold = 0.4
@@ -94,7 +94,7 @@ if (!file.exists(dir_tsv)) {
 
 tc_sra_intersect = function(tc, sra) {
     sra_run = sra[['run']]
-    tc = tc[, colnames(tc) %in% sra_run]
+    tc = tc[, colnames(tc) %in% sra_run, drop=FALSE]
     sra = sra[sra[['run']] %in% colnames(tc), ]
     return(list(tc = tc, sra = sra))
 }
@@ -127,6 +127,13 @@ add_color_to_sra = function(sra, selected_curate_groups) {
         bp_color = rainbow_hcl(length(bioproject_u), c = 50)
         sp_color = rainbow_hcl(length(scientific_name_u), c = 150)
     }
+
+    print(head(sra))
+    print(curate_group)
+    print(curate_group_u)
+    print(curate_group_color)
+    print(curate_group_color[1:length(curate_group_u)])
+
     df_curate_group = data.frame(curate_group=curate_group_u, curate_group_color=curate_group_color[1:length(curate_group_u)], stringsAsFactors = FALSE)
     df_bp = data.frame(bioproject=bioproject_u, bp_color=bp_color[1:length(bioproject_u)], stringsAsFactors = FALSE)
     df_sp = data.frame(scientific_name=scientific_name_u, sp_color=sp_color[1:length(scientific_name_u)], stringsAsFactors = FALSE)
@@ -141,7 +148,7 @@ sort_tc_and_sra = function(tc, sra, sort_columns = c("curate_group", "scientific
         sra = sra[order(sra[column]), ]
     }
     sra_intersection = sra[(sra[['run']] %in% colnames(tc)),'run']
-    tc = tc[, sra_intersection]
+    tc = tc[, sra_intersection, drop=FALSE]
     return(list(tc = tc, sra = sra))
 }
 
@@ -156,7 +163,7 @@ sort_averaged_tc = function(tc) {
         curate_group_names = c(curate_group_names, split_colnames[[i]][3])
     }
     colname_order = order(curate_group_names, genus_names, specific_names)
-    tc = tc[, colname_order]
+    tc = tc[, colname_order, drop=FALSE]
     return(tc)
 }
 
@@ -224,7 +231,7 @@ curate_group_mean = function(tc, sra, selected_curate_groups = NA, balance.bp = 
     return(list(tc_ave = tc_ave,selected_curate_groups = selected_curate_groups))
 }
 
-curate_group2tau = function(tc_curate_group, rich.annotation = TRUE, unlog = FALSE) {
+curate_group2tau = function(tc_curate_group, rich.annotation = TRUE, transform_method) {
     if (rich.annotation) {
         cols = c("tau", "highest", "order")
     } else {
@@ -233,10 +240,16 @@ curate_group2tau = function(tc_curate_group, rich.annotation = TRUE, unlog = FAL
     df_tau = data.frame(matrix(rep(NA, length(cols) * nrow(tc_curate_group)), nrow = nrow(tc_curate_group)))
     colnames(df_tau) = cols
     rownames(df_tau) = rownames(tc_curate_group)
-    if (unlog) {
+    if (grepl('logn-', transform_method)) {
+        tc_curate_group = exp(tc_curate_group)
+    } else if (grepl('log2-', transform_method)) {
+        tc_curate_group = 2**tc_curate_group
+    } else if (grepl('lognp1-', transform_method)) {
         tc_curate_group = exp(tc_curate_group) - 1
-        tc_curate_group[tc_curate_group < 0] = 0
+    } else if (grepl('log2p1-', transform_method)) {
+        tc_curate_group = 2**tc_curate_group - 1
     }
+    tc_curate_group[tc_curate_group < 0] = 0
     xmax = apply(tc_curate_group, 1, max)
     df_tau[,'tau'] = apply((1 - (tc_curate_group/xmax))/(ncol(tc_curate_group) - 1), 1, sum)
     if (rich.annotation) {
@@ -255,22 +268,26 @@ curate_group2tau = function(tc_curate_group, rich.annotation = TRUE, unlog = FAL
 }
 
 check_mapping_rate = function(tc, sra, mapping_rate_cutoff) {
-    cat(paste0('Mapping rate cutoff: ', mapping_rate_cutoff*100, '%\n'))
-    is_mapping_good = (sra[['mapping_rate']] > mapping_rate_cutoff*100)
-    is_mapping_good[is.na(is_mapping_good)] = TRUE
-    if (any(!is_mapping_good)) {
-        cat("Removed due to low mapping rate:\n")
-        df_tmp = sra[!is_mapping_good,]
-        for (i in rownames(df_tmp)) {
-            sra_id = df_tmp[i,'run']
-            mapping_rate = df_tmp[i,'mapping_rate']
-            cat(paste0(sra_id, ': mapping rate = ', mapping_rate, '%\n'))
+    if ('mapping_rate' %in% colnames(sra)) {
+        cat(paste0('Mapping rate cutoff: ', mapping_rate_cutoff*100, '%\n'))
+        is_mapping_good = (sra[['mapping_rate']] > mapping_rate_cutoff*100)
+        is_mapping_good[is.na(is_mapping_good)] = TRUE
+        if (any(!is_mapping_good)) {
+            cat("Removed due to low mapping rate:\n")
+            df_tmp = sra[!is_mapping_good,]
+            for (i in rownames(df_tmp)) {
+                sra_id = df_tmp[i,'run']
+                mapping_rate = df_tmp[i,'mapping_rate']
+                cat(paste0(sra_id, ': mapping rate = ', mapping_rate, '%\n'))
+            }
+            tc = tc[, colnames(tc) %in% sra[is_mapping_good, "run"], drop=FALSE]
+        } else {
+            cat("No entry removed due to low mapping rate.\n")
         }
-        tc = tc[, colnames(tc) %in% sra[is_mapping_good, "run"]]
+        sra[!is_mapping_good, "exclusion"] = "low_mapping_rate"
     } else {
-        cat("No entry removed due to low mapping rate.\n")
+        cat('Mapping rate cutoff will not be applied.\n')
     }
-    sra[!is_mapping_good, "exclusion"] = "low_mapping_rate"
     return(list(tc = tc, sra = sra))
 }
 
@@ -372,12 +389,16 @@ check_within_curate_group_correlation = function(tc, sra, dist_method, min_dif, 
         cat("Removed Runs due to low within-curate_group correlation:\n")
         print(exclude_runs)
     }
-    tc = tc[, !colnames(tc) %in% exclude_runs]
+    tc = tc[, !colnames(tc) %in% exclude_runs, drop=FALSE]
     sra[(sra[['run']] %in% exclude_runs), "exclusion"] = "low_within_curate_group_correlation"
     return(list(tc = tc, sra = sra))
 }
 
 sva_subtraction = function(tc, sra) {
+    if (ncol(tc)==1) {
+        cat('Only 1 sample is available. Skipping SVA.\n')
+        return(list(tc = tc, sva = NULL))
+    }
     out = tc_sra_intersect(tc, sra)
     tc = out[["tc"]]
     sra = out[["sra"]]
@@ -678,8 +699,8 @@ draw_boxplot = function(sra, tc_dist_matrix, fontsize = 7) {
 
 }
 
-draw_tau_histogram = function(tc, sra, selected_curate_groups, fontsize = 7) {
-    df_tau = curate_group2tau(curate_group_mean(tc, sra, selected_curate_groups)[['tc_ave']], rich.annotation = FALSE, unlog = TRUE)
+draw_tau_histogram = function(tc, sra, selected_curate_groups, fontsize = 7, transform_method) {
+    df_tau = curate_group2tau(curate_group_mean(tc, sra, selected_curate_groups)[['tc_ave']], rich.annotation = FALSE, transform_method)
     hist_out = hist(df_tau[['tau']], breaks = seq(0, 1, 0.05), las = 1, xlab = "Tau (expression specificity)",
                     ylab = "Gene count", main = "", col = "gray")
     num_noexp = sum(is.na(df_tau[['tau']]))
@@ -696,7 +717,7 @@ draw_exp_level_histogram = function(tc, sra, selected_curate_groups, fontsize = 
     xmax[xmax < 0] = 0
     xmax[xmax > 15] = 15
     breaks = seq(0, 15, 1)
-    hist_out = hist(xmax, breaks = breaks, las = 1, xlab = paste0("Max expression (log ",transform_method,"+1)"), ylab = "Gene count",
+    hist_out = hist(xmax, breaks = breaks, las = 1, xlab = paste0("Max expression (",transform_method,")"), ylab = "Gene count",
                     main = "", col = "gray")
 }
 
@@ -720,6 +741,10 @@ draw_legend = function(sra, new = TRUE, pos = "center", fontsize = 7, nlabel.in.
 }
 
 save_plot = function(tc, sra, sva_out, dist_method, file, selected_curate_groups, fontsize = 7, transform_method) {
+    if (ncol(tc)==1) {
+        cat('Only 1 sample is available. Skipping the plot.\n')
+        return()
+    }
     out = tc_sra_intersect(tc, sra)
     tc = out[["tc"]]
     sra = out[["sra"]]
@@ -756,7 +781,7 @@ save_plot = function(tc, sra, sva_out, dist_method, file, selected_curate_groups
     par(mar = c(4, 4, 1, 1))
     draw_exp_level_histogram(tc, sra, selected_curate_groups, fontsize, transform_method)
     par(mar = c(4, 4, 1, 1))
-    draw_tau_histogram(tc, sra, selected_curate_groups, fontsize)
+    draw_tau_histogram(tc, sra, selected_curate_groups, fontsize, transform_method)
     par(mar = rep(0.1, 4))
     df_r2 = draw_sva_summary(sva_out, tc, sra, fontsize)
     if (!all(is.na(df_r2))) {
@@ -832,21 +857,36 @@ if (any(conditions)) {
 
 is_not_excluded = (sra[['exclusion']]=='no')
 cat('Number of non-excluded SRA runs (exclusion=="no"):', sum(is_not_excluded), '\n')
-tc = tc[,sra[is_not_excluded,'run']]
+tc = tc[,sra[is_not_excluded,'run'], drop=FALSE]
 out = sort_tc_and_sra(tc, sra) ; tc = out[["tc"]] ; sra = out[["sra"]]
 
 # log transform AFTER mappingrate
 row.names(tc_eff_length) <- tc_eff_length[, 1]
 tc_eff_length <- tc_eff_length[, colnames(tc)]
-if (transform_method == "fpkm") {
-    tc <- transform_raw_to_fpkm(tc, tc_eff_length)
-    tc <- log(tc + 1)
+if (grepl('fpkm', transform_method)) {
+    cat('Applying FPKM transformation.\n')
+    tc = transform_raw_to_fpkm(tc, tc_eff_length)
+} else if (grepl('tpm', transform_method)) {
+    cat('Applying TPM transformation.\n')
+    tc = transform_raw_to_tpm(tc, tc_eff_length)
+} else {
+    cat('Applying neither FPKM nor TPM transformation.\n')
 }
-if (transform_method == "tpm") {
-    tc <- transform_raw_to_tpm(tc, tc_eff_length)
-    tc <- log(tc + 1)
+if (grepl('logn-', transform_method)) {
+    cat('Applying log_n(x) normalization.\n')
+    tc = log(tc)
+} else if (grepl('log2-', transform_method)) {
+    cat('Applying log_2(x) normalization.\n')
+    tc = log2(tc)
+} else if (grepl('lognp1-', transform_method)) {
+    cat('Applying log_n(x+1) normalization.\n')
+    tc = log(tc + 1)
+} else if (grepl('log2p1-', transform_method)) {
+    cat('Applying log_2(x+1) normalization.\n')
+    tc = log2(tc + 1)
+} else {
+    cat('Applying no log normalization.\n')
 }
-
 
 file_name = paste0(dir_tsv,'/',sub(" ", "_", scientific_name), ".uncorrected.tc.tsv")
 write.table(data.frame("GeneID"=rownames(tc), tc), file = file_name,
@@ -872,7 +912,9 @@ save_plot(tc, sra, NULL, dist_method, paste0(sub(" ", "_", scientific_name), "."
 out = sva_subtraction(tc, sra)
 tc_sva = out[["tc"]]
 sva_out = out[["sva"]]
-save(sva_out, file = paste0(dir_rdata,'/', sub(" ", "_", scientific_name), ".sva.", round, ".RData"))
+if (!is.null(sva_out)) {
+    save(sva_out, file = paste0(dir_rdata,'/', sub(" ", "_", scientific_name), ".sva.", round, ".RData"))
+}
 save_plot(tc_sva, sra, sva_out, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".original.sva"),
           selected_curate_groups, fontsize, transform_method)
 
@@ -882,13 +924,15 @@ tc_sva = NULL
 out = check_mapping_rate(tc, sra, mapping_rate_cutoff)
 tc = out[["tc"]]
 sra = out[["sra"]]
-tc = tc[, sra[sra[['exclusion']] == "no", "run"]]
+tc = tc[, sra[sra[['exclusion']] == "no", "run"], drop=FALSE]
 save_plot(tc, sra, NULL, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".mapping_cutoff"),
           selected_curate_groups, fontsize, transform_method)
 out = sva_subtraction(tc, sra)
 tc_sva = out[["tc"]]
 sva_out = out[["sva"]]
-save(sva_out, file = paste0(dir_rdata,'/',sub(" ", "_", scientific_name), ".sva.", round, ".RData"))
+if (!is.null(sva_out)) {
+    save(sva_out, file = paste0(dir_rdata,'/',sub(" ", "_", scientific_name), ".sva.", round, ".RData"))
+}
 save_plot(tc_sva, sra, sva_out, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".mapping_cutoff.sva"),
           selected_curate_groups, fontsize, transform_method)
 
@@ -908,7 +952,9 @@ while (end_flag == 0) {
         out = sva_subtraction(tc_cwtc, sra)
         tc_sva = out[["tc"]]
         sva_out = out[["sva"]]
-        save(sva_out, file = paste0(dir_rdata,'/',sub(" ", "_", scientific_name), ".sva.", round, ".RData"))
+        if (!is.null(sva_out)) {
+            save(sva_out, file = paste0(dir_rdata,'/',sub(" ", "_", scientific_name), ".sva.", round, ".RData"))
+        }
         save_plot(tc_cwtc, sra, NULL, dist_method, paste0(sub(" ", "_", scientific_name), ".", round,
                                                           ".correlation_cutoff"), selected_curate_groups, fontsize, transform_method)
         save_plot(tc_sva, sra, sva_out, dist_method, paste0(sub(" ", "_", scientific_name), ".", round,
@@ -933,7 +979,7 @@ out = curate_group_mean(tc_sva, sra, selected_curate_groups)
 tc_curate_group = out[['tc_ave']]
 file = paste0(dir_tsv,'/',sub(" ", "_", scientific_name), ".curate_group.mean.tsv")
 write.table(data.frame("GeneID"=rownames(tc_curate_group), tc_curate_group), file = file, sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
-tc_tau = curate_group2tau(tc_curate_group, rich.annotation = TRUE, unlog = TRUE)
+tc_tau = curate_group2tau(tc_curate_group, rich.annotation = TRUE, transform_method)
 file = paste0(dir_tsv,'/',sub(" ", "_", scientific_name), ".tau.tsv")
 write.table(data.frame("GeneID"=rownames(tc_tau), tc_tau), file = file, sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
 cat("Done!\n")

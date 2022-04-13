@@ -26,6 +26,8 @@ get_spp_filled = function(dir_count, df_gc=NA) {
     count_files = list.files(path = file.path(dir_count, sciname_dir), pattern = ".*est_counts\\.tsv")
     if (length(count_files)==1) {
       spp_filled = c(spp_filled, count_files)
+    } else {
+      warning(paste0('Multiple est_counts files were detected: ', paste(count_files, collapse=', ')))
     }
   }
   spp_filled = sub('_', '|', spp_filled)
@@ -66,7 +68,7 @@ read_est_counts = function(dir_count, sp) {
   infile_path = file.path(sciname_path, infile[1])
   cat('Input file found, reading:', infile[1], '\n')
   dat = read.delim(infile_path, header = T, row.names=1, sep='\t', check.names=FALSE)
-  dat = dat[,(colnames(dat)!='length')]
+  dat = dat[,(colnames(dat)!='length'), drop=FALSE]
   colnames(dat) = paste(sp, colnames(dat), sep='_')
   return(dat)
 }

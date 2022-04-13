@@ -486,16 +486,12 @@ def calc_2nd_ranges(metadata):
     rate_obtained = metadata.df.loc[:,'rate_obtained']
     spot_lengths = metadata.df.loc[:,'spot_length_amalgkit']
     total_spots = metadata.df.loc[:,'total_spots']
-    #sra_target_reads = ((sra_target_bp/spot_lengths)/rate_obtained).astype(int)+1
-
     sra_target_reads = numpy.zeros_like(sra_target_bp)
     for i in numpy.arange(sra_target_reads.shape[0]):
         if numpy.isnan(rate_obtained[i]):
             sra_target_reads[i] = (sra_target_bp[i]/spot_lengths[i]).astype(int)+1 # If no read was extracted in 1st.
         else:
             sra_target_reads[i] = ((sra_target_bp[i]/spot_lengths[i])/rate_obtained[i]).astype(int)+1
-
-
     start_2nds = metadata.df.loc[:,'spot_end_1st'] + 1
     end_2nds = start_2nds + sra_target_reads
     pooled_missing_bp = metadata.df.loc[:,'bp_until_target_size'].sum()
@@ -814,11 +810,24 @@ def sequence_extraction_private(i, metadata, sra_stat, args):
 
 def check_metadata_validity(metadata):
     assert metadata.df.shape[0] > 0, 'No SRA entry found. Make sure whether --id or --id_list is compatible with --sci_name and --layout.'
-    if metadata.df.loc[:,'total_bases'].isna().any():
-        raise Exception('Empty value(s) of total_bases were detected in the metadata table.')
+    is_total_bases_na = metadata.df.loc[:,'total_bases'].isnull()
+    is_total_bases_na |= (metadata.df.loc[:, 'total_bases']==0)
+    is_total_bases_na |= (metadata.df.loc[:, 'total_bases']=='')
+    if is_total_bases_na.any():
+        #raise Exception('Empty value(s) of total_bases were detected in the metadata table.')
+        print('Empty value(s) of total_bases were detected in the metadata table. Filling a placeholder value 999,999,999,999.')
+        metadata.df.loc[is_total_bases_na,'total_bases'] = 999999999999
+        metadata.df.loc[:, 'total_bases'] = metadata.df.loc[:, 'total_bases'].astype(int)
+    is_total_spots_na = metadata.df.loc[:, 'total_spots'].isnull()
+    is_total_spots_na |=  (metadata.df.loc[:, 'total_spots']==0)
+    is_total_spots_na |=  (metadata.df.loc[:, 'total_spots']=='')
+    if is_total_spots_na.any():
+        new_values = metadata.df.loc[is_total_spots_na,'total_bases'] / metadata.df.loc[is_total_spots_na,'spot_length']
+        metadata.df.loc[is_total_spots_na, 'total_spots'] = new_values.astype(int)
     for i in metadata.df.index:
         txt = 'Individual SRA size of {}: {:,} bp'
         print(txt.format(metadata.df.at[i, 'run'], metadata.df.at[i, 'total_bases']))
+    return metadata
 
 def initialize_global_params(args, metadata, gz_exe, ungz_exe):
     g = dict()
@@ -839,7 +848,7 @@ def getfastq_main(args):
     gz_exe, ungz_exe = check_getfastq_dependency(args)
     metadata = getfastq_metadata(args)
     metadata = remove_experiment_without_run(metadata)
-    check_metadata_validity(metadata)
+    metadata = check_metadata_validity(metadata)
     g = initialize_global_params(args, metadata, gz_exe, ungz_exe)
     metadata = initialize_columns(metadata, g)
     # 1st round sequence extraction
