@@ -1,14 +1,10 @@
-from amalgkit.metadata import Metadata
-import pandas
-
 import json
 import re
-import os
 import subprocess
-import sys
 import warnings
 
 from amalgkit.util import *
+
 
 def get_curate_group(args, metadata):
     if args.curate_group is None:
@@ -18,6 +14,7 @@ def get_curate_group(args, metadata):
     print('Tissues to be included: {}'.format(', '.join(curate_group)))
     curate_group = '|'.join(curate_group)
     return curate_group
+
 
 def write_updated_metadata(metadata, outpath, args):
     if os.path.exists(outpath):
@@ -35,44 +32,47 @@ def write_updated_metadata(metadata, outpath, args):
     print('Writing updated metadata: {}'.format(outpath))
     metadata.df.to_csv(outpath, sep='\t', index=False)
 
+
 def get_updated_metadata(metadata, updated_metadata_dir):
     if os.path.exists(updated_metadata_dir):
         print('Updated metadata directory found: {}'.format(updated_metadata_dir))
         files = os.listdir(updated_metadata_dir)
-        updated_metadata_files = [ f for f in files if f.startswith('metadata')&f.endswith('.tsv') ]
+        updated_metadata_files = [f for f in files if f.startswith('metadata') & f.endswith('.tsv')]
         metadata_rows = list()
         for file in updated_metadata_files:
             file_path = os.path.join(updated_metadata_dir, file)
             tmp = pandas.read_csv(file_path, header=0, index_col=None, sep='\t')
             metadata_rows.append(tmp)
         tmp_concat = pandas.concat(metadata_rows, axis=0, ignore_index=True)
-        cols = ['run',] + [ col for col in tmp_concat.columns if (col not in metadata.df.columns)&(col!='index') ]
-        metadata.df = pandas.merge(metadata.df, tmp_concat.loc[:,cols], on='run', how='left')
+        cols = ['run', ] + [col for col in tmp_concat.columns if (col not in metadata.df.columns) & (col != 'index')]
+        metadata.df = pandas.merge(metadata.df, tmp_concat.loc[:, cols], on='run', how='left')
     else:
         txt = 'Updated metadata directory not found. Some information may not appear in the plot: {}\n'
         sys.stderr.write(txt.format(updated_metadata_dir))
     return metadata
 
+
 def get_mapping_rate(metadata, quant_dir):
     if os.path.exists(quant_dir):
         print('quant directory found: {}'.format(quant_dir))
-        metadata.df.loc[:,'mapping_rate'] = numpy.nan
-        sra_ids = metadata.df.loc[:,'run'].values
-        sra_dirs = [ d for d in os.listdir(quant_dir) if d in sra_ids ]
+        metadata.df.loc[:, 'mapping_rate'] = numpy.nan
+        sra_ids = metadata.df.loc[:, 'run'].values
+        sra_dirs = [d for d in os.listdir(quant_dir) if d in sra_ids]
         print('Number of quant sub-directories that matched to metadata: {:,}'.format(len(sra_dirs)))
         for sra_id in sra_dirs:
-            run_info_path = os.path.join(quant_dir, sra_id, sra_id+'_run_info.json')
+            run_info_path = os.path.join(quant_dir, sra_id, sra_id + '_run_info.json')
             if not os.path.exists(run_info_path):
                 sys.stderr.write('run_info.json not found. Skipping {}.\n'.format(sra_id))
                 continue
-            is_sra = (metadata.df.loc[:,'run']==sra_id)
+            is_sra = (metadata.df.loc[:, 'run'] == sra_id)
             with open(run_info_path) as f:
                 run_info = json.load(f)
-            metadata.df.loc[is_sra,'mapping_rate'] = run_info['p_pseudoaligned']
+            metadata.df.loc[is_sra, 'mapping_rate'] = run_info['p_pseudoaligned']
     else:
         txt = 'quant directory not found. Mapping rate cutoff will not be applied: {}\n'
         sys.stderr.write(txt.format(quant_dir))
     return metadata
+
 
 def check_rscript():
     try:
@@ -81,6 +81,7 @@ def check_rscript():
         print(e)
         print(",<ERROR> Rscript is not installed.")
         sys.exit(1)
+
 
 def run_curate_r_script(args, new_metadata_path, metadata, sp):
     dist_method = args.dist_method
@@ -103,38 +104,40 @@ def run_curate_r_script(args, new_metadata_path, metadata, sp):
             input_dir.index(substring)
         except ValueError:
             warnings.warn(
-                    "WARNING: TPM NORMALIZATION AND TMM NORMALIZATION ARE INCOMPATIBLE. IF INPUT DATA IS TMM NORMALIZED, PLEASE SWITCH --norm TO ANY OF THE 'fpkm' NORMALISATIONS INSTEAD: (logn|log2|lognp1|log2p1|none)-(fpkm)")
+                "WARNING: TPM NORMALIZATION AND TMM NORMALIZATION ARE INCOMPATIBLE. IF INPUT DATA IS TMM NORMALIZED, PLEASE SWITCH --norm TO ANY OF THE 'fpkm' NORMALISATIONS INSTEAD: (logn|log2|lognp1|log2p1|none)-(fpkm)")
         else:
             raise ValueError(
-                    "ERROR: AMALGKIT CSTMM NORMALIZED INPUT FILES DETECTED WHILE NORMALIZATION METHOD IS 'TPM'. TMM NORMALIZATION AND TPM NORMALIZATION ARE INCOMPATIBLE! PLEASE SWITCH --norm TO ANY OF THE 'fpkm' NORMALISATIONS INSTEAD: (logn|log2|lognp1|log2p1|none)-(fpkm)")
+                "ERROR: AMALGKIT CSTMM NORMALIZED INPUT FILES DETECTED WHILE NORMALIZATION METHOD IS 'TPM'. TMM NORMALIZATION AND TPM NORMALIZATION ARE INCOMPATIBLE! PLEASE SWITCH --norm TO ANY OF THE 'fpkm' NORMALISATIONS INSTEAD: (logn|log2|lognp1|log2p1|none)-(fpkm)")
 
-    len_file = os.path.join(input_dir,sp,sp+'_eff_length.tsv')
-    count_file = os.path.join(input_dir,sp,sp+'_est_counts.tsv')
+    len_file = os.path.join(input_dir, sp, sp + '_eff_length.tsv')
+    count_file = os.path.join(input_dir, sp, sp + '_est_counts.tsv')
 
     if os.path.exists(count_file) and os.path.exists(count_file):
         print("Both counts and effective length files found.")
         print("Calculating: ", args.norm)
 
     else:
-        print("No expression data found. Please make sure `amalgkit merge` or `amalgkit cstmm` ran correctly and you provided the correct directory path")
+        print(
+            "No expression data found. Please make sure `amalgkit merge` or `amalgkit cstmm` ran correctly and you provided the correct directory path")
         sys.exit(1)
 
     subprocess.call(['Rscript',
-                         r_script_path,
-                         count_file,
-                         new_metadata_path,
-                         os.path.realpath(args.out_dir),
-                         len_file,
-                         dist_method,
-                         str(mr_cut),
-                         '0',
-                         str(intermediate),
-                         curate_group,
-                         str(args.norm),
-                         str(args.one_outlier_per_iter),
-                         str(correlation_threshold),
+                     r_script_path,
+                     count_file,
+                     new_metadata_path,
+                     os.path.realpath(args.out_dir),
+                     len_file,
+                     dist_method,
+                     str(mr_cut),
+                     '0',
+                     str(intermediate),
+                     curate_group,
+                     str(args.norm),
+                     str(args.one_outlier_per_iter),
+                     str(correlation_threshold),
                      ])
     return
+
 
 def curate_main(args):
     check_rscript()
@@ -167,7 +170,7 @@ def curate_main(args):
         txt = 'This is {:,}th job. In total, {:,} jobs will be necessary for this metadata table.'
         print(txt.format(args.batch, len(spp)))
         sp = spp[args.batch - 1]
-        print('processing species number ',args.batch, ' : ', sp)
+        print('processing species number ', args.batch, ' : ', sp)
         metadata.df = metadata.df.loc[metadata.df['scientific_name'] == sp]
         sp = sp.replace(" ", "_")
         write_updated_metadata(metadata, new_metadata_path, args)
