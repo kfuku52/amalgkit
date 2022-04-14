@@ -12,7 +12,6 @@ from amalgkit.util import *
 
 def get_curate_group(args, metadata):
     if args.curate_group is None:
-        #metadata = load_metadata(args)
         curate_group = metadata.df.loc[:, 'curate_group'].dropna().unique()
     else:
         curate_group = re.findall(r"[\w]+", args.curate_group)
@@ -97,6 +96,18 @@ def run_curate_r_script(args, new_metadata_path, metadata, sp):
     else:
         input_dir = args.input_dir
 
+    # check if cstmm output is used when --norm == tpm, because TPM undoes tmm normalization
+    if args.norm is not None and 'tpm' in args.norm:
+        substring = "cstmm"
+        try:
+            input_dir.index(substring)
+        except ValueError:
+            warnings.warn(
+                    "WARNING: TPM NORMALIZATION AND TMM NORMALIZATION ARE INCOMPATIBLE. IF INPUT DATA IS TMM NORMALIZED, PLEASE SWITCH --norm TO ANY OF THE 'fpkm' NORMALISATIONS INSTEAD: (logn|log2|lognp1|log2p1|none)-(fpkm)")
+        else:
+            raise ValueError(
+                    "ERROR: AMALGKIT CSTMM NORMALIZED INPUT FILES DETECTED WHILE NORMALIZATION METHOD IS 'TPM'. TMM NORMALIZATION AND TPM NORMALIZATION ARE INCOMPATIBLE! PLEASE SWITCH --norm TO ANY OF THE 'fpkm' NORMALISATIONS INSTEAD: (logn|log2|lognp1|log2p1|none)-(fpkm)")
+
     len_file = os.path.join(input_dir,sp,sp+'_eff_length.tsv')
     count_file = os.path.join(input_dir,sp,sp+'_est_counts.tsv')
 
@@ -138,15 +149,6 @@ def curate_main(args):
         os.mkdir(curate_dir)
     new_metadata_path = os.path.realpath(os.path.join(curate_dir, 'metadata.tsv'))
 
-    # check if cstmm output is used when --norm == tpm, because TPM undoes tmm normalization
-    if args.norm == 'tpm':
-        substring = "cstmm"
-        try:
-            args.input_dir.index(substring)
-        except ValueError:
-            warnings.warn("WARNING: TPM NORMALIZATION AND TMM NORMALIZATION ARE INCOMPATIBLE. IF INPUT DATA IS TMM NORMALIZED, PLEASE SWITCH --norm TO 'fpkm' INSTEAD.")
-        else:
-            raise ValueError("ERROR: AMALGKIT CSTMM NORMALIZED INPUT FILES DETECTED WHILE NORMALIZATION METHOD IS 'TPM'. TMM NORMALIZATION AND TPM NORMALIZATION ARE INCOMPATIBLE! PLEASE SWITCH --norm TO 'fpkm' INSTEAD." )
     print('Found a total number of ', len(spp), ' species in this metadata table:')
     print('____________________________')
     for sp in spp:
