@@ -1,6 +1,6 @@
 import subprocess
 from amalgkit.util import *
-
+import warnings
 
 def check_quant_output(sra_id, output_dir, args):
     out_path = os.path.join(output_dir, sra_id + '_abundance.tsv')
@@ -8,11 +8,10 @@ def check_quant_output(sra_id, output_dir, args):
     if is_output_present:
         print('Output file detected: {}'.format(out_path))
         if args.redo == 'yes':
-            print('Continued. The output will be overwritten. Set "--redo no" to exit.')
+            print('Continued. The output will be overwritten. Set "--redo no" to not overwrite results.')
             return None
         else:
-            print('Exiting. Set "--redo yes" to overwrite.')
-            sys.exit()
+            print('Continued. The output will not be overwritten. If you want to overwrite the results, set "--redo yes".')
     else:
         print('Output file was not detected: {}'.format(out_path))
         return None
@@ -102,9 +101,17 @@ def run_quant(args, metadata, sra_id, index):
     sra_stat = check_layout_mismatch(sra_stat, output_dir_getfastq)
     try:
         ext = get_newest_intermediate_file_extension(sra_stat, work_dir=output_dir_getfastq)
+        if ext == '.safely_removed':
+            print('These files have been deleted. If you wish to reobtain the .fastq file(s), run: getfastq -e email@adress.com --id ', sra_id, ' -w ', args.out_dir, '--redo yes --gcp yes --aws yes --ncbi yes')
+            print('skipping.')
+            return
+
     except FileNotFoundError:
-        print('could not find directory:', output_dir_getfastq)
-        print('skipping')
+        print('ERROR: could not find fastq file(s) in:', output_dir_getfastq)
+        print(
+            'If you wish to obtain the .fastq file(s), run: getfastq -e email@adress.com --id ',
+            sra_id, ' -w ', args.out_dir, '--redo yes --gcp yes --aws yes --ncbi yes')
+        print('skipping.')
         return
     in_files = glob.glob(os.path.join(args.out_dir, 'getfastq', sra_id, sra_id + "*" + ext))
 
