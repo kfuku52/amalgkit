@@ -1,6 +1,5 @@
 import subprocess
 from amalgkit.util import *
-import warnings
 
 def check_quant_output(sra_id, output_dir, args):
     out_path = os.path.join(output_dir, sra_id + '_abundance.tsv')
