@@ -577,7 +577,6 @@ def write_updated_metadata(args, metadata, sra_id):
 def getfastq_metadata(args):
     if args.id is not None:
         print('--id is specified. Downloading SRA metadata from Entrez.')
-        assert (args.entrez_email != 'aaa@bbb.com'), "Provide your email address. No worry, you won't get spam emails."
         Entrez.email = args.entrez_email
         sra_id = args.id
         search_term = getfastq_search_term(sra_id, args.entrez_additional_search_term)
@@ -592,7 +591,6 @@ def getfastq_metadata(args):
             metadata.df = metadata.df.loc[(metadata.df['scientific_name'] == args.sci_name), :]
     if args.id_list is not None:
         print('--id_list is specified. Downloading SRA metadata from Entrez.')
-        assert (args.entrez_email != 'aaa@bbb.com'), "Provide your email address. No worry, you won't get spam emails."
         Entrez.email = args.entrez_email
         sra_id_list = [line.rstrip('\n') for line in open(args.id_list) if not line.startswith('#')]
         metadata_dict = dict()

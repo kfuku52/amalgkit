@@ -590,7 +590,6 @@ def metadata_main(args):
 
     check_config_dir(args)
 
-    assert (args.entrez_email!='aaa@bbb.com'), "Provide your email address. No worry, you won't get spam emails."
     Entrez.email = args.entrez_email
 
     date_from,date_to = args.publication_date.split(':')

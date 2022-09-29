@@ -114,8 +114,8 @@ pme.add_argument('-c', '--config_dir', metavar='PATH', default='./', type=str, r
                  help='default=%(default)s: Path to the config directory.')
 pme.add_argument('-w','--out_dir', metavar='PATH', default='./', type=str, required=False, action='store',
                  help='default=%(default)s: Path to the directory where intermediate and output files are generated.')
-pme.add_argument('-e', '--entrez_email', metavar='aaa@bbb.com', default=None, type=str, required=True, action='store',
-                 help='default=%(default)s: Your email address.')
+pme.add_argument('-e', '--entrez_email', metavar='aaa@bbb.com', default='', type=str, required=False, action='store',
+                 help='default=%(default)s: Your email address. See https://www.ncbi.nlm.nih.gov/books/NBK25497/')
 pme.add_argument('-p', '--publication_date', metavar='YYYY/MM/DD:YYYY/MM/DD', default='1900/01/01:TODAY', type=str,
                  required=False, action='store',
                  help='default=%(default)s: Range of the date that records were made public in Entrez.')
@@ -138,8 +138,8 @@ pvi.set_defaults(handler=command_view)
 
 # Sub parser: getfastq
 pge = subparsers.add_parser('getfastq', help='see `amalgkit getfastq -h`')
-pge.add_argument('-e', '--entrez_email', metavar='aaa@bbb.com', default=None, type=str, required=True, action='store',
-                 help='default=%(default)s: Your email address. Necessary for accessing NCBI database.')
+pge.add_argument('-e', '--entrez_email', metavar='aaa@bbb.com', default='', type=str, required=False, action='store',
+                 help='default=%(default)s: Your email address. See https://www.ncbi.nlm.nih.gov/books/NBK25497/')
 pge.add_argument('-w','--out_dir', metavar='PATH', default='./', type=str, required=False, action='store',
                  help='default=%(default)s: output directory.')
 pge.add_argument('--id', metavar='XXXXX0000', default=None, type=str, required=False, action='store',
