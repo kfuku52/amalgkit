@@ -575,12 +575,12 @@ def metadata_main(args):
         os.mkdir(args.out_dir)
 
     metadata_dir = os.path.join(args.out_dir, 'metadata')
-    temp_dir = os.path.join(metadata_dir, 'temp')
+    metadata_tmp_dir = os.path.join(metadata_dir, 'tmp')
     metadata_results_dir = os.path.join(metadata_dir, 'metadata')
     pivot_table_dir = os.path.join(metadata_dir, 'pivot_tables')
 
-    if not os.path.exists(temp_dir):
-        os.makedirs(os.path.join(temp_dir))
+    if not os.path.exists(metadata_tmp_dir):
+        os.makedirs(os.path.join(metadata_tmp_dir))
 
     if not os.path.exists(metadata_results_dir):
         os.makedirs(os.path.join(metadata_results_dir))
@@ -597,7 +597,6 @@ def metadata_main(args):
         d = datetime.datetime.today()
         date_to = str(d.year)+"/"+'%02d'%d.month+'/'+'%02d'%d.day
     args.publication_date = date_from+':'+date_to
-    date_range = args.publication_date.replace('/','_').replace(':','-')
     print('')
     print('Entrez publication date for search:', args.publication_date)
     print('')
@@ -619,7 +618,7 @@ def metadata_main(args):
     metadata_species = dict()
     for sp in search_spp:
         print('Entrez search:', sp)
-        sp_file_name = "tmp_"+sp.replace(' ', '_')+'_'+date_range+".tsv"
+        sp_file_name = "tmp_"+sp.replace(' ', '_')+".tsv"
         bioprojects = []
         if (os.path.exists(sp_file_name))&(args.overwrite=='no'):
             if (os.path.getsize(sp_file_name)>1):
@@ -634,13 +633,13 @@ def metadata_main(args):
             print('Entrez search term:', search_term)
             root = fetch_sra_xml(species_name=sp, search_term=search_term, save_xml=False, read_from_existing_file=False)
             metadata_species[sp] = Metadata.from_xml(xml_root=root).df
-            metadata_species[sp].to_csv(os.path.join(temp_dir,sp_file_name), sep="\t", index=False)
+            metadata_species[sp].to_csv(os.path.join(metadata_tmp_dir, sp_file_name), sep="\t", index=False)
         print('')
     metadata = Metadata.from_DataFrame(df=pandas.concat(metadata_species.values(), sort=False))
     metadata.config_dir = args.config_dir
     metadata.reorder(omit_misc=False)
-    multisp_file_name = "metadata_01_raw_"+date_range+".tsv"
-    metadata.df.to_csv(os.path.join(metadata_results_dir,multisp_file_name), sep="\t", index=False)
+    multisp_file_name = "metadata_01_raw.tsv"
+    metadata.df.to_csv(os.path.join(metadata_tmp_dir, multisp_file_name), sep="\t", index=False)
     del metadata_species
     if metadata.df.shape[0]==0:
         print('No entry was found/survived in the metadata processing. Please check the config files.')
@@ -666,7 +665,7 @@ def metadata_main(args):
         metadata.group_tissues_by_config()
 
     metadata.reorder(omit_misc=False)
-    metadata.df.to_csv(os.path.join(metadata_results_dir, 'metadata_02_grouped_'+date_range+'.tsv'), sep='\t', index=False)
+    metadata.df.to_csv(os.path.join(metadata_tmp_dir, 'metadata_02_grouped.tsv'), sep='\t', index=False)
 
     metadata.mark_treatment_terms()
     metadata.nspot_cutoff(args.min_nspots)
@@ -674,16 +673,9 @@ def metadata_main(args):
     metadata.unmark_rescue_ids()
     metadata.label_sampled_data(args.max_sample)
     metadata.reorder(omit_misc=True)
-    metadata.df.to_csv(os.path.join(metadata_results_dir, 'metadata_03_curated_'+date_range+'.tsv'), sep='\t', index=False)
-
-    #df_qualified = metadata.df.loc[(metadata.df.loc[:,'is_qualified']=='Yes'),:]
-    #df_qualified = df_qualified.loc[(df_qualified['scientific_name']!='Drosophila melanogaster'),:]
-    #df_qualified.to_csv('metadata_04_qualified_'+date_range+'.tsv', sep='\t', index=False)
-
-    #df_reduced = metadata.df.loc[(metadata.df.loc[:,'is_sampled']=='Yes'),:]
-    #df_reduced.to_csv('metadata_05_reduced_'+date_range+'.tsv', sep='\t', index=False)
+    metadata.df.to_csv(os.path.join(metadata_results_dir, 'metadata.tsv'), sep='\t', index=False)
 
     sra_qualified_pivot = metadata.pivot(n_sp_cutoff=0, qualified_only=True, sampled_only=False)
-    sra_qualified_pivot.to_csv(os.path.join(pivot_table_dir, 'pivot_04_qualified_'+date_range+'.tsv'), sep='\t')
+    sra_qualified_pivot.to_csv(os.path.join(pivot_table_dir, 'pivot_qualified.tsv'), sep='\t')
     sra_selected_pivot = metadata.pivot(n_sp_cutoff=0, qualified_only=True, sampled_only=True)
-    sra_selected_pivot.to_csv(os.path.join(pivot_table_dir, 'pivot_05_selected_'+date_range+'.tsv'), sep='\t')
+    sra_selected_pivot.to_csv(os.path.join(pivot_table_dir, 'pivot_selected.tsv'), sep='\t')
