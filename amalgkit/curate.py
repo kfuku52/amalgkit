@@ -159,7 +159,7 @@ def curate_main(args):
     print('____________________________')
 
     if args.batch is None:
-        write_updated_metadata(metadata, new_metadata_path, args)
+        #write_updated_metadata(metadata, new_metadata_path, args)
         # enter "normal" mode. Process all species, 1 at a time
         for sp in spp:
             sp = sp.replace(" ", "_")
@@ -173,5 +173,5 @@ def curate_main(args):
         print('processing species number ', args.batch, ' : ', sp)
         metadata.df = metadata.df.loc[metadata.df['scientific_name'] == sp]
         sp = sp.replace(" ", "_")
-        write_updated_metadata(metadata, new_metadata_path, args)
+        #write_updated_metadata(metadata, new_metadata_path, args)
         run_curate_r_script(args, new_metadata_path, metadata, sp)

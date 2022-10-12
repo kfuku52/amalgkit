@@ -892,8 +892,8 @@ def getfastq_main(args):
         txt = '2nd round read extraction improved % bp from {:,.2f}% to {:,.2f}%'
         print(txt.format(g['rate_obtained_1st']*100, g['rate_obtained_2nd']*100), flush=True)
     # Postprocessing
-    for sra_id in metadata.df.loc[:,'run'].values:
-        write_updated_metadata(args, metadata, sra_id)
+    #for sra_id in metadata.df.loc[:,'run'].values:
+     # write_updated_metadata(args, metadata, sra_id)
     print('')
     if args.concat == 'yes':
         concat_fastq(args, metadata, sra_stat['output_dir'], g)
