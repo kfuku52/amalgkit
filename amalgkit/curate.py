@@ -22,11 +22,11 @@ def write_updated_metadata(metadata, outpath, args):
         return None
     else:
         print('Updated metadata file was not detected. Preparing...')
-    if args.updated_metadata_dir == "inferred":
-        updated_metadata_dir = os.path.realpath(os.path.join(args.out_dir, 'metadata/updated_metadata'))
-    else:
-        updated_metadata_dir = os.path.realpath(args.updated_metadata_dir)
-    metadata = get_updated_metadata(metadata, updated_metadata_dir)
+    #if args.updated_metadata_dir == "inferred":
+        #updated_metadata_dir = os.path.realpath(os.path.join(args.out_dir, 'metadata/updated_metadata'))
+    #else:
+     #   updated_metadata_dir = os.path.realpath(args.updated_metadata_dir)
+    #metadata = get_updated_metadata(metadata, updated_metadata_dir)
     quant_dir = os.path.join(args.out_dir, 'quant')
     metadata = get_mapping_rate(metadata, quant_dir)
     print('Writing updated metadata: {}'.format(outpath))
