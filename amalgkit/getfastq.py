@@ -552,28 +552,6 @@ def print_read_stats(args, metadata, g, sra_stat=None, individual=False):
                 print('Individual {} (bp): {}'.format(rt, txt))
     print('')
 
-
-def write_updated_metadata(args, metadata, sra_id):
-    ind_sra = metadata.df.index[metadata.df.loc[:,'run'] == sra_id].values[0]
-    if metadata.df.at[ind_sra, 'lib_layout'] == 'single':
-        denom = 1
-    elif metadata.df.at[ind_sra, 'lib_layout'] == 'paired':
-        denom = 2
-    if args.pfd == 'yes':
-        metadata.df.at[ind_sra, 'num_read_fastq_dumped'] = metadata.df.at[ind_sra,'num_dumped'] / denom
-        metadata.df.at[ind_sra, 'num_read_fastq_rejected'] = metadata.df.at[ind_sra,'num_rejected'] / denom
-        metadata.df.at[ind_sra, 'num_read_fastq_written'] = metadata.df.at[ind_sra,'num_written'] / denom
-    if args.fastp:
-        metadata.df.at[ind_sra, 'num_read_fastp_input'] = metadata.df.at[ind_sra,'num_fastp_in'] / denom
-        metadata.df.at[ind_sra, 'num_read_fastp'] = metadata.df.at[ind_sra,'num_fastp_out'] / denom
-    metadata.df.at[ind_sra, 'spot_length'] = metadata.df.at[ind_sra,'spot_length']
-    metadata_output_dir = os.path.join(args.out_dir, 'metadata', 'updated_metadata')
-    if not os.path.exists(metadata_output_dir):
-        os.makedirs(metadata_output_dir)
-    outpath = os.path.join(metadata_output_dir, 'metadata_' + sra_id + '.tsv')
-    print('Writing updated metadata: {}'.format(outpath))
-    metadata.df.loc[ind_sra,:].to_csv(outpath, sep='\t', index=False)
-
 def getfastq_metadata(args):
     if args.id is not None:
         print('--id is specified. Downloading SRA metadata from Entrez.')
@@ -849,6 +827,7 @@ def getfastq_main(args):
     metadata = check_metadata_validity(metadata)
     g = initialize_global_params(args, metadata, gz_exe, ungz_exe)
     metadata = initialize_columns(metadata, g)
+    flag_private_file = False
     # 1st round sequence extraction
     for i in metadata.df.index:
         print('')
@@ -892,8 +871,6 @@ def getfastq_main(args):
         txt = '2nd round read extraction improved % bp from {:,.2f}% to {:,.2f}%'
         print(txt.format(g['rate_obtained_1st']*100, g['rate_obtained_2nd']*100), flush=True)
     # Postprocessing
-    for sra_id in metadata.df.loc[:,'run'].values:
-        write_updated_metadata(args, metadata, sra_id)
     print('')
     if args.concat == 'yes':
         concat_fastq(args, metadata, sra_stat['output_dir'], g)
