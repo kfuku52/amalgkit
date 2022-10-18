@@ -18,38 +18,14 @@ def get_curate_group(args, metadata):
 
 def write_updated_metadata(metadata, outpath, args):
     if os.path.exists(outpath):
-        print('Updated metadata file was detected and will not be overwritten.')
+        print('Updated metadata was detected and will not be overwritten.')
         return None
     else:
         print('Updated metadata file was not detected. Preparing...')
-    if args.updated_metadata_dir == "inferred":
-        updated_metadata_dir = os.path.realpath(os.path.join(args.out_dir, 'metadata/updated_metadata'))
-    else:
-        updated_metadata_dir = os.path.realpath(args.updated_metadata_dir)
-    metadata = get_updated_metadata(metadata, updated_metadata_dir)
     quant_dir = os.path.join(args.out_dir, 'quant')
     metadata = get_mapping_rate(metadata, quant_dir)
-    print('Writing updated metadata: {}'.format(outpath))
+    print('Writing curate metadata containing mapping rate: {}'.format(outpath))
     metadata.df.to_csv(outpath, sep='\t', index=False)
-
-
-def get_updated_metadata(metadata, updated_metadata_dir):
-    if os.path.exists(updated_metadata_dir):
-        print('Updated metadata directory found: {}'.format(updated_metadata_dir))
-        files = os.listdir(updated_metadata_dir)
-        updated_metadata_files = [f for f in files if f.startswith('metadata') & f.endswith('.tsv')]
-        metadata_rows = list()
-        for file in updated_metadata_files:
-            file_path = os.path.join(updated_metadata_dir, file)
-            tmp = pandas.read_csv(file_path, header=0, index_col=None, sep='\t')
-            metadata_rows.append(tmp)
-        tmp_concat = pandas.concat(metadata_rows, axis=0, ignore_index=True)
-        cols = ['run', ] + [col for col in tmp_concat.columns if (col not in metadata.df.columns) & (col != 'index')]
-        metadata.df = pandas.merge(metadata.df, tmp_concat.loc[:, cols], on='run', how='left')
-    else:
-        txt = 'Updated metadata directory not found. Some information may not appear in the plot: {}\n'
-        sys.stderr.write(txt.format(updated_metadata_dir))
-    return metadata
 
 
 def get_mapping_rate(metadata, quant_dir):
