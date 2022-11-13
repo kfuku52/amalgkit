@@ -285,9 +285,12 @@ class Metadata:
         return metadata
 
     def mark_exclude_ids(self, id_cols=id_cols):
-        config = pandas.read_csv(os.path.join(self.config_dir, 'exclude_id.config'),
-                             parse_dates=False, infer_datetime_format=False, quotechar='"', sep='\t',
-                             header=None, index_col=None, skip_blank_lines=True, comment='#')
+        try:
+            config = pandas.read_csv(os.path.join(self.config_dir, 'exclude_id.config'),
+                                 parse_dates=False, infer_datetime_format=False, quotechar='"', sep='\t',
+                                 header=None, index_col=None, skip_blank_lines=True, comment='#')
+        except:
+            config = pandas.DataFrame()
         config = config.replace(numpy.nan, '')
         for i in numpy.arange(config.shape[0]):
             reason = config.iloc[i,0]
@@ -305,7 +308,7 @@ class Metadata:
         except:
             config = pandas.DataFrame()
         config = config.replace(numpy.nan, '')
-        for i in numpy.arange(len(config)):
+        for i in numpy.arange(config.shape[0]):
             rescue_id = config.iloc[i,0]
             for col in id_cols:
                 is_rescue_id = (self.df.loc[:,col]==rescue_id).fillna(False)
@@ -313,9 +316,12 @@ class Metadata:
                     self.df.loc[is_rescue_id,'exclusion'] = 'no'
 
     def group_attributes(self):
-        config = pandas.read_csv(os.path.join(self.config_dir, 'group_attribute.config'),
-                                 parse_dates=False, infer_datetime_format=False, quotechar='"', sep='\t',
-                                 header=None, index_col=None, skip_blank_lines=True, comment='#')
+        try:
+            config = pandas.read_csv(os.path.join(self.config_dir, 'group_attribute.config'),
+                                     parse_dates=False, infer_datetime_format=False, quotechar='"', sep='\t',
+                                     header=None, index_col=None, skip_blank_lines=True, comment='#')
+        except:
+            config = pandas.DataFrame()
         config = config.replace(numpy.nan, '')
         for i in numpy.arange(config.shape[0]):
             aggregate_to = config.iloc[i,0]
@@ -334,10 +340,12 @@ class Metadata:
 
     def correct_orthographical_variants(self):
         self.df.loc[:,"scientific_name"] = [re.sub(r'(.+)(\s)(.+)(\s)(.+)', r"\1\2\3", sp) for sp in self.df.loc[:,"scientific_name"]]
-
-        config = pandas.read_csv(os.path.join(self.config_dir, 'orthographical_variant.config'),
-                                 parse_dates=False, infer_datetime_format=False, quotechar='"', sep='\t',
-                                 header=None, index_col=None, skip_blank_lines=True, comment='#')
+        try:
+            config = pandas.read_csv(os.path.join(self.config_dir, 'orthographical_variant.config'),
+                                     parse_dates=False, infer_datetime_format=False, quotechar='"', sep='\t',
+                                     header=None, index_col=None, skip_blank_lines=True, comment='#')
+        except:
+            config = pandas.DataFrame()
         config = config.replace(numpy.nan, '')
         for i in numpy.arange(config.shape[0]):
             cols = config.iloc[i,0].split(',')
@@ -411,22 +419,28 @@ class Metadata:
         self.df.loc[:,'tissue'] = lemm
 
     def group_tissues_by_config(self):
+        try:
             config = pandas.read_csv(os.path.join(self.config_dir, 'group_tissue.config'),
                                  parse_dates=False, infer_datetime_format=False, quotechar='"', sep='\t',
                                  header=None, index_col=None, skip_blank_lines=True, comment='#')
-            config = config.replace(numpy.nan, '')
-            for i in numpy.arange(config.shape[0]):
-                replace_from = config.iloc[i,1]
-                replace_to = config.iloc[i,0]
-                is_matching = self.df.loc[:,'tissue'].str.match(replace_from, case=False, na=False)
-                self.df.loc[is_matching,'tissue'] = replace_to
-            self.df.loc[:,'tissue'] = self.df.loc[:,'tissue'].str.lower()
-            self.df.loc[:, 'curate_group'] = self.df.loc[:, 'tissue']
+        except:
+            config = pandas.DataFrame()
+        config = config.replace(numpy.nan, '')
+        for i in numpy.arange(config.shape[0]):
+            replace_from = config.iloc[i,1]
+            replace_to = config.iloc[i,0]
+            is_matching = self.df.loc[:,'tissue'].str.match(replace_from, case=False, na=False)
+            self.df.loc[is_matching,'tissue'] = replace_to
+        self.df.loc[:,'tissue'] = self.df.loc[:,'tissue'].str.lower()
+        self.df.loc[:, 'curate_group'] = self.df.loc[:, 'tissue']
 
     def mark_exclude_keywords(self):
-        config = pandas.read_csv(os.path.join(self.config_dir, 'exclude_keyword.config'),
-                                 parse_dates=False, infer_datetime_format=False, quotechar='"', sep='\t',
-                                 header=None, index_col=None, skip_blank_lines=True, comment='#')
+        try:
+            config = pandas.read_csv(os.path.join(self.config_dir, 'exclude_keyword.config'),
+                                     parse_dates=False, infer_datetime_format=False, quotechar='"', sep='\t',
+                                     header=None, index_col=None, skip_blank_lines=True, comment='#')
+        except:
+            config = pandas.DataFrame()
         config = config.replace(numpy.nan, '')
         for i in numpy.arange(config.shape[0]):
             cols = config.iloc[i,0].split(',')
@@ -438,9 +452,12 @@ class Metadata:
         self.df.loc[~((self.df.loc[:,'cell'].isnull())|(self.df.loc[:,'cell']=='')), 'exclusion'] = 'cell_culture'
 
     def replace_values(self):
-        config = pandas.read_csv(os.path.join(self.config_dir, 'replace_value.config'),
-                                 parse_dates=False, infer_datetime_format=False, quotechar='"', sep='\t',
-                                 header=None, index_col=None, skip_blank_lines=True, comment='#')
+        try:
+            config = pandas.read_csv(os.path.join(self.config_dir, 'replace_value.config'),
+                                     parse_dates=False, infer_datetime_format=False, quotechar='"', sep='\t',
+                                     header=None, index_col=None, skip_blank_lines=True, comment='#')
+        except:
+            config = pandas.DataFrame()
         config = config.replace(numpy.nan, '')
         for i in numpy.arange(config.shape[0]):
             col1 = config.iloc[i,0]
@@ -450,9 +467,12 @@ class Metadata:
             self.df.loc[(self.df.loc[:,col1]==col1_value), col2] = self.df.loc[(self.df.loc[:,col1]==col1_value), col3]
 
     def give_values(self, id_cols=id_cols):
-        config = pandas.read_csv(os.path.join(self.config_dir, 'give_value.config'),
-                                 parse_dates=False, infer_datetime_format=False, quotechar='"', sep='\t',
-                                 header=None, index_col=None, skip_blank_lines=True, comment='#')
+        try:
+            config = pandas.read_csv(os.path.join(self.config_dir, 'give_value.config'),
+                                     parse_dates=False, infer_datetime_format=False, quotechar='"', sep='\t',
+                                     header=None, index_col=None, skip_blank_lines=True, comment='#')
+        except:
+            config = pandas.DataFrame()
         config = config.replace(numpy.nan, '')
         for i in numpy.arange(config.shape[0]):
             target_id = config.iloc[i,0]
@@ -464,9 +484,12 @@ class Metadata:
                     self.df.loc[is_target_id,column] = value
 
     def mark_treatment_terms(self):
-        config = pandas.read_csv(os.path.join(self.config_dir, 'control_term.config'),
-                                 parse_dates=False, infer_datetime_format=False, quotechar='"', sep='\t',
-                                 header=None, index_col=None, skip_blank_lines=True, comment='#')
+        try:
+            config = pandas.read_csv(os.path.join(self.config_dir, 'control_term.config'),
+                                     parse_dates=False, infer_datetime_format=False, quotechar='"', sep='\t',
+                                     header=None, index_col=None, skip_blank_lines=True, comment='#')
+        except:
+            config = pandas.DataFrame()
         config = config.replace(numpy.nan, '')
         for i in numpy.arange(config.shape[0]):
             col = config.iloc[i,0]
@@ -484,8 +507,8 @@ class Metadata:
                 self.df.loc[(is_bioproject & -is_control), 'exclusion'] = 'treatment'
 
     def nspot_cutoff(self, min_nspots):
-        self.df.loc[:,'total_spots'] = self.df.loc[:,'total_spots'].replace('', 0)
-        self.df.loc[:,'total_spots'] = self.df.loc[:,'total_spots'].fillna(0).astype(int)
+        self.df['total_spots'] = self.df.loc[:,'total_spots'].replace('', 0)
+        self.df['total_spots'] = self.df.loc[:,'total_spots'].fillna(0).astype(int)
         self.df.loc[-(self.df.loc[:,'total_spots']==0) & (self.df.loc[:,'total_spots'] < min_nspots), 'exclusion'] = 'low_nspots'
 
     def remove_redundant_biosample(self):
