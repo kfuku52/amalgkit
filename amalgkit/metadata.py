@@ -516,21 +516,21 @@ class Metadata:
         self.df.loc[redundant_bool, 'exclusion'] = 'redundant_biosample'
 
     def _maximize_bioproject_sampling(self, df, target_n=10):
-        # TODO the next 4 lines cause pandas' SettingWithCopyWarning
-        df.loc[:,'bioproject'] = df.loc[:,'bioproject'].fillna('unknown').values
-        df.loc[:,'is_sampled'] = 'No'
-        df.loc[:,'is_qualified'] = 'No'
-        df.loc[(df.loc[:,'exclusion']=='no'), 'is_qualified'] = 'Yes'
-        while len(df.loc[(df.loc[:,'is_sampled']=='Yes')&(df.loc[:,'exclusion']=='no'),:]) < target_n:
+        pandas.set_option('mode.chained_assignment', None)
+        df.loc[:, 'bioproject'] = df.loc[:, 'bioproject'].fillna('unknown').values
+        df.loc[:, 'is_sampled'] = 'no'
+        df.loc[:, 'is_qualified'] = 'no'
+        df.loc[(df.loc[:, 'exclusion']=='no'), 'is_qualified'] = 'yes'
+        while len(df.loc[(df.loc[:,'is_sampled']=='yes')&(df.loc[:,'exclusion']=='no'),:]) < target_n:
             if len(df) <= target_n:
-                df.loc[(df.loc[:,'exclusion']=='no'), 'is_sampled'] = 'Yes'
+                df.loc[(df.loc[:,'exclusion']=='no'), 'is_sampled'] = 'yes'
                 break
             else:
-                df_unselected = df.loc[(df.loc[:,'is_sampled']=='No')&(df.loc[:,'exclusion']=='no'),:]
-                bioprojects = df_unselected.loc[:,'bioproject'].unique()
+                df_unselected = df.loc[(df.loc[:,'is_sampled']=='no')&(df.loc[:,'exclusion']=='no'),:]
+                bioprojects = df_unselected.loc[:, 'bioproject'].unique()
                 if len(bioprojects) == 0:
                     break
-                remaining_n = target_n - (df.loc[:,'is_sampled']=='Yes').sum()
+                remaining_n = target_n - (df.loc[:, 'is_sampled']=='yes').sum()
                 select_n = min([len(bioprojects), remaining_n])
                 selected_bioprojects = numpy.random.choice(bioprojects, size=select_n, replace=False)
                 selected_index = []
@@ -538,7 +538,8 @@ class Metadata:
                     is_bp = (df_unselected.loc[:,'bioproject']==bioproject)
                     index = numpy.random.choice(df_unselected.index[is_bp], size=1, replace=False)
                     selected_index.append(int(index))
-                df.loc[selected_index, 'is_sampled'] = 'Yes'
+                df.loc[selected_index, 'is_sampled'] = 'yes'
+        pandas.set_option('mode.chained_assignment', 'warn')
         return df
 
     def label_sampled_data(self, max_sample=10):
@@ -566,9 +567,9 @@ class Metadata:
     def pivot(self, n_sp_cutoff=0, qualified_only=True, sampled_only=False):
         df = self.df
         if qualified_only:
-            df = df.loc[(df.loc[:,'is_qualified']=='Yes'),:]
+            df = df.loc[(df.loc[:,'is_qualified']=='yes'),:]
         if sampled_only:
-            df = df.loc[(df.loc[:,'is_sampled']=='Yes'),:]
+            df = df.loc[(df.loc[:,'is_sampled']=='yes'),:]
         df_reduced = df.loc[:,['scientific_name', 'biosample', 'tissue']]
         pivot = df_reduced.pivot_table(columns='tissue',index='scientific_name', aggfunc='count')
         pivot.columns = pivot.columns.get_level_values(1)
