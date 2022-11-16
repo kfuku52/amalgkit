@@ -85,18 +85,18 @@ def run_curate_r_script(args, new_metadata_path, metadata, sp):
             raise ValueError(
                 "ERROR: AMALGKIT CSTMM NORMALIZED INPUT FILES DETECTED WHILE NORMALIZATION METHOD IS 'TPM'. TMM NORMALIZATION AND TPM NORMALIZATION ARE INCOMPATIBLE! PLEASE SWITCH --norm TO ANY OF THE 'fpkm' NORMALISATIONS INSTEAD: (logn|log2|lognp1|log2p1|none)-(fpkm)")
 
-    len_file = os.path.join(input_dir, sp, sp + '_eff_length.tsv')
-    count_file = os.path.join(input_dir, sp, sp + '_est_counts.tsv')
-
-    if os.path.exists(count_file) and os.path.exists(count_file):
-        print("Both counts and effective length files found.")
-        print("Calculating: ", args.norm)
-
+    len_file = os.path.join(os.path.abspath(input_dir), sp, sp + '_eff_length.tsv')
+    if 'cstmm' in input_dir:
+        count_file = os.path.join(os.path.abspath(input_dir), sp, sp + '_cstmm_counts.tsv')
     else:
-        print(
-            "No expression data found. Please make sure `amalgkit merge` or `amalgkit cstmm` ran correctly and you provided the correct directory path")
-        sys.exit(1)
+        count_file = os.path.join(os.path.abspath(input_dir), sp, sp + '_est_counts.tsv')
 
+    if os.path.exists(count_file) and os.path.exists(len_file):
+        print("Both counts and effective length files found.")
+    else:
+        sys.stderr.write("No expression data found. Please make sure `amalgkit merge` or `amalgkit cstmm` ran correctly and you provided the correct directory PATH.\n")
+        sys.exit(1)
+    print("Starting Rscript to obtain curated {} values.".format(args.norm))
     subprocess.call(['Rscript',
                      r_script_path,
                      count_file,
