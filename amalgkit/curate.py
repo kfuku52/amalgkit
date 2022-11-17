@@ -95,6 +95,10 @@ def run_curate_r_script(args, new_metadata_path, metadata, sp):
         print("Both counts and effective length files found.")
     else:
         sys.stderr.write("No expression data found. Please make sure `amalgkit merge` or `amalgkit cstmm` ran correctly and you provided the correct directory PATH.\n")
+        if not os.path.exists(count_file):
+            sys.stderr.write('Expected but undetected PATH of the count file: {}\n'.format(count_file))
+        if not os.path.exists(len_file):
+            sys.stderr.write('Expected but undetected PATH of the effective length file: {}\n'.format(len_file))
         sys.exit(1)
     print("Starting Rscript to obtain curated {} values.".format(args.norm))
     subprocess.call(['Rscript',

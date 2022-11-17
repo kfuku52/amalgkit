@@ -128,12 +128,6 @@ add_color_to_sra = function(sra, selected_curate_groups) {
         sp_color = rainbow_hcl(length(scientific_name_u), c = 150)
     }
 
-    print(head(sra))
-    print(curate_group)
-    print(curate_group_u)
-    print(curate_group_color)
-    print(curate_group_color[1:length(curate_group_u)])
-
     df_curate_group = data.frame(curate_group=curate_group_u, curate_group_color=curate_group_color[1:length(curate_group_u)], stringsAsFactors = FALSE)
     df_bp = data.frame(bioproject=bioproject_u, bp_color=bp_color[1:length(bioproject_u)], stringsAsFactors = FALSE)
     df_sp = data.frame(scientific_name=scientific_name_u, sp_color=sp_color[1:length(scientific_name_u)], stringsAsFactors = FALSE)
@@ -145,7 +139,7 @@ add_color_to_sra = function(sra, selected_curate_groups) {
 
 sort_tc_and_sra = function(tc, sra, sort_columns = c("curate_group", "scientific_name", "bioproject")) {
     for (column in rev(sort_columns)) {
-        sra = sra[order(sra[column]), ]
+        sra = sra[order(sra[[column]]), ]
     }
     sra_intersection = sra[(sra[['run']] %in% colnames(tc)),'run']
     tc = tc[, sra_intersection, drop=FALSE]
@@ -573,8 +567,8 @@ draw_pca = function(sra, tc_dist_matrix, fontsize = 7) {
     xlabel = paste0("PC 1 (", round(summary(pca)[['importance']][2, 1] * 100, digits = 1), "%)")
     ylabel = paste0("PC 2 (", round(summary(pca)[['importance']][2, 2] * 100, digits = 1), "%)")
     plot(
-      pca[['rotation']][, 1],
-      pca[['rotation']][, 2],
+      pca[['x']][, 1],
+      pca[['x']][, 2],
       pch = 21,
       cex = 2,
       lwd = 1,
