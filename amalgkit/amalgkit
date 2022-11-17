@@ -98,6 +98,13 @@ def command_csca(args):
     print('Time elapsed: {:,} sec'.format(int(time.time() - start)))
     sys.stdout.write('amalgkit csca: end\n')
 
+def command_config(args):
+    sys.stdout.write('amalgkit config: start\n')
+    start = time.time()
+    from amalgkit.config import config_main
+    config_main(args)
+    print('Time elapsed: {:,} sec'.format(int(time.time() - start)))
+    sys.stdout.write('amalgkit config: end\n')
 
 def command_help(args):
     print(parser.parse_args([args.command, '--help']))
@@ -369,6 +376,16 @@ pin.add_argument('--remove_tmp', metavar='yes|no', default='no', type=strtobool,
 
 pin.set_defaults(handler=command_integrate)
 
+# Sub parser: config
+pco = subparsers.add_parser('config', help='see `amalgkit config -h`')
+
+pco.add_argument('-w','--out_dir', metavar='PATH', default='./', type=str, required=False, action='store',
+                 help='default=%(default)s: output directory.')
+pco.add_argument('--config_dir', metavar='STR', default='empty_config', type=str, required=False, action='store',
+                 help='default=%(default)s: Name of config folder to be created.')
+pco.add_argument('--overwrite', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
+                 help='default=%(default)s: allow to overwrite config files in out_dir/config/config_dir/ .')
+pco.set_defaults(handler=command_config)
 
 # Sub parser: help
 parser_help = subparsers.add_parser('help', help='see `help -h`')
