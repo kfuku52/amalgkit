@@ -381,8 +381,14 @@ pco = subparsers.add_parser('config', help='see `amalgkit config -h`')
 
 pco.add_argument('-w','--out_dir', metavar='PATH', default='./', type=str, required=False, action='store',
                  help='default=%(default)s: output directory.')
-pco.add_argument('--config_dir', metavar='STR', default='empty_config', type=str, required=False, action='store',
-                 help='default=%(default)s: Name of config folder to be created.')
+pco.add_argument('--config', metavar='base|test|plantae|vertebrate', default='base', type=str, required=False, action='store',
+                 help='default=%(default)s: Name of config dataset to be exported. '
+                      'Options: "base": a nearly empty set of .config files for the purpose of creating custom config files. '
+                      '"test": short animal set for testing amalgkit metadtata. '
+                      '"vertebrate" preconfigured set of config files for vertebrate animal data"'
+                      '"plantae": preconfigured set of config files for plant data')
+pco.add_argument('--config_dir', metavar='STR', default='inferred', type=str, required=False, action='store',
+                 help='default=%(default)s: Name of config folder to be created. Defaults to the original name within the package.')
 pco.add_argument('--overwrite', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
                  help='default=%(default)s: allow to overwrite config files in out_dir/config/config_dir/ .')
 pco.set_defaults(handler=command_config)
