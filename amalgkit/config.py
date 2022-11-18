@@ -66,8 +66,6 @@ def create_config_from_package(args):
         # Try backported to PY<37 `importlib_resources`.
         import importlib_resources as ir
 
-    from . import config_dir
-
     config_base = 'amalgkit.config_dir' + '.' + args.config
     config_files = ir.files(config_base).rglob('*.config')
 
