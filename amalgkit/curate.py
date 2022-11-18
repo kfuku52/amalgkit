@@ -18,8 +18,13 @@ def get_curate_group(args, metadata):
 
 def write_updated_metadata(metadata, outpath, args):
     if os.path.exists(outpath):
-        print('Updated metadata was detected and will not be overwritten.')
-        return None
+        if not args.overwrite_metadata:
+            print('Updated metadata was detected and will not be overwritten.')
+            return None
+        else:
+            print('Updated metadata was detected.')
+            print('--overwrite_metadata option was set to yes. Metadata will be overwritten.')
+            print('Preparing...')
     else:
         print('Updated metadata file was not detected. Preparing...')
     quant_dir = os.path.join(args.out_dir, 'quant')
