@@ -29,7 +29,7 @@ def merge_main(args):
             os.makedirs(merge_species_dir)
         is_sp = (metadata.df.loc[:,'scientific_name']==sp)
         sra_ids = metadata.df.loc[is_sp,'run'].values
-        is_sampled = metadata.df.loc[:,'is_sampled']=='Yes'
+        is_sampled = metadata.df.loc[:,'is_sampled']=='yes'
         sampled_sra_ids = metadata.df.loc[is_sampled,'run'].values
         if len(sra_ids)==0:
             warnings.warn('No SRA Run ID found: {}'.format(sp))
