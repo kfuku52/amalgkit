@@ -53,12 +53,12 @@ def check_files(args, config_file_list, ext='.config'):
 def create_config_from_package(args):
 
     if args.config_dir == 'inferred':
-        config_dir = args.config
+        config_source = args.config
     else:
-        config_dir = args.config_dir
+        config_source = args.config_dir
 
     work_dir = os.path.join(args.out_dir, 'config')
-    path_config = os.path.join(work_dir, config_dir)
+    path_config = os.path.join(work_dir, config_source)
 
     try:
         import importlib.resources as ir
@@ -66,7 +66,9 @@ def create_config_from_package(args):
         # Try backported to PY<37 `importlib_resources`.
         import importlib_resources as ir
 
-    config_base = 'config_dir' + '.' + args.config
+    from . import config_dir
+
+    config_base = 'amalgkit.config_dir' + '.' + args.config
     config_files = ir.files(config_base).rglob('*.config')
 
     for config_file in config_files:
