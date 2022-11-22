@@ -163,7 +163,7 @@ def quant_main(args):
             print('looking for index folder in ', args.out_dir)
             index = get_index(args, sci_name)
             run_quant(args, metadata, sra_id, index)
-    # if args.id is not specified, it will run the whole metadata sheed one by one
+    # if args.id is not specified, it will run the whole metadata sheet one by one
     else:
         sra_id = args.id
         sci_name = metadata.df.loc[metadata.df['run'] == args.id, 'scientific_name']
