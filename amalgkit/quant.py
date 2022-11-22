@@ -135,16 +135,38 @@ def get_index(args, sci_name):
         index_dir = args.index_dir
     else:
         index_dir = os.path.join(args.out_dir, 'Index')
+
+    if not os.path.exists(index_dir) & args.build_index is True:
+        os.mkdir(index_dir)
+
     if os.path.exists(index_dir):
         index = glob.glob(os.path.join(index_dir, sci_name + '*'))
         if len(index) > 1:
             raise ValueError(
                 "found multiple index files for species. Please make sure there is only one index file for this species.")
         elif len(index) == 0:
-            raise FileNotFoundError("Could not find Index file.")
+            if args.build_index:
+                print("--build_index set. Building index for ", sci_name)
+                fasta_file = glob.glob(os.path.join(args.fasta_dir, sci_name + '*.fa*'))
+                if len(fasta_file) > 1:
+                    raise ValueError(
+                        "found multiple fasta files for species. Please make sure there is only one index file for this species."
+                    )
+                elif len(fasta_file) == 0:
+                    raise FileNotFoundError("Could not find fasta file for this species.")
+                fasta_file = fasta_file[0]
+                print('fasta file found: ', fasta_file)
+                print('building index.')
+                index_path = os.path.join(index_dir, sci_name + '.idx')
+                kallisto_build_cmd = ["kallisto", "index", "-i", index_path, fasta_file]
+                subprocess.run(kallisto_build_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                index = [index_path]
+
+            else:
+                raise FileNotFoundError("Could not find Index file.")
         index = index[0]
     else:
-        raise FileNotFoundError("could not find index folder")
+        raise FileNotFoundError("could not find Index folder")
     print("Index file found: {}".format(index))
     return index
 

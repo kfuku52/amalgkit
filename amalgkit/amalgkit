@@ -240,6 +240,13 @@ pqu.add_argument('--clean_fastq', metavar='yes|no', default='yes', type=str, req
                  help='default=%(default)s: Remove fastq files when quant is successfully completed.')
 pqu.add_argument('--redo', metavar='yes|no', default='no', type=str, required=False, action='store', choices=['yes', 'no'],
                  help='default=%(default)s: Redo the analysis even if *_abundance.tsv is detected.')
+pqu.add_argument('--fasta_dir', metavar='PATH', default=None, type=str, required=False, action='store',
+                 help='default=%(default)s: path to directory containing fasta files required for index building (see --build_index).')
+pqu.add_argument('--build_index', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
+                 help='default=%(default)s: If yes, allows quant to build an index file using kallisto from fasta files. '
+                      'Will only do this for a species if an index file is not already present. One fasta file per species should be put in the directory set in --fasta_dir'
+                      'amalgkit will read the species from the metadata, try to find the fasta file (.fa or .fasta) and build the index for further use.')
+
 pqu.set_defaults(handler=command_quant)
 
 # Sub parser: cstmm
