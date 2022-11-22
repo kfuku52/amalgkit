@@ -382,6 +382,9 @@ pin.add_argument('--getfastq_dir', metavar='PATH', default=None, type=str, requi
                       'out_dir/getfastq/')
 pin.add_argument('--remove_tmp', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
                  help='default=%(default)s: Remove temporary files.')
+pin.add_argument('--accurate_size', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
+                 help='default=%(default)s: If no, runs seqkit only on the first 1000 sequences in the fastq file to get an estimate for information like average read length. '
+                      'If yes, runs seqkit on the whole fastq file. More accurate, but comes with much higher runtime.')
 
 pin.set_defaults(handler=command_integrate)
 

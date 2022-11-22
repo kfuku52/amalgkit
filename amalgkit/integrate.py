@@ -50,24 +50,35 @@ def get_fastq_stats(args):
                     print("Found {} file(s) for ID {}. Lib-layout: {}".format(id_dict[id], id,lib_layout), flush=True)
                     print("Getting sequence statistics.", flush=True)
                     tmp_file = os.path.join(args.out_dir, id+'_seqkit_stats.tmp')
-                    OS = platform.system()
-                    if OS == 'Darwin':
-                        zcat_command = 'zcat < '
-                    elif OS == 'Linux':
-                        zcat_command = 'zcat '
-                    else:
-                        zcat_command = 'zcat '
-                        sys.stderr.write('zcat may not be supported by this OS: {}\n'.format(OS))
-                    seqkit_command = zcat_command + fastq_files[0] + ' | head -n 4000 | seqkit stats -T -j ' + str(args.threads)
-                    total_lines_command = 'echo $(' + zcat_command + str(fastq_files[0]) + ' | wc -l)'
-                    seqkit_stdout = open(tmp_file, 'w')
-                    subprocess.run(seqkit_command,shell=True, stdout=seqkit_stdout)
-                    seqkit_stdout.close()
-                    total_lines_bytes = subprocess.check_output(total_lines_command, shell=True)
-                    total_lines = int(total_lines_bytes.decode().replace('\n', ''))
-                    total_spots = int(total_lines/4)
+                    if args.accurate_size:
+                        print('--accurate_size set to yes. Running accurate sequence scan.')
+                        seqkit_command = ['seqkit', 'stats', '-T', '-j', str(args.threads), fastq_files[0]]
+                        seqkit_stdout = open(tmp_file, 'w')
+                        subprocess.run(seqkit_command, stdout=seqkit_stdout)
+                        seqkit_stdout.close()
+                        tmp_stat_df = pandas.read_csv(tmp_file, sep='\t', header=0)
+                        total_spots = tmp_stat_df.loc[0, 'num_seqs']
 
-                    tmp_stat_df = pandas.read_csv(tmp_file, sep='\t', header=0)
+                    else:
+                        OS = platform.system()
+                        if OS == 'Darwin':
+                            zcat_command = 'zcat < '
+                        elif OS == 'Linux':
+                            zcat_command = 'zcat '
+                        else:
+                            zcat_command = 'zcat '
+                            sys.stderr.write('zcat may not be supported by this OS: {}\n'.format(OS))
+                        seqkit_command = zcat_command + fastq_files[0] + ' | head -n 4000 | seqkit stats -T -j ' + str(
+                            args.threads)
+                        total_lines_command = 'echo $(' + zcat_command + str(fastq_files[0]) + ' | wc -l)'
+                        seqkit_stdout = open(tmp_file, 'w')
+                        subprocess.run(seqkit_command, shell=True, stdout=seqkit_stdout)
+                        seqkit_stdout.close()
+                        tmp_stat_df = pandas.read_csv(tmp_file, sep='\t', header=0)
+                        total_lines_bytes = subprocess.check_output(total_lines_command, shell=True)
+                        total_lines = int(total_lines_bytes.decode().replace('\n', ''))
+                        total_spots = int(total_lines / 4)
+
                     if args.remove_tmp:
                         os.remove(tmp_file)
                     tmp_stat_df.loc[0,'id'] = id
