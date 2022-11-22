@@ -136,8 +136,8 @@ def get_index(args, sci_name):
     else:
         index_dir = os.path.join(args.out_dir, 'Index')
 
-    if not os.path.exists(index_dir) & args.build_index is True:
-        os.mkdir(index_dir)
+    if not os.path.exists(index_dir) and args.build_index:
+            os.mkdir(index_dir)
 
     if os.path.exists(index_dir):
         index = glob.glob(os.path.join(index_dir, sci_name + '*'))
@@ -147,7 +147,7 @@ def get_index(args, sci_name):
         elif len(index) == 0:
             if args.build_index:
                 print("--build_index set. Building index for ", sci_name)
-                fasta_file = glob.glob(os.path.join(args.fasta_dir, sci_name + '*.fa*'))
+                fasta_file = glob.glob(os.path.join(args.fasta_dir, sci_name + '*.fa')) + glob.glob(os.path.join(args.fasta_dir, sci_name + '*.fasta'))
                 if len(fasta_file) > 1:
                     raise ValueError(
                         "found multiple fasta files for species. Please make sure there is only one index file for this species."
