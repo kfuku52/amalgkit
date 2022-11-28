@@ -309,7 +309,7 @@ def download_sra(metadata, sra_stat, args, work_dir, overwrite=False):
 
 
 def check_getfastq_dependency(args):
-    if args.pfd == 'yes':
+    if args.pfd:
         test_pfd = subprocess.run([args.pfd_exe, '-h'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         assert (test_pfd.returncode == 0), "parallel-fastq-dump PATH cannot be found: " + args.pfd_exe
         # commented out because prefetch is often not activatable in containers and no longer strictly required for getfastq.
@@ -337,7 +337,7 @@ def set_getfastq_directories(args, sra_id):
         output_dir = os.path.join(args.out_dir, 'getfastq', args.id)
     elif args.metadata is not None:
         output_dir = os.path.join(args.out_dir, 'getfastq', sra_id)
-    elif (args.id_list is not None) & (args.concat == 'yes'):
+    elif (args.id_list is not None) & args.concat:
         output_dir = os.path.join(args.out_dir, 'getfastq', os.path.basename(args.id_list))
     elif (args.id_list is not None) & (args.concat != 'yes'):
         output_dir = os.path.join(args.out_dir, 'getfastq', sra_id)
@@ -360,7 +360,7 @@ def run_pfd(sra_stat, args, metadata, start, end):
     # pfd_command = pfd_command + ['-s', sra_stat['sra_id']]
     print('Command:', ' '.join(pfd_command))
     pfd_out = subprocess.run(pfd_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if args.pfd_print == 'yes':
+    if args.pfd_print:
         print('parallel-fastq-dump stdout:')
         print(pfd_out.stdout.decode('utf8'))
         print('parallel-fastq-dump stderr:')
@@ -420,12 +420,12 @@ def run_fastp(sra_stat, args, output_dir, metadata):
         fp_out = subprocess.run(fp_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     except subprocess.CalledProcessError as e:
         raise RuntimeError("command '{}' returned with error (code {}): {}".format(e.cmd, e.returncode, e.output))
-    if args.fastp_print == 'yes':
+    if args.fastp_print:
         print('fastp stdout:')
         print(fp_out.stdout.decode('utf8'))
         print('fastp stderr:')
         print(fp_out.stderr.decode('utf8'))
-    if args.remove_tmp == 'yes':
+    if args.remove_tmp:
         remove_intermediate_files(sra_stat, ext=inext, work_dir=output_dir)
     bps = fp_out.stderr.decode('utf8').split('\n')
     num_in = list()
@@ -466,7 +466,7 @@ def rename_reads(sra_stat, args, output_dir, gz_exe, ungz_exe):
                 ungz_exe + ' -c "' + infile1 + '" | sed -e "s|[[:space:]].*|/1|" | ' + gz_exe + ' -c > "' + inbase1 + outext + '"')
             os.system(
                 ungz_exe + ' -c "' + infile2 + '" | sed -e "s|[[:space:]].*|/2|" | ' + gz_exe + ' -c > "' + inbase2 + outext + '"')
-    if args.remove_tmp == 'yes':
+    if args.remove_tmp:
         remove_intermediate_files(sra_stat, ext=inext, work_dir=output_dir)
 
 
@@ -527,7 +527,7 @@ def print_read_stats(args, metadata, g, sra_stat=None, individual=False):
     else:
         df = metadata.df.loc[(metadata.df['run']==sra_stat['sra_id']),:]
         print('Individual target size: {:,} bp'.format(g['num_bp_per_sra']))
-    if args.pfd == 'yes':
+    if args.pfd:
         print('Sum of fastq_dump dumped reads: {:,} bp'.format(df['bp_dumped'].sum()))
         print('Sum of fastq_dump rejected reads: {:,} bp'.format(df['bp_rejected'].sum()))
         print('Sum of fastq_dump written reads: {:,} bp'.format(df['bp_written'].sum()))
@@ -538,7 +538,7 @@ def print_read_stats(args, metadata, g, sra_stat=None, individual=False):
         print('Individual SRA IDs:', ' '.join(df['run'].values))
         read_types = list()
         keys = list()
-        if args.pfd == 'yes':
+        if args.pfd:
             read_types = read_types + ['fastq_dump dumped reads', 'fastq_dump rejected reads',
                                        'fastq_dump written reads']
             keys = keys + ['bp_dumped', 'bp_rejected', 'bp_written']
@@ -595,7 +595,7 @@ def getfastq_metadata(args):
 
     if args.metadata is not None:
         print('--metadata is specified. Reading existing metadata table.')
-        assert args.concat == 'no', '--concat should be set "no" when --metadata is specified.'
+        assert args.concat == False, '--concat should be set "no" when --metadata is specified.'
         metadata = load_metadata(args)
     metadata.df.loc[:,'total_bases'] = metadata.df.loc[:,'total_bases'].replace('', numpy.nan).astype(float)
     metadata.df.loc[:, 'spot_length'] = metadata.df.loc[:, 'spot_length'].replace('', numpy.nan).astype(float)
@@ -603,7 +603,7 @@ def getfastq_metadata(args):
 
 
 def is_getfastq_output_present(args, sra_stat):
-    if args.concat == 'yes':
+    if args.concat:
         if args.id is not None:
             prefixes = [args.id, ]
         elif args.id_list is not None:
@@ -672,7 +672,7 @@ def initialize_columns(metadata, g):
 def sequence_extraction(args, sra_stat, metadata, g, start, end):
     sra_id = sra_stat['sra_id']
     ind_sra = metadata.df.index[metadata.df.loc[:,'run'] == sra_id].values[0]
-    if args.pfd == 'yes':
+    if args.pfd:
         metadata,sra_stat = run_pfd(sra_stat, args, metadata, start, end)
         bp_discarded = metadata.df.at[ind_sra,'bp_dumped'] - metadata.df.at[ind_sra,'bp_written']
         metadata.df.at[ind_sra,'bp_discarded'] += bp_discarded
@@ -835,7 +835,7 @@ def getfastq_main(args):
         print('Processing SRA ID: {}'.format(sra_id))
         sra_stat = get_sra_stat(sra_id, metadata, g['num_bp_per_sra'])
         sra_stat['output_dir'] = set_getfastq_directories(args, sra_id)
-        if (is_getfastq_output_present(args, sra_stat)) & (args.redo == 'no'):
+        if (is_getfastq_output_present(args, sra_stat)) & (args.redo == False):
             print('Output file(s) detected. Skipping {}.  Set "--redo yes" for reanalysis.'.format(sra_id))
             continue
         remove_old_intermediate_files(sra_id=sra_id, work_dir=sra_stat['output_dir'])
@@ -872,12 +872,12 @@ def getfastq_main(args):
         print(txt.format(g['rate_obtained_1st']*100, g['rate_obtained_2nd']*100), flush=True)
     # Postprocessing
     print('')
-    if args.concat == 'yes':
+    if args.concat:
         concat_fastq(args, metadata, sra_stat['output_dir'], g)
-    if args.remove_sra == 'yes':
+    if args.remove_sra:
         remove_sra_files(metadata, sra_dir=sra_stat['output_dir'])
     else:
-        if args.pfd == 'yes':
+        if args.pfd:
             print('SRA files not removed:', sra_stat['output_dir'])
     print('\n--- getfastq final report ---')
     print_read_stats(args, metadata, g, sra_stat=None, individual=True)
