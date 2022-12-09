@@ -30,7 +30,7 @@ def check_config_dir(args):
     for af in asserted_files:
         assert (af in files), 'config file not found: '+af
 
-def get_search_term(species_name="", bioprojects=[], biosamples=[], keywords=[], publication_date='',
+def get_search_term(species_name="", bioprojects=[], biosamples=[], keywords=[],
                     other_conditions=pandas.DataFrame(), excluded_conditions=pandas.DataFrame()):
     assert ((len(bioprojects)>0)+(len(biosamples)>0))!=2, "bioprojects and biosamples cannot be specified simultaneously."
 
@@ -50,8 +50,6 @@ def get_search_term(species_name="", bioprojects=[], biosamples=[], keywords=[],
         excluded_terms.append('\"'+excluded_conditions.loc[i,1]+'\"['+excluded_conditions.loc[i,0]+']')
     excluded_term = '('+" OR ".join(excluded_terms)+')'
 
-    date_term = publication_date+'[Publication Date]'
-
     if len(bioprojects):
         bioproject_term = "(" + " OR ".join(bioprojects) + ")"
         search_term = species_term + " AND " + bioproject_term + " AND " + other_term + " NOT " + excluded_term
@@ -59,8 +57,10 @@ def get_search_term(species_name="", bioprojects=[], biosamples=[], keywords=[],
         biosample_term = "(" + " OR ".join(biosamples) + ")"
         search_term = biosample_term
     else:
-        search_term = species_term + " AND " + keyword_term + " AND " + other_term + " AND " + date_term + " NOT " + excluded_term
-        # search_term = species_term + " AND " + other_term + " AND " + date_term + " NOT " + excluded_term
+        search_term = species_term + " AND " + keyword_term + " AND " + other_term + " NOT " + excluded_term
+    search_term = re.sub(" AND  AND ", " AND ", search_term)
+    search_term = re.sub(" AND  NOT ", " NOT ", search_term)
+    search_term = re.sub("^ AND ", "", search_term)
     return search_term
 
 def fetch_sra_xml(species_name, search_term, save_xml=True, read_from_existing_file=False, retmax=100):
@@ -91,7 +91,7 @@ def fetch_sra_xml(species_name, search_term, save_xml=True, read_from_existing_f
         for i in numpy.arange(numpy.ceil(num_record//retmax)+1):
             start = int(i*retmax)
             end = int(((i+1)*retmax)-1) if num_record >= int(((i+1)*retmax)-1) else num_record
-            print('processing SRA records:', start, '-', end, flush=True)
+            print('Processing SRA records:', start, '-', end, flush=True)
             max_retry = 10
             for i in range(max_retry):
                 try:
@@ -616,15 +616,6 @@ def metadata_main(args):
 
     Entrez.email = args.entrez_email
 
-    date_from,date_to = args.publication_date.split(':')
-    if date_to=='TODAY':
-        d = datetime.datetime.today()
-        date_to = str(d.year)+"/"+'%02d'%d.month+'/'+'%02d'%d.day
-    args.publication_date = date_from+':'+date_to
-    print('')
-    print('Entrez publication date for search:', args.publication_date)
-    print('')
-
     search_spp = read_config_file(file_name='search_term_species.config', dir_path=args.config_dir)
     print('Number of species for Entrez search: {:,}'.format(search_spp.shape[0]))
     if search_spp.shape[0]==0:
@@ -652,8 +643,7 @@ def metadata_main(args):
                 print(sp, ': empty tsv file. skipped.')
         else:
             search_term = get_search_term(species_name=sp, bioprojects=bioprojects, biosamples=[], keywords=search_keywords,
-                                          other_conditions=other_conditions, excluded_conditions=excluded_conditions,
-                                          publication_date=args.publication_date)
+                                          other_conditions=other_conditions, excluded_conditions=excluded_conditions)
             print('Entrez search term:', search_term)
             root = fetch_sra_xml(species_name=sp, search_term=search_term, save_xml=False, read_from_existing_file=False)
             metadata_species[sp] = Metadata.from_xml(xml_root=root).df

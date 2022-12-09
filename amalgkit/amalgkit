@@ -138,9 +138,6 @@ pme.add_argument('-c', '--config_dir', metavar='PATH', default='./', type=str, r
                  help='default=%(default)s: Path to the config directory.')
 pme.add_argument('-e', '--entrez_email', metavar='aaa@bbb.com', default='', type=str, required=False, action='store',
                  help='default=%(default)s: Your email address. See https://www.ncbi.nlm.nih.gov/books/NBK25497/')
-pme.add_argument('-p', '--publication_date', metavar='YYYY/MM/DD:YYYY/MM/DD', default='1900/01/01:TODAY', type=str,
-                 required=False, action='store',
-                 help='default=%(default)s: Range of the date that records were made public in Entrez.')
 pme.add_argument('-n', '--min_nspots', metavar='INT', default=5000000, type=int, required=False, action='store',
                  help='default=%(default)s: Minimum number of RNA-seq reads per sample.')
 pme.add_argument('-a', '--tissue_detect', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
