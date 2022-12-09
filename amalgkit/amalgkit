@@ -7,6 +7,10 @@ from distutils.util import strtobool
 
 from amalgkit.__init__ import __version__
 
+print('AMALGKIT version: {}'.format(__version__))
+print('AMALGKIT command: {}'.format(' '.join(sys.argv)))
+print('AMALGKIT bug report: https://github.com/kfuku52/amalgkit/issues')
+
 def command_metadata(args):
     sys.stdout.write('amalgkit metadata: start\n')
     start = time.time()

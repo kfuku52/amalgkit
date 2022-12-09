@@ -592,7 +592,6 @@ def getfastq_metadata(args):
             sys.exit(1)
         metadata = list(metadata_dict.values())[0]
         metadata.df = pandas.concat([ v.df for v in metadata_dict.values() ], ignore_index=True)
-
     if args.metadata is not None:
         print('--metadata is specified. Reading existing metadata table.')
         assert args.concat == False, '--concat should be set "no" when --metadata is specified.'

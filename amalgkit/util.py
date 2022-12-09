@@ -13,20 +13,22 @@ def load_metadata(args):
     df = pandas.read_csv(args.metadata, sep='\t', header=0)
     metadata = Metadata.from_DataFrame(df)
     if 'batch' in dir(args):
-        if args.batch is not None:
-            print('--batch is specified. Processing one SRA per job.')
-            is_sampled = numpy.array([strtobool(yn) for yn in df.loc[:, 'is_sampled']], dtype=bool)
-            txt = 'This is {:,}th job. In total, {:,} jobs will be necessary for this metadata table. {:,} SRAs were excluded.'
-            print(txt.format(args.batch, sum(is_sampled), len(numpy.where(is_sampled == False)[0])))
-            if args.batch>sum(is_sampled):
-                sys.stderr.write('--batch {} is too large. Exiting.\n'.format(args.batch))
-                sys.exit(0)
-            if is_sampled.sum()==0:
-                print('No sample is "sampled". Please check the "is_sampled" column in the metadata. Exiting.')
-                sys.exit(1)
-            metadata.df = metadata.df.loc[is_sampled,:]
-            metadata.df = metadata.df.reset_index()
-            metadata.df = metadata.df.loc[[args.batch-1,],:]
+        if args.batch is None:
+            return metadata
+        print('--batch is specified. Processing one SRA per job.')
+        is_sampled = numpy.array([strtobool(yn) for yn in df.loc[:, 'is_sampled']], dtype=bool)
+        txt = 'This is {:,}th job. In total, {:,} jobs will be necessary for this metadata table. {:,} '
+        txt += 'SRAs were excluded from the table (is_sampled==no).'
+        print(txt.format(args.batch, sum(is_sampled), len(numpy.where(is_sampled == False)[0])))
+        if args.batch>sum(is_sampled):
+            sys.stderr.write('--batch {} is too large. Exiting.\n'.format(args.batch))
+            sys.exit(0)
+        if is_sampled.sum()==0:
+            print('No sample is "sampled". Please check the "is_sampled" column in the metadata. Exiting.')
+            sys.exit(1)
+        metadata.df = metadata.df.loc[is_sampled,:]
+        metadata.df = metadata.df.reset_index()
+        metadata.df = metadata.df.loc[[args.batch-1,],:]
     return metadata
 
 def get_sra_stat(sra_id, metadata, num_bp_per_sra=None):
