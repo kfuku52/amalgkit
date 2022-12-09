@@ -121,11 +121,12 @@ def get_fastq_stats(args):
 
 def integrate_main(args):
     check_seqkit_dependency()
-    if args.metadata:
-        if not os.path.exists(args.metadata):
-            raise ValueError("Path to metadata table does not exist.")
-        print("found metadata \n")
-        print("reading metadata from:", args.metadata)
+    if args.metadata=='inferred':
+        relative_path = os.path.join(args.out_dir, 'metadata', 'metadata', 'metadata.tsv')
+        real_path = os.path.realpath(relative_path)
+    else:
+        real_path = os.path.realpath(args.metadata)
+    if os.path.exists(real_path):
         metadata = load_metadata(args)
         metadata.df.loc[:,'private_file'] = 'no'
         print("scanning for getfastq output")
@@ -135,7 +136,6 @@ def integrate_main(args):
         metadata.df.loc[metadata.df['run'].isin(data_unavailable), 'data_available'] = 'no'
         tmp_metadata = get_fastq_stats(args)
         df = pandas.concat([metadata.df, tmp_metadata])
-
         df.to_csv(os.path.join(args.out_dir,'metadata','metadata_updated_for_private_fastq_' + time.strftime("%Y-%m-%d") + '.tsv'), sep='\t', index=False)
     else:
         get_fastq_stats(args)

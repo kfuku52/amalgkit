@@ -335,11 +335,11 @@ def set_getfastq_directories(args, sra_id):
         args.out_dir = args.out_dir.replace('.', os.getcwd())
     if args.id is not None:
         output_dir = os.path.join(args.out_dir, 'getfastq', args.id)
-    elif args.metadata is not None:
-        output_dir = os.path.join(args.out_dir, 'getfastq', sra_id)
     elif (args.id_list is not None) & args.concat:
         output_dir = os.path.join(args.out_dir, 'getfastq', os.path.basename(args.id_list))
     elif (args.id_list is not None) & (args.concat != 'yes'):
+        output_dir = os.path.join(args.out_dir, 'getfastq', sra_id)
+    else:
         output_dir = os.path.join(args.out_dir, 'getfastq', sra_id)
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
@@ -592,9 +592,8 @@ def getfastq_metadata(args):
             sys.exit(1)
         metadata = list(metadata_dict.values())[0]
         metadata.df = pandas.concat([ v.df for v in metadata_dict.values() ], ignore_index=True)
-    if args.metadata is not None:
-        print('--metadata is specified. Reading existing metadata table.')
-        assert args.concat == False, '--concat should be set "no" when --metadata is specified.'
+    if (args.id is None)&(args.id_list is None):
+        assert args.concat == False, '--concat should be set "no" with the input from --metadata.'
         metadata = load_metadata(args)
     metadata.df.loc[:,'total_bases'] = metadata.df.loc[:,'total_bases'].replace('', numpy.nan).astype(float)
     metadata.df.loc[:, 'spot_length'] = metadata.df.loc[:, 'spot_length'].replace('', numpy.nan).astype(float)

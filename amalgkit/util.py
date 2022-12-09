@@ -1,5 +1,4 @@
-from amalgkit.metadata import Metadata
-
+import json
 import numpy
 import pandas
 
@@ -8,9 +7,16 @@ import os
 import sys
 
 from distutils.util import strtobool
+from amalgkit.metadata import Metadata
 
 def load_metadata(args):
-    df = pandas.read_csv(args.metadata, sep='\t', header=0)
+    if args.metadata=='inferred':
+        relative_path = os.path.join(args.out_dir, 'metadata', 'metadata', 'metadata.tsv')
+        real_path = os.path.realpath(relative_path)
+    else:
+        real_path = os.path.realpath(args.metadata)
+    print('Loading metadata from: {}'.format(real_path), flush=True)
+    df = pandas.read_csv(real_path, sep='\t', header=0)
     metadata = Metadata.from_DataFrame(df)
     if 'batch' in dir(args):
         if args.batch is None:
@@ -73,3 +79,40 @@ def get_newest_intermediate_file_extension(sra_stat, work_dir):
         sys.stderr.write('getfastq output not found in: {}, layout = {}\n'.format(work_dir, sra_stat['layout']))
         raise FileNotFoundError
     return ext_out
+
+def write_updated_metadata(metadata, outpath, args):
+    if os.path.exists(outpath):
+        if not args.overwrite_metadata:
+            print('Updated metadata was detected and will not be overwritten.')
+            return None
+        else:
+            print('Updated metadata was detected.')
+            print('--overwrite_metadata option was set to yes. Metadata will be overwritten.')
+            print('Preparing...')
+    else:
+        print('Updated metadata file was not detected. Preparing...')
+    quant_dir = os.path.join(args.out_dir, 'quant')
+    metadata = get_mapping_rate(metadata, quant_dir)
+    print('Writing curate metadata containing mapping rate: {}'.format(outpath))
+    metadata.df.to_csv(outpath, sep='\t', index=False)
+
+def get_mapping_rate(metadata, quant_dir):
+    if os.path.exists(quant_dir):
+        print('quant directory found: {}'.format(quant_dir))
+        metadata.df.loc[:, 'mapping_rate'] = numpy.nan
+        sra_ids = metadata.df.loc[:, 'run'].values
+        sra_dirs = [d for d in os.listdir(quant_dir) if d in sra_ids]
+        print('Number of quant sub-directories that matched to metadata: {:,}'.format(len(sra_dirs)))
+        for sra_id in sra_dirs:
+            run_info_path = os.path.join(quant_dir, sra_id, sra_id + '_run_info.json')
+            if not os.path.exists(run_info_path):
+                sys.stderr.write('run_info.json not found. Skipping {}.\n'.format(sra_id))
+                continue
+            is_sra = (metadata.df.loc[:, 'run'] == sra_id)
+            with open(run_info_path) as f:
+                run_info = json.load(f)
+            metadata.df.loc[is_sra, 'mapping_rate'] = run_info['p_pseudoaligned']
+    else:
+        txt = 'quant directory not found. Mapping rate cutoff will not be applied: {}\n'
+        sys.stderr.write(txt.format(quant_dir))
+    return metadata

@@ -3,23 +3,14 @@ import pandas
 import os
 import warnings
 from amalgkit.util import *
-from amalgkit.curate import write_updated_metadata
 
 def merge_main(args):
     quant_dir = os.path.join(args.out_dir, 'quant')
     merge_dir = os.path.join(args.out_dir, 'merge')
     if not os.path.exists(merge_dir):
         os.makedirs(os.path.join(merge_dir))
-
-    if args.metadata is not None:
-        real_path = os.path.realpath(args.metadata)
-        print('Loading metadata from: {}'.format(real_path), flush=True)
-        metadata = load_metadata(args)
-        spp = metadata.df.loc[:,'scientific_name'].dropna().unique()
-    else:
-        raise Exception("If getfastq outputs are restructured like /getfastq/species_name/SRR00000,"
-              "species names can be obtained from the directory names. Such change can drop "
-              "the --metadata option, but not done yet. Use --metadata for now.")
+    metadata = load_metadata(args)
+    spp = metadata.df.loc[:,'scientific_name'].dropna().unique()
 
     for sp in spp:
         print('processing: {}'.format(sp), flush=True)

@@ -15,7 +15,6 @@ def check_quant_output(sra_id, output_dir, args):
         print('Output file was not detected: {}'.format(out_path))
         return None
 
-
 def call_kallisto(args, in_files, metadata, sra_stat, output_dir, index):
     sra_id = sra_stat['sra_id']
     lib_layout = sra_stat['layout']
@@ -147,7 +146,11 @@ def get_index(args, sci_name):
         elif len(index) == 0:
             if args.build_index:
                 print("--build_index set. Building index for ", sci_name)
-                fasta_file = glob.glob(os.path.join(args.fasta_dir, sci_name + '*.fa')) + glob.glob(os.path.join(args.fasta_dir, sci_name + '*.fasta'))
+                if (args.fasta_dir=='inferred'):
+                    path_fasta_dir = os.path.join(args.out_dir, 'fasta')
+                else:
+                    path_fasta_dir = args.fasta_dir
+                fasta_file = glob.glob(os.path.join(path_fasta_dir, sci_name + '*.fa')) + glob.glob(os.path.join(args.fasta_dir, sci_name + '*.fasta'))
                 if len(fasta_file) > 1:
                     raise ValueError(
                         "found multiple fasta files for species. Please make sure there is only one index file for this species."
@@ -161,8 +164,9 @@ def get_index(args, sci_name):
                 kallisto_build_cmd = ["kallisto", "index", "-i", index_path, fasta_file]
                 subprocess.run(kallisto_build_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 index = [index_path]
-
             else:
+                sys.stderr.write('No index file was found in: {}\n'.format(index_dir))
+                sys.stderr.write('Try --fasta_dir PATH and --build_index yes\n')
                 raise FileNotFoundError("Could not find Index file.")
         index = index[0]
     else:

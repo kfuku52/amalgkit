@@ -20,8 +20,8 @@ def parse_metadata(args, metadata):
         print(len(uni_species), " species detected:")
         print(uni_species)
     else:
-        raise ValueError(len(uni_species), " species detected. Please check if ", args.metadata,
-                         " has a 'scientific_name' column.")
+        txt = "{} species detected. Please check if --metadata ({}) has a 'scientific_name' column."
+        raise ValueError(txt.format(len(uni_species), args.metadata))
 
     sra_ids = metadata.df.loc[:, 'run']
     if len(sra_ids):
@@ -32,8 +32,8 @@ def parse_metadata(args, metadata):
             raise ValueError("Duplicate SRA IDs detected, where IDs should be unique. Please check these entries: ",
                              list_duplicates(sra_ids))
     else:
-        raise ValueError(len(np.unique(sra_ids)), " SRA runs detected. Please check if ", args.metadata,
-                         " has a 'run' column.")
+        txt = "{} SRA runs detected. Please check if --metadata ({}) has a 'run' column."
+        raise ValueError(txt.format(len(np.unique(sra_ids)), args.metadata))
     return uni_species, sra_ids
 
 
@@ -95,7 +95,8 @@ def check_getfastq_outputs(args, sra_ids, metadata, output_dir):
             file.write(sra_id + "\n")
         file.close()
     else:
-        print("Sequences found for all SRA IDs in ", args.metadata, " !")
+        txt = "Sequences found for all SRA IDs in --metadata ({})"
+        print(txt.format(args.metadata))
 
     if metadata_unavailable:
         print("writing SRA IDs without updated metadata output to: ", os.path.join(output_dir,
@@ -159,7 +160,7 @@ def check_quant_index(args, uni_species, output_dir):
                 file.write(species + "\n")
             file.close()
         else:
-            print("Index found for all species in ", args.metadata, " !")
+            print("Index found for all species in --metadata ({})".format(args.metadata))
     else:
         print("Could not find Index directory ", index_dir_path, " . Did you provide the correct Path?")
 
@@ -212,26 +213,20 @@ def check_quant_output(args, sra_ids, output_dir):
             file.write(sra_id + "\n")
         file.close()
     else:
-        print("Quant outputs found for all SRA IDs in ", args.metadata, " !")
+        print("Quant outputs found for all SRA IDs in --metadata ({})".format(args.metadata))
 
     return data_available, data_unavailable
 
 
 def sanity_main(args):
-    print("reading metadata from:", args.metadata)
     metadata = load_metadata(args)
-
     output_dir = os.path.join(args.out_dir, 'sanity')
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
-
     uni_species, sra_ids = parse_metadata(args, metadata)
-
     if args.getfastq or args.all:
         check_getfastq_outputs(args, sra_ids, metadata, output_dir)
-
     if args.index or args.all:
         check_quant_index(args, uni_species, output_dir)
-
     if args.quant or args.all:
         check_quant_output(args, sra_ids, output_dir)

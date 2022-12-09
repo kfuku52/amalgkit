@@ -107,7 +107,7 @@ remove_nonexpressed_gene = function(tc) {
 }
 
 add_color_to_sra = function(sra, selected_curate_groups) {
-    sra = sra[, (!names(sra) %in% c("bp_color", "sp_color", "curate_group_color"))]
+    sra = sra[, (!colnames(sra) %in% c("bp_color", "sp_color", "curate_group_color"))]
     bioproject = as.character(sra[['bioproject']])
     bioproject_u = sort(unique(bioproject))
     scientific_name = as.character(sra[['scientific_name']])
@@ -127,7 +127,6 @@ add_color_to_sra = function(sra, selected_curate_groups) {
         bp_color = rainbow_hcl(length(bioproject_u), c = 50)
         sp_color = rainbow_hcl(length(scientific_name_u), c = 150)
     }
-
     df_curate_group = data.frame(curate_group=curate_group_u, curate_group_color=curate_group_color[1:length(curate_group_u)], stringsAsFactors = FALSE)
     df_bp = data.frame(bioproject=bioproject_u, bp_color=bp_color[1:length(bioproject_u)], stringsAsFactors = FALSE)
     df_sp = data.frame(scientific_name=scientific_name_u, sp_color=sp_color[1:length(scientific_name_u)], stringsAsFactors = FALSE)
@@ -286,10 +285,13 @@ check_mapping_rate = function(tc, sra, mapping_rate_cutoff) {
 }
 
 check_within_curate_group_correlation = function(tc, sra, dist_method, min_dif, selected_curate_groups, one_out_per_iter = TRUE, correlation_threshold) {
+    if (length(selected_curate_groups)==1) {
+        cat('Only one curate_group category is available. Outlier removal will be skipped.\n')
+        return(list(tc = tc, sra = sra))
+    }
     out = tc_sra_intersect(tc, sra)
     tc = out[["tc"]]
     sra2 = out[["sra"]]
-    
     sra2[,'num_other_run_same_bp_curate_group'] = 0
     selected_curate_groups = selected_curate_groups[selected_curate_groups %in% unique(sra2[['curate_group']])]
     num_curate_group = length(selected_curate_groups)
@@ -402,7 +404,10 @@ sva_subtraction = function(tc, sra) {
     out = remove_nonexpressed_gene(tc)
     tc = out[["tc_ex"]]
     tc_ne = out[["tc_ne"]]
-    mod = model.matrix(~curate_group, data = sra)
+    mod = try(model.matrix(~curate_group, data = sra))
+    if (class(mod) != "try-error") {
+        return(list(tc = tc, sva = NULL))
+    }
     mod0 = model.matrix(~1, data = sra)
     set.seed(1)
     sva1 = try(sva(dat = as.matrix(tc), mod = mod, mod0 = mod0, B = 10))
@@ -612,8 +617,23 @@ draw_mds = function(sra, tc_dist_dist, fontsize = 7) {
 draw_tsne = function(sra, tc, fontsize = 7) {
     perplexity = min(30, floor(nrow(sra)/4))
     set.seed(1)
-    out_tsne = Rtsne(as.matrix(t(tc)), theta = 0, check_duplicates = FALSE, verbose = FALSE, perplexity = perplexity,
-                     dims = 2)
+    try_out = tryCatch({
+        Rtsne(
+          as.matrix(t(tc)),
+          theta = 0,
+          check_duplicates = FALSE,
+          verbose = FALSE,
+          perplexity = perplexity,
+          dims = 2
+        )
+    }, error = function(a) {
+        return("t-SNE calculation failed.")
+    })
+    if (mode(try_out) == "character") {
+        cat("t-SNE failed.\n")
+        plot(c(0, 1), c(0, 1), ann = F, bty = "n", type = "n", xaxt = "n", yaxt = "n")
+    }
+    out_tsne = try_out
     try_out = tryCatch({
         plot(
           out_tsne[['Y']][, 1],
@@ -837,11 +857,11 @@ tc_eff_length <- read.table(eff_file, sep = "\t", stringsAsFactors = FALSE, head
 # row.names(tc)<-tc[,1] tc <- tc[,-1]
 
 # read transcriptome
-scientific_name = unique(sra_all[sra_all[['run']] %in% colnames(tc), "scientific_name"])
+scientific_name = unique(sra_all[(sra_all[['run']] %in% colnames(tc)), "scientific_name"])
 is_sp = (sra_all[,'scientific_name'] == scientific_name)
 is_curate_group = (sra_all[,'curate_group'] %in% selected_curate_groups)
 cat('Number of SRA runs for this species:', sum(is_sp), '\n')
-cat('Number of SRA runs for selected tisssues:', sum(is_curate_group), '\n')
+cat('Number of SRA runs for selected tissues:', sum(is_curate_group), '\n')
 sra = sra_all[(is_sp & is_curate_group),]
 conditions = (sra[['exclusion']] == "no") & (!sra[['run']] %in% colnames(tc))
 if (any(conditions)) {

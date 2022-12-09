@@ -121,8 +121,9 @@ subparsers = parser.add_subparsers()
 
 # Parent parsers
 parent_parser_meta = argparse.ArgumentParser(add_help=False)
-parent_parser_meta.add_argument('--metadata', metavar='PATH', default=None, type=str, required=False, action='store',
-                 help='default=%(default)s: PATH to metadata table. See `amalgkit metadata -h` for details.')
+parent_parser_meta.add_argument('--metadata', metavar='PATH', default='inferred', type=str, required=False, action='store',
+                 help='default=%(default)s: "inferred" = out_dir/metadata/metadata/metadata.tsv. '
+                      'PATH to metadata table, the output file of `amalgkit metadata`.')
 parent_parser_out = argparse.ArgumentParser(add_help=False)
 parent_parser_out.add_argument('-w','--out_dir', metavar='PATH', default='./', type=str, required=False, action='store',
                  help='default=%(default)s: Path to the directory where intermediate and output files are generated.')
@@ -232,11 +233,12 @@ pqu.add_argument('--index_dir', metavar='PATH', default=None, type=str, required
                       'out_dir/Index/')
 pqu.add_argument('--clean_fastq', metavar='yes|no', default='yes', type=strtobool, required=False, action='store',
                  help='default=%(default)s: Remove fastq files when quant is successfully completed.')
-pqu.add_argument('--fasta_dir', metavar='PATH', default=None, type=str, required=False, action='store',
-                 help='default=%(default)s: path to directory containing fasta files required for index building (see --build_index).')
+pqu.add_argument('--fasta_dir', metavar='PATH', default='inferred', type=str, required=False, action='store',
+                 help='default=%(default)s: "inferred" = out_dir/fasta. '
+                      'PATH to directory containing fasta files required for index building (see --build_index).')
 pqu.add_argument('--build_index', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
                  help='default=%(default)s: If yes, allows quant to build an index file using kallisto from fasta files. '
-                      'Will only do this for a species if an index file is not already present. One fasta file per species should be put in the directory set in --fasta_dir'
+                      'Will only do this for a species if an index file is not already present. One fasta file per species should be put in the directory set in --fasta_dir. '
                       'amalgkit will read the species from the metadata, try to find the fasta file (.fa or .fasta) and build the index for further use.')
 
 pqu.set_defaults(handler=command_quant)
@@ -307,6 +309,8 @@ pcu.set_defaults(handler=command_curate)
 
 # Sub parser: merge
 pmg = subparsers.add_parser('merge', help='see `amalgkit merge -h`', parents=[parent_parser_out, parent_parser_meta])
+pmg.add_argument('-o', '--overwrite_metadata', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
+                 help='default=%(default)s: If yes, allows merge to overwrite a metadata file created from previous merge runs within the curate folder.')
 pmg.set_defaults(handler=command_merge)
 
 # Sub parser: sanity

@@ -1,4 +1,3 @@
-import json
 import re
 import subprocess
 import warnings
@@ -11,49 +10,15 @@ def get_curate_group(args, metadata):
         curate_group = metadata.df.loc[:, 'curate_group'].dropna().unique()
     else:
         curate_group = re.findall(r"[\w]+", args.curate_group)
+    if (len(curate_group)==0):
+        txt = 'The "curate_group" column in --metadata ({}) is not filled. Please manually edit the file.\n'
+        txt += '`amalgkit curate` recognizes samples with the same string in this columns to belong the same group.\n'
+        txt += 'Exiting.\n'
+        sys.stderr.write(txt.format(args.metadata))
+        sys.exit(1)
     print('Tissues to be included: {}'.format(', '.join(curate_group)))
     curate_group = '|'.join(curate_group)
     return curate_group
-
-
-def write_updated_metadata(metadata, outpath, args):
-    if os.path.exists(outpath):
-        if not args.overwrite_metadata:
-            print('Updated metadata was detected and will not be overwritten.')
-            return None
-        else:
-            print('Updated metadata was detected.')
-            print('--overwrite_metadata option was set to yes. Metadata will be overwritten.')
-            print('Preparing...')
-    else:
-        print('Updated metadata file was not detected. Preparing...')
-    quant_dir = os.path.join(args.out_dir, 'quant')
-    metadata = get_mapping_rate(metadata, quant_dir)
-    print('Writing curate metadata containing mapping rate: {}'.format(outpath))
-    metadata.df.to_csv(outpath, sep='\t', index=False)
-
-
-def get_mapping_rate(metadata, quant_dir):
-    if os.path.exists(quant_dir):
-        print('quant directory found: {}'.format(quant_dir))
-        metadata.df.loc[:, 'mapping_rate'] = numpy.nan
-        sra_ids = metadata.df.loc[:, 'run'].values
-        sra_dirs = [d for d in os.listdir(quant_dir) if d in sra_ids]
-        print('Number of quant sub-directories that matched to metadata: {:,}'.format(len(sra_dirs)))
-        for sra_id in sra_dirs:
-            run_info_path = os.path.join(quant_dir, sra_id, sra_id + '_run_info.json')
-            if not os.path.exists(run_info_path):
-                sys.stderr.write('run_info.json not found. Skipping {}.\n'.format(sra_id))
-                continue
-            is_sra = (metadata.df.loc[:, 'run'] == sra_id)
-            with open(run_info_path) as f:
-                run_info = json.load(f)
-            metadata.df.loc[is_sra, 'mapping_rate'] = run_info['p_pseudoaligned']
-    else:
-        txt = 'quant directory not found. Mapping rate cutoff will not be applied: {}\n'
-        sys.stderr.write(txt.format(quant_dir))
-    return metadata
-
 
 def check_rscript():
     try:
@@ -126,9 +91,7 @@ def run_curate_r_script(args, new_metadata_path, metadata, sp):
 
 def curate_main(args):
     check_rscript()
-    # load metadata
-    df = pandas.read_csv(args.metadata, sep='\t', header=0)
-    metadata = Metadata.from_DataFrame(df)
+    metadata = load_metadata(args)
     # figure out unique species
     spp = metadata.df.loc[:, 'scientific_name'].drop_duplicates().values
     # make directory
