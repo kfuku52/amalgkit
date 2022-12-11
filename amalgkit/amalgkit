@@ -19,17 +19,6 @@ def command_metadata(args):
     print('Time elapsed: {:,} sec'.format(int(time.time() - start)))
     sys.stdout.write('amalgkit metadata: end\n')
 
-
-def command_view(args): # TODO: Do we still need this?
-    sys.stdout.write('amalgkit view: start\n')
-    start = time.time()
-    # from amalgkit.view import view_main
-    # view_main(args)
-    print('Hello world!')
-    print('Time elapsed: {:,} sec'.format(int(time.time() - start)))
-    sys.stdout.write('amalgkit view: end\n')
-
-
 def command_getfastq(args):
     sys.stdout.write('amalgkit getfastq: start\n')
     start = time.time()
@@ -37,7 +26,6 @@ def command_getfastq(args):
     getfastq_main(args)
     print('Time elapsed: {:,} sec'.format(int(time.time() - start)))
     sys.stdout.write('amalgkit getfastq: end\n')
-
 
 def command_quant(args):
     sys.stdout.write('amalgkit quant: start\n')
@@ -48,10 +36,8 @@ def command_quant(args):
     except ValueError as err:
         print("ERROR: ", err)
         sys.exit(1)
-
     print('Time elapsed: {:,} sec'.format(int(time.time() - start)))
     sys.stdout.write('amalgkit quant: end\n')
-
 
 def command_cstmm(args):
     sys.stdout.write('amalgkit cstmm: start\n')
@@ -68,7 +54,6 @@ def command_curate(args):
     curate_main(args)
     print('Time elapsed: {:,} sec'.format(int(time.time() - start)))
     sys.stdout.write('amalgkit curate: end\n')
-
 
 def command_merge(args):
     sys.stdout.write('amalgkit merge: start\n')
@@ -154,12 +139,6 @@ pme.add_argument('-o', '--overwrite', metavar='no|yes', default='no', type=strto
                  help='default=%(default)s: Overwrite existing intermediate files.')
 pme.set_defaults(handler=command_metadata)
 
-# Sub parser: view
-pvi = subparsers.add_parser('view', help='see `amalgkit view -h`')
-pvi.add_argument('-t', '--taxid', metavar='3400', default=None, type=int, required=True, action='store',
-                 help='default=%(default)s: NCBI Taxid (e.g., 3400 for Magnoliales).')
-pvi.set_defaults(handler=command_view)
-
 # Sub parser: getfastq
 pge = subparsers.add_parser('getfastq', help='see `amalgkit getfastq -h`', parents=[parent_parser_out, parent_parser_meta, parent_parser_threads, parent_parser_redo, parent_parser_batch])
 pge.add_argument('-e', '--entrez_email', metavar='aaa@bbb.com', default='', type=str, required=False, action='store',
@@ -220,7 +199,6 @@ pge.add_argument('--tol', metavar='FLOAT', default=1, type=float, required=False
                  help='default=%(default)s: Acceptable percentage loss of reads relative to --max_bp. If the 1st-round sequence '
                       'generation could not produce enough reads, the 2nd-round sequence generation is activated to '
                       'compensate the loss.')
-
 pge.set_defaults(handler=command_getfastq)
 
 # Sub parser: quant
@@ -235,12 +213,14 @@ pqu.add_argument('--clean_fastq', metavar='yes|no', default='yes', type=strtoboo
                  help='default=%(default)s: Remove getfastq-processed fastq files when quant is successfully completed.')
 pqu.add_argument('--fasta_dir', metavar='PATH', default='inferred', type=str, required=False, action='store',
                  help='default=%(default)s: "inferred" = out_dir/fasta. '
-                      'PATH to directory containing reference fasta files required for index building (see --build_index).')
+                      'PATH to directory containing reference fasta files required for index building (see --build_index). '
+                      'In this directory, file names of fasta files are expected to start with the string in the "scientific_name" column of the metadata table. '
+                      'Example: Arabidopsis_thaliana_v1.fasta for Arabidopsis thaliana.'
+                 )
 pqu.add_argument('--build_index', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
-                 help='default=%(default)s: If yes, allows quant to build an index file using kallisto from fasta files. '
+                 help='default=%(default)s: If yes, allows quant to build a kallisto index file from fasta files. '
                       'Will only do this for a species if an index file is not already present. One fasta file per species should be put in the directory set in --fasta_dir. '
                       'amalgkit will read the species from the metadata, try to find the fasta file (.fa or .fasta) and build the index for further use.')
-
 pqu.set_defaults(handler=command_quant)
 
 # Sub parser: cstmm
@@ -272,7 +252,6 @@ pca.add_argument('--curate_group', metavar='STR', default=None, type=str, requir
                  help='default=%(default)s: "comma separated list of primary condition or tissue used in curate analysis.'
                       'Example input may look like "root,flower,leaf" or "heat stressed,cold stressed,light stressed".'
                       'Please refer to your amalgkit curate outputs.')
-
 pca.set_defaults(handler=command_csca)
 
 # Sub parser: curate
@@ -354,7 +333,6 @@ pin.add_argument('--remove_tmp', metavar='yes|no', default='no', type=strtobool,
 pin.add_argument('--accurate_size', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
                  help='default=%(default)s: If no, runs seqkit only on the first 1000 sequences in the fastq file to get an estimate for information like average read length. '
                       'If yes, runs seqkit on the whole fastq file. More accurate, but comes with much higher runtime.')
-
 pin.set_defaults(handler=command_integrate)
 
 # Sub parser: config
