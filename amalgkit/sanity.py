@@ -113,7 +113,7 @@ def check_quant_index(args, uni_species, output_dir):
     if args.index_dir:
         index_dir_path = args.index_dir
     else:
-        index_dir_path = os.path.join(args.out_dir, "Index")
+        index_dir_path = os.path.join(args.out_dir, "index")
     index_unavailable = []
     index_available = []
     if os.path.exists(index_dir_path):
@@ -122,7 +122,7 @@ def check_quant_index(args, uni_species, output_dir):
             sci_name = sci_name.replace(".", "")
             index_path = os.path.join(index_dir_path, sci_name + "*")
             print("\n")
-            print("Looking for Index file", index_path, "for species: ", species)
+            print("Looking for index file", index_path, "for species: ", species)
             index_files = glob.glob(index_path)
             if not index_files:
                 print("could not find anything in", index_path)
@@ -150,19 +150,19 @@ def check_quant_index(args, uni_species, output_dir):
                 index_available.append(species)
 
             if len(index_files) > 1:
-                print("Multiple possible Index files detected for ", species, ": ", index_files,
+                print("Multiple possible index files detected for ", species, ": ", index_files,
                       ". You may have to resolve ambiguity")
 
         if index_unavailable:
-            print("writing species without Index to: ", os.path.join(output_dir, "species_without_index.txt"))
+            print("writing species without index to: ", os.path.join(output_dir, "species_without_index.txt"))
             file = open(os.path.join(output_dir, "species_without_index.txt"), "w")
             for species in index_unavailable:
                 file.write(species + "\n")
             file.close()
         else:
-            print("Index found for all species in --metadata ({})".format(args.metadata))
+            print("index found for all species in --metadata ({})".format(args.metadata))
     else:
-        print("Could not find Index directory ", index_dir_path, " . Did you provide the correct Path?")
+        print("Could not find index directory ", index_dir_path, " . Did you provide the correct Path?")
 
     return index_available, index_unavailable
 

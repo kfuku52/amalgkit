@@ -133,7 +133,7 @@ def get_index(args, sci_name):
     if args.index_dir is not None:
         index_dir = args.index_dir
     else:
-        index_dir = os.path.join(args.out_dir, 'Index')
+        index_dir = os.path.join(args.out_dir, 'index')
 
     if not os.path.exists(index_dir) and args.build_index:
             os.mkdir(index_dir)
@@ -152,11 +152,13 @@ def get_index(args, sci_name):
                     path_fasta_dir = args.fasta_dir
                 fasta_file = glob.glob(os.path.join(path_fasta_dir, sci_name + '*.fa')) + glob.glob(os.path.join(args.fasta_dir, sci_name + '*.fasta'))
                 if len(fasta_file) > 1:
-                    raise ValueError(
-                        "found multiple fasta files for species. Please make sure there is only one index file for this species."
-                    )
+                    txt = "found multiple reference fasta files for this species: {}\n"
+                    txt += "Please make sure there is only one index file for this species.\n{}"
+                    raise ValueError(txt.format(', '.join(sci_name, fasta_file)))
                 elif len(fasta_file) == 0:
-                    raise FileNotFoundError("Could not find fasta file for this species.")
+                    txt = "Could not find reference fasta file for this species: {}\n".format(sci_name)
+                    txt += 'If the reference fasta file is correctly placed, the column "scientific_name" of the --metadata file may need to be edited.'
+                    raise FileNotFoundError(txt)
                 fasta_file = fasta_file[0]
                 print('fasta file found: ', fasta_file)
                 print('building index.')
@@ -167,11 +169,11 @@ def get_index(args, sci_name):
             else:
                 sys.stderr.write('No index file was found in: {}\n'.format(index_dir))
                 sys.stderr.write('Try --fasta_dir PATH and --build_index yes\n')
-                raise FileNotFoundError("Could not find Index file.")
+                raise FileNotFoundError("Could not find index file.")
         index = index[0]
     else:
-        raise FileNotFoundError("could not find Index folder")
-    print("Index file found: {}".format(index))
+        raise FileNotFoundError("could not find index folder")
+    print("index file found: {}".format(index))
     return index
 
 

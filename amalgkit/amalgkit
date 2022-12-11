@@ -229,13 +229,13 @@ pqu = subparsers.add_parser('quant', help='see `amalgkit quant -h`', parents=[pa
 pqu.add_argument('--id', metavar='XXXXX0000', default=None, type=str, required=False, action='store',
                  help='default=%(default)s: SRA ID. quant automatically search .fastq or .fastq.gz file(s)')
 pqu.add_argument('--index_dir', metavar='PATH', default=None, type=str, required=False, action='store',
-                 help='default=%(default)s: custom path to Index directory. Only required if Index directory is not '
-                      'out_dir/Index/')
+                 help='default=%(default)s: custom path to index directory. Only required if index directory is not '
+                      'out_dir/index/')
 pqu.add_argument('--clean_fastq', metavar='yes|no', default='yes', type=strtobool, required=False, action='store',
                  help='default=%(default)s: Remove getfastq-processed fastq files when quant is successfully completed.')
 pqu.add_argument('--fasta_dir', metavar='PATH', default='inferred', type=str, required=False, action='store',
                  help='default=%(default)s: "inferred" = out_dir/fasta. '
-                      'PATH to directory containing fasta files required for index building (see --build_index).')
+                      'PATH to directory containing reference fasta files required for index building (see --build_index).')
 pqu.add_argument('--build_index', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
                  help='default=%(default)s: If yes, allows quant to build an index file using kallisto from fasta files. '
                       'Will only do this for a species if an index file is not already present. One fasta file per species should be put in the directory set in --fasta_dir. '
@@ -317,7 +317,7 @@ pmg.set_defaults(handler=command_merge)
 psa = subparsers.add_parser('sanity', help='see `amalgkit sanity -h`', parents=[parent_parser_out, parent_parser_meta])
 
 psa.add_argument('--index', required=False, action='store_true',
-                 help='set this option if you want to check for availability of Index files '
+                 help='set this option if you want to check for availability of index files '
                       'based on species name in metadata file.')
 psa.add_argument('--quant', required=False, action='store_true',
                  help='set this option if you want to check for availability quant output files '
@@ -328,13 +328,13 @@ psa.add_argument('--getfastq', required=False, action='store_true',
 psa.add_argument('--all', required=False, action='store_true',
                  help='setting this option runs amalgkit sanity as if --index, --quant, --getfastq were set')
 psa.add_argument('--index_dir', metavar='PATH', default=None, type=str, required=False, action='store',
-                 help='default=%(default)s: custom path to Index directory. Only required if Index directory is not '
-                      'out_dir/Index/')
+                 help='default=%(default)s: custom path to index directory. Only required if index directory is not '
+                      'out_dir/index/')
 psa.add_argument('--quant_dir', metavar='PATH', default=None, type=str, required=False, action='store',
                  help='default=%(default)s: custom path to quant directory. Only required if quant directory is not '
                       'out_dir/quant/')
 psa.add_argument('--getfastq_dir', metavar='PATH', default=None, type=str, required=False, action='store',
-                 help='default=%(default)s: custom path to Index directory. Only required if getfastq directory is not '
+                 help='default=%(default)s: custom path to index directory. Only required if getfastq directory is not '
                       'out_dir/getfastq/')
 psa.add_argument('--updated_metadata_dir', metavar='PATH', default=None, type=str, required=False, action='store',
                  help='default=%(default)s: custom path to updated metadata directory. Only required if updated metadata'
@@ -347,7 +347,7 @@ pin = subparsers.add_parser('integrate', help='see `amalgkit proc -h`', parents=
 pin.add_argument('--fastq_dir', metavar='PATH', default=None, type=str, required=False, action='store',
                  help='default=%(default)s: custom path to fastq directory.')
 pin.add_argument('--getfastq_dir', metavar='PATH', default=None, type=str, required=False, action='store',
-                 help='default=%(default)s: custom path to Index directory. Only required if getfastq directory is not '
+                 help='default=%(default)s: custom path to index directory. Only required if getfastq directory is not '
                       'out_dir/getfastq/')
 pin.add_argument('--remove_tmp', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
                  help='default=%(default)s: Remove temporary files.')
