@@ -232,7 +232,7 @@ pqu.add_argument('--index_dir', metavar='PATH', default=None, type=str, required
                  help='default=%(default)s: custom path to Index directory. Only required if Index directory is not '
                       'out_dir/Index/')
 pqu.add_argument('--clean_fastq', metavar='yes|no', default='yes', type=strtobool, required=False, action='store',
-                 help='default=%(default)s: Remove fastq files when quant is successfully completed.')
+                 help='default=%(default)s: Remove getfastq-processed fastq files when quant is successfully completed.')
 pqu.add_argument('--fasta_dir', metavar='PATH', default='inferred', type=str, required=False, action='store',
                  help='default=%(default)s: "inferred" = out_dir/fasta. '
                       'PATH to directory containing fasta files required for index building (see --build_index).')

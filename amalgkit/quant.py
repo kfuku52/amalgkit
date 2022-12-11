@@ -100,16 +100,16 @@ def run_quant(args, metadata, sra_id, index):
     try:
         ext = get_newest_intermediate_file_extension(sra_stat, work_dir=output_dir_getfastq)
         if ext == '.safely_removed':
-            print('These files have been deleted. If you wish to reobtain the .fastq file(s), run: getfastq -e email@adress.com --id ', sra_id, ' -w ', args.out_dir, '--redo yes --gcp yes --aws yes --ncbi yes')
+            print('These files have been deleted. If you wish to re-obtain the .fastq file(s), run: getfastq -e email@adress.com --id ', sra_id, ' -w ', args.out_dir, '--redo yes --gcp yes --aws yes --ncbi yes')
             print('skipping.')
             return
 
     except FileNotFoundError:
-        print('ERROR: could not find fastq file(s) in:', output_dir_getfastq)
-        print(
-            'If you wish to obtain the .fastq file(s), run: getfastq -e email@adress.com --id ',
-            sra_id, ' -w ', args.out_dir, '--redo yes --gcp yes --aws yes --ncbi yes')
-        print('skipping.')
+        sys.stderr.write('ERROR: could not find fastq file(s) in:', output_dir_getfastq)
+        txt = 'If you wish to obtain the .fastq file(s), run: '
+        txt += 'getfastq --id {} --out_dir {}'
+        print(txt.format(sra_id, args.out_dir))
+        print('Skipping {}'.format(sra_id))
         return
     in_files = glob.glob(os.path.join(args.out_dir, 'getfastq', sra_id, sra_id + "*" + ext))
 
@@ -179,17 +179,17 @@ def quant_main(args):
     check_kallisto_dependency()
     metadata = load_metadata(args)  # loads single-row metadata according to --batch
     if args.id is None:
+        # if args.id is not specified, it will run the whole metadata sheet one by one
         for i in metadata.df.index:
             print('')
             sra_id = metadata.df.at[i, 'run']
             sci_name = metadata.df.at[i, 'scientific_name']
             print('Species: {}'.format(sci_name))
-            print('Run ID: {}'.format(sra_id))
+            print('SRA Run ID: {}'.format(sra_id))
             sci_name = sci_name.replace(" ", "_")
             print('looking for index folder in ', args.out_dir)
             index = get_index(args, sci_name)
             run_quant(args, metadata, sra_id, index)
-    # if args.id is not specified, it will run the whole metadata sheet one by one
     else:
         sra_id = args.id
         sci_name = metadata.df.loc[metadata.df['run'] == args.id, 'scientific_name']
