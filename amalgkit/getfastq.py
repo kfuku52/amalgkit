@@ -148,11 +148,11 @@ def concat_fastq(args, metadata, output_dir, g):
 def remove_sra_files(metadata, sra_dir):
     for sra_id in metadata.df['run']:
         sra_pattern = os.path.join(sra_dir, sra_id + '.sra*')
-        sra_paths = glob.glob(sra_pattern)
-        if len(sra_paths) > 0:
-            for sra_path in sra_paths:
-                print('Deleting:', sra_path)
-                os.remove(sra_path)
+        path_downloaded_sras = glob.glob(sra_pattern)
+        if len(path_downloaded_sras) > 0:
+            for path_downloaded_sra in path_downloaded_sras:
+                print('Deleting:', path_downloaded_sra)
+                os.remove(path_downloaded_sra)
         else:
             print('SRA file not found. Pattern searched:', sra_pattern)
     print('')
@@ -195,78 +195,73 @@ def remove_intermediate_files(sra_stat, ext, work_dir):
 
 
 def download_sra(metadata, sra_stat, args, work_dir, overwrite=False):
-    sra_path = os.path.join(work_dir, sra_stat['sra_id'] + '.sra')
+    path_downloaded_sra = os.path.join(work_dir, sra_stat['sra_id'] + '.sra')
     individual_sra_tmp_dir = os.path.join(work_dir, sra_stat['sra_id'] + '/')
 
-    if os.path.exists(sra_path):
-        print('Previously-downloaded sra file was detected.')
+    if os.path.exists(path_downloaded_sra):
+        print('Previously-downloaded sra file was detected at: {}'.format(path_downloaded_sra))
         if (overwrite):
-            print('Removing', sra_path)
+            print('Removing', path_downloaded_sra)
             print('New sra file will be downloaded.')
-            os.remove(sra_path)
+            os.remove(path_downloaded_sra)
         else:
             return None
     else:
         print('Previously-downloaded sra file was not detected. New sra file will be downloaded.')
 
     if (args.aws) or (args.ncbi) or (args.gcp):
-        source = []
-        sra_source_list = []
+        sra_sources = dict()
         sra_id = sra_stat['sra_id']
-
-        if args.gcp:
-            source.append('GCP')
-            sra_source_list.append(metadata.df.loc[metadata.df['run'] == sra_id]['GCP_Link'].values[0])
-
+        is_sra = (metadata.df['run']==sra_stat['sra_id'])
         if args.aws:
-            source.append('AWS')
-            sra_source_list.append(metadata.df.loc[metadata.df['run'] == sra_id]['AWS_Link'].values[0])
-
+            aws_link = metadata.df.loc[is_sra,'AWS_Link'].values[0]
+            if aws_link=='':
+                sys.stderr.write('AWS_Link is empty and will be skipped.\n')
+            else:
+                sra_sources['AWS'] = aws_link
+        if args.gcp:
+            gcp_link = metadata.df.loc[is_sra,'GCP_Link'].values[0]
+            if gcp_link=='':
+                sys.stderr.write('GCP_Link is empty and will be skipped.\n')
+            else:
+                sra_sources['GCP'] = gcp_link
         if args.ncbi:
-            source.append('NCBI')
-            sra_source_list.append(metadata.df.loc[metadata.df['run'] == sra_id]['NCBI_Link'].values[0])
-
-        if len(sra_source_list) > 1:
-            print("Multiple sources set. Trying one by one.")
-
-        sra_source_list = [ item for item in sra_source_list if item!='' ]
-        if len(sra_source_list)==0:
+            ncbi_link = metadata.df.loc[is_sra,'NCBI_Link'].values[0]
+            if ncbi_link=='':
+                sys.stderr.write('NCBI_Link is empty and will be skipped.\n')
+            else:
+                sra_sources['NCBI'] = ncbi_link
+        if len(sra_sources)==0:
             print('No source URL is available. Check whether --aws, --gcp, and --ncbi are properly set.')
-
-        dl_status = 'failed'
-
-        for sra_source in sra_source_list:
-            print("trying to fetch {} from {}".format(sra_id, sra_source))
+        is_sra_download_completed = False
+        for sra_source_name in sra_sources.keys():
+            print("Trying to fetch {} from {}: {}".format(sra_id, sra_source_name, sra_sources[sra_source_name]))
             try:
-                urllib.request.urlretrieve(str(sra_source), os.path.join(work_dir, (str(sra_id + '.sra'))))
-                dl_status = 'success'
-                break
+                urllib.request.urlretrieve(str(sra_sources[sra_source_name]), path_downloaded_sra)
+                if os.path.exists(path_downloaded_sra):
+                    is_sra_download_completed = True
+                    print('SRA file was downloaded with urllib.request from {}'.format(sra_source_name))
+                    break
             except urllib.error.URLError:
-                print("ERROR: urllib.request did not work. Trying wget")
-                try:
-                    wget_command = ['wget', str(sra_source), os.path.join(work_dir, (str(sra_id + '.sra')))]
-                    subprocess.run(wget_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                except ModuleNotFoundError:
-                    print("ERROR: Could not find wget")
-                except urllib.error.URLError:
-                    print(
-                        "ERROR: Could not download from " + sra_source + ".")
-                    dl_status = 'failed'
-                    continue
-
-                print(
-                    "ERROR: Could not download from " + sra_source + ".")
-                dl_status = 'failed'
-                continue
-
-        if dl_status == 'failed':
-            print("Exhausted all Sources, trying prefetch.")
+                sys.stderr.write("urllib.request failed SRA download from {}.\n".format(sra_source_name))
+            try:
+                wget_command = ['wget', str(sra_sources[sra_source_name]), path_downloaded_sra]
+                subprocess.run(wget_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                if os.path.exists(path_downloaded_sra):
+                    is_sra_download_completed = True
+                    print('SRA file was downloaded with GNU Wget from {}'.format(sra_source_name))
+                    break
+                else:
+                    sys.stderr.write("GNU Wget failed SRA download from {}.\n".format(sra_source_name))
+            except ModuleNotFoundError:
+                sys.stderr.write("wget command not found. Consider install it.\n")
+        if not is_sra_download_completed:
+            sys.stderr.write("Exhausted all sources of download.\n")
         else:
-            print("done!")
-            assert os.path.exists(sra_path), 'SRA file download failed: ' + sra_stat['sra_id']
+            assert os.path.exists(path_downloaded_sra), 'SRA file download failed: ' + sra_stat['sra_id']
             return
 
-    if not os.path.exists(sra_path):
+    if not os.path.exists(path_downloaded_sra):
         print('Trying to download the SRA file using prefetch.')
         if os.path.exists(individual_sra_tmp_dir):
             shutil.rmtree(individual_sra_tmp_dir)
@@ -278,10 +273,8 @@ def download_sra(metadata, sra_stat, args, work_dir, overwrite=False):
         print(prefetch_out.stdout.decode('utf8'))
         print('prefetch stderr:')
         print(prefetch_out.stderr.decode('utf8'))
-        if (prefetch_out.returncode !=0):
-            sys.stderr.write("prefetch did not finish safely.\n")
         if (prefetch_out.returncode):
-            sys.stderr.write('Trying prefetch again...\n')
+            sys.stderr.write("prefetch did not finish safely. Trying prefetch again.\n")
             prefetch_command = [args.prefetch_exe, '--force', 'no', '--max-size', '100G',
                                 sra_stat['sra_id']]
             prefetch_out = subprocess.run(prefetch_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -290,22 +283,22 @@ def download_sra(metadata, sra_stat, args, work_dir, overwrite=False):
             print('prefetch stderr:')
             print(prefetch_out.stderr.decode('utf8'))
             if (prefetch_out.returncode !=0):
-                sys.stderr.write("prefetch did not finish safely.\n")
+                sys.stderr.write("Again, prefetch did not finish safely.\n")
     # Move files downloaded by prefetch. This is necessary because absolute path didn't work for prefetch --output-directory
     if os.path.exists(os.path.join('./', sra_stat['sra_id'] + '/', sra_stat['sra_id'] + '.sra')):
-        subprocess.run(['mv', os.path.join('./', sra_stat['sra_id'] + '/', sra_stat['sra_id'] + '.sra'), sra_path],
+        subprocess.run(['mv', os.path.join('./', sra_stat['sra_id'] + '/', sra_stat['sra_id'] + '.sra'), path_downloaded_sra],
                        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         shutil.rmtree(os.path.join('./', sra_stat['sra_id'] + '/'))
     elif os.path.exists(os.path.expanduser(os.path.join('~/ncbi/public/sra/', sra_stat['sra_id'] + '.sra'))):
         subprocess.run(
-            ['mv', os.path.expanduser(os.path.join('~/ncbi/public/sra/', sra_stat['sra_id'] + '.sra')), sra_path],
+            ['mv', os.path.expanduser(os.path.join('~/ncbi/public/sra/', sra_stat['sra_id'] + '.sra')), path_downloaded_sra],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     # Move files downloaded by ascp
     if os.path.exists(os.path.join(individual_sra_tmp_dir, sra_stat['sra_id'] + '.sra')):
-        subprocess.run(['mv', os.path.join(individual_sra_tmp_dir, sra_stat['sra_id'] + '.sra'), sra_path],
+        subprocess.run(['mv', os.path.join(individual_sra_tmp_dir, sra_stat['sra_id'] + '.sra'), path_downloaded_sra],
                        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         shutil.rmtree(individual_sra_tmp_dir)
-    assert os.path.exists(sra_path), 'SRA file download failed: ' + sra_stat['sra_id']
+    assert os.path.exists(path_downloaded_sra), 'SRA file download failed: ' + sra_stat['sra_id']
 
 
 def check_getfastq_dependency(args):
@@ -347,16 +340,16 @@ def set_getfastq_directories(args, sra_id):
 
 
 def run_pfd(sra_stat, args, metadata, start, end):
-    sra_path = os.path.join(sra_stat['output_dir'], sra_stat['sra_id'] + '.sra')
+    path_downloaded_sra = os.path.join(sra_stat['output_dir'], sra_stat['sra_id'] + '.sra')
     pfd_command = ['parallel-fastq-dump', '-t', str(args.threads), '--minReadLen', str(args.min_read_length),
                    '--qual-filter-1',
                    '--skip-technical', '--split-3', '--clip', '--gzip', '--outdir', sra_stat['output_dir'],
                    '--tmpdir', sra_stat['output_dir']]
     print('Total sampled bases:', "{:,}".format(sra_stat['spot_length'] * (end - start + 1)), 'bp')
     pfd_command = pfd_command + ['--minSpotId', str(int(start)), '--maxSpotId', str(int(end))]
-    # If sra_stat['sra_id'], not sra_path, is provided, pfd couldn't find pre-downloaded .sra files
+    # If sra_stat['sra_id'], not path_downloaded_sra, is provided, pfd couldn't find pre-downloaded .sra files
     # and start downloading it to $HOME/ncbi/public/sra/
-    pfd_command = pfd_command + ['-s', sra_path]
+    pfd_command = pfd_command + ['-s', path_downloaded_sra]
     # pfd_command = pfd_command + ['-s', sra_stat['sra_id']]
     print('Command:', ' '.join(pfd_command))
     pfd_out = subprocess.run(pfd_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -595,8 +588,8 @@ def getfastq_metadata(args):
     if (args.id is None)&(args.id_list is None):
         assert args.concat == False, '--concat should be set "no" with the input from --metadata.'
         metadata = load_metadata(args)
-    metadata.df.loc[:,'total_bases'] = metadata.df.loc[:,'total_bases'].replace('', numpy.nan).astype(float)
-    metadata.df.loc[:, 'spot_length'] = metadata.df.loc[:, 'spot_length'].replace('', numpy.nan).astype(float)
+    metadata.df['total_bases'] = metadata.df.loc[:,'total_bases'].replace('', numpy.nan).astype(float)
+    metadata.df['spot_length'] = metadata.df.loc[:, 'spot_length'].replace('', numpy.nan).astype(float)
     return metadata
 
 
@@ -663,8 +656,8 @@ def initialize_columns(metadata, g):
     metadata.df.loc[:, 'bp_until_target_size'] = g['num_bp_per_sra']
     cols = ['total_spots','total_bases','size','nominal_length','nominal_sdev','spot_length']
     for col in cols:
-        if metadata.df.loc[:,col].dtype in [numpy.object, numpy.str]:
-            metadata.df.loc[:,col] = metadata.df.loc[:,col].str.replace('^$', 'nan', regex=True).astype(float)
+        if metadata.df[col].dtype in [numpy.object, numpy.str]:
+            metadata.df[col] = metadata.df.loc[:,col].str.replace('^$', 'nan', regex=True).astype(float)
     return metadata
 
 def sequence_extraction(args, sra_stat, metadata, g, start, end):
@@ -788,16 +781,21 @@ def check_metadata_validity(metadata):
     is_total_bases_na |= (metadata.df.loc[:, 'total_bases']==0)
     is_total_bases_na |= (metadata.df.loc[:, 'total_bases']=='')
     if is_total_bases_na.any():
-        #raise Exception('Empty value(s) of total_bases were detected in the metadata table.')
-        print('Empty value(s) of total_bases were detected in the metadata table. Filling a placeholder value 999,999,999,999.')
+        txt = 'Empty value(s) of total_bases were detected in {}. Filling a placeholder value 999,999,999,999\n'
+        sys.stderr.write(txt.format(', '.join(metadata.df.loc[is_total_bases_na, 'run'])))
         metadata.df.loc[is_total_bases_na,'total_bases'] = 999999999999
-        metadata.df.loc[:, 'total_bases'] = metadata.df.loc[:, 'total_bases'].astype(int)
+        metadata.df['total_bases'] = metadata.df.loc[:, 'total_bases'].astype(int)
     is_total_spots_na = metadata.df.loc[:, 'total_spots'].isnull()
     is_total_spots_na |=  (metadata.df.loc[:, 'total_spots']==0)
     is_total_spots_na |=  (metadata.df.loc[:, 'total_spots']=='')
     if is_total_spots_na.any():
         new_values = metadata.df.loc[is_total_spots_na,'total_bases'] / metadata.df.loc[is_total_spots_na,'spot_length']
-        metadata.df.loc[is_total_spots_na, 'total_spots'] = new_values.astype(int)
+        if is_total_spots_na.any():
+            txt = 'Empty value(s) of total_spots were detected in {}. Filling a placeholder value 999,999,999,999\n'
+            sys.stderr.write(txt.format(', '.join(metadata.df.loc[is_total_spots_na,'run'])))
+            new_values.loc[new_values.isnull()] = 999999999999 # https://github.com/kfuku52/amalgkit/issues/110
+        new_values = new_values.astype(int)
+        metadata.df.loc[is_total_spots_na, 'total_spots'] = new_values
     for i in metadata.df.index:
         txt = 'Individual SRA size of {}: {:,} bp'
         print(txt.format(metadata.df.at[i, 'run'], metadata.df.at[i, 'total_bases']))
