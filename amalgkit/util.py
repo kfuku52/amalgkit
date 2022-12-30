@@ -77,10 +77,8 @@ def get_newest_intermediate_file_extension(sra_stat, work_dir):
                 sys.stdout.write('{}\n'.format(safe_delete_file))
             return '.safely_removed'
         sys.stderr.write('getfastq output not found in: {}, layout = {}\n'.format(work_dir, sra_stat['layout']))
-        txt = 'If you wish to obtain the .fastq file(s), run: '
-        txt += 'getfastq --id {} --out_dir {}'
-        print(txt.format(sra_id, args.out_dir))
-        print('Skipping {}'.format(sra_id))
+        txt = 'Skipping. If you wish to obtain the .fastq file(s), run: getfastq --id {}\n'
+        sys.stderr.write(txt.format(sra_stat['sra_id']))
         raise FileNotFoundError
     return ext_out
 

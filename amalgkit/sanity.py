@@ -50,7 +50,7 @@ def check_getfastq_outputs(args, sra_ids, metadata, output_dir):
         print("amalgkit getfastq output folder detected. Checking presence of output files.")
         for sra_id in sra_ids:
             print("\n")
-            print("Looking for ", sra_id)
+            print("Looking for {}".format(sra_id))
             sra_path = os.path.join(getfastq_path, sra_id)
             if os.path.exists(sra_path):
                 sra_stat = get_sra_stat(sra_id, metadata)
@@ -64,7 +64,7 @@ def check_getfastq_outputs(args, sra_ids, metadata, output_dir):
 
                 files = glob.glob(os.path.join(sra_path, sra_id + "*" + ext))
                 if ext != '.safely_removed':
-                    print("found: ", files)
+                    print("Found:", files)
                 data_available.append(sra_id)
                 try:
                     updated_metadata_path = os.path.join(args.updated_metadata_dir, "metadata_" + sra_id + ".tsv")
@@ -72,12 +72,11 @@ def check_getfastq_outputs(args, sra_ids, metadata, output_dir):
                     updated_metadata_path = os.path.join(args.out_dir, "metadata/updated_metadata/metadata_"
                                                          + sra_id + ".tsv")
 
-                print("checking for updated metadata in: ", updated_metadata_path)
+                print("Checking for updated metadata in: ", updated_metadata_path)
                 if os.path.exists(updated_metadata_path):
                     print("found updated metadata!")
                 else:
-                    print("could not find updated metadata! Please make sure amalgkit getfastq ran properly for ",
-                          sra_id)
+                    print("The amalgkit getfastq output not found: {}".format(sra_id))
                     metadata_unavailable.append(sra_id)
             else:
                 print("Could not find getfastq output for: ", sra_id, "\n")
@@ -95,7 +94,7 @@ def check_getfastq_outputs(args, sra_ids, metadata, output_dir):
             file.write(sra_id + "\n")
         file.close()
     else:
-        txt = "Sequences found for all SRA IDs in --metadata ({})"
+        txt = "The getfastq output files for all SRA IDs in --metadata ({}) were found."
         print(txt.format(args.metadata))
 
     if metadata_unavailable:
@@ -122,7 +121,7 @@ def check_quant_index(args, uni_species, output_dir):
             sci_name = sci_name.replace(".", "")
             index_path = os.path.join(index_dir_path, sci_name + "*")
             print("\n")
-            print("Looking for index file", index_path, "for species: ", species)
+            print("Looking for index file {} for species {}".format(index_path, species))
             index_files = glob.glob(index_path)
             if not index_files:
                 print("could not find anything in", index_path)
@@ -133,7 +132,7 @@ def check_quant_index(args, uni_species, output_dir):
                     sci_name = sci_name[0] + "_" + sci_name[1]
                     print("Ignoring subspecies.")
                     index_path = os.path.join(index_dir_path, sci_name + "*")
-                    print("Looking for ", index_path)
+                    print("Looking for {}".format(index_path))
                     index_files = glob.glob(index_path)
                     if index_files:
                         print("Found ", index_files, "!")
@@ -178,7 +177,7 @@ def check_quant_output(args, sra_ids, output_dir):
         for sra_id in sra_ids:
             warned = []
             print("\n")
-            print("Looking for ", sra_id)
+            print("Looking for {}".format(sra_id))
             sra_path = os.path.join(quant_path, sra_id)
             if os.path.exists(sra_path):
                 print("Found output folder ", sra_path, " for ", sra_id)
