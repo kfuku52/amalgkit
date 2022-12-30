@@ -97,19 +97,10 @@ def run_quant(args, metadata, sra_id, index):
     output_dir_getfastq = os.path.join(args.out_dir, 'getfastq', sra_id)
     sra_stat = get_sra_stat(sra_id, metadata, num_bp_per_sra=None)
     sra_stat = check_layout_mismatch(sra_stat, output_dir_getfastq)
-    try:
-        ext = get_newest_intermediate_file_extension(sra_stat, work_dir=output_dir_getfastq)
-        if ext == '.safely_removed':
-            print('These files have been deleted. If you wish to re-obtain the .fastq file(s), run: getfastq -e email@adress.com --id ', sra_id, ' -w ', args.out_dir, '--redo yes --gcp yes --aws yes --ncbi yes')
-            print('skipping.')
-            return
-
-    except FileNotFoundError:
-        sys.stderr.write('ERROR: could not find fastq file(s) in:', output_dir_getfastq)
-        txt = 'If you wish to obtain the .fastq file(s), run: '
-        txt += 'getfastq --id {} --out_dir {}'
-        print(txt.format(sra_id, args.out_dir))
-        print('Skipping {}'.format(sra_id))
+    ext = get_newest_intermediate_file_extension(sra_stat, work_dir=output_dir_getfastq)
+    if ext == '.safely_removed':
+        print('These files have been deleted. If you wish to re-obtain the .fastq file(s), run: getfastq -e email@adress.com --id ', sra_id, ' -w ', args.out_dir, '--redo yes --gcp yes --aws yes --ncbi yes')
+        print('skipping.')
         return
     in_files = glob.glob(os.path.join(args.out_dir, 'getfastq', sra_id, sra_id + "*" + ext))
 
