@@ -496,11 +496,11 @@ get_pca_coordinates = function(tc, df_label, by='species_tissue') {
   for (i in 1:5) {
     labels = c(labels, paste0("Principal component ", i, " (", round(summary(pca)$importance[2,i]*100, digits=1), "%)"))
   }
-  PC1 = pca[['rotation']][,'PC1']
-  PC2 = pca[['rotation']][,'PC2']
-  PC3 = pca[['rotation']][,'PC3']
-  PC4 = pca[['rotation']][,'PC4']
-  PC5 = pca[['rotation']][,'PC5']
+  PC1 = pca[['x']][,'PC1']
+  PC2 = pca[['x']][,'PC2']
+  PC3 = pca[['x']][,'PC3']
+  PC4 = pca[['x']][,'PC4']
+  PC5 = pca[['x']][,'PC5']
   tmp = data.frame(PC1, PC2, PC3, PC4, PC5)
   if (by=='species_tissue') {
     df_label[by] = paste0(sub(' ', '_', df_label[['scientific_name']]), '_', df_label[['tissue']])
