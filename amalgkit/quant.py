@@ -171,23 +171,13 @@ def get_index(args, sci_name):
 def quant_main(args):
     check_kallisto_dependency()
     metadata = load_metadata(args)  # loads single-row metadata according to --batch
-    if args.id is None:
-        # if args.id is not specified, it will run the whole metadata sheet one by one
-        for i in metadata.df.index:
-            print('')
-            sra_id = metadata.df.at[i, 'run']
-            sci_name = metadata.df.at[i, 'scientific_name']
-            print('Species: {}'.format(sci_name))
-            print('SRA Run ID: {}'.format(sra_id))
-            sci_name = sci_name.replace(" ", "_")
-            print('looking for index folder in ', args.out_dir)
-            index = get_index(args, sci_name)
-            run_quant(args, metadata, sra_id, index)
-    else:
-        sra_id = args.id
-        sci_name = metadata.df.loc[metadata.df['run'] == args.id, 'scientific_name']
+    for i in metadata.df.index:
+        print('')
+        sra_id = metadata.df.at[i, 'run']
+        sci_name = metadata.df.at[i, 'scientific_name']
         print('Species: {}'.format(sci_name))
-        print('Run ID: {}'.format(sra_id))
+        print('SRA Run ID: {}'.format(sra_id))
         sci_name = sci_name.replace(" ", "_")
+        print('looking for index folder in ', args.out_dir)
         index = get_index(args, sci_name)
         run_quant(args, metadata, sra_id, index)

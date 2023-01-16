@@ -204,8 +204,6 @@ pge.set_defaults(handler=command_getfastq)
 # Sub parser: quant
 pqu = subparsers.add_parser('quant', help='see `amalgkit quant -h`', parents=[parent_parser_out, parent_parser_meta, parent_parser_threads, parent_parser_redo, parent_parser_batch])
 
-pqu.add_argument('--id', metavar='XXXXX0000', default=None, type=str, required=False, action='store',
-                 help='default=%(default)s: SRA ID. quant automatically search .fastq or .fastq.gz file(s)')
 pqu.add_argument('--index_dir', metavar='PATH', default=None, type=str, required=False, action='store',
                  help='default=%(default)s: custom path to index directory. Only required if index directory is not '
                       'out_dir/index/')
