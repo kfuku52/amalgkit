@@ -66,18 +66,7 @@ def check_getfastq_outputs(args, sra_ids, metadata, output_dir):
                 if ext != '.safely_removed':
                     print("Found:", files)
                 data_available.append(sra_id)
-                try:
-                    updated_metadata_path = os.path.join(args.updated_metadata_dir, "metadata_" + sra_id + ".tsv")
-                except:
-                    updated_metadata_path = os.path.join(args.out_dir, "metadata/updated_metadata/metadata_"
-                                                         + sra_id + ".tsv")
 
-                print("Checking for updated metadata in: ", updated_metadata_path)
-                if os.path.exists(updated_metadata_path):
-                    print("found updated metadata!")
-                else:
-                    print("The amalgkit getfastq output not found: {}".format(sra_id))
-                    metadata_unavailable.append(sra_id)
             else:
                 print("Could not find getfastq output for: ", sra_id, "\n")
                 print("Suggested command for rerun: getfastq -e email@adress.com --id ", sra_id, " -w ", args.out_dir, "--redo yes --gcp yes --aws yes --ncbi yes")
