@@ -83,16 +83,20 @@ def get_newest_intermediate_file_extension(sra_stat, work_dir):
     return ext_out
 
 def write_updated_metadata(metadata, outpath, args):
+    try:
+        overwrite_intermediate_metadata = args.overwrite_intermediate_metadata
+    except AttributeError:
+        overwrite_intermediate_metadata = 'yes'
     if os.path.exists(outpath):
-        if not args.overwrite_metadata:
-            print('Updated metadata was detected and will not be overwritten.')
+        if not overwrite_intermediate_metadata:
+            print('Intermediate metadata from previous run was detected and will not be overwritten.')
             return None
         else:
-            print('Updated metadata was detected.')
-            print('--overwrite_metadata option was set to yes. Metadata will be overwritten.')
+            print('Intermediate metadata from previous run was detected.')
+            print('Intermediate metadata will be overwritten.')
             print('Preparing...')
     else:
-        print('Updated metadata file was not detected. Preparing...')
+        print('Intermediate metadata file was not detected. Preparing...')
     quant_dir = os.path.join(args.out_dir, 'quant')
     metadata = get_mapping_rate(metadata, quant_dir)
     print('Writing curate metadata containing mapping rate: {}'.format(outpath))
