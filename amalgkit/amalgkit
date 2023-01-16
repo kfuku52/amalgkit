@@ -340,10 +340,10 @@ pco.add_argument('--config', metavar='base|test|plantae|vertebrate', default='ba
                       '"test": short animal set for testing amalgkit metadtata. '
                       '"vertebrate" preconfigured set of config files for vertebrate animal data"'
                       '"plantae": preconfigured set of config files for plant data')
-pco.add_argument('--config_dir', metavar='STR', default='inferred', type=str, required=False, action='store',
+pco.add_argument('--config_name', metavar='STR', default='inferred', type=str, required=False, action='store',
                  help='default=%(default)s: Name of config folder to be created. Defaults to the original name within the package.')
 pco.add_argument('--overwrite', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
-                 help='default=%(default)s: allow to overwrite config files in out_dir/config/config_dir/ .')
+                 help='default=%(default)s: allow to overwrite config files in out_dir/config/config_name/ .')
 pco.set_defaults(handler=command_config)
 
 # Sub parser: help
