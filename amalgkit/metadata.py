@@ -8,7 +8,7 @@ import re
 import lxml.etree
 import datetime
 import time
-
+import warnings
 
 
 def check_config_dir(args):
@@ -28,7 +28,8 @@ def check_config_dir(args):
         'orthographical_variant.config',
     ]
     for af in asserted_files:
-        assert (af in files), 'config file not found: '+af
+        if af not in files:
+            warnings.warn('WARNING: File '+af+' not found. This may impact some functionalities of amalgkit metadata. Please refer to the amalgkit wiki for more info: https://github.com/kfuku52/amalgkit/wiki/Amalgkit-metadata#Configs')
 
 def get_search_term(species_name="", bioprojects=[], biosamples=[], keywords=[],
                     other_conditions=pandas.DataFrame(), excluded_conditions=pandas.DataFrame()):
