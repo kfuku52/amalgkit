@@ -5,7 +5,7 @@ import os
 import platform
 import re
 import subprocess
-import time
+import warnings
 
 from amalgkit.sanity import check_getfastq_outputs
 from amalgkit.util import *
@@ -52,7 +52,16 @@ def get_fastq_stats(args):
         print("Found {} file(s) for ID {}. Lib-layout: {}".format(num_fastq_files[id], id,lib_layout), flush=True)
         print("Getting sequence statistics.", flush=True)
         tmp_file = os.path.join(args.out_dir, id+'_seqkit_stats.tmp')
-        if args.accurate_size:
+        # check for file extension. seqkit is significantly slower on compressed files, but still fast on decompressed files.
+        if fastq_files[0].endswith(('.fq', '.fastq')):
+            is_decompressed = True
+        elif fastq_files[0].endswith(('.fq.gz', '.fastq.gz')):
+            is_decompressed = False
+        else:
+            warnings.warn(fastq_files[0]+"is not a fastq file. Skipping.")
+            continue
+
+        if args.accurate_size or is_decompressed:
             print('--accurate_size set to yes. Running accurate sequence scan.')
             seqkit_command = ['seqkit', 'stats', '-T', '-j', str(args.threads), fastq_files[0]]
             seqkit_stdout = open(tmp_file, 'w')
