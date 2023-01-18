@@ -58,7 +58,7 @@ def get_fastq_stats(args):
         elif fastq_files[0].endswith(('.fq.gz', '.fastq.gz')):
             is_decompressed = False
         else:
-            warnings.warn(fastq_files[0]+"is not a fastq file. Skipping.")
+            warnings.warn("{} is not a fastq file. Skipping.".format(fastq_files[0]))
             continue
 
         if args.accurate_size or is_decompressed:
