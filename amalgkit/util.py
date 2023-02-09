@@ -21,7 +21,12 @@ def load_metadata(args):
     if 'batch' in dir(args):
         if args.batch is None:
             return metadata
-        print('--batch is specified. Processing one SRA per job.')
+        try:
+            # --batch must be handled species-wise in curate.py
+            args.curate_group
+            return metadata
+        except:
+            print('--batch is specified. Processing one SRA per job.')
         is_sampled = numpy.array([strtobool(yn) for yn in df.loc[:, 'is_sampled']], dtype=bool)
         txt = 'This is {:,}th job. In total, {:,} jobs will be necessary for this metadata table. {:,} '
         txt += 'SRAs were excluded from the table (is_sampled==no).'
