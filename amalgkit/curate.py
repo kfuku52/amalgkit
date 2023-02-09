@@ -114,12 +114,6 @@ def curate_main(args):
             run_curate_r_script(args, new_metadata_path, metadata, sp)
     else:
         # enter Batch mode, only process 1 species
-        print('Entering --batch mode. processing 1 species')
-        txt = 'This is {:,}th job. In total, {:,} jobs will be necessary for this metadata table.'
-        print(txt.format(args.batch, len(spp)))
-        sp = spp[args.batch - 1]
-        print('processing species number ', args.batch, ' : ', sp)
-        metadata.df = metadata.df.loc[metadata.df['scientific_name'] == sp]
         sp = sp.replace(" ", "_")
         write_updated_metadata(metadata, new_metadata_path, args)
         run_curate_r_script(args, new_metadata_path, metadata, sp)

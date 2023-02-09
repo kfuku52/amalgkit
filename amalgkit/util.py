@@ -5,6 +5,7 @@ import pandas
 import glob
 import os
 import sys
+import inspect
 
 from distutils.util import strtobool
 from amalgkit.metadata import Metadata
@@ -21,12 +22,24 @@ def load_metadata(args):
     if 'batch' in dir(args):
         if args.batch is None:
             return metadata
-        try:
-            # --batch must be handled species-wise in curate.py
-            args.curate_group
+        # --batch must be handled species-wise in curate.py
+        # so we need to find out where the call came from
+        frm = inspect.stack()[1]
+        mod = inspect.getmodule(frm[0])
+        if mod.__name__ == 'amalgkit.curate':
+            print('Entering --batch mode for amalgkit curate. processing 1 species')
+            txt = 'This is {:,}th job. In total, {:,} jobs will be necessary for this metadata table.'
+            spp = metadata.df.loc[:, 'scientific_name'].drop_duplicates().values
+            print(txt.format(args.batch, len(spp)))
+            sp = spp[args.batch - 1]
+            print('processing species number ', args.batch, ' : ', sp)
+            is_sampled = numpy.array([strtobool(yn) for yn in df.loc[:, 'is_sampled']], dtype=bool)
+            metadata.df = metadata.df.loc[is_sampled, :]
+            metadata.df = metadata.df.reset_index()
+            metadata.df = metadata.df.loc[metadata.df['scientific_name'] == sp]
             return metadata
-        except:
-            print('--batch is specified. Processing one SRA per job.')
+
+        print('--batch is specified. Processing one SRA per job.')
         is_sampled = numpy.array([strtobool(yn) for yn in df.loc[:, 'is_sampled']], dtype=bool)
         txt = 'This is {:,}th job. In total, {:,} jobs will be necessary for this metadata table. {:,} '
         txt += 'SRAs were excluded from the table (is_sampled==no).'
