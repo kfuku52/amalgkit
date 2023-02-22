@@ -1,4 +1,7 @@
+import os
+import re
 import subprocess
+
 from amalgkit.util import *
 
 def check_quant_output(sra_id, output_dir, args):
@@ -20,7 +23,7 @@ def call_kallisto(args, in_files, metadata, sra_stat, output_dir, index):
     lib_layout = sra_stat['layout']
     kallisto_cmd = ''
     if lib_layout == 'single':
-        print("single end reads detected. Proceeding in single mode")
+        print("Single end reads detected. Proceeding in single mode")
         if len(in_files) != 1:
             txt = "Library layout: {} and expected 1 input file. " \
                   "Received {} input file[s]. Please check your inputs and metadata."
@@ -43,7 +46,7 @@ def call_kallisto(args, in_files, metadata, sra_stat, output_dir, index):
             txt = "Library layout: {} and expected 2 input files. " \
                   "Received {} input file[s]. Please check your inputs and metadata."
             raise ValueError(txt.format(lib_layout, len(in_files)))
-        print("paired end reads detected. Running in paired read mode.")
+        print("Paired-end reads detected. Running in paired read mode.")
         kallisto_cmd = ["kallisto", "quant", "--threads", str(args.threads), "-i", index, "-o",
                         output_dir, in_files[0], in_files[1]]
 
@@ -55,7 +58,7 @@ def call_kallisto(args, in_files, metadata, sra_stat, output_dir, index):
     print(kallisto_out.stderr.decode('utf8'))
     if kallisto_out.returncode != 0:
         sys.stderr.write("kallisto did not finish safely.\n")
-        if 'zero reads pseudoaligned' in kallisto_out.stderr.decode('utf8'):
+        if 'Zero reads pseudoaligned' in kallisto_out.stderr.decode('utf8'):
             sys.stderr.write('No reads are mapped to the reference. This sample will be removed by `amalgkit curate`.')
 
     # move output to results with unique name
@@ -100,7 +103,7 @@ def run_quant(args, metadata, sra_id, index):
     ext = get_newest_intermediate_file_extension(sra_stat, work_dir=output_dir_getfastq)
     if ext == '.safely_removed':
         print('These files have been deleted. If you wish to re-obtain the .fastq file(s), run: getfastq -e email@adress.com --id ', sra_id, ' -w ', args.out_dir, '--redo yes --gcp yes --aws yes --ncbi yes')
-        print('skipping.')
+        print('Skipping.')
         return
     in_files = glob.glob(os.path.join(args.out_dir, 'getfastq', sra_id, sra_id + "*" + ext))
 
@@ -133,26 +136,29 @@ def get_index(args, sci_name):
         index = glob.glob(os.path.join(index_dir, sci_name + '*'))
         if len(index) > 1:
             raise ValueError(
-                "found multiple index files for species. Please make sure there is only one index file for this species.")
+                "Found multiple index files for species. Please make sure there is only one index file for this species.")
         elif len(index) == 0:
             if args.build_index:
-                print("--build_index set. Building index for ", sci_name)
+                print("--build_index set. Building index for {}".format(sci_name))
                 if (args.fasta_dir=='inferred'):
                     path_fasta_dir = os.path.join(args.out_dir, 'fasta')
                 else:
                     path_fasta_dir = args.fasta_dir
-                fasta_file = glob.glob(os.path.join(path_fasta_dir, sci_name + '*.fa')) + glob.glob(os.path.join(args.fasta_dir, sci_name + '*.fasta'))
-                if len(fasta_file) > 1:
-                    txt = "found multiple reference fasta files for this species: {}\n"
+                fasta_files = []
+                for ext in ['*.fa','*.fasta','*.fa.gz','*.fasta.gz',]:
+                    path_pattern = os.path.join(path_fasta_dir, sci_name + ext)
+                    fasta_files.extend(glob.glob(path_pattern))
+                if len(fasta_files) > 1:
+                    txt = "Found multiple reference fasta files for this species: {}\n"
                     txt += "Please make sure there is only one index file for this species.\n{}"
-                    raise ValueError(txt.format(', '.join(sci_name, fasta_file)))
-                elif len(fasta_file) == 0:
+                    raise ValueError(txt.format(', '.join(sci_name, fasta_files)))
+                elif len(fasta_files) == 0:
                     txt = "Could not find reference fasta file for this species: {}\n".format(sci_name)
                     txt += 'If the reference fasta file is correctly placed, the column "scientific_name" of the --metadata file may need to be edited.'
                     raise FileNotFoundError(txt)
-                fasta_file = fasta_file[0]
-                print('fasta file found: ', fasta_file)
-                print('building index.')
+                fasta_file = fasta_files[0]
+                print('Reference fasta file found: {}'.format(fasta_file))
+                print('Building index.')
                 index_path = os.path.join(index_dir, sci_name + '.idx')
                 kallisto_build_cmd = ["kallisto", "index", "-i", index_path, fasta_file]
                 subprocess.run(kallisto_build_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -164,7 +170,7 @@ def get_index(args, sci_name):
         index = index[0]
     else:
         raise FileNotFoundError("could not find index folder")
-    print("index file found: {}".format(index))
+    print("Kallisto index file found: {}".format(index))
     return index
 
 
@@ -178,6 +184,6 @@ def quant_main(args):
         print('Species: {}'.format(sci_name))
         print('SRA Run ID: {}'.format(sra_id))
         sci_name = sci_name.replace(" ", "_")
-        print('looking for index folder in ', args.out_dir)
+        print('Looking for index folder in ', args.out_dir)
         index = get_index(args, sci_name)
         run_quant(args, metadata, sra_id, index)
