@@ -91,9 +91,9 @@ def get_fastq_stats(args):
         if args.remove_tmp:
             os.remove(tmp_file)
         tmp_stat_df.loc[0,'id'] = id
-        try:
+        if len(fastq_files) == 2:
             tmp_stat_df.loc[0, 'file2'] = fastq_files[1]
-        except IndexError:
+        else:
             tmp_stat_df.loc[0, 'file2'] = 'unavailable'
         tmp_metadata.loc[row, 'scientific_name'] = 'Please add in format: Genus species'
         tmp_metadata.loc[row,'curate_group'] = 'Please add'
