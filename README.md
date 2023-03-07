@@ -1,3 +1,5 @@
+![](logo/logo_amalgkit_large.png)
+
 ## Overview
 **AMALGKIT** ([/əm`ælgkit/](http://ipa-reader.xyz/?text=%C9%99m%60%C3%A6lgkit&voice=Joanna)) is a toolkit to integrate RNA-seq data from [the NCBI SRA database](https://www.ncbi.nlm.nih.gov/sra) and from private fastq files to generate unbiased cross-species transcript abundance dataset for a large-scale evolutionary gene expression analysis.
 
