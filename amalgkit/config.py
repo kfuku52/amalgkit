@@ -70,12 +70,8 @@ def create_config_from_package(args):
     config_files = ir.files(config_base).rglob('*.config')
 
     for config_file in config_files:
-        try:
-            # extracts the contents of a single file from the config_name within the amalgkit package
-            file_content = ir.files(config_base).joinpath(os.path.basename(config_file)).read_bytes()
-        except:
-            continue
-        print('Writing {} for the dataset {}'.format(config_file, args.config))
+        file_content = ir.files(config_base).joinpath(os.path.basename(config_file)).read_bytes()
+        print('Copying from {} to {}'.format(config_file, path_config))
         with open(os.path.join(path_config, os.path.basename(config_file)), mode='wb') as f:
             f.write(file_content)
 
