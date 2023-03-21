@@ -93,8 +93,10 @@ def get_fastq_stats(args):
         tmp_stat_df.loc[0,'id'] = id
         if len(fastq_files) == 2:
             tmp_stat_df.loc[0, 'file2'] = fastq_files[1]
-        else:
+        elif len(fastq_files) == 1:
             tmp_stat_df.loc[0, 'file2'] = 'unavailable'
+        else:
+            raise ValueError('Too many files found for set {}'.format(fastq_files))
         tmp_metadata.loc[row, 'scientific_name'] = 'Please add in format: Genus species'
         tmp_metadata.loc[row,'curate_group'] = 'Please add'
         tmp_metadata.loc[row,'run'] = tmp_stat_df.loc[0,'id']
