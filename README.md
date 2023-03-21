@@ -1,39 +1,7 @@
+![](logo/logo_amalgkit_large.png)
+
 ## Overview
-**amalgkit** contains tools to amalgamate RNA-seq data from diverse research projects to enable a large-scale evolutionary gene expression analysis with unbiased datasets.
-
-## Dependency
-
-### General
-* [python 3](https://www.python.org/)
-* [biopython](https://biopython.org/)
-* [numpy](https://github.com/numpy/numpy)
-* [pandas](https://github.com/pandas-dev/pandas)
-* [lxml](https://lxml.de/)
-
-### amalgkit metadata
-- Nothing
-
-### amalgkit getfastq
-* [parallel-fastq-dump](https://github.com/rvalieris/parallel-fastq-dump) for `--pfd yes` (default)
-*[fastp](https://github.com/OpenGene/fastp) for `--fastp yes` (default)
-
-### amalgkit quant
-- [kallisto](https://pachterlab.github.io/kallisto/)
-
-### amalgkit curate
-- [R](https://www.r-project.org), with various libraries:
-    - Biobase
-    - pcaMethods
-    - colorspace
-    - RColorBrewer
-    - sva
-    - MASS
-    - NMF
-    - dendextend
-    - amap
-    - pvclust
-    - Rtsne
-    - vioplot
+**AMALGKIT** ([/əm`ælgkit/](http://ipa-reader.xyz/?text=%C9%99m%60%C3%A6lgkit&voice=Joanna)) is a toolkit to integrate RNA-seq data from [the NCBI SRA database](https://www.ncbi.nlm.nih.gov/sra) and from private fastq files to generate unbiased cross-species transcript abundance dataset for a large-scale evolutionary gene expression analysis.
 
 ## Installation
 ```
@@ -44,99 +12,31 @@ pip install git+https://github.com/kfuku52/amalgkit
 amalgkit -h
 ```
 
-## `amalgkit metadata` – SRA metadata curation
-**amalgkit metadata** is a subcommand that fetches and curates metadata from the [NCBI SRA database](https://www.ncbi.nlm.nih.gov/sra). 
-This program needs many config files to enable a tailored metadata curation. See `/amalgkit/config/test/`. 
-Currently, the config files are available only for RNA-seq data from vertebrate organs. To get a fairly good metadata for other taxa/tissues, you would have to extensively edit the config files. 
+## Functions
+See [Wiki](https://github.com/kfuku52/amalgkit/wiki) for details.
 
-### Test run
+- `amalgkit config`: Creat a series of config files
 
-```
-mkdir -p amalgkit_out; cd $_
+- `amalgkit metadata`: SRA metadata curation
 
-svn export https://github.com/kfuku52/amalgkit/trunk/config
+- `amalgkit integrate`: Appending local fastq info to a metadata table
 
-config_dir="./config/test"
+- `amalgkit getfastq`: Generate assembly-ready fastq
 
-amalgkit metadata \
---config_dir ${config_dir} \
---out_dir . \
---entrez_email 'aaa@bbb.com' # Use your own email address.
-```
+- `amalgkit quant`: Transcript abundance estimation
 
-If you get a network connection error, simply rerun the same analysis. The program will resume the analysis using intermediate files in `--out_dir`.
+- `amalgkit merge`: Generating transcript abundance tables
 
-### Output
-* **metadata_01_raw_YYYY_MM_DD-YYYY_MM_DD.tsv**: This table is a reformatted version of SRA metadata in the xml format.
-* **metadata_02_grouped_YYYY_MM_DD-YYYY_MM_DD.tsv**: Similar attributes (columns) are grouped into a few categories according to .config settings.
-* **metadata_03_curated_YYYY_MM_DD-YYYY_MM_DD.tsv**: A variety of curation steps are applied according to .config settings. Data unsuitable for evolutionary gene expression analysis such as those from miRNA-seq are marked `No` in the `is_qualified` column. There are particular samples which have been intensively sequenced (e.g., livers of *Bos taurus*). Those samples can be subsampled by the `--max_sample` option and excluded data are marked `No` in the `is_sampled` column.
-* **pivot_\*.tsv**: "species x tissue" pivot tables.
+- `amalgkit cstmm`: Cross-species TMM normalization using single-copy genes
 
-## `amalgkit getfastq` – Generate assembly-ready fastq
-**amalgkit getfastq** takes a BioProject/BioSample/SRA ID as input and generates RNA-seq fastq files for transcriptome assembly. In the assembly process, the more RNA-seq libraries you include, the more transcripts you get. However, it's often computationally challenging to get an assembly from overwhelming amount of data. **amalgkit getfastq** can automatically subsample RNA-seq reads from different libraries. The amount of data you need (specified by `--max_bp`) depends on many factors including the assembly program you use. See [this paper](https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0146062) for example.
+- `amalgkit curate`: Automatic removal of outlier samples and unwanted biases
 
-### Test run
-```
-mkdir fastq_files
+- `amalgkit csca`: Generating plots with cross-species correlation analysis
 
-amalgkit getfastq \
---entrez_email 'aaa@bbb.com' \
---id 'PRJDB4514' \
---threads 2 \
---out_dir ./fastq_files \
---max_bp '75,000'
-```
-## `amalgkit quant` - quantification of RNAseq data
-**amalkit quant** quantifies abundances of transcripts from RNAseq data using Kallisto. All required input and intermediary files are assumed to be in the working directory (default `./`).
+- `amalgkit sanity`: Checking the integrity of AMALGKIT input and output files
 
-### Input files
-- Needs fastq files (single end or paired end) for quantification, ideally processed by `amalgkit getfastq`, but should be able to handle custom data as well.
-- Needs a reference file (usually a fasta file of cdna sequences) for index building, if `--build_index yes` (default), OR an index file if `--build_index no`
-- `--index` is either the name given to the index file (default: `id_name.idx`) for index building (optional in this case), or index file if `build_oindex no`
-- results are stored in `results_quant`
-
-### Contents of working directory:
-- `SRR8819967_1.amalgkit.fastq.gz`
-- `SRR8819967_2.amalgkit.fastq.gz`
-- `arabidopsis_thaliana.fasta` (this is a reference genome)
-
-### Usage example
-```
-amalgkit quant \
---id SRR8819967 \
---index arabidopsis_thaliana.idx \
---ref arabidopsis_thaliana.fasta \
---out_dir ./fastq_files
-```
-
-### Output
-* **SRR8819967_abundance.h5**: bootstrap results in `h5dump` format
-* **SRR8819967_run_info.json**: contains run info
-* **SRR8819967_abundance.tsv**: contains target_id, lentgh, eff_length, est_counts and tpm in human readable .tsv
-
-
-## `amalgkit curate` - transcriptome curation
-
-### Input files
-- output files of `merge` or `cstmm`
-- metadata table from `metadata`
-
-### Usage example
-
-```
-amalgkit curate \
---infile transcriptome.tsv \
---metadata metadata.tsv \
---dist_method 'pearson' \
---tissues brain liver heart embryo \
---out_dir './'
-```
-#### Output
-
-
-
-## Reference
-Although **amalgkit** supports novel unpublished functions, some functionalities including metadata curation, expression level quantification, and further curation steps have been described in this paper, in which we described the transcriptome amalgamation of 21 vertebrate species.
+## Citation
+Although **AMALGKIT** supports novel unpublished functions, some functionalities including metadata curation, expression level quantification, and further curation steps have been described in this paper, in which we described the transcriptome amalgamation of 21 vertebrate species.
 
 Fukushima K*, Pollock DD*. 2020. Amalgamated cross-species transcriptomes reveal organ-specific propensity in gene expression evolution. Nature Communications 11: 4459 (DOI: 10.1038/s41467-020-18090-8) [open access](https://www.nature.com/articles/s41467-020-18090-8)
 
