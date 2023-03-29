@@ -15,7 +15,7 @@ amalgkit -h
 ## Functions
 See [Wiki](https://github.com/kfuku52/amalgkit/wiki) for details.
 
-- `amalgkit config`: Creat a series of config files
+- `amalgkit config`: Creating a series of config files
 
 - `amalgkit metadata`: SRA metadata curation
 
