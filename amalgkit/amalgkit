@@ -110,7 +110,7 @@ pp_meta.add_argument('--metadata', metavar='PATH', default='inferred', type=str,
                  help='default=%(default)s: "inferred" = out_dir/metadata/metadata/metadata.tsv. '
                       'PATH to metadata table, the output file of `amalgkit metadata`.')
 pp_out = argparse.ArgumentParser(add_help=False)
-pp_out.add_argument('-w','--out_dir', metavar='PATH', default='./', type=str, required=False, action='store',
+pp_out.add_argument('--out_dir', metavar='PATH', default='./', type=str, required=False, action='store',
                  help='default=%(default)s: Path to the directory where intermediate and output files are generated.')
 pp_batch = argparse.ArgumentParser(add_help=False)
 pp_batch.add_argument('--batch', metavar='INT', default=None, type=int, required=False, action='store',
@@ -125,17 +125,17 @@ pp_threads.add_argument('--threads', metavar='INT', default=1, type=int, require
 # Sub parser: metadata
 pme_help = 'Generating metadata table. See `amalgkit metadata -h`'
 pme = subparsers.add_parser('metadata', help=pme_help, parents=[pp_out])
-pme.add_argument('-c', '--config_dir', metavar='PATH', default='./', type=str, required=True, action='store',
+pme.add_argument('--config_dir', metavar='PATH', default='./', type=str, required=True, action='store',
                  help='default=%(default)s: Path to the config directory.')
-pme.add_argument('-e', '--entrez_email', metavar='aaa@bbb.com', default='', type=str, required=False, action='store',
+pme.add_argument('--entrez_email', metavar='aaa@bbb.com', default='', type=str, required=False, action='store',
                  help='default=%(default)s: Your email address. See https://www.ncbi.nlm.nih.gov/books/NBK25497/')
-pme.add_argument('-n', '--min_nspots', metavar='INT', default=5000000, type=int, required=False, action='store',
+pme.add_argument('--min_nspots', metavar='INT', default=5000000, type=int, required=False, action='store',
                  help='default=%(default)s: Minimum number of RNA-seq reads per sample.')
-pme.add_argument('-a', '--tissue_detect', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
+pme.add_argument('--tissue_detect', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
                  help='default=%(default)s: Uses config files for tissue grouping by default. If turned on, uses natural language processing to group tissues automatically.')
-pme.add_argument('-s', '--max_sample', metavar='INT', default=99999, type=int, required=False, action='store',
+pme.add_argument('--max_sample', metavar='INT', default=99999, type=int, required=False, action='store',
                  help='default=%(default)s: Maximum number of RNA-seq data sampled for one tissue in a species.')
-pme.add_argument('-o', '--overwrite', metavar='no|yes', default='no', type=strtobool,
+pme.add_argument('--overwrite', metavar='no|yes', default='no', type=strtobool,
                  required=False, action='store',
                  help='default=%(default)s: Overwrite existing intermediate files.')
 pme.set_defaults(handler=command_metadata)
@@ -143,7 +143,7 @@ pme.set_defaults(handler=command_metadata)
 # Sub parser: getfastq
 pge_help = 'Retrieving fastq files. See `amalgkit getfastq -h`'
 pge = subparsers.add_parser('getfastq', help=pge_help, parents=[pp_out, pp_meta, pp_threads, pp_redo, pp_batch])
-pge.add_argument('-e', '--entrez_email', metavar='aaa@bbb.com', default='', type=str, required=False, action='store',
+pge.add_argument('--entrez_email', metavar='aaa@bbb.com', default='', type=str, required=False, action='store',
                  help='default=%(default)s: Your email address. See https://www.ncbi.nlm.nih.gov/books/NBK25497/')
 pge.add_argument('--id', metavar='XXXXX0000', default=None, type=str, required=False, action='store',
                  help='default=%(default)s: BioProject/BioSample/SRR ID.')
@@ -280,7 +280,7 @@ pcu.add_argument('--one_outlier_per_iter', metavar='yes|no', default='no', type=
 pcu.add_argument('--curate_group', metavar='STR', default=None, type=str, required=False, action='store',
                  help='default=%(default)s: "comma separated list of values contained in the curate_group metadata column to be included in the analysis. '
                       'Example input may look like "root,flower,leaf" or "heat stressed,cold stressed,light stressed".')
-pcu.add_argument('-o','--overwrite_intermediate_metadata', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
+pcu.add_argument('--overwrite_intermediate_metadata', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
                  help='default=%(default)s: If yes, allows curate to overwrite an intermediate metadata file created from previous curate runs within the curate folder.')
 pcu.add_argument('--norm', metavar='(logn|log2|lognp1|log2p1|none)-(fpkm|tpm|none)',
                  default='log2p1-fpkm', type=str, required=False, action='store',
