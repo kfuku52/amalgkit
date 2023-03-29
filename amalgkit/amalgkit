@@ -123,7 +123,7 @@ pp_threads.add_argument('--threads', metavar='INT', default=1, type=int, require
                  help='default=%(default)s: Number of threads.')
 
 # Sub parser: metadata
-pme_help = 'Generating metadata table. See `amalgkit metadata -h`'
+pme_help = 'NCBI SRA metadata retrieval and curation. See `amalgkit metadata -h`'
 pme = subparsers.add_parser('metadata', help=pme_help, parents=[pp_out])
 pme.add_argument('--config_dir', metavar='PATH', default='./', type=str, required=True, action='store',
                  help='default=%(default)s: Path to the config directory.')
@@ -338,7 +338,7 @@ pin.add_argument('--accurate_size', metavar='yes|no', default='yes', type=strtob
 pin.set_defaults(handler=command_integrate)
 
 # Sub parser: config
-pco_help = 'Creating a series of config files. See `amalgkit config -h`'
+pco_help = 'Creating a series of config files for the metadata search. See `amalgkit config -h`'
 pco = subparsers.add_parser('config', help=pco_help, parents=[pp_out])
 pco.add_argument('--config', metavar='base|test|plantae|vertebrate', default='base', type=str, required=False, action='store',
                  help='default=%(default)s: Name of config dataset to be exported. '

@@ -15,25 +15,25 @@ amalgkit -h
 ## Functions
 See [Wiki](https://github.com/kfuku52/amalgkit/wiki) for details.
 
-- `amalgkit config`: Creating a series of config files
+- [`amalgkit config`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-config): Creating a series of config files for the metadata search
 
-- `amalgkit metadata`: SRA metadata curation
+- [`amalgkit metadata`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-metadata): NCBI SRA metadata retrieval and curation
 
-- `amalgkit integrate`: Appending local fastq info to a metadata table
+- [`amalgkit integrate`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-integrate): Appending local fastq info to a metadata table
 
-- `amalgkit getfastq`: Generate assembly-ready fastq
+- [`amalgkit getfastq`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-getfastq): Generate assembly-ready fastq
 
-- `amalgkit quant`: Transcript abundance estimation
+- [`amalgkit quant`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-quant): Transcript abundance estimation
 
-- `amalgkit merge`: Generating transcript abundance tables
+- [`amalgkit merge`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-merge): Generating transcript abundance tables
 
-- `amalgkit cstmm`: Cross-species TMM normalization using single-copy genes
+- [`amalgkit cstmm`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-cstmm): Cross-species TMM normalization using single-copy genes
 
-- `amalgkit curate`: Automatic removal of outlier samples and unwanted biases
+- [`amalgkit curate`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-curate): Automatic removal of outlier samples and unwanted biases
 
-- `amalgkit csca`: Generating plots with cross-species correlation analysis
+- [`amalgkit csca`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-csca): Generating plots with cross-species correlation analysis
 
-- `amalgkit sanity`: Checking the integrity of AMALGKIT input and output files
+- [`amalgkit sanity`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-sanity): Checking the integrity of AMALGKIT input and output files
 
 ## Citation
 Although **AMALGKIT** supports novel unpublished functions, some functionalities including metadata curation, expression level quantification, and further curation steps have been described in this paper, in which we described the transcriptome amalgamation of 21 vertebrate species.
