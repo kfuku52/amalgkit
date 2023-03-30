@@ -656,7 +656,7 @@ def initialize_columns(metadata, g):
     metadata.df.loc[:, 'bp_until_target_size'] = g['num_bp_per_sra']
     cols = ['total_spots','total_bases','size','nominal_length','nominal_sdev','spot_length']
     for col in cols:
-        if metadata.df[col].dtype in [numpy.object, numpy.str]:
+        if any([ dtype in str(metadata.df[col].dtype) for dtype in ['str','object'] ]):
             metadata.df[col] = metadata.df.loc[:,col].str.replace('^$', 'nan', regex=True).astype(float)
     return metadata
 
