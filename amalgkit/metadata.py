@@ -1,18 +1,19 @@
 from Bio import Entrez
+import lxml.etree
 import numpy
 import pandas
 
-from urllib.error import HTTPError
+import datetime
 import os
 import re
-import lxml.etree
-import datetime
+import sys
 import time
 import warnings
 
+from urllib.error import HTTPError
 
-def check_config_dir(args):
-    files = os.listdir(args.config_dir)
+def check_config_dir(dir_path):
+    files = os.listdir(dir_path)
     asserted_files = [
         'group_attribute.config',
         'group_tissue.config',
@@ -27,9 +28,16 @@ def check_config_dir(args):
         'search_term_keyword.config',
         'orthographical_variant.config',
     ]
+    missing_count = 0
     for af in asserted_files:
-        if af not in files:
-            warnings.warn('WARNING: File '+af+' not found. This may impact some functionalities of amalgkit metadata. Please refer to the amalgkit wiki for more info: https://github.com/kfuku52/amalgkit/wiki/Amalgkit-metadata#Configs')
+        if af in files:
+            print('Config file found: {}'.format(af))
+        else:
+            sys.stderr.write('Config file not found: {}\n'.format(af))
+            missing_count += 1
+    if missing_count>0:
+        txt = 'Please refer to the AMALGKIT Wiki for more info: https://github.com/kfuku52/amalgkit/wiki/amalgkit-metadata\n'
+        sys.stderr.write(txt)
 
 def get_search_term(species_name="", bioprojects=[], biosamples=[], keywords=[],
                     other_conditions=pandas.DataFrame(), excluded_conditions=pandas.DataFrame()):
@@ -613,22 +621,26 @@ def metadata_main(args):
     if not os.path.exists(pivot_table_dir):
         os.makedirs(os.path.join(pivot_table_dir))
 
-    check_config_dir(args)
+    if args.config_dir=='inferred':
+        dir_config = os.path.join(args.out_dir, 'config')
+    else:
+        dir_config = args.config_dir
+    check_config_dir(dir_path=dir_config)
 
     Entrez.email = args.entrez_email
 
-    search_spp = read_config_file(file_name='search_term_species.config', dir_path=args.config_dir)
+    search_spp = read_config_file(file_name='search_term_species.config', dir_path=dir_config)
     print('Number of species for Entrez search: {:,}'.format(search_spp.shape[0]))
     if search_spp.shape[0]==0:
         search_spp = pandas.Series(['',])
 
-    search_keywords = read_config_file(file_name='search_term_keyword.config', dir_path=args.config_dir)
+    search_keywords = read_config_file(file_name='search_term_keyword.config', dir_path=dir_config)
     print('Number of free keywords for Entrez search: {:,}'.format(search_keywords.shape[0]))
 
-    other_conditions = read_config_file(file_name='search_term_other.config', dir_path=args.config_dir)
+    other_conditions = read_config_file(file_name='search_term_other.config', dir_path=dir_config)
     print('Number of other conditions for Entrez search: {:,}'.format(other_conditions.shape[0]))
 
-    excluded_conditions = read_config_file(file_name='search_term_exclusion.config', dir_path=args.config_dir)
+    excluded_conditions = read_config_file(file_name='search_term_exclusion.config', dir_path=dir_config)
     print('Number of excluded conditions for Entrez search: {:,}'.format(excluded_conditions.shape[0]))
 
     metadata_species = dict()
@@ -651,7 +663,7 @@ def metadata_main(args):
             metadata_species[sp].to_csv(os.path.join(metadata_tmp_dir, sp_file_name), sep="\t", index=False)
         print('')
     metadata = Metadata.from_DataFrame(df=pandas.concat(metadata_species.values(), sort=False))
-    metadata.config_dir = args.config_dir
+    metadata.config_dir = dir_config
     metadata.reorder(omit_misc=False)
     multisp_file_name = "metadata_01_raw.tsv"
     metadata.df.to_csv(os.path.join(metadata_tmp_dir, multisp_file_name), sep="\t", index=False)

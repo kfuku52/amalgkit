@@ -111,7 +111,7 @@ pp_meta.add_argument('--metadata', metavar='PATH', default='inferred', type=str,
                       'PATH to metadata table, the output file of `amalgkit metadata`.')
 pp_out = argparse.ArgumentParser(add_help=False)
 pp_out.add_argument('--out_dir', metavar='PATH', default='./', type=str, required=False, action='store',
-                 help='default=%(default)s: Path to the directory where intermediate and output files are generated.')
+                 help='default=%(default)s: PATH to the directory where intermediate and output files are generated.')
 pp_batch = argparse.ArgumentParser(add_help=False)
 pp_batch.add_argument('--batch', metavar='INT', default=None, type=int, required=False, action='store',
                  help='default=%(default)s: One-based index of metadata table (--metadata). If set, process only one SRA record. This function is intended for array job processing.')
@@ -125,8 +125,8 @@ pp_threads.add_argument('--threads', metavar='INT', default=1, type=int, require
 # Sub parser: metadata
 pme_help = 'NCBI SRA metadata retrieval and curation. See `amalgkit metadata -h`'
 pme = subparsers.add_parser('metadata', help=pme_help, parents=[pp_out])
-pme.add_argument('--config_dir', metavar='PATH', default='./', type=str, required=True, action='store',
-                 help='default=%(default)s: Path to the config directory.')
+pme.add_argument('--config_dir', metavar='PATH', default='inferred', type=str, required=False, action='store',
+                 help='default=%(default)s: PATH to the config directory. "inferred" = out_dir/config')
 pme.add_argument('--entrez_email', metavar='aaa@bbb.com', default='', type=str, required=False, action='store',
                  help='default=%(default)s: Your email address. See https://www.ncbi.nlm.nih.gov/books/NBK25497/')
 pme.add_argument('--min_nspots', metavar='INT', default=5000000, type=int, required=False, action='store',
@@ -233,7 +233,7 @@ pmg.set_defaults(handler=command_merge)
 pcs_help = 'Applying cross-species TMM normalization using single-copy genes. See `amalgkit cstmm -h`'
 pcs = subparsers.add_parser('cstmm', help=pcs_help, parents=[pp_out, pp_meta])
 pcs.add_argument('--ortho', metavar='PATH', default='./', type=str, required=True, action='store',
-                 help='default=%(default)s: Path to "Orthogroups" folder from OrthoFinder output. '
+                 help='default=%(default)s: PATH to "Orthogroups" folder from OrthoFinder output. '
                       'Specify `--ortho ""` for the analysis of single species')
 pcs.add_argument('--count', metavar='PATH', default='./', type=str, required=True, action='store',
                  help='default=%(default)s: Folder path to count data as produced by `amalgkit merge`.')
@@ -266,7 +266,7 @@ pca.set_defaults(handler=command_csca)
 pcu_help = 'Automatic removal of outlier samples and SVA-based unwanted biases. See `amalgkit curate -h`'
 pcu = subparsers.add_parser('curate', help=pcu_help, parents=[pp_out, pp_meta, pp_batch])
 pcu.add_argument('--input_dir', metavar='PATH', default=None, type=str, required=False, action='store',
-                 help='default=%(default)s: Path to `amalgkit merge` or `amalgkit cstmm` folder. Assumes `merge` folder if no input is given.')
+                 help='default=%(default)s: PATH to `amalgkit merge` or `amalgkit cstmm` folder. Assumes `merge` folder if no input is given.')
 pcu.add_argument('--dist_method', metavar='STR', default='pearson', type=str, required=False, action='store',
                  help='default=%(default)s: Method for calculating distance.')
 pcu.add_argument('--mapping_rate', metavar='FLOAT', default=0.20, type=float, required=False, action='store',
@@ -341,11 +341,12 @@ pin.set_defaults(handler=command_integrate)
 pco_help = 'Creating a series of config files for the metadata search. See `amalgkit config -h`'
 pco = subparsers.add_parser('config', help=pco_help, parents=[pp_out])
 pco.add_argument('--config', metavar='base|test|plantae|vertebrate', default='base', type=str, required=False, action='store',
-                 help='default=%(default)s: Name of config dataset to be exported. '
-                      'Options: "base": a nearly empty set of .config files for the purpose of creating custom config files. '
+                 help='default=%(default)s: Name of config dataset to be exported. Options: '
+                      '"base": a minimal set of .config files for the purpose of creating custom config files. '
+                      '"base_all": a complete set of near-empty .config files. '
                       '"test": short animal set for testing amalgkit metadtata. '
-                      '"vertebrate" preconfigured set of config files for vertebrate animal data"'
-                      '"plantae": preconfigured set of config files for plant data')
+                      '"vertebrate" preconfigured set of config files for vertebrate animal data.'
+                      '"plantae": preconfigured set of config files for plant data.')
 pco.add_argument('--config_name', metavar='STR', default='inferred', type=str, required=False, action='store',
                  help='default=%(default)s: Name of config folder to be created. Defaults to the original name within the package.')
 pco.add_argument('--overwrite', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
