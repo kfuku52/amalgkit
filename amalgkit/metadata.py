@@ -603,23 +603,18 @@ def read_config_file(file_name, dir_path):
     return df
 
 def metadata_main(args):
-    if not os.path.exists(args.out_dir):
-        print('Creating directory:', args.out_dir)
-        os.mkdir(args.out_dir)
-
     metadata_dir = os.path.join(args.out_dir, 'metadata')
     metadata_tmp_dir = os.path.join(metadata_dir, 'tmp')
     metadata_results_dir = os.path.join(metadata_dir, 'metadata')
     pivot_table_dir = os.path.join(metadata_dir, 'pivot_tables')
-
-    if not os.path.exists(metadata_tmp_dir):
-        os.makedirs(os.path.join(metadata_tmp_dir))
-
-    if not os.path.exists(metadata_results_dir):
-        os.makedirs(os.path.join(metadata_results_dir))
-
-    if not os.path.exists(pivot_table_dir):
-        os.makedirs(os.path.join(pivot_table_dir))
+    for path_dir in [args.out_dir, metadata_dir, metadata_tmp_dir, metadata_results_dir, pivot_table_dir]:
+        if not os.path.exists(path_dir):
+            print('Creating directory: {}'.format(path_dir))
+            os.mkdir(path_dir)
+    path_metadata_table = os.path.join(metadata_results_dir, 'metadata.tsv')
+    if os.path.exists(path_metadata_table) & (args.overwrite==False):
+        print('Exiting. --overwrite is set to "no". Output file exists at: {}'.format(path_metadata_table))
+        sys.exit()
 
     if args.config_dir=='inferred':
         dir_config = os.path.join(args.out_dir, 'config')
@@ -700,7 +695,7 @@ def metadata_main(args):
     metadata.unmark_rescue_ids()
     metadata.label_sampled_data(args.max_sample)
     metadata.reorder(omit_misc=True)
-    metadata.df.to_csv(os.path.join(metadata_results_dir, 'metadata.tsv'), sep='\t', index=False)
+    metadata.df.to_csv(path_metadata_table, sep='\t', index=False)
 
     sra_qualified_pivot = metadata.pivot(n_sp_cutoff=0, qualified_only=True, sampled_only=False)
     sra_qualified_pivot.to_csv(os.path.join(pivot_table_dir, 'pivot_qualified.tsv'), sep='\t')

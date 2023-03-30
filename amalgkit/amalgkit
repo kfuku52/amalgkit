@@ -137,7 +137,7 @@ pme.add_argument('--max_sample', metavar='INT', default=99999, type=int, require
                  help='default=%(default)s: Maximum number of RNA-seq data sampled for one tissue in a species.')
 pme.add_argument('--overwrite', metavar='no|yes', default='no', type=strtobool,
                  required=False, action='store',
-                 help='default=%(default)s: Overwrite existing intermediate files.')
+                 help='default=%(default)s: Overwrite existing metadata.tsv and intermediate files.')
 pme.set_defaults(handler=command_metadata)
 
 # Sub parser: getfastq
