@@ -318,9 +318,6 @@ psa.add_argument('--quant_dir', metavar='PATH', default=None, type=str, required
 psa.add_argument('--getfastq_dir', metavar='PATH', default=None, type=str, required=False, action='store',
                  help='default=%(default)s: PATH to index directory. Only required if getfastq directory is not '
                       'out_dir/getfastq/')
-psa.add_argument('--updated_metadata_dir', metavar='PATH', default=None, type=str, required=False, action='store',
-                 help='default=%(default)s: PATH to updated metadata directory. Only required if updated metadata'
-                      ' directory is not out_directory/metadata/updated_metadata/')
 psa.set_defaults(handler=command_sanity)
 
 # Sub parser: integrate
