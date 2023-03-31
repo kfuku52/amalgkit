@@ -232,9 +232,12 @@ pmg.set_defaults(handler=command_merge)
 # Sub parser: cstmm
 pcs_help = 'Applying cross-species TMM normalization using single-copy genes. See `amalgkit cstmm -h`'
 pcs = subparsers.add_parser('cstmm', help=pcs_help, parents=[pp_out, pp_meta])
-pcs.add_argument('--orthogroup_table', metavar='PATH', default='./', type=str, required=True, action='store',
+pcs.add_argument('--orthogroup_table', metavar='PATH', default=None, type=str, required=False, action='store',
                  help='default=%(default)s: PATH to orthogroup table, which is, for example, Orthogroups.tsv and N0.tsv in OrthoFinder.'
                       'Specify `--orthogroup_table ""` for single-species TMM normalization.')
+pcs.add_argument('--dir_busco', metavar='PATH', default=None, type=str, required=False, action='store',
+                 help='default=%(default)s: PATH to the directory where per-species BUSCO full tables are stored. '
+                      'File names in this directory are expected to be GENUS_SPECIES_MISC.tsv: e.g., Arabidopsis_thaliana_full_table.tsv')
 pcs.add_argument('--dir_count', metavar='PATH', default='inferred', type=str, required=False, action='store',
                  help='default=%(default)s: AMALGKIT subfolder PATH to per-species transcript abundance data as produced by `amalgkit merge`. '
                       '"inferred" = out_dir/merge')
