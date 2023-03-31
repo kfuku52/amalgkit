@@ -4,30 +4,30 @@ mode = ifelse(length(commandArgs(trailingOnly=TRUE))==1, 'debug', 'batch')
 
 if (mode=="debug") {
   dir_work = '/Users/s229181/MSN/'
-  dir_ortho = paste0(dir_work, "OrthoFinder/Results_Jun22/Orthogroups")
-  dir_count = paste0(dir_work, "counts/")
+  file_orthogroup_table = file.path(dir_work, "OrthoFinder/Results_Jun22/Orthogroups/Orthogroups.tsv")
+  file_genecount = file.path(dir_work, "OrthoFinder/Results_Jun22/Orthogroups/Orthogroups.GeneCount.tsv")
+  dir_count = file.path(dir_work, "merge")
+  dir_cstmm = file.path(dir_work, "cstmm")
   mode_tmm = 'multi_species'
-  #dir_work = '/Users/kef74yk/Dropbox_p/collaborators/Ken Naito/20210509_Vigna/gfe_data'
-  #dir_ortho = "/Users/kef74yk/Dropbox_p/collaborators/Ken Naito/20210509_Vigna/gfe_data/Orthogroups"
-  #dir_count = "/Users/kef74yk/Dropbox_p/collaborators/Ken Naito/20210509_Vigna/gfe_data/merge"
   setwd(dir_work)
 } else if (mode=="batch") {
   args = commandArgs(trailingOnly=TRUE)
   dir_count = args[1]
-  dir_ortho = args[2]
-  dir_work = args[3]
-  mode_tmm = args[4]
+  file_orthogroup_table = args[2]
+  file_genecount = args[3]
+  dir_cstmm = args[4]
+  mode_tmm = args[5]
 }
 
 get_spp_filled = function(dir_count, df_gc=NA) {
-  sciname_dirs = list.files(dir_count)
+  sciname_dirs = list.dirs(dir_count, full.names=FALSE, recursive=FALSE)
   spp_filled = c()
   for (sciname_dir in sciname_dirs) {
     count_files = list.files(path = file.path(dir_count, sciname_dir), pattern = ".*est_counts\\.tsv")
     if (length(count_files)==1) {
       spp_filled = c(spp_filled, count_files)
     } else {
-      warning(paste0('Multiple est_counts files were detected: ', paste(count_files, collapse=', ')))
+      warning(paste0('Multiple or no est_counts files were detected for ', sciname_dir, ': ', paste(count_files, collapse=', ')))
     }
   }
   spp_filled = sub('_', '|', spp_filled)
@@ -37,23 +37,22 @@ get_spp_filled = function(dir_count, df_gc=NA) {
     is_missing_in_genecount = (!spp_filled %in% colnames(df_gc))
     if (sum(is_missing_in_genecount)) {
       for (sp in spp_filled[is_missing_in_genecount]) {
-        warning(paste0('Species excluded. Not found in OrthoFinder\'s GeneCount table: ', sp))
+        warning(paste0('Species excluded. Not found in the orthogroup table: ', sp))
       }
     }
     spp_filled = spp_filled[!is_missing_in_genecount]
   }
-  cat('Detected species:', spp_filled, '\n')
   return(spp_filled)
 }
 
-get_singlecopy_og = function(df_gc, spp_filled) {
+get_singlecopy_bool_index = function(df_gc, spp_filled) {
   is_singlecopy = TRUE
   for (sp in spp_filled) {
     is_singlecopy = is_singlecopy & (df_gc[,sp]==1)
   }
-  sc_og = df_gc[is_singlecopy,'Orthogroup']
-  cat(length(sc_og), 'single-copy orthogroups were detected for the', length(spp_filled), 'species.\n')
-  return(sc_og)
+  num_sc = sum(is_singlecopy)
+  cat(num_sc, 'single-copy orthogroups were detected for the', length(spp_filled), 'species.\n')
+  return(is_singlecopy)
 }
 
 read_est_counts = function(dir_count, sp) {
@@ -91,12 +90,12 @@ get_uncorrected = function(dir_count, file_genecount=NA) {
   return(uncorrected)
 }
 
-get_df_sog = function(file_genecount, file_orthogroup, dir_count, uncorrected) {
+get_df_sog = function(file_genecount, file_orthogroup_table, dir_count, uncorrected) {
   df_gc = read.table(file_genecount, header=TRUE, sep='\t', check.names=FALSE)
+  df_og = read.table(file_orthogroup_table, header=TRUE, sep='\t', row.names=1, check.names=FALSE)
   spp_filled = get_spp_filled(dir_count, df_gc)
-  single_orthogroups = get_singlecopy_og(df_gc, spp_filled)
-  df_og = read.table(file_orthogroup, header=TRUE, sep='\t', row.names=1, check.names=FALSE)
-  df_singleog = df_og[(rownames(df_og) %in% single_orthogroups), spp_filled, drop=FALSE]
+  is_singlecopy = get_singlecopy_bool_index(df_gc, spp_filled)
+  df_singleog = df_og[is_singlecopy, spp_filled, drop=FALSE]
   df_sog = df_singleog
   for (sp in spp_filled) {
     if (!sp %in% names(uncorrected)) {
@@ -133,20 +132,6 @@ create_eff_length_symlink = function(dir_count, dir_cstmm, sp) {
   }
 }
 
-# set directory
-if (!file.exists(dir_work)) {
-  dir.create(dir_work)
-}
-setwd(dir_work)
-
-dir_cstmm = file.path(dir_work,'cstmm')
-if (!file.exists(dir_cstmm)) {
-  dir.create(dir_cstmm)
-}
-
-file_genecount = file.path(dir_ortho, 'Orthogroups.GeneCount.tsv')
-file_orthogroup = file.path(dir_ortho, 'Orthogroups.tsv')
-
 if (mode_tmm=='single_species') {
   uncorrected = get_uncorrected(dir_count=dir_count, file_genecount=NA)
   stopifnot(length(names(uncorrected))==1)
@@ -155,7 +140,7 @@ if (mode_tmm=='single_species') {
   df_nonzero = get_df_nonzero(df_sog)
 } else if (mode_tmm=='multi_species') {
   uncorrected = get_uncorrected(dir_count=dir_count, file_genecount=file_genecount)
-  df_sog = get_df_sog(file_genecount, file_orthogroup, dir_count, uncorrected)
+  df_sog = get_df_sog(file_genecount, file_orthogroup_table, dir_count, uncorrected)
   df_nonzero = get_df_nonzero(df_sog)
 }
 
@@ -217,6 +202,5 @@ for (sp in names(uncorrected)) {
   create_eff_length_symlink(dir_count, dir_cstmm, sp)
   file_path = file.path(dir_cstmm_sp, paste0(sp, "_cstmm_counts.tsv"))
   write.table(dat_out, file_path, sep='\t', row.names=FALSE, col.names=TRUE, quote=FALSE)
-
 }
 cat('cstmm.r completed!\n')

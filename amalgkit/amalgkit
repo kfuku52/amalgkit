@@ -232,11 +232,12 @@ pmg.set_defaults(handler=command_merge)
 # Sub parser: cstmm
 pcs_help = 'Applying cross-species TMM normalization using single-copy genes. See `amalgkit cstmm -h`'
 pcs = subparsers.add_parser('cstmm', help=pcs_help, parents=[pp_out, pp_meta])
-pcs.add_argument('--ortho', metavar='PATH', default='./', type=str, required=True, action='store',
-                 help='default=%(default)s: PATH to "Orthogroups" folder from OrthoFinder output. '
-                      'Specify `--ortho ""` for the analysis of single species')
-pcs.add_argument('--count', metavar='PATH', default='./', type=str, required=True, action='store',
-                 help='default=%(default)s: Folder path to count data as produced by `amalgkit merge`.')
+pcs.add_argument('--orthogroup_table', metavar='PATH', default='./', type=str, required=True, action='store',
+                 help='default=%(default)s: PATH to orthogroup table, which is, for example, Orthogroups.tsv and N0.tsv in OrthoFinder.'
+                      'Specify `--orthogroup_table ""` for single-species TMM normalization.')
+pcs.add_argument('--dir_count', metavar='PATH', default='inferred', type=str, required=False, action='store',
+                 help='default=%(default)s: AMALGKIT subfolder PATH to per-species transcript abundance data as produced by `amalgkit merge`. '
+                      '"inferred" = out_dir/merge')
 pcs.set_defaults(handler=command_cstmm)
 
 # Sub parser: csca

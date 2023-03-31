@@ -1,5 +1,8 @@
+import pandas
+
 import subprocess
 import os
+import re
 import sys
 
 def check_cstmm_dependency():
@@ -36,26 +39,37 @@ def get_count_files(dir_count):
         raise Exception('No est_counts.tsv file was detected.')
     return count_files
 
-def check_orthofinder_outputs(dir_ortho):
-    # TODO: do this more elegantly. :D
-    if os.path.exists(os.path.join(dir_ortho, 'Orthogroups.tsv')):
-        print("Orthogroups.tsv found")
-    else:
-        print("Could not find Orthogroups.tsv. Did you provide the correct OrthoFinder folder?")
-        sys.exit()
-    if os.path.exists(os.path.join(dir_ortho, 'Orthogroups_SingleCopyOrthologues.txt')):
-        print("Orthogroups_SingleCopyOrthologues.txt found")
-    else:
-        print("Could not find Orthogroups_SingleCopyOrthologues.txt. Did you provide the correct OrthoFinder path?")
-        sys.exit()
+def filepath2spp(file_paths):
+    spp = [ os.path.basename(cf) for cf in file_paths]
+    spp = [ re.sub('_', 'PLACEHOLDER', sp, count=1) for sp in spp ]
+    spp = [ re.sub('_.*', '', sp) for sp in spp ]
+    spp = [ re.sub('PLACEHOLDER', '_', sp) for sp in spp ]
+    return spp
+
+def orthogroup2genecount(file_orthogroup, file_genecount, spp):
+    df = pandas.read_csv(file_orthogroup, sep='\t', header=0, low_memory=False)
+    is_spp = df.columns.isin(spp)
+    df = df.loc[:,is_spp]
+    df[df.isnull()] = ''
+    gc = df.copy()
+    for col in gc.columns:
+        is_comma = (df[col].str.contains(','))
+        gc[col] = 0
+        gc.loc[(df[col] != '') & ~is_comma, col] = 1
+        gc.loc[is_comma, col] = df.loc[is_comma, col].str.count(',') + 1
+    gc.to_csv(file_genecount, index=False, sep='\t')
 
 def cstmm_main(args):
     check_cstmm_dependency()
-
-    # TODO still truncated PATHs are expected. Please update.
-    dir_count = os.path.realpath(os.path.join(args.out_dir, args.count))
-    dir_ortho = os.path.realpath(os.path.join(args.out_dir, args.ortho))
     dir_work = os.path.realpath(args.out_dir)
+    dir_cstmm = os.path.join(dir_work, 'cstmm')
+    if not os.path.exists(dir_cstmm):
+        os.makedirs(dir_cstmm)
+    if args.dir_count=='inferred':
+        dir_count = os.path.join(dir_work, 'merge')
+    else:
+        dir_count = os.path.realpath(args.dir_count)
+    file_orthogroup_table = os.path.realpath(args.orthogroup_table)
     count_files = get_count_files(dir_count)
     if (len(count_files)==1):
         txt = 'Only one species was detected. Standard TMM normalization will be applied.'
@@ -66,10 +80,12 @@ def cstmm_main(args):
               'Cross-species TMM normalization will be applied with single-copy orthologs.'
         print(txt, flush=True)
         mode_tmm = 'multi_species'
-        check_orthofinder_outputs(dir_ortho)
-    cstmm_path = os.path.dirname(os.path.realpath(__file__))
-    r_script_path = cstmm_path + '/cstmm.r'
-    r_command = ['Rscript', r_script_path, dir_count, dir_ortho, dir_work, mode_tmm]
+    file_genecount = 'tmp.amalgkit.orthogroup.genecount.tsv'
+    spp = filepath2spp(count_files)
+    orthogroup2genecount(file_orthogroup=file_orthogroup_table, file_genecount=file_genecount, spp=spp)
+    dir_amalgkit_script = os.path.dirname(os.path.realpath(__file__))
+    r_cstmm_path = os.path.join(dir_amalgkit_script, 'cstmm.r')
+    r_command = ['Rscript', r_cstmm_path, dir_count, file_orthogroup_table, file_genecount, dir_cstmm, mode_tmm]
     print('')
     print('Starting R script: {}'.format(' '.join(r_command)), flush=True)
     subprocess.check_call(r_command)
