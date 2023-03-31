@@ -45,7 +45,6 @@ def check_getfastq_outputs(args, sra_ids, metadata, output_dir):
         getfastq_path = os.path.join(args.out_dir, "getfastq")
     data_available = []
     data_unavailable = []
-    metadata_unavailable = []
     if os.path.exists(getfastq_path):
         print("amalgkit getfastq output folder detected. Checking presence of output files.")
         for sra_id in sra_ids:
@@ -86,13 +85,6 @@ def check_getfastq_outputs(args, sra_ids, metadata, output_dir):
         txt = "The getfastq output files for all SRA IDs in --metadata ({}) were found."
         print(txt.format(args.metadata))
 
-    if metadata_unavailable:
-        print("writing SRA IDs without updated metadata output to: ", os.path.join(output_dir,
-                                                                                   "SRA_IDs_without_metadata.txt"))
-        file = open(os.path.join(output_dir, "SRA_IDs_without_metadata.txt"), "w")
-        for sra_id in metadata_unavailable:
-            file.write(sra_id + "\n")
-        file.close()
 
     return data_available, data_unavailable
 
