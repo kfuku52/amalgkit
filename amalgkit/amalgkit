@@ -269,8 +269,9 @@ pca.set_defaults(handler=command_csca)
 # Sub parser: curate
 pcu_help = 'Automatic removal of outlier samples and SVA-based unwanted biases. See `amalgkit curate -h`'
 pcu = subparsers.add_parser('curate', help=pcu_help, parents=[pp_out, pp_meta, pp_batch])
-pcu.add_argument('--input_dir', metavar='PATH', default=None, type=str, required=False, action='store',
-                 help='default=%(default)s: PATH to `amalgkit merge` or `amalgkit cstmm` folder. Assumes `merge` folder if no input is given.')
+pcu.add_argument('--input_dir', metavar='PATH', default='inferred', type=str, required=False, action='store',
+                 help='default=%(default)s: PATH to `amalgkit merge` or `amalgkit cstmm` output folder. '
+                      '"inferred" = out_dir/cstmm if exist, else out_dir/merge.')
 pcu.add_argument('--dist_method', metavar='STR', default='pearson', type=str, required=False, action='store',
                  help='default=%(default)s: Method for calculating distance.')
 pcu.add_argument('--mapping_rate', metavar='FLOAT', default=0.20, type=float, required=False, action='store',

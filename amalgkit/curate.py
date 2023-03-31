@@ -37,10 +37,17 @@ def run_curate_r_script(args, new_metadata_path, metadata, sp):
     curate_group = get_curate_group(args, metadata)
     curate_path = os.path.dirname(os.path.realpath(__file__))
     r_script_path = curate_path + '/transcriptome_curation.r'
-    if args.input_dir is None:
-        input_dir = os.path.join(args.out_dir, 'merge')
-        print("no input_dir given. Assuming path is: ", input_dir)
+    if args.input_dir=='inferred':
+        dir_merge = os.path.join(args.out_dir, 'merge')
+        dir_cstmm = os.path.join(args.out_dir, 'cstmm')
+        if os.path.exists(dir_cstmm):
+            print('Subdirectory for amalgkit cstmm will be used as input: {}'.format(dir_cstmm))
+            input_dir = dir_cstmm
+        else:
+            print('Subdirectory for amalgkit merge will be used as input: {}'.format(dir_merge))
+            input_dir = dir_merge
     else:
+        print('Input_directory: {}'.format(args.input_dir))
         input_dir = args.input_dir
 
     # check if cstmm output is used when --norm == tpm, because TPM undoes tmm normalization
@@ -92,9 +99,7 @@ def run_curate_r_script(args, new_metadata_path, metadata, sp):
 def curate_main(args):
     check_rscript()
     metadata = load_metadata(args)
-    # figure out unique species
     spp = metadata.df.loc[:, 'scientific_name'].drop_duplicates().values
-    # make directory
     curate_dir = os.path.join(args.out_dir, 'curate')
     if not os.path.exists(curate_dir):
         os.mkdir(curate_dir)
