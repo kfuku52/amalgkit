@@ -214,14 +214,14 @@ pqu.add_argument('--clean_fastq', metavar='yes|no', default='yes', type=strtoboo
                  help='default=%(default)s: Remove getfastq-processed fastq files when quant is successfully completed.')
 pqu.add_argument('--fasta_dir', metavar='PATH', default='inferred', type=str, required=False, action='store',
                  help='default=%(default)s: "inferred" = out_dir/fasta. '
-                      'PATH to directory containing reference fasta files required for index building (see --build_index). '
-                      'In this directory, file names of fasta files are expected to start with the string in the "scientific_name" column of the metadata table. '
-                      'Example: Arabidopsis_thaliana_v1.fasta for Arabidopsis thaliana.'
-                 )
+                      'PATH to directory containing reference transcriptome fasta files required for kallisto index building (see --build_index). '
+                      'In this directory, file names of fasta files are expected to start with the string '
+                      'in the "scientific_name" column of the metadata table, with a space replaced with an underbar. '
+                      'Example: Arabidopsis_thaliana_v1.fasta for Arabidopsis thaliana.')
 pqu.add_argument('--build_index', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
-                 help='default=%(default)s: If yes, allows quant to build a kallisto index file from fasta files. '
-                      'Will only do this for a species if an index file is not already present. One fasta file per species should be put in the directory set in --fasta_dir. '
-                      'amalgkit will read the species from the metadata, try to find the fasta file (.fa or .fasta) and build the index for further use.')
+                 help='default=%(default)s: Allows AMALGKIT to build kallisto index from reference fasta files. '
+                      'Will only do this for a species if an index file is not already present. One fasta file per species should be put in --fasta_dir. '
+                      'AMALGKIT will read the species from the metadata, try to find the fasta file (.fa or .fasta) and build the index for further use.')
 pqu.set_defaults(handler=command_quant)
 
 # Sub parser: merge

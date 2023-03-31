@@ -128,48 +128,46 @@ def get_index(args, sci_name):
         index_dir = args.index_dir
     else:
         index_dir = os.path.join(args.out_dir, 'index')
-
     if not os.path.exists(index_dir) and args.build_index:
             os.mkdir(index_dir)
+    if not os.path.exists(index_dir):
+        raise FileNotFoundError("Could not find index folder at: {}".format(index_dir))
 
-    if os.path.exists(index_dir):
-        index = glob.glob(os.path.join(index_dir, sci_name + '*'))
-        if len(index) > 1:
-            raise ValueError(
-                "Found multiple index files for species. Please make sure there is only one index file for this species.")
-        elif len(index) == 0:
-            if args.build_index:
-                print("--build_index set. Building index for {}".format(sci_name))
-                if (args.fasta_dir=='inferred'):
-                    path_fasta_dir = os.path.join(args.out_dir, 'fasta')
-                else:
-                    path_fasta_dir = args.fasta_dir
-                fasta_files = []
-                for ext in ['*.fa','*.fasta','*.fa.gz','*.fasta.gz',]:
-                    path_pattern = os.path.join(path_fasta_dir, sci_name + ext)
-                    fasta_files.extend(glob.glob(path_pattern))
-                if len(fasta_files) > 1:
-                    txt = "Found multiple reference fasta files for this species: {}\n"
-                    txt += "Please make sure there is only one index file for this species.\n{}"
-                    raise ValueError(txt.format(', '.join(sci_name, fasta_files)))
-                elif len(fasta_files) == 0:
-                    txt = "Could not find reference fasta file for this species: {}\n".format(sci_name)
-                    txt += 'If the reference fasta file is correctly placed, the column "scientific_name" of the --metadata file may need to be edited.'
-                    raise FileNotFoundError(txt)
-                fasta_file = fasta_files[0]
-                print('Reference fasta file found: {}'.format(fasta_file))
-                print('Building index.')
-                index_path = os.path.join(index_dir, sci_name + '.idx')
-                kallisto_build_cmd = ["kallisto", "index", "-i", index_path, fasta_file]
-                subprocess.run(kallisto_build_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                index = [index_path]
+    index = glob.glob(os.path.join(index_dir, sci_name + '*'))
+    if len(index) > 1:
+        raise ValueError(
+            "Found multiple index files for species. Please make sure there is only one index file for this species.")
+    elif len(index) == 0:
+        if args.build_index:
+            print("--build_index set. Building index for {}".format(sci_name))
+            if (args.fasta_dir=='inferred'):
+                path_fasta_dir = os.path.join(args.out_dir, 'fasta')
             else:
-                sys.stderr.write('No index file was found in: {}\n'.format(index_dir))
-                sys.stderr.write('Try --fasta_dir PATH and --build_index yes\n')
-                raise FileNotFoundError("Could not find index file.")
-        index = index[0]
-    else:
-        raise FileNotFoundError("could not find index folder")
+                path_fasta_dir = args.fasta_dir
+            fasta_files = []
+            for ext in ['*.fa','*.fasta','*.fa.gz','*.fasta.gz',]:
+                path_pattern = os.path.join(path_fasta_dir, sci_name + ext)
+                fasta_files.extend(glob.glob(path_pattern))
+            if len(fasta_files) > 1:
+                txt = "Found multiple reference fasta files for this species: {}\n"
+                txt += "Please make sure there is only one index file for this species.\n{}"
+                raise ValueError(txt.format(', '.join(sci_name, fasta_files)))
+            elif len(fasta_files) == 0:
+                txt = "Could not find reference fasta file for this species: {}\n".format(sci_name)
+                txt += 'If the reference fasta file is correctly placed, the column "scientific_name" of the --metadata file may need to be edited.'
+                raise FileNotFoundError(txt)
+            fasta_file = fasta_files[0]
+            print('Reference fasta file found: {}'.format(fasta_file))
+            print('Building index.')
+            index_path = os.path.join(index_dir, sci_name + '.idx')
+            kallisto_build_cmd = ["kallisto", "index", "-i", index_path, fasta_file]
+            subprocess.run(kallisto_build_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            index = [index_path]
+        else:
+            sys.stderr.write('No index file was found in: {}\n'.format(index_dir))
+            sys.stderr.write('Try --fasta_dir PATH and --build_index yes\n')
+            raise FileNotFoundError("Could not find index file.")
+    index = index[0]
     print("Kallisto index file found: {}".format(index))
     return index
 
