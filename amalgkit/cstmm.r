@@ -1,4 +1,5 @@
 suppressPackageStartupMessages(library(edgeR, quietly=TRUE))
+suppressPackageStartupMessages(library(ggplot2, quietly=TRUE))
 
 mode = ifelse(length(commandArgs(trailingOnly=TRUE))==1, 'debug', 'batch')
 
@@ -132,6 +133,47 @@ create_eff_length_symlink = function(dir_count, dir_cstmm, sp) {
   }
 }
 
+plot_norm_factor_stats = function(df_nf, out_path, font_size=8) {
+  x_limit = max(abs(log2(df_nf[['norm.factors']])))
+  g = ggplot2::ggplot(df_nf, aes(x=log2(norm.factors), fill=scientific_name)) +
+    geom_histogram(position="stack", alpha=1.0, bins=40) +
+    theme_bw(base_size=font_size) +
+    xlim(c(-x_limit, x_limit)) +
+    labs(x='log2(TMM normalization factor)', y='Count') +
+    theme(
+        axis.text=element_text(size=font_size),
+        axis.title=element_text(size=font_size),
+        #panel.grid.major.y=element_blank(),
+        panel.grid.major.x=element_blank(),
+        panel.grid.minor.y=element_blank(),
+        panel.grid.minor.x=element_blank(),
+        legend.title=element_text(size=font_size),
+        legend.text=element_text(size=font_size),
+        rect=element_rect(fill="transparent"),
+        plot.margin=unit(rep(0.1, 4), "cm")
+    )
+  ggsave(file.path(dir_cstmm, 'normalization_factor_histogram.pdf'), plot=g, width=7.2, height=2.4, units='in')
+
+  g = ggplot2::ggplot(df_nf, aes(x=log10(lib.size), y=log2(norm.factors), fill=scientific_name, color=scientific_name)) +
+    geom_point() +
+    theme_bw(base_size=font_size) +
+    ylim(c(-x_limit, x_limit)) +
+    labs(x='log10(Library size)', y='log2(TMM normalization factor)') +
+    theme(
+        axis.text=element_text(size=font_size),
+        axis.title=element_text(size=font_size),
+        #panel.grid.major.y=element_blank(),
+        panel.grid.major.x=element_blank(),
+        panel.grid.minor.y=element_blank(),
+        panel.grid.minor.x=element_blank(),
+        legend.title=element_text(size=font_size),
+        legend.text=element_text(size=font_size),
+        rect=element_rect(fill="transparent"),
+        plot.margin=unit(rep(0.1, 4), "cm")
+    )
+  ggsave(file.path(dir_cstmm, 'normalization_factor_scatter.pdf'), plot=g, width=3.6, height=2.0, units='in')
+}
+
 if (mode_tmm=='single_species') {
   uncorrected = get_uncorrected(dir_count=dir_count, file_genecount=NA)
   stopifnot(length(names(uncorrected))==1)
@@ -159,18 +201,15 @@ cat('Round 2: Median TMM normalization factor =', median(cnf_out2[[2]][['norm.fa
 
 df_nf = cnf_out2[[2]]
 df_nf[['sample']] = rownames(df_nf)
-df_nf = df_nf[,c('sample','group','lib.size','norm.factors')]
-write.table(df_nf, 'cstmm/normalization_factor.tsv', row.names=FALSE, sep='\t')
-
-xlim = c(-2,2)
-bins = seq(-2,2,0.1)
-file_name='cstmm/normalization_factor_histogram.pdf'
-pdf(file_name, height=3.3, width=7.2) # full figure size = 9.7 x 7.2
-x = log2(cnf_out2[[2]][['norm.factors']])
-x[x>xlim[2]] = xlim[2]
-x[x<xlim[1]] = xlim[1]
-hist(x, xlab='log2(TMM normalization factor)', ylab='Count', main=NULL, col='black', xlim=xlim, breaks=bins, las=1)
-graphics.off()
+df_nf[['scientific_name']] = df_nf[['sample']]
+df_nf[['scientific_name']] = sub('_', 'PLACEHOLDER', df_nf[['scientific_name']])
+df_nf[['scientific_name']] = sub('_.*', '', df_nf[['scientific_name']])
+df_nf[['scientific_name']] = sub('PLACEHOLDER', '_', df_nf[['scientific_name']])
+df_nf[['run']] = sub('.*_', '', df_nf[['sample']])
+df_nf = df_nf[,c('scientific_name', 'run','sample','group','lib.size','norm.factors')]
+out_path = file.path(dir_cstmm, 'normalization_factor.tsv')
+write.table(df_nf, out_path, row.names=FALSE, sep='\t', quote=FALSE)
+plot_norm_factor_stats(df_nf=df_nf)
 
 for (sp in names(uncorrected)) {
   cat('Applying TMM normalization factors:', sp, '\n')
