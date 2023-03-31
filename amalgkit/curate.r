@@ -115,7 +115,8 @@ add_color_to_sra = function(sra, selected_curate_groups) {
     curate_group = as.character(sra[['curate_group']])
     curate_group_u = sort(unique(curate_group))
     if (length(selected_curate_groups) <= 8) {
-        curate_group_color = brewer.pal(length(curate_group_u), "Dark2")
+        curate_group_color = brewer.pal(8, "Dark2")
+        curate_group_color = curate_group_color[1:length(selected_curate_groups)] # To avoid the warning "minimal value for n is 3, returning requested palette with 3 different levels"
         bp_color = rainbow_hcl(length(bioproject_u), c = 50)
         sp_color = rainbow_hcl(length(scientific_name_u), c = 100)
     } else if (length(selected_curate_groups) <= 12) {
@@ -405,7 +406,7 @@ sva_subtraction = function(tc, sra) {
     tc = out[["tc_ex"]]
     tc_ne = out[["tc_ne"]]
     mod = try(model.matrix(~curate_group, data = sra))
-    if (class(mod) != "try-error") {
+    if ("try-error" %in% class(mod)) {
         return(list(tc = tc, sva = NULL))
     }
     mod0 = model.matrix(~1, data = sra)

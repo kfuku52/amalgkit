@@ -35,8 +35,8 @@ def run_curate_r_script(args, new_metadata_path, metadata, sp):
     correlation_threshold = args.correlation_threshold
     intermediate = args.plot_intermediate
     curate_group = get_curate_group(args, metadata)
-    curate_path = os.path.dirname(os.path.realpath(__file__))
-    r_script_path = curate_path + '/transcriptome_curation.r'
+    amalgkit_script_dir = os.path.dirname(os.path.realpath(__file__))
+    r_script_path = os.path.join(amalgkit_script_dir, 'curate.r')
     if args.input_dir=='inferred':
         dir_merge = os.path.join(args.out_dir, 'merge')
         dir_cstmm = os.path.join(args.out_dir, 'cstmm')
