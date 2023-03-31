@@ -3,9 +3,11 @@ import numpy
 import pandas
 
 import glob
-import os
-import sys
 import inspect
+import os
+import re
+import subprocess
+import sys
 
 from distutils.util import strtobool
 from amalgkit.metadata import Metadata
@@ -140,3 +142,67 @@ def get_mapping_rate(metadata, quant_dir):
         txt = 'quant directory not found. Mapping rate cutoff will not be applied: {}\n'
         sys.stderr.write(txt.format(quant_dir))
     return metadata
+
+def check_rscript():
+    try:
+        subprocess.run(['Rscript', '--help'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    except FileNotFoundError as e:
+        print(e)
+        print("R (Rscript) is not installed. Exiting.")
+        sys.exit(1)
+
+def orthogroup2genecount(file_orthogroup, file_genecount, spp):
+    df = pandas.read_csv(file_orthogroup, sep='\t', header=0, low_memory=False)
+    is_spp = df.columns.isin(spp)
+    df = df.loc[:,is_spp]
+    df[df.isnull()] = ''
+    gc = df.copy()
+    for col in gc.columns:
+        is_comma = (df[col].str.contains(','))
+        gc[col] = 0
+        gc.loc[(df[col] != '') & ~is_comma, col] = 1
+        gc.loc[is_comma, col] = df.loc[is_comma, col].str.count(',') + 1
+    gc.to_csv(file_genecount, index=False, sep='\t')
+
+def check_ortholog_parameter_compatibility(args):
+    if (args.orthogroup_table is None)&(args.dir_busco is None):
+        raise Exception('One of --orthogroup_table and --dir_busco should be specified.')
+    if (args.orthogroup_table is not None)&(args.dir_busco is not None):
+        raise Exception('Only one of --orthogroup_table and --dir_busco should be specified.')
+
+def generate_multisp_busco_table(dir_busco, outfile):
+    print('Generating multi-species BUSCO table.', flush=True)
+    col_names = ['busco_id', 'status', 'sequence', 'score', 'length', 'orthodb_url', 'description']
+    species_infiles = [f for f in os.listdir(path=dir_busco) if f.endswith('.tsv')]
+    print('BUSCO full tables for {} species were detected at: {}'.format(len(species_infiles), dir_busco), flush=True)
+    for species_infile in species_infiles:
+        print('Working on {}'.format(species_infile), flush=True)
+        path_to_table = os.path.join(dir_busco, species_infile)
+        if not os.path.exists(path_to_table):
+            warnings.warn('full_table.tsv does not exist. Skipping: '.format(species_infile))
+            continue
+        tmp_table = pandas.read_table(path_to_table, sep='\t', header=None, comment='#', names=col_names)
+        tmp_table.loc[:, 'sequence'] = tmp_table.loc[:, 'sequence'].str.replace(':[-\.0-9]*$', '', regex=True)
+        tmp_table.loc[(tmp_table.loc[:, 'sequence'].isnull()), 'sequence'] = '-'
+        tmp_table.loc[(tmp_table.loc[:, 'orthodb_url'].isnull()), 'orthodb_url'] = '-'
+        tmp_table.loc[(tmp_table.loc[:, 'description'].isnull()), 'description'] = '-'
+        if species_infile == species_infiles[0]:
+            merged_table = tmp_table.loc[:, ['busco_id', 'orthodb_url', 'description']]
+            merged_table = merged_table.drop_duplicates(keep='first', inplace=False, ignore_index=True)
+        else:
+            is_mt_missing = (merged_table.loc[:, 'orthodb_url'] == '-')
+            if is_mt_missing.sum() > 0:
+                tmp_table2 = tmp_table.loc[:, ['busco_id', 'orthodb_url', 'description']]
+                tmp_table2 = tmp_table2.drop_duplicates(keep='first', inplace=False, ignore_index=True)
+                merged_table.loc[is_mt_missing, 'orthodb_url'] = tmp_table2.loc[is_mt_missing, 'orthodb_url']
+                merged_table.loc[is_mt_missing, 'description'] = tmp_table2.loc[is_mt_missing, 'description']
+        tmp_table = tmp_table.loc[:, ['busco_id', 'sequence']].groupby(['busco_id'])['sequence'].apply(
+            lambda x: ','.join(x))
+        tmp_table = tmp_table.reset_index()
+        species_colname = species_infile
+        species_colname = re.sub('_', 'PLACEHOLDER', species_colname)
+        species_colname = re.sub('[-\._].*', '',  species_colname)
+        species_colname = re.sub('PLACEHOLDER', '_', species_colname)
+        tmp_table = tmp_table.rename(columns={'sequence': species_colname})
+        merged_table = merged_table.merge(tmp_table, on='busco_id', how='outer')
+    merged_table.to_csv(outfile, sep='\t', index=None)

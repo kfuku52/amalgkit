@@ -18,7 +18,9 @@ if (mode=="debug") {
   file_genecount = args[3]
   dir_cstmm = args[4]
   mode_tmm = args[5]
+  r_util_path = args[6]
 }
+source(r_util_path)
 
 get_spp_filled = function(dir_count, df_gc=NA) {
   sciname_dirs = list.dirs(dir_count, full.names=FALSE, recursive=FALSE)
@@ -44,16 +46,6 @@ get_spp_filled = function(dir_count, df_gc=NA) {
     spp_filled = spp_filled[!is_missing_in_genecount]
   }
   return(spp_filled)
-}
-
-get_singlecopy_bool_index = function(df_gc, spp_filled) {
-  is_singlecopy = TRUE
-  for (sp in spp_filled) {
-    is_singlecopy = is_singlecopy & (df_gc[,sp]==1)
-  }
-  num_sc = sum(is_singlecopy)
-  cat(num_sc, 'single-copy orthogroups were detected for the', length(spp_filled), 'species.\n')
-  return(is_singlecopy)
 }
 
 read_est_counts = function(dir_count, sp) {
@@ -91,7 +83,7 @@ get_uncorrected = function(dir_count, file_genecount=NA) {
   return(uncorrected)
 }
 
-get_df_sog = function(file_genecount, file_orthogroup_table, dir_count, uncorrected) {
+get_df_exp_single_copy_ortholog = function(file_genecount, file_orthogroup_table, dir_count, uncorrected) {
   df_gc = read.table(file_genecount, header=TRUE, sep='\t', check.names=FALSE)
   df_og = read.table(file_orthogroup_table, header=TRUE, sep='\t', row.names=1, check.names=FALSE)
   spp_filled = get_spp_filled(dir_count, df_gc)
@@ -182,7 +174,7 @@ if (mode_tmm=='single_species') {
   df_nonzero = get_df_nonzero(df_sog)
 } else if (mode_tmm=='multi_species') {
   uncorrected = get_uncorrected(dir_count=dir_count, file_genecount=file_genecount)
-  df_sog = get_df_sog(file_genecount, file_orthogroup_table, dir_count, uncorrected)
+  df_sog = get_df_exp_single_copy_ortholog(file_genecount, file_orthogroup_table, dir_count, uncorrected)
   df_nonzero = get_df_nonzero(df_sog)
 }
 

@@ -221,7 +221,6 @@ curate_group_mean = function(tc, sra, selected_curate_groups = NA, balance.bp = 
         }
         tc_ave[, curate_group] = exp_curate_group
     }
-    
     return(list(tc_ave = tc_ave,selected_curate_groups = selected_curate_groups))
 }
 
@@ -914,7 +913,6 @@ file_name = paste0(dir_tsv,'/',sub(" ", "_", scientific_name), ".uncorrected.cur
 write.table(data.frame("GeneID"=rownames(tc_curate_group_uncorrected), tc_curate_group_uncorrected), file = file_name,
             sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
 
-
 round = 0
 sva_out = NULL
 tc_sva = NULL
@@ -954,7 +952,7 @@ save_plot(tc_sva, sra, sva_out, dist_method, paste0(sub(" ", "_", scientific_nam
 round = 2
 end_flag = 0
 while (end_flag == 0) {
-    cat("iteratively checking within-curate_group correlation, round:", round, "\n")
+    cat("Iteratively checking within-curate_group correlation, round:", round, "\n")
     tc_cwtc = NULL
     num_run_before = sum(sra[['exclusion']] == "no")
     out = check_within_curate_group_correlation(tc, sra, dist_method, min_dif, selected_curate_groups, one_outlier_per_iteration, correlation_threshold)
@@ -975,10 +973,7 @@ while (end_flag == 0) {
         save_plot(tc_sva, sra, sva_out, dist_method, paste0(sub(" ", "_", scientific_name), ".", round,
                                                             ".correlation_cutoff.sva"), selected_curate_groups, fontsize, transform_method)
     }
-    # out = check_within_curate_group_correlation(tc_sva, sra, dist_method, min_dif, selected_curate_groups) ; tc_sva= out[['tc']] ; sra = out[['sra']]
-    
     cat("round:", round, ": # before =", num_run_before, ": # after =", num_run_after, "\n\n")
-    # tc = tc[,colnames(tc_sva)]
     if (num_run_before == num_run_after) {
         end_flag = 1
     }

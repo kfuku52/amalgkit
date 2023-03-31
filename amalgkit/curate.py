@@ -20,15 +20,6 @@ def get_curate_group(args, metadata):
     curate_group = '|'.join(curate_group)
     return curate_group
 
-def check_rscript():
-    try:
-        subprocess.run(['Rscript', '--help'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    except FileNotFoundError as e:
-        print(e)
-        print(",<ERROR> Rscript is not installed.")
-        sys.exit(1)
-
-
 def run_curate_r_script(args, new_metadata_path, metadata, sp):
     dist_method = args.dist_method
     mr_cut = args.mapping_rate

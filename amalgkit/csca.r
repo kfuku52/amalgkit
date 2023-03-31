@@ -5,120 +5,75 @@ if (FALSE) {
   options(repos=structure(c(CRAN="http://cran.rstudio.com/")))
   install.packages(c("phytools","amap","RColorBrewer","colorspace","dendextend","NMF","MASS","caper","pvclust"))
 }
-library(phytools)
-library(amap)
-library(RColorBrewer)
-library(colorspace)
-library(dendextend)
-library(NMF)
-library(MASS)
-library(caper)
-library(pvclust)
-library(Rtsne)
-library(ggplot2)
+#suppressPackageStartupMessages(library(phytools, quietly=TRUE))
+suppressPackageStartupMessages(library(amap, quietly=TRUE))
+suppressPackageStartupMessages(library(RColorBrewer, quietly=TRUE))
+suppressPackageStartupMessages(library(colorspace, quietly=TRUE))
+suppressPackageStartupMessages(library(dendextend, quietly=TRUE))
+suppressPackageStartupMessages(library(NMF, quietly=TRUE))
+suppressPackageStartupMessages(library(MASS, quietly=TRUE))
+#suppressPackageStartupMessages(library(caper, quietly=TRUE))
+suppressPackageStartupMessages(library(pvclust, quietly=TRUE))
+suppressPackageStartupMessages(library(Rtsne, quietly=TRUE))
+suppressPackageStartupMessages(library(ggplot2, quietly=TRUE))
 options(stringsAsFactors = FALSE)
-
 
 debug_mode = ifelse(length(commandArgs(trailingOnly = TRUE)) == 1, "debug", "batch")
 font_size = 8
 date_sra = Sys.Date()
 
 if (debug_mode == "debug") {
-  # Parameters
-  selected_tissues = c('root','flower', 'leaf')
+  selected_curate_groups = c('root','flower', 'leaf')
   dir_work = '/Users/s229181/MSN/'
   dir_curated_transcriptome = paste0(dir_work, 'curate/')
   dir_tc = paste0(dir_curated_transcriptome,'tables/')
-  dir_uncorrected_tissue_mean = paste0(dir_curated_transcriptome,'tables/')
-  dir_tissue_mean = paste0(dir_curated_transcriptome, 'tables/')
+  dir_uncorrected_curate_group_mean = paste0(dir_curated_transcriptome,'tables/')
+  dir_curate_group_mean = paste0(dir_curated_transcriptome, 'tables/')
   dir_sra = paste0(dir_curated_transcriptome,'tables/')
   file_outsra = paste0(dir_work,'/sra_table_amalgamated_', date_sra, '.tsv')
-  file_species_tree = '/Users/s229181/MSN/species_list.nwk'
-  dir_orthofinder = paste0(dir_work, 'OrthoFinder/') 
-  file_singlecopy = paste0(dir_orthofinder, 'Results_Jun23/Orthogroups/Orthogroups_SingleCopyOrthologues.txt')
-  file_orthogroup = paste0(dir_orthofinder, 'Results_Jun23/Orthogroups/Orthogroups.tsv')
-  
-  
+  file_orthogroup = paste0(dir_work, 'OrthoFinder/Orthogroups.tsv')
 } else if (debug_mode == "batch") {
   args = commandArgs(trailingOnly = TRUE)
   print(args)
-  selected_tissues = strsplit(args[1], "\\|")[[1]]
+  selected_curate_groups = strsplit(args[1], "\\|")[[1]]
   dir_work = args[2]
   dir_tc = args[3]
-  dir_uncorrected_tissue_mean = args[4]
-  dir_tissue_mean = args[5]
+  dir_uncorrected_curate_group_mean = args[4]
+  dir_curate_group_mean = args[5]
   dir_sra = args[6]
-  file_species_tree = args[7]
-  file_singlecopy = args[8]
-  file_orthogroup = args[9]
+  file_orthogroup = args[7]
+  file_genecount = args[8]
+  r_util_path = args[9]
+  dir_csca = args[10]
 }
+source(r_util_path)
+setwd(dir_csca)
 
-if (!endsWith(dir_work, "/")) {
-  dir_work = paste0(dir_work, "/")
-}
-
-dir_out = paste0(dir_work,"csca/")
-if (!endsWith(dir_out, "/")) {
-  dir_out = paste0(dir_out, "/")
-}
-
-if (!file.exists(dir_out)) {
-  dir.create(dir_out)
-}
-
-
-setwd(dir_out)
-
-file_outsra = paste0(dir_out,'sra_table_amalgamated_', date_sra, '.tsv')
-
-sptree = ladderize(read.newick(file_species_tree), right=TRUE)
-sp_orders = rev(sptree$tip.label)
-label_orders = c()
-
-for (tissue in selected_tissues) {
-  label_orders = c(label_orders, paste(sp_orders, tissue, sep='_'))
-}
-single_orthogroups = read.table(file_singlecopy, header=FALSE)$V1
-df_og = read.table(file_orthogroup, header=TRUE, sep='\t', row.names=1)
-df_singleog = df_og[(rownames(df_og) %in% single_orthogroups),]
-
-#for (col in 1:ncol(df_singleog)) {
-#  df_singleog[,col] = sub('.*_', '', df_singleog[,col])
-#}
-
-
-
-num_comma = apply(df_og, MARGIN=c(1,2), FUN=function(x){stringr:::str_count(x,',')})
-#df_og = NULL
-spp_filled = colnames(df_singleog)
-spp = sub('_', ' ', spp_filled)
-cat('num selected species:', length(spp), '\n')
-cat('selected species:', spp, '\n')
-add_color_to_sra = function(df, selected_tissues) {
-  df = df[,(!colnames(df) %in% c('bp_color','sp_color','tissue_color'))]
+add_color_to_sra = function(df, selected_curate_groups) {
+  df = df[,(!colnames(df) %in% c('bp_color','sp_color','curate_group_color'))]
   scientific_name = as.character(df$scientific_name)
-  tissue = as.character(df$tissue)
+  curate_group = as.character(df$curate_group)
   scientific_name_unique = scientific_name[!duplicated(scientific_name)]
-  tissue_unique = tissue[!duplicated(tissue)]
-  if (length(selected_tissues) <= 8) {
-    tissue_color = brewer.pal(length(unique(tissue)), "Dark2")
+  curate_group_unique = curate_group[!duplicated(curate_group)]
+  if (length(selected_curate_groups) <= 8) {
+    curate_group_color = brewer.pal(length(unique(curate_group)), "Dark2")
     sp_color = rainbow_hcl(length(unique(scientific_name)), c=100)
-  } else if (length(selected_tissues) <= 12) {
-    tissue_color = brewer.pal(length(unique(tissue)), "Paired")
+  } else if (length(selected_curate_groups) <= 12) {
+    curate_group_color = brewer.pal(length(unique(curate_group)), "Paired")
     sp_color = rainbow_hcl(length(unique(scientific_name)), c=100)
   } else {
-    tissue_color = rainbow_hcl(length(selected_tissues), c=100)
+    curate_group_color = rainbow_hcl(length(selected_curate_groups), c=100)
     sp_color = rainbow_hcl(length(unique(scientific_name)), c=150)
   }
-  df_tissue = data.frame(tissue=sort(tissue_unique), tissue_color=tissue_color[1:length(tissue_unique)], stringsAsFactors=FALSE)
+  df_curate_group = data.frame(curate_group=sort(curate_group_unique), curate_group_color=curate_group_color[1:length(curate_group_unique)], stringsAsFactors=FALSE)
   df_sp = data.frame(scientific_name=scientific_name_unique, sp_color=sp_color[1:length(scientific_name_unique)], stringsAsFactors=FALSE)
   df = merge(df, df_sp, sort=FALSE, all.y=FALSE)
-  df = merge(df, df_tissue, sort=FALSE, all.y=FALSE)
+  df = merge(df, df_curate_group, sort=FALSE, all.y=FALSE)
   if ('bioproject' %in% colnames(df)) {
     bioproject = as.character(df$bioproject)
-    if (length(selected_tissues) <= 8) {
+    if (length(selected_curate_groups) <= 8) {
       bp_color = rainbow_hcl(length(unique(bioproject)), c=50)
-    } else if (length(selected_tissues) <= 12) {
+    } else if (length(selected_curate_groups) <= 12) {
       bp_color = rainbow_hcl(length(unique(bioproject)), c=50)
     } else {
       bp_color = rainbow_hcl(length(unique(bioproject)), c=50)
@@ -134,8 +89,8 @@ sort_labels = function(df_label, label_orders) {
   for (lo in label_orders) {
     splits = strsplit(lo, '_')[[1]]
     scientific_name = paste(splits[1], splits[2])
-    tissue = splits[3]
-    df_tmp = rbind(df_tmp, df_label[(df_label$scientific_name==scientific_name)&(df_label$tissue==tissue),])
+    curate_group = splits[3]
+    df_tmp = rbind(df_tmp, df_label[(df_label$scientific_name==scientific_name)&(df_label$curate_group==curate_group),])
   }
   return(df_tmp)
 }
@@ -144,13 +99,13 @@ sort_averaged_tc = function(tc) {
   split_colnames = strsplit(colnames(tc), "_")
   genus_names = c()
   specific_names = c()
-  tissue_names = c()
+  curate_group_names = c()
   for (i in 1:length(split_colnames)) {
     genus_names = c(genus_names, split_colnames[[i]][1])
     specific_names = c(specific_names, split_colnames[[i]][2])
-    tissue_names = c(tissue_names, split_colnames[[i]][3])
+    curate_group_names = c(curate_group_names, split_colnames[[i]][3])
   }
-  colname_order = order(tissue_names, genus_names, specific_names)
+  colname_order = order(curate_group_names, genus_names, specific_names)
   tc = tc[, colname_order]
   return(tc)
 }
@@ -181,13 +136,13 @@ map_color = function(redundant_variables, c) {
 draw_multisp_heatmap = function(tc, df_label) {
   tc_dist_matrix = cor(tc, method='pearson')
   tc_dist_matrix[is.na(tc_dist_matrix)] = 0
-  ann_label = df_label[,c('scientific_name','tissue')]
-  colnames(ann_label) = c('species', 'organ')
+  ann_label = df_label[,c('scientific_name','curate_group')]
+  colnames(ann_label) = c('species', 'curate_group')
   sp_color = df_label$sp_color[!duplicated(df_label$sp_color)]
   sp_color = sp_color[order(df_label$scientific_name[!duplicated(df_label$scientific_name)])]
-  organ_color = df_label$tissue_color[!duplicated(df_label$tissue_color)]
-  organ_color = organ_color[order(df_label$tissue[!duplicated(df_label$tissue)])]
-  ann_color = list(species=sp_color, organ=organ_color)
+  curate_group_color = df_label$curate_group_color[!duplicated(df_label$curate_group_color)]
+  curate_group_color = curate_group_color[order(df_label$curate_group[!duplicated(df_label$curate_group)])]
+  ann_color = list(species=sp_color, curate_group=curate_group_color)
   breaks = c(0, seq(0.3, 1, 0.01))
   aheatmap(tc_dist_matrix, color="-RdYlBu2:71", Rowv=NA, Colv=NA, revC=TRUE, legend=TRUE, breaks=breaks, 
            annCol=ann_label, annRow=ann_label, annColors=ann_color, annLegend=FALSE, labRow=NA, labCol=NA)
@@ -207,7 +162,7 @@ draw_multisp_dendrogram = function(tc, df_label, sra, nboot, cex.xlab, cex.yaxis
     save(result, file=pvclust_file)
   }
   dend = as.dendrogram(result)
-  dend_colors = df_label$tissue_color[order.dendrogram(dend)]
+  dend_colors = df_label$curate_group_color[order.dendrogram(dend)]
   label_colors = df_label$sp_color[order.dendrogram(dend)]
   labels_colors(dend) = label_colors
   dend_labels <- sra$run[order.dendrogram(dend)]
@@ -225,15 +180,15 @@ draw_multisp_dendrogram = function(tc, df_label, sra, nboot, cex.xlab, cex.yaxis
   
   n = ncol(tc)
   f = 100
-  tissue_unique = unique(sra$tissue)
+  curate_group_unique = unique(sra$curate_group)
   sp_unique = unique(sra$scientific_name)
   bp_unique = unique(sra$bioproject)
-  tissue_color_unique = unique(sra$tissue_color)
+  curate_group_color_unique = unique(sra$curate_group_color)
   sp_color_unique = unique(sra$sp_color)
   bp_color_unique = unique(sra$bp_color)
-  legend_text = c(as.character(tissue_unique), "", as.character(sp_unique), "", as.character(bp_unique))
-  legend_bg = c(tissue_color_unique, "white", sp_color_unique, "white", bp_color_unique)
-  legend_fg = c(rep("black", length(tissue_color_unique)), "white", rep("black", length(sp_color_unique)), "white", rep("black", length(bp_color_unique)))
+  legend_text = c(as.character(curate_group_unique), "", as.character(sp_unique), "", as.character(bp_unique))
+  legend_bg = c(curate_group_color_unique, "white", sp_color_unique, "white", bp_color_unique)
+  legend_fg = c(rep("black", length(curate_group_color_unique)), "white", rep("black", length(sp_color_unique)), "white", rep("black", length(bp_color_unique)))
   #plot.new() ; par(mar=c(0,0,0,0))
   #legend("center", legend=legend_text, cex=1, pch=22, lty=0, lwd=1, pt.bg=legend_bg, col=legend_fg)
 }
@@ -245,7 +200,7 @@ draw_multisp_pca = function(tc, df_label) {
   pca = prcomp(tc_dist_matrix)
   xlabel = paste0("PC 1 (", round(summary(pca)$importance[2,1]*100, digits=1), "%)")
   ylabel = paste0("PC 2 (", round(summary(pca)$importance[2,2]*100, digits=1), "%)")
-  plot(pca$rotation[,1], pca$rotation[,2], pch=21, cex=2, lwd=1, bg=df_label$tissue_color, col=df_label$sp_color, xlab=xlabel, ylab=ylabel, las=1)
+  plot(pca$rotation[,1], pca$rotation[,2], pch=21, cex=2, lwd=1, bg=df_label$curate_group_color, col=df_label$sp_color, xlab=xlabel, ylab=ylabel, las=1)
 }
 
 draw_multisp_mds = function(tc, df_label) {
@@ -261,7 +216,7 @@ draw_multisp_mds = function(tc, df_label) {
     plot(c(0, 1), c(0, 1), ann = F, bty = 'n', type = 'n', xaxt = 'n', yaxt = 'n')
   } else {
     mds <- try_out
-    plot(mds$points[,1], mds$points[,2], pch=21, cex=2, lwd=1, bg=df_label$tissue_color, col=df_label$sp_color, xlab="MDS dimension 1", ylab="MDS dimension 2", las=1)
+    plot(mds$points[,1], mds$points[,2], pch=21, cex=2, lwd=1, bg=df_label$curate_group_color, col=df_label$sp_color, xlab="MDS dimension 1", ylab="MDS dimension 2", las=1)
   }
 }
 
@@ -271,7 +226,7 @@ draw_multisp_tsne = function(tc, df_label) {
   out_tsne = Rtsne(as.matrix(t(tc)), theta=0, check_duplicates=FALSE, verbose=FALSE, perplexity=perplexity, dims=2)
   try_out = tryCatch(
     {
-      plot(out_tsne$Y[,1], out_tsne$Y[,2], pch=21, cex=2, lwd=1, bg=df_label$tissue_color, col=df_label$sp_color, 
+      plot(out_tsne$Y[,1], out_tsne$Y[,2], pch=21, cex=2, lwd=1, bg=df_label$curate_group_color, col=df_label$sp_color, 
            xlab="t-SNE dimension 1", ylab="t-SNE dimension 2", las=1)
     },
     error = function(a){return("t-SNE plot failed.")}
@@ -284,53 +239,62 @@ draw_multisp_tsne = function(tc, df_label) {
 }
 
 draw_multisp_legend = function(df_label) {
-  tissue_unique = df_label$tissue[!duplicated(df_label$tissue)]
+  curate_group_unique = df_label$curate_group[!duplicated(df_label$curate_group)]
   sp_unique = df_label$scientific_name[!duplicated(df_label$scientific_name)]
-  tissue_color_unique = df_label$tissue_color[!duplicated(df_label$tissue_color)]
+  curate_group_color_unique = df_label$curate_group_color[!duplicated(df_label$curate_group_color)]
   sp_color_unique = df_label$sp_color[!duplicated(df_label$sp_color)]
   toumei=rgb(1,1,1,0)
-  legend_text = c('Tissue', as.character(tissue_unique), "", 'Species', as.character(sp_unique))
-  legend_bg = c(toumei, tissue_color_unique, toumei, toumei, rep(toumei, length(sp_color_unique)))
-  legend_fg = c(toumei, rep(toumei, length(tissue_color_unique)), toumei, toumei, sp_color_unique)
-  legend_pch = c(1, rep(21,length(tissue_color_unique)), 1, 1, rep(1,length(sp_color_unique)))
-  legend_font = c(2, rep(1, length(tissue_color_unique)), 1, 2, rep(3, length(sp_color_unique)))
+  legend_text = c('Tissue', as.character(curate_group_unique), "", 'Species', as.character(sp_unique))
+  legend_bg = c(toumei, curate_group_color_unique, toumei, toumei, rep(toumei, length(sp_color_unique)))
+  legend_fg = c(toumei, rep(toumei, length(curate_group_color_unique)), toumei, toumei, sp_color_unique)
+  legend_pch = c(1, rep(21,length(curate_group_color_unique)), 1, 1, rep(1,length(sp_color_unique)))
+  legend_font = c(2, rep(1, length(curate_group_color_unique)), 1, 2, rep(3, length(sp_color_unique)))
   plot.new()
   legend("right", legend=legend_text, pt.cex=1, pch=legend_pch, lty=0, lwd=2, pt.bg=legend_bg, col=legend_fg, cex=cex_axis, text.font=legend_font)
-  
 }
 
+file_outsra = file.path(dir_csca, paste0('sra_table_amalgamated_', date_sra, '.tsv'))
 
+df_og = read.table(file_orthogroup, header=TRUE, sep='\t', row.names=1)
+df_gc = read.table(file_genecount, header=TRUE, sep='\t', check.names=FALSE)
+spp_filled = colnames(df_gc)
+is_singlecopy = get_singlecopy_bool_index(df_gc, spp_filled)
+df_singleog = df_og[is_singlecopy,spp_filled]
 
-
+num_comma = apply(df_og, MARGIN=c(1,2), FUN=function(x){stringr:::str_count(x,',')})
+spp_filled = colnames(df_singleog)
+spp = sub('_', ' ', spp_filled)
+cat('Number of selected species:', length(spp), '\n')
+cat('Selected species:', spp, '\n')
 
 files = list.files(dir_sra, pattern = ".*sra.*")
 df_sra = data.frame()
 for (file in files) {
-  sra_path = paste0(dir_sra, file)
+  sra_path = file.path(dir_sra, file)
   tmp_sra = read.table(sra_path, header=TRUE, sep='\t', quote='', comment.char='')
   df_sra = rbind(df_sra, tmp_sra)
 }
 write.table(df_sra, file_outsra, row.names=FALSE, sep='\t')
-
-df_sra = df_sra[(df_sra$tissue %in% selected_tissues)&(df_sra$scientific_name %in% spp),]
-
+df_sra = df_sra[(df_sra[['curate_group']] %in% selected_curate_groups)&(df_sra[['scientific_name']] %in% spp),]
+order_cg = order(df_sra[['curate_group']])
+label_orders = unique(paste(df_sra[order_cg,'scientific_name'], df_sra[order_cg,'curate_group'], sep='_'))
+label_orders = sub(' ', '_', label_orders)
 
 tcs = list()
 tcs[['uncorrected']] = list()
 tcs[['corrected']] = list()
 
-all_files = list.files(dir_tissue_mean, pattern = "*tissue.mean.tsv")
+all_files = list.files(dir_curate_group_mean, pattern = "*.curate_group.mean.tsv")
 uncorrected_files = all_files[grep("uncorrected", all_files)]
 corrected_files = all_files[-grep("uncorrected", all_files)]
 for (sp in spp_filled) {
   uncorrected_file = uncorrected_files[startsWith(uncorrected_files, sp)]
   corrected_file = corrected_files[startsWith(corrected_files, sp)]
-  uncorrected_path = paste0(dir_uncorrected_tissue_mean, uncorrected_file)
-  corrected_path = paste0(dir_tissue_mean, corrected_file)
+  uncorrected_path = file.path(dir_uncorrected_curate_group_mean, uncorrected_file)
+  corrected_path = file.path(dir_curate_group_mean, corrected_file)
   tcs[['uncorrected']][[sp]] = read.delim(uncorrected_path, header=TRUE, row.names=1, sep='\t')
   tcs[['corrected']][[sp]] = read.delim(corrected_path, header=TRUE, row.names=1, sep='\t')
 }
-cat('done!\n')
 
 # Orthogroup mean expression
 
@@ -351,19 +315,18 @@ for (d in c('uncorrected', 'corrected')) {
   ortholog[[d]] = ortholog[[d]][,-(1:num_remove_col)]
   rownames(ortholog[[d]]) = row_names
   ortholog[[d]] = sort_averaged_tc(ortholog[[d]])
-  #ortholog[[d]][ortholog[[d]]<0] = 0
   ortholog[[d]] = ortholog[[d]][, label_orders]
 }
 cat(nrow(ortholog[[d]]), 'orthologs detected.\n')
 
 unaveraged_tcs = list()
 unaveraged_tcs[['corrected']] = list()
-all_files = list.files(dir_tissue_mean, pattern = "*.tc.*")
+all_files = list.files(dir_curate_group_mean, pattern = "*.tc.*")
 uncorrected_files = all_files[grep("uncorrected", all_files)]
 corrected_files = all_files[-grep("uncorrected", all_files)]
 for (sp in spp_filled) {
   corrected_file = corrected_files[startsWith(corrected_files, sp)]
-  corrected_path = paste0(dir_tc, corrected_file)
+  corrected_path = file.path(dir_tc, corrected_file)
   unaveraged_tcs[['corrected']][[sp]] = read.delim(corrected_path, header=TRUE, row.names=1, sep='\t')
 }
 # Unaveraged orthogroup extraction
@@ -431,8 +394,8 @@ for (d in c('corrected')) {
 }
 cat(nrow(unaveraged_ortholog[[d]]), 'unaveraged_orthologs detected.\n')
 
-cols = c('run','bioproject','tissue','scientific_name','sp_color','tissue_color','bp_color')
-df_label2 = add_color_to_sra(df_sra[(df_sra$exclusion=='no'),], selected_tissues)
+cols = c('run','bioproject','curate_group','scientific_name','sp_color','curate_group_color','bp_color')
+df_label2 = add_color_to_sra(df_sra[(df_sra$exclusion=='no'),], selected_curate_groups)
 df_label2 =df_label2[,cols]
 head(df_label2)
 label_order = order(df_label2[['run']])
@@ -446,7 +409,7 @@ draw_multisp_tsne2 = function(tc, df_label) {
   out_tsne = Rtsne(as.matrix(t(tc)), theta=0, check_duplicates=FALSE, verbose=FALSE, perplexity=perplexity, dims=2)
   try_out = tryCatch(
     {
-      plot(out_tsne$Y[,1], out_tsne$Y[,2], pch=21, cex=2, lwd=1, bg=df_label$tissue_color, col=df_label$sp_color, 
+      plot(out_tsne$Y[,1], out_tsne$Y[,2], pch=21, cex=2, lwd=1, bg=df_label$curate_group_color, col=df_label$sp_color, 
            xlab="t-SNE dimension 1", ylab="t-SNE dimension 2", las=1)
       #plot(out_tsne$Y[,1], out_tsne$Y[,2], pch=21, cex=2, lwd=1, 
       #     xlab="t-SNE dimension 1", ylab="t-SNE dimension 2", las=1)
@@ -470,24 +433,24 @@ for (tpm in c('uncorrected','corrected')) {
     sra_tmp = df_sra[(df_sra$exclusion=='no'),]
   }
   
-  df_label = unique(sra_tmp[,c('scientific_name','tissue')])
-  categories = list(scientific_name=sra_tmp$scientific_name, tissue=sra_tmp$tissue)
+  df_label = unique(sra_tmp[,c('scientific_name','curate_group')])
+  categories = list(scientific_name=sra_tmp$scientific_name, curate_group=sra_tmp$curate_group)
   
   df_bp = aggregate(sra_tmp$bioproject, by=categories, function(x){length(unique(x))})
-  colnames(df_bp) = c('scientific_name','tissue','num_bp')
+  colnames(df_bp) = c('scientific_name','curate_group','num_bp')
   df_label = merge(df_label, df_bp, all.x=TRUE, all.y=FALSE)
   
   df_exp = aggregate(sra_tmp$experiment, by=categories, function(x){length(unique(x))})
-  colnames(df_exp) = c('scientific_name','tissue','num_exp')
+  colnames(df_exp) = c('scientific_name','curate_group','num_exp')
   df_label = merge(df_label, df_exp, all.x=TRUE, all.y=FALSE)
-  df_label = df_label[order(df_label$tissue, df_label$scientific_name),]
+  df_label = df_label[order(df_label$curate_group, df_label$scientific_name),]
   df_label = sort_labels(df_label, label_orders)
-  df_label = add_color_to_sra(df_label, selected_tissues)
+  df_label = add_color_to_sra(df_label, selected_curate_groups)
   df_label = sort_labels(df_label, label_orders)
   df_labels[[tpm]] = df_label
 }
 
-get_pca_coordinates = function(tc, df_label, by='species_tissue') {
+get_pca_coordinates = function(tc, df_label, by='species_curate_group') {
   tc_dist_matrix = cor(tc, method='pearson')
   tc_dist_matrix[is.na(tc_dist_matrix)] = 0
   #set.seed(1)
@@ -502,8 +465,8 @@ get_pca_coordinates = function(tc, df_label, by='species_tissue') {
   PC4 = pca[['x']][,'PC4']
   PC5 = pca[['x']][,'PC5']
   tmp = data.frame(PC1, PC2, PC3, PC4, PC5)
-  if (by=='species_tissue') {
-    df_label[by] = paste0(sub(' ', '_', df_label[['scientific_name']]), '_', df_label[['tissue']])
+  if (by=='species_curate_group') {
+    df_label[by] = paste0(sub(' ', '_', df_label[['scientific_name']]), '_', df_label[['curate_group']])
     tmp[by] = rownames(tmp)
   } else if (by=='run') {
     tmp[by] = sub('.*_','',rownames(tmp))
@@ -526,21 +489,13 @@ dfl_in = df_label2
 
 if (preprocessing=='no_averaging') {
   by = 'run'
-} else if (preprocessing=='remove_early_diverging_taxa') {
-  remove_spp = c('Astyanax mexicanus','Danio rerio','Gadus morhua','Oreochromis niloticus',
-                 'Oryzias latipes','Xenopus tropicalis')
-  remove_runs = dfl_in[(dfl_in[['scientific_name']]%in%remove_spp),'run']
-  cat('Number of removed Runs:', length(remove_runs), '\n')
-  tc_in = tc_in[,(!colnames(tc_in)%in%remove_runs)]
-  dfl_in = dfl_in[(!dfl_in[['run']]%in%remove_runs),]
-  by = 'run'
 } else if (preprocessing=='bioproject_mean') {
   dfl_in[['bioproject']] = sub(';.*', '', dfl_in[['bioproject']])
   for (sp in unique(dfl_in[['scientific_name']])) {
-    for (tissue in unique(dfl_in[['tissue']])) {
-      dfl_tmp = dfl_in[(dfl_in[['scientific_name']]==sp)&(dfl_in[['tissue']]==tissue),]
+    for (curate_group in unique(dfl_in[['curate_group']])) {
+      dfl_tmp = dfl_in[(dfl_in[['scientific_name']]==sp)&(dfl_in[['curate_group']]==curate_group),]
       for (bp in unique(dfl_tmp[['bioproject']])) {
-        key = paste0(sub(' ','_',sp), '_', tissue, '_', bp)
+        key = paste0(sub(' ','_',sp), '_', curate_group, '_', bp)
         runs = dfl_tmp[(dfl_tmp[['bioproject']]==bp),'run']
         cols = paste0(sub(' ','_',sp), '_', runs)
         if (length(cols)==1) {
@@ -555,16 +510,16 @@ if (preprocessing=='no_averaging') {
   }
   dfl_in[['run']] = NULL
   dfl_in = unique(dfl_in)
-  dfl_in[['key']] = paste0(sub(' ', '_', dfl_in[['scientific_name']]), '_', dfl_in[['tissue']], '_', dfl_in[['bioproject']])
+  dfl_in[['key']] = paste0(sub(' ', '_', dfl_in[['scientific_name']]), '_', dfl_in[['curate_group']], '_', dfl_in[['bioproject']])
   by='key'
-} else if (preprocessing=='tissue_mean') {
-  by='species_tissue'
+} else if (preprocessing=='curate_group_mean') {
+  by='species_curate_group'
 }
 out = get_pca_coordinates(tc=tc_in, df_label=dfl_in, by='run')
 tmp = out[[1]]
 pc_contributions = out[[2]]
 
-cat('Number of genes/orthogroups =', nrow(tc_in), '\n')
+cat('Number of orthogroups:', nrow(tc_in), '\n')
 
 for (pcxy in list(c(1,2),c(3,4))) {    
   pcx = pcxy[1]
@@ -583,13 +538,15 @@ for (pcxy in list(c(1,2),c(3,4))) {
   yunit = (ymax-ymin)*0.01
   ymin = ymin - yunit
   ymax = ymax + yunit
-  
-  g = ggplot(tmp, aes(tmp[[colx]], tmp[[coly]], color=tissue))
+
+    write.table(df_label, 'df_label.tsv', sep='\t', row.names=FALSE)
+
+  g = ggplot(tmp, aes(x=!!rlang::sym(colx), y=!!rlang::sym(coly), color=curate_group))
   g = g + theme_bw()
   g = g + geom_point(size=0.5)
-  g = g + geom_density_2d(geom="polygon", aes(fill=tissue_color), bins=12, size=0.25)
-  organ_colors = unique(df_label[,c('tissue','tissue_color')])[['tissue_color']]
-  g = g + scale_color_manual(values=organ_colors)
+  # g = g + geom_density_2d(mapping=aes(color=curate_group), bins=12, size=0.25) # Temporarily deactivated. Bug fix needed.
+  curate_group_colors = unique(df_label[,c('curate_group','curate_group_color')])[['curate_group_color']]
+  g = g + scale_color_manual(values=curate_group_colors)
   g = g + xlab(pc_contributions[pcx])
   g = g + ylab(pc_contributions[pcy])
   g = g + xlim(xmin, xmax)
@@ -625,10 +582,10 @@ if (preprocessing=='no_averaging') {
 } else if (preprocessing=='bioproject_mean') {
   dfl_in[['bioproject']] = sub(';.*', '', dfl_in[['bioproject']])
   for (sp in unique(dfl_in[['scientific_name']])) {
-    for (tissue in unique(dfl_in[['tissue']])) {
-      dfl_tmp = dfl_in[(dfl_in[['scientific_name']]==sp)&(dfl_in[['tissue']]==tissue),]
+    for (curate_group in unique(dfl_in[['curate_group']])) {
+      dfl_tmp = dfl_in[(dfl_in[['scientific_name']]==sp)&(dfl_in[['curate_group']]==curate_group),]
       for (bp in unique(dfl_tmp[['bioproject']])) {
-        key = paste0(sub(' ','_',sp), '_', tissue, '_', bp)
+        key = paste0(sub(' ','_',sp), '_', curate_group, '_', bp)
         runs = dfl_tmp[(dfl_tmp[['bioproject']]==bp),'run']
         cols = paste0(sub(' ','_',sp), '_', runs)
         if (length(cols)==1) {
@@ -643,10 +600,10 @@ if (preprocessing=='no_averaging') {
   }
   dfl_in[['run']] = NULL
   dfl_in = unique(dfl_in)
-  dfl_in[['key']] = paste0(sub(' ', '_', dfl_in[['scientific_name']]), '_', dfl_in[['tissue']], '_', dfl_in[['bioproject']])
+  dfl_in[['key']] = paste0(sub(' ', '_', dfl_in[['scientific_name']]), '_', dfl_in[['curate_group']], '_', dfl_in[['bioproject']])
   by='key'
-} else if (preprocessing=='tissue_mean') {
-  by='species_tissue'
+} else if (preprocessing=='curate_group_mean') {
+  by='species_curate_group'
 }
 
 get_tsne_coordinates = function(tc, df_label, by='run') {
@@ -663,7 +620,6 @@ tmp = get_tsne_coordinates(tc=tc_in, df_label=dfl_in)
 
 pcx = 1
 pcy = 2
-
 colx = paste0('tsne', pcx)
 coly = paste0('tsne', pcy)
 xmin = min(tmp[[colx]])
@@ -678,12 +634,12 @@ yunit = (ymax-ymin)*0.01
 ymin = ymin - yunit
 ymax = ymax + yunit
 
-g = ggplot(tmp, aes(tmp[[colx]], tmp[[coly]], color=tissue))
+g = ggplot(tmp, aes(x=!!rlang::sym(colx), !!rlang::sym(coly), color=curate_group))
 g = g + theme_bw()
 g = g + geom_point(size=0.5)
-g = g + geom_density_2d(geom="polygon", aes(fill=tissue_color), bins=12, size=0.25)
-organ_colors = unique(df_label[,c('tissue','tissue_color')])[['tissue_color']]
-g = g + scale_color_manual(values=organ_colors)
+#g = g+ geom_density_2d(mapping=aes(color=curate_group), bins=12, size=0.25) # Temporarily deactivated. Bug fix needed.
+curate_group_colors = unique(df_label[,c('curate_group','curate_group_color')])[['curate_group_color']]
+g = g + scale_color_manual(values=curate_group_colors)
 g = g + xlab('t-SNE dimension 1')
 g = g + ylab('t-SNE dimension 2')
 g = g + xlim(xmin, xmax)
@@ -845,18 +801,19 @@ print('Completed!')
 
 draw_multisp_boxplot = function(sra, tc_dist_matrix, fontsize=7) {
   is_same_sp = outer(sra$scientific_name, sra$scientific_name, function(x,y){x==y})
-  is_same_tissue = outer(sra$tissue, sra$tissue, function(x,y){x==y})
+  is_same_curate_group = outer(sra$curate_group, sra$curate_group, function(x,y){x==y})
   plot(c(0.5, 4.5), c(0, 1), type = 'n', xlab='', ylab="Pearson's correlation\ncoefficient", las=1, xaxt='n')
-  boxplot(tc_dist_matrix[(!is_same_sp)&(!is_same_tissue)], at=1, add=TRUE, col='gray', yaxt='n')
-  boxplot(tc_dist_matrix[(is_same_sp)&(!is_same_tissue)], at=2, add=TRUE, col='gray', yaxt='n')
-  boxplot(tc_dist_matrix[(!is_same_sp)&(is_same_tissue)], at=3, add=TRUE, col='gray', yaxt='n')
-  boxplot(tc_dist_matrix[(is_same_sp)&(is_same_tissue)], at=4, add=TRUE, col='gray', yaxt='n')
+  boxplot(tc_dist_matrix[(!is_same_sp)&(!is_same_curate_group)], at=1, add=TRUE, col='gray', yaxt='n')
+  boxplot(tc_dist_matrix[(is_same_sp)&(!is_same_curate_group)], at=2, add=TRUE, col='gray', yaxt='n')
+  boxplot(tc_dist_matrix[(!is_same_sp)&(is_same_curate_group)], at=3, add=TRUE, col='gray', yaxt='n')
+  boxplot(tc_dist_matrix[(is_same_sp)&(is_same_curate_group)], at=4, add=TRUE, col='gray', yaxt='n')
   labels = c('bw\nbw', 'bw\nwi', 'wi\nbw', 'wi\nwi')
   axis(side=1, at=c(1,2,3,4), labels=labels, padj=0.5)
   axis(side=1, at=0.35, labels='Organ\nSpecies', padj=0.5, hadj=1, tick=FALSE)
-  
 }
 
+file_name='Multisp.boxplot.pdf'
+pdf(file_name, height=3.6, width=7.2) # full figure size = 9.7 x 7.2
 par(mfrow=c(1,2))
 for (tpm in c('uncorrected','corrected')) {
   tc = ortholog[[tpm]]
@@ -865,11 +822,8 @@ for (tpm in c('uncorrected','corrected')) {
   tc_dist_matrix[is.na(tc_dist_matrix)] = 0
   draw_multisp_boxplot(df_labels[[tpm]], tc_dist_matrix, fontsize=7)
 }
-file_name='Multisp.SVA.t-SNE.pdf'
-pdf(file_name, height=2, width=2.5) # full figure size = 9.7 x 7.2       
 tpm = 'corrected'
 tc = ortholog[[tpm]]
 df_label = df_labels[[tpm]]
 par(mar=c(2.5,2.5,0.3,0.1), cex=1, ps=8, mgp=c(1.5, 0.7, 0)); draw_multisp_tsne(tc=tc, df_label=df_label$sp_color)
-dev.off()
-
+graphics.off()

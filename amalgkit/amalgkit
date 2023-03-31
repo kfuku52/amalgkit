@@ -254,16 +254,16 @@ pca.add_argument('--dir_sra', metavar='PATH', default='inferred', type=str, requ
                  help='default=%(default)s: In an unaltered amalgkit curate output, this would be curate/tables/. If left at default "inferred" this value will be set to out_dir/curate/tables/')
 pca.add_argument('--dir_tc', metavar='PATH', default='inferred', type=str, required=False, action='store',
                  help='default=%(default)s: In an unaltered amalgkit curate output, this would be curate/tables/. If left at default "inferred" this value will be set to out_dir/curate/tables/')
-pca.add_argument('--file_singlecopy', metavar='PATH', default=None, type=str, required=True, action='store',
-                 help='default=%(default)s: ')
-pca.add_argument('--file_orthogroup', metavar='PATH', default=None, type=str, required=True, action='store',
-                 help='default=%(default)s: ')
-pca.add_argument('--file_species_tree', metavar='PATH', default=None, type=str, required=True, action='store',
-                 help='default=%(default)s: ')
+pca.add_argument('--orthogroup_table', metavar='PATH', default=None, type=str, required=False, action='store',
+                 help='default=%(default)s: PATH to orthogroup table, which is, for example, Orthogroups.tsv and N0.tsv in OrthoFinder.'
+                      'Specify `--orthogroup_table ""` for single-species TMM normalization.')
+pca.add_argument('--dir_busco', metavar='PATH', default=None, type=str, required=False, action='store',
+                 help='default=%(default)s: PATH to the directory where per-species BUSCO full tables are stored. '
+                      'File names in this directory are expected to be GENUS_SPECIES_MISC.tsv: e.g., Arabidopsis_thaliana_full_table.tsv')
 pca.add_argument('--curate_group', metavar='STR', default=None, type=str, required=False, action='store',
-                 help='default=%(default)s: "comma separated list of primary condition or tissue used in curate analysis.'
-                      'Example input may look like "root,flower,leaf" or "heat stressed,cold stressed,light stressed".'
-                      'Please refer to your amalgkit curate outputs.')
+                 help='default=%(default)s: "Comma separated list of primary condition or tissue used in curate analysis. '
+                      'Example input may look like "root,flower,leaf" or "heat stressed,cold stressed,light stressed". '
+                      'By default, all curate_group values in metadata.tsv are passed.')
 pca.set_defaults(handler=command_csca)
 
 # Sub parser: curate
@@ -275,15 +275,15 @@ pcu.add_argument('--input_dir', metavar='PATH', default='inferred', type=str, re
 pcu.add_argument('--dist_method', metavar='STR', default='pearson', type=str, required=False, action='store',
                  help='default=%(default)s: Method for calculating distance.')
 pcu.add_argument('--mapping_rate', metavar='FLOAT', default=0.20, type=float, required=False, action='store',
-                 help='default=%(default)s: cutoff for mapping rate.')
+                 help='default=%(default)s: Cutoff for mapping rate.')
 pcu.add_argument('--correlation_threshold', metavar='FLOAT', default=0.30, type=float, required=False, action='store',
-                 help='default=%(default)s: lower cutoff for pearson r during outlier removal.')
+                 help='default=%(default)s: Lower cutoff for pearson r during outlier removal.')
 pcu.add_argument('--plot_intermediate', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
                  help='default=%(default)s: If yes, calculates and plots SVA correction after each iteration of outlier removal. Drastically increases computing times!')
 pcu.add_argument('--one_outlier_per_iter', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
                  help='default=%(default)s: If yes, allows curate to remove only 1 sample per same-tissue or same-bioproject. Increases computing times!')
 pcu.add_argument('--curate_group', metavar='STR', default=None, type=str, required=False, action='store',
-                 help='default=%(default)s: "comma separated list of values contained in the curate_group metadata column to be included in the analysis. '
+                 help='default=%(default)s: "Comma-separated list of values contained in the curate_group metadata column to be included in the analysis. '
                       'Example input may look like "root,flower,leaf" or "heat stressed,cold stressed,light stressed".')
 pcu.add_argument('--overwrite_intermediate_metadata', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
                  help='default=%(default)s: If yes, allows curate to overwrite an intermediate metadata file created from previous curate runs within the curate folder.')
