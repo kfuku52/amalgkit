@@ -116,10 +116,8 @@ create_eff_length_symlink = function(dir_count, dir_cstmm, sp) {
   if (length(eff_length_files)==1) {
     path_target = file.path(path_sp, eff_length_files[1])
     path_link = file.path(dir_cstmm, sp, eff_length_files[1])
-    if (file.exists(path_link)) {
-      file.remove(path_link)
-    }
-    file.symlink(from=path_target, to=path_link)
+    cat('Copying file from', path_target, 'to', path_link, '\n')
+    file.copy(from=path_target, to=path_link, overwrite=TRUE)
   } else {
     warning(paste0('No eff_length.tsv file found: ', path_sp))
   }
