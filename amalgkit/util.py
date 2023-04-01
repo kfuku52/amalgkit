@@ -156,6 +156,7 @@ def orthogroup2genecount(file_orthogroup, file_genecount, spp):
     is_spp = df.columns.isin(spp)
     df = df.loc[:,is_spp]
     df[df.isnull()] = ''
+    df[df=='-'] = ''
     gc = df.copy()
     for col in gc.columns:
         is_comma = (df[col].str.contains(','))

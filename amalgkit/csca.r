@@ -153,11 +153,11 @@ draw_multisp_dendrogram = function(tc, df_label, sra, nboot, cex.xlab, cex.yaxis
   dist_fun = function(x){Dist(t(x), method='pearson')}
   if (file.exists(pvclust_file)) {
     if (file.info(pvclust_file)$size) {
-      print('pvclust file found.')
+      cat('pvclust file found.\n')
       load(pvclust_file)
     }
   } else {
-    print('no pvclust file found. Start bootstrapping.')
+    cat('No pvclust file found. Start bootstrapping.\n')
     result = pvclust(tc, method.dist=dist_fun, method.hclust="average", nboot=nboot, parallel=FALSE) # UPGMA
     save(result, file=pvclust_file)
   }
@@ -260,10 +260,10 @@ df_gc = read.table(file_genecount, header=TRUE, sep='\t', check.names=FALSE)
 spp_filled = colnames(df_gc)
 is_singlecopy = get_singlecopy_bool_index(df_gc, spp_filled)
 df_singleog = df_og[is_singlecopy,spp_filled]
-
-num_comma = apply(df_og, MARGIN=c(1,2), FUN=function(x){stringr:::str_count(x,',')})
 spp_filled = colnames(df_singleog)
 spp = sub('_', ' ', spp_filled)
+cat('Number of orthologs in input table:', nrow(df_og), '\n')
+cat('Number of single-copy orthologs:', nrow(df_singleog), '\n')
 cat('Number of selected species:', length(spp), '\n')
 cat('Selected species:', spp, '\n')
 
@@ -317,7 +317,7 @@ for (d in c('uncorrected', 'corrected')) {
   ortholog[[d]] = sort_averaged_tc(ortholog[[d]])
   ortholog[[d]] = ortholog[[d]][, label_orders]
 }
-cat(nrow(ortholog[[d]]), 'orthologs detected.\n')
+cat(nrow(ortholog[[d]]), 'orthologs were found before filtering.\n')
 
 unaveraged_tcs = list()
 unaveraged_tcs[['corrected']] = list()
@@ -330,8 +330,6 @@ for (sp in spp_filled) {
   unaveraged_tcs[['corrected']][[sp]] = read.delim(corrected_path, header=TRUE, row.names=1, sep='\t')
 }
 # Unaveraged orthogroup extraction
-
-t = proc.time()
 orthogroup = list()
 is_complete = apply(df_og!='', 1, all)
 ogtmp = df_og[is_complete,]
@@ -367,8 +365,7 @@ for (d in c('corrected')) {
   #orthogroup[[d]][orthogroup[[d]]<0] = 0
   #orthogroup[[d]] = orthogroup[[d]][, label_orders]
 }
-cat(nrow(orthogroup[[d]]), 'orthogroups detected.\n')
-print(proc.time()-t)
+cat(nrow(orthogroup[[d]]), 'orthologs were found after filtering.\n')
 
 # Single-copy unaveraged_ortholog extraction
 
@@ -388,16 +385,17 @@ for (d in c('corrected')) {
   num_remove_col = length(selected_species)
   unaveraged_ortholog[[d]] = unaveraged_ortholog[[d]][,-(1:num_remove_col)]
   rownames(unaveraged_ortholog[[d]]) = row_names
+  is_not_na = apply(unaveraged_ortholog[[d]], 1, function(x){!any(is.na(x))})
+  unaveraged_ortholog[[d]] = unaveraged_ortholog[[d]][is_not_na,]
   #unaveraged_ortholog[[d]] = sort_averaged_tc(unaveraged_ortholog[[d]])
   #unaveraged_ortholog[[d]][unaveraged_ortholog[[d]]<0] = 0
   #unaveraged_ortholog[[d]] = unaveraged_ortholog[[d]][, label_orders]
 }
-cat(nrow(unaveraged_ortholog[[d]]), 'unaveraged_orthologs detected.\n')
+cat(nrow(unaveraged_ortholog[[d]]), 'unaveraged_orthologs were found after filtering.\n')
 
 cols = c('run','bioproject','curate_group','scientific_name','sp_color','curate_group_color','bp_color')
 df_label2 = add_color_to_sra(df_sra[(df_sra$exclusion=='no'),], selected_curate_groups)
 df_label2 =df_label2[,cols]
-head(df_label2)
 label_order = order(df_label2[['run']])
 df_label2 = df_label2[label_order,]
 tc_order = order(sub('.*_','',colnames(unaveraged_ortholog[['corrected']])))
@@ -406,21 +404,27 @@ unaveraged_ortholog[['corrected']] = unaveraged_ortholog[['corrected']][,tc_orde
 draw_multisp_tsne2 = function(tc, df_label) {
   perplexity = min(30, floor(ncol(tc)/4))
   set.seed(1)
-  out_tsne = Rtsne(as.matrix(t(tc)), theta=0, check_duplicates=FALSE, verbose=FALSE, perplexity=perplexity, dims=2)
+  out_tsne = try(Rtsne(as.matrix(t(tc)), theta=0, check_duplicates=FALSE, verbose=FALSE, perplexity=perplexity, dims=2))
+  if ("try-error" %in% class(out_tsne)) {
+    flag_tsne_success = FALSE
+    print(out_tsne)
+  } else {
+    flag_tsne_success = TRUE
+  }
+  if (!flag_tsne_success) {
+    return()
+  }
   try_out = tryCatch(
     {
-      plot(out_tsne$Y[,1], out_tsne$Y[,2], pch=21, cex=2, lwd=1, bg=df_label$curate_group_color, col=df_label$sp_color, 
-           xlab="t-SNE dimension 1", ylab="t-SNE dimension 2", las=1)
-      #plot(out_tsne$Y[,1], out_tsne$Y[,2], pch=21, cex=2, lwd=1, 
-      #     xlab="t-SNE dimension 1", ylab="t-SNE dimension 2", las=1)
+      plot(out_tsne$Y[,1], out_tsne$Y[,2], pch=21, cex=2, lwd=1, bg=df_label[['curate_group_color']],
+           col=df_label[['sp_color']], xlab="t-SNE dimension 1", ylab="t-SNE dimension 2", las=1)
     },
     error = function(a){return("t-SNE plot failed.")}
   )
   if (mode(try_out)=="character") {
     cat('t-SNE failed.\n')
     plot(c(0, 1), c(0, 1), ann = F, bty = 'n', type = 'n', xaxt = 'n', yaxt = 'n')
-  }    
-  
+  }
 }
 
 draw_multisp_tsne2(tc=unaveraged_ortholog[['corrected']], df_label=df_label2)
@@ -480,11 +484,8 @@ get_pca_coordinates = function(tc, df_label, by='species_curate_group') {
 max_gene_per_og = 1
 cat('Maximum number of genes per orthogroup =', max_gene_per_og, '\n')
 preprocessing = 'no_averaging'
-almost_conserved_og = apply(num_comma, 1, function(x){all((x<=max_gene_per_og-1))})
-almost_conserved_og = names(almost_conserved_og)[almost_conserved_og]
 tc_in = orthogroup[['corrected']]
-tc_in = tc_in[(rownames(tc_in)%in%almost_conserved_og),]
-#tc_in = unaveraged_ortholog[['corrected']]
+tc_in = tc_in[apply(tc_in, 1, function(x){!any(is.na(x))}),]
 dfl_in = df_label2
 
 if (preprocessing=='no_averaging') {
@@ -539,7 +540,7 @@ for (pcxy in list(c(1,2),c(3,4))) {
   ymin = ymin - yunit
   ymax = ymax + yunit
 
-    write.table(df_label, 'df_label.tsv', sep='\t', row.names=FALSE)
+  write.table(df_label, 'df_label.tsv', sep='\t', row.names=FALSE)
 
   g = ggplot(tmp, aes(x=!!rlang::sym(colx), y=!!rlang::sym(coly), color=curate_group))
   g = g + theme_bw()
@@ -563,21 +564,11 @@ for (pcxy in list(c(1,2),c(3,4))) {
 }
 
 preprocessing = 'no_averaging'
-
 tc_in = orthogroup[['corrected']]
-tc_in = tc_in[(rownames(tc_in)%in%almost_conserved_og),]
-#tc_in = unaveraged_ortholog[['corrected']]
+tc_in = tc_in[apply(tc_in, 1, function(x){!any(is.na(x))}),]
 dfl_in = df_label2
 
 if (preprocessing=='no_averaging') {
-  by = 'run'
-} else if (preprocessing=='remove_early_diverging_taxa') {
-  remove_spp = c('Astyanax mexicanus','Danio rerio','Gadus morhua','Oreochromis niloticus',
-                 'Oryzias latipes','Xenopus tropicalis')
-  remove_runs = dfl_in[(dfl_in[['scientific_name']]%in%remove_spp),'run']
-  cat('Number of removed Runs:', length(remove_runs), '\n')
-  tc_in = tc_in[,(!colnames(tc_in)%in%remove_runs)]
-  dfl_in = dfl_in[(!dfl_in[['run']]%in%remove_runs),]
   by = 'run'
 } else if (preprocessing=='bioproject_mean') {
   dfl_in[['bioproject']] = sub(';.*', '', dfl_in[['bioproject']])
@@ -608,7 +599,7 @@ if (preprocessing=='no_averaging') {
 
 get_tsne_coordinates = function(tc, df_label, by='run') {
   perplexity = min(30, floor(ncol(tc)/4))
-  #set.seed(1)
+  set.seed(1)
   out_tsne = Rtsne(as.matrix(t(tc)), theta=0, check_duplicates=FALSE, verbose=FALSE, perplexity=perplexity, dims=2)
   tmp = data.frame(tsne1=out_tsne$Y[,1], tsne2=out_tsne$Y[,2])
   tmp[[by]] = sub('.*_', '', colnames(tc))
@@ -796,8 +787,6 @@ if (do_combined) {
     graphics.off()
   }
 }
-
-print('Completed!')
 
 draw_multisp_boxplot = function(sra, tc_dist_matrix, fontsize=7) {
   is_same_sp = outer(sra$scientific_name, sra$scientific_name, function(x,y){x==y})
