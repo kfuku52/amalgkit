@@ -206,4 +206,4 @@ def generate_multisp_busco_table(dir_busco, outfile):
         species_colname = re.sub('PLACEHOLDER', '_', species_colname)
         tmp_table = tmp_table.rename(columns={'sequence': species_colname})
         merged_table = merged_table.merge(tmp_table, on='busco_id', how='outer')
-    merged_table.to_csv(outfile, sep='\t', index=None)
+    merged_table.to_csv(outfile, sep='\t', index=None, doublequote=False)

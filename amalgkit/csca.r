@@ -5,14 +5,12 @@ if (FALSE) {
   options(repos=structure(c(CRAN="http://cran.rstudio.com/")))
   install.packages(c("phytools","amap","RColorBrewer","colorspace","dendextend","NMF","MASS","caper","pvclust"))
 }
-#suppressPackageStartupMessages(library(phytools, quietly=TRUE))
 suppressPackageStartupMessages(library(amap, quietly=TRUE))
 suppressPackageStartupMessages(library(RColorBrewer, quietly=TRUE))
 suppressPackageStartupMessages(library(colorspace, quietly=TRUE))
 suppressPackageStartupMessages(library(dendextend, quietly=TRUE))
 suppressPackageStartupMessages(library(NMF, quietly=TRUE))
 suppressPackageStartupMessages(library(MASS, quietly=TRUE))
-#suppressPackageStartupMessages(library(caper, quietly=TRUE))
 suppressPackageStartupMessages(library(pvclust, quietly=TRUE))
 suppressPackageStartupMessages(library(Rtsne, quietly=TRUE))
 suppressPackageStartupMessages(library(ggplot2, quietly=TRUE))
@@ -255,8 +253,8 @@ draw_multisp_legend = function(df_label) {
 
 file_outsra = file.path(dir_csca, paste0('sra_table_amalgamated_', date_sra, '.tsv'))
 
-df_og = read.table(file_orthogroup, header=TRUE, sep='\t', row.names=1)
-df_gc = read.table(file_genecount, header=TRUE, sep='\t', check.names=FALSE)
+df_og = read.table(file_orthogroup, header=TRUE, sep='\t', row.names=1, quote='')
+df_gc = read.table(file_genecount, header=TRUE, sep='\t', check.names=FALSE, quote='')
 spp_filled = colnames(df_gc)
 is_singlecopy = get_singlecopy_bool_index(df_gc, spp_filled)
 df_singleog = df_og[is_singlecopy,spp_filled]
@@ -365,7 +363,6 @@ for (d in c('corrected')) {
   #orthogroup[[d]][orthogroup[[d]]<0] = 0
   #orthogroup[[d]] = orthogroup[[d]][, label_orders]
 }
-cat(nrow(orthogroup[[d]]), 'orthologs were found after filtering.\n')
 
 # Single-copy unaveraged_ortholog extraction
 
@@ -816,3 +813,6 @@ tc = ortholog[[tpm]]
 df_label = df_labels[[tpm]]
 par(mar=c(2.5,2.5,0.3,0.1), cex=1, ps=8, mgp=c(1.5, 0.7, 0)); draw_multisp_tsne(tc=tc, df_label=df_label$sp_color)
 graphics.off()
+if (file.exists('Rplots.pdf')) {
+  file.remove('Rplots.pdf')
+}

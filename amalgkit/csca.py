@@ -75,5 +75,5 @@ def csca_main(args):
                      r_util_path,
                      dir_csca,
                      ])
-    #for f in glob.glob("tmp.amalgkit.*"):
-    #    os.remove(f)
+    for f in glob.glob("tmp.amalgkit.*"):
+        os.remove(f)
