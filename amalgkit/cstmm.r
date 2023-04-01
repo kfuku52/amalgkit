@@ -52,14 +52,14 @@ read_est_counts = function(dir_count, sp) {
   sciname_path = file.path(dir_count, sp)
   infile = list.files(path=sciname_path, pattern=".*est_counts\\.tsv")
   if (length(infile)> 1){
-    stop(paste0("Multiple *count.tsv files found for: ", sp ,"\n"))
+    stop(paste0("Multiple *count.tsv files found: ", sp ,"\n"))
   } else if (length(infile)==0) {
-    warning(paste0("Skipping. No *est_counts.tsv files found for: ", sp ,"\n"))
+    warning(paste0("Skipping. No *est_counts.tsv files found: ", sp ,"\n"))
     return(NULL)
   }
   infile_path = file.path(sciname_path, infile[1])
   cat('Input file found, reading:', infile[1], '\n')
-  dat = read.delim(infile_path, header = T, row.names=1, sep='\t', check.names=FALSE)
+  dat = read.delim(infile_path, header=TRUE, row.names=1, sep='\t', check.names=FALSE)
   dat = dat[,(colnames(dat)!='length'), drop=FALSE]
   colnames(dat) = paste(sp, colnames(dat), sep='_')
   return(dat)
@@ -103,9 +103,11 @@ get_df_exp_single_copy_ortholog = function(file_genecount, file_orthogroup_table
 
 get_df_nonzero = function(df_sog) {
   is_na_containing_row = apply(df_sog, 1, function(x){any(is.na(x))})
-  cat('Removing', sum(is_na_containing_row), 'out of', nrow(df_sog), 'orthogroups because missing values are observed in at least 1 species.\n')
+  txt = 'Removing %s out of %s orthogroups because missing values are observed in at least one species.\n'
+  cat(sprintf(txt, formatC(sum(is_na_containing_row), big.mark=','), formatC(nrow(df_sog), big.mark=',')))
   is_no_count_col = apply(df_sog, 2, function(x){sum(x, na.rm=TRUE)==0})
-  cat('Removing', sum(is_no_count_col), 'out of', ncol(df_sog), 'RNA-seq samples because read mapping values are all zero.\n')
+  txt = 'Removing %s out of %s samples because read mapping values are all zero.\n'
+  cat(sprintf(txt, formatC(sum(is_no_count_col), big.mark=','), formatC(ncol(df_sog), big.mark=',')))
   df_nonzero = df_sog[!is_na_containing_row,!is_no_count_col]
   return(df_nonzero)
 }
@@ -123,41 +125,74 @@ create_eff_length_symlink = function(dir_count, dir_cstmm, sp) {
   }
 }
 
-plot_norm_factor_stats = function(df_nf, out_path, font_size=8) {
-  x_limit = max(abs(log2(df_nf[['norm.factors']])))
-  g = ggplot2::ggplot(df_nf, aes(x=log2(norm.factors), fill=scientific_name)) +
-    geom_histogram(position="stack", alpha=1.0, bins=40) +
+append_tmm_stats_to_metadata = function(df_metadata, cnf_out2) {
+  df_nf = cnf_out2[[2]]
+  df_nf[['sample']] = rownames(df_nf)
+  df_nf[['scientific_name']] = df_nf[['sample']]
+  df_nf[['scientific_name']] = sub('_', 'PLACEHOLDER', df_nf[['scientific_name']])
+  df_nf[['scientific_name']] = sub('_.*', '', df_nf[['scientific_name']])
+  df_nf[['scientific_name']] = sub('PLACEHOLDER', ' ', df_nf[['scientific_name']])
+  df_nf[['run']] = sub('.*_', '', df_nf[['sample']])
+  df_nf = df_nf[,c('scientific_name', 'run', 'lib.size', 'norm.factors')]
+  colnames(df_nf) = c('scientific_name', 'run', 'tmm_library_size', 'tmm_normalization_factor')
+  out_cols = c(colnames(df_metadata), colnames(df_nf)[3:ncol(df_nf)])
+  df_metadata = merge(df_metadata, df_nf, by=c('scientific_name', 'run'), sort=FALSE, all.x=TRUE, all.y=FALSE)
+  df_metadata = df_metadata[,out_cols]
+  return(df_metadata)
+}
+
+plot_norm_factor_histogram = function(df_metadata, font_size=8) {
+  cols = c('scientific_name','curate_group','tmm_normalization_factor')
+  tmp1 = df_metadata[,cols]
+  tmp2 = df_metadata[,cols]
+  colnames(tmp1) = c('scientific_name','curate_group','tmm_normalization_factor1')
+  colnames(tmp2) = c('scientific_name','curate_group','tmm_normalization_factor2')
+  tmp1[,'tmm_normalization_factor2'] = NA
+  tmp2[,'tmm_normalization_factor1'] = NA
+  tmp1[,'plot_type'] = 'scientific_name'
+  tmp2[,'plot_type'] = 'curate_group'
+  tmp = rbind(tmp1, tmp2)
+  x_limit = max(abs(log2(df_metadata[['tmm_normalization_factor']])))
+  g = ggplot2::ggplot(tmp) +
+    geom_histogram(aes(x=log2(tmm_normalization_factor1), fill=scientific_name), position="stack", alpha=0.7, bins=40) +
+    geom_histogram(aes(x=log2(tmm_normalization_factor2), fill=curate_group), position="stack", alpha=0.7, bins=40) +
+  facet_wrap(~plot_type, scales="free", nrow=2) +
     theme_bw(base_size=font_size) +
     xlim(c(-x_limit, x_limit)) +
     labs(x='log2(TMM normalization factor)', y='Count') +
     theme(
-        axis.text=element_text(size=font_size),
-        axis.title=element_text(size=font_size),
+        axis.text=element_text(size=font_size, color='black'),
+        axis.title=element_text(size=font_size, color='black'),
         #panel.grid.major.y=element_blank(),
         panel.grid.major.x=element_blank(),
         panel.grid.minor.y=element_blank(),
         panel.grid.minor.x=element_blank(),
-        legend.title=element_text(size=font_size),
-        legend.text=element_text(size=font_size),
+        legend.title=element_blank(),
+        legend.text=element_text(size=font_size, color='black'),
         rect=element_rect(fill="transparent"),
         plot.margin=unit(rep(0.1, 4), "cm")
     )
-  ggsave(file.path(dir_cstmm, 'normalization_factor_histogram.pdf'), plot=g, width=7.2, height=2.4, units='in')
+  ggsave(file.path(dir_cstmm, 'normalization_factor_histogram.pdf'), plot=g, width=7.2, height=4.8, units='in')
+}
 
-  g = ggplot2::ggplot(df_nf, aes(x=log10(lib.size), y=log2(norm.factors), fill=scientific_name, color=scientific_name)) +
-    geom_point() +
+plot_norm_factor_scatter = function(df_metadata, font_size=8) {
+  x_limit = max(abs(log2(df_metadata[['tmm_normalization_factor']])))
+  g = ggplot2::ggplot(df_metadata, aes(x=log10(tmm_library_size), y=log2(tmm_normalization_factor), fill=scientific_name, color=curate_group)) +
+    geom_point(shape=21, alpha=0.7) +
+    scale_fill_hue(l=65) +
+    scale_color_hue(l=45) +
     theme_bw(base_size=font_size) +
     ylim(c(-x_limit, x_limit)) +
     labs(x='log10(Library size)', y='log2(TMM normalization factor)') +
     theme(
-        axis.text=element_text(size=font_size),
-        axis.title=element_text(size=font_size),
+        axis.text=element_text(size=font_size, color='black'),
+        axis.title=element_text(size=font_size, color='black'),
         #panel.grid.major.y=element_blank(),
         panel.grid.major.x=element_blank(),
         panel.grid.minor.y=element_blank(),
         panel.grid.minor.x=element_blank(),
-        legend.title=element_text(size=font_size),
-        legend.text=element_text(size=font_size),
+        legend.title=element_text(size=font_size, color='black'),
+        legend.text=element_text(size=font_size, color='black'),
         rect=element_rect(fill="transparent"),
         plot.margin=unit(rep(0.1, 4), "cm")
     )
@@ -177,7 +212,6 @@ if (mode_tmm=='single_species') {
 }
 
 cnf_in = edgeR::DGEList(counts = df_nonzero)
-
 cat('Round 1: Performing TMM normalization to determine the appropriate baseline.\n')
 cnf_out1 = edgeR::calcNormFactors(cnf_in, method='TMM', refColumn=NULL)
 x = cnf_out1[[2]][['norm.factors']]
@@ -189,37 +223,23 @@ cat('Round 2: Performing TMM normalization for output.\n')
 cnf_out2 = edgeR::calcNormFactors(cnf_in, method='TMM', refColumn=median_index)
 cat('Round 2: Median TMM normalization factor =', median(cnf_out2[[2]][['norm.factors']]), '\n')
 
-df_nf = cnf_out2[[2]]
-df_nf[['sample']] = rownames(df_nf)
-df_nf[['scientific_name']] = df_nf[['sample']]
-df_nf[['scientific_name']] = sub('_', 'PLACEHOLDER', df_nf[['scientific_name']])
-df_nf[['scientific_name']] = sub('_.*', '', df_nf[['scientific_name']])
-df_nf[['scientific_name']] = sub('PLACEHOLDER', '_', df_nf[['scientific_name']])
-df_nf[['run']] = sub('.*_', '', df_nf[['sample']])
-df_nf = df_nf[,c('scientific_name', 'run','sample','group','lib.size','norm.factors')]
-out_path = file.path(dir_cstmm, 'normalization_factor.tsv')
-write.table(df_nf, out_path, row.names=FALSE, sep='\t', quote=FALSE)
-plot_norm_factor_stats(df_nf=df_nf)
+path_metadata = file.path(dir_count, 'metadata.tsv')
+df_metadata = read.table(path_metadata, header=TRUE, sep='\t', check.names=FALSE, quote='')
+
+df_metadata = append_tmm_stats_to_metadata(df_metadata, cnf_out2)
+out_path = file.path(dir_cstmm, 'metadata.tsv')
+write.table(df_metadata, out_path, row.names=FALSE, sep='\t', quote=FALSE)
+plot_norm_factor_histogram(df_metadata=df_metadata)
+plot_norm_factor_scatter(df_metadata=df_metadata)
 
 for (sp in names(uncorrected)) {
   cat('Applying TMM normalization factors:', sp, '\n')
   dat = uncorrected[[sp]]
   df_nf_sp = cnf_out2[[2]][startsWith(rownames(cnf_out2[[2]]),sp),]
-
   for (i in 1:length(df_nf_sp[,1])){
-    # check if dat colnames start with the species name
-    # and modify SRR variable to match the format of dat colnames
-    # TODO: is this necessary? Is there any situation where the species name prefix is missing?
-    if(all(startsWith(colnames(dat), sp))){
-      SRR = as.character(row.names(df_nf_sp[i,]))
-    }
-    else{
-      SRR = as.character(strsplit(row.names(df_nf_sp[i,]),'_')[[1]][3])
-    }
-    # manually apply normfactor
-    tmm_normalization_factor = as.double(df_nf_sp[i,"norm.factors"])
+    SRR = as.character(row.names(df_nf_sp[i,]))
+    tmm_normalization_factor = as.double(df_nf_sp[i,"norm.factors"]) # manually apply normfactor
     dat[,SRR] = dat[,SRR]/tmm_normalization_factor
-
   }
   dat_out = cbind(target_id=rownames(dat), dat)
   rownames(dat_out) = NULL
