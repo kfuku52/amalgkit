@@ -68,8 +68,8 @@ def get_sra_stat(sra_id, metadata, num_bp_per_sra=None):
     if (numpy.isnan(original_spot_len) | (original_spot_len==0)):
         inferred_spot_len = int(metadata.df.loc[is_sra,'total_bases'].values[0]) / int(sra_stat['total_spot'])
         sra_stat['spot_length'] = int(inferred_spot_len)
-        print('spot_length cannot be obtained directly from the metadata.')
-        print('Using total_bases/total_spots instead: {:,}'.format(sra_stat['spot_length']))
+        txt = 'spot_length cannot be obtained directly from metadata. Using total_bases/total_spots instead: {:,}'
+        print(txt.format(sra_stat['spot_length']))
     else:
         sra_stat['spot_length'] = int(original_spot_len)
     if num_bp_per_sra is not None:
