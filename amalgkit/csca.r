@@ -18,7 +18,6 @@ options(stringsAsFactors = FALSE)
 
 debug_mode = ifelse(length(commandArgs(trailingOnly = TRUE)) == 1, "debug", "batch")
 font_size = 8
-date_sra = Sys.Date()
 
 if (debug_mode == "debug") {
   selected_curate_groups = c('root','flower', 'leaf')
@@ -28,7 +27,7 @@ if (debug_mode == "debug") {
   dir_uncorrected_curate_group_mean = paste0(dir_curated_transcriptome,'tables/')
   dir_curate_group_mean = paste0(dir_curated_transcriptome, 'tables/')
   dir_sra = paste0(dir_curated_transcriptome,'tables/')
-  file_outsra = paste0(dir_work,'/sra_table_amalgamated_', date_sra, '.tsv')
+  file_outsra = paste0(dir_work,'/sra_table_amalgamated.tsv')
   file_orthogroup = paste0(dir_work, 'OrthoFinder/Orthogroups.tsv')
 } else if (debug_mode == "batch") {
   args = commandArgs(trailingOnly = TRUE)
@@ -251,7 +250,7 @@ draw_multisp_legend = function(df_label) {
   legend("right", legend=legend_text, pt.cex=1, pch=legend_pch, lty=0, lwd=2, pt.bg=legend_bg, col=legend_fg, cex=cex_axis, text.font=legend_font)
 }
 
-file_outsra = file.path(dir_csca, paste0('sra_table_amalgamated_', date_sra, '.tsv'))
+file_outsra = file.path(dir_csca, paste0('sra_table_csca.tsv'))
 
 df_og = read.table(file_orthogroup, header=TRUE, sep='\t', row.names=1, quote='')
 df_gc = read.table(file_genecount, header=TRUE, sep='\t', check.names=FALSE, quote='')
@@ -795,7 +794,7 @@ draw_multisp_boxplot = function(sra, tc_dist_matrix, fontsize=7) {
   boxplot(tc_dist_matrix[(is_same_sp)&(is_same_curate_group)], at=4, add=TRUE, col='gray', yaxt='n')
   labels = c('bw\nbw', 'bw\nwi', 'wi\nbw', 'wi\nwi')
   axis(side=1, at=c(1,2,3,4), labels=labels, padj=0.5)
-  axis(side=1, at=0.35, labels='Organ\nSpecies', padj=0.5, hadj=1, tick=FALSE)
+  axis(side=1, at=0.35, labels='Group\nSpecies', padj=0.5, hadj=1, tick=FALSE)
 }
 
 file_name='Multisp.boxplot.pdf'
