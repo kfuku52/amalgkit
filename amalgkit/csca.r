@@ -125,8 +125,8 @@ map_color = function(redundant_variables, c) {
   df_unique = data.frame(var=uniq_var, col=uniq_col, stringsAsFactors=FALSE)
   df_redundant = data.frame(var=redundant_variables, order=seq(1, length(redundant_variables)), stringsAsFactors=FALSE)
   df_redundant = merge(df_redundant, df_unique, by="var", all.x=TRUE, stringsAsFactors=FALSE)
-  df_redundant = df_redundant[order(df_redundant$order),]
-  return(df_redundant$col)
+  df_redundant = df_redundant[order(df_redundant[['order']]),]
+  return(df_redundant[['col']])
 }
 
 draw_multisp_heatmap = function(tc, df_label) {
@@ -134,17 +134,17 @@ draw_multisp_heatmap = function(tc, df_label) {
   tc_dist_matrix[is.na(tc_dist_matrix)] = 0
   ann_label = df_label[,c('scientific_name','curate_group')]
   colnames(ann_label) = c('species', 'curate_group')
-  sp_color = df_label$sp_color[!duplicated(df_label$sp_color)]
-  sp_color = sp_color[order(df_label$scientific_name[!duplicated(df_label$scientific_name)])]
-  curate_group_color = df_label$curate_group_color[!duplicated(df_label$curate_group_color)]
-  curate_group_color = curate_group_color[order(df_label$curate_group[!duplicated(df_label$curate_group)])]
+  sp_color = df_label[!duplicated(df_label[['sp_color']]), 'sp_color']
+  sp_color = sp_color[order(df_label[!duplicated(df_label[['scientific_name']]), 'scientific_name'])]
+  curate_group_color = df_label[!duplicated(df_label[['curate_group_color']]), 'curate_group_color']
+  curate_group_color = curate_group_color[order(df_label[!duplicated(df_label[['curate_group']]), 'curate_group'])]
   ann_color = list(species=sp_color, curate_group=curate_group_color)
   breaks = c(0, seq(0.3, 1, 0.01))
-  aheatmap(tc_dist_matrix, color="-RdYlBu2:71", Rowv=NA, Colv=NA, revC=TRUE, legend=TRUE, breaks=breaks, 
+  NMF::aheatmap(tc_dist_matrix, color="-RdYlBu2:71", Rowv=NA, Colv=NA, revC=TRUE, legend=TRUE, breaks=breaks,
            annCol=ann_label, annRow=ann_label, annColors=ann_color, annLegend=FALSE, labRow=NA, labCol=NA)
 }
 
-draw_multisp_dendrogram = function(tc, df_label, sra, nboot, cex.xlab, cex.yaxis, pvclust_file='pvclust.RData') {
+draw_multisp_dendrogram = function(tc, df_label, df_metadata, nboot, cex.xlab, cex.yaxis, pvclust_file='pvclust.RData') {
   colnames(tc) = sub("_.*","",sub('_',' ',colnames(tc)))
   dist_fun = function(x){Dist(t(x), method='pearson')}
   if (file.exists(pvclust_file)) {
@@ -158,10 +158,10 @@ draw_multisp_dendrogram = function(tc, df_label, sra, nboot, cex.xlab, cex.yaxis
     save(result, file=pvclust_file)
   }
   dend = as.dendrogram(result)
-  dend_colors = df_label$curate_group_color[order.dendrogram(dend)]
-  label_colors = df_label$sp_color[order.dendrogram(dend)]
+  dend_colors = df_label[order.dendrogram(dend), 'curate_group_color']
+  label_colors = df_label[order.dendrogram(dend), 'sp_color']
   labels_colors(dend) = label_colors
-  dend_labels <- sra$run[order.dendrogram(dend)]
+  dend_labels <- df_metadata[order.dendrogram(dend), 'run']
   dend <- color_branches(dend, labels=dend_labels, col=dend_colors)
   dend <- set(dend, "branches_lwd", 2)
   for (i in 1:ncol(tc)) {
@@ -176,12 +176,12 @@ draw_multisp_dendrogram = function(tc, df_label, sra, nboot, cex.xlab, cex.yaxis
   
   n = ncol(tc)
   f = 100
-  curate_group_unique = unique(sra$curate_group)
-  sp_unique = unique(sra$scientific_name)
-  bp_unique = unique(sra$bioproject)
-  curate_group_color_unique = unique(sra$curate_group_color)
-  sp_color_unique = unique(sra$sp_color)
-  bp_color_unique = unique(sra$bp_color)
+  curate_group_unique = unique(df_metadata['curate_group'])
+  sp_unique = unique(df_metadata[['scientific_name']])
+  bp_unique = unique(df_metadata[['bioproject']])
+  curate_group_color_unique = unique(df_metadata[['curate_group_color']])
+  sp_color_unique = unique(df_metadata[['sp_color']])
+  bp_color_unique = unique(df_metadata[['bp_color']])
   legend_text = c(as.character(curate_group_unique), "", as.character(sp_unique), "", as.character(bp_unique))
   legend_bg = c(curate_group_color_unique, "white", sp_color_unique, "white", bp_color_unique)
   legend_fg = c(rep("black", length(curate_group_color_unique)), "white", rep("black", length(sp_color_unique)), "white", rep("black", length(bp_color_unique)))
@@ -253,9 +253,9 @@ prepare_metadata_table = function(dir_metadata, selected_curate_groups, spp) {
   files = list.files(dir_metadata, pattern = ".*sra.*")
   df_metadata = data.frame()
   for (file in files) {
-    sra_path = file.path(dir_metadata, file)
-    tmp_sra = read.table(sra_path, header=TRUE, sep='\t', quote='', comment.char='')
-    df_metadata = rbind(df_metadata, tmp_sra)
+    metadata_path = file.path(dir_metadata, file)
+    tmp_metadata = read.table(metadata_path, header=TRUE, sep='\t', quote='', comment.char='')
+    df_metadata = rbind(df_metadata, tmp_metadata)
   }
   df_metadata = df_metadata[(df_metadata[['curate_group']] %in% selected_curate_groups)&(df_metadata[['scientific_name']] %in% spp),]
   write.table(df_metadata, file_metadata_out, row.names=FALSE, sep='\t', quote=FALSE)
@@ -381,7 +381,7 @@ get_df_labels = function(df_metadata) {
 get_df_label2 = function(df_metadata, selected_curate_groups) {
   cols = c('run','bioproject','curate_group','scientific_name','sp_color','curate_group_color','bp_color')
   df_color_unaveraged = add_color_to_sra(df_metadata[(df_metadata[['exclusion']]=='no'),], selected_curate_groups)
-  df_color_unaveraged =df_color_unaveraged[,cols]
+  df_color_unaveraged = df_color_unaveraged[,cols]
   label_order = order(df_color_unaveraged[['run']])
   df_color_unaveraged = df_color_unaveraged[label_order,]
   return(df_color_unaveraged)
@@ -566,7 +566,7 @@ save_averaged_dendrogram_plot = function(averaged_orthologs, df_color_averaged) 
     df_label = df_color_averaged[[d]]
     par(cex=0.5, mar=c(10,5.5,0,0), mgp=c(4, 0.7, 0))
     pvclust_file=paste0('csca.pvclust.',d,'.RData')
-    draw_multisp_dendrogram(tc=tc, df_label=df_label, sra=df_metadata, pvclust_file=pvclust_file,
+    draw_multisp_dendrogram(tc=tc, df_label=df_label, df_metadata=df_metadata, pvclust_file=pvclust_file,
                             nboot=1, cex.xlab=0.3, cex.yaxis=0.5)
   }
   graphics.off()
@@ -589,9 +589,9 @@ save_averaged_pca_mds_plot = function(averaged_orthologs, df_color_averaged) {
   graphics.off()
 }
 
-draw_multisp_boxplot = function(sra, tc_dist_matrix, fontsize=7) {
-  is_same_sp = outer(sra$scientific_name, sra$scientific_name, function(x,y){x==y})
-  is_same_curate_group = outer(sra$curate_group, sra$curate_group, function(x,y){x==y})
+draw_multisp_boxplot = function(df_metadata, tc_dist_matrix, fontsize=7) {
+  is_same_sp = outer(df_metadata[['scientific_name']], df_metadata[['scientific_name']], function(x,y){x==y})
+  is_same_curate_group = outer(df_metadata[['curate_group']], df_metadata[['curate_group']], function(x,y){x==y})
   plot(c(0.5, 4.5), c(0, 1), type = 'n', xlab='', ylab="Pearson's correlation\ncoefficient", las=1, xaxt='n')
   boxplot(tc_dist_matrix[(!is_same_sp)&(!is_same_curate_group)], at=1, add=TRUE, col='gray', yaxt='n')
   boxplot(tc_dist_matrix[(is_same_sp)&(!is_same_curate_group)], at=2, add=TRUE, col='gray', yaxt='n')
