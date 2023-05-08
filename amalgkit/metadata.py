@@ -72,7 +72,7 @@ def get_search_term(species_name="", bioprojects=[], biosamples=[], keywords=[],
     search_term = re.sub("^ AND ", "", search_term)
     return search_term
 
-def fetch_sra_xml(species_name, search_term, save_xml=True, read_from_existing_file=False, retmax=100):
+def fetch_sra_xml(species_name, search_term, save_xml=True, read_from_existing_file=False, retmax=500):
     file_xml = "SRA_"+species_name.replace(" ", "_")+".xml"
     flag = True
     if (read_from_existing_file)&(os.path.exists(file_xml)):
@@ -95,14 +95,15 @@ def fetch_sra_xml(species_name, search_term, save_xml=True, read_from_existing_f
         num_record = len(record_ids)
         print('Number of SRA records:', num_record)
         start_time = time.time()
-        query_search_time = datetime.datetime.now().strftime('%Y/%m/%d %H:%M:%S')
+        print('SRA record retrieval started at: {}'.format(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
         root = None
+        max_retry = 10
         for i in numpy.arange(numpy.ceil(num_record//retmax)+1):
             start = int(i*retmax)
             end = int(((i+1)*retmax)-1) if num_record >= int(((i+1)*retmax)-1) else num_record
-            print('Processing SRA records:', start, '-', end, flush=True)
-            max_retry = 10
-            for i in range(max_retry):
+            now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            print('{}: Retrieving SRA records: {} - {}'.format(now, start, end), flush=True)
+            for j in range(max_retry):
                 try:
                     handle = Entrez.efetch(db="sra", id=record_ids[start:end], rettype="full", retmode="xml", retmax=retmax)
                 except HTTPError as e:
@@ -121,6 +122,8 @@ def fetch_sra_xml(species_name, search_term, save_xml=True, read_from_existing_f
             else:
                 root.append(chunk)
         elapsed_time = int(time.time() - start_time)
+        print('SRA record retrieval ended at: {}'.format(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+        print('SRA record retrieval time: {:,.1f} sec'.format(elapsed_time), flush=True)
         xml_string = lxml.etree.tostring(root, pretty_print=True)
         for line in str(xml_string).split('\n'):
             if '<Error>' in line:
@@ -173,6 +176,7 @@ class Metadata:
             cols = list(self.df)
             cols.insert(1, cols.pop(cols.index('curate_group')))
             self.df = self.df.loc[:, cols]
+        self.df = self.df.reset_index(drop=True)
 
     def from_DataFrame(df):
         metadata = Metadata()
@@ -185,8 +189,12 @@ class Metadata:
             xml_root = lxml.etree.ElementTree(xml_root)
         root = xml_root
         assert isinstance(root, lxml.etree._ElementTree), "Unknown input type."
-        df = pandas.DataFrame()
+        df_list = list()
+        counter = 0
         for entry in root.iter(tag="EXPERIMENT_PACKAGE"):
+            if counter % 1000 ==0:
+                now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                print('{}: Converting {}th sample from XML to DataFrame'.format(now, counter), flush=True)
             items = []
             bioproject = entry.findall('.//EXTERNAL_ID[@namespace="BioProject"]')
             if not len(bioproject):
@@ -282,7 +290,11 @@ class Metadata:
                             sa_df = pandas.DataFrame([value])
                             sa_df.columns = [tag]
                             row_df = pandas.concat([row_df,sa_df], axis=1)
-            df = pandas.concat([df, row_df], ignore_index=True, sort=False)
+            df_list.append(row_df)
+            counter += 1
+        df = pandas.concat(df_list, ignore_index=True, sort=False)
+        now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        print('{}: Finished converting {} samples'.format(now, counter), flush=True)
         if "scientific_name" in df.columns and len(df.loc[(df.loc[:,"scientific_name"]==""), "scientific_name"]):
             species_names = df.loc[~(df.loc[:,"scientific_name"]==""), "scientific_name"]
             if species_names.shape[0]>0:
@@ -441,7 +453,6 @@ class Metadata:
             is_matching = self.df.loc[:,'tissue'].str.match(replace_from, case=False, na=False)
             self.df.loc[is_matching,'tissue'] = replace_to
         self.df.loc[:,'tissue'] = self.df.loc[:,'tissue'].str.lower()
-        self.df.loc[:, 'curate_group'] = self.df.loc[:, 'tissue']
 
     def mark_exclude_keywords(self):
         try:
@@ -530,6 +541,10 @@ class Metadata:
         df.loc[:, 'is_sampled'] = 'no'
         df.loc[:, 'is_qualified'] = 'no'
         df.loc[(df.loc[:, 'exclusion']=='no'), 'is_qualified'] = 'yes'
+        if df['tissue'].iloc[0]=='':
+            df['is_qualified'] = 'no'
+            df['exclusion'] = 'no_tissue_label'
+            return df
         while len(df.loc[(df.loc[:,'is_sampled']=='yes')&(df.loc[:,'exclusion']=='no'),:]) < target_n:
             if len(df) <= target_n:
                 df.loc[(df.loc[:,'exclusion']=='no'), 'is_sampled'] = 'yes'
@@ -657,14 +672,16 @@ def metadata_main(args):
             metadata_species[sp] = Metadata.from_xml(xml_root=root).df
             metadata_species[sp].to_csv(os.path.join(metadata_tmp_dir, sp_file_name), sep="\t", index=False)
         print('')
-    metadata = Metadata.from_DataFrame(df=pandas.concat(metadata_species.values(), sort=False))
+    metadata = Metadata.from_DataFrame(df=pandas.concat(metadata_species.values(), sort=False, ignore_index=True))
     metadata.config_dir = dir_config
     metadata.reorder(omit_misc=False)
+    metadata.df['tissue'] = metadata.df['tissue'].astype(str)
+    metadata.df.loc[(metadata.df['tissue']=='nan'), 'tissue'] = ''
     multisp_file_name = "metadata_01_raw.tsv"
     metadata.df.to_csv(os.path.join(metadata_tmp_dir, multisp_file_name), sep="\t", index=False)
     del metadata_species
     if metadata.df.shape[0]==0:
-        print('No entry was found/survived in the metadata processing. Please check the config files.')
+        sys.stderr.write('No entry was found/survived in the metadata processing. Please reconsider your config files.\n')
         return None
     metadata.df.loc[:, 'tissue_original'] = metadata.df.loc[:, 'tissue']
     if args.tissue_detect:
@@ -695,6 +712,7 @@ def metadata_main(args):
     metadata.unmark_rescue_ids()
     metadata.label_sampled_data(args.max_sample)
     metadata.reorder(omit_misc=True)
+    metadata.df.loc[:, 'curate_group'] = metadata.df.loc[:, 'tissue']
     metadata.df.to_csv(path_metadata_table, sep='\t', index=False)
 
     sra_qualified_pivot = metadata.pivot(n_sp_cutoff=0, qualified_only=True, sampled_only=False)
