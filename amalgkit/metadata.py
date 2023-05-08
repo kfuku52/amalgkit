@@ -72,7 +72,7 @@ def get_search_term(species_name="", bioprojects=[], biosamples=[], keywords=[],
     search_term = re.sub("^ AND ", "", search_term)
     return search_term
 
-def fetch_sra_xml(species_name, search_term, save_xml=True, read_from_existing_file=False, retmax=500):
+def fetch_sra_xml(species_name, search_term, save_xml=True, read_from_existing_file=False, retmax=1000):
     file_xml = "SRA_"+species_name.replace(" ", "_")+".xml"
     flag = True
     if (read_from_existing_file)&(os.path.exists(file_xml)):
@@ -93,22 +93,22 @@ def fetch_sra_xml(species_name, search_term, save_xml=True, read_from_existing_f
         sra_record = Entrez.read(sra_handle)
         record_ids = sra_record["IdList"]
         num_record = len(record_ids)
-        print('Number of SRA records:', num_record)
+        print('Number of SRA records: {:,}'.format(num_record))
         start_time = time.time()
-        print('SRA record retrieval started at: {}'.format(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+        print('{}: SRA XML retrieval started.'.format(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
         root = None
         max_retry = 10
         for i in numpy.arange(numpy.ceil(num_record//retmax)+1):
             start = int(i*retmax)
             end = int(((i+1)*retmax)-1) if num_record >= int(((i+1)*retmax)-1) else num_record
             now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            print('{}: Retrieving SRA records: {} - {}'.format(now, start, end), flush=True)
+            print('{}: Retrieving SRA XML: {:,}-{:,} of {:,} records'.format(now, start, end, num_record), flush=True)
             for j in range(max_retry):
                 try:
                     handle = Entrez.efetch(db="sra", id=record_ids[start:end], rettype="full", retmode="xml", retmax=retmax)
                 except HTTPError as e:
                     sleep_second = 60
-                    print('{} - Trying Entrez.efetch() again after {} seconds...'.format(e, sleep_second), flush=True)
+                    print('{} - Trying Entrez.efetch() again after {:,} seconds...'.format(e, sleep_second), flush=True)
                     time.sleep(sleep_second)
                     continue
                 try:
@@ -122,8 +122,8 @@ def fetch_sra_xml(species_name, search_term, save_xml=True, read_from_existing_f
             else:
                 root.append(chunk)
         elapsed_time = int(time.time() - start_time)
-        print('SRA record retrieval ended at: {}'.format(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
-        print('SRA record retrieval time: {:,.1f} sec'.format(elapsed_time), flush=True)
+        print('{}: SRA XML retrieval ended.'.format(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+        print('SRA XML retrieval time: {:,.1f} sec'.format(elapsed_time), flush=True)
         xml_string = lxml.etree.tostring(root, pretty_print=True)
         for line in str(xml_string).split('\n'):
             if '<Error>' in line:
@@ -162,9 +162,7 @@ class Metadata:
     def reorder(self, omit_misc=False, column_names=column_names):
         if (self.df.shape[0]==0):
             return None
-        for col in column_names:
-            if not col in self.df.columns:
-                self.df.loc[:,col] = ''
+        self.df.loc[:, [col for col in column_names if col not in self.df.columns]] = ''
         if omit_misc:
             self.df = self.df.loc[:,column_names]
         else:
@@ -194,7 +192,7 @@ class Metadata:
         for entry in root.iter(tag="EXPERIMENT_PACKAGE"):
             if counter % 1000 ==0:
                 now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                print('{}: Converting {}th sample from XML to DataFrame'.format(now, counter), flush=True)
+                print('{}: Converting {:,}th sample from XML to DataFrame'.format(now, counter), flush=True)
             items = []
             bioproject = entry.findall('.//EXTERNAL_ID[@namespace="BioProject"]')
             if not len(bioproject):
@@ -294,7 +292,7 @@ class Metadata:
             counter += 1
         df = pandas.concat(df_list, ignore_index=True, sort=False)
         now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        print('{}: Finished converting {} samples'.format(now, counter), flush=True)
+        print('{}: Finished converting {:,} samples'.format(now, counter), flush=True)
         if "scientific_name" in df.columns and len(df.loc[(df.loc[:,"scientific_name"]==""), "scientific_name"]):
             species_names = df.loc[~(df.loc[:,"scientific_name"]==""), "scientific_name"]
             if species_names.shape[0]>0:
@@ -531,7 +529,7 @@ class Metadata:
         self.df['total_spots'] = self.df.loc[:,'total_spots'].fillna(0).astype(int)
         self.df.loc[-(self.df.loc[:,'total_spots']==0) & (self.df.loc[:,'total_spots'] < min_nspots), 'exclusion'] = 'low_nspots'
 
-    def remove_redundant_biosample(self):
+    def mark_redundant_biosample(self):
         redundant_bool = self.df.duplicated(subset=['bioproject','biosample'], keep='first')
         self.df.loc[redundant_bool, 'exclusion'] = 'redundant_biosample'
 
@@ -655,8 +653,12 @@ def metadata_main(args):
 
     metadata_species = dict()
     for sp in search_spp:
-        print('Entrez search:', sp)
-        sp_file_name = "tmp_"+sp.replace(' ', '_')+".tsv"
+        if sp=='':
+            sp_print = 'All'
+        else:
+            sp_print = sp
+        print('Entrez search species: {}'.format(sp_print), flush=True)
+        sp_file_name = "tmp_"+sp_print.replace(' ', '_')+".tsv"
         bioprojects = []
         if (os.path.exists(sp_file_name))&(args.overwrite=='no'):
             if (os.path.getsize(sp_file_name)>1):
@@ -669,8 +671,8 @@ def metadata_main(args):
                                           other_conditions=other_conditions, excluded_conditions=excluded_conditions)
             print('Entrez search term:', search_term)
             root = fetch_sra_xml(species_name=sp, search_term=search_term, save_xml=False, read_from_existing_file=False)
-            metadata_species[sp] = Metadata.from_xml(xml_root=root).df
-            metadata_species[sp].to_csv(os.path.join(metadata_tmp_dir, sp_file_name), sep="\t", index=False)
+            metadata_species[sp_print] = Metadata.from_xml(xml_root=root).df
+            metadata_species[sp_print].to_csv(os.path.join(metadata_tmp_dir, sp_file_name), sep="\t", index=False)
         print('')
     metadata = Metadata.from_DataFrame(df=pandas.concat(metadata_species.values(), sort=False, ignore_index=True))
     metadata.config_dir = dir_config
@@ -708,7 +710,8 @@ def metadata_main(args):
 
     metadata.mark_treatment_terms()
     metadata.nspot_cutoff(args.min_nspots)
-    metadata.remove_redundant_biosample()
+    if args.mark_redundant_biosamples:
+        metadata.mark_redundant_biosample()
     metadata.unmark_rescue_ids()
     metadata.label_sampled_data(args.max_sample)
     metadata.reorder(omit_misc=True)
