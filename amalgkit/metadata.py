@@ -353,7 +353,6 @@ class Metadata:
         self.reorder(omit_misc=False)
 
     def correct_orthographical_variants(self):
-        self.df.loc[:,"scientific_name"] = [re.sub(r'(.+)(\s)(.+)(\s)(.+)', r"\1\2\3", sp) for sp in self.df.loc[:,"scientific_name"]]
         try:
             config = pandas.read_csv(os.path.join(self.config_dir, 'orthographical_variant.config'),
                                      parse_dates=False, infer_datetime_format=False, quotechar='"', sep='\t',
