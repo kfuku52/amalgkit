@@ -293,11 +293,6 @@ class Metadata:
         df = pandas.concat(df_list, ignore_index=True, sort=False)
         now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         print('{}: Finished converting {:,} samples'.format(now, counter), flush=True)
-        if "scientific_name" in df.columns and len(df.loc[(df.loc[:,"scientific_name"]==""), "scientific_name"]):
-            species_names = df.loc[~(df.loc[:,"scientific_name"]==""), "scientific_name"]
-            if species_names.shape[0]>0:
-                species_name = species_names.iloc[0]
-                df.loc[(df.loc[:,"scientific_name"]==""), "scientific_name"] = species_name
         metadata = Metadata()
         metadata.df = df
         metadata.reorder(omit_misc=False)
