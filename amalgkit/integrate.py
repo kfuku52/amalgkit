@@ -121,13 +121,13 @@ def get_fastq_stats(args):
     if not os.path.exists(os.path.join(args.out_dir, 'metadata')):
         os.makedirs(os.path.join(args.out_dir, 'metadata'))
     tmp_metadata = tmp_metadata.sort_values(by='run', axis=0, ascending=True).reset_index(drop=True)
-    tmp_metadata.to_csv(os.path.join(args.out_dir,'metadata','metadata_private_fastq.tsv'), sep='\t', index=False)
+    tmp_metadata.to_csv(os.path.join(args.out_dir, 'metadata_private_fastq.tsv'), sep='\t', index=False)
     return tmp_metadata
 
 def integrate_main(args):
     check_seqkit_dependency()
     if args.metadata=='inferred':
-        relative_path = os.path.join(args.out_dir, 'metadata', 'metadata', 'metadata.tsv')
+        relative_path = os.path.join(args.out_dir, 'metadata', 'metadata.tsv')
         metadata_path = os.path.realpath(relative_path)
     else:
         metadata_path = os.path.realpath(args.metadata)
@@ -142,7 +142,7 @@ def integrate_main(args):
         metadata.df.loc[metadata.df['run'].isin(data_unavailable), 'data_available'] = 'no'
         tmp_metadata = get_fastq_stats(args)
         df = pandas.concat([metadata.df, tmp_metadata])
-        df.to_csv(os.path.join(args.out_dir,'metadata','metadata_updated_for_private_fastq.tsv'), sep='\t', index=False)
+        df.to_csv(os.path.join(args.out_dir, 'metadata', 'metadata_updated_for_private_fastq.tsv'), sep='\t', index=False)
     else:
         print('Generating a new metadata table.')
         get_fastq_stats(args)

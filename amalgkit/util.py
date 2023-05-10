@@ -1,6 +1,8 @@
 import json
 import numpy
 import pandas
+import lxml.etree
+import datetime
 
 import glob
 import inspect
@@ -10,11 +12,371 @@ import subprocess
 import sys
 
 from distutils.util import strtobool
-from amalgkit.metadata import Metadata
+
+class Metadata:
+    column_names = ['scientific_name', 'tissue', 'curate_group', 'tissue_original', 'genotype', 'sex', 'age',
+                    'treatment', 'source_name',
+                    'is_sampled', 'is_qualified', 'exclusion', 'protocol', 'bioproject', 'biosample',
+                    'experiment', 'run', 'sra_primary', 'sra_sample', 'sra_study', 'study_title', 'exp_title', 'design',
+                    'sample_title', 'sample_description', 'lib_name', 'lib_layout', 'lib_strategy', 'lib_source',
+                    'lib_selection', 'instrument', 'total_spots', 'total_bases', 'size', 'nominal_length',
+                    'nominal_sdev',
+                    'spot_length', 'read_index', 'read_class', 'read_type', 'base_coord', 'lab', 'center',
+                    'submitter_id',
+                    'pubmed_id', 'taxid', 'published_date', 'biomaterial_provider', 'cell', 'location', 'antibody',
+                    'batch',
+                    'misc', 'NCBI_Link', 'AWS_Link', 'GCP_Link', ]
+    id_cols = ['bioproject', 'biosample', 'experiment', 'run', 'sra_primary', 'sra_sample', 'sra_study']
+
+    def __init__(self, column_names=column_names):
+        self.config_dir = ''
+        self.df = pandas.DataFrame(index=[], columns=column_names)
+
+    def reorder(self, omit_misc=False, column_names=column_names):
+        if (self.df.shape[0] == 0):
+            return None
+        self.df.loc[:, [col for col in column_names if col not in self.df.columns]] = ''
+        if omit_misc:
+            self.df = self.df.loc[:, column_names]
+        else:
+            misc_columns = [col for col in self.df.columns if col not in column_names]
+            self.df = self.df.loc[:, column_names + misc_columns]
+        self.df.loc[:, 'exclusion'] = self.df.loc[:, 'exclusion'].replace('', 'no')
+        # reorder curate_group to the front
+        if 'curate_group' in self.df.columns:
+            cols = list(self.df)
+            cols.insert(1, cols.pop(cols.index('curate_group')))
+            self.df = self.df.loc[:, cols]
+        self.df = self.df.reset_index(drop=True)
+
+    def from_DataFrame(df):
+        metadata = Metadata()
+        metadata.df = df
+        metadata.reorder(omit_misc=False)
+        return metadata
+
+    def from_xml(xml_root):
+        if isinstance(xml_root, lxml.etree._Element):
+            xml_root = lxml.etree.ElementTree(xml_root)
+        root = xml_root
+        assert isinstance(root, lxml.etree._ElementTree), "Unknown input type."
+        df_list = list()
+        counter = 0
+        for entry in root.iter(tag="EXPERIMENT_PACKAGE"):
+            if counter % 1000 == 0:
+                now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                print('{}: Converting {:,}th sample from XML to DataFrame'.format(now, counter), flush=True)
+            items = []
+            bioproject = entry.findall('.//EXTERNAL_ID[@namespace="BioProject"]')
+            if not len(bioproject):
+                labels = entry.findall('.//LABEL')
+                for label in labels:
+                    text = label.text
+                    if text.startswith("PRJ"):
+                        bioproject = [label]
+                        break
+            is_single = len(entry.findall('.//LIBRARY_LAYOUT/SINGLE'))
+            is_paired = len(entry.findall('.//LIBRARY_LAYOUT/PAIRED'))
+            if is_single:
+                library_layout = ["single"]
+            elif is_paired:
+                library_layout = ["paired"]
+            else:
+                library_layout = [""]
+            values = entry.findall('.//VALUE')
+            is_protected = ["No"]
+            if len(values):
+                for value in values:
+                    text = value.text
+                    if not text is None:
+                        if text.endswith("PROTECTED"):
+                            is_protected = ["Yes"]
+                            break
+            items.append(["bioproject", bioproject])
+            items.append(["scientific_name", entry.xpath('./SAMPLE/SAMPLE_NAME/SCIENTIFIC_NAME')])
+            items.append(["biosample", entry.findall('.//EXTERNAL_ID[@namespace="BioSample"]')])
+            items.append(["experiment", entry.xpath('./EXPERIMENT/IDENTIFIERS/PRIMARY_ID')])
+            items.append(["run", entry.xpath('./RUN_SET/RUN/IDENTIFIERS/PRIMARY_ID')])
+            items.append(["sra_primary", entry.xpath('./SUBMISSION/IDENTIFIERS/PRIMARY_ID')])
+            items.append(["sra_sample", entry.xpath('./SAMPLE/IDENTIFIERS/PRIMARY_ID')])
+            items.append(["sra_study", entry.xpath('./EXPERIMENT/STUDY_REF/IDENTIFIERS/PRIMARY_ID')])
+            items.append(["published_date", entry.xpath('./RUN_SET/RUN/@published')])
+            items.append(["exp_title", entry.xpath('./EXPERIMENT/TITLE')])
+            items.append(["design", entry.xpath('./EXPERIMENT/DESIGN/DESIGN_DESCRIPTION')])
+            items.append(["lib_name", entry.xpath('./EXPERIMENT/DESIGN/LIBRARY_DESCRIPTOR/LIBRARY_NAME')])
+            items.append(["lib_strategy", entry.xpath('./EXPERIMENT/DESIGN/LIBRARY_DESCRIPTOR/LIBRARY_STRATEGY')])
+            items.append(["lib_source", entry.xpath('./EXPERIMENT/DESIGN/LIBRARY_DESCRIPTOR/LIBRARY_SOURCE')])
+            items.append(["lib_selection", entry.xpath('./EXPERIMENT/DESIGN/LIBRARY_DESCRIPTOR/LIBRARY_SELECTION')])
+            items.append(["lib_layout", library_layout])
+            items.append(["nominal_length",
+                          entry.xpath('./EXPERIMENT/DESIGN/LIBRARY_DESCRIPTOR/LIBRARY_LAYOUT/PAIRED/@NOMINAL_LENGTH')])
+            items.append(["nominal_sdev",
+                          entry.xpath('./EXPERIMENT/DESIGN/LIBRARY_DESCRIPTOR/LIBRARY_LAYOUT/PAIRED/@NOMINAL_SDEV')])
+            items.append(
+                ["spot_length", entry.xpath('./EXPERIMENT/DESIGN/SPOT_DESCRIPTOR/SPOT_DECODE_SPEC/SPOT_LENGTH')])
+            items.append(["read_index",
+                          entry.xpath('./EXPERIMENT/DESIGN/SPOT_DESCRIPTOR/SPOT_DECODE_SPEC/READ_SPEC/READ_INDEX')])
+            items.append(["read_class",
+                          entry.xpath('./EXPERIMENT/DESIGN/SPOT_DESCRIPTOR/SPOT_DECODE_SPEC/READ_SPEC/READ_CLASS')])
+            items.append(
+                ["read_type", entry.xpath('./EXPERIMENT/DESIGN/SPOT_DESCRIPTOR/SPOT_DECODE_SPEC/READ_SPEC/READ_TYPE')])
+            items.append(["base_coord",
+                          entry.xpath('./EXPERIMENT/DESIGN/SPOT_DESCRIPTOR/SPOT_DECODE_SPEC/READ_SPEC/BASE_COORD')])
+            items.append(["instrument", entry.xpath('./EXPERIMENT/PLATFORM/ILLUMINA/INSTRUMENT_MODEL')])
+            items.append(["lab", entry.xpath('./SUBMISSION/@lab_name')])
+            items.append(["center", entry.xpath('./SUBMISSION/@center_name')])
+            items.append(["submitter_id", entry.xpath('./SUBMISSION/IDENTIFIERS/SUBMITTER_ID')])
+            items.append(["study_title", entry.xpath('./STUDY/DESCRIPTOR/STUDY_TITLE')])
+            items.append(["pubmed_id", entry.xpath('./STUDY/STUDY_LINKS/STUDY_LINK/XREF_LINK/ID')])
+            items.append(["sample_title", entry.xpath('./SAMPLE/TITLE')])
+            items.append(["taxid", entry.xpath('./SAMPLE/SAMPLE_NAME/TAXON_ID')])
+            items.append(["sample_description", entry.xpath('./SAMPLE/DESCRIPTION')])
+            items.append(["total_spots", entry.xpath('./RUN_SET/RUN/@total_spots')])
+            items.append(["total_bases", entry.xpath('./RUN_SET/RUN/@total_bases')])
+            items.append(["size", entry.xpath('./RUN_SET/RUN/@size')])
+            items.append(["NCBI_Link", entry.xpath(
+                './RUN_SET/RUN/SRAFiles/SRAFile[@supertype="Primary ETL"]/Alternatives[@org="NCBI"]/@url')])
+            items.append(["AWS_Link", entry.xpath(
+                './RUN_SET/RUN/SRAFiles/SRAFile[@supertype="Primary ETL"]/Alternatives[@org="AWS"]/@url')])
+            items.append(["GCP_Link", entry.xpath(
+                './RUN_SET/RUN/SRAFiles/SRAFile[@supertype="Primary ETL"]/Alternatives[@org="GCP"]/@url')])
+
+            row = []
+            for item in items:
+                try:
+                    if isinstance(item[1][0], (lxml.etree._ElementUnicodeResult, int, str)):
+                        row.append(str(item[1][0]))
+                    else:
+                        row.append(item[1][0].text)
+                except:
+                    row.append("")
+            colnames = []
+            for item in items:
+                colnames.append(item[0])
+            row_df = pandas.DataFrame(row).T
+            row_df.columns = colnames
+            sas = entry.xpath('./SAMPLE/SAMPLE_ATTRIBUTES/SAMPLE_ATTRIBUTE')
+            for sa in sas:
+                tag = sa.xpath('./TAG')
+                if not tag[0].text == None:
+                    tag = tag[0].text.lower()
+                    tag = re.sub(" \(.*", "", tag)
+                    tag = re.sub(" ", "_", tag)
+                    if not tag in row_df.columns:
+                        value = sa.xpath('./VALUE')
+                        if len(value):
+                            value = value[0].text
+                            if tag in colnames:
+                                tag = tag + "_2"
+                            sa_df = pandas.DataFrame([value])
+                            sa_df.columns = [tag]
+                            row_df = pandas.concat([row_df, sa_df], axis=1)
+            df_list.append(row_df)
+            counter += 1
+        df = pandas.concat(df_list, ignore_index=True, sort=False)
+        now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        print('{}: Finished converting {:,} samples'.format(now, counter), flush=True)
+        metadata = Metadata()
+        metadata.df = df
+        metadata.reorder(omit_misc=False)
+        return metadata
+
+    def group_attributes(self):
+        try:
+            config = pandas.read_csv(os.path.join(self.config_dir, 'group_attribute.config'),
+                                     parse_dates=False, infer_datetime_format=False, quotechar='"', sep='\t',
+                                     header=None, index_col=None, skip_blank_lines=True, comment='#')
+        except:
+            config = pandas.DataFrame()
+        config = config.replace(numpy.nan, '')
+        for i in numpy.arange(config.shape[0]):
+            aggregate_to = config.iloc[i, 0]
+            aggregate_from = config.iloc[i, 1]
+            if (aggregate_from in self.df.columns) & (aggregate_from != ''):
+                if not aggregate_to in self.df.columns:
+                    self.df.loc[:, aggregate_to] = ''
+                is_from_empty = (self.df.loc[:, aggregate_from].isnull()) | (
+                            self.df.loc[:, aggregate_from].astype(str) == '')
+                is_to_empty = (self.df.loc[:, aggregate_to].isnull()) | (self.df.loc[:, aggregate_to].astype(str) == '')
+                new_annotations = self.df.loc[(~is_from_empty) & (is_to_empty), aggregate_from].astype(
+                    str) + '[' + aggregate_from + ']'
+                self.df.loc[(~is_from_empty) & (is_to_empty), aggregate_to] = new_annotations
+                new_annotations = self.df.loc[(~is_from_empty) & (~is_to_empty), aggregate_to].astype(str) + "; " + \
+                                  self.df.loc[(~is_from_empty) & (~is_to_empty), aggregate_from].astype(
+                                      str) + '[' + aggregate_from + ']'
+                self.df.loc[(~is_from_empty) & (~is_to_empty), aggregate_to] = new_annotations
+                self.df = self.df.drop(labels=aggregate_from, axis=1)
+        self.reorder(omit_misc=False)
+
+    def correct_orthographical_variants(self):
+        try:
+            config = pandas.read_csv(os.path.join(self.config_dir, 'orthographical_variant.config'),
+                                     parse_dates=False, infer_datetime_format=False, quotechar='"', sep='\t',
+                                     header=None, index_col=None, skip_blank_lines=True, comment='#')
+        except:
+            config = pandas.DataFrame()
+        config = config.replace(numpy.nan, '')
+        for i in numpy.arange(config.shape[0]):
+            cols = config.iloc[i, 0].split(',')
+            replace_from = config.iloc[i, 2]
+            replace_to = config.iloc[i, 1]
+            for col in cols:
+                self.df.loc[:, col] = self.df.loc[:, col].str.replace(replace_from, replace_to, regex=True, case=False)
+
+    def group_tissues_by_config(self):
+        try:
+            config = pandas.read_csv(os.path.join(self.config_dir, 'group_tissue.config'),
+                                     parse_dates=False, infer_datetime_format=False, quotechar='"', sep='\t',
+                                     header=None, index_col=None, skip_blank_lines=True, comment='#')
+        except:
+            config = pandas.DataFrame()
+        config = config.replace(numpy.nan, '')
+        for i in numpy.arange(config.shape[0]):
+            replace_from = config.iloc[i, 1]
+            replace_to = config.iloc[i, 0]
+            is_matching = self.df.loc[:, 'tissue'].str.match(replace_from, case=False, na=False)
+            self.df.loc[is_matching, 'tissue'] = replace_to
+        self.df.loc[:, 'tissue'] = self.df.loc[:, 'tissue'].str.lower()
+
+    def mark_exclude_keywords(self):
+        try:
+            config = pandas.read_csv(os.path.join(self.config_dir, 'exclude_keyword.config'),
+                                     parse_dates=False, infer_datetime_format=False, quotechar='"', sep='\t',
+                                     header=None, index_col=None, skip_blank_lines=True, comment='#')
+        except:
+            config = pandas.DataFrame()
+        config = config.replace(numpy.nan, '')
+        for i in numpy.arange(config.shape[0]):
+            cols = config.iloc[i, 0].split(',')
+            reason = config.iloc[i, 1]
+            exclude_keyword = config.iloc[i, 2]
+            for col in cols:
+                self.df.loc[self.df.loc[:, col].str.contains(exclude_keyword, regex=True, case=False).fillna(
+                    False), 'exclusion'] = reason
+        self.df.loc[~((self.df.loc[:, 'antibody'].isnull()) | (
+                    self.df.loc[:, 'antibody'] == '')), 'exclusion'] = 'immunoprecipitation'
+        self.df.loc[~((self.df.loc[:, 'cell'].isnull()) | (self.df.loc[:, 'cell'] == '')), 'exclusion'] = 'cell_culture'
+
+    def mark_treatment_terms(self):
+        try:
+            config = pandas.read_csv(os.path.join(self.config_dir, 'control_term.config'),
+                                     parse_dates=False, infer_datetime_format=False, quotechar='"', sep='\t',
+                                     header=None, index_col=None, skip_blank_lines=True, comment='#')
+        except:
+            config = pandas.DataFrame()
+        config = config.replace(numpy.nan, '')
+        for i in numpy.arange(config.shape[0]):
+            col = config.iloc[i, 0]
+            control_term = config.iloc[i, 1]
+            if control_term == '':
+                continue
+            is_control = self.df.loc[:, col].str.contains(control_term, regex=True, case=False).fillna(False)
+            if not any(is_control):
+                continue
+            bioprojects = self.df.loc[:, 'bioproject'][is_control].unique()
+            for bioproject in bioprojects:
+                if bioproject == '':
+                    continue
+                is_bioproject = (self.df.loc[:, 'bioproject'] == bioproject)
+                self.df.loc[(is_bioproject & -is_control), 'exclusion'] = 'treatment'
+
+    def nspot_cutoff(self, min_nspots):
+        self.df['total_spots'] = self.df.loc[:, 'total_spots'].replace('', 0)
+        self.df['total_spots'] = self.df.loc[:, 'total_spots'].fillna(0).astype(int)
+        self.df.loc[-(self.df.loc[:, 'total_spots'] == 0) & (
+                    self.df.loc[:, 'total_spots'] < min_nspots), 'exclusion'] = 'low_nspots'
+
+    def mark_redundant_biosample(self):
+        redundant_bool = self.df.duplicated(subset=['bioproject', 'biosample'], keep='first')
+        self.df.loc[redundant_bool, 'exclusion'] = 'redundant_biosample'
+
+    def _maximize_bioproject_sampling(self, df, target_n=10):
+        pandas.set_option('mode.chained_assignment', None)
+        df.loc[:, 'bioproject'] = df.loc[:, 'bioproject'].fillna('unknown').values
+        df.loc[:, 'is_sampled'] = 'no'
+        df.loc[:, 'is_qualified'] = 'no'
+        df.loc[(df.loc[:, 'exclusion'] == 'no'), 'is_qualified'] = 'yes'
+        if df['tissue'].iloc[0] == '':
+            df['is_qualified'] = 'no'
+            df['exclusion'] = 'no_tissue_label'
+            return df
+        while len(df.loc[(df.loc[:, 'is_sampled'] == 'yes') & (df.loc[:, 'exclusion'] == 'no'), :]) < target_n:
+            if len(df) <= target_n:
+                df.loc[(df.loc[:, 'exclusion'] == 'no'), 'is_sampled'] = 'yes'
+                break
+            else:
+                df_unselected = df.loc[(df.loc[:, 'is_sampled'] == 'no') & (df.loc[:, 'exclusion'] == 'no'), :]
+                bioprojects = df_unselected.loc[:, 'bioproject'].unique()
+                if len(bioprojects) == 0:
+                    break
+                remaining_n = target_n - (df.loc[:, 'is_sampled'] == 'yes').sum()
+                select_n = min([len(bioprojects), remaining_n])
+                selected_bioprojects = numpy.random.choice(bioprojects, size=select_n, replace=False)
+                selected_index = []
+                for bioproject in selected_bioprojects:
+                    is_bp = (df_unselected.loc[:, 'bioproject'] == bioproject)
+                    index = numpy.random.choice(df_unselected.index[is_bp], size=1, replace=False)
+                    selected_index.append(int(index))
+                df.loc[selected_index, 'is_sampled'] = 'yes'
+        pandas.set_option('mode.chained_assignment', 'warn')
+        return df
+
+    def label_sampled_data(self, max_sample=10):
+        df_labeled = pandas.DataFrame()
+        species = self.df.loc[:, 'scientific_name'].unique()
+        for sp in species:
+            sp_table = self.df.loc[(self.df.loc[:, 'scientific_name'] == sp), :]
+            tissues = sp_table.loc[:, 'tissue'].unique()
+            for tissue in tissues:
+                sp_tissue = sp_table.loc[(sp_table.loc[:, 'tissue'] == tissue), :]
+                if sp_tissue.shape[0] == 0:
+                    continue
+                sp_tissue = self._maximize_bioproject_sampling(df=sp_tissue, target_n=max_sample)
+                df_labeled = pandas.concat([df_labeled, sp_tissue], axis=0)
+        self.df = df_labeled
+        self.reorder(omit_misc=False)
+
+    def remove_specialchars(self):
+        for col, dtype in zip(self.df.dtypes.index, self.df.dtypes.values):
+            if any([key in str(dtype) for key in ['str', 'object']]):
+                self.df.loc[:, col] = self.df[col].replace('\r', '', regex=True)
+                self.df.loc[:, col] = self.df[col].replace('\n', '', regex=True)
+                self.df.loc[:, col] = self.df[col].replace('\'', '', regex=True)
+                self.df.loc[:, col] = self.df[col].replace('\"', '', regex=True)
+                self.df.loc[:, col] = self.df[col].replace('\|', '', regex=True)
+
+    def pivot(self, n_sp_cutoff=0, qualified_only=True, sampled_only=False):
+        df = self.df
+        if qualified_only:
+            df = df.loc[(df.loc[:, 'is_qualified'] == 'yes'), :]
+        if sampled_only:
+            df = df.loc[(df.loc[:, 'is_sampled'] == 'yes'), :]
+        df_reduced = df.loc[:, ['scientific_name', 'biosample', 'tissue']]
+        pivot = df_reduced.pivot_table(columns='tissue', index='scientific_name', aggfunc='count')
+        pivot.columns = pivot.columns.get_level_values(1)
+        column_sort = pivot.count(axis='index').sort_values(ascending=False).index
+        index_sort = pivot.count(axis='columns').sort_values(ascending=False).index
+        pivot = pivot.loc[index_sort, column_sort]
+        pivot_reduced = pivot.loc[:, pivot.count(axis='index') >= n_sp_cutoff]
+        column_sort = pivot_reduced.count(axis='index').sort_values(ascending=False).index
+        index_sort = pivot_reduced.count(axis='columns').sort_values(ascending=False).index
+        pivot_reduced = pivot_reduced.loc[index_sort, column_sort]
+        return pivot_reduced
+
+def read_config_file(file_name, dir_path):
+    try:
+        df = pandas.read_csv(os.path.join(dir_path, file_name),
+                             parse_dates=False, infer_datetime_format=False, quotechar='"', sep='\t',
+                             header=None, index_col=None, skip_blank_lines=True, comment='#')
+    except:
+        df = pandas.DataFrame([])
+    if df.shape[1]==1:
+        df = df.iloc[:,0]
+    return df
 
 def load_metadata(args):
     if args.metadata=='inferred':
-        relative_path = os.path.join(args.out_dir, 'metadata', 'metadata', 'metadata.tsv')
+        relative_path = os.path.join(args.out_dir, 'metadata', 'metadata.tsv')
         real_path = os.path.realpath(relative_path)
     else:
         real_path = os.path.realpath(args.metadata)
@@ -207,3 +569,32 @@ def generate_multisp_busco_table(dir_busco, outfile):
         tmp_table = tmp_table.rename(columns={'sequence': species_colname})
         merged_table = merged_table.merge(tmp_table, on='busco_id', how='outer')
     merged_table.to_csv(outfile, sep='\t', index=None, doublequote=False)
+
+def check_config_dir(dir_path, mode):
+    files = os.listdir(dir_path)
+    if mode=='metadata':
+        asserted_files = [
+            'search_term_exclusion.config',
+            'search_term_other.config',
+            'search_term_species.config',
+            'search_term_keyword.config',
+        ]
+    elif mode=='select':
+        asserted_files = [
+            'group_attribute.config',
+            'group_tissue.config',
+            'exclude_keyword.config',
+            'control_term.config',
+            'orthographical_variant.config',
+        ]
+
+    missing_count = 0
+    for af in asserted_files:
+        if af in files:
+            print('Config file found: {}'.format(af))
+        else:
+            sys.stderr.write('Config file not found: {}\n'.format(af))
+            missing_count += 1
+    if missing_count>0:
+        txt = 'Please refer to the AMALGKIT Wiki for more info: https://github.com/kfuku52/amalgkit/wiki/amalgkit-metadata\n'
+        sys.stderr.write(txt)

@@ -19,6 +19,14 @@ def command_metadata(args):
     print('Time elapsed: {:,} sec'.format(int(time.time() - start)))
     sys.stdout.write('amalgkit metadata: end\n')
 
+def command_select(args):
+    sys.stdout.write('amalgkit select: start\n')
+    start = time.time()
+    from amalgkit.select import select_main
+    select_main(args)
+    print('Time elapsed: {:,} sec'.format(int(time.time() - start)))
+    sys.stdout.write('amalgkit select: end\n')
+
 def command_getfastq(args):
     sys.stdout.write('amalgkit getfastq: start\n')
     start = time.time()
@@ -124,22 +132,26 @@ pp_threads.add_argument('--threads', metavar='INT', default=1, type=int, require
 
 # Sub parser: metadata
 pme_help = 'NCBI SRA metadata retrieval and curation. See `amalgkit metadata -h`'
-pme = subparsers.add_parser('metadata', help=pme_help, parents=[pp_out])
+pme = subparsers.add_parser('metadata', help=pme_help, parents=[pp_out, pp_redo])
 pme.add_argument('--config_dir', metavar='PATH', default='inferred', type=str, required=False, action='store',
                  help='default=%(default)s: PATH to the config directory. "inferred" = out_dir/config')
 pme.add_argument('--entrez_email', metavar='aaa@bbb.com', default='', type=str, required=False, action='store',
                  help='default=%(default)s: Your email address. See https://www.ncbi.nlm.nih.gov/books/NBK25497/')
-pme.add_argument('--min_nspots', metavar='INT', default=5000000, type=int, required=False, action='store',
+pme.set_defaults(handler=command_metadata)
+
+# Sub parser: select
+pse_help = 'Selecting SRA entries for analysis. See `amalgkit select -h`'
+pse = subparsers.add_parser('select', help=pse_help, parents=[pp_out, pp_meta])
+pse.add_argument('--config_dir', metavar='PATH', default='inferred', type=str, required=False, action='store',
+                 help='default=%(default)s: PATH to the config directory. "inferred" = out_dir/config')
+pse.add_argument('--min_nspots', metavar='INT', default=5000000, type=int, required=False, action='store',
                  help='default=%(default)s: Minimum number of RNA-seq reads per sample.')
-pme.add_argument('--max_sample', metavar='INT', default=99999, type=int, required=False, action='store',
+pse.add_argument('--max_sample', metavar='INT', default=99999, type=int, required=False, action='store',
                  help='default=%(default)s: Maximum number of RNA-seq data sampled for one tissue in a species.')
-pme.add_argument('--mark_redundant_biosamples', metavar='no|yes', default='no', type=strtobool,
+pse.add_argument('--mark_redundant_biosamples', metavar='no|yes', default='no', type=strtobool,
                  required=False, action='store',
                  help='default=%(default)s: Whether to label SRAs with the same BioSample ID as unqualified.')
-pme.add_argument('--overwrite', metavar='no|yes', default='no', type=strtobool,
-                 required=False, action='store',
-                 help='default=%(default)s: Overwrite existing metadata.tsv and intermediate files.')
-pme.set_defaults(handler=command_metadata)
+pse.set_defaults(handler=command_select)
 
 # Sub parser: getfastq
 pge_help = 'Retrieving fastq files. See `amalgkit getfastq -h`'
