@@ -208,21 +208,6 @@ class Metadata:
                 self.df = self.df.drop(labels=aggregate_from, axis=1)
         self.reorder(omit_misc=False)
 
-    def correct_orthographical_variants(self):
-        try:
-            config = pandas.read_csv(os.path.join(self.config_dir, 'orthographical_variant.config'),
-                                     parse_dates=False, infer_datetime_format=False, quotechar='"', sep='\t',
-                                     header=None, index_col=None, skip_blank_lines=True, comment='#')
-        except:
-            config = pandas.DataFrame()
-        config = config.replace(numpy.nan, '')
-        for i in numpy.arange(config.shape[0]):
-            cols = config.iloc[i, 0].split(',')
-            replace_from = config.iloc[i, 2]
-            replace_to = config.iloc[i, 1]
-            for col in cols:
-                self.df.loc[:, col] = self.df.loc[:, col].str.replace(replace_from, replace_to, regex=True, case=False)
-
     def mark_exclude_keywords(self):
         try:
             config = pandas.read_csv(os.path.join(self.config_dir, 'exclude_keyword.config'),
@@ -569,7 +554,6 @@ def check_config_dir(dir_path, mode):
             'group_attribute.config',
             'exclude_keyword.config',
             'control_term.config',
-            'orthographical_variant.config',
         ]
 
     missing_count = 0

@@ -31,7 +31,6 @@ def select_main(args):
         metadata.mark_redundant_biosample()
     metadata.remove_specialchars()
     metadata.group_attributes()
-    metadata.correct_orthographical_variants()
     metadata.mark_exclude_keywords()
     metadata.mark_treatment_terms()
     metadata.label_sampled_data(args.max_sample)
