@@ -131,8 +131,6 @@ pme.add_argument('--entrez_email', metavar='aaa@bbb.com', default='', type=str, 
                  help='default=%(default)s: Your email address. See https://www.ncbi.nlm.nih.gov/books/NBK25497/')
 pme.add_argument('--min_nspots', metavar='INT', default=5000000, type=int, required=False, action='store',
                  help='default=%(default)s: Minimum number of RNA-seq reads per sample.')
-pme.add_argument('--tissue_detect', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
-                 help='default=%(default)s: Uses config files for tissue grouping by default. If turned on, uses natural language processing to group tissues automatically.')
 pme.add_argument('--max_sample', metavar='INT', default=99999, type=int, required=False, action='store',
                  help='default=%(default)s: Maximum number of RNA-seq data sampled for one tissue in a species.')
 pme.add_argument('--mark_redundant_biosamples', metavar='no|yes', default='no', type=strtobool,

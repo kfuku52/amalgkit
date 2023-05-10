@@ -333,70 +333,6 @@ class Metadata:
             for col in cols:
                 self.df.loc[:,col] = self.df.loc[:,col].str.replace(replace_from, replace_to, regex=True, case=False)
 
-    def group_tissues_auto(self):
-        import nltk
-        from nltk.stem import WordNetLemmatizer
-        import obonet
-        nltk.download('wordnet')
-        # retrieve metadata
-        # retrieve tissue query from config
-        tissues = pandas.read_csv(os.path.join(self.config_dir, 'search_term_keyword.config'),
-                                    parse_dates=False, infer_datetime_format=False, quotechar='"', sep='\t',
-                                    header=None, index_col=None, skip_blank_lines=True, comment='#').iloc[:,0]
-        tissues = tissues.tolist()
-        # init lemmatizer
-        lemmatizer = WordNetLemmatizer()
-        # isolate tissue from metadata, force lower case and remove tailing whitespaces
-        content = self.df.loc[:,'tissue']
-        content = ['' if pandas.isnull(x) else x.lower() for x in content]
-        content = [x if pandas.isnull(x) else x.strip() for x in content]
-        # lemmatize all words in tissue list
-        lemm = [lemmatizer.lemmatize(i) for i in content]
-
-        # load ontology
-        graph = obonet.read_obo("http://purl.obolibrary.org/obo/po.obo")
-        dat_list =[]
-
-        # declare functions for later
-
-        id_to_name = {id_: data.get('name') for id_, data in graph.nodes(data=True)}
-        name_to_id = {data['name']: id_ for id_, data in graph.nodes(data=True) if 'name' in data}
-
-        def search(values, searchFor):
-            for k in values:
-                for v in values[k]:
-                    if searchFor in v:
-                       return k
-            return None
-
-        # for each item in the lemmatized tissue list, check if the query can be recovered
-        for i in range(len(lemm)):
-
-            sp = re.sub(r"[^a-zA-Z]+", ' ', lemm[i])
-            sp = re.split('[_,:;" "/]', sp)
-            sp = [lemmatizer.lemmatize(x) for x in sp]
-
-
-            if len(sp) > 0 :
-
-                list_set = set(sp)
-                for tissue in tissues:
-                    if tissue in list_set:
-                        lemm[i] = tissue
-                        break
-                    else:
-                        try:
-                            lemm[i] = graph.node[name_to_id[tissue]]['name']
-                        except Exception as e:
-                            for id, dat in graph.nodes(data=True):
-                                if search(dat, tissue) != None:
-                                    lemm[i] = dat['name']
-
-
-                    lemm[i] = ''.join(sp)
-
-        self.df.loc[:,'tissue'] = lemm
-
     def group_tissues_by_config(self):
         try:
             config = pandas.read_csv(os.path.join(self.config_dir, 'group_tissue.config'),
@@ -614,18 +550,11 @@ def metadata_main(args):
         sys.stderr.write('No entry was found/survived in the metadata processing. Please reconsider your config files.\n')
         return None
     metadata.df.loc[:, 'tissue_original'] = metadata.df.loc[:, 'tissue']
-    if args.tissue_detect:
-        metadata.remove_linebreak()
-        # metadata.group_attributes() # TODO to Matthias, this should be activated even when --tissue_detect yes. Any conflicting feature?
-        metadata.correct_orthographical_variants()
-        #metadata.mark_exclude_keywords() # TODO to Matthias, this should be activated even when --tissue_detect yes. Any conflicting feature?
-        metadata.group_tissues_auto()
-    else:
-        metadata.remove_specialchars()
-        metadata.group_attributes()
-        metadata.correct_orthographical_variants()
-        metadata.mark_exclude_keywords()
-        metadata.group_tissues_by_config()
+    metadata.remove_specialchars()
+    metadata.group_attributes()
+    metadata.correct_orthographical_variants()
+    metadata.mark_exclude_keywords()
+    metadata.group_tissues_by_config()
 
     metadata.reorder(omit_misc=False)
     metadata.df.to_csv(os.path.join(metadata_tmp_dir, 'metadata_02_grouped.tsv'), sep='\t', index=False)
