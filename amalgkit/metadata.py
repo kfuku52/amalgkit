@@ -17,7 +17,6 @@ def check_config_dir(dir_path):
     asserted_files = [
         'group_attribute.config',
         'group_tissue.config',
-        'replace_value.config',
         'exclude_keyword.config',
         'control_term.config',
         'search_term_exclusion.config',
@@ -430,21 +429,6 @@ class Metadata:
         self.df.loc[~((self.df.loc[:,'antibody'].isnull())|(self.df.loc[:,'antibody']=='')), 'exclusion'] = 'immunoprecipitation'
         self.df.loc[~((self.df.loc[:,'cell'].isnull())|(self.df.loc[:,'cell']=='')), 'exclusion'] = 'cell_culture'
 
-    def replace_values(self):
-        try:
-            config = pandas.read_csv(os.path.join(self.config_dir, 'replace_value.config'),
-                                     parse_dates=False, infer_datetime_format=False, quotechar='"', sep='\t',
-                                     header=None, index_col=None, skip_blank_lines=True, comment='#')
-        except:
-            config = pandas.DataFrame()
-        config = config.replace(numpy.nan, '')
-        for i in numpy.arange(config.shape[0]):
-            col1 = config.iloc[i,0]
-            col1_value = config.iloc[i,1]
-            col2 = config.iloc[i,2]
-            col3 = config.iloc[i,3]
-            self.df.loc[(self.df.loc[:,col1]==col1_value), col2] = self.df.loc[(self.df.loc[:,col1]==col1_value), col3]
-
     def mark_treatment_terms(self):
         try:
             config = pandas.read_csv(os.path.join(self.config_dir, 'control_term.config'),
@@ -634,14 +618,12 @@ def metadata_main(args):
         metadata.remove_linebreak()
         # metadata.group_attributes() # TODO to Matthias, this should be activated even when --tissue_detect yes. Any conflicting feature?
         metadata.correct_orthographical_variants()
-        metadata.replace_values()
         #metadata.mark_exclude_keywords() # TODO to Matthias, this should be activated even when --tissue_detect yes. Any conflicting feature?
         metadata.group_tissues_auto()
     else:
         metadata.remove_specialchars()
         metadata.group_attributes()
         metadata.correct_orthographical_variants()
-        metadata.replace_values()
         metadata.mark_exclude_keywords()
         metadata.group_tissues_by_config()
 
