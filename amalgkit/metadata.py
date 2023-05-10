@@ -21,7 +21,6 @@ def check_config_dir(dir_path):
         'replace_value.config',
         'exclude_keyword.config',
         'control_term.config',
-        'rescue_id.config',
         'search_term_exclusion.config',
         'search_term_other.config',
         'search_term_species.config',
@@ -297,37 +296,6 @@ class Metadata:
         metadata.df = df
         metadata.reorder(omit_misc=False)
         return metadata
-
-    def mark_exclude_ids(self, id_cols=id_cols):
-        try:
-            config = pandas.read_csv(os.path.join(self.config_dir, 'exclude_id.config'),
-                                 parse_dates=False, infer_datetime_format=False, quotechar='"', sep='\t',
-                                 header=None, index_col=None, skip_blank_lines=True, comment='#')
-        except:
-            config = pandas.DataFrame()
-        config = config.replace(numpy.nan, '')
-        for i in numpy.arange(config.shape[0]):
-            reason = config.iloc[i,0]
-            exclude_id = config.iloc[i,1]
-            for col in id_cols:
-                is_exclude_id = (self.df.loc[:,col]==exclude_id).fillna(False)
-                if any(is_exclude_id):
-                    self.df.loc[is_exclude_id,'exclusion'] = reason
-
-    def unmark_rescue_ids(self, id_cols=id_cols):
-        try:
-            config = pandas.read_csv(os.path.join(self.config_dir, 'rescue_id.config'),
-                                     parse_dates=False, infer_datetime_format=False, quotechar='"', sep='\t',
-                                     header=None, index_col=None, skip_blank_lines=True, comment='#')
-        except:
-            config = pandas.DataFrame()
-        config = config.replace(numpy.nan, '')
-        for i in numpy.arange(config.shape[0]):
-            rescue_id = config.iloc[i,0]
-            for col in id_cols:
-                is_rescue_id = (self.df.loc[:,col]==rescue_id).fillna(False)
-                if any(is_rescue_id):
-                    self.df.loc[is_rescue_id,'exclusion'] = 'no'
 
     def group_attributes(self):
         try:
@@ -682,7 +650,6 @@ def metadata_main(args):
     metadata.df.loc[:, 'tissue_original'] = metadata.df.loc[:, 'tissue']
     if args.tissue_detect:
         metadata.remove_linebreak()
-        # metadata.mark_exclude_ids() # TODO to Matthias, this should be activated even when --tissue_detect yes. Any conflicting feature?
         # metadata.group_attributes() # TODO to Matthias, this should be activated even when --tissue_detect yes. Any conflicting feature?
         metadata.correct_orthographical_variants()
         metadata.replace_values()
@@ -691,7 +658,6 @@ def metadata_main(args):
         metadata.group_tissues_auto()
     else:
         metadata.remove_specialchars()
-        metadata.mark_exclude_ids()
         metadata.group_attributes()
         metadata.correct_orthographical_variants()
         metadata.replace_values()
@@ -706,7 +672,6 @@ def metadata_main(args):
     metadata.nspot_cutoff(args.min_nspots)
     if args.mark_redundant_biosamples:
         metadata.mark_redundant_biosample()
-    metadata.unmark_rescue_ids()
     metadata.label_sampled_data(args.max_sample)
     metadata.reorder(omit_misc=True)
     metadata.df.loc[:, 'curate_group'] = metadata.df.loc[:, 'tissue']
