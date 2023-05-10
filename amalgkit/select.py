@@ -8,6 +8,7 @@ def write_select_outputs(path_metadata_original, path_metadata_table, metadata_d
     else:
         print('Original metadata copy does not exist. Creating: {}'.format(path_metadata_original), flush=True)
         shutil.copyfile(path_metadata_table, path_metadata_original)
+    print('Updating metadata table at: {}'.format(path_metadata_table), flush=True)
     metadata.df.to_csv(path_metadata_table, sep='\t', index=False)
     sra_qualified_pivot = metadata.pivot(n_sp_cutoff=0, qualified_only=True, sampled_only=False)
     sra_qualified_pivot.to_csv(os.path.join(metadata_dir, 'pivot_qualified.tsv'), sep='\t')

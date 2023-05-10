@@ -14,7 +14,7 @@ import sys
 from distutils.util import strtobool
 
 class Metadata:
-    column_names = ['scientific_name', 'tissue', 'curate_group', 'tissue_original', 'genotype', 'sex', 'age',
+    column_names = ['scientific_name', 'tissue', 'curate_group', 'genotype', 'sex', 'age',
                     'treatment', 'source_name',
                     'is_sampled', 'is_qualified', 'exclusion', 'protocol', 'bioproject', 'biosample',
                     'experiment', 'run', 'sra_primary', 'sra_sample', 'sra_study', 'study_title', 'exp_title', 'design',
@@ -236,7 +236,6 @@ class Metadata:
             replace_to = config.iloc[i, 0]
             is_matching = self.df.loc[:, 'tissue'].str.match(replace_from, case=False, na=False)
             self.df.loc[is_matching, 'tissue'] = replace_to
-        self.df.loc[:, 'tissue'] = self.df.loc[:, 'tissue'].str.lower()
 
     def mark_exclude_keywords(self):
         try:

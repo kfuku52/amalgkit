@@ -115,11 +115,12 @@ def metadata_main(args):
     metadata_dir = os.path.join(args.out_dir, 'metadata')
     metadata_tmp_dir = os.path.join(metadata_dir, 'tmp')
     multisp_file_path = os.path.join(metadata_dir, "metadata.tsv")
-    if args.redo & os.path.exists(multisp_file_path):
-        os.remove(multisp_file_path)
-    else:
-        print('Exiting. Output file already exists at: {}'.format(multisp_file_path))
-        sys.exit(0)
+    if os.path.exists(multisp_file_path):
+        if args.redo:
+            os.remove(multisp_file_path)
+        else:
+            print('Exiting. Output file already exists at: {}'.format(multisp_file_path))
+            sys.exit(0)
     for path_dir in [args.out_dir, metadata_dir, metadata_tmp_dir]:
         if not os.path.exists(path_dir):
             print('Creating directory: {}'.format(path_dir))
@@ -173,7 +174,7 @@ def metadata_main(args):
     metadata.config_dir = dir_config
     metadata.df['tissue'] = metadata.df['tissue'].astype(str)
     metadata.df.loc[(metadata.df['tissue']=='nan'), 'tissue'] = ''
-    metadata.df.loc[:, 'curate_group'] = metadata.df.loc[:, 'tissue']
+    metadata.df.loc[:, 'curate_group'] = metadata.df.loc[:, 'tissue'].str.lower()
     metadata.reorder(omit_misc=False)
     metadata.df.to_csv(multisp_file_path, sep="\t", index=False)
     if metadata.df.shape[0]==0:
