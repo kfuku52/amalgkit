@@ -33,7 +33,6 @@ def select_main(args):
     metadata.group_attributes()
     metadata.correct_orthographical_variants()
     metadata.mark_exclude_keywords()
-    metadata.group_tissues_by_config()
     metadata.mark_treatment_terms()
     metadata.label_sampled_data(args.max_sample)
     metadata.reorder(omit_misc=True)

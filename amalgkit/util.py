@@ -223,20 +223,6 @@ class Metadata:
             for col in cols:
                 self.df.loc[:, col] = self.df.loc[:, col].str.replace(replace_from, replace_to, regex=True, case=False)
 
-    def group_tissues_by_config(self):
-        try:
-            config = pandas.read_csv(os.path.join(self.config_dir, 'group_tissue.config'),
-                                     parse_dates=False, infer_datetime_format=False, quotechar='"', sep='\t',
-                                     header=None, index_col=None, skip_blank_lines=True, comment='#')
-        except:
-            config = pandas.DataFrame()
-        config = config.replace(numpy.nan, '')
-        for i in numpy.arange(config.shape[0]):
-            replace_from = config.iloc[i, 1]
-            replace_to = config.iloc[i, 0]
-            is_matching = self.df.loc[:, 'tissue'].str.match(replace_from, case=False, na=False)
-            self.df.loc[is_matching, 'tissue'] = replace_to
-
     def mark_exclude_keywords(self):
         try:
             config = pandas.read_csv(os.path.join(self.config_dir, 'exclude_keyword.config'),
@@ -581,7 +567,6 @@ def check_config_dir(dir_path, mode):
     elif mode=='select':
         asserted_files = [
             'group_attribute.config',
-            'group_tissue.config',
             'exclude_keyword.config',
             'control_term.config',
             'orthographical_variant.config',
