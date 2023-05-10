@@ -26,13 +26,17 @@ def select_main(args):
     path_metadata_original = os.path.join(metadata_dir, 'metadata_original.tsv')
 
     metadata = load_metadata(args)
+    if args.curate_group is not None:
+        txt = '{}: Extracting pre-selected curate_group entries: {}'
+        print(txt.format(datetime.datetime.now(), args.curate_group), flush=True)
+        selected_curate_groups = args.curate_group.split(',')
+        metadata.df = metadata.df.loc[metadata.df['curate_group'].isin(selected_curate_groups),:].reset_index(drop=True)
     metadata.nspot_cutoff(args.min_nspots)
-    if args.mark_redundant_biosamples:
-        metadata.mark_redundant_biosample()
+    metadata.mark_redundant_biosample(args.mark_redundant_biosamples)
     metadata.remove_specialchars()
-    metadata.group_attributes()
-    metadata.mark_exclude_keywords()
-    metadata.mark_treatment_terms()
+    metadata.group_attributes(dir_config)
+    metadata.mark_exclude_keywords(dir_config)
+    metadata.mark_treatment_terms(dir_config)
     metadata.label_sampled_data(args.max_sample)
     metadata.reorder(omit_misc=True)
     write_select_outputs(path_metadata_original, path_metadata_table, metadata_dir, metadata)

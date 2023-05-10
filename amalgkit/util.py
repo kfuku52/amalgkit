@@ -181,18 +181,19 @@ class Metadata:
         metadata.reorder(omit_misc=False)
         return metadata
 
-    def group_attributes(self):
+    def group_attributes(self, dir_config):
         try:
-            config = pandas.read_csv(os.path.join(self.config_dir, 'group_attribute.config'),
+            config = pandas.read_csv(os.path.join(dir_config, 'group_attribute.config'),
                                      parse_dates=False, infer_datetime_format=False, quotechar='"', sep='\t',
                                      header=None, index_col=None, skip_blank_lines=True, comment='#')
         except:
             config = pandas.DataFrame()
         config = config.replace(numpy.nan, '')
-        for i in numpy.arange(config.shape[0]):
+        for i in config.index:
             aggregate_to = config.iloc[i, 0]
             aggregate_from = config.iloc[i, 1]
             if (aggregate_from in self.df.columns) & (aggregate_from != ''):
+                print('{}: Aggregating column "{}" to column "{}"'.format(datetime.datetime.now(), aggregate_from, aggregate_to), flush=True)
                 if not aggregate_to in self.df.columns:
                     self.df.loc[:, aggregate_to] = ''
                 is_from_empty = (self.df.loc[:, aggregate_from].isnull()) | (
@@ -208,68 +209,75 @@ class Metadata:
                 self.df = self.df.drop(labels=aggregate_from, axis=1)
         self.reorder(omit_misc=False)
 
-    def mark_exclude_keywords(self):
+    def mark_exclude_keywords(self, dir_config):
         try:
-            config = pandas.read_csv(os.path.join(self.config_dir, 'exclude_keyword.config'),
+            config = pandas.read_csv(os.path.join(dir_config, 'exclude_keyword.config'),
                                      parse_dates=False, infer_datetime_format=False, quotechar='"', sep='\t',
                                      header=None, index_col=None, skip_blank_lines=True, comment='#')
         except:
             config = pandas.DataFrame()
         config = config.replace(numpy.nan, '')
-        for i in numpy.arange(config.shape[0]):
+        if config.shape[0]>0:
+            print('{}: Marking SRAs with bad keywords'.format(datetime.datetime.now()), flush=True)
+        for i in config.index:
             cols = config.iloc[i, 0].split(',')
             reason = config.iloc[i, 1]
             exclude_keyword = config.iloc[i, 2]
+            num_detected = 0
             for col in cols:
-                self.df.loc[self.df.loc[:, col].str.contains(exclude_keyword, regex=True, case=False).fillna(
-                    False), 'exclusion'] = reason
+                has_bad_keyword = self.df.loc[:, col].str.contains(exclude_keyword, regex=True, case=False).fillna(False)
+                self.df.loc[has_bad_keyword, 'exclusion'] = reason
+                num_detected += has_bad_keyword.sum()
+            txt = '{}: Marking {:,} SRAs with keyword "{}"'
+            print(txt.format(datetime.datetime.now(), num_detected, exclude_keyword), flush=True)
         self.df.loc[~((self.df.loc[:, 'antibody'].isnull()) | (
                     self.df.loc[:, 'antibody'] == '')), 'exclusion'] = 'immunoprecipitation'
         self.df.loc[~((self.df.loc[:, 'cell'].isnull()) | (self.df.loc[:, 'cell'] == '')), 'exclusion'] = 'cell_culture'
 
-    def mark_treatment_terms(self):
+    def mark_treatment_terms(self, dir_config):
         try:
-            config = pandas.read_csv(os.path.join(self.config_dir, 'control_term.config'),
+            config = pandas.read_csv(os.path.join(dir_config, 'control_term.config'),
                                      parse_dates=False, infer_datetime_format=False, quotechar='"', sep='\t',
                                      header=None, index_col=None, skip_blank_lines=True, comment='#')
         except:
             config = pandas.DataFrame()
         config = config.replace(numpy.nan, '')
-        for i in numpy.arange(config.shape[0]):
-            col = config.iloc[i, 0]
+        if config.shape[0]>0:
+            print('{}: Marking SRAs with non-control terms'.format(datetime.datetime.now()), flush=True)
+        for i in config.index:
+            cols = config.iloc[i, 0].split(',')
             control_term = config.iloc[i, 1]
             if control_term == '':
                 continue
-            is_control = self.df.loc[:, col].str.contains(control_term, regex=True, case=False).fillna(False)
-            if not any(is_control):
-                continue
-            bioprojects = self.df.loc[:, 'bioproject'][is_control].unique()
-            for bioproject in bioprojects:
-                if bioproject == '':
+            num_control = 0
+            num_treatment = 0
+            for col in cols:
+                is_control = self.df.loc[:, col].str.contains(control_term, regex=True, case=False).fillna(False)
+                if not any(is_control):
                     continue
-                is_bioproject = (self.df.loc[:, 'bioproject'] == bioproject)
-                self.df.loc[(is_bioproject & -is_control), 'exclusion'] = 'treatment'
+                bioprojects = self.df.loc[is_control, 'bioproject'].unique()
+                for bioproject in bioprojects:
+                    is_bioproject = (self.df.loc[:, 'bioproject'] == bioproject)
+                    self.df.loc[(is_bioproject & -is_control), 'exclusion'] = 'non_control'
+                    num_control += (is_bioproject & is_control).sum()
+                    num_treatment += (is_bioproject & -is_control).sum()
+            txt = '{}: Applying control term "{}": Detected control and treatment SRAs: {:,} and {:,}'
+            print(txt.format(datetime.datetime.now(), control_term, num_control, num_treatment), flush=True)
 
     def nspot_cutoff(self, min_nspots):
+        print('{}: Marking SRAs with less than {:,} reads'.format(datetime.datetime.now(), min_nspots), flush=True)
         self.df['total_spots'] = self.df.loc[:, 'total_spots'].replace('', 0)
         self.df['total_spots'] = self.df.loc[:, 'total_spots'].fillna(0).astype(int)
         self.df.loc[-(self.df.loc[:, 'total_spots'] == 0) & (
                     self.df.loc[:, 'total_spots'] < min_nspots), 'exclusion'] = 'low_nspots'
 
-    def mark_redundant_biosample(self):
-        redundant_bool = self.df.duplicated(subset=['bioproject', 'biosample'], keep='first')
-        self.df.loc[redundant_bool, 'exclusion'] = 'redundant_biosample'
+    def mark_redundant_biosample(self, exe_flag):
+        if exe_flag:
+            print('{}: Marking SRAs with redundant BioSample IDs'.format(datetime.datetime.now()), flush=True)
+            redundant_bool = self.df.duplicated(subset=['bioproject', 'biosample'], keep='first')
+            self.df.loc[redundant_bool, 'exclusion'] = 'redundant_biosample'
 
     def _maximize_bioproject_sampling(self, df, target_n=10):
-        pandas.set_option('mode.chained_assignment', None)
-        df.loc[:, 'bioproject'] = df.loc[:, 'bioproject'].fillna('unknown').values
-        df.loc[:, 'is_sampled'] = 'no'
-        df.loc[:, 'is_qualified'] = 'no'
-        df.loc[(df.loc[:, 'exclusion'] == 'no'), 'is_qualified'] = 'yes'
-        if df['tissue'].iloc[0] == '':
-            df['is_qualified'] = 'no'
-            df['exclusion'] = 'no_tissue_label'
-            return df
         while len(df.loc[(df.loc[:, 'is_sampled'] == 'yes') & (df.loc[:, 'exclusion'] == 'no'), :]) < target_n:
             if len(df) <= target_n:
                 df.loc[(df.loc[:, 'exclusion'] == 'no'), 'is_sampled'] = 'yes'
@@ -288,23 +296,33 @@ class Metadata:
                     index = numpy.random.choice(df_unselected.index[is_bp], size=1, replace=False)
                     selected_index.append(int(index))
                 df.loc[selected_index, 'is_sampled'] = 'yes'
-        pandas.set_option('mode.chained_assignment', 'warn')
         return df
 
     def label_sampled_data(self, max_sample=10):
+        pandas.set_option('mode.chained_assignment', None)
+        txt = '{}: Selecting subsets of SRA IDs for >{:,} samples per curate_group per species'
+        print(txt.format(datetime.datetime.now(), max_sample), flush=True)
+        is_empty = (self.df['curate_group'] == '')
+        self.df.loc[is_empty,'is_qualified'] = 'no'
+        self.df.loc[is_empty,'exclusion'] = 'no_tissue_label'
+        self.df['bioproject'] = self.df['bioproject'].fillna('unknown').values
+        self.df['is_sampled'] = 'no'
+        self.df['is_qualified'] = 'no'
+        self.df.loc[(self.df.loc[:, 'exclusion'] == 'no'), 'is_qualified'] = 'yes'
         df_labeled = pandas.DataFrame()
         species = self.df.loc[:, 'scientific_name'].unique()
         for sp in species:
             sp_table = self.df.loc[(self.df.loc[:, 'scientific_name'] == sp), :]
-            tissues = sp_table.loc[:, 'tissue'].unique()
-            for tissue in tissues:
-                sp_tissue = sp_table.loc[(sp_table.loc[:, 'tissue'] == tissue), :]
-                if sp_tissue.shape[0] == 0:
+            curate_groups = sp_table.loc[:, 'curate_group'].unique()
+            for curate_group in curate_groups:
+                sp_curate_group = sp_table.loc[(sp_table.loc[:, 'curate_group'] == curate_group), :]
+                if sp_curate_group.shape[0] == 0:
                     continue
-                sp_tissue = self._maximize_bioproject_sampling(df=sp_tissue, target_n=max_sample)
-                df_labeled = pandas.concat([df_labeled, sp_tissue], axis=0)
+                sp_curate_group = self._maximize_bioproject_sampling(df=sp_curate_group, target_n=max_sample)
+                df_labeled = pandas.concat([df_labeled, sp_curate_group], axis=0)
         self.df = df_labeled
         self.reorder(omit_misc=False)
+        pandas.set_option('mode.chained_assignment', 'warn')
 
     def remove_specialchars(self):
         for col, dtype in zip(self.df.dtypes.index, self.df.dtypes.values):
@@ -321,8 +339,8 @@ class Metadata:
             df = df.loc[(df.loc[:, 'is_qualified'] == 'yes'), :]
         if sampled_only:
             df = df.loc[(df.loc[:, 'is_sampled'] == 'yes'), :]
-        df_reduced = df.loc[:, ['scientific_name', 'biosample', 'tissue']]
-        pivot = df_reduced.pivot_table(columns='tissue', index='scientific_name', aggfunc='count')
+        df_reduced = df.loc[:, ['scientific_name', 'biosample', 'curate_group']]
+        pivot = df_reduced.pivot_table(columns='curate_group', index='scientific_name', aggfunc='count')
         pivot.columns = pivot.columns.get_level_values(1)
         column_sort = pivot.count(axis='index').sort_values(ascending=False).index
         index_sort = pivot.count(axis='columns').sort_values(ascending=False).index
@@ -350,8 +368,8 @@ def load_metadata(args):
         real_path = os.path.realpath(relative_path)
     else:
         real_path = os.path.realpath(args.metadata)
-    print('Loading metadata from: {}'.format(real_path), flush=True)
-    df = pandas.read_csv(real_path, sep='\t', header=0)
+    print('{}: Loading metadata from: {}'.format(datetime.datetime.now(), real_path), flush=True)
+    df = pandas.read_csv(real_path, sep='\t', header=0, low_memory=False)
     metadata = Metadata.from_DataFrame(df)
     if 'batch' in dir(args):
         if args.batch is None:
