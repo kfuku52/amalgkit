@@ -110,7 +110,7 @@ def run_quant(args, metadata, sra_id, index):
     assert in_files, '{}: Fastq file not found. Check {}'.format(sra_id, output_dir)
     print('Input fastq detected:', ', '.join(in_files))
     call_kallisto(args, in_files, metadata, sra_stat, output_dir, index)
-    if (args.clean_fastq & is_quant_output_available):
+    if (args.clean_fastq & quant_output_exists(sra_id, output_dir)):
         print('Safe-deleting getfastq files.', flush=True)
         for in_file in in_files:
             print('Output file detected. Safely removing fastq:', in_file)
@@ -118,6 +118,8 @@ def run_quant(args, metadata, sra_id, index):
             placeholder = open(in_file + '.safely_removed', "w")
             placeholder.write("This fastq file was safely removed after `amalgkit quant`.")
             placeholder.close()
+    else:
+        print('Skipping the deletion of getfastq files.', flush=True)
 
 def get_index(args, sci_name):
     if args.index_dir is not None:
