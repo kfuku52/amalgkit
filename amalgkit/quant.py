@@ -1,6 +1,7 @@
 import os
 import re
 import subprocess
+import sys
 
 from amalgkit.util import *
 
@@ -9,14 +10,14 @@ def check_quant_output(sra_id, output_dir, args):
     is_output_present = os.path.exists(out_path)
     if is_output_present:
         print('Output file detected: {}'.format(out_path))
-        if args.redo == 'yes':
-            print('Continued. The output will be overwritten. Set "--redo no" to not overwrite results.')
-            return None
+        if args.redo:
+            print('The output will be overwritten. Set "--redo no" to not overwrite results.')
+            return False
         else:
-            print('Continued. The output will not be overwritten. If you want to overwrite the results, set "--redo yes".')
+            return True
     else:
         print('Output file was not detected: {}'.format(out_path))
-        return None
+        return False
 
 def call_kallisto(args, in_files, metadata, sra_stat, output_dir, index):
     sra_id = sra_stat['sra_id']
@@ -94,9 +95,10 @@ def run_quant(args, metadata, sra_id, index):
     output_dir = os.path.join(args.out_dir, 'quant', sra_id)
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
-
-    check_quant_output(sra_id, output_dir, args)
-
+    flag_skip = check_quant_output(sra_id, output_dir, args)
+    if flag_skip:
+        print('Continued. The output will not be overwritten. If you want to overwrite the results, set "--redo yes".')
+        return
     output_dir_getfastq = os.path.join(args.out_dir, 'getfastq', sra_id)
     sra_stat = get_sra_stat(sra_id, metadata, num_bp_per_sra=None)
     sra_stat = check_layout_mismatch(sra_stat, output_dir_getfastq)
@@ -174,7 +176,7 @@ def get_index(args, sci_name):
 
 def quant_main(args):
     check_kallisto_dependency()
-    metadata = load_metadata(args)  # loads single-row metadata according to --batch
+    metadata = load_metadata(args)
     for i in metadata.df.index:
         print('')
         sra_id = metadata.df.at[i, 'run']
