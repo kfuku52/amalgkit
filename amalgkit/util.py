@@ -456,7 +456,7 @@ def write_updated_metadata(metadata, outpath, args):
     try:
         overwrite_intermediate_metadata = args.overwrite_intermediate_metadata
     except AttributeError:
-        overwrite_intermediate_metadata = 'yes'
+        overwrite_intermediate_metadata = True
     if os.path.exists(outpath):
         if not overwrite_intermediate_metadata:
             print('Intermediate metadata from previous run was detected and will not be overwritten.')

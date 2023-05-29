@@ -136,7 +136,7 @@ def concat_fastq(args, metadata, output_dir, g):
                 print('Concatenated file:', infile_path, flush=True)
                 os.system('cat "' + infile_path + '" >> "' + outfile_path + '"')
             print('')
-        if args.remove_tmp == 'yes':
+        if args.remove_tmp:
             for i in metadata.df.index:
                 sra_id = metadata.df.loc[i, 'run']
                 sra_stat = get_sra_stat(sra_id, metadata, g['num_bp_per_sra'])
@@ -240,21 +240,10 @@ def download_sra(metadata, sra_stat, args, work_dir, overwrite=False):
                 urllib.request.urlretrieve(str(sra_sources[sra_source_name]), path_downloaded_sra)
                 if os.path.exists(path_downloaded_sra):
                     is_sra_download_completed = True
-                    print('SRA file was downloaded with urllib.request from {}'.format(sra_source_name))
+                    print('SRA file was downloaded with urllib.request from {}'.format(sra_source_name), flush=True)
                     break
             except urllib.error.URLError:
                 sys.stderr.write("urllib.request failed SRA download from {}.\n".format(sra_source_name))
-            try:
-                wget_command = ['wget', str(sra_sources[sra_source_name]), path_downloaded_sra]
-                subprocess.run(wget_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                if os.path.exists(path_downloaded_sra):
-                    is_sra_download_completed = True
-                    print('SRA file was downloaded with GNU Wget from {}'.format(sra_source_name))
-                    break
-                else:
-                    sys.stderr.write("GNU Wget failed SRA download from {}.\n".format(sra_source_name))
-            except ModuleNotFoundError:
-                sys.stderr.write("wget command not found. Consider install it.\n")
         if not is_sra_download_completed:
             sys.stderr.write("Exhausted all sources of download.\n")
         else:
@@ -329,7 +318,7 @@ def get_getfastq_run_dir(args, sra_id):
         run_output_dir = os.path.join(amalgkit_out_dir, 'getfastq', args.id)
     elif (args.id_list is not None) & args.concat:
         run_output_dir = os.path.join(amalgkit_out_dir, 'getfastq', os.path.basename(args.id_list))
-    elif (args.id_list is not None) & (args.concat != 'yes'):
+    elif (args.id_list is not None) & (not args.concat):
         run_output_dir = os.path.join(amalgkit_out_dir, 'getfastq', sra_id)
     else:
         run_output_dir = os.path.join(amalgkit_out_dir, 'getfastq', sra_id)

@@ -5,16 +5,12 @@ import sys
 
 from amalgkit.util import *
 
-def check_quant_output(sra_id, output_dir, args):
+def quant_output_exists(sra_id, output_dir):
     out_path = os.path.join(output_dir, sra_id + '_abundance.tsv')
     is_output_present = os.path.exists(out_path)
     if is_output_present:
         print('Output file detected: {}'.format(out_path))
-        if args.redo:
-            print('The output will be overwritten. Set "--redo no" to not overwrite results.')
-            return False
-        else:
-            return True
+        return True
     else:
         print('Output file was not detected: {}'.format(out_path))
         return False
@@ -95,10 +91,13 @@ def run_quant(args, metadata, sra_id, index):
     output_dir = os.path.join(args.out_dir, 'quant', sra_id)
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
-    flag_skip = check_quant_output(sra_id, output_dir, args)
-    if flag_skip:
-        print('Continued. The output will not be overwritten. If you want to overwrite the results, set "--redo yes".')
-        return
+    is_quant_output_available = quant_output_exists(sra_id, output_dir)
+    if is_quant_output_available:
+        if args.redo:
+            print('The output will be overwritten. Set "--redo no" to not overwrite results.')
+        else:
+            print('Continued. The output will not be overwritten. If you want to overwrite the results, set "--redo yes".')
+            return
     output_dir_getfastq = os.path.join(args.out_dir, 'getfastq', sra_id)
     sra_stat = get_sra_stat(sra_id, metadata, num_bp_per_sra=None)
     sra_stat = check_layout_mismatch(sra_stat, output_dir_getfastq)
@@ -108,22 +107,17 @@ def run_quant(args, metadata, sra_id, index):
         print('Skipping.')
         return
     in_files = glob.glob(os.path.join(args.out_dir, 'getfastq', sra_id, sra_id + "*" + ext))
-
-    # start quantification process.
-    # throws exception, if in_files still empty.
     assert in_files, '{}: Fastq file not found. Check {}'.format(sra_id, output_dir)
     print('Input fastq detected:', ', '.join(in_files))
-
     call_kallisto(args, in_files, metadata, sra_stat, output_dir, index)
-
-    if (args.clean_fastq == 'yes') & (os.path.exists(os.path.join(output_dir, sra_id + "_abundance.tsv"))):
+    if (args.clean_fastq & is_quant_output_available):
+        print('Safe-deleting getfastq files.', flush=True)
         for in_file in in_files:
             print('Output file detected. Safely removing fastq:', in_file)
             os.remove(in_file)
             placeholder = open(in_file + '.safely_removed', "w")
             placeholder.write("This fastq file was safely removed after `amalgkit quant`.")
             placeholder.close()
-
 
 def get_index(args, sci_name):
     if args.index_dir is not None:
