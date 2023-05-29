@@ -236,6 +236,9 @@ def download_sra(metadata, sra_stat, args, work_dir, overwrite=False):
         is_sra_download_completed = False
         for sra_source_name in sra_sources.keys():
             print("Trying to fetch {} from {}: {}".format(sra_id, sra_source_name, sra_sources[sra_source_name]))
+            if str(sra_sources[sra_source_name])=='nan':
+                sys.stderr.write("Skipping. No URL for {}.\n".format(sra_source_name))
+                continue
             try:
                 urllib.request.urlretrieve(str(sra_sources[sra_source_name]), path_downloaded_sra)
                 if os.path.exists(path_downloaded_sra):
