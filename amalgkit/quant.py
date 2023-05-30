@@ -108,7 +108,7 @@ def run_quant(args, metadata, sra_id, index):
         print('Skipping.')
         return
     if ext == 'no_extension_found':
-        sys.stderr.write('getfastq output not found in: {}, layout = {}\n'.format(work_dir, sra_stat['layout']))
+        sys.stderr.write('getfastq output not found in: {}, layout = {}\n'.format(sra_stat['getfastq_sra_dir'], sra_stat['layout']))
         txt = 'Exiting. If you wish to obtain the .fastq file(s), run: getfastq --id {}\n'
         sys.stderr.write(txt.format(sra_stat['sra_id']))
         sys.exit(1)
