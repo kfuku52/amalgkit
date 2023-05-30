@@ -787,8 +787,14 @@ def getfastq_main(args):
         print('Processing SRA ID: {}'.format(sra_id))
         sra_stat = get_sra_stat(sra_id, metadata, g['num_bp_per_sra'])
         sra_stat['getfastq_sra_dir'] = get_getfastq_run_dir(args, sra_id)
-        if (is_getfastq_output_present(args, sra_stat)) & (args.redo == False):
-            print('Output file(s) detected. Skipping {}.  Set "--redo yes" for reanalysis.'.format(sra_id))
+        ext = get_newest_intermediate_file_extension(sra_stat, sra_stat['getfastq_sra_dir'])
+        if (ext == '.safely_removed') & (not args.redo):
+            txt = 'Safely_removed file(s) detected. Skipping {}.  Set "--redo yes" for reanalysis.'
+            print(txt.format(sra_id), flush=True)
+            continue
+        if (is_getfastq_output_present(args, sra_stat)) & (not args.redo):
+            txt = 'Output file(s) detected. Skipping {}.  Set "--redo yes" for reanalysis.'
+            print(txt.format(sra_id), flush=True)
             flag_any_output_file_present =True
             continue
         remove_old_intermediate_files(sra_id=sra_id, work_dir=sra_stat['getfastq_sra_dir'])

@@ -427,10 +427,10 @@ def get_sra_stat(sra_id, metadata, num_bp_per_sra=None):
     return sra_stat
 
 def get_newest_intermediate_file_extension(sra_stat, work_dir):
+    ext_out = 'no_extension_found'
     # Order is important in this list. More downstream should come first.
     extensions = ['.amalgkit.fastq.gz','.rename.fastq.gz','.fastp.fastq.gz','.fastq.gz']
     sra_stat = detect_layout_from_file(sra_stat)
-
     if sra_stat['layout']=='single':
         subext = ''
     elif sra_stat['layout']=='paired':
@@ -440,7 +440,7 @@ def get_newest_intermediate_file_extension(sra_stat, work_dir):
         if any([ f==sra_stat['sra_id']+subext+ext for f in files ]):
             ext_out = ext
             break
-    if not 'ext_out' in locals():
+    if ext_out == 'no_extension_found':
         safe_delete_files = glob.glob(os.path.join(work_dir, sra_stat['sra_id']+"*.safely_removed"))
         if len(safe_delete_files):
             txt = 'getfastq safely_removed flag was detected. `amalgkit quant` has been completed in this sample: {}\n'
@@ -448,10 +448,6 @@ def get_newest_intermediate_file_extension(sra_stat, work_dir):
             for safe_delete_file in safe_delete_files:
                 sys.stdout.write('{}\n'.format(safe_delete_file))
             return '.safely_removed'
-        sys.stderr.write('getfastq output not found in: {}, layout = {}\n'.format(work_dir, sra_stat['layout']))
-        txt = 'Skipping. If you wish to obtain the .fastq file(s), run: getfastq --id {}\n'
-        sys.stderr.write(txt.format(sra_stat['sra_id']))
-        raise FileNotFoundError
     return ext_out
 
 def detect_layout_from_file(sra_stat):
@@ -476,8 +472,6 @@ def detect_layout_from_file(sra_stat):
         is_single_end = True
     else:
         is_single_end = False
-    assert is_paired_end | is_single_end, 'No fastq file was generated.'
-    assert (not is_paired_end) | (not is_unpaird_file), 'Paired-end/single-end layout cannot be determined.'
     if is_paired_end & is_unpaird_file:
         print('layout = {}; Deleting unpaired file: {}'.format(sra_stat['layout'], unpaired_file))
         os.remove(unpaired_file)

@@ -104,9 +104,14 @@ def run_quant(args, metadata, sra_id, index):
     sra_stat['getfastq_sra_dir'] = get_getfastq_run_dir(args, sra_id)
     ext = get_newest_intermediate_file_extension(sra_stat, work_dir=output_dir_getfastq)
     if ext == '.safely_removed':
-        print('These files have been deleted. If you wish to re-obtain the .fastq file(s), run: getfastq -e email@adress.com --id ', sra_id, ' -w ', args.out_dir, '--redo yes --gcp yes --aws yes --ncbi yes')
+        print('These files have been safe-deleted. If you wish to re-obtain the .fastq file(s), run: getfastq --id ', sra_id, ' -w ', args.out_dir)
         print('Skipping.')
         return
+    if ext == 'no_extension_found':
+        sys.stderr.write('getfastq output not found in: {}, layout = {}\n'.format(work_dir, sra_stat['layout']))
+        txt = 'Exiting. If you wish to obtain the .fastq file(s), run: getfastq --id {}\n'
+        sys.stderr.write(txt.format(sra_stat['sra_id']))
+        sys.exit(1)
     in_files = glob.glob(os.path.join(args.out_dir, 'getfastq', sra_id, sra_id + "*" + ext))
     assert in_files, '{}: Fastq file not found. Check {}'.format(sra_id, output_dir)
     print('Input fastq detected:', ', '.join(in_files))
