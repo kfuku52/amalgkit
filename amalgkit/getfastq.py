@@ -362,23 +362,36 @@ def run_pfd(sra_stat, args, metadata, start, end):
     metadata.df.at[ind_sra,'bp_dumped'] += sum(nd) * sra_stat['spot_length']
     metadata.df.at[ind_sra,'bp_rejected'] += sum(nr) * sra_stat['spot_length']
     metadata.df.at[ind_sra,'bp_written'] += sum(nw) * sra_stat['spot_length']
-    if (sra_stat['layout'] == 'paired'):
-        fastq_files = glob.glob(os.path.join(sra_stat['output_dir'], sra_stat['sra_id']+'*.fastq*'))
-        unpaired_file = os.path.join(sra_stat['output_dir'], sra_stat['sra_id'] + '.fastq.gz')
-        if (os.path.exists(unpaired_file))&(len(fastq_files)==3):
-            print('layout = {}; Deleting unpaired file: {}'.format(sra_stat['layout'], unpaired_file))
-            os.remove(unpaired_file)
-        elif (os.path.exists(unpaired_file))&(len(fastq_files)==1):
-            txt = 'Single-end fastq was generated even though layout = {}. '
-            txt += 'This sample will be treated as single-end sequencing.\n'
-            txt = txt.format(sra_stat['layout'])
-            sys.stderr.write(txt)
-            sra_stat['layout'] = 'single'
-        else:
-            print('Unpaired file not found:', unpaired_file)
+    paired_fastq_files = [
+        os.path.join(sra_stat['output_dir'], sra_stat['sra_id'] + '_1.fastq.gz'),
+        os.path.join(sra_stat['output_dir'], sra_stat['sra_id'] + '_2.fastq.gz'),
+    ]
+    single_fastq_file = os.path.join(sra_stat['output_dir'], sra_stat['sra_id'] + '.fastq.gz')
+    is_paired_end = all([os.path.exists(f) for f in paired_fastq_files])
+    is_unpaird_file = os.path.exists(single_fastq_file)
+    if (not is_paired_end) & is_unpaird_file:
+        is_single_end = True
+    else:
+        is_single_end = False
+    assert is_paired_end | is_single_end, 'No fastq file was generated.'
+    assert (not is_paired_end) | (not is_unpaird_file), 'Paired-end/single-end layout cannot be determined.'
+    if is_paired_end & is_unpaird_file:
+        print('layout = {}; Deleting unpaired file: {}'.format(sra_stat['layout'], unpaired_file))
+        os.remove(unpaired_file)
+    if is_single_end & (sra_stat['layout'] == 'paired'):
+        txt = 'Single-end fastq was generated even though layout in the metadata = {}. '
+        txt += 'This sample will be treated as single-end reads: {}\n'
+        txt = txt.format(sra_stat['layout'], sra_stat['sra_id'])
+        sys.stderr.write(txt)
+        sra_stat['layout'] = 'single'
+    if is_paired_end & (sra_stat['layout'] == 'single'):
+        txt = 'Paired-end fastq was generated even though layout in the metadata = {}. '
+        txt += 'This sample will be treated as paired-end reads: {}\n'
+        txt = txt.format(sra_stat['layout'], sra_stat['sra_id'])
+        sys.stderr.write(txt)
+        sra_stat['layout'] = 'paired'
     metadata.df.at[ind_sra,'layout_amalgkit'] = sra_stat['layout']
     return metadata,sra_stat
-
 
 def run_fastp(sra_stat, args, output_dir, metadata):
     inext = get_newest_intermediate_file_extension(sra_stat, work_dir=output_dir)
