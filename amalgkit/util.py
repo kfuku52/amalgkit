@@ -429,6 +429,8 @@ def get_sra_stat(sra_id, metadata, num_bp_per_sra=None):
 def get_newest_intermediate_file_extension(sra_stat, work_dir):
     # Order is important in this list. More downstream should come first.
     extensions = ['.amalgkit.fastq.gz','.rename.fastq.gz','.fastp.fastq.gz','.fastq.gz']
+    sra_stat = detect_layout_from_file(sra_stat)
+
     if sra_stat['layout']=='single':
         subext = ''
     elif sra_stat['layout']=='paired':
@@ -451,6 +453,47 @@ def get_newest_intermediate_file_extension(sra_stat, work_dir):
         sys.stderr.write(txt.format(sra_stat['sra_id']))
         raise FileNotFoundError
     return ext_out
+
+def detect_layout_from_file(sra_stat):
+    # Order is important in this list. More downstream should come first.
+    extensions = ['.amalgkit.fastq.gz','.rename.fastq.gz','.fastp.fastq.gz','.fastq.gz']
+    is_paired_end = False
+    for ext in extensions:
+        paired_fastq_files = [
+            os.path.join(sra_stat['getfastq_sra_dir'], sra_stat['sra_id'] + '_1'+ext),
+            os.path.join(sra_stat['getfastq_sra_dir'], sra_stat['sra_id'] + '_2'+ext),
+        ]
+        if all([os.path.exists(f) for f in paired_fastq_files]):
+            is_paired_end = True
+            break
+    is_unpaird_file = False
+    for ext in extensions:
+        single_fastq_file = os.path.join(sra_stat['getfastq_sra_dir'], sra_stat['sra_id'] + ext)
+        if os.path.exists(single_fastq_file):
+            is_unpaird_file = True
+            break
+    if (not is_paired_end) & is_unpaird_file:
+        is_single_end = True
+    else:
+        is_single_end = False
+    assert is_paired_end | is_single_end, 'No fastq file was generated.'
+    assert (not is_paired_end) | (not is_unpaird_file), 'Paired-end/single-end layout cannot be determined.'
+    if is_paired_end & is_unpaird_file:
+        print('layout = {}; Deleting unpaired file: {}'.format(sra_stat['layout'], unpaired_file))
+        os.remove(unpaired_file)
+    if is_single_end & (sra_stat['layout'] == 'paired'):
+        txt = 'Single-end fastq was generated even though layout in the metadata = {}. '
+        txt += 'This sample will be treated as single-end reads: {}\n'
+        txt = txt.format(sra_stat['layout'], sra_stat['sra_id'])
+        sys.stderr.write(txt)
+        sra_stat['layout'] = 'single'
+    if is_paired_end & (sra_stat['layout'] == 'single'):
+        txt = 'Paired-end fastq was generated even though layout in the metadata = {}. '
+        txt += 'This sample will be treated as paired-end reads: {}\n'
+        txt = txt.format(sra_stat['layout'], sra_stat['sra_id'])
+        sys.stderr.write(txt)
+        sra_stat['layout'] = 'paired'
+    return sra_stat
 
 def write_updated_metadata(metadata, outpath, args):
     try:
@@ -584,3 +627,10 @@ def check_config_dir(dir_path, mode):
     if missing_count>0:
         txt = 'Please refer to the AMALGKIT Wiki for more info: https://github.com/kfuku52/amalgkit/wiki/amalgkit-metadata\n'
         sys.stderr.write(txt)
+
+def get_getfastq_run_dir(args, sra_id):
+    amalgkit_out_dir = os.path.realpath(args.out_dir)
+    run_output_dir = os.path.join(amalgkit_out_dir, 'getfastq', sra_id)
+    if not os.path.exists(run_output_dir):
+        os.makedirs(run_output_dir)
+    return run_output_dir
