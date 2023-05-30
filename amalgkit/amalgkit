@@ -115,7 +115,7 @@ subparsers = parser.add_subparsers()
 # Parent parsers
 pp_meta = argparse.ArgumentParser(add_help=False)
 pp_meta.add_argument('--metadata', metavar='PATH', default='inferred', type=str, required=False, action='store',
-                 help='default=%(default)s: "inferred" = out_dir/metadata/metadata/metadata.tsv. '
+                 help='default=%(default)s: "inferred" = out_dir/metadata/metadata.tsv. '
                       'PATH to metadata table, the output file of `amalgkit metadata`.')
 pp_out = argparse.ArgumentParser(add_help=False)
 pp_out.add_argument('--out_dir', metavar='PATH', default='./', type=str, required=False, action='store',
