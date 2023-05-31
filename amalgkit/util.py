@@ -382,14 +382,12 @@ def load_metadata(args):
     if mod.__name__ == 'amalgkit.curate':
         print('Entering --batch mode for amalgkit curate. processing 1 species', flush=True)
         txt = 'This is {:,}th job. In total, {:,} jobs will be necessary for this metadata table.'
-        spp = metadata.df.loc[:, 'scientific_name'].drop_duplicates().values
+        spp = metadata.df.loc[:, 'scientific_name'].drop_duplicates().sort_values().values
         print(txt.format(args.batch, len(spp)), flush=True)
         sp = spp[args.batch - 1]
         print('Processing species: {}'.format(sp), flush=True)
-        is_sampled = numpy.array([strtobool(yn) for yn in df.loc[:, 'is_sampled']], dtype=bool)
-        metadata.df = metadata.df.loc[is_sampled, :]
-        metadata.df = metadata.df.reset_index()
-        metadata.df = metadata.df.loc[metadata.df['scientific_name'] == sp]
+        is_sp = (metadata.df['scientific_name'] == sp)
+        metadata.df = metadata.df.loc[is_sp,:].reset_index(drop=True)
         return metadata
     else:
         print('--batch is specified. Processing one SRA per job.', flush=True)
