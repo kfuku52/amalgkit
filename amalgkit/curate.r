@@ -981,8 +981,8 @@ while (end_flag == 0) {
     round = round + 1
 }
 cat("finished checking within-curate_group correlation.\n")
-file = paste0(dir_tsv,'/',sub(" ", "_", scientific_name), ".sra.tsv")
-write.table(sra, file = file, sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
+file = paste0(dir_tsv,'/',sub(" ", "_", scientific_name), ".metadata.tsv")
+write.table(sra[,colnames(sra)!='index'], file = file, sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
 file = paste0(dir_tsv,'/',sub(" ", "_", scientific_name), ".tc.tsv")
 write.table(data.frame("GeneID"=rownames(tc_sva),tc_sva), file = file, sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
 out = curate_group_mean(tc_sva, sra, selected_curate_groups)

@@ -20,7 +20,7 @@ def get_curate_group(args, metadata):
     curate_group = '|'.join(curate_group)
     return curate_group
 
-def run_curate_r_script(args, new_metadata_path, metadata, sp):
+def run_curate_r_script(args, metadata, sp, input_dir):
     dist_method = args.dist_method
     mr_cut = args.mapping_rate
     correlation_threshold = args.correlation_threshold
@@ -28,19 +28,7 @@ def run_curate_r_script(args, new_metadata_path, metadata, sp):
     curate_group = get_curate_group(args, metadata)
     amalgkit_script_dir = os.path.dirname(os.path.realpath(__file__))
     r_script_path = os.path.join(amalgkit_script_dir, 'curate.r')
-    if args.input_dir=='inferred':
-        dir_merge = os.path.join(args.out_dir, 'merge')
-        dir_cstmm = os.path.join(args.out_dir, 'cstmm')
-        if os.path.exists(dir_cstmm):
-            print('Subdirectory for amalgkit cstmm will be used as input: {}'.format(dir_cstmm))
-            input_dir = dir_cstmm
-        else:
-            print('Subdirectory for amalgkit merge will be used as input: {}'.format(dir_merge))
-            input_dir = dir_merge
-    else:
-        print('Input_directory: {}'.format(args.input_dir))
-        input_dir = args.input_dir
-
+    path_curate_input_metadata = os.path.join(input_dir, 'metadata.tsv')
     # check if cstmm output is used when --norm == tpm, because TPM undoes tmm normalization
     if args.norm is not None and 'tpm' in args.norm:
         substring = "cstmm"
@@ -72,7 +60,7 @@ def run_curate_r_script(args, new_metadata_path, metadata, sp):
     subprocess.call(['Rscript',
                      r_script_path,
                      count_file,
-                     new_metadata_path,
+                     path_curate_input_metadata,
                      os.path.realpath(args.out_dir),
                      len_file,
                      dist_method,
@@ -86,30 +74,32 @@ def run_curate_r_script(args, new_metadata_path, metadata, sp):
                      ])
     return
 
-
 def curate_main(args):
     check_rscript()
     metadata = load_metadata(args)
+    if args.input_dir=='inferred':
+        dir_merge = os.path.realpath(os.path.join(args.out_dir, 'merge'))
+        dir_cstmm = os.path.realpath(os.path.join(args.out_dir, 'cstmm'))
+        if os.path.exists(dir_cstmm):
+            print('Subdirectory for amalgkit cstmm will be used as input: {}'.format(dir_cstmm))
+            input_dir = dir_cstmm
+        else:
+            print('Subdirectory for amalgkit merge will be used as input: {}'.format(dir_merge))
+            input_dir = dir_merge
+    else:
+        print('Input_directory: {}'.format(args.input_dir))
+        input_dir = args.input_dir
     spp = metadata.df.loc[:, 'scientific_name'].drop_duplicates().values
     curate_dir = os.path.join(args.out_dir, 'curate')
     if not os.path.exists(curate_dir):
         os.mkdir(curate_dir)
-    new_metadata_path = os.path.realpath(os.path.join(curate_dir, 'metadata.tsv'))
-
-    print('Found a total number of ', len(spp), ' species in this metadata table:')
-    print('____________________________')
-    for sp in spp:
-        print(sp)
-    print('____________________________')
-
+    print('Number of species in the metadata table: {}'.format(len(spp)), flush=True)
     if args.batch is None:
-        write_updated_metadata(metadata, new_metadata_path, args)
         # enter "normal" mode. Process all species, 1 at a time
         for sp in spp:
             sp = sp.replace(" ", "_")
-            run_curate_r_script(args, new_metadata_path, metadata, sp)
+            run_curate_r_script(args, metadata, sp, input_dir)
     else:
         # enter Batch mode, only process 1 species
-        sp = sp.replace(" ", "_")
-        write_updated_metadata(metadata, new_metadata_path, args)
-        run_curate_r_script(args, new_metadata_path, metadata, sp)
+        sp = spp[0].replace(" ", "_")
+        run_curate_r_script(args, metadata, sp, input_dir)

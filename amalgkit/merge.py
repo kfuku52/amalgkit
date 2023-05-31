@@ -47,5 +47,5 @@ def merge_main(args):
             outfile = os.path.join(merge_species_dir, outfile_name)
             print('Writing output file:', outfile)
             out.to_csv(outfile, sep='\t', index=False)
-    print('Getting mapping rate from quant output and write new metadata file into merge directory.')
+    print('Getting mapping rate from quant output and write new metadata file into merge directory.', flush=True)
     write_updated_metadata(metadata, os.path.join(args.out_dir, 'merge', 'metadata.tsv'), args)

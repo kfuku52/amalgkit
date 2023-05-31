@@ -294,8 +294,6 @@ pcu.add_argument('--plot_intermediate', metavar='yes|no', default='no', type=str
                  help='default=%(default)s: If yes, calculates and plots SVA correction after each iteration of outlier removal. Drastically increases computing times!')
 pcu.add_argument('--one_outlier_per_iter', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
                  help='default=%(default)s: If yes, allows curate to remove only 1 sample per same-tissue or same-bioproject. Increases computing times!')
-pcu.add_argument('--overwrite_intermediate_metadata', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
-                 help='default=%(default)s: If yes, allows curate to overwrite an intermediate metadata file created from previous curate runs within the curate folder.')
 pcu.add_argument('--norm', metavar='(logn|log2|lognp1|log2p1|none)-(fpkm|tpm|none)',
                  default='log2p1-fpkm', type=str, required=False, action='store',
                  help='default=%(default)s: Expression level transformation before SVA. '

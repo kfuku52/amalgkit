@@ -371,31 +371,32 @@ def load_metadata(args):
     print('{}: Loading metadata from: {}'.format(datetime.datetime.now(), real_path), flush=True)
     df = pandas.read_csv(real_path, sep='\t', header=0, low_memory=False)
     metadata = Metadata.from_DataFrame(df)
-    if 'batch' in dir(args):
-        if args.batch is None:
-            return metadata
-        # --batch must be handled species-wise in curate.py
-        # so we need to find out where the call came from
-        frm = inspect.stack()[1]
-        mod = inspect.getmodule(frm[0])
-        if mod.__name__ == 'amalgkit.curate':
-            print('Entering --batch mode for amalgkit curate. processing 1 species')
-            txt = 'This is {:,}th job. In total, {:,} jobs will be necessary for this metadata table.'
-            spp = metadata.df.loc[:, 'scientific_name'].drop_duplicates().values
-            print(txt.format(args.batch, len(spp)))
-            sp = spp[args.batch - 1]
-            print('processing species number ', args.batch, ' : ', sp)
-            is_sampled = numpy.array([strtobool(yn) for yn in df.loc[:, 'is_sampled']], dtype=bool)
-            metadata.df = metadata.df.loc[is_sampled, :]
-            metadata.df = metadata.df.reset_index()
-            metadata.df = metadata.df.loc[metadata.df['scientific_name'] == sp]
-            return metadata
-
-        print('--batch is specified. Processing one SRA per job.')
+    if 'batch' not in dir(args):
+        return metadata
+    if args.batch is None:
+        return metadata
+    # --batch must be handled species-wise in curate.py
+    # so we need to find out where the call came from
+    frm = inspect.stack()[1]
+    mod = inspect.getmodule(frm[0])
+    if mod.__name__ == 'amalgkit.curate':
+        print('Entering --batch mode for amalgkit curate. processing 1 species', flush=True)
+        txt = 'This is {:,}th job. In total, {:,} jobs will be necessary for this metadata table.'
+        spp = metadata.df.loc[:, 'scientific_name'].drop_duplicates().values
+        print(txt.format(args.batch, len(spp)), flush=True)
+        sp = spp[args.batch - 1]
+        print('Processing species: {}'.format(sp), flush=True)
+        is_sampled = numpy.array([strtobool(yn) for yn in df.loc[:, 'is_sampled']], dtype=bool)
+        metadata.df = metadata.df.loc[is_sampled, :]
+        metadata.df = metadata.df.reset_index()
+        metadata.df = metadata.df.loc[metadata.df['scientific_name'] == sp]
+        return metadata
+    else:
+        print('--batch is specified. Processing one SRA per job.', flush=True)
         is_sampled = numpy.array([strtobool(yn) for yn in df.loc[:, 'is_sampled']], dtype=bool)
         txt = 'This is {:,}th job. In total, {:,} jobs will be necessary for this metadata table. {:,} '
         txt += 'SRAs were excluded from the table (is_sampled==no).'
-        print(txt.format(args.batch, sum(is_sampled), len(numpy.where(is_sampled == False)[0])))
+        print(txt.format(args.batch, sum(is_sampled), len(numpy.where(is_sampled == False)[0])), flush=True)
         if args.batch>sum(is_sampled):
             sys.stderr.write('--batch {} is too large. Exiting.\n'.format(args.batch))
             sys.exit(0)
@@ -405,7 +406,7 @@ def load_metadata(args):
         metadata.df = metadata.df.loc[is_sampled,:]
         metadata.df = metadata.df.reset_index()
         metadata.df = metadata.df.loc[[args.batch-1,],:]
-    return metadata
+        return metadata
 
 def get_sra_stat(sra_id, metadata, num_bp_per_sra=None):
     sra_stat = dict()
@@ -490,20 +491,8 @@ def detect_layout_from_file(sra_stat):
     return sra_stat
 
 def write_updated_metadata(metadata, outpath, args):
-    try:
-        overwrite_intermediate_metadata = args.overwrite_intermediate_metadata
-    except AttributeError:
-        overwrite_intermediate_metadata = True
     if os.path.exists(outpath):
-        if not overwrite_intermediate_metadata:
-            print('Intermediate metadata from previous run was detected and will not be overwritten.')
-            return None
-        else:
-            print('Intermediate metadata from previous run was detected.')
-            print('Intermediate metadata will be overwritten.')
-            print('Preparing...')
-    else:
-        print('Intermediate metadata file was not detected. Preparing...')
+        print('Updated metadata file was detected. Will be overwritten: {}'.format(outpath), flush=True)
     quant_dir = os.path.join(args.out_dir, 'quant')
     metadata = get_mapping_rate(metadata, quant_dir)
     print('Writing curate metadata containing mapping rate: {}'.format(outpath))
