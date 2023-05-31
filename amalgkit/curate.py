@@ -1,5 +1,9 @@
+import datetime
+import os
 import re
+import shutil
 import subprocess
+import sys
 import warnings
 
 from amalgkit.util import *
@@ -96,4 +100,14 @@ def curate_main(args):
     print('Number of species in the metadata table: {}'.format(len(spp)), flush=True)
     for sp in spp:
         sp = sp.replace(" ", "_")
+        file_curate_completion_flag = os.path.join(curate_dir, sp, 'curate_completion_flag.txt')
+        if os.path.exists(file_curate_completion_flag):
+            if args.redo:
+                print('Output file detected. Will be overwritten: {}'.format(sp), flush=True)
+                shutil.rmtree(os.path.join(curate_dir, sp))
+            else:
+                print('Skipping. Output file detected: {}'.format(sp), flush=True)
+                continue
         run_curate_r_script(args, metadata, sp, input_dir)
+        with open(file_curate_completion_flag, 'w') as f:
+            f.write('amalgkit curate completed at {}\n'.format(datetime.datetime.now()))

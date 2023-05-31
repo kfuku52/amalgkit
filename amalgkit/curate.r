@@ -352,10 +352,8 @@ check_within_curate_group_correlation = function(tc, sra, dist_method, min_dif, 
         
     }
     if (length(exclude_runs)) {
-        cat("Partially removed BioProjects due to low within-curate_group correlation:\n")
-        print(exclude_bps)
-        cat("Removed Runs due to low within-curate_group correlation:\n")
-        print(exclude_runs)
+        cat('Partially removed BioProjects due to low within-curate_group correlation:', paste(exclude_bps, collapse=' '), '\n')
+        cat('Removed Runs due to low within-curate_group correlation:', paste(exclude_runs, collapse=' '), '\n')
     }
     tc = tc[, !colnames(tc) %in% exclude_runs, drop=FALSE]
     sra[(sra[['run']] %in% exclude_runs), "exclusion"] = "low_within_curate_group_correlation"
@@ -893,7 +891,7 @@ write.table(data.frame("GeneID"=rownames(tc_curate_group_uncorrected), tc_curate
 round = 0
 sva_out = NULL
 tc_sva = NULL
-cat("removing entries with mapping rate of 0. \n")
+cat("Removing entries with mapping rate of 0.\n")
 out = check_mapping_rate(tc, sra, 0)
 tc = out[["tc"]]
 sra = out[["sra"]]
@@ -952,14 +950,16 @@ while (end_flag == 0) {
                    paste0(sub(" ", "_", scientific_name), ".", round, ".correlation_cutoff.sva"),
                   selected_curate_groups, fontsize, transform_method)
     }
-    cat("round:", round, ": # before =", num_run_before, ": # after =", num_run_after, "\n\n")
+    cat("Round:", round, ": # before =", num_run_before, ": # after =", num_run_after, "\n\n")
     if (num_run_before == num_run_after) {
         end_flag = 1
     }
     tc = tc_cwtc
     round = round + 1
 }
-cat("finished checking within-curate_group correlation.\n")
+cat("Finished checking within-curate_group correlation.\n")
+
+cat("Writing summary files for", scientific_name, "\n")
 file = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".metadata.tsv"))
 write.table(sra[,colnames(sra)!='index'], file = file, sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
 file = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".tc.tsv"))
@@ -971,4 +971,4 @@ write.table(data.frame("GeneID"=rownames(tc_curate_group), tc_curate_group), fil
 tc_tau = curate_group2tau(tc_curate_group, rich.annotation = TRUE, transform_method)
 file = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".tau.tsv"))
 write.table(data.frame("GeneID"=rownames(tc_tau), tc_tau), file = file, sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
-cat("Done!\n")
+cat(log_prefix, "Completed.\n")
