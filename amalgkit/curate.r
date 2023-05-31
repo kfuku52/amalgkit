@@ -62,34 +62,6 @@ if (debug_mode == "debug") {
     transform_method = args[10]
     one_outlier_per_iteration = as.integer(args[11])
     correlation_threshold = as.numeric(args[12])
-
-}
-if (!endsWith(dir_work, "/")) {
-    dir_work = paste0(dir_work, "/")
-}
-
-# set directory
-cat(log_prefix, "dir_work =", dir_work, "\n")
-dir.create(dir_work, showWarnings = FALSE)
-
-dir_curate = file.path(dir_work,'curate')
-if (!file.exists(dir_curate)) {
-  dir.create(dir_curate)
-}
-setwd(dir_curate)
-
-# create output directories
-dir_pdf = file.path(dir_curate,'plots')
-if (!file.exists(dir_pdf)) {
-  dir.create(dir_pdf)
-}
-dir_rdata = file.path(dir_curate,'rdata')
-if (!file.exists(dir_rdata)) {
-  dir.create(dir_rdata)
-}
-dir_tsv = file.path(dir_curate,'tables')
-if (!file.exists(dir_tsv)) {
-  dir.create(dir_tsv)
 }
 
 tc_sra_intersect = function(tc, sra) {
@@ -766,7 +738,7 @@ save_plot = function(tc, sra, sva_out, dist_method, file, selected_curate_groups
     out = sort_tc_and_sra(tc, sra)
     tc = out[["tc"]]
     sra = out[["sra"]]
-    pdf(paste0(dir_pdf,'/',file, ".pdf"), height = 8, width = 7.2, fonts = "Helvetica", pointsize = fontsize)
+    pdf(file.path(dir_pdf, paste0(file, ".pdf")), height = 8, width = 7.2, fonts = "Helvetica", pointsize = fontsize)
     layout_matrix = matrix(c(2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1,
                              2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 1, 1,
                              1, 1, 1, 1, 1, 3, 3, 3, 4, 4, 4, 5, 5, 5, 6, 6, 6, 3, 3, 3, 4, 4, 4, 5, 5, 5, 6, 6, 6, 3, 3,
@@ -799,7 +771,7 @@ save_plot = function(tc, sra, sva_out, dist_method, file, selected_curate_groups
     par(mar = rep(0.1, 4))
     df_r2 = draw_sva_summary(sva_out, tc, sra, fontsize)
     if (!all(is.na(df_r2))) {
-        write.table(df_r2, paste0(dir_tsv,'/',file, ".r2.tsv"), sep = "\t", row.names = FALSE)
+        write.table(df_r2, file.path(dir_tsv, paste0(file, ".r2.tsv")), sep = "\t", row.names = FALSE)
     }
     par(mar = rep(0.1, 4))
     draw_legend(sra, new = TRUE, pos = "center", fontsize = fontsize, nlabel.in.col = 8)
@@ -843,21 +815,26 @@ get_tmm_scaled_fpkm = function(dat, df_nf, efflen) {
 
 fontsize = 7
 
-# read SRA table
+tc = read.table(infile, sep = "\t", stringsAsFactors = FALSE, header = TRUE, quote = "", fill = FALSE, row.names = 1, check.names=FALSE)
+tc_eff_length = read.table(eff_file, sep = "\t", stringsAsFactors = FALSE, header = TRUE, quote = "", fill = FALSE, check.names=FALSE)
 sra_all = read.table(srafile, sep = "\t", header = TRUE, quote = "", fill = TRUE, comment.char = "",
                      stringsAsFactors = FALSE, check.names=FALSE)
 for (col in c('instrument','bioproject')) {
     is_missing = (sra_all[,col] == "")|(is.na(sra_all[,col]))
     sra_all[is_missing, col] = "not_provided"
 }
-
-tc <- read.table(infile, sep = "\t", stringsAsFactors = FALSE, header = TRUE, quote = "", fill = FALSE, row.names = 1, check.names=FALSE)
-
-tc_eff_length <- read.table(eff_file, sep = "\t", stringsAsFactors = FALSE, header = TRUE, quote = "", fill = FALSE, check.names=FALSE)
-# row.names(tc)<-tc[,1] tc <- tc[,-1]
-
-# read transcriptome
 scientific_name = unique(sra_all[(sra_all[['run']] %in% colnames(tc)), "scientific_name"])
+
+dir_curate = file.path(dir_work, 'curate')
+dir_pdf = file.path(dir_curate, sub(" ", "_", scientific_name), 'plots')
+dir.create(dir_pdf, showWarnings=FALSE, recursive=TRUE)
+dir_rdata = file.path(dir_curate, sub(" ", "_", scientific_name), 'rdata')
+dir.create(dir_rdata, showWarnings=FALSE, recursive=TRUE)
+dir_tsv = file.path(dir_curate, sub(" ", "_", scientific_name), 'tables')
+dir.create(dir_tsv, showWarnings=FALSE, recursive=TRUE)
+setwd(dir_curate)
+cat(log_prefix, "Working at:", getwd(), "\n")
+
 is_sp = (sra_all[,'scientific_name'] == scientific_name)
 is_curate_group = (sra_all[,'curate_group'] %in% selected_curate_groups)
 cat('Number of SRA runs for this species:', sum(is_sp), '\n')
@@ -902,14 +879,14 @@ if (grepl('logn-', transform_method)) {
     cat('Applying no log normalization.\n')
 }
 
-file_name = paste0(dir_tsv,'/',sub(" ", "_", scientific_name), ".uncorrected.tc.tsv")
+file_name = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".uncorrected.tc.tsv"))
 write.table(data.frame("GeneID"=rownames(tc), tc), file = file_name,
             sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
 tc_uncorrected = tc
 out = curate_group_mean(tc, sra, selected_curate_groups)
 tc_curate_group_uncorrected = out[['tc_ave']]
 selected_curate_groups = out[['selected_curate_groups']]
-file_name = paste0(dir_tsv,'/',sub(" ", "_", scientific_name), ".uncorrected.curate_group.mean.tsv")
+file_name = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".uncorrected.curate_group.mean.tsv"))
 write.table(data.frame("GeneID"=rownames(tc_curate_group_uncorrected), tc_curate_group_uncorrected), file = file_name,
             sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
 
@@ -926,7 +903,7 @@ out = sva_subtraction(tc, sra)
 tc_sva = out[["tc"]]
 sva_out = out[["sva"]]
 if (!is.null(sva_out)) {
-    save(sva_out, file = paste0(dir_rdata,'/', sub(" ", "_", scientific_name), ".sva.", round, ".RData"))
+    save(sva_out, file = file.path(dir_rdata, paste0(sub(" ", "_", scientific_name), ".sva.", round, ".RData")))
 }
 save_plot(tc_sva, sra, sva_out, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".original.sva"),
           selected_curate_groups, fontsize, transform_method)
@@ -944,7 +921,7 @@ out = sva_subtraction(tc, sra)
 tc_sva = out[["tc"]]
 sva_out = out[["sva"]]
 if (!is.null(sva_out)) {
-    save(sva_out, file = paste0(dir_rdata,'/',sub(" ", "_", scientific_name), ".sva.", round, ".RData"))
+    save(sva_out, file=file.path(dir_rdata, paste0(sub(" ", "_", scientific_name), ".sva.", round, ".RData")))
 }
 save_plot(tc_sva, sra, sva_out, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".mapping_cutoff.sva"),
           selected_curate_groups, fontsize, transform_method)
@@ -966,12 +943,14 @@ while (end_flag == 0) {
         tc_sva = out[["tc"]]
         sva_out = out[["sva"]]
         if (!is.null(sva_out)) {
-            save(sva_out, file = paste0(dir_rdata,'/',sub(" ", "_", scientific_name), ".sva.", round, ".RData"))
+            save(sva_out, file=file.path(dir_rdata, paste0(sub(" ", "_", scientific_name), ".sva.", round, ".RData")))
         }
-        save_plot(tc_cwtc, sra, NULL, dist_method, paste0(sub(" ", "_", scientific_name), ".", round,
-                                                          ".correlation_cutoff"), selected_curate_groups, fontsize, transform_method)
-        save_plot(tc_sva, sra, sva_out, dist_method, paste0(sub(" ", "_", scientific_name), ".", round,
-                                                            ".correlation_cutoff.sva"), selected_curate_groups, fontsize, transform_method)
+        save_plot(tc_cwtc, sra, NULL, dist_method,
+                   paste0(sub(" ", "_", scientific_name), ".", round, ".correlation_cutoff"),
+                  selected_curate_groups, fontsize, transform_method)
+        save_plot(tc_sva, sra, sva_out, dist_method,
+                   paste0(sub(" ", "_", scientific_name), ".", round, ".correlation_cutoff.sva"),
+                  selected_curate_groups, fontsize, transform_method)
     }
     cat("round:", round, ": # before =", num_run_before, ": # after =", num_run_after, "\n\n")
     if (num_run_before == num_run_after) {
@@ -981,125 +960,15 @@ while (end_flag == 0) {
     round = round + 1
 }
 cat("finished checking within-curate_group correlation.\n")
-file = paste0(dir_tsv,'/',sub(" ", "_", scientific_name), ".metadata.tsv")
+file = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".metadata.tsv"))
 write.table(sra[,colnames(sra)!='index'], file = file, sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
-file = paste0(dir_tsv,'/',sub(" ", "_", scientific_name), ".tc.tsv")
+file = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".tc.tsv"))
 write.table(data.frame("GeneID"=rownames(tc_sva),tc_sva), file = file, sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
 out = curate_group_mean(tc_sva, sra, selected_curate_groups)
 tc_curate_group = out[['tc_ave']]
-file = paste0(dir_tsv,'/',sub(" ", "_", scientific_name), ".curate_group.mean.tsv")
+file = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".curate_group.mean.tsv"))
 write.table(data.frame("GeneID"=rownames(tc_curate_group), tc_curate_group), file = file, sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
 tc_tau = curate_group2tau(tc_curate_group, rich.annotation = TRUE, transform_method)
-file = paste0(dir_tsv,'/',sub(" ", "_", scientific_name), ".tau.tsv")
+file = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".tau.tsv"))
 write.table(data.frame("GeneID"=rownames(tc_tau), tc_tau), file = file, sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
 cat("Done!\n")
-
-
-#
-#
-# par_sva = function(i, species_names, dir_count, dir_eff_length) {
-#   species = species_names[i]
-#   cat("Files found for", species, ": ")
-#   species = sub(' ', '_', species)
-#   infile = list.files(dir_count, pattern = species)[1]
-#   infile = paste0(dir_count, infile)
-#   if(exists("dir_eff_length")){
-#     eff_file = list.files(dir_eff_length, pattern = species)[1]
-#     eff_file = paste0(dir_eff_length, eff_file)
-#     cat(infile, eff_file, "\n")
-#   }
-#   else{
-#     cat(infile, "\n")
-#     eff_file = NA
-#   }
-#
-#   tc <- read.table(infile, sep="\t", stringsAsFactors=FALSE, header = T, quote="", fill =F)
-#   tc_eff_length <- read.table(eff_file, sep="\t", stringsAsFactors=FALSE, header = T, quote="", fill =F)
-#   row.names(tc)<-tc[,1]
-#   tc<-tc[,-1]
-#   row.names(tc_eff_length)<-tc_eff_length[,1]
-#   tc_eff_length<-tc_eff_length[,-1]
-#   tc_eff_length = tc_eff_length[,colnames(tc)]
-#   # calculate tpm and log transform transcriptome (adds pseudocount +1), important to do AFTER get_mapping_rate()
-#   tc = transform_raw_to_fpkm(tc, tc_eff_length)
-#   main_sva()
-# }
-#
-
-
-#}
-#
-# if(mode == 'msm'){
-#   #########################
-#   # read SRA table
-#   sra_all = read.table(srafile, sep="\t", header=TRUE, quote="", fill=TRUE, comment.char="", stringsAsFactors=FALSE)
-#   sra_all$instrument[sra_all$instrument==""] = "not_provided"
-#   sra_all$bioproject[sra_all$bioproject==""] = "not_provided"
-#
-#   #setup parallel backend to use many processors
-#   cores=detectCores()
-#   #cl <- makeCluster(cores[1]-1) #not to overload your computer
-#   cl <- parallel::makeCluster(cores[1]-1, setup_strategy = "sequential")
-#
-#   registerDoParallel(cl)
-#   req_packages = c("Biobase",
-#                    "pcaMethods",
-#                    "colorspace",
-#                    "RColorBrewer",
-#                    "sva",
-#                    "MASS",
-#                    "NMF",
-#                    "dendextend",
-#                    "amap",
-#                    "pvclust",
-#                    "Rtsne")
-#
-#   species_names = unique(sra_all[,'scientific_name'])
-#   cat("Species in the provided metadata file: ", species_names, "\n")
-#
-#
-#
-#
-#
-#   out = list()
-#   foreach(i=1:length(species_names), .packages = req_packages) %dopar%{
-#     out[[species_names[i]]] = par_sva(i, species_names, dir_count, dir_eff_length)
-#   }
-#
-#
-#
-#  stopCluster()
-#   #
-# foreach(i=1:length(species_names), .packages = req_packages) %dopar%{
-#   species = species_names[i]
-#   cat("Files found for", species, ": ")
-#   species = sub(' ', '_', species)
-#   infile = list.files(dir_count, pattern = species)[1]
-#   infile = paste0(dir_count, infile)
-#   if(exists("dir_eff_length")){
-#   eff_file = list.files(dir_eff_length, pattern = species)[1]
-#   eff_file = paste0(dir_eff_length, eff_file)
-#   cat(infile, eff_file, "\n")
-#   }
-#   else{
-#   cat(infile, "\n")
-#   eff_file = NA
-#   }
-#
-#   tc <- read.table(infile, sep="\t", stringsAsFactors=FALSE, header = T, quote="", fill =F)
-#   tc_eff_length <- read.table(eff_file, sep="\t", stringsAsFactors=FALSE, header = T, quote="", fill =F)
-#   row.names(tc)<-tc[,1]
-#   tc<-tc[,-1]
-#   row.names(tc_eff_length)<-tc_eff_length[,1]
-#   tc_eff_length<-tc_eff_length[,-1]
-#   tc_eff_length = tc_eff_length[,colnames(tc)]
-#   # calculate tpm and log transform transcriptome (adds pseudocount +1), important to do AFTER get_mapping_rate()
-#   tc = transform_raw_to_fpkm(tc, tc_eff_length)
-#   main_sva()
-# }
-#
-# stopCluster()
-#
-
-#}
-

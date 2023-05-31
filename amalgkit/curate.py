@@ -94,12 +94,6 @@ def curate_main(args):
     if not os.path.exists(curate_dir):
         os.mkdir(curate_dir)
     print('Number of species in the metadata table: {}'.format(len(spp)), flush=True)
-    if args.batch is None:
-        # enter "normal" mode. Process all species, 1 at a time
-        for sp in spp:
-            sp = sp.replace(" ", "_")
-            run_curate_r_script(args, metadata, sp, input_dir)
-    else:
-        # enter Batch mode, only process 1 species
-        sp = spp[0].replace(" ", "_")
+    for sp in spp:
+        sp = sp.replace(" ", "_")
         run_curate_r_script(args, metadata, sp, input_dir)
