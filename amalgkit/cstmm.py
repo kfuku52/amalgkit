@@ -4,6 +4,7 @@ import glob
 import subprocess
 import os
 import re
+import shutil
 import sys
 
 from amalgkit.util import *
@@ -80,3 +81,7 @@ def cstmm_main(args):
     subprocess.check_call(r_command)
     for f in glob.glob("tmp.amalgkit.*"):
         os.remove(f)
+    path_metadata_from = os.path.join(args.out_dir, 'merge', 'metadata.tsv')
+    path_metadata_to = os.path.join(args.out_dir, 'cstmm', 'metadata.tsv')
+    print('Copying metadata.tsv from {} to {}'.format(path_metadata_from, path_metadata_to), flush=True)
+    shutil.copyfile(path_metadata_from, path_metadata_to)

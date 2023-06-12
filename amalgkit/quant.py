@@ -1,22 +1,19 @@
 import os
 import re
 import subprocess
+import sys
 
 from amalgkit.util import *
 
-def check_quant_output(sra_id, output_dir, args):
+def quant_output_exists(sra_id, output_dir):
     out_path = os.path.join(output_dir, sra_id + '_abundance.tsv')
     is_output_present = os.path.exists(out_path)
     if is_output_present:
         print('Output file detected: {}'.format(out_path))
-        if args.redo == 'yes':
-            print('Continued. The output will be overwritten. Set "--redo no" to not overwrite results.')
-            return None
-        else:
-            print('Continued. The output will not be overwritten. If you want to overwrite the results, set "--redo yes".')
+        return True
     else:
         print('Output file was not detected: {}'.format(out_path))
-        return None
+        return False
 
 def call_kallisto(args, in_files, metadata, sra_stat, output_dir, index):
     sra_id = sra_stat['sra_id']
@@ -94,34 +91,41 @@ def run_quant(args, metadata, sra_id, index):
     output_dir = os.path.join(args.out_dir, 'quant', sra_id)
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
-
-    check_quant_output(sra_id, output_dir, args)
-
+    is_quant_output_available = quant_output_exists(sra_id, output_dir)
+    if is_quant_output_available:
+        if args.redo:
+            print('The output will be overwritten. Set "--redo no" to not overwrite results.')
+        else:
+            print('Continued. The output will not be overwritten. If you want to overwrite the results, set "--redo yes".')
+            return
     output_dir_getfastq = os.path.join(args.out_dir, 'getfastq', sra_id)
     sra_stat = get_sra_stat(sra_id, metadata, num_bp_per_sra=None)
     sra_stat = check_layout_mismatch(sra_stat, output_dir_getfastq)
+    sra_stat['getfastq_sra_dir'] = get_getfastq_run_dir(args, sra_id)
     ext = get_newest_intermediate_file_extension(sra_stat, work_dir=output_dir_getfastq)
     if ext == '.safely_removed':
-        print('These files have been deleted. If you wish to re-obtain the .fastq file(s), run: getfastq -e email@adress.com --id ', sra_id, ' -w ', args.out_dir, '--redo yes --gcp yes --aws yes --ncbi yes')
+        print('These files have been safe-deleted. If you wish to re-obtain the .fastq file(s), run: getfastq --id ', sra_id, ' -w ', args.out_dir)
         print('Skipping.')
         return
+    if ext == 'no_extension_found':
+        sys.stderr.write('getfastq output not found in: {}, layout = {}\n'.format(sra_stat['getfastq_sra_dir'], sra_stat['layout']))
+        txt = 'Exiting. If you wish to obtain the .fastq file(s), run: getfastq --id {}\n'
+        sys.stderr.write(txt.format(sra_stat['sra_id']))
+        sys.exit(1)
     in_files = glob.glob(os.path.join(args.out_dir, 'getfastq', sra_id, sra_id + "*" + ext))
-
-    # start quantification process.
-    # throws exception, if in_files still empty.
     assert in_files, '{}: Fastq file not found. Check {}'.format(sra_id, output_dir)
     print('Input fastq detected:', ', '.join(in_files))
-
     call_kallisto(args, in_files, metadata, sra_stat, output_dir, index)
-
-    if (args.clean_fastq == 'yes') & (os.path.exists(os.path.join(output_dir, sra_id + "_abundance.tsv"))):
+    if (args.clean_fastq & quant_output_exists(sra_id, output_dir)):
+        print('Safe-deleting getfastq files.', flush=True)
         for in_file in in_files:
             print('Output file detected. Safely removing fastq:', in_file)
             os.remove(in_file)
             placeholder = open(in_file + '.safely_removed', "w")
             placeholder.write("This fastq file was safely removed after `amalgkit quant`.")
             placeholder.close()
-
+    else:
+        print('Skipping the deletion of getfastq files.', flush=True)
 
 def get_index(args, sci_name):
     if args.index_dir is not None:
@@ -174,7 +178,7 @@ def get_index(args, sci_name):
 
 def quant_main(args):
     check_kallisto_dependency()
-    metadata = load_metadata(args)  # loads single-row metadata according to --batch
+    metadata = load_metadata(args)
     for i in metadata.df.index:
         print('')
         sra_id = metadata.df.at[i, 'run']

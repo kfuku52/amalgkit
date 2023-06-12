@@ -66,33 +66,6 @@ if (debug_mode == "debug") {
     batch_effect_alg = args[13]
 
 }
-if (!endsWith(dir_work, "/")) {
-    dir_work = paste0(dir_work, "/")
-}
-
-# set directory
-cat(log_prefix, "dir_work =", dir_work, "\n")
-dir.create(dir_work, showWarnings = FALSE)
-
-dir_curate = file.path(dir_work,'curate')
-if (!file.exists(dir_curate)) {
-  dir.create(dir_curate)
-}
-setwd(dir_curate)
-
-# create output directories
-dir_pdf = file.path(dir_curate,'plots')
-if (!file.exists(dir_pdf)) {
-  dir.create(dir_pdf)
-}
-dir_rdata = file.path(dir_curate,'rdata')
-if (!file.exists(dir_rdata)) {
-  dir.create(dir_rdata)
-}
-dir_tsv = file.path(dir_curate,'tables')
-if (!file.exists(dir_tsv)) {
-  dir.create(dir_tsv)
-}
 
 tc_sra_intersect = function(tc, sra) {
     sra_run = sra[['run']]
@@ -182,7 +155,7 @@ curate_group_mean = function(tc, sra, selected_curate_groups = NA, balance.bp = 
     tc_ave = data.frame(matrix(rep(NA, length(sp_curate_groups) * nrow(tc)), nrow = nrow(tc)))
     colnames(tc_ave) = sp_curate_groups
     rownames(tc_ave) = rownames(tc)
-
+    
     for (curate_group in sp_curate_groups) {
         exclusion_curate_group = sra[(sra[['curate_group']] == curate_group),'exclusion']
         run_curate_group = sra[(sra[['curate_group']] == curate_group),'run']
@@ -382,10 +355,8 @@ check_within_curate_group_correlation = function(tc, sra, dist_method, min_dif, 
 
     }
     if (length(exclude_runs)) {
-        cat("Partially removed BioProjects due to low within-curate_group correlation:\n")
-        print(exclude_bps)
-        cat("Removed Runs due to low within-curate_group correlation:\n")
-        print(exclude_runs)
+        cat('Partially removed BioProjects due to low within-curate_group correlation:', paste(exclude_bps, collapse=' '), '\n')
+        cat('Removed Runs due to low within-curate_group correlation:', paste(exclude_runs, collapse=' '), '\n')
     }
     tc = tc[, !colnames(tc) %in% exclude_runs, drop=FALSE]
     sra[(sra[['run']] %in% exclude_runs), "exclusion"] = "low_within_curate_group_correlation"
@@ -847,7 +818,7 @@ save_plot = function(tc, sra, sva_out, dist_method, file, selected_curate_groups
     out = sort_tc_and_sra(tc, sra)
     tc = out[["tc"]]
     sra = out[["sra"]]
-    pdf(paste0(dir_pdf,'/',file, ".pdf"), height = 8, width = 7.2, fonts = "Helvetica", pointsize = fontsize)
+    pdf(file.path(dir_pdf, paste0(file, ".pdf")), height = 8, width = 7.2, fonts = "Helvetica", pointsize = fontsize)
     layout_matrix = matrix(c(2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1,
                              2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 1, 1,
                              1, 1, 1, 1, 1, 3, 3, 3, 4, 4, 4, 5, 5, 5, 6, 6, 6, 3, 3, 3, 4, 4, 4, 5, 5, 5, 6, 6, 6, 3, 3,
@@ -886,7 +857,7 @@ save_plot = function(tc, sra, sva_out, dist_method, file, selected_curate_groups
     df_r2 = draw_sva_summary(sva_out, tc, sra, fontsize)
 
     if (!all(is.na(df_r2))) {
-        write.table(df_r2, paste0(dir_tsv,'/',file, ".r2.tsv"), sep = "\t", row.names = FALSE)
+        write.table(df_r2, file.path(dir_tsv, paste0(file, ".r2.tsv")), sep = "\t", row.names = FALSE)
     }
     }
     par(mar = rep(0.1, 4))
@@ -965,7 +936,8 @@ apply_transformation_logic = function(tc, tc_eff_length, transform_method, batch
 
 fontsize = 7
 
-# read SRA table
+tc = read.table(infile, sep = "\t", stringsAsFactors = FALSE, header = TRUE, quote = "", fill = FALSE, row.names = 1, check.names=FALSE)
+tc_eff_length = read.table(eff_file, sep = "\t", stringsAsFactors = FALSE, header = TRUE, quote = "", fill = FALSE, check.names=FALSE)
 sra_all = read.table(srafile, sep = "\t", header = TRUE, quote = "", fill = TRUE, comment.char = "",
                      stringsAsFactors = FALSE, check.names=FALSE)
 
@@ -973,16 +945,18 @@ for (col in c('instrument','bioproject')) {
     is_missing = (sra_all[,col] == "")|(is.na(sra_all[,col]))
     sra_all[is_missing, col] = "not_provided"
 }
-
-tc <- read.table(infile, sep = "\t", stringsAsFactors = FALSE, header = TRUE, quote = "", fill = FALSE, row.names = 1, check.names=FALSE)
-
-tc_eff_length <- read.table(eff_file, sep = "\t", stringsAsFactors = FALSE, header = TRUE, quote = "", fill = FALSE, check.names=FALSE)
-
-
-# row.names(tc)<-tc[,1] tc <- tc[,-1]
-
-# read transcriptome
 scientific_name = unique(sra_all[(sra_all[['run']] %in% colnames(tc)), "scientific_name"])
+
+dir_curate = file.path(dir_work, 'curate')
+dir_pdf = file.path(dir_curate, sub(" ", "_", scientific_name), 'plots')
+dir.create(dir_pdf, showWarnings=FALSE, recursive=TRUE)
+dir_rdata = file.path(dir_curate, sub(" ", "_", scientific_name), 'rdata')
+dir.create(dir_rdata, showWarnings=FALSE, recursive=TRUE)
+dir_tsv = file.path(dir_curate, sub(" ", "_", scientific_name), 'tables')
+dir.create(dir_tsv, showWarnings=FALSE, recursive=TRUE)
+setwd(dir_curate)
+cat(log_prefix, "Working at:", getwd(), "\n")
+
 is_sp = (sra_all[,'scientific_name'] == scientific_name)
 is_curate_group = (sra_all[,'curate_group'] %in% selected_curate_groups)
 cat('Number of SRA runs for this species:', sum(is_sp), '\n')
@@ -1014,21 +988,21 @@ if (batch_effect_alg != 'sva'){
 
 
 
-file_name = paste0(dir_tsv,'/',sub(" ", "_", scientific_name), ".uncorrected.tc.tsv")
+file_name = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".uncorrected.tc.tsv"))
 write.table(data.frame("GeneID"=rownames(tc), tc), file = file_name,
             sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
 tc_uncorrected = tc
 out = curate_group_mean(tc, sra, selected_curate_groups)
 tc_curate_group_uncorrected = out[['tc_ave']]
 selected_curate_groups = out[['selected_curate_groups']]
-file_name = paste0(dir_tsv,'/',sub(" ", "_", scientific_name), ".uncorrected.curate_group.mean.tsv")
+file_name = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".uncorrected.curate_group.mean.tsv"))
 write.table(data.frame("GeneID"=rownames(tc_curate_group_uncorrected), tc_curate_group_uncorrected), file = file_name,
             sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
 
 round = 0
 sva_out = NULL
 tc_sva = NULL
-cat("removing entries with mapping rate of 0. \n")
+cat("Removing entries with mapping rate of 0.\n")
 out = check_mapping_rate(tc, sra, 0)
 tc = out[["tc"]]
 sra = out[["sra"]]
@@ -1049,7 +1023,7 @@ out = sva_subtraction(tc, sra)
 tc_sva = out[["tc"]]
 sva_out = out[["sva"]]
 if (!is.null(sva_out)) {
-    save(sva_out, file = paste0(dir_rdata,'/', sub(" ", "_", scientific_name),".", batch_effect_alg,".", round, ".RData"))
+    save(sva_out, file = file.path(dir_rdata, paste0(sub(" ", "_", scientific_name),".", batch_effect_alg,".", round, ".RData")))
 }
 tc_sva_tmp = tc_sva
 if (batch_effect_alg != 'sva'){
@@ -1087,7 +1061,7 @@ tc_sva = out[["tc"]]
 sva_out = out[["sva"]]
 
 if (!is.null(sva_out)) {
-    save(sva_out, file = paste0(dir_rdata,'/',sub(" ", "_", scientific_name),".", batch_effect_alg,".", round, ".RData"))
+    save(sva_out, file=file.path(dir_rdata, paste0(sub(" ", "_", scientific_name),".", batch_effect_alg,".", round, ".RData")))
 }
 
 tc_sva_tmp = tc_sva
@@ -1132,7 +1106,7 @@ while (end_flag == 0) {
         tc_sva = out[["tc"]]
         sva_out = out[["sva"]]
         if (!is.null(sva_out)) {
-            save(sva_out, file = paste0(dir_rdata,'/',sub(" ", "_", scientific_name),".", batch_effect_alg, ".", round, ".RData"))
+            save(sva_out, file=file.path(dir_rdata, paste0(sub(" ", "_", scientific_name),".", batch_effect_alg, ".", round, ".RData")))
         }
         save_plot(tc_cwtc, sra, NULL, dist_method, paste0(sub(" ", "_", scientific_name), ".", round,
                                                           ".correlation_cutoff"), selected_curate_groups, fontsize, transform_method, batch_effect_alg)
@@ -1152,7 +1126,7 @@ while (end_flag == 0) {
                                                             ".correlation_cutoff",".", batch_effect_alg), selected_curate_groups, fontsize, transform_method, batch_effect_alg)
 
     }
-    cat("round:", round, ": # before =", num_run_before, ": # after =", num_run_after, "\n\n")
+    cat("Round:", round, ": # before =", num_run_before, ": # after =", num_run_after, "\n\n")
     if (num_run_before == num_run_after) {
         end_flag = 1
     }
@@ -1162,20 +1136,21 @@ while (end_flag == 0) {
 
 
 
-cat("finished checking within-curate_group correlation.\n")
+cat("Finished checking within-curate_group correlation.\n")
 if (batch_effect_alg != 'sva'){
     cat("Batch-effect removal algorithm is: ",batch_effect_alg ," . Applying transformation on final adjusted counts. \n")
     tc_sva = tc_sva_tmp
 }
-file = paste0(dir_tsv,'/',sub(" ", "_", scientific_name), ".sra.tsv")
-write.table(sra, file = file, sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
-file = paste0(dir_tsv,'/',sub(" ", "_", scientific_name), ".tc.tsv")
+cat("Writing summary files for", scientific_name, "\n")
+file = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".metadata.tsv"))
+write.table(sra[,colnames(sra)!='index'], file = file, sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
+file = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".tc.tsv"))
 write.table(data.frame("GeneID"=rownames(tc_sva),tc_sva), file = file, sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
 out = curate_group_mean(tc_sva, sra, selected_curate_groups)
 tc_curate_group = out[['tc_ave']]
-file = paste0(dir_tsv,'/',sub(" ", "_", scientific_name), ".", batch_effect_alg , ".curate_group.mean.tsv")
+file = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".", batch_effect_alg , ".curate_group.mean.tsv"))
 write.table(data.frame("GeneID"=rownames(tc_curate_group), tc_curate_group), file = file, sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
 tc_tau = curate_group2tau(tc_curate_group, rich.annotation = TRUE, transform_method)
-file = paste0(dir_tsv,'/',sub(" ", "_", scientific_name), ".", batch_effect_alg , ".tau.tsv")
+file = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".", batch_effect_alg , ".tau.tsv"))
 write.table(data.frame("GeneID"=rownames(tc_tau), tc_tau), file = file, sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
-cat("Done!\n")
+cat(log_prefix, "Completed.\n")

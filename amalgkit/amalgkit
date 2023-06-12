@@ -19,6 +19,14 @@ def command_metadata(args):
     print('Time elapsed: {:,} sec'.format(int(time.time() - start)))
     sys.stdout.write('amalgkit metadata: end\n')
 
+def command_select(args):
+    sys.stdout.write('amalgkit select: start\n')
+    start = time.time()
+    from amalgkit.select import select_main
+    select_main(args)
+    print('Time elapsed: {:,} sec'.format(int(time.time() - start)))
+    sys.stdout.write('amalgkit select: end\n')
+
 def command_getfastq(args):
     sys.stdout.write('amalgkit getfastq: start\n')
     start = time.time()
@@ -107,7 +115,7 @@ subparsers = parser.add_subparsers()
 # Parent parsers
 pp_meta = argparse.ArgumentParser(add_help=False)
 pp_meta.add_argument('--metadata', metavar='PATH', default='inferred', type=str, required=False, action='store',
-                 help='default=%(default)s: "inferred" = out_dir/metadata/metadata/metadata.tsv. '
+                 help='default=%(default)s: "inferred" = out_dir/metadata/metadata.tsv. '
                       'PATH to metadata table, the output file of `amalgkit metadata`.')
 pp_out = argparse.ArgumentParser(add_help=False)
 pp_out.add_argument('--out_dir', metavar='PATH', default='./', type=str, required=False, action='store',
@@ -121,24 +129,34 @@ pp_redo.add_argument('--redo', metavar='yes|no', default='no', type=strtobool, r
 pp_threads = argparse.ArgumentParser(add_help=False)
 pp_threads.add_argument('--threads', metavar='INT', default=1, type=int, required=False, action='store',
                  help='default=%(default)s: Number of threads.')
+pp_cg = argparse.ArgumentParser(add_help=False)
+pp_cg.add_argument('--curate_group', metavar='STR', default=None, type=str, required=False, action='store',
+                 help='default=%(default)s: "Comma separated list of primary condition or tissue used in curate analysis. '
+                      'Example input may look like "root,flower,leaf" or "heat stressed,cold stressed,light stressed". '
+                      'By default, all curate_group values in metadata.tsv are passed.')
 
 # Sub parser: metadata
 pme_help = 'NCBI SRA metadata retrieval and curation. See `amalgkit metadata -h`'
-pme = subparsers.add_parser('metadata', help=pme_help, parents=[pp_out])
+pme = subparsers.add_parser('metadata', help=pme_help, parents=[pp_out, pp_redo])
 pme.add_argument('--config_dir', metavar='PATH', default='inferred', type=str, required=False, action='store',
                  help='default=%(default)s: PATH to the config directory. "inferred" = out_dir/config')
 pme.add_argument('--entrez_email', metavar='aaa@bbb.com', default='', type=str, required=False, action='store',
                  help='default=%(default)s: Your email address. See https://www.ncbi.nlm.nih.gov/books/NBK25497/')
-pme.add_argument('--min_nspots', metavar='INT', default=5000000, type=int, required=False, action='store',
-                 help='default=%(default)s: Minimum number of RNA-seq reads per sample.')
-pme.add_argument('--tissue_detect', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
-                 help='default=%(default)s: Uses config files for tissue grouping by default. If turned on, uses natural language processing to group tissues automatically.')
-pme.add_argument('--max_sample', metavar='INT', default=99999, type=int, required=False, action='store',
-                 help='default=%(default)s: Maximum number of RNA-seq data sampled for one tissue in a species.')
-pme.add_argument('--overwrite', metavar='no|yes', default='no', type=strtobool,
-                 required=False, action='store',
-                 help='default=%(default)s: Overwrite existing metadata.tsv and intermediate files.')
 pme.set_defaults(handler=command_metadata)
+
+# Sub parser: select
+pse_help = 'Selecting SRA entries for analysis. See `amalgkit select -h`'
+pse = subparsers.add_parser('select', help=pse_help, parents=[pp_out, pp_meta, pp_cg])
+pse.add_argument('--config_dir', metavar='PATH', default='inferred', type=str, required=False, action='store',
+                 help='default=%(default)s: PATH to the config directory. "inferred" = out_dir/config')
+pse.add_argument('--min_nspots', metavar='INT', default=5000000, type=int, required=False, action='store',
+                 help='default=%(default)s: Minimum number of RNA-seq reads per sample.')
+pse.add_argument('--max_sample', metavar='INT', default=99999, type=int, required=False, action='store',
+                 help='default=%(default)s: Maximum number of RNA-seq data to retain for one tissue in a species.')
+pse.add_argument('--mark_redundant_biosamples', metavar='no|yes', default='no', type=strtobool,
+                 required=False, action='store',
+                 help='default=%(default)s: Whether to label SRAs with the same BioSample ID as unqualified.')
+pse.set_defaults(handler=command_select)
 
 # Sub parser: getfastq
 pge_help = 'Retrieving fastq files. See `amalgkit getfastq -h`'
@@ -190,8 +208,6 @@ pge.add_argument('--gcp', metavar='yes|no', default='yes', type=strtobool, requi
 pge.add_argument('--read_name', metavar='default|trinity', default='default', type=str, required=False, action='store',
                  choices=['default', 'trinity'],
                  help='default=%(default)s: read name formatting for downstream analysis.')
-pge.add_argument('--concat', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
-                 help='default=%(default)s: concatenate SRA fastq files (e.g, for assembly).')
 pge.add_argument('--entrez_additional_search_term', metavar='STR',
                  default=None,
                 # default='"platform illumina"[Properties] AND "type rnaseq"[Filter] AND "sra biosample"[Filter]',
@@ -245,7 +261,7 @@ pcs.set_defaults(handler=command_cstmm)
 
 # Sub parser: csca
 pca_help = 'Generating plots with cross-species correlation analysis. See `amalgkit csca -h`'
-pca = subparsers.add_parser('csca', help=pca_help, parents=[pp_out, pp_meta])
+pca = subparsers.add_parser('csca', help=pca_help, parents=[pp_out, pp_meta, pp_cg])
 pca.add_argument('--dir_uncorrected_curate_group_mean', metavar='PATH', default='inferred', type=str, required=False, action='store',
                  help='default=%(default)s: In an unaltered amalgkit curate output, this would be curate/tables/. If left at default "inferred" this value will be set to out_dir/curate/tables/')
 pca.add_argument('--dir_curate_group_mean', metavar='PATH', default='inferred', type=str, required=False, action='store',
@@ -260,15 +276,11 @@ pca.add_argument('--orthogroup_table', metavar='PATH', default=None, type=str, r
 pca.add_argument('--dir_busco', metavar='PATH', default=None, type=str, required=False, action='store',
                  help='default=%(default)s: PATH to the directory where per-species BUSCO full tables are stored. '
                       'File names in this directory are expected to be GENUS_SPECIES_MISC.tsv: e.g., Arabidopsis_thaliana_full_table.tsv')
-pca.add_argument('--curate_group', metavar='STR', default=None, type=str, required=False, action='store',
-                 help='default=%(default)s: "Comma separated list of primary condition or tissue used in curate analysis. '
-                      'Example input may look like "root,flower,leaf" or "heat stressed,cold stressed,light stressed". '
-                      'By default, all curate_group values in metadata.tsv are passed.')
 pca.set_defaults(handler=command_csca)
 
 # Sub parser: curate
 pcu_help = 'Automatic removal of outlier samples and SVA-based unwanted biases. See `amalgkit curate -h`'
-pcu = subparsers.add_parser('curate', help=pcu_help, parents=[pp_out, pp_meta, pp_batch])
+pcu = subparsers.add_parser('curate', help=pcu_help, parents=[pp_out, pp_meta, pp_batch, pp_cg, pp_redo])
 pcu.add_argument('--input_dir', metavar='PATH', default='inferred', type=str, required=False, action='store',
                  help='default=%(default)s: PATH to `amalgkit merge` or `amalgkit cstmm` output folder. '
                       '"inferred" = out_dir/cstmm if exist, else out_dir/merge.')
@@ -282,11 +294,6 @@ pcu.add_argument('--plot_intermediate', metavar='yes|no', default='no', type=str
                  help='default=%(default)s: If yes, calculates and plots SVA correction after each iteration of outlier removal. Drastically increases computing times!')
 pcu.add_argument('--one_outlier_per_iter', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
                  help='default=%(default)s: If yes, allows curate to remove only 1 sample per same-tissue or same-bioproject. Increases computing times!')
-pcu.add_argument('--curate_group', metavar='STR', default=None, type=str, required=False, action='store',
-                 help='default=%(default)s: "Comma-separated list of values contained in the curate_group metadata column to be included in the analysis. '
-                      'Example input may look like "root,flower,leaf" or "heat stressed,cold stressed,light stressed".')
-pcu.add_argument('--overwrite_intermediate_metadata', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
-                 help='default=%(default)s: If yes, allows curate to overwrite an intermediate metadata file created from previous curate runs within the curate folder.')
 pcu.add_argument('--norm', metavar='(logn|log2|lognp1|log2p1|none)-(fpkm|tpm|none)',
                  default='log2p1-fpkm', type=str, required=False, action='store',
                  help='default=%(default)s: Expression level transformation before SVA. '
