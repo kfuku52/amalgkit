@@ -83,6 +83,7 @@ def run_curate_r_script(args, new_metadata_path, metadata, sp):
                      str(args.norm),
                      str(args.one_outlier_per_iter),
                      str(correlation_threshold),
+                     str(args.batch_effect_alg)
                      ])
     return
 

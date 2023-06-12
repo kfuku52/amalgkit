@@ -11,6 +11,7 @@ suppressPackageStartupMessages(library(dendextend, quietly = TRUE))
 suppressPackageStartupMessages(library(amap, quietly = TRUE))
 suppressPackageStartupMessages(library(pvclust, quietly = TRUE))
 suppressPackageStartupMessages(library(Rtsne, quietly = TRUE))
+suppressPackageStartupMessages(library(RUVSeq, quietly = TRUE))
 
 debug_mode = ifelse(length(commandArgs(trailingOnly = TRUE)) == 1, "debug", "batch")
 #debug_mode = "debug"
@@ -62,6 +63,7 @@ if (debug_mode == "debug") {
     transform_method = args[10]
     one_outlier_per_iteration = as.integer(args[11])
     correlation_threshold = as.numeric(args[12])
+    batch_effect_alg = args[13]
 
 }
 if (!endsWith(dir_work, "/")) {
@@ -180,7 +182,7 @@ curate_group_mean = function(tc, sra, selected_curate_groups = NA, balance.bp = 
     tc_ave = data.frame(matrix(rep(NA, length(sp_curate_groups) * nrow(tc)), nrow = nrow(tc)))
     colnames(tc_ave) = sp_curate_groups
     rownames(tc_ave) = rownames(tc)
-    
+
     for (curate_group in sp_curate_groups) {
         exclusion_curate_group = sra[(sra[['curate_group']] == curate_group),'exclusion']
         run_curate_group = sra[(sra[['curate_group']] == curate_group),'run']
@@ -308,7 +310,7 @@ check_within_curate_group_correlation = function(tc, sra, dist_method, min_dif, 
         num_other_run_same_bp_curate_group = length(unique(sra2[(is_not_my_bp & is_my_curate_group), "bioproject"]))
         sra2[is_sra, "num_other_run_same_bp_curate_group"] = num_other_run_same_bp_curate_group
         sra2_other_bp <- sra2[sra2[['run']] %in% run_other_bp,]
-        
+
         # If one curate_group is completely sourced from the same bioproject, we can't remove the whole bioproject for tc_ave_other_bp
 
         num_other_bp_same_curate_group = sum(sra2_other_bp[['curate_group']] == my_curate_group, na.rm=TRUE)
@@ -328,7 +330,7 @@ check_within_curate_group_correlation = function(tc, sra, dist_method, min_dif, 
             } else {
               tmp_coef_other_bp = cor(tc[, sra_run], tc_ave_other_bp[, curate_group], method = dist_method)
             }
-            
+
             if (curate_group == my_curate_group) {
                 tmp_coef = tmp_coef - min_dif
                 tmp_coef_other_bp = tmp_coef_other_bp - min_dif
@@ -377,7 +379,7 @@ check_within_curate_group_correlation = function(tc, sra, dist_method, min_dif, 
         exclude_bps = unique(exclude_run_bps[conditions, "bioproject"])
         exclude_runs = exclude_run_bps[(exclude_run_bps[['bioproject']] %in% exclude_bps), "run"]
       }
-        
+
     }
     if (length(exclude_runs)) {
         cat("Partially removed BioProjects due to low within-curate_group correlation:\n")
@@ -404,21 +406,95 @@ sva_subtraction = function(tc, sra) {
     out = remove_nonexpressed_gene(tc)
     tc = out[["tc_ex"]]
     tc_ne = out[["tc_ne"]]
-    mod = try(model.matrix(~curate_group, data = sra))
-    if ("try-error" %in% class(mod)) {
+
+    if (batch_effect_alg == "sva")
+    {
+        mod = try(model.matrix(~curate_group, data = sra))
+        if ("try-error" %in% class(mod)) {
         return(list(tc = tc, sva = NULL))
+        }
+        mod0 = model.matrix(~1, data = sra)
+        set.seed(1)
+
+        sva1 = try(sva(dat = as.matrix(tc), mod = mod, mod0 = mod0, B = 10))
     }
-    mod0 = model.matrix(~1, data = sra)
-    set.seed(1)
-    sva1 = try(sva(dat = as.matrix(tc), mod = mod, mod0 = mod0, B = 10))
-    if (class(sva1) != "try-error") {
+
+    if (batch_effect_alg == "svaseq")
+    {
+        mod = try(model.matrix(~curate_group, data = sra))
+        if ("try-error" %in% class(mod)) {
+        return(list(tc = tc, sva = NULL))
+        }
+        mod0 = model.matrix(~1, data = sra)
+        sva1 = try(svaseq(dat = as.matrix(tc), mod = mod, mod0 = mod0, B = 10))
+    }
+
+    if (batch_effect_alg == "combatseq")
+    {
+        bp_freq = as.data.frame(table(sra[,"bioproject"]))
+        bp_freq_gt1 = bp_freq[bp_freq[,"Freq"]>1, "Var1"]
+        bp_freq_eq1 = bp_freq[bp_freq[,"Freq"]==1, "Var1"]
+        run_bp_freq_gt1 = sra[sra[,"bioproject"] %in% bp_freq_gt1, "run"]
+        run_bp_freq_eq1 = sra[sra[,"bioproject"] %in% bp_freq_eq1, "run"]
+        tc_combat = tc[, colnames(tc) %in% run_bp_freq_gt1]
+        tcc_cn = colnames(tc_combat)
+        batch=sra[sra[,"bioproject"] %in% bp_freq_gt1,"bioproject"]
+        group=sra[sra[,"run"] %in% run_bp_freq_gt1,"curate_group"]
+        tc_combat = try( ComBat_seq(as.matrix(tc_combat), batch=batch, group=group))
+        if (class(tc_combat)[1] != "try-error") {
+            cat("These runs are being removed, due to the bioproject only having 1 sample: \n")
+            print(run_bp_freq_eq1)
+            cat("Combatseq correction was correctly performed.\n")
+            tc_combat = as.data.frame(tc_combat)
+            colnames(tc_combat) = tcc_cn
+            tc = rbind(tc_combat, tc_ne[, colnames(tc_combat)])
+            sva1 = ''
+
+        } else{
+            cat("Combatseq correction failed. Returning the original transcriptome data.\n")
+            tc = rbind(tc, tc_ne)
+            sva1= ''
+        }
+    }
+
+    if (batch_effect_alg == "ruvseq"){
+        x = as.factor(sra$curate_group)
+        design = try(model.matrix(~curate_group, data = sra))
+
+        if ("try-error" %in% class(design)) {
+            return(list(tc = tc, sva = NULL))
+            }
+
+        y = DGEList(counts=as.matrix(tc+1), group=x)
+        y = calcNormFactors(y, method="upperquartile")
+        y = estimateGLMCommonDisp(y, design)
+        y = estimateGLMTagwiseDisp(y, design)
+        fit = glmFit(y, design)
+        res = residuals(fit, type="deviance")
+        seqUQ = betweenLaneNormalization(as.matrix(tc+1), which="upper", round = TRUE, offset = FALSE)
+        controls = rep(TRUE,dim(as.matrix(tc+1))[1])
+        batch_ruv_res = try(RUVr(seqUQ,controls,k=1,res)[[2]])
+        if (class(batch_ruv_res)[1] != "try-error") {
+            cat("RUVseq correction was correctly performed.\n")
+            tc = rbind(batch_ruv_res, tc_ne)
+            sva1 = ''
+        } else
+        {
+            cat("RUVseq correction failed. Returning the original transcriptome data.\n")
+            tc = rbind(tc, tc_ne)
+        }
+    }
+
+    if (class(sva1) != "try-error" & (batch_effect_alg == "sva" | batch_effect_alg == "svaseq")) {
         cat("SVA correction was correctly performed.\n")
         tc = cleanY(y = tc, mod = mod, svs = sva1[['sv']])
         tc = rbind(tc, tc_ne)
-    } else {
+    }
+    else if (class(sva1) == "try-error" & (batch_effect_alg == "sva" | batch_effect_alg == "svaseq")){
         cat("SVA correction failed. Returning the original transcriptome data.\n")
         tc = rbind(tc, tc_ne)
     }
+
     return(list(tc = tc, sva = sva1))
 }
 
@@ -441,6 +517,7 @@ draw_heatmap = function(sra, tc_dist_matrix, legend = TRUE, fontsize = 7) {
     curate_group_col_uniq = unique(sra[order(sra[['curate_group']]), 'curate_group_color'])
     ann_color = list(bioproject = bp_col_uniq, curate_group = curate_group_col_uniq)
     breaks = c(0, seq(0.3, 1, 0.01))
+    colnames(tc_dist_matrix)<-sra[sra$run %in% colnames(tc_dist_matrix), 'run']
     aheatmap(tc_dist_matrix, color = "-RdYlBu2:71", Rowv = NA, Colv = NA, revC = TRUE, legend = TRUE,
              breaks = breaks, annCol = ann_label, annRow = ann_label, annColors = ann_color, annLegend = legend,
              fontsize = fontsize)
@@ -463,6 +540,7 @@ draw_dendrogram = function(sra, tc_dist_dist, fontsize = 7) {
     dend <- as.dendrogram(hclust(tc_dist_dist))
     dend_colors = sra[order.dendrogram(dend),'curate_group_color']
     labels_colors(dend) <- dend_colors
+
     dend_labels <- sra[order.dendrogram(dend), 'run']
     dend <- color_branches(dend, labels = dend_labels, col = dend_colors)
     dend <- set(dend, "branches_lwd", 1)
@@ -490,23 +568,26 @@ draw_dendrogram = function(sra, tc_dist_dist, fontsize = 7) {
 }
 
 draw_dendrogram_ggplot = function(sra, tc_dist_dist, fontsize = 7) {
-  
+
   cg_col = unique(sra[,c('curate_group', 'curate_group_color')])
   bp_col = unique(sra[,c('bioproject', 'bp_color')])
   colnames(cg_col) = c('Group', 'Color')
   colnames(bp_col) = c('Group', 'Color')
   sra_colors = rbind(cg_col,bp_col)
-  
+
   group_colors <-  data.table(Group=sra_colors$Group, Color=sra_colors$Color, key="Group")
   group_colors <- transpose(group_colors, make.names = "Group")
-  
+  sra$run <- paste0(sra$run, " (",sra$rRNA_rate,")")
+  colnames(tc_dist_dist)<-sra$run
   hc       <- hclust(tc_dist_dist)           # heirarchal clustering
   dendr    <- dendro_data(hc, type="rectangle") # convert for ggplot
+
+
   clust.df <- data.frame(label=sra$run, curate_group=factor(sra[sra$run %in% dendr$labels$label,'curate_group']), bioproject = factor(sra[sra$run %in% dendr$labels$label,'bioproject']))
   dendr[["labels"]] <- merge(dendr[["labels"]],clust.df, by="label")
-  ggplot() + 
-    geom_segment(data=dendr$segments, aes(x=x, y=y, xend=xend, yend=yend), size = .8, show.legend = FALSE) + 
-    geom_segment(data=merge(dendr$segments[dendr$segments$yend==0,], dendr$labels[,c('label', 'curate_group', 'x')], by = 'x'), aes(x=x, y=y, xend=xend, yend=yend, color = curate_group), size = .8, show.legend = FALSE) + 
+  ggplot() +
+    geom_segment(data=dendr$segments, aes(x=x, y=y, xend=xend, yend=yend), size = .8, show.legend = FALSE) +
+    geom_segment(data=merge(dendr$segments[dendr$segments$yend==0,], dendr$labels[,c('label', 'curate_group', 'x')], by = 'x'), aes(x=x, y=y, xend=xend, yend=yend, color = curate_group), size = .8, show.legend = FALSE) +
     geom_text(data=dendr$labels, aes(x, y - .008, label=label, hjust=0, angle = 270, color = curate_group ), size=3, show.legend = FALSE) +
     scale_y_continuous(expand = c(.2, .1)) +
     geom_point(data = dendr$labels, aes(x,y, color = bioproject), size = 3, show.legend = FALSE) +
@@ -519,7 +600,7 @@ draw_dendrogram_ggplot = function(sra, tc_dist_dist, fontsize = 7) {
           axis.ticks.y=element_blank(),
           axis.text.y=element_blank(),
           panel.background=element_rect(fill="white"),
-          panel.grid=element_blank() 
+          panel.grid=element_blank()
     ) + scale_color_manual(values=group_colors)
 }
 
@@ -754,7 +835,7 @@ draw_legend = function(sra, new = TRUE, pos = "center", fontsize = 7, nlabel.in.
            text.font = legend_font, ncol = ncol, bty = "n")
 }
 
-save_plot = function(tc, sra, sva_out, dist_method, file, selected_curate_groups, fontsize = 7, transform_method) {
+save_plot = function(tc, sra, sva_out, dist_method, file, selected_curate_groups, fontsize = 7, transform_method, batch_effect_alg) {
     if (ncol(tc)==1) {
         cat('Only 1 sample is available. Skipping the plot.\n')
         return()
@@ -775,6 +856,10 @@ save_plot = function(tc, sra, sva_out, dist_method, file, selected_curate_groups
                              10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10), 14, 12,
                            byrow = TRUE)
     layout(layout_matrix)
+    ##
+    sra$run <- paste0("(",sra$rRNA_rate,") ", sra$run)
+    colnames(tc)<-sra$run
+    ##
     tc_dist_matrix = cor(tc, method = dist_method)
     tc_dist_matrix[is.na(tc_dist_matrix)] = 0
     tc_dist_dist = Dist(t(tc), method = dist_method) + 1e-09
@@ -797,9 +882,12 @@ save_plot = function(tc, sra, sva_out, dist_method, file, selected_curate_groups
     par(mar = c(4, 4, 1, 1))
     draw_tau_histogram(tc, sra, selected_curate_groups, fontsize, transform_method)
     par(mar = rep(0.1, 4))
+    if (batch_effect_alg == 'sva' | batch_effect_alg == 'svaseq'){
     df_r2 = draw_sva_summary(sva_out, tc, sra, fontsize)
+
     if (!all(is.na(df_r2))) {
         write.table(df_r2, paste0(dir_tsv,'/',file, ".r2.tsv"), sep = "\t", row.names = FALSE)
+    }
     }
     par(mar = rep(0.1, 4))
     draw_legend(sra, new = TRUE, pos = "center", fontsize = fontsize, nlabel.in.col = 8)
@@ -835,8 +923,42 @@ get_tmm_scaled_fpkm = function(dat, df_nf, efflen) {
     return(dat_fpkm)
 }
 
+apply_transformation_logic = function(tc, tc_eff_length, transform_method, batch_effect_alg, bool_fpkm_tpm = TRUE, bool_log = TRUE){
 
-####################END OF FUNCTION DECLARATION####################################################
+           if (bool_fpkm_tpm == TRUE){
+                if (grepl('fpkm', transform_method) ) {
+                    cat('Applying FPKM transformation.\n')
+                    tc = transform_raw_to_fpkm(tc, tc_eff_length[, colnames(tc)])
+                } else if (grepl('tpm', transform_method )) {
+                    cat('Applying TPM transformation.\n')
+                    tc = transform_raw_to_tpm(tc, tc_eff_length[, colnames(tc)])
+                } else {
+                    cat('Applying neither FPKM nor TPM transformation.\n')
+                }
+            }
+
+           if (bool_log == TRUE){
+
+                if (grepl('logn-', transform_method)) {
+                    cat('Applying log_n(x) normalization.\n')
+                    tc = log(tc)
+                } else if (grepl('log2-', transform_method)) {
+                    cat('Applying log_2(x) normalization.\n')
+                    tc = log2(tc)
+                } else if (grepl('lognp1-', transform_method)) {
+                    cat('Applying log_n(x+1) normalization.\n')
+                    tc = log(tc + 1)
+                } else if (grepl('log2p1-', transform_method)) {
+                    cat('Applying log_2(x+1) normalization.\n')
+                    tc = log2(tc + 1)
+                } else {
+                    cat('Applying no log normalization.\n')
+                }
+            }
+    return(tc)
+}
+
+########cd############END OF FUNCTION DECLARATION####################################################
 
 ################################################# START OF SVA CORRECTION ########################################################
 
@@ -846,6 +968,7 @@ fontsize = 7
 # read SRA table
 sra_all = read.table(srafile, sep = "\t", header = TRUE, quote = "", fill = TRUE, comment.char = "",
                      stringsAsFactors = FALSE, check.names=FALSE)
+
 for (col in c('instrument','bioproject')) {
     is_missing = (sra_all[,col] == "")|(is.na(sra_all[,col]))
     sra_all[is_missing, col] = "not_provided"
@@ -854,6 +977,8 @@ for (col in c('instrument','bioproject')) {
 tc <- read.table(infile, sep = "\t", stringsAsFactors = FALSE, header = TRUE, quote = "", fill = FALSE, row.names = 1, check.names=FALSE)
 
 tc_eff_length <- read.table(eff_file, sep = "\t", stringsAsFactors = FALSE, header = TRUE, quote = "", fill = FALSE, check.names=FALSE)
+
+
 # row.names(tc)<-tc[,1] tc <- tc[,-1]
 
 # read transcriptome
@@ -877,30 +1002,17 @@ out = sort_tc_and_sra(tc, sra) ; tc = out[["tc"]] ; sra = out[["sra"]]
 # log transform AFTER mappingrate
 row.names(tc_eff_length) <- tc_eff_length[, 1]
 tc_eff_length <- tc_eff_length[, colnames(tc)]
-if (grepl('fpkm', transform_method)) {
-    cat('Applying FPKM transformation.\n')
-    tc = transform_raw_to_fpkm(tc, tc_eff_length)
-} else if (grepl('tpm', transform_method)) {
-    cat('Applying TPM transformation.\n')
-    tc = transform_raw_to_tpm(tc, tc_eff_length)
-} else {
-    cat('Applying neither FPKM nor TPM transformation.\n')
+
+if (batch_effect_alg != 'sva'){
+    cat(paste0('batch effect removal algorithm is ', batch_effect_alg, ' and transform_method is: ', transform_method, ' Applying transformation after batch effect removal and temporarily for plotting. \n'))
+    if(batch_effect_alg == 'svaseq'){
+        tc = apply_transformation_logic(tc, tc_eff_length, transform_method, batch_effect_alg, bool_fpkm_tpm = TRUE, bool_log = FALSE)
+    }
+}else{
+    tc = apply_transformation_logic(tc, tc_eff_length, transform_method, batch_effect_alg, bool_fpkm_tpm = TRUE, bool_log = TRUE)
 }
-if (grepl('logn-', transform_method)) {
-    cat('Applying log_n(x) normalization.\n')
-    tc = log(tc)
-} else if (grepl('log2-', transform_method)) {
-    cat('Applying log_2(x) normalization.\n')
-    tc = log2(tc)
-} else if (grepl('lognp1-', transform_method)) {
-    cat('Applying log_n(x+1) normalization.\n')
-    tc = log(tc + 1)
-} else if (grepl('log2p1-', transform_method)) {
-    cat('Applying log_2(x+1) normalization.\n')
-    tc = log2(tc + 1)
-} else {
-    cat('Applying no log normalization.\n')
-}
+
+
 
 file_name = paste0(dir_tsv,'/',sub(" ", "_", scientific_name), ".uncorrected.tc.tsv")
 write.table(data.frame("GeneID"=rownames(tc), tc), file = file_name,
@@ -920,17 +1032,36 @@ cat("removing entries with mapping rate of 0. \n")
 out = check_mapping_rate(tc, sra, 0)
 tc = out[["tc"]]
 sra = out[["sra"]]
-save_plot(tc, sra, NULL, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".original"),
-          selected_curate_groups, fontsize, transform_method)
+
+tc_tmp = tc
+if (batch_effect_alg != 'sva'){
+    cat(paste0('batch effect removal algorithm is ', batch_effect_alg, ' and transform_method is: ', transform_method, ' Applying transformation after batch effect removal and temporarily for plotting. \n'))
+    if(batch_effect_alg == 'svaseq'){
+        tc_tmp = apply_transformation_logic(tc, tc_eff_length, transform_method, batch_effect_alg, bool_fpkm_tpm = FALSE, bool_log = TRUE)
+    }else{
+    tc_tmp = apply_transformation_logic(tc, tc_eff_length, transform_method, batch_effect_alg, bool_fpkm_tpm = TRUE, bool_log = TRUE)
+    }
+}
+
+save_plot(tc_tmp, sra, NULL, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".original"),
+          selected_curate_groups, fontsize, transform_method, batch_effect_alg)
 out = sva_subtraction(tc, sra)
 tc_sva = out[["tc"]]
 sva_out = out[["sva"]]
 if (!is.null(sva_out)) {
-    save(sva_out, file = paste0(dir_rdata,'/', sub(" ", "_", scientific_name), ".sva.", round, ".RData"))
+    save(sva_out, file = paste0(dir_rdata,'/', sub(" ", "_", scientific_name),".", batch_effect_alg,".", round, ".RData"))
 }
-save_plot(tc_sva, sra, sva_out, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".original.sva"),
-          selected_curate_groups, fontsize, transform_method)
-
+tc_sva_tmp = tc_sva
+if (batch_effect_alg != 'sva'){
+    cat(paste0('batch effect removal algorithm is ', batch_effect_alg, ' and transform_method is: ', transform_method, ' Applying transformation after batch effect removal and temporarily for plotting. \n'))
+    if(batch_effect_alg == 'svaseq'){
+        tc_sva_tmp = apply_transformation_logic(tc_sva, tc_eff_length, transform_method, batch_effect_alg, bool_fpkm_tpm = FALSE, bool_log = FALSE)
+    }else{
+    tc_sva_tmp = apply_transformation_logic(tc_sva, tc_eff_length, transform_method, batch_effect_alg, bool_fpkm_tpm = TRUE, bool_log = TRUE)
+    }
+}
+save_plot(tc_sva_tmp, sra, sva_out, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".original", ".", batch_effect_alg),
+          selected_curate_groups, fontsize, transform_method, batch_effect_alg)
 round = 1
 sva_out = NULL
 tc_sva = NULL
@@ -938,16 +1069,39 @@ out = check_mapping_rate(tc, sra, mapping_rate_cutoff)
 tc = out[["tc"]]
 sra = out[["sra"]]
 tc = tc[, sra[sra[['exclusion']] == "no", "run"], drop=FALSE]
-save_plot(tc, sra, NULL, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".mapping_cutoff"),
-          selected_curate_groups, fontsize, transform_method)
+
+tc_tmp = tc
+if (batch_effect_alg != 'sva'){
+    cat(paste0('batch effect removal algorithm is ', batch_effect_alg, ' and transform_method is: ', transform_method, ' Applying transformation after batch effect removal and temporarily for plotting. \n'))
+    if(batch_effect_alg == 'svaseq'){
+        tc_tmp = apply_transformation_logic(tc, tc_eff_length, transform_method, batch_effect_alg, bool_fpkm_tpm = FALSE, bool_log = TRUE)
+    }
+    else{
+    tc_tmp = apply_transformation_logic(tc, tc_eff_length, transform_method, batch_effect_alg, bool_fpkm_tpm = TRUE, bool_log = TRUE)
+    }
+}
+save_plot(tc_tmp, sra, NULL, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".mapping_cutoff"),
+          selected_curate_groups, fontsize, transform_method, batch_effect_alg)
 out = sva_subtraction(tc, sra)
 tc_sva = out[["tc"]]
 sva_out = out[["sva"]]
+
 if (!is.null(sva_out)) {
-    save(sva_out, file = paste0(dir_rdata,'/',sub(" ", "_", scientific_name), ".sva.", round, ".RData"))
+    save(sva_out, file = paste0(dir_rdata,'/',sub(" ", "_", scientific_name),".", batch_effect_alg,".", round, ".RData"))
 }
-save_plot(tc_sva, sra, sva_out, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".mapping_cutoff.sva"),
-          selected_curate_groups, fontsize, transform_method)
+
+tc_sva_tmp = tc_sva
+if (batch_effect_alg != 'sva'){
+    cat(paste0('batch effect removal algorithm is ', batch_effect_alg, ' and transform_method is: ', transform_method, ' Applying transformation after batch effect removal and temporarily for plotting. \n'))
+    if(batch_effect_alg == 'svaseq'){
+        tc_sva_tmp = apply_transformation_logic(tc_sva, tc_eff_length, transform_method, batch_effect_alg, bool_fpkm_tpm = FALSE, bool_log = FALSE)
+    }
+    else{
+    tc_sva_tmp = apply_transformation_logic(tc_sva, tc_eff_length, transform_method, batch_effect_alg, bool_fpkm_tpm = TRUE, bool_log = TRUE)
+    }
+}
+save_plot(tc_sva_tmp, sra, sva_out, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".mapping_cutoff", ".", batch_effect_alg),
+          selected_curate_groups, fontsize, transform_method, batch_effect_alg)
 
 round = 2
 end_flag = 0
@@ -955,23 +1109,48 @@ while (end_flag == 0) {
     cat("Iteratively checking within-curate_group correlation, round:", round, "\n")
     tc_cwtc = NULL
     num_run_before = sum(sra[['exclusion']] == "no")
-    out = check_within_curate_group_correlation(tc, sra, dist_method, min_dif, selected_curate_groups, one_outlier_per_iteration, correlation_threshold)
+
+    tc_tmp = tc
+    if (batch_effect_alg != 'sva'){
+    cat(paste0('batch effect removal algorithm is ', batch_effect_alg, ' and transform_method is: ', transform_method, ' Applying transformation after batch effect removal and temporarily for plotting. \n'))
+        if(batch_effect_alg == 'svaseq'){
+            tc_tmp = apply_transformation_logic(tc, tc_eff_length, transform_method, batch_effect_alg, bool_fpkm_tpm = FALSE, bool_log = TRUE)
+        }
+        else{
+        tc_tmp = apply_transformation_logic(tc, tc_eff_length, transform_method, batch_effect_alg, bool_fpkm_tpm = TRUE, bool_log = TRUE)
+        }
+    }
+
+    out = check_within_curate_group_correlation(tc_tmp, sra, dist_method, min_dif, selected_curate_groups, one_outlier_per_iteration, correlation_threshold)
     tc_cwtc = out[["tc"]]
     sra = out[["sra"]]
     num_run_after = sum(sra[['exclusion']] == "no")
     if ((num_run_before == num_run_after) | (plot_intermediate)) {
         sva_out = NULL
         tc_sva = NULL
-        out = sva_subtraction(tc_cwtc, sra)
+        out = sva_subtraction(tc[,colnames(tc_cwtc)], sra)
         tc_sva = out[["tc"]]
         sva_out = out[["sva"]]
         if (!is.null(sva_out)) {
-            save(sva_out, file = paste0(dir_rdata,'/',sub(" ", "_", scientific_name), ".sva.", round, ".RData"))
+            save(sva_out, file = paste0(dir_rdata,'/',sub(" ", "_", scientific_name),".", batch_effect_alg, ".", round, ".RData"))
         }
         save_plot(tc_cwtc, sra, NULL, dist_method, paste0(sub(" ", "_", scientific_name), ".", round,
-                                                          ".correlation_cutoff"), selected_curate_groups, fontsize, transform_method)
-        save_plot(tc_sva, sra, sva_out, dist_method, paste0(sub(" ", "_", scientific_name), ".", round,
-                                                            ".correlation_cutoff.sva"), selected_curate_groups, fontsize, transform_method)
+                                                          ".correlation_cutoff"), selected_curate_groups, fontsize, transform_method, batch_effect_alg)
+
+        tc_sva_tmp = tc_sva
+        if (batch_effect_alg != 'sva'){
+            cat(paste0('batch effect removal algorithm is ', batch_effect_alg, ' and transform_method is: ', transform_method, ' Applying transformation after batch effect removal and temporarily for plotting. \n'))
+            if(batch_effect_alg == 'svaseq'){
+                tc_sva_tmp = apply_transformation_logic(tc_sva, tc_eff_length, transform_method, batch_effect_alg, bool_fpkm_tpm = FALSE, bool_log = FALSE)
+            }
+            else{
+            tc_sva_tmp = apply_transformation_logic(tc_sva, tc_eff_length, transform_method, batch_effect_alg, bool_fpkm_tpm = TRUE, bool_log = TRUE)
+            }
+        }
+
+        save_plot(tc_sva_tmp, sra, sva_out, dist_method, paste0(sub(" ", "_", scientific_name), ".", round,
+                                                            ".correlation_cutoff",".", batch_effect_alg), selected_curate_groups, fontsize, transform_method, batch_effect_alg)
+
     }
     cat("round:", round, ": # before =", num_run_before, ": # after =", num_run_after, "\n\n")
     if (num_run_before == num_run_after) {
@@ -980,126 +1159,23 @@ while (end_flag == 0) {
     tc = tc_cwtc
     round = round + 1
 }
+
+
+
 cat("finished checking within-curate_group correlation.\n")
+if (batch_effect_alg != 'sva'){
+    cat("Batch-effect removal algorithm is: ",batch_effect_alg ," . Applying transformation on final adjusted counts. \n")
+    tc_sva = tc_sva_tmp
+}
 file = paste0(dir_tsv,'/',sub(" ", "_", scientific_name), ".sra.tsv")
 write.table(sra, file = file, sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
 file = paste0(dir_tsv,'/',sub(" ", "_", scientific_name), ".tc.tsv")
 write.table(data.frame("GeneID"=rownames(tc_sva),tc_sva), file = file, sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
 out = curate_group_mean(tc_sva, sra, selected_curate_groups)
 tc_curate_group = out[['tc_ave']]
-file = paste0(dir_tsv,'/',sub(" ", "_", scientific_name), ".curate_group.mean.tsv")
+file = paste0(dir_tsv,'/',sub(" ", "_", scientific_name), ".", batch_effect_alg , ".curate_group.mean.tsv")
 write.table(data.frame("GeneID"=rownames(tc_curate_group), tc_curate_group), file = file, sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
 tc_tau = curate_group2tau(tc_curate_group, rich.annotation = TRUE, transform_method)
-file = paste0(dir_tsv,'/',sub(" ", "_", scientific_name), ".tau.tsv")
+file = paste0(dir_tsv,'/',sub(" ", "_", scientific_name), ".", batch_effect_alg , ".tau.tsv")
 write.table(data.frame("GeneID"=rownames(tc_tau), tc_tau), file = file, sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
 cat("Done!\n")
-
-
-#
-#
-# par_sva = function(i, species_names, dir_count, dir_eff_length) {
-#   species = species_names[i]
-#   cat("Files found for", species, ": ")
-#   species = sub(' ', '_', species)
-#   infile = list.files(dir_count, pattern = species)[1]
-#   infile = paste0(dir_count, infile)
-#   if(exists("dir_eff_length")){
-#     eff_file = list.files(dir_eff_length, pattern = species)[1]
-#     eff_file = paste0(dir_eff_length, eff_file)
-#     cat(infile, eff_file, "\n")
-#   }
-#   else{
-#     cat(infile, "\n")
-#     eff_file = NA
-#   }
-#
-#   tc <- read.table(infile, sep="\t", stringsAsFactors=FALSE, header = T, quote="", fill =F)
-#   tc_eff_length <- read.table(eff_file, sep="\t", stringsAsFactors=FALSE, header = T, quote="", fill =F)
-#   row.names(tc)<-tc[,1]
-#   tc<-tc[,-1]
-#   row.names(tc_eff_length)<-tc_eff_length[,1]
-#   tc_eff_length<-tc_eff_length[,-1]
-#   tc_eff_length = tc_eff_length[,colnames(tc)]
-#   # calculate tpm and log transform transcriptome (adds pseudocount +1), important to do AFTER get_mapping_rate()
-#   tc = transform_raw_to_fpkm(tc, tc_eff_length)
-#   main_sva()
-# }
-#
-
-
-#}
-#
-# if(mode == 'msm'){
-#   #########################
-#   # read SRA table
-#   sra_all = read.table(srafile, sep="\t", header=TRUE, quote="", fill=TRUE, comment.char="", stringsAsFactors=FALSE)
-#   sra_all$instrument[sra_all$instrument==""] = "not_provided"
-#   sra_all$bioproject[sra_all$bioproject==""] = "not_provided"
-#
-#   #setup parallel backend to use many processors
-#   cores=detectCores()
-#   #cl <- makeCluster(cores[1]-1) #not to overload your computer
-#   cl <- parallel::makeCluster(cores[1]-1, setup_strategy = "sequential")
-#
-#   registerDoParallel(cl)
-#   req_packages = c("Biobase",
-#                    "pcaMethods",
-#                    "colorspace",
-#                    "RColorBrewer",
-#                    "sva",
-#                    "MASS",
-#                    "NMF",
-#                    "dendextend",
-#                    "amap",
-#                    "pvclust",
-#                    "Rtsne")
-#
-#   species_names = unique(sra_all[,'scientific_name'])
-#   cat("Species in the provided metadata file: ", species_names, "\n")
-#
-#
-#
-#
-#
-#   out = list()
-#   foreach(i=1:length(species_names), .packages = req_packages) %dopar%{
-#     out[[species_names[i]]] = par_sva(i, species_names, dir_count, dir_eff_length)
-#   }
-#
-#
-#
-#  stopCluster()
-#   #
-# foreach(i=1:length(species_names), .packages = req_packages) %dopar%{
-#   species = species_names[i]
-#   cat("Files found for", species, ": ")
-#   species = sub(' ', '_', species)
-#   infile = list.files(dir_count, pattern = species)[1]
-#   infile = paste0(dir_count, infile)
-#   if(exists("dir_eff_length")){
-#   eff_file = list.files(dir_eff_length, pattern = species)[1]
-#   eff_file = paste0(dir_eff_length, eff_file)
-#   cat(infile, eff_file, "\n")
-#   }
-#   else{
-#   cat(infile, "\n")
-#   eff_file = NA
-#   }
-#
-#   tc <- read.table(infile, sep="\t", stringsAsFactors=FALSE, header = T, quote="", fill =F)
-#   tc_eff_length <- read.table(eff_file, sep="\t", stringsAsFactors=FALSE, header = T, quote="", fill =F)
-#   row.names(tc)<-tc[,1]
-#   tc<-tc[,-1]
-#   row.names(tc_eff_length)<-tc_eff_length[,1]
-#   tc_eff_length<-tc_eff_length[,-1]
-#   tc_eff_length = tc_eff_length[,colnames(tc)]
-#   # calculate tpm and log transform transcriptome (adds pseudocount +1), important to do AFTER get_mapping_rate()
-#   tc = transform_raw_to_fpkm(tc, tc_eff_length)
-#   main_sva()
-# }
-#
-# stopCluster()
-#
-
-#}
-
