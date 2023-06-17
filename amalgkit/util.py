@@ -461,17 +461,17 @@ def detect_layout_from_file(sra_stat):
         if all([os.path.exists(f) for f in paired_fastq_files]):
             is_paired_end = True
             break
-    is_unpaird_file = False
+    is_unpaired_file = False
     for ext in extensions:
         single_fastq_file = os.path.join(sra_stat['getfastq_sra_dir'], sra_stat['sra_id'] + ext)
         if os.path.exists(single_fastq_file):
-            is_unpaird_file = True
+            is_unpaired_file = True
             break
-    if (not is_paired_end) & is_unpaird_file:
+    if (not is_paired_end) & is_unpaired_file:
         is_single_end = True
     else:
         is_single_end = False
-    if is_paired_end & is_unpaird_file:
+    if is_paired_end & is_unpaired_file:
         print('layout = {}; Deleting unpaired file: {}'.format(sra_stat['layout'], unpaired_file))
         os.remove(unpaired_file)
     if is_single_end & (sra_stat['layout'] == 'paired'):
