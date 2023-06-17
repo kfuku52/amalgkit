@@ -471,9 +471,6 @@ def detect_layout_from_file(sra_stat):
         is_single_end = True
     else:
         is_single_end = False
-    if is_paired_end & is_unpaired_file:
-        print('layout = {}; Deleting unpaired file: {}'.format(sra_stat['layout'], unpaired_file))
-        os.remove(unpaired_file)
     if is_single_end & (sra_stat['layout'] == 'paired'):
         txt = 'Single-end fastq was generated even though layout in the metadata = {}. '
         txt += 'This sample will be treated as single-end reads: {}\n'
