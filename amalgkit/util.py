@@ -449,6 +449,15 @@ def get_newest_intermediate_file_extension(sra_stat, work_dir):
             return '.safely_removed'
     return ext_out
 
+def is_there_unpaired_file(sra_stat, extensions):
+    is_unpaired_file = False
+    for ext in extensions:
+        single_fastq_file = os.path.join(sra_stat['getfastq_sra_dir'], sra_stat['sra_id'] + ext)
+        if os.path.exists(single_fastq_file):
+            is_unpaired_file = True
+            break
+    return is_unpaired_file
+
 def detect_layout_from_file(sra_stat):
     # Order is important in this list. More downstream should come first.
     extensions = ['.amalgkit.fastq.gz','.rename.fastq.gz','.fastp.fastq.gz','.fastq.gz']
@@ -461,12 +470,7 @@ def detect_layout_from_file(sra_stat):
         if all([os.path.exists(f) for f in paired_fastq_files]):
             is_paired_end = True
             break
-    is_unpaired_file = False
-    for ext in extensions:
-        single_fastq_file = os.path.join(sra_stat['getfastq_sra_dir'], sra_stat['sra_id'] + ext)
-        if os.path.exists(single_fastq_file):
-            is_unpaired_file = True
-            break
+    is_unpaired_file = is_there_unpaired_file(sra_stat, extensions)
     if (not is_paired_end) & is_unpaired_file:
         is_single_end = True
     else:
