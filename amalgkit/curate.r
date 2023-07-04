@@ -4,14 +4,12 @@
 suppressPackageStartupMessages(library(pcaMethods, quietly = TRUE))
 suppressPackageStartupMessages(library(colorspace, quietly = TRUE))
 suppressPackageStartupMessages(library(RColorBrewer, quietly = TRUE))
-suppressPackageStartupMessages(library(sva, quietly = TRUE))
 suppressPackageStartupMessages(library(MASS, quietly = TRUE))
 suppressPackageStartupMessages(library(NMF, quietly = TRUE))
 suppressPackageStartupMessages(library(dendextend, quietly = TRUE))
 suppressPackageStartupMessages(library(amap, quietly = TRUE))
 suppressPackageStartupMessages(library(pvclust, quietly = TRUE))
 suppressPackageStartupMessages(library(Rtsne, quietly = TRUE))
-suppressPackageStartupMessages(library(RUVSeq, quietly = TRUE))
 
 debug_mode = ifelse(length(commandArgs(trailingOnly = TRUE)) == 1, "debug", "batch")
 #debug_mode = "debug"
@@ -62,7 +60,12 @@ if (debug_mode == "debug") {
     one_outlier_per_iteration = as.integer(args[11])
     correlation_threshold = as.numeric(args[12])
     batch_effect_alg = args[13]
+}
 
+if (batch_effect_alg == "ruvseq") {
+    suppressPackageStartupMessages(library(RUVSeq, quietly = TRUE))
+} else {
+    suppressPackageStartupMessages(library(sva, quietly = TRUE))
 }
 
 tc_sra_intersect = function(tc, sra) {
@@ -376,8 +379,7 @@ sva_subtraction = function(tc, sra) {
     tc = out[["tc_ex"]]
     tc_ne = out[["tc_ne"]]
 
-    if (batch_effect_alg == "sva")
-    {
+    if (batch_effect_alg == "sva") {
         mod = try(model.matrix(~curate_group, data = sra))
         if ("try-error" %in% class(mod)) {
         return(list(tc = tc, sva = NULL))
@@ -386,20 +388,14 @@ sva_subtraction = function(tc, sra) {
         set.seed(1)
 
         sva1 = try(sva(dat = as.matrix(tc), mod = mod, mod0 = mod0, B = 10))
-    }
-
-    if (batch_effect_alg == "svaseq")
-    {
+    } else if (batch_effect_alg == "svaseq") {
         mod = try(model.matrix(~curate_group, data = sra))
         if ("try-error" %in% class(mod)) {
         return(list(tc = tc, sva = NULL))
         }
         mod0 = model.matrix(~1, data = sra)
         sva1 = try(svaseq(dat = as.matrix(tc), mod = mod, mod0 = mod0, B = 10))
-    }
-
-    if (batch_effect_alg == "combatseq")
-    {
+    } else if (batch_effect_alg == "combatseq") {
         bp_freq = as.data.frame(table(sra[,"bioproject"]))
         bp_freq_gt1 = bp_freq[bp_freq[,"Freq"]>1, "Var1"]
         bp_freq_eq1 = bp_freq[bp_freq[,"Freq"]==1, "Var1"]
@@ -424,9 +420,7 @@ sva_subtraction = function(tc, sra) {
             tc = rbind(tc, tc_ne)
             sva1= ''
         }
-    }
-
-    if (batch_effect_alg == "ruvseq"){
+    } else if (batch_effect_alg == "ruvseq") {
         x = as.factor(sra$curate_group)
         design = try(model.matrix(~curate_group, data = sra))
 
