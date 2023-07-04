@@ -45,7 +45,7 @@ if (debug_mode == "debug") {
 source(r_util_path)
 setwd(dir_csca)
 
-add_color_to_sra = function(df, selected_curate_groups) {
+add_color_to_metadata = function(df, selected_curate_groups) {
   df = df[,(!colnames(df) %in% c('bp_color','sp_color','curate_group_color'))]
   scientific_name = as.character(df[['scientific_name']])
   curate_group = as.character(df[['curate_group']])
@@ -250,7 +250,7 @@ draw_multisp_legend = function(df_label) {
 }
 
 prepare_metadata_table = function(dir_metadata, selected_curate_groups, spp) {
-  files = list.files(dir_metadata, pattern = ".*sra.*")
+  files = list.files(dir_metadata, pattern = ".*metadata.*")
   df_metadata = data.frame()
   for (file in files) {
     metadata_path = file.path(dir_metadata, file)
@@ -371,7 +371,7 @@ get_df_labels = function(df_metadata) {
     df_label = merge(df_label, df_exp, all.x=TRUE, all.y=FALSE)
     df_label = df_label[order(df_label[['curate_group']], df_label[['scientific_name']]),]
     df_label = sort_labels(df_label, label_orders)
-    df_label = add_color_to_sra(df_label, selected_curate_groups)
+    df_label = add_color_to_metadata(df_label, selected_curate_groups)
     df_label = sort_labels(df_label, label_orders)
     df_color_averaged[[d]] = df_label
   }
@@ -380,7 +380,7 @@ get_df_labels = function(df_metadata) {
 
 get_df_label2 = function(df_metadata, selected_curate_groups) {
   cols = c('run','bioproject','curate_group','scientific_name','sp_color','curate_group_color','bp_color')
-  df_color_unaveraged = add_color_to_sra(df_metadata[(df_metadata[['exclusion']]=='no'),], selected_curate_groups)
+  df_color_unaveraged = add_color_to_metadata(df_metadata[(df_metadata[['exclusion']]=='no'),], selected_curate_groups)
   df_color_unaveraged = df_color_unaveraged[,cols]
   label_order = order(df_color_unaveraged[['run']])
   df_color_unaveraged = df_color_unaveraged[label_order,]

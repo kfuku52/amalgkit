@@ -3,8 +3,8 @@ from amalgkit.util import *
 import re
 import subprocess
 import os
+import shutil
 import sys
-
 
 def get_curate_group(args):
     if args.curate_group is None:
@@ -16,36 +16,32 @@ def get_curate_group(args):
     curate_group = '|'.join(curate_group)
     return curate_group
 
-def dir_table2spp(dir_curate_group_mean):
-    files = os.listdir(dir_curate_group_mean)
-    files = [ f for f in files if f.endswith('.uncorrected.curate_group.mean.tsv') ]
-    spp = [ f.replace('.uncorrected.curate_group.mean.tsv', '') for f in files ]
+def get_spp_from_dir(dir_curate):
+    files = os.listdir(dir_curate)
+    spp = [ f for f in files if (not f.startswith('.')) & (not f.startswith('tmp.')) ]
     return spp
+
+def generate_csca_input_symlinks(dir_csca_input_table, dir_curate, spp):
+    if os.path.exists(dir_csca_input_table):
+        shutil.rmtree(dir_csca_input_table)
+    os.makedirs(dir_csca_input_table)
+    for sp in spp:
+        files = os.listdir(os.path.join(dir_curate, sp, 'tables'))
+        files = [ f for f in files if f.endswith('.tsv') ]
+        for file in files:
+            path_src = os.path.join(dir_curate, sp, 'tables', file)
+            path_dst = os.path.join(dir_csca_input_table, file)
+            os.symlink(path_src, path_dst)
+    return None
 
 def csca_main(args):
     check_rscript()
     check_ortholog_parameter_compatibility(args)
     dir_out = os.path.realpath(args.out_dir)
-    if args.dir_tc == "inferred":
-        dir_tc = os.path.join(dir_out, 'curate', 'tables')
-    else:
-        dir_tc = os.path.realpath(args.dir_tc)
-
-    if args.dir_uncorrected_curate_group_mean == "inferred":
-        dir_uncorrected_curate_group_mean = os.path.join(dir_out, 'curate', 'tables')
-    else:
-        dir_uncorrected_curate_group_mean = os.path.realpath(args.dir_uncorrected_curate_group_mean)
-
-    if args.dir_curate_group_mean == "inferred":
-        dir_curate_group_mean = os.path.join(dir_out, 'curate', 'tables')
-    else:
-        dir_curate_group_mean = os.path.realpath(args.dir_curate_group_mean)
-
-    if args.dir_sra == "inferred":
-        dir_sra = os.path.join(dir_out, 'curate', 'tables')
-    else:
-        dir_sra = os.path.realpath(args.dir_sra)
-    # norm method may not be needed, curate outputs are all in the same directory => can be inferred
+    dir_curate = os.path.join(dir_out, 'curate')
+    dir_csca_input_table = os.path.join(dir_curate, 'tmp.amalgkit.csca_input_tables')
+    spp = get_spp_from_dir(dir_curate)
+    generate_csca_input_symlinks(dir_csca_input_table, dir_curate, spp)
     curate_group = get_curate_group(args)
     dir_csca = os.path.join(dir_out, 'csca')
     if not os.path.exists(dir_csca):
@@ -59,17 +55,16 @@ def csca_main(args):
     csca_r_script_path = os.path.join(dir_amalgkit_script, 'csca.r')
     r_util_path = os.path.join(dir_amalgkit_script, 'util.r')
     file_genecount = os.path.join(dir_out, 'tmp.amalgkit.orthogroup.genecount.tsv')
-    spp = dir_table2spp(dir_curate_group_mean)
     orthogroup2genecount(file_orthogroup=file_orthogroup_table, file_genecount=file_genecount, spp=spp)
 
     subprocess.call(['Rscript',
                      csca_r_script_path,
                      curate_group,
                      dir_out,
-                     dir_tc,
-                     dir_uncorrected_curate_group_mean,
-                     dir_curate_group_mean,
-                     dir_sra,
+                     dir_csca_input_table,
+                     dir_csca_input_table,
+                     dir_csca_input_table,
+                     dir_csca_input_table,
                      file_orthogroup_table,
                      file_genecount,
                      r_util_path,
@@ -77,3 +72,4 @@ def csca_main(args):
                      ])
     for f in glob.glob("tmp.amalgkit.*"):
         os.remove(f)
+    #shutil.rmtree(dir_csca_input_table)

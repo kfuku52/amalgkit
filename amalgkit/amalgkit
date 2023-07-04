@@ -262,14 +262,6 @@ pcs.set_defaults(handler=command_cstmm)
 # Sub parser: csca
 pca_help = 'Generating plots with cross-species correlation analysis. See `amalgkit csca -h`'
 pca = subparsers.add_parser('csca', help=pca_help, parents=[pp_out, pp_meta, pp_cg])
-pca.add_argument('--dir_uncorrected_curate_group_mean', metavar='PATH', default='inferred', type=str, required=False, action='store',
-                 help='default=%(default)s: In an unaltered amalgkit curate output, this would be curate/tables/. If left at default "inferred" this value will be set to out_dir/curate/tables/')
-pca.add_argument('--dir_curate_group_mean', metavar='PATH', default='inferred', type=str, required=False, action='store',
-                 help='default=%(default)s: In an unaltered amalgkit curate output, this would be curate/tables/. If left at default "inferred" this value will be set to out_dir/curate/tables/')
-pca.add_argument('--dir_sra', metavar='PATH', default='inferred', type=str, required=False, action='store',
-                 help='default=%(default)s: In an unaltered amalgkit curate output, this would be curate/tables/. If left at default "inferred" this value will be set to out_dir/curate/tables/')
-pca.add_argument('--dir_tc', metavar='PATH', default='inferred', type=str, required=False, action='store',
-                 help='default=%(default)s: In an unaltered amalgkit curate output, this would be curate/tables/. If left at default "inferred" this value will be set to out_dir/curate/tables/')
 pca.add_argument('--orthogroup_table', metavar='PATH', default=None, type=str, required=False, action='store',
                  help='default=%(default)s: PATH to orthogroup table, which is, for example, Orthogroups.tsv and N0.tsv in OrthoFinder.'
                       'Specify `--orthogroup_table ""` for single-species TMM normalization.')
