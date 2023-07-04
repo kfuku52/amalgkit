@@ -52,15 +52,16 @@ def run_curate_r_script(args, metadata, sp, input_dir):
         count_file = os.path.join(os.path.abspath(input_dir), sp, sp + '_est_counts.tsv')
 
     if os.path.exists(count_file) and os.path.exists(len_file):
-        print("Both counts and effective length files found.")
+        print("Both counts and effective length files found.", flush=True)
     else:
-        sys.stderr.write("No expression data found. Please make sure `amalgkit merge` or `amalgkit cstmm` ran correctly and you provided the correct directory PATH.\n")
         if not os.path.exists(count_file):
             sys.stderr.write('Expected but undetected PATH of the count file: {}\n'.format(count_file))
         if not os.path.exists(len_file):
             sys.stderr.write('Expected but undetected PATH of the effective length file: {}\n'.format(len_file))
-        sys.exit(1)
-    print("Starting Rscript to obtain curated {} values.".format(args.norm))
+        sys.stderr.write('Skipping {}\n'.format(sp))
+        print('Skipping {}'.format(sp), flush=True)
+        return 1
+    print("Starting Rscript to obtain curated {} values.".format(args.norm), flush=True)
     subprocess.call(['Rscript',
                      r_script_path,
                      count_file,
@@ -77,7 +78,7 @@ def run_curate_r_script(args, metadata, sp, input_dir):
                      str(correlation_threshold),
                      str(args.batch_effect_alg)
                      ])
-    return
+    return 0
 
 def curate_main(args):
     check_rscript()
@@ -109,6 +110,7 @@ def curate_main(args):
             else:
                 print('Skipping. Output file detected: {}'.format(sp), flush=True)
                 continue
-        run_curate_r_script(args, metadata, sp, input_dir)
-        with open(file_curate_completion_flag, 'w') as f:
-            f.write('amalgkit curate completed at {}\n'.format(datetime.datetime.now()))
+        exit_status = run_curate_r_script(args, metadata, sp, input_dir)
+        if exit_status == 0:
+            with open(file_curate_completion_flag, 'w') as f:
+                f.write('amalgkit curate completed at {}\n'.format(datetime.datetime.now()))

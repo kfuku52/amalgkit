@@ -31,7 +31,6 @@ if (debug_mode == "debug") {
     #selected_curate_groups = c("adipose_W","brain_M","brain_Q","brain_W","hypopharyngeal_glands_W","antennae_W")
     dir_count = "counts/"
     dir_eff_length = "eff_length/"
-    mode = "msm"
     transform_method = "log2p1-fpkm"
     one_outlier_per_iteration = "no"
     # tmm norm debug
@@ -45,7 +44,6 @@ if (debug_mode == "debug") {
     dist_method = "pearson"
     min_dif = 0
     plot_intermediate = 1
-    stop_after_tmm = TRUE
 
     # selected_curate_groups = strsplit('root|flower|leaf', '\\|')[[1]]
 } else if (debug_mode == "batch") {
