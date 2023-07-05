@@ -147,48 +147,43 @@ append_tmm_stats_to_metadata = function(df_metadata, cnf_out2) {
 }
 
 plot_norm_factor_histogram = function(df_metadata, font_size=8) {
-  cols = c('scientific_name','curate_group','tmm_normalization_factor')
-  tmp1 = df_metadata[,cols]
-  tmp2 = df_metadata[,cols]
-  colnames(tmp1) = c('scientific_name','curate_group','tmm_normalization_factor1')
-  colnames(tmp2) = c('scientific_name','curate_group','tmm_normalization_factor2')
-  tmp1[,'tmm_normalization_factor2'] = NA
-  tmp2[,'tmm_normalization_factor1'] = NA
-  tmp1[,'plot_type'] = 'scientific_name'
-  tmp2[,'plot_type'] = 'curate_group'
-  tmp = rbind(tmp1, tmp2)
-  x_limit = max(abs(log2(df_metadata[['tmm_normalization_factor']])))
-  g = ggplot2::ggplot(tmp) +
-    geom_histogram(aes(x=log2(tmm_normalization_factor1), fill=scientific_name), position="stack", alpha=0.7, bins=40) +
-    geom_histogram(aes(x=log2(tmm_normalization_factor2), fill=curate_group), position="stack", alpha=0.7, bins=40) +
-  facet_wrap(~plot_type, scales="free", nrow=2) +
-    theme_bw(base_size=font_size) +
-    xlim(c(-x_limit, x_limit)) +
-    labs(x='log2(TMM normalization factor)', y='Count') +
-    theme(
-        axis.text=element_text(size=font_size, color='black'),
-        axis.title=element_text(size=font_size, color='black'),
-        #panel.grid.major.y=element_blank(),
-        panel.grid.major.x=element_blank(),
-        panel.grid.minor.y=element_blank(),
-        panel.grid.minor.x=element_blank(),
-        legend.title=element_blank(),
-        legend.text=element_text(size=font_size, color='black'),
-        rect=element_rect(fill="transparent"),
-        plot.margin=unit(rep(0.1, 4), "cm")
-    )
-  ggsave(file.path(dir_cstmm, 'normalization_factor_histogram.pdf'), plot=g, width=7.2, height=4.8, units='in')
+  tmp = df_metadata[(!is.na(df_metadata[['tmm_normalization_factor']])),]
+  x_limit = max(abs(log2(tmp[['tmm_normalization_factor']])))
+  for (fill_by in c('scientific_name', 'curate_group')) {
+    g = ggplot2::ggplot(tmp) +
+      geom_histogram(aes(x=log2(tmm_normalization_factor), fill=!!rlang::sym(fill_by)), position="stack", alpha=0.7, bins=40) +
+      theme_bw(base_size=font_size) +
+      xlim(c(-x_limit, x_limit)) +
+      labs(x='log2(TMM normalization factor)', y='Count') +
+      guides(fill=guide_legend(ncol=1)) +
+      theme(
+          axis.text=element_text(size=font_size, color='black'),
+          axis.title=element_text(size=font_size, color='black'),
+          #panel.grid.major.y=element_blank(),
+          panel.grid.major.x=element_blank(),
+          panel.grid.minor.y=element_blank(),
+          panel.grid.minor.x=element_blank(),
+          legend.title=element_blank(),
+          legend.text=element_text(size=font_size, color='black'),
+          rect=element_rect(fill="transparent"),
+          plot.margin=unit(rep(0.1, 4), "cm")
+      )
+    out_path = file.path(dir_cstmm, paste0('tmm_normalization_factor_histogram.', fill_by, '.pdf'))
+    ggsave(out_path, plot=g, width=4.8, height=2.4, units='in')
+  }
 }
 
 plot_norm_factor_scatter = function(df_metadata, font_size=8) {
-  x_limit = max(abs(log2(df_metadata[['tmm_normalization_factor']])))
-  g = ggplot2::ggplot(df_metadata, aes(x=log10(tmm_library_size), y=log2(tmm_normalization_factor), fill=scientific_name, color=curate_group)) +
+  tmp = df_metadata[(!is.na(df_metadata[['tmm_normalization_factor']])),]
+  x_limit = max(abs(log2(tmp[['tmm_normalization_factor']])))
+  g = ggplot2::ggplot(tmp, aes(x=log10(tmm_library_size), y=log2(tmm_normalization_factor), fill=scientific_name, color=curate_group)) +
     geom_point(shape=21, alpha=0.7) +
     scale_fill_hue(l=65) +
     scale_color_hue(l=45) +
     theme_bw(base_size=font_size) +
     ylim(c(-x_limit, x_limit)) +
     labs(x='log10(Library size)', y='log2(TMM normalization factor)') +
+    guides(fill=guide_legend(ncol=1), color=guide_legend(ncol=1)) +
     theme(
         axis.text=element_text(size=font_size, color='black'),
         axis.title=element_text(size=font_size, color='black'),
@@ -201,7 +196,7 @@ plot_norm_factor_scatter = function(df_metadata, font_size=8) {
         rect=element_rect(fill="transparent"),
         plot.margin=unit(rep(0.1, 4), "cm")
     )
-  ggsave(file.path(dir_cstmm, 'normalization_factor_scatter.pdf'), plot=g, width=3.6, height=2.0, units='in')
+  ggsave(file.path(dir_cstmm, 'normalization_factor_scatter.pdf'), plot=g, width=4.8, height=2.0, units='in')
 }
 
 if (mode_tmm=='single_species') {
