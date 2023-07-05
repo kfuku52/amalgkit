@@ -62,23 +62,24 @@ def run_curate_r_script(args, metadata, sp, input_dir):
         print('Skipping {}'.format(sp), flush=True)
         return 1
     print("Starting Rscript to obtain curated {} values.".format(args.norm), flush=True)
-    subprocess.call(['Rscript',
-                     r_script_path,
-                     count_file,
-                     path_curate_input_metadata,
-                     os.path.realpath(args.out_dir),
-                     len_file,
-                     dist_method,
-                     str(mr_cut),
-                     '0',
-                     str(intermediate),
-                     curate_group,
-                     str(args.norm),
-                     str(args.one_outlier_per_iter),
-                     str(correlation_threshold),
-                     str(args.batch_effect_alg)
-                     ])
-    return 0
+    curate_r_exit_code = subprocess.call([
+        'Rscript',
+         r_script_path,
+         count_file,
+         path_curate_input_metadata,
+         os.path.realpath(args.out_dir),
+         len_file,
+         dist_method,
+         str(mr_cut),
+         '0',
+         str(intermediate),
+         curate_group,
+         str(args.norm),
+         str(args.one_outlier_per_iter),
+         str(correlation_threshold),
+         str(args.batch_effect_alg)
+         ])
+    return curate_r_exit_code
 
 def curate_main(args):
     check_rscript()

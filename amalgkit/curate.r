@@ -1,6 +1,5 @@
 #!/usr/bin/env Rscript
 
-# library(Biobase)
 suppressPackageStartupMessages(library(pcaMethods, quietly = TRUE))
 suppressPackageStartupMessages(library(colorspace, quietly = TRUE))
 suppressPackageStartupMessages(library(RColorBrewer, quietly = TRUE))
@@ -12,21 +11,16 @@ suppressPackageStartupMessages(library(pvclust, quietly = TRUE))
 suppressPackageStartupMessages(library(Rtsne, quietly = TRUE))
 
 debug_mode = ifelse(length(commandArgs(trailingOnly = TRUE)) == 1, "debug", "batch")
-#debug_mode = "debug"
 log_prefix = "transcriptome_curation.r:"
 cat(log_prefix, "mode =", debug_mode, "\n")
 if (debug_mode == "debug") {
     infile = '/Users/s229181/Desktop/projects/apis/est_count/Apis_mellifera_est_counts.tsv'
     eff_file = '/Users/s229181/Desktop/projects/apis/read_length/Apis_mellifera_eff_length.tsv'
-   # infile = "/Users/kf/Dropbox (Personal)/collaborators/Ken Naito/20210509_Vigna/gfe_data/cross_species_tmm_normalized_counts/Vigna_angularis_cstmm_counts.tsv"
-    #eff_file = "/Users/kf/Dropbox (Personal)/collaborators/Ken Naito/20210509_Vigna/gfe_data/merge/Vigna_angularis_eff_length.tsv"
     dist_method = "pearson"
     mapping_rate_cutoff = .20
     min_dif = 0
     plot_intermediate = 0
-    #selected_curate_groups = c("root", "flower", "leaf")
-    selected_curate_groups = c("adipose_W","brain_M","brain_Q","brain_W","hypopharyngeal_glands_W","antennae_W","malpighian_tubule_W","mandibular_gland_W","midgut_W","nasonov_gland_W","second_thoracic_ganglia_W","skeletal_muscle_W","sting_gland_W","ovary_W","mushroom_bodies_M","mushroom_bodies_W","larval_gut_W","adipose_Q","mandibular_gland_Q","head_and_thorax_Q","embryo_M")
-    #selected_curate_groups = c("adipose_W","brain_M","brain_Q","brain_W","hypopharyngeal_glands_W","antennae_W")
+    selected_curate_groups = c("root", "flower", "leaf")
     dir_count = "counts/"
     dir_eff_length = "eff_length/"
     transform_method = "log2p1-fpkm"
@@ -36,14 +30,9 @@ if (debug_mode == "debug") {
     tmm_norm = "no"
     dir_work = '/Users/s229181/Desktop/projects/apis/'
     srafile = '/Users/s229181/Desktop/projects/apis/metadata/metadata.tsv'
-   # dir_work = "/Users/kf/Dropbox (Personal)/collaborators/Ken Naito/20210509_Vigna/gfe_data"
-   # srafile = "/Users/kf/Dropbox (Personal)/collaborators/Ken Naito/20210509_Vigna/gfe_data/metadata/metadata/metadata_manual.tsv"
-
     dist_method = "pearson"
     min_dif = 0
     plot_intermediate = 1
-
-    # selected_curate_groups = strsplit('root|flower|leaf', '\\|')[[1]]
 } else if (debug_mode == "batch") {
     args = commandArgs(trailingOnly = TRUE)
     print(args)
@@ -156,12 +145,11 @@ curate_group_mean = function(tc, sra, selected_curate_groups = NA, balance.bp = 
     tc_ave = data.frame(matrix(rep(NA, length(sp_curate_groups) * nrow(tc)), nrow = nrow(tc)))
     colnames(tc_ave) = sp_curate_groups
     rownames(tc_ave) = rownames(tc)
-    
     for (curate_group in sp_curate_groups) {
         exclusion_curate_group = sra[(sra[['curate_group']] == curate_group),'exclusion']
         run_curate_group = sra[(sra[['curate_group']] == curate_group),'run']
         run_curate_group = run_curate_group[run_curate_group %in% colnames(tc)]
-        if (all(exclusion_curate_group!= "no")){
+        if (all(exclusion_curate_group!= "no")) {
           warning_message = paste0('All samples of curate_group ', curate_group, ' are marked for exclusion. This curate_group will be omitted from further analysis.')
           selected_curate_groups = selected_curate_groups[!selected_curate_groups==curate_group]
           tc_ave = tc_ave[, !names(tc_ave) %in% c(curate_group)]
@@ -480,7 +468,7 @@ draw_heatmap = function(sra, tc_dist_matrix, legend = TRUE, fontsize = 7) {
     curate_group_col_uniq = unique(sra[order(sra[['curate_group']]), 'curate_group_color'])
     ann_color = list(bioproject = bp_col_uniq, curate_group = curate_group_col_uniq)
     breaks = c(0, seq(0.3, 1, 0.01))
-    colnames(tc_dist_matrix)<-sra[sra$run %in% colnames(tc_dist_matrix), 'run']
+    colnames(tc_dist_matrix) = sra[sra$run %in% colnames(tc_dist_matrix), 'run']
     aheatmap(tc_dist_matrix, color = "-RdYlBu2:71", Rowv = NA, Colv = NA, revC = TRUE, legend = TRUE,
              breaks = breaks, annCol = ann_label, annRow = ann_label, annColors = ann_color, annLegend = legend,
              fontsize = fontsize)
@@ -500,13 +488,12 @@ color_children2parent = function(node) {
 }
 
 draw_dendrogram = function(sra, tc_dist_dist, fontsize = 7) {
-    dend <- as.dendrogram(hclust(tc_dist_dist))
+    dend = as.dendrogram(hclust(tc_dist_dist))
     dend_colors = sra[order.dendrogram(dend),'curate_group_color']
-    labels_colors(dend) <- dend_colors
-
-    dend_labels <- sra[order.dendrogram(dend), 'run']
-    dend <- color_branches(dend, labels = dend_labels, col = dend_colors)
-    dend <- set(dend, "branches_lwd", 1)
+    labels_colors(dend) = dend_colors
+    dend_labels = sra[order.dendrogram(dend), 'run']
+    dend = color_branches(dend, labels = dend_labels, col = dend_colors)
+    dend = set(dend, "branches_lwd", 1)
     for (i in 1:ncol(tc)) {
         dend = dendrapply(dend, color_children2parent)
     }
@@ -711,9 +698,14 @@ draw_sva_summary = function(sva_out, tc, sra, fontsize) {
         out = sort_tc_and_sra(tc, sra)
         tc = out[["tc"]]
         sra = out[["sra"]]
-        cols = c("curate_group","bioproject","lib_selection","instrument","mapping_rate")
-        label_cols = c("organ","BioProject","library selection","instrument","mapping rate")
-
+        sra[['log10_total_spots']] = log10(sra[['total_spots']])
+        sra[['log10_total_bases']] = log10(sra[['total_bases']])
+        cols = c("curate_group","bioproject","lib_selection","instrument","mapping_rate",'log10_total_spots','log10_total_bases')
+        label_cols = c("Group","BioProject","Library selection","Instrument","Mapping rate",'Log10 reads','Log10 total bases')
+        if ('tmm_normalization_factor' %in% colnames(sra)) {
+            cols = c(cols, 'tmm_normalization_factor')
+            label_cols = c(label_cols, 'TMM normalization factor')
+        }
         num_sv = sva_out[['n.sv']]
         df = data.frame(matrix(NA, num_sv, length(cols)))
         colnames(df) = cols
@@ -763,8 +755,6 @@ draw_tau_histogram = function(tc, sra, selected_curate_groups, fontsize = 7, tra
                     ylab = "Gene count", main = "", col = "gray")
     num_noexp = sum(is.na(df_tau[['tau']]))
     num_all = nrow(df_tau)
-    # num_exp = nrow(df_tau) - num_noexp text_noexp = paste('Expressed genes:', num_exp,
-    # '\nNon-expressed genes:', num_noexp)
     text_noexp = paste0("Excluded due to\nno expression:\n", num_noexp, "/", num_all, " genes")
     text(0, max(hist_out[['counts']]) * 0.85, text_noexp, pos = 4)
 }
@@ -886,38 +876,35 @@ get_tmm_scaled_fpkm = function(dat, df_nf, efflen) {
     return(dat_fpkm)
 }
 
-apply_transformation_logic = function(tc, tc_eff_length, transform_method, batch_effect_alg, bool_fpkm_tpm = TRUE, bool_log = TRUE){
-
-           if (bool_fpkm_tpm == TRUE){
-                if (grepl('fpkm', transform_method) ) {
-                    cat('Applying FPKM transformation.\n')
-                    tc = transform_raw_to_fpkm(tc, tc_eff_length[, colnames(tc)])
-                } else if (grepl('tpm', transform_method )) {
-                    cat('Applying TPM transformation.\n')
-                    tc = transform_raw_to_tpm(tc, tc_eff_length[, colnames(tc)])
-                } else {
-                    cat('Applying neither FPKM nor TPM transformation.\n')
-                }
-            }
-
-           if (bool_log == TRUE){
-
-                if (grepl('logn-', transform_method)) {
-                    cat('Applying log_n(x) normalization.\n')
-                    tc = log(tc)
-                } else if (grepl('log2-', transform_method)) {
-                    cat('Applying log_2(x) normalization.\n')
-                    tc = log2(tc)
-                } else if (grepl('lognp1-', transform_method)) {
-                    cat('Applying log_n(x+1) normalization.\n')
-                    tc = log(tc + 1)
-                } else if (grepl('log2p1-', transform_method)) {
-                    cat('Applying log_2(x+1) normalization.\n')
-                    tc = log2(tc + 1)
-                } else {
-                    cat('Applying no log normalization.\n')
-                }
-            }
+apply_transformation_logic = function(tc, tc_eff_length, transform_method, bool_fpkm_tpm = TRUE, bool_log = TRUE) {
+    if (bool_fpkm_tpm == TRUE){
+        if (grepl('fpkm', transform_method) ) {
+            cat('Applying FPKM transformation.\n')
+            tc = transform_raw_to_fpkm(tc, tc_eff_length[, colnames(tc)])
+        } else if (grepl('tpm', transform_method )) {
+            cat('Applying TPM transformation.\n')
+            tc = transform_raw_to_tpm(tc, tc_eff_length[, colnames(tc)])
+        } else {
+            cat('Applying neither FPKM nor TPM transformation.\n')
+        }
+    }
+    if (bool_log == TRUE){
+        if (grepl('logn-', transform_method)) {
+            cat('Applying log_n(x) normalization.\n')
+            tc = log(tc)
+        } else if (grepl('log2-', transform_method)) {
+            cat('Applying log_2(x) normalization.\n')
+            tc = log2(tc)
+        } else if (grepl('lognp1-', transform_method)) {
+            cat('Applying log_n(x+1) normalization.\n')
+            tc = log(tc + 1)
+        } else if (grepl('log2p1-', transform_method)) {
+            cat('Applying log_2(x+1) normalization.\n')
+            tc = log2(tc + 1)
+        } else {
+            cat('Applying no log normalization.\n')
+        }
+    }
     return(tc)
 }
 
@@ -964,18 +951,16 @@ is_not_excluded = (sra[['exclusion']]=='no')
 cat('Number of non-excluded SRA runs (exclusion=="no"):', sum(is_not_excluded), '\n')
 tc = tc[,sra[is_not_excluded,'run'], drop=FALSE]
 out = sort_tc_and_sra(tc, sra) ; tc = out[["tc"]] ; sra = out[["sra"]]
+row.names(tc_eff_length) = tc_eff_length[, 1]
+tc_eff_length = tc_eff_length[, colnames(tc)]
 
-# log transform AFTER mappingrate
-row.names(tc_eff_length) <- tc_eff_length[, 1]
-tc_eff_length <- tc_eff_length[, colnames(tc)]
-
-if (batch_effect_alg != 'sva'){
+if (batch_effect_alg != 'sva') {
     cat(paste0('batch effect removal algorithm is ', batch_effect_alg, ' and transform_method is: ', transform_method, ' Applying transformation after batch effect removal and temporarily for plotting. \n'))
-    if(batch_effect_alg == 'svaseq'){
-        tc = apply_transformation_logic(tc, tc_eff_length, transform_method, batch_effect_alg, bool_fpkm_tpm = TRUE, bool_log = FALSE)
+    if (batch_effect_alg == 'svaseq') {
+        tc = apply_transformation_logic(tc, tc_eff_length, transform_method, bool_fpkm_tpm = TRUE, bool_log = FALSE)
     }
-}else{
-    tc = apply_transformation_logic(tc, tc_eff_length, transform_method, batch_effect_alg, bool_fpkm_tpm = TRUE, bool_log = TRUE)
+} else {
+    tc = apply_transformation_logic(tc, tc_eff_length, transform_method, bool_fpkm_tpm = TRUE, bool_log = TRUE)
 }
 
 
@@ -1000,12 +985,12 @@ tc = out[["tc"]]
 sra = out[["sra"]]
 
 tc_tmp = tc
-if (batch_effect_alg != 'sva'){
+if (batch_effect_alg != 'sva') {
     cat(paste0('batch effect removal algorithm is ', batch_effect_alg, ' and transform_method is: ', transform_method, ' Applying transformation after batch effect removal and temporarily for plotting. \n'))
-    if(batch_effect_alg == 'svaseq'){
-        tc_tmp = apply_transformation_logic(tc, tc_eff_length, transform_method, batch_effect_alg, bool_fpkm_tpm = FALSE, bool_log = TRUE)
-    }else{
-    tc_tmp = apply_transformation_logic(tc, tc_eff_length, transform_method, batch_effect_alg, bool_fpkm_tpm = TRUE, bool_log = TRUE)
+    if (batch_effect_alg == 'svaseq') {
+        tc_tmp = apply_transformation_logic(tc, tc_eff_length, transform_method, bool_fpkm_tpm = FALSE, bool_log = TRUE)
+    } else {
+    tc_tmp = apply_transformation_logic(tc, tc_eff_length, transform_method, bool_fpkm_tpm = TRUE, bool_log = TRUE)
     }
 }
 
@@ -1018,12 +1003,12 @@ if (!is.null(sva_out)) {
     save(sva_out, file = file.path(dir_rdata, paste0(sub(" ", "_", scientific_name),".", batch_effect_alg,".", round, ".RData")))
 }
 tc_sva_tmp = tc_sva
-if (batch_effect_alg != 'sva'){
+if (batch_effect_alg != 'sva') {
     cat(paste0('batch effect removal algorithm is ', batch_effect_alg, ' and transform_method is: ', transform_method, ' Applying transformation after batch effect removal and temporarily for plotting. \n'))
-    if(batch_effect_alg == 'svaseq'){
-        tc_sva_tmp = apply_transformation_logic(tc_sva, tc_eff_length, transform_method, batch_effect_alg, bool_fpkm_tpm = FALSE, bool_log = FALSE)
-    }else{
-    tc_sva_tmp = apply_transformation_logic(tc_sva, tc_eff_length, transform_method, batch_effect_alg, bool_fpkm_tpm = TRUE, bool_log = TRUE)
+    if(batch_effect_alg == 'svaseq') {
+        tc_sva_tmp = apply_transformation_logic(tc_sva, tc_eff_length, transform_method, bool_fpkm_tpm = FALSE, bool_log = FALSE)
+    } else {
+        tc_sva_tmp = apply_transformation_logic(tc_sva, tc_eff_length, transform_method, bool_fpkm_tpm = TRUE, bool_log = TRUE)
     }
 }
 save_plot(tc_sva_tmp, sra, sva_out, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".original", ".", batch_effect_alg),
@@ -1037,13 +1022,12 @@ sra = out[["sra"]]
 tc = tc[, sra[sra[['exclusion']] == "no", "run"], drop=FALSE]
 
 tc_tmp = tc
-if (batch_effect_alg != 'sva'){
+if (batch_effect_alg != 'sva') {
     cat(paste0('batch effect removal algorithm is ', batch_effect_alg, ' and transform_method is: ', transform_method, ' Applying transformation after batch effect removal and temporarily for plotting. \n'))
-    if(batch_effect_alg == 'svaseq'){
-        tc_tmp = apply_transformation_logic(tc, tc_eff_length, transform_method, batch_effect_alg, bool_fpkm_tpm = FALSE, bool_log = TRUE)
-    }
-    else{
-    tc_tmp = apply_transformation_logic(tc, tc_eff_length, transform_method, batch_effect_alg, bool_fpkm_tpm = TRUE, bool_log = TRUE)
+    if (batch_effect_alg == 'svaseq') {
+        tc_tmp = apply_transformation_logic(tc, tc_eff_length, transform_method, bool_fpkm_tpm = FALSE, bool_log = TRUE)
+    } else {
+        tc_tmp = apply_transformation_logic(tc, tc_eff_length, transform_method, bool_fpkm_tpm = TRUE, bool_log = TRUE)
     }
 }
 save_plot(tc_tmp, sra, NULL, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".mapping_cutoff"),
@@ -1060,10 +1044,9 @@ tc_sva_tmp = tc_sva
 if (batch_effect_alg != 'sva'){
     cat(paste0('batch effect removal algorithm is ', batch_effect_alg, ' and transform_method is: ', transform_method, ' Applying transformation after batch effect removal and temporarily for plotting. \n'))
     if(batch_effect_alg == 'svaseq'){
-        tc_sva_tmp = apply_transformation_logic(tc_sva, tc_eff_length, transform_method, batch_effect_alg, bool_fpkm_tpm = FALSE, bool_log = FALSE)
-    }
-    else{
-    tc_sva_tmp = apply_transformation_logic(tc_sva, tc_eff_length, transform_method, batch_effect_alg, bool_fpkm_tpm = TRUE, bool_log = TRUE)
+        tc_sva_tmp = apply_transformation_logic(tc_sva, tc_eff_length, transform_method, bool_fpkm_tpm = FALSE, bool_log = FALSE)
+    } else {
+        tc_sva_tmp = apply_transformation_logic(tc_sva, tc_eff_length, transform_method, bool_fpkm_tpm = TRUE, bool_log = TRUE)
     }
 }
 save_plot(tc_sva_tmp, sra, sva_out, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".mapping_cutoff", ".", batch_effect_alg),
@@ -1075,18 +1058,15 @@ while (end_flag == 0) {
     cat("Iteratively checking within-curate_group correlation, round:", round, "\n")
     tc_cwtc = NULL
     num_run_before = sum(sra[['exclusion']] == "no")
-
     tc_tmp = tc
-    if (batch_effect_alg != 'sva'){
-    cat(paste0('batch effect removal algorithm is ', batch_effect_alg, ' and transform_method is: ', transform_method, ' Applying transformation after batch effect removal and temporarily for plotting. \n'))
-        if(batch_effect_alg == 'svaseq'){
-            tc_tmp = apply_transformation_logic(tc, tc_eff_length, transform_method, batch_effect_alg, bool_fpkm_tpm = FALSE, bool_log = TRUE)
-        }
-        else{
-        tc_tmp = apply_transformation_logic(tc, tc_eff_length, transform_method, batch_effect_alg, bool_fpkm_tpm = TRUE, bool_log = TRUE)
+    if (batch_effect_alg != 'sva') {
+        cat(paste0('batch effect removal algorithm is ', batch_effect_alg, ' and transform_method is: ', transform_method, ' Applying transformation after batch effect removal and temporarily for plotting. \n'))
+        if (batch_effect_alg == 'svaseq') {
+            tc_tmp = apply_transformation_logic(tc, tc_eff_length, transform_method, bool_fpkm_tpm = FALSE, bool_log = TRUE)
+        } else {
+            tc_tmp = apply_transformation_logic(tc, tc_eff_length, transform_method, bool_fpkm_tpm = TRUE, bool_log = TRUE)
         }
     }
-
     out = check_within_curate_group_correlation(tc_tmp, sra, dist_method, min_dif, selected_curate_groups, one_outlier_per_iteration, correlation_threshold)
     tc_cwtc = out[["tc"]]
     sra = out[["sra"]]
@@ -1102,21 +1082,17 @@ while (end_flag == 0) {
         }
         save_plot(tc_cwtc, sra, NULL, dist_method, paste0(sub(" ", "_", scientific_name), ".", round,
                                                           ".correlation_cutoff"), selected_curate_groups, fontsize, transform_method, batch_effect_alg)
-
         tc_sva_tmp = tc_sva
-        if (batch_effect_alg != 'sva'){
+        if (batch_effect_alg != 'sva') {
             cat(paste0('batch effect removal algorithm is ', batch_effect_alg, ' and transform_method is: ', transform_method, ' Applying transformation after batch effect removal and temporarily for plotting. \n'))
-            if(batch_effect_alg == 'svaseq'){
-                tc_sva_tmp = apply_transformation_logic(tc_sva, tc_eff_length, transform_method, batch_effect_alg, bool_fpkm_tpm = FALSE, bool_log = FALSE)
-            }
-            else{
-            tc_sva_tmp = apply_transformation_logic(tc_sva, tc_eff_length, transform_method, batch_effect_alg, bool_fpkm_tpm = TRUE, bool_log = TRUE)
+            if (batch_effect_alg == 'svaseq') {
+                tc_sva_tmp = apply_transformation_logic(tc_sva, tc_eff_length, transform_method, bool_fpkm_tpm = FALSE, bool_log = FALSE)
+            } else {
+                tc_sva_tmp = apply_transformation_logic(tc_sva, tc_eff_length, transform_method, bool_fpkm_tpm = TRUE, bool_log = TRUE)
             }
         }
-
         save_plot(tc_sva_tmp, sra, sva_out, dist_method, paste0(sub(" ", "_", scientific_name), ".", round,
                                                             ".correlation_cutoff",".", batch_effect_alg), selected_curate_groups, fontsize, transform_method, batch_effect_alg)
-
     }
     cat("Round:", round, ": # before =", num_run_before, ": # after =", num_run_after, "\n\n")
     if (num_run_before == num_run_after) {
@@ -1126,10 +1102,8 @@ while (end_flag == 0) {
     round = round + 1
 }
 
-
-
 cat("Finished checking within-curate_group correlation.\n")
-if (batch_effect_alg != 'sva'){
+if (batch_effect_alg != 'sva') {
     cat("Batch-effect removal algorithm is: ",batch_effect_alg ," . Applying transformation on final adjusted counts. \n")
     tc_sva = tc_sva_tmp
 }
@@ -1146,3 +1120,4 @@ tc_tau = curate_group2tau(tc_curate_group, rich.annotation = TRUE, transform_met
 file = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".", batch_effect_alg , ".tau.tsv"))
 write.table(data.frame("GeneID"=rownames(tc_tau), tc_tau), file = file, sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
 cat(log_prefix, "Completed.\n")
+quit(save='no', status=0)
