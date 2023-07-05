@@ -69,7 +69,7 @@ get_uncorrected = function(dir_count, file_genecount=NA) {
   if (is.na(file_genecount)) {
     df_gc = NA
   } else {
-    df_gc = read.table(file_genecount, header=TRUE, sep='\t', check.names=FALSE)
+    df_gc = read.table(file_genecount, header=TRUE, sep='\t', check.names=FALSE, quote='', comment.char='')
   }
   spp_filled = get_spp_filled(dir_count, df_gc)
   uncorrected = list()
@@ -84,8 +84,8 @@ get_uncorrected = function(dir_count, file_genecount=NA) {
 }
 
 get_df_exp_single_copy_ortholog = function(file_genecount, file_orthogroup_table, dir_count, uncorrected) {
-  df_gc = read.table(file_genecount, header=TRUE, sep='\t', check.names=FALSE)
-  df_og = read.table(file_orthogroup_table, header=TRUE, sep='\t', row.names=1, check.names=FALSE)
+  df_gc = read.table(file_genecount, header=TRUE, sep='\t', check.names=FALSE, quote='', comment.char='')
+  df_og = read.table(file_orthogroup_table, header=TRUE, sep='\t', row.names=1, check.names=FALSE, quote='', comment.char='')
   spp_filled = get_spp_filled(dir_count, df_gc)
   is_singlecopy = get_singlecopy_bool_index(df_gc, spp_filled)
   df_singleog = df_og[is_singlecopy, spp_filled, drop=FALSE]
@@ -101,14 +101,19 @@ get_df_exp_single_copy_ortholog = function(file_genecount, file_orthogroup_table
   return(df_sog)
 }
 
-get_df_nonzero = function(df_sog) {
-  is_na_containing_row = apply(df_sog, 1, function(x){any(is.na(x))})
-  txt = 'Removing %s out of %s orthogroups because missing values are observed in at least one species.\n'
-  cat(sprintf(txt, formatC(sum(is_na_containing_row), big.mark=','), formatC(nrow(df_sog), big.mark=',')))
+get_df_nonzero = function(df_sog, imputation=TRUE) {
   is_no_count_col = apply(df_sog, 2, function(x){sum(x, na.rm=TRUE)==0})
-  txt = 'Removing %s out of %s samples because read mapping values are all zero.\n'
+  txt = 'Removing %s out of %s samples whose read mapping values are all zero.\n'
   cat(sprintf(txt, formatC(sum(is_no_count_col), big.mark=','), formatC(ncol(df_sog), big.mark=',')))
-  df_nonzero = df_sog[!is_na_containing_row,!is_no_count_col]
+  df_nonzero = df_sog[,!is_no_count_col]
+  if (imputation) {
+    df_nonzero = impute_expression(df_nonzero)
+  } else {
+    is_na_containing_row = apply(df_sog, 1, function(x){any(is.na(x))})
+    txt = 'Removing %s out of %s orthogroups because missing values are observed in at least one species.\n'
+    cat(sprintf(txt, formatC(sum(is_na_containing_row), big.mark=','), formatC(nrow(df_sog), big.mark=',')))
+    df_nonzero = df_sog[!is_na_containing_row,]
+  }
   return(df_nonzero)
 }
 
@@ -224,8 +229,7 @@ cnf_out2 = edgeR::calcNormFactors(cnf_in, method='TMM', refColumn=median_index)
 cat('Round 2: Median TMM normalization factor =', median(cnf_out2[[2]][['norm.factors']]), '\n')
 
 path_metadata = file.path(dir_count, 'metadata.tsv')
-df_metadata = read.table(path_metadata, header=TRUE, sep='\t', check.names=FALSE, quote='')
-
+df_metadata = read.table(path_metadata, header=TRUE, sep='\t', check.names=FALSE, quote='', comment.char='')
 df_metadata = append_tmm_stats_to_metadata(df_metadata, cnf_out2)
 out_path = file.path(dir_cstmm, 'metadata.tsv')
 write.table(df_metadata, out_path, row.names=FALSE, sep='\t', quote=FALSE)

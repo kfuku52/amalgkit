@@ -14,6 +14,7 @@ suppressPackageStartupMessages(library(MASS, quietly=TRUE))
 suppressPackageStartupMessages(library(pvclust, quietly=TRUE))
 suppressPackageStartupMessages(library(Rtsne, quietly=TRUE))
 suppressPackageStartupMessages(library(ggplot2, quietly=TRUE))
+suppressPackageStartupMessages(library(pcaMethods, quietly=TRUE))
 options(stringsAsFactors = FALSE)
 
 debug_mode = ifelse(length(commandArgs(trailingOnly = TRUE)) == 1, "debug", "batch")
@@ -23,24 +24,18 @@ if (debug_mode == "debug") {
   selected_curate_groups = c('root','flower', 'leaf')
   dir_work = '/Users/s229181/MSN/'
   dir_curated_transcriptome = paste0(dir_work, 'curate/')
-  dir_unaveraged = paste0(dir_curated_transcriptome,'tables/')
-  dir_uncorrected_curate_group_mean = paste0(dir_curated_transcriptome,'tables/')
-  dir_curate_group_mean = paste0(dir_curated_transcriptome, 'tables/')
-  dir_metadata = paste0(dir_curated_transcriptome,'tables/')
+  dir_csca_input_table = paste0(dir_curated_transcriptome,'tables/')
   file_orthogroup = paste0(dir_work, 'OrthoFinder/Orthogroups.tsv')
 } else if (debug_mode == "batch") {
   args = commandArgs(trailingOnly = TRUE)
   print(args)
   selected_curate_groups = strsplit(args[1], "\\|")[[1]]
   dir_work = args[2]
-  dir_unaveraged = args[3]
-  dir_uncorrected_curate_group_mean = args[4]
-  dir_curate_group_mean = args[5]
-  dir_metadata = args[6]
-  file_orthogroup = args[7]
-  file_genecount = args[8]
-  r_util_path = args[9]
-  dir_csca = args[10]
+  dir_csca_input_table = args[3]
+  file_orthogroup = args[4]
+  file_genecount = args[5]
+  r_util_path = args[6]
+  dir_csca = args[7]
 }
 source(r_util_path)
 setwd(dir_csca)
@@ -249,11 +244,11 @@ draw_multisp_legend = function(df_label) {
   legend("right", legend=legend_text, pt.cex=1, pch=legend_pch, lty=0, lwd=2, pt.bg=legend_bg, col=legend_fg, cex=cex_axis, text.font=legend_font)
 }
 
-prepare_metadata_table = function(dir_metadata, selected_curate_groups, spp) {
-  files = list.files(dir_metadata, pattern = ".*metadata.*")
+prepare_metadata_table = function(dir_csca_input_table, selected_curate_groups, spp) {
+  files = list.files(dir_csca_input_table, pattern = ".*metadata.*")
   df_metadata = data.frame()
   for (file in files) {
-    metadata_path = file.path(dir_metadata, file)
+    metadata_path = file.path(dir_csca_input_table, file)
     tmp_metadata = read.table(metadata_path, header=TRUE, sep='\t', quote='', comment.char='')
     df_metadata = rbind(df_metadata, tmp_metadata)
   }
@@ -269,18 +264,18 @@ get_label_orders = function(df_metadata) {
   return(label_orders)
 }
 
-load_group_mean_expression_tables = function(dir_curate_group_mean, spp_filled) {
+load_group_mean_expression_tables = function(dir_csca_input_table, spp_filled) {
   averaged_tcs = list()
   averaged_tcs[['uncorrected']] = list()
   averaged_tcs[['corrected']] = list()
-  all_files = list.files(dir_curate_group_mean, pattern = "*.curate_group.mean.tsv")
+  all_files = list.files(dir_csca_input_table, pattern = "*.curate_group.mean.tsv")
   uncorrected_files = all_files[grep("uncorrected", all_files)]
   corrected_files = all_files[-grep("uncorrected", all_files)]
   for (sp in spp_filled) {
     uncorrected_file = uncorrected_files[startsWith(uncorrected_files, sp)]
     corrected_file = corrected_files[startsWith(corrected_files, sp)]
-    uncorrected_path = file.path(dir_uncorrected_curate_group_mean, uncorrected_file)
-    corrected_path = file.path(dir_curate_group_mean, corrected_file)
+    uncorrected_path = file.path(dir_csca_input_table, uncorrected_file)
+    corrected_path = file.path(dir_csca_input_table, corrected_file)
     averaged_tcs[['uncorrected']][[sp]] = read.delim(uncorrected_path, header=TRUE, row.names=1, sep='\t')
     averaged_tcs[['corrected']][[sp]] = read.delim(corrected_path, header=TRUE, row.names=1, sep='\t')
   }
@@ -294,7 +289,6 @@ extract_ortholog_mean_expression_table = function(df_singleog, averaged_tcs, spp
   row_names = rownames(averaged_orthologs[['corrected']])
   selected_species = spp
   for (d in c('uncorrected', 'corrected')) {
-    cat(d, '\n')
     for (sp in spp) {
       sp_filled = sub(" ", "_", sp)
       tc = averaged_tcs[[d]][[sp_filled]]
@@ -305,24 +299,25 @@ extract_ortholog_mean_expression_table = function(df_singleog, averaged_tcs, spp
     averaged_orthologs[[d]] = averaged_orthologs[[d]][,-(1:num_remove_col)]
     rownames(averaged_orthologs[[d]]) = row_names
     averaged_orthologs[[d]] = sort_averaged_tc(averaged_orthologs[[d]])
-    averaged_orthologs[[d]] = averaged_orthologs[[d]][, label_orders]
+    available_label_orders = label_orders[label_orders %in% colnames(averaged_orthologs[[d]])]
+    averaged_orthologs[[d]] = averaged_orthologs[[d]][, available_label_orders]
   }
   cat(nrow(averaged_orthologs[[d]]), 'orthologs were found before filtering.\n')
   return(averaged_orthologs)
 }
 
-load_unaveraged_expression_tables = function(dir_unaveraged, spp_filled) {
+load_unaveraged_expression_tables = function(dir_csca_input_table, spp_filled) {
   unaveraged_tcs = list()
   unaveraged_tcs[['uncorrected']] = list()
   unaveraged_tcs[['corrected']] = list()
-  all_files = list.files(dir_unaveraged, pattern = "*.tc.*") # TODO This pattern doesn't look safe
+  all_files = list.files(dir_csca_input_table, pattern = "*.tc.*") # TODO This pattern doesn't look safe
   uncorrected_files = all_files[grep("uncorrected", all_files)]
   corrected_files = all_files[-grep("uncorrected", all_files)]
   for (sp in spp_filled) {
     uncorrected_file = uncorrected_files[startsWith(uncorrected_files, sp)]
-    uncorrected_path = file.path(dir_unaveraged, uncorrected_file)
+    uncorrected_path = file.path(dir_csca_input_table, uncorrected_file)
     corrected_file = corrected_files[startsWith(corrected_files, sp)]
-    corrected_path = file.path(dir_unaveraged, corrected_file)
+    corrected_path = file.path(dir_csca_input_table, corrected_file)
     unaveraged_tcs[['uncorrected']][[sp]] = read.delim(uncorrected_path, header=TRUE, row.names=1, sep='\t')
     unaveraged_tcs[['corrected']][[sp]] = read.delim(corrected_path, header=TRUE, row.names=1, sep='\t')
   }
@@ -344,16 +339,16 @@ extract_ortholog_unaveraged_expression_table = function(df_singleog, unaveraged_
     num_remove_col = length(spp)
     unaveraged_orthologs[[d]] = unaveraged_orthologs[[d]][,-(1:num_remove_col)]
     rownames(unaveraged_orthologs[[d]]) = row_names
-    is_not_na = apply(unaveraged_orthologs[[d]], 1, function(x){!any(is.na(x))})
-    unaveraged_orthologs[[d]] = unaveraged_orthologs[[d]][is_not_na,]
+    #is_not_na = apply(unaveraged_orthologs[[d]], 1, function(x){!any(is.na(x))})
+    #unaveraged_orthologs[[d]] = unaveraged_orthologs[[d]][is_not_na,]
   }
-  cat(nrow(unaveraged_orthologs[[d]]), 'unaveraged_orthologs were found after filtering.\n')
+  #cat(nrow(unaveraged_orthologs[[d]]), 'unaveraged_orthologs were found after filtering.\n')
   tc_order = order(sub('.*_','',colnames(unaveraged_orthologs[['corrected']])))
   unaveraged_orthologs[['corrected']] = unaveraged_orthologs[['corrected']][,tc_order]
   return(unaveraged_orthologs)
 }
 
-get_df_labels = function(df_metadata) {
+get_df_labels_averaged = function(df_metadata) {
   df_color_averaged = list()
   for (d in c('uncorrected','corrected')) {
     if (d=='uncorrected') {
@@ -378,12 +373,20 @@ get_df_labels = function(df_metadata) {
   return(df_color_averaged)
 }
 
-get_df_label2 = function(df_metadata, selected_curate_groups) {
+get_df_labels_unaveraged = function(df_metadata, selected_curate_groups) {
+  df_color_unaveraged = list()
   cols = c('run','bioproject','curate_group','scientific_name','sp_color','curate_group_color','bp_color')
-  df_color_unaveraged = add_color_to_metadata(df_metadata[(df_metadata[['exclusion']]=='no'),], selected_curate_groups)
-  df_color_unaveraged = df_color_unaveraged[,cols]
-  label_order = order(df_color_unaveraged[['run']])
-  df_color_unaveraged = df_color_unaveraged[label_order,]
+  for (d in c('uncorrected','corrected')) {
+    if (d=='uncorrected') {
+      metadata_tmp = df_metadata
+    } else if (d=='corrected') {
+      metadata_tmp = df_metadata[(df_metadata[['exclusion']]=='no'),]
+    }
+    df_color_unaveraged[[d]] = add_color_to_metadata(metadata_tmp, selected_curate_groups)
+    df_color_unaveraged[[d]] = df_color_unaveraged[[d]][,cols]
+    label_order = order(df_color_unaveraged[[d]][['run']])
+    df_color_unaveraged[[d]] = df_color_unaveraged[[d]][label_order,]
+  }
   return(df_color_unaveraged)
 }
 
@@ -442,7 +445,7 @@ get_pca_coordinates = function(tc, df_label, by='species_curate_group') {
 
 save_unaveraged_pca_plot = function(unaveraged_orthologs, df_color_unaveraged) {
   for (d in c('uncorrected', 'corrected')) {
-    out = get_pca_coordinates(tc=unaveraged_orthologs[[d]], df_label=df_color_unaveraged, by='run')
+    out = get_pca_coordinates(tc=unaveraged_orthologs[[d]], df_label=df_color_unaveraged[[d]], by='run')
     tmp = out[[1]]
     pc_contributions = out[[2]]
     for (pcxy in list(c(1,2),c(3,4))) {
@@ -467,7 +470,7 @@ save_unaveraged_pca_plot = function(unaveraged_orthologs, df_color_unaveraged) {
       g = g + theme_bw()
       g = g + geom_point(size=0.5)
       # g = g + geom_density_2d(mapping=aes(color=curate_group), bins=12, size=0.25) # Temporarily deactivated. Bug fix needed.
-      curate_group_colors = unique(df_color_unaveraged[,c('curate_group','curate_group_color')])[['curate_group_color']]
+      curate_group_colors = unique(df_color_unaveraged[[d]][,c('curate_group','curate_group_color')])[['curate_group_color']]
       g = g + scale_color_manual(values=curate_group_colors)
       g = g + xlab(pc_contributions[pcx])
       g = g + ylab(pc_contributions[pcy])
@@ -497,7 +500,7 @@ get_tsne_coordinates = function(tc, df_label, by='run') {
 
 save_unaveraged_tsne_plot = function(unaveraged_orthologs, df_color_unaveraged) {
   for (d in c('uncorrected', 'corrected')) {
-    tmp = get_tsne_coordinates(tc=unaveraged_orthologs[[d]], df_label=df_color_unaveraged)
+    tmp = get_tsne_coordinates(tc=unaveraged_orthologs[[d]], df_label=df_color_unaveraged[[d]])
     pcx = 1
     pcy = 2
     colx = paste0('tsne', pcx)
@@ -518,7 +521,7 @@ save_unaveraged_tsne_plot = function(unaveraged_orthologs, df_color_unaveraged) 
     g = g + theme_bw()
     g = g + geom_point(size=0.5)
     #g = g+ geom_density_2d(mapping=aes(color=curate_group), bins=12, size=0.25) # Temporarily deactivated. Bug fix needed.
-    curate_group_colors = unique(df_color_unaveraged[,c('curate_group','curate_group_color')])[['curate_group_color']]
+    curate_group_colors = unique(df_color_unaveraged[[d]][,c('curate_group','curate_group_color')])[['curate_group_color']]
     g = g + scale_color_manual(values=curate_group_colors)
     g = g + xlab('t-SNE dimension 1')
     g = g + ylab('t-SNE dimension 2')
@@ -572,18 +575,18 @@ save_averaged_dendrogram_plot = function(averaged_orthologs, df_color_averaged) 
   graphics.off()
 }
 
-save_averaged_pca_mds_plot = function(averaged_orthologs, df_color_averaged) {
+save_averaged_dimensionality_reduction_summary = function(averaged_orthologs, df_color_averaged) {
   par(cex=1)
-  file_name='csca.SVA.PCA.MDS.pdf'
-  pdf(file_name, height=4.5, width=7.2) # full figure size = 9.7 x 7.2
-  layout_matrix = matrix(c(1,1,1,3,3,3,5,5,2,2,2,4,4,4,5,5),2,8,byrow=TRUE)
+  file_name='csca.averaged.summary.pdf'
+  pdf(file_name, height=7.2, width=7.2) # full figure size = 9.7 x 7.2
+  layout_matrix = matrix(c(1,1,1,4,4,4,7,7,2,2,2,5,5,5,7,7,3,3,3,6,6,6,7,7),3,8,byrow=TRUE)
   layout(layout_matrix)
   for (d in c('uncorrected','corrected')) {
     tc = averaged_orthologs[[d]]
     df_label = df_color_averaged[[d]]
     par(mar=c(4,4,0.1,1)); draw_multisp_pca(tc=tc, df_label=df_label)
     par(mar=c(4,4,0.1,1)); draw_multisp_tsne(tc=tc, df_label=df_label)
-    #par(mar=c(4,4,0.1,1)); draw_multisp_mds(tc=tc, df_label=df_label)
+    par(mar=c(4,4,0.1,1)); draw_multisp_mds(tc=tc, df_label=df_label)
   }
   par(mar=c(0,0,0,0)); draw_multisp_legend(df_label)
   graphics.off()
@@ -624,32 +627,42 @@ file_metadata_out = file.path(dir_csca, 'metadata.tsv')
 df_og = read.table(file_orthogroup, header=TRUE, sep='\t', row.names=1, quote='')
 df_gc = read.table(file_genecount, header=TRUE, sep='\t', check.names=FALSE, quote='')
 spp_filled = colnames(df_gc)
+
 is_singlecopy = get_singlecopy_bool_index(df_gc, spp_filled)
 df_singleog = df_og[is_singlecopy,spp_filled]
 spp = sub('_', ' ', spp_filled)
-df_metadata = prepare_metadata_table(dir_metadata, selected_curate_groups, spp)
+df_metadata = prepare_metadata_table(dir_csca_input_table, selected_curate_groups, spp)
 label_orders = get_label_orders(df_metadata)
 cat('Number of orthologs in input table:', nrow(df_og), '\n')
 cat('Number of single-copy orthologs:', nrow(df_singleog), '\n')
 cat('Number of selected species:', length(spp), '\n')
 cat('Selected species:', spp, '\n')
 
-averaged_tcs = load_group_mean_expression_tables(dir_curate_group_mean, spp_filled)
+averaged_tcs = load_group_mean_expression_tables(dir_csca_input_table, spp_filled)
 averaged_orthologs = extract_ortholog_mean_expression_table(df_singleog, averaged_tcs, spp, label_orders)
-unaveraged_tcs = load_unaveraged_expression_tables(dir_unaveraged, spp_filled)
+unaveraged_tcs = load_unaveraged_expression_tables(dir_csca_input_table, spp_filled)
 unaveraged_orthologs = extract_ortholog_unaveraged_expression_table(df_singleog, unaveraged_tcs, spp)
-
-df_color_averaged = get_df_labels(df_metadata)
-df_color_unaveraged = get_df_label2(df_metadata, selected_curate_groups)
-write.table(df_color_averaged, 'csca_color_averaged.tsv', sep='\t', row.names=FALSE, quote=FALSE)
-write.table(df_color_unaveraged, 'csca_color_unaveraged.tsv', sep='\t', row.names=FALSE, quote=FALSE)
-save_averaged_tsne_plot(tc=unaveraged_orthologs[['corrected']], df_label=df_color_unaveraged)
-save_averaged_heatmap_plot(averaged_orthologs, df_color_averaged)
-save_averaged_dendrogram_plot(averaged_orthologs, df_color_averaged)
-save_averaged_pca_mds_plot(averaged_orthologs, df_color_averaged)
-save_averaged_box_plot(averaged_orthologs, df_color_averaged)
-save_unaveraged_pca_plot(unaveraged_orthologs, df_color_unaveraged)
-save_unaveraged_tsne_plot(unaveraged_orthologs, df_color_unaveraged)
+cat('Applying expression level imputation for missing orthologs.\n')
+imputed_averaged_orthologs = list()
+imputed_unaveraged_orthologs = list()
+for (d in c('uncorrected','corrected')) {
+  imputed_averaged_orthologs[[d]] = impute_expression(averaged_orthologs[[d]])
+  imputed_unaveraged_orthologs[[d]] = impute_expression(unaveraged_orthologs[[d]])
+}
+cat(nrow(imputed_unaveraged_orthologs[[d]]), 'orthologs were found after filtering and imputation.\n')
+df_color_averaged = get_df_labels_averaged(df_metadata)
+df_color_unaveraged = get_df_labels_unaveraged(df_metadata, selected_curate_groups)
+for (d in c('uncorrected','corrected')) {
+  write.table(df_color_averaged[[d]], paste0('csca_color_averaged.',d,'.tsv'), sep='\t', row.names=FALSE, quote=FALSE)
+  write.table(df_color_unaveraged[[d]], paste0('csca_color_unaveraged.',d,'.tsv'), sep='\t', row.names=FALSE, quote=FALSE)
+}
+save_averaged_tsne_plot(tc=imputed_unaveraged_orthologs[['corrected']], df_label=df_color_unaveraged[['corrected']])
+save_averaged_heatmap_plot(imputed_averaged_orthologs, df_color_averaged)
+save_averaged_dendrogram_plot(imputed_averaged_orthologs, df_color_averaged)
+save_averaged_dimensionality_reduction_summary(imputed_averaged_orthologs, df_color_averaged)
+save_averaged_box_plot(imputed_averaged_orthologs, df_color_averaged)
+save_unaveraged_pca_plot(imputed_unaveraged_orthologs, df_color_unaveraged)
+save_unaveraged_tsne_plot(imputed_unaveraged_orthologs, df_color_unaveraged)
 
 if (file.exists('Rplots.pdf')) {
   file.remove('Rplots.pdf')
