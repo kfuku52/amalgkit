@@ -295,13 +295,13 @@ pcu.add_argument('--norm', metavar='(logn|log2|lognp1|log2p1|none)-(fpkm|tpm|non
                       'lognp1: log_n(x+1) normalization after FPKM/TPM transformation. '
                       'log2p1: log_2(x+1) normalization after FPKM/TPM transformation. '
                       'fpkm/tpm/none: FPKM, TPM, or no transformation. ')
-pcu.add_argument('--batch_effect_alg', metavar='(sva|svaseq|ruvseq|combatseq)',
+pcu.add_argument('--batch_effect_alg', metavar='(no|sva|ruvseq|combatseq)', choices=['no', 'sva', 'ruvseq', 'combatseq'],
                  default='sva', type=str, required=False, action='store',
-                 help='default=%(default)s: batch-effect removal algorithm.'
+                 help='default=%(default)s: batch-effect removal algorithm. '
+                 'no: no batch-effect removal. '
                  'sva: surrogate variable analysis. Use with log-transformed values. '
-                 'svaseq: surrogate variable analysis optimized for use with RNAseq count data. If log-fpkm/tpm is set, transfomation will be applied after batch-effect removal. '
-                 'ruvseq: batch effect removal based on control genes. Control genes are obtained from the residuals of a GLM. If log-fpkm/tpm is set, transfomation will be applied after batch-effect removal. '
-                 'combatseq: batch effect removal based on known batch effects (bioproject). If log-fpkm/tpm is set, transfomation will be applied after batch-effect removal. ')
+                 'ruvseq: batch effect removal based on control genes. Control genes are obtained from the residuals of a GLM. If log-fpkm/tpm is set, transformation will be applied after batch-effect removal. '
+                 'combatseq: batch effect removal based on known batch effects (bioproject). If log-fpkm/tpm is set, transformation will be applied after batch-effect removal. ')
 pcu.set_defaults(handler=command_curate)
 
 # Sub parser: sanity

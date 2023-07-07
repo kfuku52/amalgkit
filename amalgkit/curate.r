@@ -14,8 +14,8 @@ debug_mode = ifelse(length(commandArgs(trailingOnly = TRUE)) == 1, "debug", "bat
 log_prefix = "transcriptome_curation.r:"
 cat(log_prefix, "mode =", debug_mode, "\n")
 if (debug_mode == "debug") {
-    infile = '/Users/s229181/Desktop/projects/apis/est_count/Apis_mellifera_est_counts.tsv'
-    eff_file = '/Users/s229181/Desktop/projects/apis/read_length/Apis_mellifera_eff_length.tsv'
+    est_counts_path = '/Users/s229181/Desktop/projects/apis/est_count/Apis_mellifera_est_counts.tsv'
+    eff_length_path = '/Users/s229181/Desktop/projects/apis/read_length/Apis_mellifera_eff_length.tsv'
     dist_method = "pearson"
     mapping_rate_cutoff = .20
     min_dif = 0
@@ -25,21 +25,19 @@ if (debug_mode == "debug") {
     dir_eff_length = "eff_length/"
     transform_method = "log2p1-fpkm"
     one_outlier_per_iteration = "no"
-    # tmm norm debug
     correlation_threshold = 0.4
     tmm_norm = "no"
-    dir_work = '/Users/s229181/Desktop/projects/apis/'
-    srafile = '/Users/s229181/Desktop/projects/apis/metadata/metadata.tsv'
+    out_dir = '/Users/s229181/Desktop/projects/apis/'
+    metadata_path = '/Users/s229181/Desktop/projects/apis/metadata/metadata.tsv'
     dist_method = "pearson"
     min_dif = 0
     plot_intermediate = 1
 } else if (debug_mode == "batch") {
     args = commandArgs(trailingOnly = TRUE)
-    print(args)
-    infile = args[1]
-    srafile = args[2]
-    dir_work = args[3]
-    eff_file = args[4]
+    est_counts_path = args[1]
+    metadata_path = args[2]
+    out_dir = args[3]
+    eff_length_path = args[4]
     dist_method = args[5]
     mapping_rate_cutoff = as.numeric(args[6])
     min_dif = as.numeric(args[7])
@@ -50,6 +48,19 @@ if (debug_mode == "debug") {
     correlation_threshold = as.numeric(args[12])
     batch_effect_alg = args[13]
 }
+cat('est_counts_path:', est_counts_path, "\n")
+cat('metadata_path:', metadata_path, "\n")
+cat('out_dir:', out_dir, "\n")
+cat('eff_length_path:', eff_length_path, "\n")
+cat('dist_method:', dist_method, "\n")
+cat('mapping_rate_cutoff:', mapping_rate_cutoff, "\n")
+cat('min_dif:', min_dif, "\n")
+cat('plot_intermediate:', plot_intermediate, "\n")
+cat('selected_curate_groups:', selected_curate_groups, "\n")
+cat('transform_method:', transform_method, "\n")
+cat('one_outlier_per_iteration:', one_outlier_per_iteration, "\n")
+cat('correlation_threshold:', correlation_threshold, "\n")
+cat('batch_effect_alg:', batch_effect_alg, "\n")
 
 if (batch_effect_alg == "ruvseq") {
     suppressPackageStartupMessages(library(RUVSeq, quietly = TRUE))
@@ -57,7 +68,7 @@ if (batch_effect_alg == "ruvseq") {
     suppressPackageStartupMessages(library(sva, quietly = TRUE))
 }
 
-tc_sra_intersect = function(tc, sra) {
+tc_metadata_intersect = function(tc, sra) {
     sra_run = sra[['run']]
     tc = tc[, colnames(tc) %in% sra_run, drop=FALSE]
     sra = sra[sra[['run']] %in% colnames(tc), ]
@@ -71,7 +82,7 @@ remove_nonexpressed_gene = function(tc) {
     return(list(tc_ex = tc_ex, tc_ne = tc_ne))
 }
 
-add_color_to_sra = function(sra, selected_curate_groups) {
+add_color_to_metadata = function(sra, selected_curate_groups) {
     sra = sra[, (!colnames(sra) %in% c("bp_color", "sp_color", "curate_group_color"))]
     bioproject = as.character(sra[['bioproject']])
     bioproject_u = sort(unique(bioproject))
@@ -102,7 +113,7 @@ add_color_to_sra = function(sra, selected_curate_groups) {
     return(sra)
 }
 
-sort_tc_and_sra = function(tc, sra, sort_columns = c("curate_group", "scientific_name", "bioproject")) {
+sort_tc_and_metadata = function(tc, sra, sort_columns = c("curate_group", "scientific_name", "bioproject")) {
     for (column in rev(sort_columns)) {
         sra = sra[order(sra[[column]]), ]
     }
@@ -253,12 +264,11 @@ check_within_curate_group_correlation = function(tc, sra, dist_method, min_dif, 
         cat('Only one curate_group category is available. Outlier removal will be skipped.\n')
         return(list(tc = tc, sra = sra))
     }
-    out = tc_sra_intersect(tc, sra)
+    out = tc_metadata_intersect(tc, sra)
     tc = out[["tc"]]
     sra2 = out[["sra"]]
     sra2[,'num_other_run_same_bp_curate_group'] = 0
     selected_curate_groups = selected_curate_groups[selected_curate_groups %in% unique(sra2[['curate_group']])]
-    num_curate_group = length(selected_curate_groups)
     exclude_runs = c()
     for (sra_run in colnames(tc)) {
         is_sra = (sra2[['run']] == sra_run)
@@ -286,13 +296,11 @@ check_within_curate_group_correlation = function(tc, sra, dist_method, min_dif, 
         coef_other_bp = c()
         for (curate_group in selected_curate_groups) {
             tmp_coef = cor(tc[, sra_run], tc_ave[, curate_group], method = dist_method)
-
             if ((num_other_bp_same_curate_group == 0) & (curate_group == my_curate_group)) {
               tmp_coef_other_bp = cor(tc[, sra_run], tc_ave[, curate_group], method = dist_method)
             } else {
               tmp_coef_other_bp = cor(tc[, sra_run], tc_ave_other_bp[, curate_group], method = dist_method)
             }
-
             if (curate_group == my_curate_group) {
                 tmp_coef = tmp_coef - min_dif
                 tmp_coef_other_bp = tmp_coef_other_bp - min_dif
@@ -341,7 +349,6 @@ check_within_curate_group_correlation = function(tc, sra, dist_method, min_dif, 
         exclude_bps = unique(exclude_run_bps[conditions, "bioproject"])
         exclude_runs = exclude_run_bps[(exclude_run_bps[['bioproject']] %in% exclude_bps), "run"]
       }
-
     }
     if (length(exclude_runs)) {
         cat('Partially removed BioProjects due to low within-curate_group correlation:', paste(exclude_bps, collapse=' '), '\n')
@@ -352,37 +359,35 @@ check_within_curate_group_correlation = function(tc, sra, dist_method, min_dif, 
     return(list(tc = tc, sra = sra))
 }
 
-sva_subtraction = function(tc, sra) {
+batch_effect_subtraction = function(tc, sra, batch_effect_alg) {
     if (ncol(tc)==1) {
-        cat('Only 1 sample is available. Skipping SVA.\n')
+        cat('Only 1 sample is available. Skipping batch effect subtraction.\n')
         return(list(tc = tc, sva = NULL))
     }
-    out = tc_sra_intersect(tc, sra)
+    out = tc_metadata_intersect(tc, sra)
     tc = out[["tc"]]
     sra = out[["sra"]]
-    out = sort_tc_and_sra(tc, sra)
+    out = sort_tc_and_metadata(tc, sra)
     tc = out[["tc"]]
     sra = out[["sra"]]
     out = remove_nonexpressed_gene(tc)
     tc = out[["tc_ex"]]
     tc_ne = out[["tc_ne"]]
-
     if (batch_effect_alg == "sva") {
         mod = try(model.matrix(~curate_group, data = sra))
         if ("try-error" %in% class(mod)) {
-        return(list(tc = tc, sva = NULL))
+            return(list(tc = tc, sva = NULL))
         }
         mod0 = model.matrix(~1, data = sra)
-        set.seed(1)
-
         sva1 = try(sva(dat = as.matrix(tc), mod = mod, mod0 = mod0, B = 10))
-    } else if (batch_effect_alg == "svaseq") {
-        mod = try(model.matrix(~curate_group, data = sra))
-        if ("try-error" %in% class(mod)) {
-        return(list(tc = tc, sva = NULL))
+        if ((class(sva1) != "try-error")) {
+            cat("SVA correction was correctly performed.\n")
+            tc = cleanY(y = tc, mod = mod, svs = sva1[['sv']])
+            tc = rbind(tc, tc_ne)
+        } else if ((class(sva1) == "try-error")) {
+            cat("SVA correction failed.")
+            # tc = rbind(tc, tc_ne) # Original tc shouldn't be returned as it is confusing. We may need a logic to retrieve the result of the previous round as final output.
         }
-        mod0 = model.matrix(~1, data = sra)
-        sva1 = try(svaseq(dat = as.matrix(tc), mod = mod, mod0 = mod0, B = 10))
     } else if (batch_effect_alg == "combatseq") {
         bp_freq = as.data.frame(table(sra[,"bioproject"]))
         bp_freq_gt1 = bp_freq[bp_freq[,"Freq"]>1, "Var1"]
@@ -391,9 +396,9 @@ sva_subtraction = function(tc, sra) {
         run_bp_freq_eq1 = sra[sra[,"bioproject"] %in% bp_freq_eq1, "run"]
         tc_combat = tc[, colnames(tc) %in% run_bp_freq_gt1]
         tcc_cn = colnames(tc_combat)
-        batch=sra[sra[,"bioproject"] %in% bp_freq_gt1,"bioproject"]
-        group=sra[sra[,"run"] %in% run_bp_freq_gt1,"curate_group"]
-        tc_combat = try( ComBat_seq(as.matrix(tc_combat), batch=batch, group=group))
+        batch = sra[(sra[,"bioproject"] %in% bp_freq_gt1),"bioproject"]
+        group = sra[(sra[,"run"] %in% run_bp_freq_gt1),"curate_group"]
+        tc_combat = try(ComBat_seq(as.matrix(tc_combat), batch=batch, group=group))
         if (class(tc_combat)[1] != "try-error") {
             cat("These runs are being removed, due to the bioproject only having 1 sample: \n")
             print(run_bp_freq_eq1)
@@ -402,20 +407,17 @@ sva_subtraction = function(tc, sra) {
             colnames(tc_combat) = tcc_cn
             tc = rbind(tc_combat, tc_ne[, colnames(tc_combat)])
             sva1 = ''
-
-        } else{
-            cat("Combatseq correction failed. Returning the original transcriptome data.\n")
-            tc = rbind(tc, tc_ne)
-            sva1= ''
+        } else {
+            stop("Combatseq correction failed.")
+            # tc = rbind(tc, tc_ne) # Original tc shouldn't be returned as it is confusing. We may need a logic to retrieve the result of the previous round as final output.
+            sva1 = ''
         }
     } else if (batch_effect_alg == "ruvseq") {
         x = as.factor(sra$curate_group)
         design = try(model.matrix(~curate_group, data = sra))
-
         if ("try-error" %in% class(design)) {
             return(list(tc = tc, sva = NULL))
-            }
-
+        }
         y = DGEList(counts=as.matrix(tc+1), group=x)
         y = calcNormFactors(y, method="upperquartile")
         y = estimateGLMCommonDisp(y, design)
@@ -429,23 +431,17 @@ sva_subtraction = function(tc, sra) {
             cat("RUVseq correction was correctly performed.\n")
             tc = rbind(batch_ruv_res, tc_ne)
             sva1 = ''
-        } else
-        {
-            cat("RUVseq correction failed. Returning the original transcriptome data.\n")
-            tc = rbind(tc, tc_ne)
+        } else {
+            stop("RUVseq correction failed.")
+            # tc = rbind(tc, tc_ne) # Original tc shouldn't be returned as it is confusing. We may need a logic to retrieve the result of the previous round as final output.
         }
-    }
-
-    if (class(sva1) != "try-error" & (batch_effect_alg == "sva" | batch_effect_alg == "svaseq")) {
-        cat("SVA correction was correctly performed.\n")
-        tc = cleanY(y = tc, mod = mod, svs = sva1[['sv']])
+    } else if (batch_effect_alg == "no") {
+        cat("No batch effect correction was performed.\n")
         tc = rbind(tc, tc_ne)
+        sva1 = ''
+    } else {
+        stop("Invalid batch effect correction algorithm.")
     }
-    else if (class(sva1) == "try-error" & (batch_effect_alg == "sva" | batch_effect_alg == "svaseq")){
-        cat("SVA correction failed. Returning the original transcriptome data.\n")
-        tc = rbind(tc, tc_ne)
-    }
-
     return(list(tc = tc, sva = sva1))
 }
 
@@ -598,7 +594,6 @@ draw_dendrogram_pvclust = function(sra, tc, nboot, pvclust_file, fontsize = 7) {
 }
 
 draw_pca = function(sra, tc_dist_matrix, fontsize = 7) {
-    set.seed(1)
     pca = prcomp(tc_dist_matrix)
     xlabel = paste0("PC 1 (", round(summary(pca)[['importance']][2, 1] * 100, digits = 1), "%)")
     ylabel = paste0("PC 2 (", round(summary(pca)[['importance']][2, 2] * 100, digits = 1), "%)")
@@ -619,7 +614,6 @@ draw_pca = function(sra, tc_dist_matrix, fontsize = 7) {
 }
 
 draw_mds = function(sra, tc_dist_dist, fontsize = 7) {
-    set.seed(1)
     try_out = tryCatch({
         isoMDS(tc_dist_dist, k = 2, maxit = 100)
     }, error = function(a) {
@@ -647,7 +641,6 @@ draw_mds = function(sra, tc_dist_dist, fontsize = 7) {
 
 draw_tsne = function(sra, tc, fontsize = 7) {
     perplexity = min(30, floor(nrow(sra)/4))
-    set.seed(1)
     try_out = tryCatch({
         Rtsne(
           as.matrix(t(tc)),
@@ -663,6 +656,7 @@ draw_tsne = function(sra, tc, fontsize = 7) {
     if (mode(try_out) == "character") {
         cat("t-SNE failed.\n")
         plot(c(0, 1), c(0, 1), ann = F, bty = "n", type = "n", xaxt = "n", yaxt = "n")
+        return(NULL)
     }
     out_tsne = try_out
     try_out = tryCatch({
@@ -692,16 +686,16 @@ draw_sva_summary = function(sva_out, tc, sra, fontsize) {
         plot(c(0, 1), c(0, 1), ann = F, bty = "n", type = "n", xaxt = "n", yaxt = "n")
         df = NA
     } else {
-        out = tc_sra_intersect(tc, sra)
+        out = tc_metadata_intersect(tc, sra)
         tc = out[["tc"]]
         sra = out[["sra"]]
-        out = sort_tc_and_sra(tc, sra)
+        out = sort_tc_and_metadata(tc, sra)
         tc = out[["tc"]]
         sra = out[["sra"]]
         sra[['log10_total_spots']] = log10(sra[['total_spots']])
         sra[['log10_total_bases']] = log10(sra[['total_bases']])
-        cols = c("curate_group","bioproject","lib_selection","instrument","mapping_rate",'log10_total_spots','log10_total_bases')
-        label_cols = c("Group","BioProject","Library selection","Instrument","Mapping rate",'Log10 reads','Log10 total bases')
+        cols = c("curate_group","bioproject","lib_layout","lib_selection","instrument","mapping_rate",'log10_total_spots','log10_total_bases')
+        label_cols = c("Group","BioProject","Library layout","Library selection","Instrument","Mapping rate",'Log10 total reads','Log10 total bases')
         if ('tmm_normalization_factor' %in% colnames(sra)) {
             cols = c(cols, 'tmm_normalization_factor')
             label_cols = c(label_cols, 'TMM normalization factor')
@@ -793,11 +787,11 @@ save_plot = function(tc, sra, sva_out, dist_method, file, selected_curate_groups
         cat('Only 1 sample is available. Skipping the plot.\n')
         return()
     }
-    out = tc_sra_intersect(tc, sra)
+    out = tc_metadata_intersect(tc, sra)
     tc = out[["tc"]]
     sra = out[["sra"]]
-    sra = add_color_to_sra(sra, selected_curate_groups)
-    out = sort_tc_and_sra(tc, sra)
+    sra = add_color_to_metadata(sra, selected_curate_groups)
+    out = sort_tc_and_metadata(tc, sra)
     tc = out[["tc"]]
     sra = out[["sra"]]
     pdf(file.path(dir_pdf, paste0(file, ".pdf")), height = 8, width = 7.2, fonts = "Helvetica", pointsize = fontsize)
@@ -835,12 +829,11 @@ save_plot = function(tc, sra, sva_out, dist_method, file, selected_curate_groups
     par(mar = c(4, 4, 1, 1))
     draw_tau_histogram(tc, sra, selected_curate_groups, fontsize, transform_method)
     par(mar = rep(0.1, 4))
-    if (batch_effect_alg == 'sva' | batch_effect_alg == 'svaseq'){
-    df_r2 = draw_sva_summary(sva_out, tc, sra, fontsize)
-
-    if (!all(is.na(df_r2))) {
-        write.table(df_r2, file.path(dir_tsv, paste0(file, ".r2.tsv")), sep = "\t", row.names = FALSE)
-    }
+    if (batch_effect_alg == 'sva') {
+        df_r2 = draw_sva_summary(sva_out, tc, sra, fontsize)
+        if (!all(is.na(df_r2))) {
+            write.table(df_r2, file.path(dir_tsv, paste0(file, ".r2.tsv")), sep = "\t", row.names = FALSE)
+        }
     }
     par(mar = rep(0.1, 4))
     draw_legend(sra, new = TRUE, pos = "center", fontsize = fontsize, nlabel.in.col = 8)
@@ -857,27 +850,54 @@ transform_raw_to_tpm = function(counts, len) {
     return(t(t(x) * 1e+06/colSums(x)))
 }
 
-get_tmm_scaled_fpkm = function(dat, df_nf, efflen) {
-    dat_fpkm = dat
-    dat_fpkm[, ] = NA
-    for (sample in colnames(dat)) {
-        if (sample %in% rownames(df_nf)) {
-            dat_sample = data.frame(dat[, sample])
-            colnames(dat_sample) = sample
-            nf_sample = df_nf[sample, ]
-            dl_sample = list(counts = dat_sample, samples = nf_sample)
-            class(dl_sample) = "DGEList"
-            col_fpkm = edgeR::rpkm(dl_sample, gene.length = efflen[, sample], normalized.lib.sizes = TRUE)
-            dat_fpkm[, sample] = col_fpkm
-        } else {
-            dat_fpkm[, sample] = dat[, sample]
+apply_transformation_logic = function(tc, tc_eff_length, transform_method, batch_effect_alg,
+                                      step=c('before_batch','before_batch_plot','after_batch')) {
+    if (batch_effect_alg=='no') {
+        if (step=='before_batch') {
+            bool_fpkm_tpm = TRUE
+            bool_log = TRUE
+        } else if (step=='before_batch_plot') {
+            bool_fpkm_tpm = FALSE
+            bool_log = FALSE
+        } else if (step=='after_batch') {
+            bool_fpkm_tpm = FALSE
+            bool_log = FALSE
+        }
+    } else if (batch_effect_alg=='sva') {
+        if (step=='before_batch') {
+            bool_fpkm_tpm = TRUE
+            bool_log = TRUE
+        } else if (step=='before_batch_plot') {
+            bool_fpkm_tpm = FALSE
+            bool_log = FALSE
+        } else if (step=='after_batch') {
+            bool_fpkm_tpm = FALSE
+            bool_log = FALSE
+        }
+    } else if (batch_effect_alg=='ruvseq') {
+        if (step=='before_batch') {
+            bool_fpkm_tpm = FALSE
+            bool_log = FALSE
+        } else if (step=='before_batch_plot') {
+            bool_fpkm_tpm = TRUE
+            bool_log = TRUE
+        } else if (step=='after_batch') {
+            bool_fpkm_tpm = TRUE
+            bool_log = TRUE
+        }
+    } else if (batch_effect_alg=='combatseq') {
+        if (step=='before_batch') {
+            bool_fpkm_tpm = FALSE
+            bool_log = FALSE
+        } else if (step=='before_batch_plot') {
+            bool_fpkm_tpm = TRUE
+            bool_log = TRUE
+        } else if (step=='after_batch') {
+            bool_fpkm_tpm = TRUE
+            bool_log = TRUE
         }
     }
-    return(dat_fpkm)
-}
-
-apply_transformation_logic = function(tc, tc_eff_length, transform_method, bool_fpkm_tpm = TRUE, bool_log = TRUE) {
-    if (bool_fpkm_tpm == TRUE){
+    if (bool_fpkm_tpm == TRUE) {
         if (grepl('fpkm', transform_method) ) {
             cat('Applying FPKM transformation.\n')
             tc = transform_raw_to_fpkm(tc, tc_eff_length[, colnames(tc)])
@@ -888,7 +908,7 @@ apply_transformation_logic = function(tc, tc_eff_length, transform_method, bool_
             cat('Applying neither FPKM nor TPM transformation.\n')
         }
     }
-    if (bool_log == TRUE){
+    if (bool_log == TRUE) {
         if (grepl('logn-', transform_method)) {
             cat('Applying log_n(x) normalization.\n')
             tc = log(tc)
@@ -908,6 +928,41 @@ apply_transformation_logic = function(tc, tc_eff_length, transform_method, bool_
     return(tc)
 }
 
+standardize_metadata_all = function(sra_all) {
+    for (col in c('instrument','bioproject')) {
+        is_missing = (sra_all[,col] == "")|(is.na(sra_all[,col]))
+        sra_all[is_missing, col] = "not_provided"
+    }
+    return(sra_all)
+}
+
+get_species_metadata = function(sra_all, scientific_name, selected_curate_groups) {
+    is_sp = (sra_all[,'scientific_name'] == scientific_name)
+    is_curate_group = (sra_all[,'curate_group'] %in% selected_curate_groups)
+    cat('Number of SRA runs for this species:', sum(is_sp), '\n')
+    cat('Number of SRA runs for selected curate groups:', sum(is_curate_group), '\n')
+    sra = sra_all[(is_sp & is_curate_group),]
+    conditions = (sra[['exclusion']] == "no") & (!sra[['run']] %in% colnames(tc))
+    if (any(conditions)) {
+        cat("Failed quantification:", sra[conditions, "run"], "\n")
+        sra[conditions, "exclusion"] = "failed_quantification"
+    }
+    return(sra)
+}
+
+exclude_inappropriate_sample_from_tc = function(tc, sra) {
+    is_not_excluded = (sra[['exclusion']]=='no')
+    cat('Number of non-excluded SRA runs (exclusion=="no"):', sum(is_not_excluded), '\n')
+    tc = tc[,sra[is_not_excluded,'run'], drop=FALSE]
+    return(tc)
+}
+
+exclude_inappropriate_sample_from_eff_length = function(tc_eff_length, tc) {
+    row.names(tc_eff_length) = tc_eff_length[, 1]
+    tc_eff_length = tc_eff_length[, colnames(tc)]
+    return(tc_eff_length)
+}
+
 ########cd############END OF FUNCTION DECLARATION####################################################
 
 ################################################# START OF SVA CORRECTION ########################################################
@@ -915,18 +970,15 @@ apply_transformation_logic = function(tc, tc_eff_length, transform_method, bool_
 
 fontsize = 7
 
-tc = read.table(infile, sep = "\t", stringsAsFactors = FALSE, header = TRUE, quote = "", fill = FALSE, row.names = 1, check.names=FALSE)
-tc_eff_length = read.table(eff_file, sep = "\t", stringsAsFactors = FALSE, header = TRUE, quote = "", fill = FALSE, check.names=FALSE)
-sra_all = read.table(srafile, sep = "\t", header = TRUE, quote = "", fill = TRUE, comment.char = "",
-                     stringsAsFactors = FALSE, check.names=FALSE)
+tc = read.table(est_counts_path, sep = "\t", stringsAsFactors = FALSE, header = TRUE, quote = "", fill = FALSE, row.names = 1, check.names=FALSE)
+tc_eff_length = read.table(eff_length_path, sep = "\t", stringsAsFactors = FALSE, header = TRUE, quote = "", fill = FALSE, check.names=FALSE)
 
-for (col in c('instrument','bioproject')) {
-    is_missing = (sra_all[,col] == "")|(is.na(sra_all[,col]))
-    sra_all[is_missing, col] = "not_provided"
-}
+
+sra_all = read.table(metadata_path, sep = "\t", header = TRUE, quote = "", fill = TRUE, comment.char = "", stringsAsFactors = FALSE, check.names=FALSE)
+sra_all = standardize_metadata_all(sra_all)
+
 scientific_name = unique(sra_all[(sra_all[['run']] %in% colnames(tc)), "scientific_name"])
-
-dir_curate = file.path(dir_work, 'curate')
+dir_curate = file.path(out_dir, 'curate')
 dir_pdf = file.path(dir_curate, sub(" ", "_", scientific_name), 'plots')
 dir.create(dir_pdf, showWarnings=FALSE, recursive=TRUE)
 dir_rdata = file.path(dir_curate, sub(" ", "_", scientific_name), 'rdata')
@@ -936,120 +988,63 @@ dir.create(dir_tsv, showWarnings=FALSE, recursive=TRUE)
 setwd(dir_curate)
 cat(log_prefix, "Working at:", getwd(), "\n")
 
-is_sp = (sra_all[,'scientific_name'] == scientific_name)
-is_curate_group = (sra_all[,'curate_group'] %in% selected_curate_groups)
-cat('Number of SRA runs for this species:', sum(is_sp), '\n')
-cat('Number of SRA runs for selected tissues:', sum(is_curate_group), '\n')
-sra = sra_all[(is_sp & is_curate_group),]
-conditions = (sra[['exclusion']] == "no") & (!sra[['run']] %in% colnames(tc))
-if (any(conditions)) {
-    cat("Failed quantification:", sra[conditions, "run"], "\n")
-    sra[conditions, "exclusion"] = "failed_quantification"
-}
+sra = get_species_metadata(sra_all, scientific_name, selected_curate_groups)
+tc = exclude_inappropriate_sample_from_tc(tc, sra)
+out = sort_tc_and_metadata(tc, sra) ; tc = out[["tc"]] ; sra = out[["sra"]]
+tc_eff_length = exclude_inappropriate_sample_from_eff_length(tc_eff_length, tc)
 
-is_not_excluded = (sra[['exclusion']]=='no')
-cat('Number of non-excluded SRA runs (exclusion=="no"):', sum(is_not_excluded), '\n')
-tc = tc[,sra[is_not_excluded,'run'], drop=FALSE]
-out = sort_tc_and_sra(tc, sra) ; tc = out[["tc"]] ; sra = out[["sra"]]
-row.names(tc_eff_length) = tc_eff_length[, 1]
-tc_eff_length = tc_eff_length[, colnames(tc)]
-
-if (batch_effect_alg != 'sva') {
-    cat(paste0('batch effect removal algorithm is ', batch_effect_alg, ' and transform_method is: ', transform_method, ' Applying transformation after batch effect removal and temporarily for plotting. \n'))
-    if (batch_effect_alg == 'svaseq') {
-        tc = apply_transformation_logic(tc, tc_eff_length, transform_method, bool_fpkm_tpm = TRUE, bool_log = FALSE)
-    }
-} else {
-    tc = apply_transformation_logic(tc, tc_eff_length, transform_method, bool_fpkm_tpm = TRUE, bool_log = TRUE)
-}
-
-
-
+tc = apply_transformation_logic(tc, tc_eff_length, transform_method, batch_effect_alg, step='before_batch')
+tc_tmp = apply_transformation_logic(tc, tc_eff_length, transform_method, batch_effect_alg, step='before_batch_plot')
 file_name = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".uncorrected.tc.tsv"))
-write.table(data.frame("GeneID"=rownames(tc), tc), file = file_name,
+write.table(data.frame("GeneID"=rownames(tc_tmp), tc_tmp), file = file_name,
             sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
-tc_uncorrected = tc
-out = curate_group_mean(tc, sra, selected_curate_groups)
+out = curate_group_mean(tc_tmp, sra, selected_curate_groups)
 tc_curate_group_uncorrected = out[['tc_ave']]
 selected_curate_groups = out[['selected_curate_groups']]
 file_name = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".uncorrected.curate_group.mean.tsv"))
 write.table(data.frame("GeneID"=rownames(tc_curate_group_uncorrected), tc_curate_group_uncorrected), file = file_name,
             sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
 
+cat("Removing samples with mapping rate of 0.\n")
 round = 0
 sva_out = NULL
-tc_sva = NULL
-cat("Removing entries with mapping rate of 0.\n")
+tc_batch_corrected = NULL
 out = check_mapping_rate(tc, sra, 0)
 tc = out[["tc"]]
 sra = out[["sra"]]
-
-tc_tmp = tc
-if (batch_effect_alg != 'sva') {
-    cat(paste0('batch effect removal algorithm is ', batch_effect_alg, ' and transform_method is: ', transform_method, ' Applying transformation after batch effect removal and temporarily for plotting. \n'))
-    if (batch_effect_alg == 'svaseq') {
-        tc_tmp = apply_transformation_logic(tc, tc_eff_length, transform_method, bool_fpkm_tpm = FALSE, bool_log = TRUE)
-    } else {
-    tc_tmp = apply_transformation_logic(tc, tc_eff_length, transform_method, bool_fpkm_tpm = TRUE, bool_log = TRUE)
-    }
-}
-
+tc_tmp = apply_transformation_logic(tc, tc_eff_length, transform_method, batch_effect_alg, step='before_batch_plot')
 save_plot(tc_tmp, sra, NULL, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".original"),
           selected_curate_groups, fontsize, transform_method, batch_effect_alg)
-out = sva_subtraction(tc, sra)
-tc_sva = out[["tc"]]
+out = batch_effect_subtraction(tc, sra, batch_effect_alg)
+tc_batch_corrected = out[["tc"]]
 sva_out = out[["sva"]]
 if (!is.null(sva_out)) {
-    save(sva_out, file = file.path(dir_rdata, paste0(sub(" ", "_", scientific_name),".", batch_effect_alg,".", round, ".RData")))
+    file_name = paste0(sub(" ", "_", scientific_name), ".", batch_effect_alg, ".", round, ".RData")
+    save(sva_out, file = file.path(dir_rdata, file_name))
 }
-tc_sva_tmp = tc_sva
-if (batch_effect_alg != 'sva') {
-    cat(paste0('batch effect removal algorithm is ', batch_effect_alg, ' and transform_method is: ', transform_method, ' Applying transformation after batch effect removal and temporarily for plotting. \n'))
-    if(batch_effect_alg == 'svaseq') {
-        tc_sva_tmp = apply_transformation_logic(tc_sva, tc_eff_length, transform_method, bool_fpkm_tpm = FALSE, bool_log = FALSE)
-    } else {
-        tc_sva_tmp = apply_transformation_logic(tc_sva, tc_eff_length, transform_method, bool_fpkm_tpm = TRUE, bool_log = TRUE)
-    }
-}
-save_plot(tc_sva_tmp, sra, sva_out, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".original", ".", batch_effect_alg),
+tc_batch_corrected_tmp = apply_transformation_logic(tc_batch_corrected, tc_eff_length, transform_method, batch_effect_alg, step='after_batch')
+save_plot(tc_batch_corrected_tmp, sra, sva_out, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".original", ".", batch_effect_alg),
           selected_curate_groups, fontsize, transform_method, batch_effect_alg)
+
+cat("Removing samples with the mapping rate >", mapping_rate_cutoff, "\n")
 round = 1
 sva_out = NULL
-tc_sva = NULL
+tc_batch_corrected = NULL
 out = check_mapping_rate(tc, sra, mapping_rate_cutoff)
 tc = out[["tc"]]
 sra = out[["sra"]]
-tc = tc[, sra[sra[['exclusion']] == "no", "run"], drop=FALSE]
 
-tc_tmp = tc
-if (batch_effect_alg != 'sva') {
-    cat(paste0('batch effect removal algorithm is ', batch_effect_alg, ' and transform_method is: ', transform_method, ' Applying transformation after batch effect removal and temporarily for plotting. \n'))
-    if (batch_effect_alg == 'svaseq') {
-        tc_tmp = apply_transformation_logic(tc, tc_eff_length, transform_method, bool_fpkm_tpm = FALSE, bool_log = TRUE)
-    } else {
-        tc_tmp = apply_transformation_logic(tc, tc_eff_length, transform_method, bool_fpkm_tpm = TRUE, bool_log = TRUE)
-    }
-}
+tc_tmp = apply_transformation_logic(tc, tc_eff_length, transform_method, batch_effect_alg, step='before_batch_plot')
 save_plot(tc_tmp, sra, NULL, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".mapping_cutoff"),
           selected_curate_groups, fontsize, transform_method, batch_effect_alg)
-out = sva_subtraction(tc, sra)
-tc_sva = out[["tc"]]
+out = batch_effect_subtraction(tc, sra, batch_effect_alg)
+tc_batch_corrected = out[["tc"]]
 sva_out = out[["sva"]]
-
 if (!is.null(sva_out)) {
     save(sva_out, file=file.path(dir_rdata, paste0(sub(" ", "_", scientific_name),".", batch_effect_alg,".", round, ".RData")))
 }
-
-tc_sva_tmp = tc_sva
-if (batch_effect_alg != 'sva'){
-    cat(paste0('batch effect removal algorithm is ', batch_effect_alg, ' and transform_method is: ', transform_method, ' Applying transformation after batch effect removal and temporarily for plotting. \n'))
-    if(batch_effect_alg == 'svaseq'){
-        tc_sva_tmp = apply_transformation_logic(tc_sva, tc_eff_length, transform_method, bool_fpkm_tpm = FALSE, bool_log = FALSE)
-    } else {
-        tc_sva_tmp = apply_transformation_logic(tc_sva, tc_eff_length, transform_method, bool_fpkm_tpm = TRUE, bool_log = TRUE)
-    }
-}
-save_plot(tc_sva_tmp, sra, sva_out, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".mapping_cutoff", ".", batch_effect_alg),
+tc_batch_corrected_tmp = apply_transformation_logic(tc_batch_corrected, tc_eff_length, transform_method, batch_effect_alg, step='after_batch')
+save_plot(tc_batch_corrected_tmp, sra, sva_out, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".mapping_cutoff", ".", batch_effect_alg),
           selected_curate_groups, fontsize, transform_method, batch_effect_alg)
 
 round = 2
@@ -1058,40 +1053,24 @@ while (end_flag == 0) {
     cat("Iteratively checking within-curate_group correlation, round:", round, "\n")
     tc_cwtc = NULL
     num_run_before = sum(sra[['exclusion']] == "no")
-    tc_tmp = tc
-    if (batch_effect_alg != 'sva') {
-        cat(paste0('batch effect removal algorithm is ', batch_effect_alg, ' and transform_method is: ', transform_method, ' Applying transformation after batch effect removal and temporarily for plotting. \n'))
-        if (batch_effect_alg == 'svaseq') {
-            tc_tmp = apply_transformation_logic(tc, tc_eff_length, transform_method, bool_fpkm_tpm = FALSE, bool_log = TRUE)
-        } else {
-            tc_tmp = apply_transformation_logic(tc, tc_eff_length, transform_method, bool_fpkm_tpm = TRUE, bool_log = TRUE)
-        }
-    }
-    out = check_within_curate_group_correlation(tc_tmp, sra, dist_method, min_dif, selected_curate_groups, one_outlier_per_iteration, correlation_threshold)
+    out = check_within_curate_group_correlation(tc, sra, dist_method, min_dif, selected_curate_groups, one_outlier_per_iteration, correlation_threshold)
     tc_cwtc = out[["tc"]]
     sra = out[["sra"]]
     num_run_after = sum(sra[['exclusion']] == "no")
     if ((num_run_before == num_run_after) | (plot_intermediate)) {
         sva_out = NULL
-        tc_sva = NULL
-        out = sva_subtraction(tc[,colnames(tc_cwtc)], sra)
-        tc_sva = out[["tc"]]
+        tc_batch_corrected = NULL
+        out = batch_effect_subtraction(tc[,colnames(tc_cwtc)], sra, batch_effect_alg)
+        tc_batch_corrected = out[["tc"]]
         sva_out = out[["sva"]]
         if (!is.null(sva_out)) {
             save(sva_out, file=file.path(dir_rdata, paste0(sub(" ", "_", scientific_name),".", batch_effect_alg, ".", round, ".RData")))
         }
-        save_plot(tc_cwtc, sra, NULL, dist_method, paste0(sub(" ", "_", scientific_name), ".", round,
+        tc_cwtc_tmp = apply_transformation_logic(tc_cwtc, tc_eff_length, transform_method, batch_effect_alg, step='before_batch_plot')
+        save_plot(tc_cwtc_tmp, sra, NULL, dist_method, paste0(sub(" ", "_", scientific_name), ".", round,
                                                           ".correlation_cutoff"), selected_curate_groups, fontsize, transform_method, batch_effect_alg)
-        tc_sva_tmp = tc_sva
-        if (batch_effect_alg != 'sva') {
-            cat(paste0('batch effect removal algorithm is ', batch_effect_alg, ' and transform_method is: ', transform_method, ' Applying transformation after batch effect removal and temporarily for plotting. \n'))
-            if (batch_effect_alg == 'svaseq') {
-                tc_sva_tmp = apply_transformation_logic(tc_sva, tc_eff_length, transform_method, bool_fpkm_tpm = FALSE, bool_log = FALSE)
-            } else {
-                tc_sva_tmp = apply_transformation_logic(tc_sva, tc_eff_length, transform_method, bool_fpkm_tpm = TRUE, bool_log = TRUE)
-            }
-        }
-        save_plot(tc_sva_tmp, sra, sva_out, dist_method, paste0(sub(" ", "_", scientific_name), ".", round,
+        tc_batch_corrected_tmp = apply_transformation_logic(tc_batch_corrected, tc_eff_length, transform_method, batch_effect_alg, step='after_batch')
+        save_plot(tc_batch_corrected_tmp, sra, sva_out, dist_method, paste0(sub(" ", "_", scientific_name), ".", round,
                                                             ".correlation_cutoff",".", batch_effect_alg), selected_curate_groups, fontsize, transform_method, batch_effect_alg)
     }
     cat("Round:", round, ": # before =", num_run_before, ": # after =", num_run_after, "\n\n")
@@ -1104,15 +1083,15 @@ while (end_flag == 0) {
 
 cat("Finished checking within-curate_group correlation.\n")
 if (batch_effect_alg != 'sva') {
-    cat("Batch-effect removal algorithm is: ",batch_effect_alg ," . Applying transformation on final adjusted counts. \n")
-    tc_sva = tc_sva_tmp
+    cat("Batch-effect removal algorithm is: ",batch_effect_alg ,". Applying transformation on final batch-removed counts.\n")
+    tc_batch_corrected = tc_batch_corrected_tmp
 }
 cat("Writing summary files for", scientific_name, "\n")
 file = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".metadata.tsv"))
 write.table(sra[,colnames(sra)!='index'], file = file, sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
-file = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".tc.tsv"))
-write.table(data.frame("GeneID"=rownames(tc_sva),tc_sva), file = file, sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
-out = curate_group_mean(tc_sva, sra, selected_curate_groups)
+file = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".", batch_effect_alg , ".tc.tsv"))
+write.table(data.frame("GeneID"=rownames(tc_batch_corrected),tc_batch_corrected), file = file, sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
+out = curate_group_mean(tc_batch_corrected, sra, selected_curate_groups)
 tc_curate_group = out[['tc_ave']]
 file = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".", batch_effect_alg , ".curate_group.mean.tsv"))
 write.table(data.frame("GeneID"=rownames(tc_curate_group), tc_curate_group), file = file, sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
