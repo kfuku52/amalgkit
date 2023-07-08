@@ -21,10 +21,9 @@ def getfastq_search_term(ncbi_id, additional_search_term=None):
         search_term = ncbi_id
     else:
         search_term = ncbi_id + ' AND ' + additional_search_term
-    #   search_term = '"'+ncbi_id+'"'+'[Accession]'
     return search_term
 
-def getfastq_getxml(search_term, save_xml=True, retmax=1000):
+def getfastq_getxml(search_term, retmax=1000):
     entrez_db = 'sra'
     try:
         sra_handle = Entrez.esearch(db=entrez_db, term=search_term, retmax=10000000)
@@ -121,12 +120,6 @@ def concat_fastq(args, metadata, output_dir, g):
                 outfile_path = os.path.join(output_dir, os.path.basename(args.id_list) + subext + outext)
             if os.path.exists(outfile_path):
                 os.remove(outfile_path)
-            # with gzip.open(outfile_path, 'wb') as outfile:
-            #    for each_infile in infiles:
-            #        with gzip.open(os.path.join(args.out_dir, each_infile), 'rb') as infile:
-            #            shutil.copyfileobj(infile, outfile) # unacceptably slow
-            if os.path.exists(outfile_path):
-                os.remove(outfile_path)
             for infile in infiles:
                 infile_path = os.path.join(output_dir, infile)
                 assert os.path.exists(infile_path), 'Dumped fastq not found: ' + infile_path
@@ -141,7 +134,7 @@ def concat_fastq(args, metadata, output_dir, g):
                 remove_intermediate_files(sra_stat, ext=ext, work_dir=output_dir)
         return None
 
-def remove_sra_files(metadata, sra_id, amalgkit_out_dir):
+def remove_sra_files(metadata, amalgkit_out_dir):
     print('Starting SRA file removal.', flush=True)
     for sra_id in metadata.df['run']:
         sra_pattern = os.path.join(os.path.realpath(amalgkit_out_dir), 'getfastq', sra_id, sra_id + '.sra*')
@@ -191,7 +184,6 @@ def remove_intermediate_files(sra_stat, ext, work_dir):
 def download_sra(metadata, sra_stat, args, work_dir, overwrite=False):
     path_downloaded_sra = os.path.join(work_dir, sra_stat['sra_id'] + '.sra')
     individual_sra_tmp_dir = os.path.join(work_dir, sra_stat['sra_id'] + '/')
-
     if os.path.exists(path_downloaded_sra):
         print('Previously-downloaded sra file was detected at: {}'.format(path_downloaded_sra))
         if (overwrite):
@@ -318,7 +310,6 @@ def run_pfd(sra_stat, args, metadata, start, end):
     # If sra_stat['sra_id'], not path_downloaded_sra, is provided, pfd couldn't find pre-downloaded .sra files
     # and start downloading it to $HOME/ncbi/public/sra/
     pfd_command = pfd_command + ['-s', path_downloaded_sra]
-    # pfd_command = pfd_command + ['-s', sra_stat['sra_id']]
     print('Command:', ' '.join(pfd_command))
     pfd_out = subprocess.run(pfd_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if args.pfd_print:
@@ -553,7 +544,8 @@ def getfastq_metadata(args):
     metadata.df['spot_length'] = metadata.df.loc[:, 'spot_length'].replace('', numpy.nan).astype(float)
     return metadata
 
-def is_getfastq_output_present(args, sra_stat):
+def is_getfastq_output_present(sra_stat):
+    sra_stat = detect_layout_from_file(sra_stat)
     prefixes = [sra_stat['sra_id'], ]
     if sra_stat['layout'] == 'single':
         sub_exts = ['', ]
@@ -570,18 +562,6 @@ def is_getfastq_output_present(args, sra_stat):
             print('getfastq output detected: {}'.format(out_path1))
         if is_out2:
             print('getfastq output detected: {}'.format(out_path2))
-        if (sra_stat['layout'] == 'paired')&(not(is_out1 | is_out2)):
-            sub_exts = ['', ]
-            for prefix, sub_ext, ext in itertools.product(prefixes, sub_exts, exts):
-                out_path_single_like1 = os.path.join(sra_stat['getfastq_sra_dir'], prefixes[0] + sub_ext + exts[0])
-                out_path_single_like2 = os.path.join(sra_stat['getfastq_sra_dir'], prefixes[0] + sub_ext + exts[0] + '.safely_removed')
-                is_out1 = os.path.exists(out_path_single_like1)
-                is_out2 = os.path.exists(out_path_single_like2)
-                txt = 'Single-end getfastq output was generated even though layout = paired: {}'
-                if is_out1:
-                    print(txt.format(out_path_single_like1))
-                if is_out2:
-                    print(txt.format(out_path_single_like2))
         is_output_present *= (is_out1 | is_out2)
     return is_output_present
 
@@ -786,15 +766,10 @@ def getfastq_main(args):
         print('Processing SRA ID: {}'.format(sra_id))
         sra_stat = get_sra_stat(sra_id, metadata, g['num_bp_per_sra'])
         sra_stat['getfastq_sra_dir'] = get_getfastq_run_dir(args, sra_id)
-        ext = get_newest_intermediate_file_extension(sra_stat, sra_stat['getfastq_sra_dir'])
-        if (ext == '.safely_removed') & (not args.redo):
-            txt = 'Safely_removed file(s) detected. Skipping {}.  Set "--redo yes" for reanalysis.'
-            print(txt.format(sra_id), flush=True)
-            continue
-        if (is_getfastq_output_present(args, sra_stat)):
+        if (is_getfastq_output_present(sra_stat)):
             flag_any_output_file_present =True
             if not args.redo:
-                txt = 'Output file(s) detected. Skipping {}.  Set "--redo yes" for reanalysis.'
+                txt = 'Output file(s) detected. Skipping {}. Set "--redo yes" for reanalysis.'
                 print(txt.format(sra_id), flush=True)
                 continue
         remove_old_intermediate_files(sra_id=sra_id, work_dir=sra_stat['getfastq_sra_dir'])
@@ -831,9 +806,7 @@ def getfastq_main(args):
         print(txt.format(g['rate_obtained_1st']*100, g['rate_obtained_2nd']*100), flush=True)
     # Postprocessing
     if args.remove_sra:
-        for i in metadata.df.index:
-            sra_id = metadata.df.at[i, 'run']
-            remove_sra_files(metadata, sra_id=sra_id, amalgkit_out_dir=args.out_dir)
+        remove_sra_files(metadata=metadata, amalgkit_out_dir=args.out_dir)
     else:
         print('SRA files not removed: {}'.format(sra_stat['getfastq_sra_dir']))
     if (not flag_any_output_file_present):

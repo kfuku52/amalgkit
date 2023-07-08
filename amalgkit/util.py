@@ -460,7 +460,7 @@ def is_there_unpaired_file(sra_stat, extensions):
 
 def detect_layout_from_file(sra_stat):
     # Order is important in this list. More downstream should come first.
-    extensions = ['.amalgkit.fastq.gz','.rename.fastq.gz','.fastp.fastq.gz','.fastq.gz']
+    extensions = ['.amalgkit.fastq.gz.safely_removed','.amalgkit.fastq.gz','.rename.fastq.gz','.fastp.fastq.gz','.fastq.gz']
     is_paired_end = False
     for ext in extensions:
         paired_fastq_files = [
