@@ -19,19 +19,17 @@ if (debug_mode == "debug") {
     dist_method = "pearson"
     mapping_rate_cutoff = .20
     min_dif = 0
-    plot_intermediate = 0
+    plot_intermediate = as.logical(0)
     selected_curate_groups = c("root", "flower", "leaf")
     dir_count = "counts/"
     dir_eff_length = "eff_length/"
     transform_method = "log2p1-fpkm"
     one_outlier_per_iteration = "no"
     correlation_threshold = 0.4
-    tmm_norm = "no"
     out_dir = '/Users/s229181/Desktop/projects/apis/'
     metadata_path = '/Users/s229181/Desktop/projects/apis/metadata/metadata.tsv'
     dist_method = "pearson"
-    min_dif = 0
-    plot_intermediate = 1
+    clip_negative = as.logical(1)
 } else if (debug_mode == "batch") {
     args = commandArgs(trailingOnly = TRUE)
     est_counts_path = args[1]
@@ -41,12 +39,13 @@ if (debug_mode == "debug") {
     dist_method = args[5]
     mapping_rate_cutoff = as.numeric(args[6])
     min_dif = as.numeric(args[7])
-    plot_intermediate = as.integer(args[8])
+    plot_intermediate = as.logical(as.integer(args[8]))
     selected_curate_groups = strsplit(args[9], "\\|")[[1]]
     transform_method = args[10]
     one_outlier_per_iteration = as.integer(args[11])
     correlation_threshold = as.numeric(args[12])
     batch_effect_alg = args[13]
+    clip_negative = as.logical(as.integer(args[14]))
 }
 cat('est_counts_path:', est_counts_path, "\n")
 cat('metadata_path:', metadata_path, "\n")
@@ -61,6 +60,7 @@ cat('transform_method:', transform_method, "\n")
 cat('one_outlier_per_iteration:', one_outlier_per_iteration, "\n")
 cat('correlation_threshold:', correlation_threshold, "\n")
 cat('batch_effect_alg:', batch_effect_alg, "\n")
+cat('clip_negative:', clip_negative, "\n")
 
 if (batch_effect_alg == "ruvseq") {
     suppressPackageStartupMessages(library(RUVSeq, quietly = TRUE))
@@ -145,12 +145,12 @@ cleanY = function(y, mod, svs) {
     return(y - t(as.matrix(X[, -c(1:P)]) %*% beta[-c(1:P), ]))
 }
 
-curate_group_mean = function(tc, sra, selected_curate_groups = NA, balance.bp = FALSE) {
-    # if the data are SVA-corrected, balance.bp would not be necessary because project-specfic effects
+curate_group_mean = function(tc, sra, selected_curate_groups = NA, balance_bp = FALSE) {
+    # if the data are SVA-corrected, balance_bp would not be necessary because project-specfic effects
     # were removed in SVA already.
     if (all(is.na(selected_curate_groups))) {
         sp_curate_groups = unique(sra[['curate_group']])
-    }else{
+    } else {
         sp_curate_groups = selected_curate_groups[selected_curate_groups %in% unique(sra[['curate_group']])]
     }
     tc_ave = data.frame(matrix(rep(NA, length(sp_curate_groups) * nrow(tc)), nrow = nrow(tc)))
@@ -170,7 +170,7 @@ curate_group_mean = function(tc, sra, selected_curate_groups = NA, balance.bp = 
         if (length(run_curate_group) == 1) {
             exp_curate_group = tc[,run_curate_group]
         } else {
-            if (balance.bp) {
+            if (balance_bp) {
                 is_run = (sra[['run']] %in% colnames(tc))
                 is_curate_group = (sra[['curate_group']] == curate_group)
                 is_no_exclusion = (sra[['exclusion']] == "no")
@@ -359,7 +359,7 @@ check_within_curate_group_correlation = function(tc, sra, dist_method, min_dif, 
     return(list(tc = tc, sra = sra))
 }
 
-batch_effect_subtraction = function(tc, sra, batch_effect_alg) {
+batch_effect_subtraction = function(tc, sra, batch_effect_alg, transform_method, clip_negative) {
     if (ncol(tc)==1) {
         cat('Only 1 sample is available. Skipping batch effect subtraction.\n')
         return(list(tc = tc, sva = NULL))
@@ -441,6 +441,22 @@ batch_effect_subtraction = function(tc, sra, batch_effect_alg) {
         sva1 = ''
     } else {
         stop("Invalid batch effect correction algorithm.")
+    }
+    if (clip_negative) {
+        if (endsWith(sub('-.*', '', transform_method), 'p1')) {
+            is_negative = (tc < 0)
+            txt = 'Number of negative values clipped to zero: %s/%s (%s x %s matrix)\n'
+            val1 = format(sum(is_negative), big.mark=',', scientific=FALSE)
+            val2 = format(prod(dim(tc)), big.mark=',', scientific=FALSE)
+            val3 = format(dim(tc)[1], big.mark=',', scientific=FALSE)
+            val4 = format(dim(tc)[2], big.mark=',', scientific=FALSE)
+            cat(sprintf(txt, val1, val2, val3, val4))
+            if (sum(is_negative) > 0) {
+                tc[is_negative] = 0
+            }
+        } else {
+            cat('`--clip_negative yes` is only applicable to `--norm log*p1-*`.\n')
+        }
     }
     return(list(tc = tc, sva = sva1))
 }
@@ -557,11 +573,11 @@ draw_dendrogram_pvclust = function(sra, tc, nboot, pvclust_file, fontsize = 7) {
     sp = sub(" ", "_", sra[['scientific_name']][1])
     if (file.exists(pvclust_file)) {
         if (file.info(pvclust_file)[['size']]) {
-            print("pvclust file found.")
+            cat("pvclust intermediate file found.\n")
             load(pvclust_file)
         }
     } else {
-        print("no pvclust file found. Start bootstrapping.")
+        cat("no pvclust intermediate file found. Start bootstrapping.\n")
         result = pvclust(tc, method.dist = dist_fun, method.hclust = "average", nboot = nboot, parallel = FALSE)  # UPGMA
         save(result, file = pvclust_file)
     }
@@ -1015,7 +1031,7 @@ sra = out[["sra"]]
 tc_tmp = apply_transformation_logic(tc, tc_eff_length, transform_method, batch_effect_alg, step='before_batch_plot')
 save_plot(tc_tmp, sra, NULL, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".original"),
           selected_curate_groups, fontsize, transform_method, batch_effect_alg)
-out = batch_effect_subtraction(tc, sra, batch_effect_alg)
+out = batch_effect_subtraction(tc, sra, batch_effect_alg, transform_method, clip_negative)
 tc_batch_corrected = out[["tc"]]
 sva_out = out[["sva"]]
 if (!is.null(sva_out)) {
@@ -1037,7 +1053,7 @@ sra = out[["sra"]]
 tc_tmp = apply_transformation_logic(tc, tc_eff_length, transform_method, batch_effect_alg, step='before_batch_plot')
 save_plot(tc_tmp, sra, NULL, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".mapping_cutoff"),
           selected_curate_groups, fontsize, transform_method, batch_effect_alg)
-out = batch_effect_subtraction(tc, sra, batch_effect_alg)
+out = batch_effect_subtraction(tc, sra, batch_effect_alg, transform_method, clip_negative)
 tc_batch_corrected = out[["tc"]]
 sva_out = out[["sva"]]
 if (!is.null(sva_out)) {
@@ -1060,7 +1076,7 @@ while (end_flag == 0) {
     if ((num_run_before == num_run_after) | (plot_intermediate)) {
         sva_out = NULL
         tc_batch_corrected = NULL
-        out = batch_effect_subtraction(tc[,colnames(tc_cwtc)], sra, batch_effect_alg)
+        out = batch_effect_subtraction(tc[,colnames(tc_cwtc)], sra, batch_effect_alg, transform_method, clip_negative)
         tc_batch_corrected = out[["tc"]]
         sva_out = out[["sva"]]
         if (!is.null(sva_out)) {

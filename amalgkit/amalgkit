@@ -291,7 +291,7 @@ pcu.add_argument('--one_outlier_per_iter', metavar='yes|no', default='no', type=
                  help='default=%(default)s: If yes, allows curate to remove only 1 sample per same-tissue or same-bioproject. Increases computing times!')
 pcu.add_argument('--norm', metavar='(logn|log2|lognp1|log2p1|none)-(fpkm|tpm|none)',
                  default='log2p1-fpkm', type=str, required=False, action='store',
-                 help='default=%(default)s: Expression level transformation before SVA. '
+                 help='default=%(default)s: Expression level transformation before the batch effect removal. '
                       'SVA is best performed with log-transformed values. '
                       'logn: log_n normalization after FPKM/TPM transformation. '
                       'log2: log_2 normalization after FPKM/TPM transformation. '
@@ -301,10 +301,13 @@ pcu.add_argument('--norm', metavar='(logn|log2|lognp1|log2p1|none)-(fpkm|tpm|non
 pcu.add_argument('--batch_effect_alg', metavar='(no|sva|ruvseq|combatseq)', choices=['no', 'sva', 'ruvseq', 'combatseq'],
                  default='sva', type=str, required=False, action='store',
                  help='default=%(default)s: Batch-effect removal algorithm. '
-                 'no: no batch-effect removal. '
-                 'sva: surrogate variable analysis. Use with log-transformed values. '
-                 'ruvseq: batch effect removal based on control genes. Control genes are obtained from the residuals of a GLM. If log-fpkm/tpm is set, transformation will be applied after batch-effect removal. '
-                 'combatseq: batch effect removal based on known batch effects (bioproject). If log-fpkm/tpm is set, transformation will be applied after batch-effect removal. ')
+                 'no: No batch-effect removal. '
+                 'sva: Surrogate variable analysis. Use with log-transformed values. '
+                 'ruvseq: Experimental. Batch effect removal based on control genes. Control genes are obtained from the residuals of a GLM. If log-fpkm/tpm is set, transformation will be applied after batch-effect removal. '
+                 'combatseq: Experimental. Batch effect removal based on known batch effects (bioproject). If log-fpkm/tpm is set, transformation will be applied after batch-effect removal. ')
+pcu.add_argument('--clip_negative', metavar='yes|no', default='yes', type=strtobool, required=False, action='store',
+                 help='default=%(default)s: Negative values will be clipped to 0 after the batch effect removal, '
+                      'if the log*p1-* transformation is applied before the batch effect removal.')
 pcu.set_defaults(handler=command_curate)
 
 # Sub parser: sanity
