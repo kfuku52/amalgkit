@@ -26,9 +26,9 @@ if (debug_mode == "debug") {
   dir_curated_transcriptome = paste0(dir_work, 'curate/')
   dir_csca_input_table = paste0(dir_curated_transcriptome,'tables/')
   file_orthogroup = paste0(dir_work, 'OrthoFinder/Orthogroups.tsv')
+  batch_effect_alg = 'sva'
 } else if (debug_mode == "batch") {
   args = commandArgs(trailingOnly = TRUE)
-  print(args)
   selected_curate_groups = strsplit(args[1], "\\|")[[1]]
   dir_work = args[2]
   dir_csca_input_table = args[3]
@@ -36,9 +36,18 @@ if (debug_mode == "debug") {
   file_genecount = args[5]
   r_util_path = args[6]
   dir_csca = args[7]
+  batch_effect_alg = args[8]
 }
 source(r_util_path)
 setwd(dir_csca)
+cat('selected_curate_groups:', selected_curate_groups, "\n")
+cat('dir_work:', dir_work, "\n")
+cat('dir_csca_input_table:', dir_csca_input_table, "\n")
+cat('file_orthogroup:', file_orthogroup, "\n")
+cat('file_genecount:', file_genecount, "\n")
+cat('r_util_path:', r_util_path, "\n")
+cat('dir_csca:', dir_csca, "\n")
+cat('batch_effect_alg:', batch_effect_alg, "\n")
 
 add_color_to_metadata = function(df, selected_curate_groups) {
   df = df[,(!colnames(df) %in% c('bp_color','sp_color','curate_group_color'))]
@@ -264,38 +273,40 @@ get_label_orders = function(df_metadata) {
   return(label_orders)
 }
 
-load_group_mean_expression_tables = function(dir_csca_input_table, spp_filled) {
+load_group_mean_expression_tables = function(dir_csca_input_table, spp_filled, batch_effect_alg) {
   averaged_tcs = list()
   averaged_tcs[['uncorrected']] = list()
   averaged_tcs[['corrected']] = list()
   all_files = list.files(dir_csca_input_table, pattern = "*.curate_group.mean.tsv")
-  uncorrected_files = all_files[grep("uncorrected", all_files)]
-  corrected_files = all_files[-grep("uncorrected", all_files)]
+  uncorrected_files = all_files[grepl("uncorrected", all_files)]
+  corrected_files = all_files[((!grepl("uncorrected", all_files))&(grepl(batch_effect_alg, all_files)))]
   for (sp in spp_filled) {
     uncorrected_file = uncorrected_files[startsWith(uncorrected_files, sp)]
     corrected_file = corrected_files[startsWith(corrected_files, sp)]
     uncorrected_path = file.path(dir_csca_input_table, uncorrected_file)
     corrected_path = file.path(dir_csca_input_table, corrected_file)
+    if ((length(uncorrected_path)==0)|(length(corrected_path)==0)) {
+      cat(paste("Skipping. `amalgkit curate` output(s) not found:", sp, "\n"), file=stderr())
+      next
+    }
     averaged_tcs[['uncorrected']][[sp]] = read.delim(uncorrected_path, header=TRUE, row.names=1, sep='\t')
     averaged_tcs[['corrected']][[sp]] = read.delim(corrected_path, header=TRUE, row.names=1, sep='\t')
   }
   return(averaged_tcs)
 }
 
-extract_ortholog_mean_expression_table = function(df_singleog, averaged_tcs, spp, label_orders) {
+extract_ortholog_mean_expression_table = function(df_singleog, averaged_tcs, label_orders) {
   averaged_orthologs = list()
   averaged_orthologs[['uncorrected']] = df_singleog
   averaged_orthologs[['corrected']] = df_singleog
   row_names = rownames(averaged_orthologs[['corrected']])
-  selected_species = spp
   for (d in c('uncorrected', 'corrected')) {
-    for (sp in spp) {
-      sp_filled = sub(" ", "_", sp)
+    for (sp_filled in colnames(df_singleog)) {
       tc = averaged_tcs[[d]][[sp_filled]]
       colnames(tc) = paste(sp_filled, colnames(tc), sep='_')
       averaged_orthologs[[d]] = merge(averaged_orthologs[[d]], tc, by.x=sp_filled, by.y="row.names", all.x=TRUE, all.y=FALSE, sort=FALSE)
     }
-    num_remove_col = length(selected_species)
+    num_remove_col = ncol(df_singleog)
     averaged_orthologs[[d]] = averaged_orthologs[[d]][,-(1:num_remove_col)]
     rownames(averaged_orthologs[[d]]) = row_names
     averaged_orthologs[[d]] = sort_averaged_tc(averaged_orthologs[[d]])
@@ -306,32 +317,35 @@ extract_ortholog_mean_expression_table = function(df_singleog, averaged_tcs, spp
   return(averaged_orthologs)
 }
 
-load_unaveraged_expression_tables = function(dir_csca_input_table, spp_filled) {
+load_unaveraged_expression_tables = function(dir_csca_input_table, spp_filled, batch_effect_alg) {
   unaveraged_tcs = list()
   unaveraged_tcs[['uncorrected']] = list()
   unaveraged_tcs[['corrected']] = list()
-  all_files = list.files(dir_csca_input_table, pattern = "*.tc.*") # TODO This pattern doesn't look safe
-  uncorrected_files = all_files[grep("uncorrected", all_files)]
-  corrected_files = all_files[-grep("uncorrected", all_files)]
+  all_files = list.files(dir_csca_input_table, pattern="*.tc.tsv")
+  uncorrected_files = all_files[grepl("uncorrected", all_files)]
+  corrected_files = all_files[((!grepl("uncorrected", all_files))&(grepl(batch_effect_alg, all_files)))]
   for (sp in spp_filled) {
     uncorrected_file = uncorrected_files[startsWith(uncorrected_files, sp)]
     uncorrected_path = file.path(dir_csca_input_table, uncorrected_file)
     corrected_file = corrected_files[startsWith(corrected_files, sp)]
     corrected_path = file.path(dir_csca_input_table, corrected_file)
+    if ((length(uncorrected_path)==0)|(length(corrected_path)==0)) {
+      cat(paste("Skipping. `amalgkit curate` output(s) not found:", sp, "\n"), file=stderr())
+      next
+    }
     unaveraged_tcs[['uncorrected']][[sp]] = read.delim(uncorrected_path, header=TRUE, row.names=1, sep='\t')
     unaveraged_tcs[['corrected']][[sp]] = read.delim(corrected_path, header=TRUE, row.names=1, sep='\t')
   }
   return(unaveraged_tcs)
 }
 
-extract_ortholog_unaveraged_expression_table = function(df_singleog, unaveraged_tcs, spp) {
+extract_ortholog_unaveraged_expression_table = function(df_singleog, unaveraged_tcs) {
   unaveraged_orthologs = list()
   unaveraged_orthologs[['uncorrected']] = df_singleog
   unaveraged_orthologs[['corrected']] = df_singleog
   row_names = rownames(unaveraged_orthologs[['corrected']])
   for (d in c('uncorrected', 'corrected')) {
-    for (sp in spp) {
-      sp_filled = sub(" ", "_", sp)
+    for (sp_filled in colnames(df_singleog)) {
       tc = unaveraged_tcs[[d]][[sp_filled]]
       colnames(tc) = paste(sp_filled, colnames(tc), sep='_')
       unaveraged_orthologs[[d]] = merge(unaveraged_orthologs[[d]], tc, by.x=sp_filled, by.y="row.names", all.x=TRUE, all.y=FALSE, sort=FALSE)
@@ -339,12 +353,9 @@ extract_ortholog_unaveraged_expression_table = function(df_singleog, unaveraged_
     num_remove_col = length(spp)
     unaveraged_orthologs[[d]] = unaveraged_orthologs[[d]][,-(1:num_remove_col)]
     rownames(unaveraged_orthologs[[d]]) = row_names
-    #is_not_na = apply(unaveraged_orthologs[[d]], 1, function(x){!any(is.na(x))})
-    #unaveraged_orthologs[[d]] = unaveraged_orthologs[[d]][is_not_na,]
+    tc_order = order(sub('.*_','',colnames(unaveraged_orthologs[[d]])))
+    unaveraged_orthologs[[d]] = unaveraged_orthologs[[d]][,tc_order]
   }
-  #cat(nrow(unaveraged_orthologs[[d]]), 'unaveraged_orthologs were found after filtering.\n')
-  tc_order = order(sub('.*_','',colnames(unaveraged_orthologs[['corrected']])))
-  unaveraged_orthologs[['corrected']] = unaveraged_orthologs[['corrected']][,tc_order]
   return(unaveraged_orthologs)
 }
 
@@ -638,16 +649,20 @@ cat('Number of single-copy orthologs:', nrow(df_singleog), '\n')
 cat('Number of selected species:', length(spp), '\n')
 cat('Selected species:', spp, '\n')
 
-averaged_tcs = load_group_mean_expression_tables(dir_csca_input_table, spp_filled)
-averaged_orthologs = extract_ortholog_mean_expression_table(df_singleog, averaged_tcs, spp, label_orders)
-unaveraged_tcs = load_unaveraged_expression_tables(dir_csca_input_table, spp_filled)
-unaveraged_orthologs = extract_ortholog_unaveraged_expression_table(df_singleog, unaveraged_tcs, spp)
+averaged_tcs = load_group_mean_expression_tables(dir_csca_input_table, spp_filled, batch_effect_alg)
+averaged_orthologs = extract_ortholog_mean_expression_table(df_singleog, averaged_tcs, label_orders)
+unaveraged_tcs = load_unaveraged_expression_tables(dir_csca_input_table, spp_filled, batch_effect_alg)
+unaveraged_orthologs = extract_ortholog_unaveraged_expression_table(df_singleog, unaveraged_tcs)
 cat('Applying expression level imputation for missing orthologs.\n')
 imputed_averaged_orthologs = list()
 imputed_unaveraged_orthologs = list()
 for (d in c('uncorrected','corrected')) {
   imputed_averaged_orthologs[[d]] = impute_expression(averaged_orthologs[[d]])
   imputed_unaveraged_orthologs[[d]] = impute_expression(unaveraged_orthologs[[d]])
+  write.table(averaged_orthologs[[d]], file=paste0('csca_ortholog_averaged.',d,'.tsv'), sep="\t", row.names=FALSE, quote=FALSE)
+  write.table(unaveraged_orthologs[[d]], file=paste0('csca_ortholog_unaveraged.',d,'.tsv'), sep="\t", row.names=FALSE, quote=FALSE)
+  write.table(imputed_averaged_orthologs[[d]], file=paste0('csca_ortholog_averaged.imputed.',d,'.tsv'), sep="\t", row.names=FALSE, quote=FALSE)
+  write.table(imputed_unaveraged_orthologs[[d]], file=paste0('csca_ortholog_unaveraged.imputed.',d,'.tsv'), sep="\t", row.names=FALSE, quote=FALSE)
 }
 cat(nrow(imputed_unaveraged_orthologs[[d]]), 'orthologs were found after filtering and imputation.\n')
 df_color_averaged = get_df_labels_averaged(df_metadata)

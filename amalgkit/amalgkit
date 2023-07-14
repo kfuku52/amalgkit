@@ -268,6 +268,9 @@ pca.add_argument('--orthogroup_table', metavar='PATH', default=None, type=str, r
 pca.add_argument('--dir_busco', metavar='PATH', default=None, type=str, required=False, action='store',
                  help='default=%(default)s: PATH to the directory where per-species BUSCO full tables are stored. '
                       'File names in this directory are expected to be GENUS_SPECIES_MISC.tsv: e.g., Arabidopsis_thaliana_full_table.tsv')
+pca.add_argument('--batch_effect_alg', metavar='(no|sva|ruvseq|combatseq)', choices=['no', 'sva', 'ruvseq', 'combatseq'],
+                 default='sva', type=str, required=False, action='store',
+                 help='default=%(default)s: Batch-effect removal algorithm used in `amalgkit curate`.')
 pca.set_defaults(handler=command_csca)
 
 # Sub parser: curate
@@ -297,7 +300,7 @@ pcu.add_argument('--norm', metavar='(logn|log2|lognp1|log2p1|none)-(fpkm|tpm|non
                       'fpkm/tpm/none: FPKM, TPM, or no transformation. ')
 pcu.add_argument('--batch_effect_alg', metavar='(no|sva|ruvseq|combatseq)', choices=['no', 'sva', 'ruvseq', 'combatseq'],
                  default='sva', type=str, required=False, action='store',
-                 help='default=%(default)s: batch-effect removal algorithm. '
+                 help='default=%(default)s: Batch-effect removal algorithm. '
                  'no: no batch-effect removal. '
                  'sva: surrogate variable analysis. Use with log-transformed values. '
                  'ruvseq: batch effect removal based on control genes. Control genes are obtained from the residuals of a GLM. If log-fpkm/tpm is set, transformation will be applied after batch-effect removal. '

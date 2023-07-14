@@ -31,6 +31,8 @@ def generate_csca_input_symlinks(dir_csca_input_table, dir_curate, spp):
         for file in files:
             path_src = os.path.join(dir_curate, sp, 'tables', file)
             path_dst = os.path.join(dir_csca_input_table, file)
+            if os.path.exists(path_dst):
+                os.remove(path_dst)
             os.symlink(path_src, path_dst)
     return None
 
@@ -39,7 +41,7 @@ def csca_main(args):
     check_ortholog_parameter_compatibility(args)
     dir_out = os.path.realpath(args.out_dir)
     dir_curate = os.path.join(dir_out, 'curate')
-    dir_csca_input_table = os.path.join(dir_curate, 'tmp.amalgkit.csca_input_tables')
+    dir_csca_input_table = os.path.join(dir_out, 'tmp.amalgkit.csca_input_tables')
     spp = get_spp_from_dir(dir_curate)
     generate_csca_input_symlinks(dir_csca_input_table, dir_curate, spp)
     curate_group = get_curate_group(args)
@@ -56,7 +58,6 @@ def csca_main(args):
     r_util_path = os.path.join(dir_amalgkit_script, 'util.r')
     file_genecount = os.path.join(dir_out, 'tmp.amalgkit.orthogroup.genecount.tsv')
     orthogroup2genecount(file_orthogroup=file_orthogroup_table, file_genecount=file_genecount, spp=spp)
-
     subprocess.call(['Rscript',
                      csca_r_script_path,
                      curate_group,
@@ -66,7 +67,8 @@ def csca_main(args):
                      file_genecount,
                      r_util_path,
                      dir_csca,
+                     args.batch_effect_alg,
                      ])
+    shutil.rmtree(dir_csca_input_table)
     for f in glob.glob("tmp.amalgkit.*"):
         os.remove(f)
-    #shutil.rmtree(dir_csca_input_table)
