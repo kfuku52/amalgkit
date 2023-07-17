@@ -184,7 +184,7 @@ class Metadata:
     def group_attributes(self, dir_config):
         try:
             config = pandas.read_csv(os.path.join(dir_config, 'group_attribute.config'),
-                                     parse_dates=False, infer_datetime_format=False, quotechar='"', sep='\t',
+                                     parse_dates=False, quotechar='"', sep='\t',
                                      header=None, index_col=None, skip_blank_lines=True, comment='#')
         except:
             config = pandas.DataFrame()
@@ -212,7 +212,7 @@ class Metadata:
     def mark_exclude_keywords(self, dir_config):
         try:
             config = pandas.read_csv(os.path.join(dir_config, 'exclude_keyword.config'),
-                                     parse_dates=False, infer_datetime_format=False, quotechar='"', sep='\t',
+                                     parse_dates=False, quotechar='"', sep='\t',
                                      header=None, index_col=None, skip_blank_lines=True, comment='#')
         except:
             config = pandas.DataFrame()
@@ -237,7 +237,7 @@ class Metadata:
     def mark_treatment_terms(self, dir_config):
         try:
             config = pandas.read_csv(os.path.join(dir_config, 'control_term.config'),
-                                     parse_dates=False, infer_datetime_format=False, quotechar='"', sep='\t',
+                                     parse_dates=False, quotechar='"', sep='\t',
                                      header=None, index_col=None, skip_blank_lines=True, comment='#')
         except:
             config = pandas.DataFrame()
@@ -354,7 +354,7 @@ class Metadata:
 def read_config_file(file_name, dir_path):
     try:
         df = pandas.read_csv(os.path.join(dir_path, file_name),
-                             parse_dates=False, infer_datetime_format=False, quotechar='"', sep='\t',
+                             parse_dates=False, quotechar='"', sep='\t',
                              header=None, index_col=None, skip_blank_lines=True, comment='#')
     except:
         df = pandas.DataFrame([])
