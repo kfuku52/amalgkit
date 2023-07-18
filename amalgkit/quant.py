@@ -49,9 +49,9 @@ def call_kallisto(args, in_files, metadata, sra_stat, output_dir, index):
 
     print('Command: {}'.format(' '.join(kallisto_cmd)))
     kallisto_out = subprocess.run(kallisto_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    print('kallisto stdout:')
+    print('kallisto quant stdout:')
     print(kallisto_out.stdout.decode('utf8'))
-    print('kallisto stderr:')
+    print('kallisto quant stderr:')
     print(kallisto_out.stderr.decode('utf8'))
     if kallisto_out.returncode != 0:
         sys.stderr.write("kallisto did not finish safely.\n")
@@ -161,18 +161,23 @@ def get_index(args, sci_name):
                 txt += 'If the reference fasta file is correctly placed, the column "scientific_name" of the --metadata file may need to be edited.'
                 raise FileNotFoundError(txt)
             fasta_file = fasta_files[0]
-            print('Reference fasta file found: {}'.format(fasta_file))
-            print('Building index.')
+            print('Reference fasta file found: {}'.format(fasta_file), flush=True)
             index_path = os.path.join(index_dir, sci_name + '.idx')
+            print('Building index: {}'.format(index_path), flush=True)
             kallisto_build_cmd = ["kallisto", "index", "-i", index_path, fasta_file]
-            subprocess.run(kallisto_build_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            print('Command: {}'.format(' '.join(kallisto_build_cmd)), flush=True)
+            index_out = subprocess.run(kallisto_build_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            print('kallisto index stdout:')
+            print(index_out.stdout.decode('utf8'))
+            print('kallisto index stderr:')
+            print(index_out.stderr.decode('utf8'))
             index = [index_path]
         else:
             sys.stderr.write('No index file was found in: {}\n'.format(index_dir))
             sys.stderr.write('Try --fasta_dir PATH and --build_index yes\n')
             raise FileNotFoundError("Could not find index file.")
     index = index[0]
-    print("Kallisto index file found: {}".format(index))
+    print("Kallisto index file found: {}".format(index), flush=True)
     return index
 
 
