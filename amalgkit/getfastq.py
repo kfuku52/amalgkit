@@ -791,7 +791,7 @@ def getfastq_main(args):
     if (not flag_private_file) & (not flag_any_output_file_present):
         g['rate_obtained_1st'] = metadata.df.loc[:,'bp_amalgkit'].sum() / g['max_bp']
         if (g['rate_obtained_1st'] < (args.tol*0.01)):
-            print('Enough data were obtained in the 1st-round sequence extraction. Proceeding without the 2nd round.')
+            print('Sufficient data were obtained in the 1st-round sequence extraction. Proceeding without the 2nd round.')
         else:
             txt = 'Only {:,.2f}% ({:,}/{:,}) of the target size (--max_bp) was obtained in the 1st round. Proceeding to the 2nd round read extraction.'
             print(txt.format(g['rate_obtained_1st']*100, metadata.df.loc[:,'bp_amalgkit'].sum(), g['max_bp']), flush=True)

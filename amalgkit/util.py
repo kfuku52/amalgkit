@@ -62,6 +62,7 @@ class Metadata:
         assert isinstance(root, lxml.etree._ElementTree), "Unknown input type."
         df_list = list()
         counter = 0
+        metadata = Metadata()
         for entry in root.iter(tag="EXPERIMENT_PACKAGE"):
             if counter % 1000 == 0:
                 now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -140,7 +141,6 @@ class Metadata:
                 './RUN_SET/RUN/SRAFiles/SRAFile[@supertype="Primary ETL"]/Alternatives[@org="AWS"]/@url')])
             items.append(["GCP_Link", entry.xpath(
                 './RUN_SET/RUN/SRAFiles/SRAFile[@supertype="Primary ETL"]/Alternatives[@org="GCP"]/@url')])
-
             row = []
             for item in items:
                 try:
@@ -173,10 +173,11 @@ class Metadata:
                             row_df = pandas.concat([row_df, sa_df], axis=1)
             df_list.append(row_df)
             counter += 1
+        if len(df_list)==0:
+            return metadata
         df = pandas.concat(df_list, ignore_index=True, sort=False)
         now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         print('{}: Finished converting {:,} samples'.format(now, counter), flush=True)
-        metadata = Metadata()
         metadata.df = df
         metadata.reorder(omit_misc=False)
         return metadata
