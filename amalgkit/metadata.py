@@ -26,7 +26,10 @@ def get_search_term(species_name="", bioprojects=[], biosamples=[], keywords=[],
 
     other_terms = list()
     for i in numpy.arange(other_conditions.shape[0]):
-        other_terms.append('\"'+other_conditions.loc[i,1]+'\"['+other_conditions.loc[i,0]+']')
+        other_terms_OR = list()
+        for term in other_conditions.loc[i,1].split(','):
+            other_terms_OR.append('\"'+term+'\"['+other_conditions.loc[i,0]+']')
+        other_terms.append("("+(" OR ".join(other_terms_OR))+")")
     other_term = " AND ".join(other_terms)
 
     excluded_terms = list()
