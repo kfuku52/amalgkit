@@ -303,8 +303,9 @@ pcu.add_argument('--batch_effect_alg', metavar='(no|sva|ruvseq|combatseq)', choi
                  help='default=%(default)s: Batch-effect removal algorithm. '
                  'no: No batch-effect removal. '
                  'sva: Surrogate variable analysis. Use with log-transformed values. '
-                 'ruvseq: Experimental. Batch effect removal based on control genes. Control genes are obtained from the residuals of a GLM. If log-fpkm/tpm is set, transformation will be applied after batch-effect removal. '
-                 'combatseq: Experimental. Batch effect removal based on known batch effects (bioproject). If log-fpkm/tpm is set, transformation will be applied after batch-effect removal. ')
+                 'ruvseq: Experimental. Batch effect removal based on control genes. Control genes are obtained from the residuals of a GLM. '
+                 'combatseq: Experimental. Batch effect removal based on BioProject IDs. '
+                 'If log-fpkm/tpm is set in combination with ruvseq or combatseq, transformation will be applied after batch-effect removal. ')
 pcu.add_argument('--clip_negative', metavar='yes|no', default='yes', type=strtobool, required=False, action='store',
                  help='default=%(default)s: Negative values will be clipped to 0 after the batch effect removal, '
                       'if the log*p1-* transformation is applied before the batch effect removal.')
