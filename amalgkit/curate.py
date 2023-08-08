@@ -33,26 +33,13 @@ def run_curate_r_script(args, metadata, sp, input_dir):
     amalgkit_script_dir = os.path.dirname(os.path.realpath(__file__))
     r_script_path = os.path.join(amalgkit_script_dir, 'curate.r')
     path_curate_input_metadata = os.path.join(input_dir, 'metadata.tsv')
-    # check if cstmm output is used when --norm == tpm, because TPM undoes tmm normalization
-    if args.norm is not None and 'tpm' in args.norm:
-        substring = "cstmm"
-        try:
-            input_dir.index(substring)
-        except ValueError:
-            warnings.warn(
-                "WARNING: TPM NORMALIZATION AND TMM NORMALIZATION ARE INCOMPATIBLE. IF INPUT DATA IS TMM NORMALIZED, PLEASE SWITCH --norm TO ANY OF THE 'fpkm' NORMALISATIONS INSTEAD: (logn|log2|lognp1|log2p1|none)-(fpkm)")
-        else:
-            raise ValueError(
-                "ERROR: AMALGKIT CSTMM NORMALIZED INPUT FILES DETECTED WHILE NORMALIZATION METHOD IS 'TPM'. TMM NORMALIZATION AND TPM NORMALIZATION ARE INCOMPATIBLE! PLEASE SWITCH --norm TO ANY OF THE 'fpkm' NORMALISATIONS INSTEAD: (logn|log2|lognp1|log2p1|none)-(fpkm)")
-
     len_file = os.path.join(os.path.abspath(input_dir), sp, sp + '_eff_length.tsv')
     if 'cstmm' in input_dir:
         count_file = os.path.join(os.path.abspath(input_dir), sp, sp + '_cstmm_counts.tsv')
     else:
         count_file = os.path.join(os.path.abspath(input_dir), sp, sp + '_est_counts.tsv')
-
     if os.path.exists(count_file) and os.path.exists(len_file):
-        print("Both counts and effective length files found.", flush=True)
+        print("Both counts and effective length files found: {}".format(sp), flush=True)
     else:
         if not os.path.exists(count_file):
             sys.stderr.write('Expected but undetected PATH of the count file: {}\n'.format(count_file))
@@ -97,6 +84,11 @@ def curate_main(args):
     else:
         print('Input_directory: {}'.format(args.input_dir))
         input_dir = args.input_dir
+    if ('tpm' in args.norm) & ('cstmm' in input_dir):
+            txt = ("TPM and TMM are incompatible. "
+                   "If input data are CSTMM-normalized, "
+                   "please switch --norm to any of the 'fpkm' normalization methods instead.")
+            sys.stderr.write(txt)
     spp = metadata.df.loc[:, 'scientific_name'].drop_duplicates().values
     curate_dir = os.path.join(args.out_dir, 'curate')
     if not os.path.exists(curate_dir):
