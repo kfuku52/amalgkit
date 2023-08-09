@@ -138,8 +138,8 @@ pp_cg.add_argument('--curate_group', metavar='STR', default=None, type=str, requ
 # Sub parser: metadata
 pme_help = 'NCBI SRA metadata retrieval and curation. See `amalgkit metadata -h`'
 pme = subparsers.add_parser('metadata', help=pme_help, parents=[pp_out, pp_redo])
-pme.add_argument('--config_dir', metavar='PATH', default='inferred', type=str, required=False, action='store',
-                 help='default=%(default)s: PATH to the config directory. "inferred" = out_dir/config')
+pme.add_argument('--search_string', metavar='PATH', default=None, type=str, required=True, action='store',
+                 help='default=%(default)s: Entrez search string. See https://www.ncbi.nlm.nih.gov/books/NBK25499/ for details.')
 pme.add_argument('--entrez_email', metavar='aaa@bbb.com', default='', type=str, required=False, action='store',
                  help='default=%(default)s: Your email address. See https://www.ncbi.nlm.nih.gov/books/NBK25497/')
 pme.set_defaults(handler=command_metadata)

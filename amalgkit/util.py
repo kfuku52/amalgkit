@@ -586,20 +586,12 @@ def generate_multisp_busco_table(dir_busco, outfile):
 
 def check_config_dir(dir_path, mode):
     files = os.listdir(dir_path)
-    if mode=='metadata':
-        asserted_files = [
-            'search_term_exclusion.config',
-            'search_term_other.config',
-            'search_term_species.config',
-            'search_term_keyword.config',
-        ]
-    elif mode=='select':
+    if mode=='select':
         asserted_files = [
             'group_attribute.config',
             'exclude_keyword.config',
             'control_term.config',
         ]
-
     missing_count = 0
     for af in asserted_files:
         if af in files:
@@ -607,7 +599,7 @@ def check_config_dir(dir_path, mode):
         else:
             sys.stderr.write('Config file not found: {}\n'.format(af))
             missing_count += 1
-    if missing_count>0:
+    if (missing_count>0):
         txt = 'Please refer to the AMALGKIT Wiki for more info: https://github.com/kfuku52/amalgkit/wiki/amalgkit-metadata\n'
         sys.stderr.write(txt)
 
