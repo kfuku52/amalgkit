@@ -1,20 +1,15 @@
-if (FALSE) { 
-  library(devtools)
-  library(httr)
-  set_config(config(ssl_verifypeer = 0L))
-  options(repos=structure(c(CRAN="http://cran.rstudio.com/")))
-  install.packages(c("phytools","amap","RColorBrewer","colorspace","dendextend","NMF","MASS","caper","pvclust"))
-}
-suppressPackageStartupMessages(library(amap, quietly=TRUE))
-suppressPackageStartupMessages(library(RColorBrewer, quietly=TRUE))
-suppressPackageStartupMessages(library(colorspace, quietly=TRUE))
-suppressPackageStartupMessages(library(dendextend, quietly=TRUE))
-suppressPackageStartupMessages(library(NMF, quietly=TRUE))
-suppressPackageStartupMessages(library(MASS, quietly=TRUE))
-suppressPackageStartupMessages(library(pvclust, quietly=TRUE))
-suppressPackageStartupMessages(library(Rtsne, quietly=TRUE))
-suppressPackageStartupMessages(library(ggplot2, quietly=TRUE))
-suppressPackageStartupMessages(library(pcaMethods, quietly=TRUE))
+#!/usr/bin/env Rscript
+
+suppressWarnings(suppressPackageStartupMessages(library(amap, quietly=TRUE)))
+suppressWarnings(suppressPackageStartupMessages(library(RColorBrewer, quietly=TRUE)))
+suppressWarnings(suppressPackageStartupMessages(library(colorspace, quietly=TRUE)))
+suppressWarnings(suppressPackageStartupMessages(library(dendextend, quietly=TRUE)))
+suppressWarnings(suppressPackageStartupMessages(library(NMF, quietly=TRUE)))
+suppressWarnings(suppressPackageStartupMessages(library(MASS, quietly=TRUE)))
+suppressWarnings(suppressPackageStartupMessages(library(pvclust, quietly=TRUE)))
+suppressWarnings(suppressPackageStartupMessages(library(Rtsne, quietly=TRUE)))
+suppressWarnings(suppressPackageStartupMessages(library(ggplot2, quietly=TRUE)))
+suppressWarnings(suppressPackageStartupMessages(library(pcaMethods, quietly=TRUE)))
 options(stringsAsFactors = FALSE)
 
 debug_mode = ifelse(length(commandArgs(trailingOnly = TRUE)) == 1, "debug", "batch")

@@ -1,5 +1,7 @@
-suppressPackageStartupMessages(library(edgeR, quietly=TRUE))
-suppressPackageStartupMessages(library(ggplot2, quietly=TRUE))
+#!/usr/bin/env Rscript
+
+suppressWarnings(suppressPackageStartupMessages(library(edgeR, quietly=TRUE)))
+suppressWarnings(suppressPackageStartupMessages(library(ggplot2, quietly=TRUE)))
 
 mode = ifelse(length(commandArgs(trailingOnly=TRUE))==1, 'debug', 'batch')
 
