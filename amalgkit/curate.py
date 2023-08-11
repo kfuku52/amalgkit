@@ -104,6 +104,7 @@ def curate_main(args):
             else:
                 print('Skipping. Output file detected: {}'.format(sp), flush=True)
                 continue
+        print('Starting: {}'.format(sp), flush=True)
         exit_status = run_curate_r_script(args, metadata, sp, input_dir)
         if exit_status == 0:
             with open(file_curate_completion_flag, 'w') as f:

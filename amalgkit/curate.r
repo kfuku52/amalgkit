@@ -1,14 +1,14 @@
 #!/usr/bin/env Rscript
 
-suppressPackageStartupMessages(library(pcaMethods, quietly = TRUE))
-suppressPackageStartupMessages(library(colorspace, quietly = TRUE))
-suppressPackageStartupMessages(library(RColorBrewer, quietly = TRUE))
-suppressPackageStartupMessages(library(MASS, quietly = TRUE))
-suppressPackageStartupMessages(library(NMF, quietly = TRUE))
-suppressPackageStartupMessages(library(dendextend, quietly = TRUE))
-suppressPackageStartupMessages(library(amap, quietly = TRUE))
-suppressPackageStartupMessages(library(pvclust, quietly = TRUE))
-suppressPackageStartupMessages(library(Rtsne, quietly = TRUE))
+suppressWarnings(suppressPackageStartupMessages(library(pcaMethods, quietly = TRUE)))
+suppressWarnings(suppressPackageStartupMessages(library(colorspace, quietly = TRUE)))
+suppressWarnings(suppressPackageStartupMessages(library(RColorBrewer, quietly = TRUE)))
+suppressWarnings(suppressPackageStartupMessages(library(MASS, quietly = TRUE)))
+suppressWarnings(suppressPackageStartupMessages(library(NMF, quietly = TRUE)))
+suppressWarnings(suppressPackageStartupMessages(library(dendextend, quietly = TRUE)))
+suppressWarnings(suppressPackageStartupMessages(library(amap, quietly = TRUE)))
+suppressWarnings(suppressPackageStartupMessages(library(pvclust, quietly = TRUE)))
+suppressWarnings(suppressPackageStartupMessages(library(Rtsne, quietly = TRUE)))
 
 debug_mode = ifelse(length(commandArgs(trailingOnly = TRUE)) == 1, "debug", "batch")
 log_prefix = "transcriptome_curation.r:"
@@ -63,9 +63,9 @@ cat('batch_effect_alg:', batch_effect_alg, "\n")
 cat('clip_negative:', clip_negative, "\n")
 
 if (batch_effect_alg == "ruvseq") {
-    suppressPackageStartupMessages(library(RUVSeq, quietly = TRUE))
+    suppressWarnings(suppressPackageStartupMessages(library(RUVSeq, quietly = TRUE)))
 } else {
-    suppressPackageStartupMessages(library(sva, quietly = TRUE))
+    suppressWarnings(suppressPackageStartupMessages(library(sva, quietly = TRUE)))
 }
 
 tc_metadata_intersect = function(tc, sra) {
@@ -671,7 +671,7 @@ draw_tsne = function(sra, tc, fontsize = 7) {
     })
     if (mode(try_out) == "character") {
         cat("t-SNE failed.\n")
-        plot(c(0, 1), c(0, 1), ann = F, bty = "n", type = "n", xaxt = "n", yaxt = "n")
+        plot(c(0, 1), c(0, 1), ann=FALSE, bty="n", type="n", xaxt="n", yaxt="n")
         return(NULL)
     }
     out_tsne = try_out
@@ -717,6 +717,11 @@ draw_sva_summary = function(sva_out, tc, sra, fontsize) {
             label_cols = c(label_cols, 'TMM normalization factor')
         }
         num_sv = sva_out[['n.sv']]
+        if (num_sv==0) {
+            cat('No surrogate variables found.\n')
+            plot(c(0, 1), c(0, 1), ann=FALSE, bty="n", type="n", xaxt="n", yaxt="n")
+            return(data.frame())
+        }
         df = data.frame(matrix(NA, num_sv, length(cols)))
         colnames(df) = cols
         rownames(df) = paste0("SV", 1:nrow(df))
@@ -1042,7 +1047,7 @@ tc_batch_corrected_tmp = apply_transformation_logic(tc_batch_corrected, tc_eff_l
 save_plot(tc_batch_corrected_tmp, sra, sva_out, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".original", ".", batch_effect_alg),
           selected_curate_groups, fontsize, transform_method, batch_effect_alg)
 
-cat("Removing samples with the mapping rate >", mapping_rate_cutoff, "\n")
+cat("Removing samples with the mapping rate smaller than", mapping_rate_cutoff, "\n")
 round = 1
 sva_out = NULL
 tc_batch_corrected = NULL
