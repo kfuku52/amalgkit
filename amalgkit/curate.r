@@ -539,7 +539,6 @@ draw_dendrogram_ggplot = function(sra, tc_dist_dist, fontsize = 7) {
 
   group_colors <-  data.table(Group=sra_colors$Group, Color=sra_colors$Color, key="Group")
   group_colors <- transpose(group_colors, make.names = "Group")
-  sra$run <- paste0(sra$run, " (",sra$rRNA_rate,")")
   colnames(tc_dist_dist)<-sra$run
   hc       <- hclust(tc_dist_dist)           # heirarchal clustering
   dendr    <- dendro_data(hc, type="rectangle") # convert for ggplot
@@ -824,8 +823,6 @@ save_plot = function(tc, sra, sva_out, dist_method, file, selected_curate_groups
                              10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10), 14, 12,
                            byrow = TRUE)
     layout(layout_matrix)
-    ##
-    sra$run <- paste0("(",sra$rRNA_rate,") ", sra$run)
     colnames(tc)<-sra$run
     ##
     tc_dist_matrix = cor(tc, method = dist_method)
