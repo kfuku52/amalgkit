@@ -106,14 +106,27 @@ sort_averaged_tc = function(tc) {
 }
 
 color_children2parent = function(node) {
-  if (length(node)==2) {
+  if (length(node)!=2) {
+    return(node)
+  }
+  if (!is.null(attributes(node[[1]])) && !is.null(attributes(node[[1]])$edgePar)) {
     child1_color = attributes(node[[1]])$edgePar[['col']]
+  } else {
+    child1_color = NULL
+  }
+  if (!is.null(attributes(node[[2]])) && !is.null(attributes(node[[2]])$edgePar)) {
     child2_color = attributes(node[[2]])$edgePar[['col']]
-    if ((!is.null(child1_color))&(!is.null(child2_color))) {
-      if (child1_color==child2_color) {
-        attributes(node)$edgePar[['col']] = child1_color
-      }
-    }
+  } else {
+    child2_color = NULL
+  }
+  if (is.null(child1_color) | is.null(child2_color)) {
+    return(node)
+  }
+  if (is.na(child1_color) | is.na(child2_color)) {
+    return(node)
+  }
+  if (child1_color==child2_color) {
+    attributes(node)$edgePar[['col']] = child1_color
   }
   return(node)
 }
@@ -642,7 +655,6 @@ label_orders = get_label_orders(df_metadata)
 cat('Number of orthologs in input table:', nrow(df_og), '\n')
 cat('Number of single-copy orthologs:', nrow(df_singleog), '\n')
 cat('Number of selected species:', length(spp), '\n')
-cat('Selected species:', spp, '\n')
 
 averaged_tcs = load_group_mean_expression_tables(dir_csca_input_table, spp_filled, batch_effect_alg)
 averaged_orthologs = extract_ortholog_mean_expression_table(df_singleog, averaged_tcs, label_orders)
