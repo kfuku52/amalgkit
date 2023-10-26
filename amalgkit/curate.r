@@ -196,7 +196,7 @@ curate_group_mean = function(tc, sra, selected_curate_groups = NA, balance_bp = 
         }
         tc_ave[, curate_group] = exp_curate_group
     }
-    return(list(tc_ave = tc_ave,selected_curate_groups = selected_curate_groups))
+    return(list(tc_ave=tc_ave, selected_curate_groups=selected_curate_groups))
 }
 
 curate_group2tau = function(tc_curate_group, rich.annotation = TRUE, transform_method) {
@@ -295,11 +295,11 @@ check_within_curate_group_correlation = function(tc, sra, dist_method, min_dif, 
         coef = c()
         coef_other_bp = c()
         for (curate_group in selected_curate_groups) {
-            tmp_coef = cor(tc[, sra_run], tc_ave[, curate_group], method = dist_method)
+            tmp_coef = cor(tc[, sra_run], tc_ave[, curate_group], method=dist_method)
             if ((num_other_bp_same_curate_group == 0) & (curate_group == my_curate_group)) {
-              tmp_coef_other_bp = cor(tc[, sra_run], tc_ave[, curate_group], method = dist_method)
+              tmp_coef_other_bp = cor(tc[, sra_run], tc_ave[, curate_group], method=dist_method)
             } else {
-              tmp_coef_other_bp = cor(tc[, sra_run], tc_ave_other_bp[, curate_group], method = dist_method)
+              tmp_coef_other_bp = cor(tc[, sra_run], tc_ave_other_bp[, curate_group], method=dist_method)
             }
             if (curate_group == my_curate_group) {
                 tmp_coef = tmp_coef - min_dif

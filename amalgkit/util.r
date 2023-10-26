@@ -28,7 +28,7 @@ impute_expression = function(dat, num_pc=4) {
   pc = pcaMethods::pca(tmp, nPcs=num_pc, method='ppca')
   imputed_dat = pcaMethods::completeObs(pc)
   num_negative = sum(imputed_dat < 0)
-  txt = 'Number of negative values coarced to zero in the imputed expression matrix: %s\n'
+  txt = 'Number of negative values clipped to zero in the imputed expression matrix: %s\n'
   cat(sprintf(txt, formatC(num_negative, big.mark=',')))
   imputed_dat[imputed_dat < 0] = 0
   return(imputed_dat)
