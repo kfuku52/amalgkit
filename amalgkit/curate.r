@@ -199,6 +199,19 @@ curate_group_mean = function(tc, sra, selected_curate_groups = NA, balance_bp = 
     return(list(tc_ave=tc_ave, selected_curate_groups=selected_curate_groups))
 }
 
+row_tau = function(row) {
+  is_nonzero = row > 0
+  if (sum(is_nonzero) > 0) {
+    exp_order = order(row[is_nonzero], decreasing = TRUE)
+    curate_group_ordered = colnames(tc_curate_group)[is_nonzero][exp_order]
+    highest = curate_group_ordered[1]
+    order = paste(curate_group_ordered, collapse = "|")
+    return(c(highest, order))
+  } else {
+    return(c(NA, NA))  # Return NA values if no nonzero elements
+  }
+}
+
 curate_group2tau = function(tc_curate_group, rich.annotation = TRUE, transform_method) {
     if (rich.annotation) {
         cols = c("tau", "highest", "order")
@@ -222,15 +235,8 @@ curate_group2tau = function(tc_curate_group, rich.annotation = TRUE, transform_m
     df_tau[,'tau'] = apply((1 - (tc_curate_group/xmax))/(ncol(tc_curate_group) - 1), 1, sum)
     if (rich.annotation) {
         tc_curate_group[is.na(tc_curate_group)] = 0
-        for (i in 1:nrow(tc_curate_group)) {
-            is_nonzero = tc_curate_group[i, ] > 0
-            if (sum(is_nonzero) > 0) {
-                exp_order = order(unlist(tc_curate_group[i, is_nonzero]), decreasing=TRUE)
-                curate_group_ordered = colnames(tc_curate_group)[is_nonzero][exp_order]
-                df_tau[i, "highest"] = curate_group_ordered[1]
-                df_tau[i, "order"] = paste(curate_group_ordered, collapse="|")
-            }
-        }
+        results = t(apply(tc_curate_group, 1, row_tau))
+        df_tau[ , c("highest", "order")] = results
     }
     return(df_tau)
 }
