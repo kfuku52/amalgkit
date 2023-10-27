@@ -150,7 +150,7 @@ append_tmm_stats_to_metadata = function(df_metadata, cnf_out2) {
 
 plot_norm_factor_histogram = function(df_metadata, font_size=8) {
   tmp = df_metadata[(!is.na(df_metadata[['tmm_normalization_factor']])),]
-  x_limit = max(abs(log2(tmp[['tmm_normalization_factor']])))
+  x_limit = max(abs(log2(tmp[['tmm_normalization_factor']])), na.rm=TRUE)
   for (fill_by in c('scientific_name', 'curate_group')) {
     g = ggplot2::ggplot(tmp) +
       geom_histogram(aes(x=log2(tmm_normalization_factor), fill=!!rlang::sym(fill_by)), position="stack", alpha=0.7, bins=40) +
@@ -177,7 +177,7 @@ plot_norm_factor_histogram = function(df_metadata, font_size=8) {
 
 plot_norm_factor_scatter = function(df_metadata, font_size=8) {
   tmp = df_metadata[(!is.na(df_metadata[['tmm_normalization_factor']])),]
-  x_limit = max(abs(log2(tmp[['tmm_normalization_factor']])))
+  x_limit = max(abs(log2(tmp[['tmm_normalization_factor']])), na.rm=TRUE)
   g = ggplot2::ggplot(tmp, aes(x=log10(tmm_library_size), y=log2(tmm_normalization_factor), fill=scientific_name, color=curate_group)) +
     geom_point(shape=21, alpha=0.7) +
     scale_fill_hue(l=65) +

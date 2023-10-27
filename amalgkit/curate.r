@@ -218,17 +218,17 @@ curate_group2tau = function(tc_curate_group, rich.annotation = TRUE, transform_m
         tc_curate_group = 2**tc_curate_group - 1
     }
     tc_curate_group[tc_curate_group < 0] = 0
-    xmax = apply(tc_curate_group, 1, max)
+    xmax = apply(tc_curate_group, 1, function(x){max(x, na.rm=TRUE)})
     df_tau[,'tau'] = apply((1 - (tc_curate_group/xmax))/(ncol(tc_curate_group) - 1), 1, sum)
     if (rich.annotation) {
         tc_curate_group[is.na(tc_curate_group)] = 0
         for (i in 1:nrow(tc_curate_group)) {
             is_nonzero = tc_curate_group[i, ] > 0
             if (sum(is_nonzero) > 0) {
-                exp_order = order(tc_curate_group[i, is_nonzero], decreasing = TRUE)
+                exp_order = order(unlist(tc_curate_group[i, is_nonzero]), decreasing=TRUE)
                 curate_group_ordered = colnames(tc_curate_group)[is_nonzero][exp_order]
                 df_tau[i, "highest"] = curate_group_ordered[1]
-                df_tau[i, "order"] = paste(curate_group_ordered, collapse = "|")
+                df_tau[i, "order"] = paste(curate_group_ordered, collapse="|")
             }
         }
     }
@@ -310,7 +310,7 @@ check_within_curate_group_correlation = function(tc, sra, dist_method, min_dif, 
         }
         names(coef) = selected_curate_groups
         names(coef_other_bp) = selected_curate_groups
-        if (max(coef) != coef[my_curate_group]) {
+        if (max(coef, na.rm=TRUE) != coef[my_curate_group]) {
             cat('Registered as a candidate for exclusion. Better correlation to other categories:', sra_run, '\n')
             exclude_runs = c(exclude_runs, sra_run)
         }
@@ -509,7 +509,7 @@ draw_dendrogram = function(sra, tc_dist_dist, fontsize = 7) {
     for (i in 1:ncol(tc)) {
         dend = dendrapply(dend, color_children2parent)
     }
-    cex.xlab = min(fontsize, max(0.2, 0.5/log10(nrow(sra))))
+    cex.xlab = min(fontsize, max(0.2, 0.5/log10(nrow(sra)), na.rm=TRUE), na.rm=TRUE)
     par(cex = cex.xlab)
     plot(dend, las = 1, axes = FALSE)
     par(cex = 1)
@@ -589,7 +589,7 @@ draw_dendrogram_pvclust = function(sra, tc, nboot, pvclust_file, fontsize = 7) {
     for (i in 1:ncol(tc)) {
         dend = dendrapply(dend, color_children2parent)
     }
-    cex.xlab = min(0.2 + 1/log10(fontsize))
+    cex.xlab = min(0.2 + 1/log10(fontsize), na.rm=TRUE)
     par(cex = cex.xlab)
     plot(dend, las = 1, ylab = "Distance", cex.axis = 1/cex.xlab, cex.lab = 1/cex.xlab)
     par(cex = 1)
@@ -655,7 +655,7 @@ draw_mds = function(sra, tc_dist_dist, fontsize = 7) {
 }
 
 draw_tsne = function(sra, tc, fontsize = 7) {
-    perplexity = min(30, floor(nrow(sra)/4))
+    perplexity = min(30, floor(nrow(sra)/4), na.rm=TRUE)
     try_out = tryCatch({
         Rtsne(
           as.matrix(t(tc)),
@@ -770,7 +770,7 @@ draw_tau_histogram = function(tc, sra, selected_curate_groups, fontsize = 7, tra
     num_noexp = sum(is.na(df_tau[['tau']]))
     num_all = nrow(df_tau)
     text_noexp = paste0("Excluded due to\nno expression:\n", num_noexp, "/", num_all, " genes")
-    text(0, max(hist_out[['counts']]) * 0.85, text_noexp, pos = 4)
+    text(0, max(hist_out[['counts']], na.rm=TRUE) * 0.85, text_noexp, pos = 4)
 }
 
 draw_exp_level_histogram = function(tc, sra, selected_curate_groups, fontsize = 7, transform_method) {
