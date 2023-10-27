@@ -232,7 +232,7 @@ draw_multisp_mds = function(tc, df_label) {
 }
 
 draw_multisp_tsne = function(tc, df_label) {
-  perplexity = min(30, floor(ncol(tc)/4))
+  perplexity = min(30, floor(ncol(tc)/4), na.rm=TRUE)
   set.seed(1)
   out_tsne = Rtsne(as.matrix(t(tc)), theta=0, check_duplicates=FALSE, verbose=FALSE, perplexity=perplexity, dims=2)
   try_out = tryCatch(
@@ -377,7 +377,8 @@ get_df_labels_unaveraged = function(df_metadata, selected_curate_groups) {
 }
 
 save_averaged_tsne_plot = function(tc, df_label) {
-  perplexity = min(30, floor(ncol(tc)/4))
+  cat('Generating averaged t-SNE plot.\n')
+  perplexity = min(30, floor(ncol(tc)/4), na.rm=TRUE)
   set.seed(1)
   out_tsne = try(Rtsne(as.matrix(t(tc)), theta=0, check_duplicates=FALSE, verbose=FALSE, perplexity=perplexity, dims=2))
   if ("try-error" %in% class(out_tsne)) {
@@ -429,34 +430,44 @@ get_pca_coordinates = function(tc, df_label, by='species_curate_group') {
   return(list(tmp, labels))
 }
 
-save_unaveraged_pca_plot = function(unaveraged_orthologs, df_color_unaveraged) {
+save_unaveraged_pca_plot = function(unaveraged_orthologs, df_color_unaveraged, df_metadata) {
+  cat('Generating unaveraged PCA plot.\n')
   for (d in c('uncorrected', 'corrected')) {
     out = get_pca_coordinates(tc=unaveraged_orthologs[[d]], df_label=df_color_unaveraged, by='run')
     tmp = out[[1]]
     pc_contributions = out[[2]]
+    pc_cols = c('PC1','PC2','PC3','PC4','PC5')
+    pc_cols2 = paste(pc_cols, d, sep='_')
+    sorted_cols = c(colnames(df_metadata), pc_cols2)
+    tmp2 = tmp[,c('run',pc_cols)]
+    colnames(tmp2) = c('run', pc_cols2)
+    df_metadata = merge(df_metadata, tmp2, all.x=TRUE, by='run', sort=FALSE)
+    df_metadata = df_metadata[,sorted_cols]
     for (pcxy in list(c(1,2),c(3,4))) {
       pcx = pcxy[1]
       pcy = pcxy[2]
 
       colx = paste0('PC', pcx)
       coly = paste0('PC', pcy)
-      xmin = min(tmp[[colx]])
-      xmax = max(tmp[[colx]])
+      xmin = min(tmp[[colx]], na.rm=TRUE)
+      xmax = max(tmp[[colx]], na.rm=TRUE)
       xunit = (xmax-xmin)*0.01
       xmin = xmin - xunit
       xmax = xmax + xunit
 
-      ymin = min(tmp[[coly]])
-      ymax = max(tmp[[coly]])
+      ymin = min(tmp[[coly]], na.rm=TRUE)
+      ymax = max(tmp[[coly]], na.rm=TRUE)
       yunit = (ymax-ymin)*0.01
       ymin = ymin - yunit
       ymax = ymax + yunit
 
+      curate_group_colors = unique(df_color_unaveraged[,c('curate_group','curate_group_color')])[['curate_group_color']]
+
       g = ggplot(tmp, aes(x=!!rlang::sym(colx), y=!!rlang::sym(coly), color=curate_group))
       g = g + theme_bw()
-      g = g + geom_point(size=0.5)
-      # g = g + geom_density_2d(mapping=aes(color=curate_group), bins=12, size=0.25) # Temporarily deactivated. Bug fix needed.
-      curate_group_colors = unique(df_color_unaveraged[,c('curate_group','curate_group_color')])[['curate_group_color']]
+      g = g + geom_point(size=0.5, alpha=0.3)
+      g = g + geom_density_2d(mapping=aes(color=curate_group), bins=12, linewidth=0.25)
+      g = g + geom_density_2d(mapping=aes(color=curate_group), bins=12, linewidth=0.25)
       g = g + scale_color_manual(values=curate_group_colors)
       g = g + xlab(pc_contributions[pcx])
       g = g + ylab(pc_contributions[pcy])
@@ -472,10 +483,11 @@ save_unaveraged_pca_plot = function(unaveraged_orthologs, df_color_unaveraged) {
       ggsave(file=filename, g, height=2.15, width=4.25)
     }
   }
+  return(df_metadata)
 }
 
 get_tsne_coordinates = function(tc, df_label, by='run') {
-  perplexity = min(30, floor(ncol(tc)/4))
+  perplexity = min(30, floor(ncol(tc)/4), na.rm=TRUE)
   set.seed(1)
   out_tsne = Rtsne(as.matrix(t(tc)), theta=0, check_duplicates=FALSE, verbose=FALSE, perplexity=perplexity, dims=2)
   tmp = data.frame(tsne1=out_tsne$Y[,1], tsne2=out_tsne$Y[,2])
@@ -485,20 +497,21 @@ get_tsne_coordinates = function(tc, df_label, by='run') {
 }
 
 save_unaveraged_tsne_plot = function(unaveraged_orthologs, df_color_unaveraged) {
+  cat('Generating unaveraged t-SNE plot.\n')
   for (d in c('uncorrected', 'corrected')) {
     tmp = get_tsne_coordinates(tc=unaveraged_orthologs[[d]], df_label=df_color_unaveraged)
     pcx = 1
     pcy = 2
     colx = paste0('tsne', pcx)
     coly = paste0('tsne', pcy)
-    xmin = min(tmp[[colx]])
-    xmax = max(tmp[[colx]])
+    xmin = min(tmp[[colx]], na.rm=TRUE)
+    xmax = max(tmp[[colx]], na.rm=TRUE)
     xunit = (xmax-xmin)*0.01
     xmin = xmin - xunit
     xmax = xmax + xunit
 
-    ymin = min(tmp[[coly]])
-    ymax = max(tmp[[coly]])
+    ymin = min(tmp[[coly]], na.rm=TRUE)
+    ymax = max(tmp[[coly]], na.rm=TRUE)
     yunit = (ymax-ymin)*0.01
     ymin = ymin - yunit
     ymax = ymax + yunit
@@ -506,7 +519,7 @@ save_unaveraged_tsne_plot = function(unaveraged_orthologs, df_color_unaveraged) 
     g = ggplot(tmp, aes(x=!!rlang::sym(colx), !!rlang::sym(coly), color=curate_group))
     g = g + theme_bw()
     g = g + geom_point(size=0.5)
-    #g = g+ geom_density_2d(mapping=aes(color=curate_group), bins=12, size=0.25) # Temporarily deactivated. Bug fix needed.
+    g = g + geom_density_2d(mapping=aes(color=curate_group), bins=12, linewidth=0.25)
     curate_group_colors = unique(df_color_unaveraged[,c('curate_group','curate_group_color')])[['curate_group_color']]
     g = g + scale_color_manual(values=curate_group_colors)
     g = g + xlab('t-SNE dimension 1')
@@ -525,6 +538,7 @@ save_unaveraged_tsne_plot = function(unaveraged_orthologs, df_color_unaveraged) 
 }
 
 save_averaged_heatmap_plot = function(averaged_orthologs, df_color_averaged) {
+  cat('Generating averaged heatmap.\n')
   file_name='csca_SVA_heatmap.pdf'
   pdf(file_name, height=3.3, width=7.2) # full figure size = 9.7 x 7.2
   layout_matrix=matrix(c(
@@ -546,6 +560,7 @@ save_averaged_heatmap_plot = function(averaged_orthologs, df_color_averaged) {
 }
 
 save_averaged_dendrogram_plot = function(averaged_orthologs, df_color_averaged) {
+  cat('Generating averaged dendrogram.\n')
   file_name='csca_SVA_dendrogram.pdf'
   pdf(file_name, height=2.5, width=7.2) # full figure size = 9.7 x 7.2
   layout_matrix=matrix(c(1,2),2,1,byrow=TRUE)
@@ -562,6 +577,7 @@ save_averaged_dendrogram_plot = function(averaged_orthologs, df_color_averaged) 
 }
 
 save_averaged_dimensionality_reduction_summary = function(averaged_orthologs, df_color_averaged) {
+  cat('Generating averaged dimensionality reduction summary.\n')
   par(cex=1)
   file_name='csca_averaged_summary.pdf'
   pdf(file_name, height=7.2, width=7.2) # full figure size = 9.7 x 7.2
@@ -578,7 +594,7 @@ save_averaged_dimensionality_reduction_summary = function(averaged_orthologs, df
   graphics.off()
 }
 
-draw_multisp_boxplot = function(df_metadata, tc_dist_matrix, fontsize=7) {
+draw_multisp_boxplot = function(df_metadata, tc_dist_matrix, fontsize=8) {
   is_same_sp = outer(df_metadata[['scientific_name']], df_metadata[['scientific_name']], function(x,y){x==y})
   is_same_curate_group = outer(df_metadata[['curate_group']], df_metadata[['curate_group']], function(x,y){x==y})
   plot(c(0.5, 4.5), c(0, 1), type = 'n', xlab='', ylab="Pearson's correlation\ncoefficient", las=1, xaxt='n')
@@ -592,6 +608,7 @@ draw_multisp_boxplot = function(df_metadata, tc_dist_matrix, fontsize=7) {
 }
 
 save_averaged_box_plot = function(averaged_orthologs, df_color_averaged) {
+  cat('Generating averaged boxplot.\n')
   file_name='csca_boxplot.pdf'
   pdf(file_name, height=3.6, width=7.2) # full figure size = 9.7 x 7.2
   par(mfrow=c(1,2))
@@ -600,7 +617,7 @@ save_averaged_box_plot = function(averaged_orthologs, df_color_averaged) {
     tc[tc<0] = 0
     tc_dist_matrix = cor(tc, method='pearson')
     tc_dist_matrix[is.na(tc_dist_matrix)] = 0
-    draw_multisp_boxplot(df_color_averaged, tc_dist_matrix, fontsize=7)
+    draw_multisp_boxplot(df_color_averaged, tc_dist_matrix, fontsize=8)
   }
   d = 'corrected'
   tc = averaged_orthologs[[d]]
@@ -622,7 +639,7 @@ calculate_correlation_within_group = function(unaveraged_orthologs, averaged_ort
         target_col = paste0('within_group_cor_', d)
         nongroup_col = paste0('max_nongroup_cor_', d)
         df_metadata[,target_col] = NA
-        df_metadata[,nongroup_col] = -1
+        df_metadata[,nongroup_col] = NA
         for (sp_and_run in colnames(unaveraged_orthologs[[d]])) {
             split_string = strsplit(sp_and_run, "_")[[1]]
             sp = paste(split_string[1:2], collapse=" ")
@@ -639,7 +656,7 @@ calculate_correlation_within_group = function(unaveraged_orthologs, averaged_ort
                 if (sample_cg==curate_group) {
                     df_metadata[is_sra,target_col] = cor_coef
                 } else {
-                    df_metadata[is_sra,nongroup_col] = max(cor_coef, df_metadata[is_sra,nongroup_col])
+                    df_metadata[is_sra,nongroup_col] = max(cor_coef, df_metadata[is_sra,nongroup_col], na.rm=TRUE)
                 }
             }
         }
@@ -647,13 +664,14 @@ calculate_correlation_within_group = function(unaveraged_orthologs, averaged_ort
     return(df_metadata)
 }
 
-plot_correlation_histogram = function(df_metadata, font_size=8) {
+save_group_cor_histogram = function(df_metadata, font_size=8) {
+  cat('Generating unaveraged group correlation histogram.\n')
   max_count <- 0
   for (col in c('within_group_cor_uncorrected', 'within_group_cor_corrected')) {
     for (fill_by in c('curate_group', 'scientific_name')) {
       tmp = df_metadata[(!is.na(df_metadata[[col]])),]
       bin_counts <- table(cut(tmp[[col]], breaks = seq(0, 1, length.out = 41)))
-      max_count <- max(max_count, max(bin_counts))  # Update max_count if necessary
+      max_count <- max(max_count, max(bin_counts, na.rm=TRUE), na.rm=TRUE)  # Update max_count if necessary
     }
   }
   plot_list <- list()
@@ -688,9 +706,7 @@ plot_correlation_histogram = function(df_metadata, font_size=8) {
                 plot_list[['within_group_cor_corrected_scientific_name']] ) /
                 ( plot_list[['within_group_cor_uncorrected_curate_group']] +
                 plot_list[['within_group_cor_corrected_curate_group']] )
-  pdf(file="csca_within_group_cor.pdf", width=7.2, height=6.0)
-  print(final_plot)
-  dev.off()
+  ggsave(filename="csca_within_group_cor.pdf", plot=final_plot, width=7.2, height=6.0)
 }
 
 extract_selected_tc_only = function(unaveraged_tcs, df_metadata) {
@@ -746,6 +762,41 @@ unaveraged2averaged = function(unaveraged_tcs, df_metadata, selected_curate_grou
     return(averaged_tcs)
 }
 
+save_group_cor_scatter = function(df_metadata, font_size=8) {
+    cat('Generating unaveraged group correlation scatter plot.\n')
+    alpha_value = 0.2
+    improvement_xymin = 0.5
+    improvement_xymax = 2.0
+    df_metadata[['corrected_per_uncorrected_group_cor']] = df_metadata[['within_group_cor_corrected']] / df_metadata[['within_group_cor_uncorrected']]
+    df_metadata[['corrected_per_uncorrected_max_nongroup_cor']] = df_metadata[['max_nongroup_cor_corrected']] / df_metadata[['max_nongroup_cor_uncorrected']]
+    for (col in c('corrected_per_uncorrected_group_cor', 'corrected_per_uncorrected_max_nongroup_cor')) {
+        df_metadata[[col]] = ifelse(df_metadata[[col]] < improvement_xymin, improvement_xymin, df_metadata[[col]])
+        df_metadata[[col]] = ifelse(df_metadata[[col]] > improvement_xymax, improvement_xymax, df_metadata[[col]])
+    }
+    ps = list()
+    ps[[1]] = ggplot(df_metadata, aes(x = max_nongroup_cor_uncorrected, y = within_group_cor_uncorrected)) + xlim(c(0, 1)) + ylim(c(0, 1))
+    ps[[2]] = ggplot(df_metadata, aes(x = max_nongroup_cor_corrected, y = within_group_cor_corrected)) + xlim(c(0, 1)) + ylim(c(0, 1))
+    ps[[3]] = ggplot(df_metadata, aes(x = within_group_cor_uncorrected, y = within_group_cor_corrected)) + xlim(c(0, 1)) + ylim(c(0, 1))
+    ps[[4]] = ggplot(df_metadata, aes(x = max_nongroup_cor_uncorrected, y = max_nongroup_cor_corrected)) + xlim(c(0, 1)) + ylim(c(0, 1))
+    ps[[5]] = ggplot(df_metadata, aes(x = corrected_per_uncorrected_max_nongroup_cor, y = corrected_per_uncorrected_group_cor)) + xlim(c(improvement_xymin, improvement_xymax)) + ylim(c(improvement_xymin, improvement_xymax))
+    for (i in 1:length(ps)) {
+        ps[[i]] = ps[[i]] + geom_point(alpha=alpha_value)
+        ps[[i]] = ps[[i]] + geom_abline(intercept = 0, slope = 1, linetype='dashed', color='blue')
+        ps[[i]] = ps[[i]] + theme_bw()
+        ps[[i]] = ps[[i]] + geom_density_2d(bins=12, linewidth=0.25, color='gray')
+        ps[[i]] = ps[[i]] + theme(
+            text=element_text(size=font_size),
+            axis.text=element_text(size=font_size),
+            axis.title=element_text(size=font_size),
+            legend.text=element_text(size=font_size),
+            legend.title=element_text(size=font_size)
+        )
+    }
+    ps[[6]] = ggplot() + theme_void()
+    combined_plot = wrap_plots(ps)
+    ggsave(filename="csca_group_cor_scatter.pdf", plot=combined_plot, width=7.2, height=4.8)
+}
+
 df_og = read.table(file_orthogroup, header=TRUE, sep='\t', row.names=1, quote='')
 df_gc = read.table(file_genecount, header=TRUE, sep='\t', check.names=FALSE, quote='')
 spp_filled = colnames(df_gc)
@@ -780,16 +831,18 @@ for (d in c('uncorrected','corrected')) {
 }
 cat(nrow(imputed_unaveraged_orthologs[[d]]), 'orthologs were found after filtering and imputation.\n')
 df_metadata = calculate_correlation_within_group(unaveraged_orthologs, averaged_orthologs, df_metadata)
-file_metadata_out = file.path(dir_csca, 'metadata.tsv')
-write.table(df_metadata, file_metadata_out, row.names=FALSE, sep='\t', quote=FALSE)
-plot_correlation_histogram(df_metadata, font_size=8)
+save_group_cor_scatter(df_metadata, font_size=8)
+save_group_cor_histogram(df_metadata, font_size=8)
 save_averaged_tsne_plot(tc=imputed_unaveraged_orthologs[['corrected']], df_label=df_color_unaveraged)
 save_averaged_heatmap_plot(imputed_averaged_orthologs, df_color_averaged)
 save_averaged_dendrogram_plot(imputed_averaged_orthologs, df_color_averaged)
 save_averaged_dimensionality_reduction_summary(imputed_averaged_orthologs, df_color_averaged)
 save_averaged_box_plot(imputed_averaged_orthologs, df_color_averaged)
-save_unaveraged_pca_plot(imputed_unaveraged_orthologs, df_color_unaveraged)
+df_metadata = save_unaveraged_pca_plot(imputed_unaveraged_orthologs, df_color_unaveraged, df_metadata)
 save_unaveraged_tsne_plot(imputed_unaveraged_orthologs, df_color_unaveraged)
+
+file_metadata_out = file.path(dir_csca, 'metadata.tsv')
+write.table(df_metadata, file_metadata_out, row.names=FALSE, sep='\t', quote=FALSE)
 
 if (file.exists('Rplots.pdf')) {
   file.remove('Rplots.pdf')
