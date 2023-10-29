@@ -18,11 +18,11 @@ font_size = 8
 
 if (debug_mode == "debug") {
   selected_curate_groups = c('root','flower', 'leaf')
-  dir_work = '/Volumes/kfT7/Dropbox/data/evolutionary_transcriptomics/20230527_gfe_pipeline/amalgkit_out'
+  dir_work = '/Users/kf/Dropbox/data/evolutionary_transcriptomics/20230527_gfe_pipeline/amalgkit_out'
   dir_csca_input_table = file.path(dir_work,'csca/csca_input_symlinks')
   file_orthogroup = file.path(dir_work, 'csca/multispecies_busco_table.tsv')
   file_genecount = file.path(dir_work, 'csca/multispecies_genecount.tsv')
-  r_util_path = '/Volumes/kfT7/Dropbox/repos/amalgkit/amalgkit/util.r'
+  r_util_path = '/Users/kf/Dropbox/repos/amalgkit/amalgkit/util.r'
   dir_csca = file.path(dir_work, 'csca')
   batch_effect_alg = 'sva'
 } else if (debug_mode == "batch") {
@@ -51,8 +51,8 @@ add_color_to_metadata = function(df, selected_curate_groups) {
   df = df[,(!colnames(df) %in% c('bp_color','sp_color','curate_group_color'))]
   scientific_name = as.character(df[['scientific_name']])
   curate_group = as.character(df[['curate_group']])
-  scientific_name_unique = scientific_name[!duplicated(scientific_name)]
-  curate_group_unique = curate_group[!duplicated(curate_group)]
+  scientific_name_unique = sort(scientific_name[!duplicated(scientific_name)])
+  curate_group_unique = sort(curate_group[!duplicated(curate_group)])
   if (length(selected_curate_groups) <= 8) {
     curate_group_color = brewer.pal(length(unique(curate_group)), "Dark2")
     sp_color = rainbow_hcl(length(unique(scientific_name)), c=100)
@@ -269,7 +269,7 @@ prepare_metadata_table = function(dir_csca_input_table, selected_curate_groups, 
   df_metadata = data.frame()
   for (file in files) {
     metadata_path = file.path(dir_csca_input_table, file)
-    tmp_metadata = read.table(metadata_path, header=TRUE, sep='\t', quote='', comment.char='')
+    tmp_metadata = read.table(metadata_path, header=TRUE, sep='\t', quote='', comment.char='', check.names=FALSE)
     df_metadata = rbind(df_metadata, tmp_metadata)
   }
   df_metadata = df_metadata[(df_metadata[['curate_group']] %in% selected_curate_groups)&(df_metadata[['scientific_name']] %in% spp),]
@@ -321,8 +321,8 @@ load_unaveraged_expression_tables = function(dir_csca_input_table, spp_filled, b
       cat(paste("Skipping. `amalgkit curate` output(s) not found:", sp, "\n"), file=stderr())
       next
     }
-    unaveraged_tcs[['uncorrected']][[sp]] = read.delim(uncorrected_path, header=TRUE, row.names=1, sep='\t')
-    unaveraged_tcs[['corrected']][[sp]] = read.delim(corrected_path, header=TRUE, row.names=1, sep='\t')
+    unaveraged_tcs[['uncorrected']][[sp]] = read.delim(uncorrected_path, header=TRUE, row.names=1, sep='\t', check.names=FALSE)
+    unaveraged_tcs[['corrected']][[sp]] = read.delim(corrected_path, header=TRUE, row.names=1, sep='\t', check.names=FALSE)
   }
   return(unaveraged_tcs)
 }
@@ -354,13 +354,14 @@ get_df_labels_averaged = function(df_metadata, label_orders) {
     df_bp = aggregate(metadata_tmp[['bioproject']], by=categories, function(x){length(unique(x))})
     colnames(df_bp) = c('scientific_name','curate_group','num_bp')
     df_label = merge(df_label, df_bp, all.x=TRUE, all.y=FALSE)
-    df_exp = aggregate(metadata_tmp[['experiment']], by=categories, function(x){length(unique(x))})
-    colnames(df_exp) = c('scientific_name','curate_group','num_exp')
-    df_label = merge(df_label, df_exp, all.x=TRUE, all.y=FALSE)
+    df_run = aggregate(metadata_tmp[['run']], by=categories, function(x){length(unique(x))})
+    colnames(df_run) = c('scientific_name','curate_group','num_run')
+    df_label = merge(df_label, df_run, all.x=TRUE, all.y=FALSE)
     df_label = df_label[order(df_label[['curate_group']], df_label[['scientific_name']]),]
     df_label = sort_labels(df_label, label_orders)
     df_label = add_color_to_metadata(df_label, selected_curate_groups)
     df_label = sort_labels(df_label, label_orders)
+    rownames(df_label) = NULL
     write.table(df_label, paste0('csca_color_averaged.tsv'), sep='\t', row.names=FALSE, quote=FALSE)
     return(df_label)
 }
@@ -626,7 +627,7 @@ save_averaged_box_plot = function(averaged_orthologs, df_color_averaged) {
   graphics.off()
 }
 
-calculate_correlation_within_group = function(unaveraged_orthologs, averaged_orthologs, df_metadata, dist_method='pearson') {
+calculate_correlation_within_group = function(unaveraged_orthologs, averaged_orthologs, df_metadata, selected_curate_groups, dist_method='pearson') {
     for (d in c('uncorrected', 'corrected')) {
         ortholog_med = data.frame(matrix(NA, nrow(averaged_orthologs[[d]]), length(selected_curate_groups)))
         colnames(ortholog_med) = selected_curate_groups
@@ -643,7 +644,7 @@ calculate_correlation_within_group = function(unaveraged_orthologs, averaged_ort
         for (sp_and_run in colnames(unaveraged_orthologs[[d]])) {
             split_string = strsplit(sp_and_run, "_")[[1]]
             sp = paste(split_string[1:2], collapse=" ")
-            sra_run = split_string[3]
+            sra_run = paste(split_string[3:length(split_string)], collapse='_')
             is_sra = (df_metadata[['run']]==sra_run) & (df_metadata[['scientific_name']]==sp)
             sample_cg = df_metadata[is_sra,'curate_group']
             sample_values = unaveraged_orthologs[[d]][,sp_and_run]
@@ -797,8 +798,8 @@ save_group_cor_scatter = function(df_metadata, font_size=8) {
     ggsave(filename="csca_group_cor_scatter.pdf", plot=combined_plot, width=7.2, height=4.8)
 }
 
-df_og = read.table(file_orthogroup, header=TRUE, sep='\t', row.names=1, quote='')
-df_gc = read.table(file_genecount, header=TRUE, sep='\t', check.names=FALSE, quote='')
+df_og = read.table(file_orthogroup, header=TRUE, sep='\t', row.names=1, quote='', check.names=FALSE)
+df_gc = read.table(file_genecount, header=TRUE, sep='\t', quote='', check.names=FALSE)
 spp_filled = colnames(df_gc)
 
 is_singlecopy = get_singlecopy_bool_index(df_gc, spp_filled)
@@ -830,7 +831,7 @@ for (d in c('uncorrected','corrected')) {
   write.table(imputed_unaveraged_orthologs[[d]], file=paste0('csca_ortholog_unaveraged.imputed.',d,'.tsv'), sep="\t", row.names=FALSE, quote=FALSE)
 }
 cat(nrow(imputed_unaveraged_orthologs[[d]]), 'orthologs were found after filtering and imputation.\n')
-df_metadata = calculate_correlation_within_group(unaveraged_orthologs, averaged_orthologs, df_metadata)
+df_metadata = calculate_correlation_within_group(unaveraged_orthologs, averaged_orthologs, df_metadata, selected_curate_groups)
 save_group_cor_scatter(df_metadata, font_size=8)
 save_group_cor_histogram(df_metadata, font_size=8)
 save_averaged_tsne_plot(tc=imputed_unaveraged_orthologs[['corrected']], df_label=df_color_unaveraged)

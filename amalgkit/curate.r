@@ -14,22 +14,22 @@ debug_mode = ifelse(length(commandArgs(trailingOnly = TRUE)) == 1, "debug", "bat
 log_prefix = "transcriptome_curation.r:"
 cat(log_prefix, "mode =", debug_mode, "\n")
 if (debug_mode == "debug") {
-    est_counts_path = '/Users/s229181/Desktop/projects/apis/est_count/Apis_mellifera_est_counts.tsv'
-    eff_length_path = '/Users/s229181/Desktop/projects/apis/read_length/Apis_mellifera_eff_length.tsv'
+    out_dir = '/Users/kf/Dropbox/data/evolutionary_transcriptomics/20230527_gfe_pipeline/amalgkit_out'
+    metadata_path = '/Users/kf/Dropbox/data/evolutionary_transcriptomics/20230527_gfe_pipeline/amalgkit_out/cstmm/metadata.tsv'
+    est_counts_path = '/Users/kf/Dropbox/data/evolutionary_transcriptomics/20230527_gfe_pipeline/amalgkit_out/cstmm/Brocchinia_reducta/Brocchinia_reducta_cstmm_counts.tsv'
+    eff_length_path = '/Users/kf/Dropbox/data/evolutionary_transcriptomics/20230527_gfe_pipeline/amalgkit_out/cstmm/Brocchinia_reducta/Brocchinia_reducta_eff_length.tsv'
     dist_method = "pearson"
     mapping_rate_cutoff = .20
     min_dif = 0
     plot_intermediate = as.logical(0)
     selected_curate_groups = c("root", "flower", "leaf")
-    dir_count = "counts/"
-    dir_eff_length = "eff_length/"
     transform_method = "log2p1-fpkm"
-    one_outlier_per_iteration = "no"
-    correlation_threshold = 0.4
-    out_dir = '/Users/s229181/Desktop/projects/apis/'
-    metadata_path = '/Users/s229181/Desktop/projects/apis/metadata/metadata.tsv'
+    one_outlier_per_iteration = as.logical(0)
+    correlation_threshold = 0.3
+    batch_effect_alg = 'sva'
     dist_method = "pearson"
     clip_negative = as.logical(1)
+    setwd(file.path(out_dir, 'curate'))
 } else if (debug_mode == "batch") {
     args = commandArgs(trailingOnly = TRUE)
     est_counts_path = args[1]
@@ -987,6 +987,13 @@ exclude_inappropriate_sample_from_eff_length = function(tc_eff_length, tc) {
     return(tc_eff_length)
 }
 
+write_table_with_index_name = function(df, file_path, index_name='GeneID') {
+    df_index = data.frame(placeholder_name=rownames(df), stringsAsFactors=FALSE)
+    colnames(df_index) = index_name
+    df = cbind(df_index, df)
+    write.table(df, file=file_path, sep='\t', row.names=FALSE, col.names=TRUE, quote=FALSE)
+}
+
 ########cd############END OF FUNCTION DECLARATION####################################################
 
 ################################################# START OF SVA CORRECTION ########################################################
@@ -996,7 +1003,6 @@ fontsize = 7
 
 tc = read.table(est_counts_path, sep = "\t", stringsAsFactors = FALSE, header = TRUE, quote = "", fill = FALSE, row.names = 1, check.names=FALSE)
 tc_eff_length = read.table(eff_length_path, sep = "\t", stringsAsFactors = FALSE, header = TRUE, quote = "", fill = FALSE, check.names=FALSE)
-
 
 sra_all = read.table(metadata_path, sep = "\t", header = TRUE, quote = "", fill = TRUE, comment.char = "", stringsAsFactors = FALSE, check.names=FALSE)
 sra_all = standardize_metadata_all(sra_all)
@@ -1020,14 +1026,12 @@ tc_eff_length = exclude_inappropriate_sample_from_eff_length(tc_eff_length, tc)
 tc = apply_transformation_logic(tc, tc_eff_length, transform_method, batch_effect_alg, step='before_batch')
 tc_tmp = apply_transformation_logic(tc, tc_eff_length, transform_method, batch_effect_alg, step='before_batch_plot')
 file_name = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".uncorrected.tc.tsv"))
-write.table(data.frame("GeneID"=rownames(tc_tmp), tc_tmp), file = file_name,
-            sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
+write_table_with_index_name(df=tc_tmp, file_path=file_name, index_name='GeneID')
 out = curate_group_mean(tc_tmp, sra, selected_curate_groups)
 tc_curate_group_uncorrected = out[['tc_ave']]
 selected_curate_groups = out[['selected_curate_groups']]
 file_name = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".uncorrected.curate_group.mean.tsv"))
-write.table(data.frame("GeneID"=rownames(tc_curate_group_uncorrected), tc_curate_group_uncorrected), file = file_name,
-            sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
+write_table_with_index_name(df=tc_curate_group_uncorrected, file_path=file_name, index_name='GeneID')
 
 cat("Removing samples with mapping rate of 0.\n")
 round = 0
@@ -1112,15 +1116,15 @@ if (batch_effect_alg != 'sva') {
 }
 cat("Writing summary files for", scientific_name, "\n")
 file = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".metadata.tsv"))
-write.table(sra[,colnames(sra)!='index'], file = file, sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
+write.table(sra[,colnames(sra)!='index'], file=file, sep="\t", row.names=FALSE, col.names=TRUE, quote=FALSE)
 file = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".", batch_effect_alg , ".tc.tsv"))
-write.table(data.frame("GeneID"=rownames(tc_batch_corrected),tc_batch_corrected), file = file, sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
+write_table_with_index_name(df=tc_batch_corrected, file_path=file, index_name='GeneID')
 out = curate_group_mean(tc_batch_corrected, sra, selected_curate_groups)
 tc_curate_group = out[['tc_ave']]
 file = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".", batch_effect_alg , ".curate_group.mean.tsv"))
-write.table(data.frame("GeneID"=rownames(tc_curate_group), tc_curate_group), file = file, sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
+write_table_with_index_name(df=tc_curate_group, file_path=file, index_name='GeneID')
 tc_tau = curate_group2tau(tc_curate_group, rich.annotation = TRUE, transform_method)
 file = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".", batch_effect_alg , ".tau.tsv"))
-write.table(data.frame("GeneID"=rownames(tc_tau), tc_tau), file = file, sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
+write_table_with_index_name(df=tc_tau, file_path=file, index_name='GeneID')
 cat(log_prefix, "Completed.\n")
 quit(save='no', status=0)
