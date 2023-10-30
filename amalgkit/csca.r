@@ -798,6 +798,22 @@ save_group_cor_scatter = function(df_metadata, font_size=8) {
     ggsave(filename="csca_group_cor_scatter.pdf", plot=combined_plot, width=7.2, height=4.8)
 }
 
+write_pivot_table = function(df_metadata, unaveraged_tcs, selected_curate_groups) {
+    d = 'corrected'
+    is_selected_cg = (df_metadata[['curate_group']] %in% selected_curate_groups)
+    is_loaded_run = FALSE
+    for (sci_name_ub in names(unaveraged_tcs[[d]])) {
+        sci_name = sub('_', ' ', sci_name_ub)
+        is_loaded_run_sp = ((df_metadata[['run']] %in% colnames(unaveraged_tcs[[d]][[sci_name_ub]])) & (df_metadata[['scientific_name']]==sci_name))
+        is_loaded_run = (is_loaded_run | is_loaded_run_sp)
+    }
+    is_selected = (is_selected_cg & is_loaded_run)
+    tmp = df_metadata[is_selected, c('scientific_name','curate_group')]
+    pivot_table = as.data.frame.matrix(table(tmp[['scientific_name']], tmp[['curate_group']]))
+    pivot_table = cbind(data.frame(scientific_name=rownames(pivot_table)), pivot_table)
+    write.table(pivot_table, 'csca_pivot_selected_samples.tsv', sep='\t', row.names=FALSE, quote=FALSE)
+}
+
 df_og = read.table(file_orthogroup, header=TRUE, sep='\t', row.names=1, quote='', check.names=FALSE)
 df_gc = read.table(file_genecount, header=TRUE, sep='\t', quote='', check.names=FALSE)
 spp_filled = colnames(df_gc)
@@ -818,6 +834,7 @@ unaveraged_tcs = extract_selected_tc_only(unaveraged_tcs, df_metadata)
 unaveraged_orthologs = extract_ortholog_unaveraged_expression_table(df_singleog, unaveraged_tcs)
 averaged_tcs = unaveraged2averaged(unaveraged_tcs, df_metadata, selected_curate_groups)
 averaged_orthologs = extract_ortholog_mean_expression_table(df_singleog, averaged_tcs, label_orders)
+write_pivot_table(df_metadata, unaveraged_tcs, selected_curate_groups)
 
 cat('Applying expression level imputation for missing orthologs.\n')
 imputed_averaged_orthologs = list()
