@@ -240,7 +240,7 @@ for (sp in names(uncorrected)) {
   for (i in 1:length(df_nf_sp[,1])){
     SRR = as.character(row.names(df_nf_sp[i,]))
     tmm_normalization_factor = as.double(df_nf_sp[i,"norm.factors"]) # manually apply normfactor
-    dat[,SRR] = dat[,SRR]/tmm_normalization_factor
+    dat[,SRR] = dat[,SRR] * tmm_normalization_factor
   }
   dat_out = cbind(target_id=rownames(dat), dat)
   rownames(dat_out) = NULL
