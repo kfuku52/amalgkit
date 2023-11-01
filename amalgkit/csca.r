@@ -286,17 +286,18 @@ get_label_orders = function(df_metadata) {
 
 extract_ortholog_mean_expression_table = function(df_singleog, averaged_tcs, label_orders) {
   averaged_orthologs = list()
-  averaged_orthologs[['uncorrected']] = df_singleog
-  averaged_orthologs[['corrected']] = df_singleog
-  row_names = rownames(averaged_orthologs[['corrected']])
+  rowname_order = rownames(df_singleog)
   for (d in c('uncorrected', 'corrected')) {
+    averaged_orthologs[[d]] = df_singleog
+    averaged_orthologs[[d]][,'busco_id'] = rownames(averaged_orthologs[[d]])
     for (sp_filled in colnames(df_singleog)) {
       tc = averaged_tcs[[d]][[sp_filled]]
       averaged_orthologs[[d]] = merge(averaged_orthologs[[d]], tc, by.x=sp_filled, by.y="row.names", all.x=TRUE, all.y=FALSE, sort=FALSE)
     }
-    num_remove_col = ncol(df_singleog)
+    num_remove_col = ncol(df_singleog) + 1
+    rownames(averaged_orthologs[[d]]) = averaged_orthologs[[d]][['busco_id']]
+    averaged_orthologs[[d]] = averaged_orthologs[[d]][rowname_order,]
     averaged_orthologs[[d]] = averaged_orthologs[[d]][,-(1:num_remove_col)]
-    rownames(averaged_orthologs[[d]]) = row_names
     averaged_orthologs[[d]] = sort_averaged_tc(averaged_orthologs[[d]])
     available_label_orders = label_orders[label_orders %in% colnames(averaged_orthologs[[d]])]
     averaged_orthologs[[d]] = averaged_orthologs[[d]][, available_label_orders]
@@ -329,18 +330,19 @@ load_unaveraged_expression_tables = function(dir_csca_input_table, spp_filled, b
 
 extract_ortholog_unaveraged_expression_table = function(df_singleog, unaveraged_tcs) {
   unaveraged_orthologs = list()
-  unaveraged_orthologs[['uncorrected']] = df_singleog
-  unaveraged_orthologs[['corrected']] = df_singleog
-  row_names = rownames(unaveraged_orthologs[['corrected']])
+  rowname_order = rownames(df_singleog)
   for (d in c('uncorrected', 'corrected')) {
+    unaveraged_orthologs[[d]] = df_singleog
+    unaveraged_orthologs[[d]][,'busco_id'] = rownames(unaveraged_orthologs[[d]])
     for (sp_filled in colnames(df_singleog)) {
       tc = unaveraged_tcs[[d]][[sp_filled]]
       colnames(tc) = paste(sp_filled, colnames(tc), sep='_')
       unaveraged_orthologs[[d]] = merge(unaveraged_orthologs[[d]], tc, by.x=sp_filled, by.y="row.names", all.x=TRUE, all.y=FALSE, sort=FALSE)
     }
-    num_remove_col = length(spp)
+    num_remove_col = length(spp) + 1
+    rownames(unaveraged_orthologs[[d]]) = unaveraged_orthologs[[d]][['busco_id']]
+    unaveraged_orthologs[[d]] = unaveraged_orthologs[[d]][rowname_order,]
     unaveraged_orthologs[[d]] = unaveraged_orthologs[[d]][,-(1:num_remove_col)]
-    rownames(unaveraged_orthologs[[d]]) = row_names
     tc_order = order(sub('.*_','',colnames(unaveraged_orthologs[[d]])))
     unaveraged_orthologs[[d]] = unaveraged_orthologs[[d]][,tc_order]
   }
@@ -628,13 +630,14 @@ save_averaged_box_plot = function(averaged_orthologs, df_color_averaged) {
 }
 
 calculate_correlation_within_group = function(unaveraged_orthologs, averaged_orthologs, df_metadata, selected_curate_groups, dist_method='pearson') {
+    my_fun1 = function(x){median(x, na.rm=TRUE)}
     for (d in c('uncorrected', 'corrected')) {
         ortholog_med = data.frame(matrix(NA, nrow(averaged_orthologs[[d]]), length(selected_curate_groups)))
         colnames(ortholog_med) = selected_curate_groups
         rownames(ortholog_med) = rownames(averaged_orthologs[[d]])
         for (curate_group in selected_curate_groups) {
             is_curate_group = endsWith(colnames(averaged_orthologs[[d]]), curate_group)
-            ortholog_med[,curate_group] = apply(averaged_orthologs[[d]][,is_curate_group], 1, function(x){median(x, na.rm=TRUE)})
+            ortholog_med[,curate_group] = apply(averaged_orthologs[[d]][,is_curate_group], 1, my_fun1)
         }
         stopifnot(all(rownames(unaveraged_orthologs[[d]])==rownames(ortholog_med)))
         target_col = paste0('within_group_cor_', d)
@@ -646,6 +649,10 @@ calculate_correlation_within_group = function(unaveraged_orthologs, averaged_ort
             sp = paste(split_string[1:2], collapse=" ")
             sra_run = paste(split_string[3:length(split_string)], collapse='_')
             is_sra = (df_metadata[['run']]==sra_run) & (df_metadata[['scientific_name']]==sp)
+            if (sum(is_sra)==0) {
+                warning(paste('Sample skipped:', sp_and_run))
+                next
+            }
             sample_cg = df_metadata[is_sra,'curate_group']
             sample_values = unaveraged_orthologs[[d]][,sp_and_run]
             for (curate_group in colnames(ortholog_med)) {
@@ -657,7 +664,8 @@ calculate_correlation_within_group = function(unaveraged_orthologs, averaged_ort
                 if (sample_cg==curate_group) {
                     df_metadata[is_sra,target_col] = cor_coef
                 } else {
-                    df_metadata[is_sra,nongroup_col] = max(cor_coef, df_metadata[is_sra,nongroup_col], na.rm=TRUE)
+                    max_value = max(cor_coef, df_metadata[is_sra,nongroup_col], na.rm=TRUE)
+                    df_metadata[is_sra,nongroup_col] = max_value
                 }
             }
         }
@@ -716,6 +724,10 @@ extract_selected_tc_only = function(unaveraged_tcs, df_metadata) {
         scientific_names = names(unaveraged_tcs[[d]])
         for (sci_name in scientific_names) {
             is_selected = colnames(unaveraged_tcs[[d]][[sci_name]]) %in% selected_runs
+            if (sum(is_selected)==0) {
+                warning(paste('No', d, 'samples were selected:', sci_name))
+                next
+            }
             unaveraged_tcs[[d]][[sci_name]] = unaveraged_tcs[[d]][[sci_name]][,is_selected]
         }
     }
