@@ -869,9 +869,10 @@ transform_raw_to_fpkm = function(counts, effective_lengths) {
     return(as.data.frame(res))
 }
 
-transform_raw_to_tpm = function(counts, len) {
-    x <- counts/len
-    return(t(t(x) * 1e+06/colSums(x)))
+transform_raw_to_tpm = function(counts, effective_lengths) {
+    x <- counts / effective_lengths
+    res = t(t(x) * 1e+06 / colSums(x))
+    return(res)
 }
 
 apply_transformation_logic = function(tc, tc_eff_length, transform_method, batch_effect_alg,

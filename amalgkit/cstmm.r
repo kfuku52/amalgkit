@@ -2,16 +2,18 @@
 
 suppressWarnings(suppressPackageStartupMessages(library(edgeR, quietly=TRUE)))
 suppressWarnings(suppressPackageStartupMessages(library(ggplot2, quietly=TRUE)))
+suppressWarnings(suppressPackageStartupMessages(library(patchwork, quietly=TRUE)))
 
 mode = ifelse(length(commandArgs(trailingOnly=TRUE))==1, 'debug', 'batch')
 
 if (mode=="debug") {
-  dir_work = '/Users/s229181/MSN/'
-  file_orthogroup_table = file.path(dir_work, "OrthoFinder/Results_Jun22/Orthogroups/Orthogroups.tsv")
-  file_genecount = file.path(dir_work, "OrthoFinder/Results_Jun22/Orthogroups/Orthogroups.GeneCount.tsv")
+  dir_work = '/Users/kf/Dropbox/data/evolutionary_transcriptomics/20230527_gfe_pipeline/amalgkit_out'
   dir_count = file.path(dir_work, "merge")
+  file_orthogroup_table = file.path(dir_work, 'cstmm', 'multispecies_busco_table.tsv')
+  file_genecount = file.path(dir_work, 'cstmm', 'amalgkit_orthogroup_genecount.tsv')
   dir_cstmm = file.path(dir_work, "cstmm")
   mode_tmm = 'multi_species'
+  r_util_path = '/Users/kf/Dropbox/repos/amalgkit/amalgkit/util.r'
   setwd(dir_work)
 } else if (mode=="batch") {
   args = commandArgs(trailingOnly=TRUE)
@@ -201,6 +203,20 @@ plot_norm_factor_scatter = function(df_metadata, font_size=8) {
   ggsave(file.path(dir_cstmm, 'normalization_factor_scatter.pdf'), plot=g, width=4.8, height=2.0, units='in')
 }
 
+get_library_sizes = function(df_nonzero, uncorrected) {
+    df_libsize = data.frame(library_size=rep(NA, ncol(df_nonzero)))
+    rownames(df_libsize) = colnames(df_nonzero)
+    for (sp in names(uncorrected)) {
+        for (sample in colnames(uncorrected[[sp]])) {
+            if (sample %in% rownames(df_libsize)) {
+                df_libsize[sample,'library_size'] = sum(uncorrected[[sp]][[sample]], na.rm=TRUE)
+            }
+        }
+    }
+    library_sizes = df_libsize[['library_size']]
+    return(library_sizes)
+}
+
 if (mode_tmm=='single_species') {
   uncorrected = get_uncorrected(dir_count=dir_count, file_genecount=NA)
   stopifnot(length(names(uncorrected))==1)
@@ -213,7 +229,8 @@ if (mode_tmm=='single_species') {
   df_nonzero = get_df_nonzero(df_sog)
 }
 
-cnf_in = edgeR::DGEList(counts = df_nonzero)
+libraray_sizes = get_library_sizes(df_nonzero, uncorrected)
+cnf_in = edgeR::DGEList(counts=df_nonzero, lib.size=libraray_sizes)
 cat('Round 1: Performing TMM normalization to determine the appropriate baseline.\n')
 cnf_out1 = edgeR::calcNormFactors(cnf_in, method='TMM', refColumn=NULL)
 x = cnf_out1[[2]][['norm.factors']]
@@ -233,6 +250,7 @@ write.table(df_metadata, out_path, row.names=FALSE, sep='\t', quote=FALSE)
 plot_norm_factor_histogram(df_metadata=df_metadata)
 plot_norm_factor_scatter(df_metadata=df_metadata)
 
+corrected = list()
 for (sp in names(uncorrected)) {
   cat('Applying TMM normalization factors:', sp, '\n')
   dat = uncorrected[[sp]]
@@ -252,5 +270,8 @@ for (sp in names(uncorrected)) {
   create_eff_length_symlink(dir_count, dir_cstmm, sp)
   file_path = file.path(dir_cstmm_sp, paste0(sp, "_cstmm_counts.tsv"))
   write.table(dat_out, file_path, sep='\t', row.names=FALSE, col.names=TRUE, quote=FALSE)
+  corrected[[sp]] = dat_out
+  rownames(corrected[[sp]]) = corrected[[sp]][['target_id']]
+  corrected[[sp]][,'target_id'] = NULL
 }
 cat('cstmm.r completed!\n')

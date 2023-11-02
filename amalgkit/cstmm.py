@@ -68,7 +68,7 @@ def cstmm_main(args):
               'Cross-species TMM normalization will be applied with single-copy orthologs.'
         print(txt, flush=True)
         mode_tmm = 'multi_species'
-    file_genecount = os.path.join(dir_out, 'tmp.amalgkit.orthogroup.genecount.tsv')
+    file_genecount = os.path.join(dir_cstmm, 'amalgkit_orthogroup_genecount.tsv')
     spp = filepath2spp(count_files)
     orthogroup2genecount(file_orthogroup=file_orthogroup_table, file_genecount=file_genecount, spp=spp)
     dir_amalgkit_script = os.path.dirname(os.path.realpath(__file__))
