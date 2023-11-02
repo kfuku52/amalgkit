@@ -172,7 +172,7 @@ plot_norm_factor_histogram = function(df_metadata, font_size=8) {
           rect=element_rect(fill="transparent"),
           plot.margin=unit(rep(0.1, 4), "cm")
       )
-    out_path = file.path(dir_cstmm, paste0('tmm_normalization_factor_histogram.', fill_by, '.pdf'))
+    out_path = file.path(dir_cstmm, paste0('cstmm_normalization_factor_histogram.', fill_by, '.pdf'))
     ggsave(out_path, plot=g, width=4.8, height=2.4, units='in')
   }
 }
@@ -200,7 +200,7 @@ plot_norm_factor_scatter = function(df_metadata, font_size=8) {
         rect=element_rect(fill="transparent"),
         plot.margin=unit(rep(0.1, 4), "cm")
     )
-  ggsave(file.path(dir_cstmm, 'normalization_factor_scatter.pdf'), plot=g, width=4.8, height=2.0, units='in')
+  ggsave(file.path(dir_cstmm, 'cstmm_normalization_factor_scatter.pdf'), plot=g, width=4.8, height=2.0, units='in')
 }
 
 get_library_sizes = function(df_nonzero, uncorrected) {
@@ -216,6 +216,97 @@ get_library_sizes = function(df_nonzero, uncorrected) {
     library_sizes = df_libsize[['library_size']]
     return(library_sizes)
 }
+
+save_mean_expression_boxplot = function(df_nonzero, cnf_out2, uncorrected, corrected, font_size=8) {
+    df_nonzero_tmm = df_nonzero
+    for (col in colnames(df_nonzero_tmm)) {
+        tmm_normalization_factor = cnf_out2[[2]][col,'norm.factors']
+        df_nonzero_tmm[,col] = df_nonzero_tmm[,col] * tmm_normalization_factor # manually apply TMM normalization factors
+    }
+    mean_before = apply(df_nonzero, 2, function(x){mean(x, na.rm=TRUE)})
+    mean_after = apply(df_nonzero_tmm, 2, function(x){mean(x, na.rm=TRUE)})
+    var_before = round(var(mean_before), digits=1)
+    var_after = round(var(mean_after), digits=1)
+    txt = 'Across-species among-sample variance of mean single-copy gene raw counts before and after TMM normalization:'
+    cat(txt, var_before, 'and', var_after, '\n')
+
+    mean_sra_before = c()
+    mean_sra_after = c()
+    for (sp in names(corrected)) {
+        mean_sra_before = c(mean_sra_before, apply(uncorrected[[sp]], 2, function(x){mean(x, na.rm=TRUE)}))
+        mean_sra_after = c(mean_sra_before, apply(corrected[[sp]], 2, function(x){mean(x, na.rm=TRUE)}))
+    }
+    var_sra_before = round(var(mean_sra_before), digits=1)
+    var_sra_after = round(var(mean_sra_after), digits=1)
+    txt = 'Across-species among-sample variance of all-gene mean raw counts before and after TMM normalization:'
+    cat(txt, var_sra_before, 'and', var_sra_after, '\n')
+
+    values = c(mean_before, mean_after)
+    labels = c(rep('Raw\ncounts', length(mean_before)), rep('TMM-\ncorrected\ncounts', length(mean_after)))
+    df = data.frame(labels=labels, values=values)
+
+    sra_values = c(mean_sra_before, mean_sra_after)
+    sra_labels = c(rep('Raw\ncounts', length(mean_sra_before)), rep('TMM-\ncorrected\ncounts', length(mean_sra_after)))
+    sra_df = data.frame(labels=sra_labels, values=sra_values)
+
+    ps = list()
+    ps[[1]] = ggplot(df, aes(x=labels, y=values)) +
+        geom_boxplot(outlier.shape=NA) +
+        ylab('Mean count of single-copy genes')
+    ps[[2]] = ggplot(sra_df, aes(x=labels, y=values)) +
+        geom_boxplot(outlier.shape=NA) +
+        ylab('Mean count of all genes')
+
+    for (i in 1:length(ps)) {
+        ps[[i]] = ps[[i]] +
+        ylim(0, 1000) +
+        theme_bw() +
+        theme(
+            axis.text=element_text(size=font_size, color='black'),
+            axis.title=element_text(size=font_size, color='black'),
+            legend.text=element_text(size=font_size, color='black'),
+            legend.title=element_text(size=font_size, color='black'),
+            panel.grid.major.x=element_blank(),
+            panel.grid.minor.y=element_blank(),
+            panel.grid.minor.x=element_blank(),
+            rect=element_rect(fill="transparent"),
+            plot.margin=unit(rep(0.1, 4), "cm"),
+        )
+    }
+
+    p = ps[[1]] + ps[[2]]
+    filename = file.path(dir_cstmm, 'cstmm_mean_expression_boxplot.pdf')
+    ggsave(file=filename, p, height=3.6, width=3.6)
+}
+
+save_corrected_output_files = function(uncorrected) {
+    corrected = list()
+    for (sp in names(uncorrected)) {
+      cat('Applying TMM normalization factors:', sp, '\n')
+      dat = uncorrected[[sp]]
+      df_nf_sp = cnf_out2[[2]][startsWith(rownames(cnf_out2[[2]]),sp),]
+      for (i in 1:length(df_nf_sp[,1])){
+        SRR = as.character(row.names(df_nf_sp[i,]))
+        tmm_normalization_factor = as.double(df_nf_sp[i,"norm.factors"])
+        dat[,SRR] = dat[,SRR] * tmm_normalization_factor # manually apply TMM normalization factors
+      }
+      dat_out = cbind(target_id=rownames(dat), dat)
+      rownames(dat_out) = NULL
+      colnames(dat_out) = sub(paste0(sp, '_'), '', colnames(dat_out))
+      dir_cstmm_sp = file.path(dir_cstmm, sp)
+      if (!file.exists(dir_cstmm_sp)) {
+        dir.create(dir_cstmm_sp)
+      }
+      create_eff_length_symlink(dir_count, dir_cstmm, sp)
+      file_path = file.path(dir_cstmm_sp, paste0(sp, "_cstmm_counts.tsv"))
+      write.table(dat_out, file_path, sep='\t', row.names=FALSE, col.names=TRUE, quote=FALSE)
+      corrected[[sp]] = dat_out
+      rownames(corrected[[sp]]) = corrected[[sp]][['target_id']]
+      corrected[[sp]][,'target_id'] = NULL
+    }
+    return(corrected)
+}
+
 
 if (mode_tmm=='single_species') {
   uncorrected = get_uncorrected(dir_count=dir_count, file_genecount=NA)
@@ -249,29 +340,7 @@ out_path = file.path(dir_cstmm, 'metadata.tsv')
 write.table(df_metadata, out_path, row.names=FALSE, sep='\t', quote=FALSE)
 plot_norm_factor_histogram(df_metadata=df_metadata)
 plot_norm_factor_scatter(df_metadata=df_metadata)
+corrected = save_corrected_output_files(uncorrected)
+save_mean_expression_boxplot(df_nonzero, cnf_out2, uncorrected, corrected, font_size=8)
 
-corrected = list()
-for (sp in names(uncorrected)) {
-  cat('Applying TMM normalization factors:', sp, '\n')
-  dat = uncorrected[[sp]]
-  df_nf_sp = cnf_out2[[2]][startsWith(rownames(cnf_out2[[2]]),sp),]
-  for (i in 1:length(df_nf_sp[,1])){
-    SRR = as.character(row.names(df_nf_sp[i,]))
-    tmm_normalization_factor = as.double(df_nf_sp[i,"norm.factors"]) # manually apply normfactor
-    dat[,SRR] = dat[,SRR] * tmm_normalization_factor
-  }
-  dat_out = cbind(target_id=rownames(dat), dat)
-  rownames(dat_out) = NULL
-  colnames(dat_out) = sub(paste0(sp, '_'), '', colnames(dat_out))
-  dir_cstmm_sp = file.path(dir_cstmm, sp)
-  if (!file.exists(dir_cstmm_sp)) {
-    dir.create(dir_cstmm_sp)
-  }
-  create_eff_length_symlink(dir_count, dir_cstmm, sp)
-  file_path = file.path(dir_cstmm_sp, paste0(sp, "_cstmm_counts.tsv"))
-  write.table(dat_out, file_path, sep='\t', row.names=FALSE, col.names=TRUE, quote=FALSE)
-  corrected[[sp]] = dat_out
-  rownames(corrected[[sp]]) = corrected[[sp]][['target_id']]
-  corrected[[sp]][,'target_id'] = NULL
-}
 cat('cstmm.r completed!\n')
