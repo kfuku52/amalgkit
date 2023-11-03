@@ -489,6 +489,11 @@ draw_heatmap = function(sra, tc_dist_matrix, legend = TRUE, fontsize = 7) {
     ann_color = list(bioproject = bp_col_uniq, curate_group = curate_group_col_uniq)
     breaks = c(0, seq(0.3, 1, 0.01))
     colnames(tc_dist_matrix) = sra[sra$run %in% colnames(tc_dist_matrix), 'run']
+    head_half = substr(colnames(tc_dist_matrix), 1, 4)
+    tail_half = substr(colnames(tc_dist_matrix), length(colnames(tc_dist_matrix))-3, length(colnames(tc_dist_matrix)))
+    short_names = paste0(head_half, '..', tail_half)
+    rownames(tc_dist_matrix) = ifelse(nchar(rownames(tc_dist_matrix))<=10, rownames(tc_dist_matrix), short_names)
+    colnames(tc_dist_matrix) = ifelse(nchar(colnames(tc_dist_matrix))<=10, colnames(tc_dist_matrix), short_names)
     aheatmap(tc_dist_matrix, color = "-RdYlBu2:71", Rowv = NA, Colv = NA, revC = TRUE, legend = TRUE,
              breaks = breaks, annCol = ann_label, annRow = ann_label, annColors = ann_color, annLegend = legend,
              fontsize = fontsize)
