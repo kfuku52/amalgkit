@@ -16,8 +16,8 @@ cat(log_prefix, "mode =", debug_mode, "\n")
 if (debug_mode == "debug") {
     out_dir = '/Users/kf/Dropbox/data/evolutionary_transcriptomics/20230527_gfe_pipeline/amalgkit_out'
     metadata_path = '/Users/kf/Dropbox/data/evolutionary_transcriptomics/20230527_gfe_pipeline/amalgkit_out/cstmm/metadata.tsv'
-    est_counts_path = '/Users/kf/Dropbox/data/evolutionary_transcriptomics/20230527_gfe_pipeline/amalgkit_out/cstmm/Brocchinia_reducta/Brocchinia_reducta_cstmm_counts.tsv'
-    eff_length_path = '/Users/kf/Dropbox/data/evolutionary_transcriptomics/20230527_gfe_pipeline/amalgkit_out/cstmm/Brocchinia_reducta/Brocchinia_reducta_eff_length.tsv'
+    est_counts_path = '/Users/kf/Dropbox/data/evolutionary_transcriptomics/20230527_gfe_pipeline/amalgkit_out/cstmm/Stylidium_debile/Stylidium_debile_cstmm_counts.tsv'
+    eff_length_path = '/Users/kf/Dropbox/data/evolutionary_transcriptomics/20230527_gfe_pipeline/amalgkit_out/cstmm/Stylidium_debile/Stylidium_debile_eff_length.tsv'
     dist_method = "pearson"
     mapping_rate_cutoff = .20
     min_dif = 0
@@ -1140,7 +1140,7 @@ if (batch_effect_alg != 'sva') {
 if (maintain_zero) {
     cat('Any zero expression levels in the input will remain as zero-values in the output tables.\n')
     tc_batch_corrected = tc_batch_corrected[order(rownames(tc_batch_corrected)),]
-    is_input_zero = is_input_zero[order(rownames(is_input_zero)),]
+    is_input_zero = is_input_zero[rownames(tc_batch_corrected),]
     stopifnot(all(rownames(is_input_zero)==rownames(tc_batch_corrected)))
     for (col in colnames(is_input_zero)) {
         tc_batch_corrected[is_input_zero[[col]],col] = 0
