@@ -87,7 +87,7 @@ sort_labels = function(df_label, label_orders) {
   for (lo in label_orders) {
     splits = strsplit(lo, '_')[[1]]
     scientific_name = paste(splits[1], splits[2])
-    curate_group = splits[3]
+    curate_group = paste(splits[3:length(splits)], collapse='_')
     df_tmp = rbind(df_tmp, df_label[(df_label[['scientific_name']]==scientific_name)&(df_label[['curate_group']]==curate_group),])
   }
   return(df_tmp)
@@ -101,7 +101,7 @@ sort_averaged_tc = function(tc) {
   for (i in 1:length(split_colnames)) {
     genus_names = c(genus_names, split_colnames[[i]][1])
     specific_names = c(specific_names, split_colnames[[i]][2])
-    curate_group_names = c(curate_group_names, split_colnames[[i]][3])
+    curate_group_names = c(curate_group_names, paste0(split_colnames[[i]][3:length(split_colnames[[i]])], collapse='_'))
   }
   colname_order = order(curate_group_names, genus_names, specific_names)
   tc = tc[, colname_order]

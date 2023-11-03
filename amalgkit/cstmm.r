@@ -135,19 +135,29 @@ create_eff_length_symlink = function(dir_count, dir_cstmm, sp) {
 }
 
 append_tmm_stats_to_metadata = function(df_metadata, cnf_out2) {
-  df_nf = cnf_out2[[2]]
-  df_nf[['sample']] = rownames(df_nf)
-  df_nf[['scientific_name']] = df_nf[['sample']]
-  df_nf[['scientific_name']] = sub('_', 'PLACEHOLDER', df_nf[['scientific_name']])
-  df_nf[['scientific_name']] = sub('_.*', '', df_nf[['scientific_name']])
-  df_nf[['scientific_name']] = sub('PLACEHOLDER', ' ', df_nf[['scientific_name']])
-  df_nf[['run']] = sub('.*_', '', df_nf[['sample']])
-  df_nf = df_nf[,c('scientific_name', 'run', 'lib.size', 'norm.factors')]
-  colnames(df_nf) = c('scientific_name', 'run', 'tmm_library_size', 'tmm_normalization_factor')
-  out_cols = c(colnames(df_metadata), colnames(df_nf)[3:ncol(df_nf)])
-  df_metadata = merge(df_metadata, df_nf, by=c('scientific_name', 'run'), sort=FALSE, all.x=TRUE, all.y=FALSE)
-  df_metadata = df_metadata[,out_cols]
-  return(df_metadata)
+    my_fun = function(x) {
+        split_sample_name = strsplit(x, '_')[[1]]
+        run_name = paste(split_sample_name[3:length(split_sample_name)], collapse='_')
+        return(run_name)
+    }
+    df_nf = cnf_out2[[2]]
+    df_nf[['sample']] = rownames(df_nf)
+    df_nf[['scientific_name']] = df_nf[['sample']]
+    df_nf[['scientific_name']] = sub('_', 'PLACEHOLDER', df_nf[['scientific_name']])
+    df_nf[['scientific_name']] = sub('_.*', '', df_nf[['scientific_name']])
+    df_nf[['scientific_name']] = sub('PLACEHOLDER', ' ', df_nf[['scientific_name']])
+    df_nf[['run']] = sapply(df_nf[['sample']], function(x){my_fun(x)})
+    df_nf = df_nf[,c('scientific_name', 'run', 'lib.size', 'norm.factors')]
+    colnames(df_nf) = c('scientific_name', 'run', 'tmm_library_size', 'tmm_normalization_factor')
+    out_cols = c(colnames(df_metadata), colnames(df_nf)[3:ncol(df_nf)])
+    df_metadata = merge(df_metadata, df_nf, by=c('scientific_name', 'run'), sort=FALSE, all.x=TRUE, all.y=FALSE)
+    df_metadata = df_metadata[,out_cols]
+    filled_mapping_rate = df_metadata[['mapping_rate']]
+    filled_mapping_rate[is.na(filled_mapping_rate)] = -999
+    df_metadata[((filled_mapping_rate==0)&(df_metadata[['exclusion']]=='no')),'exclusion'] = 'no_mapping'
+    df_metadata[((!df_metadata[['run']] %in% df_nf[['run']])&(df_metadata[['exclusion']]=='no')),'exclusion'] = 'no_cstmm_output'
+    df_metadata[(is.na(df_metadata[['tmm_normalization_factor']])&(df_metadata[['exclusion']]=='no')),'exclusion'] = 'cstmm_failed'
+    return(df_metadata)
 }
 
 plot_norm_factor_histogram = function(df_metadata, font_size=8) {
@@ -282,7 +292,6 @@ save_mean_expression_boxplot = function(df_nonzero, cnf_out2, uncorrected, corre
 save_corrected_output_files = function(uncorrected) {
     corrected = list()
     for (sp in names(uncorrected)) {
-      cat('Applying TMM normalization factors:', sp, '\n')
       dat = uncorrected[[sp]]
       df_nf_sp = cnf_out2[[2]][startsWith(rownames(cnf_out2[[2]]),sp),]
       for (i in 1:length(df_nf_sp[,1])){
@@ -305,6 +314,20 @@ save_corrected_output_files = function(uncorrected) {
       corrected[[sp]][,'target_id'] = NULL
     }
     return(corrected)
+}
+
+print_excluded_run_summary = function(df_metadata) {
+    exclusion_reasons = sort(unique(df_metadata[['exclusion']]))
+    for (reason in exclusion_reasons) {
+        num_run = sum(df_metadata[['exclusion']]==reason)
+        if (reason=='no') {
+            txt_final = paste0('Number of retained runs (exclusion = "no"): ', num_run, '\n')
+        } else {
+            txt = paste0('Number of excluded runs (exclusion = "', reason, '"): ', num_run, '\n')
+            cat(txt)
+        }
+    }
+    cat(txt_final)
 }
 
 
@@ -336,8 +359,10 @@ cat('Round 2: Median TMM normalization factor =', median(cnf_out2[[2]][['norm.fa
 path_metadata = file.path(dir_count, 'metadata.tsv')
 df_metadata = read.table(path_metadata, header=TRUE, sep='\t', check.names=FALSE, quote='', comment.char='')
 df_metadata = append_tmm_stats_to_metadata(df_metadata, cnf_out2)
+df_metadata = df_metadata[,!startsWith(colnames(df_metadata), 'Unnamed')]
 out_path = file.path(dir_cstmm, 'metadata.tsv')
 write.table(df_metadata, out_path, row.names=FALSE, sep='\t', quote=FALSE)
+print_excluded_run_summary(df_metadata)
 plot_norm_factor_histogram(df_metadata=df_metadata)
 plot_norm_factor_scatter(df_metadata=df_metadata)
 corrected = save_corrected_output_files(uncorrected)
