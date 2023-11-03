@@ -864,8 +864,20 @@ save_plot = function(tc, sra, sva_out, dist_method, file, selected_curate_groups
     graphics.off()
 }
 
-transform_raw_to_fpkm = function(counts, effective_lengths) {
-    res = counts / effective_lengths / sum(counts) * 1e+09
+transform_raw_to_fpkm = function(counts, effective_lengths, sra) {
+    if ('tmm_library_size' %in% colnames(sra)) {
+        cat('FPKM transformation with the original library sizes from amalgkit cstmm output.\n')
+        cat('If --input_dir is specified with amalgkit cstmm output, resultant values will be TMM-FPKM.\n')
+        cat('If --input_dir is specified with amalgkit merge output, resultant values will be non-TMM-corrected FPKM.\n')
+        tmp = sra
+        rownames(tmp) = tmp[['run']]
+        library_sizes = tmp[colnames(counts),'tmm_library_size']
+    } else {
+        cat('FPKM transformation with the library sizes in the input files.\n')
+        cat('Irrespective of --input_dir, resultant values will be non-TMM-corrected FPKM.\n')
+        library_sizes = colSums(counts)
+    }
+    res = counts / effective_lengths / library_sizes * 1e+09 # 1e+09 = kb * million reads
     return(as.data.frame(res))
 }
 
@@ -876,7 +888,7 @@ transform_raw_to_tpm = function(counts, effective_lengths) {
 }
 
 apply_transformation_logic = function(tc, tc_eff_length, transform_method, batch_effect_alg,
-                                      step=c('before_batch','before_batch_plot','after_batch')) {
+                                      step=c('before_batch','before_batch_plot','after_batch'), sra) {
     if (batch_effect_alg=='no') {
         if (step=='before_batch') {
             bool_fpkm_tpm = TRUE
@@ -925,7 +937,7 @@ apply_transformation_logic = function(tc, tc_eff_length, transform_method, batch
     if (bool_fpkm_tpm == TRUE) {
         if (grepl('fpkm', transform_method) ) {
             cat('Applying FPKM transformation.\n')
-            tc = transform_raw_to_fpkm(tc, tc_eff_length[, colnames(tc)])
+            tc = transform_raw_to_fpkm(tc, tc_eff_length[, colnames(tc)], sra)
         } else if (grepl('tpm', transform_method )) {
             cat('Applying TPM transformation.\n')
             tc = transform_raw_to_tpm(tc, tc_eff_length[, colnames(tc)])
@@ -988,10 +1000,13 @@ exclude_inappropriate_sample_from_eff_length = function(tc_eff_length, tc) {
     return(tc_eff_length)
 }
 
-write_table_with_index_name = function(df, file_path, index_name='GeneID') {
+write_table_with_index_name = function(df, file_path, index_name='GeneID', sort=TRUE) {
     df_index = data.frame(placeholder_name=rownames(df), stringsAsFactors=FALSE)
     colnames(df_index) = index_name
     df = cbind(df_index, df)
+    if (sort) {
+        df = df[order(df[[index_name]]),]
+    }
     write.table(df, file=file_path, sep='\t', row.names=FALSE, col.names=TRUE, quote=FALSE)
 }
 
@@ -1023,9 +1038,8 @@ sra = get_species_metadata(sra_all, scientific_name, selected_curate_groups)
 tc = exclude_inappropriate_sample_from_tc(tc, sra)
 out = sort_tc_and_metadata(tc, sra) ; tc = out[["tc"]] ; sra = out[["sra"]]
 tc_eff_length = exclude_inappropriate_sample_from_eff_length(tc_eff_length, tc)
-
-tc = apply_transformation_logic(tc, tc_eff_length, transform_method, batch_effect_alg, step='before_batch')
-tc_tmp = apply_transformation_logic(tc, tc_eff_length, transform_method, batch_effect_alg, step='before_batch_plot')
+tc = apply_transformation_logic(tc, tc_eff_length, transform_method, batch_effect_alg, step='before_batch', sra=sra)
+tc_tmp = apply_transformation_logic(tc, tc_eff_length, transform_method, batch_effect_alg, step='before_batch_plot', sra=sra)
 file_name = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".uncorrected.tc.tsv"))
 write_table_with_index_name(df=tc_tmp, file_path=file_name, index_name='GeneID')
 out = curate_group_mean(tc_tmp, sra, selected_curate_groups)
@@ -1041,7 +1055,7 @@ tc_batch_corrected = NULL
 out = check_mapping_rate(tc, sra, 0)
 tc = out[["tc"]]
 sra = out[["sra"]]
-tc_tmp = apply_transformation_logic(tc, tc_eff_length, transform_method, batch_effect_alg, step='before_batch_plot')
+tc_tmp = apply_transformation_logic(tc, tc_eff_length, transform_method, batch_effect_alg, step='before_batch_plot', sra=sra)
 save_plot(tc_tmp, sra, NULL, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".original"),
           selected_curate_groups, fontsize, transform_method, batch_effect_alg)
 out = batch_effect_subtraction(tc, sra, batch_effect_alg, transform_method, clip_negative)
@@ -1051,7 +1065,7 @@ if (!is.null(sva_out)) {
     file_name = paste0(sub(" ", "_", scientific_name), ".", batch_effect_alg, ".", round, ".RData")
     save(sva_out, file = file.path(dir_rdata, file_name))
 }
-tc_batch_corrected_tmp = apply_transformation_logic(tc_batch_corrected, tc_eff_length, transform_method, batch_effect_alg, step='after_batch')
+tc_batch_corrected_tmp = apply_transformation_logic(tc_batch_corrected, tc_eff_length, transform_method, batch_effect_alg, step='after_batch', sra=sra)
 save_plot(tc_batch_corrected_tmp, sra, sva_out, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".original", ".", batch_effect_alg),
           selected_curate_groups, fontsize, transform_method, batch_effect_alg)
 
@@ -1063,7 +1077,7 @@ out = check_mapping_rate(tc, sra, mapping_rate_cutoff)
 tc = out[["tc"]]
 sra = out[["sra"]]
 
-tc_tmp = apply_transformation_logic(tc, tc_eff_length, transform_method, batch_effect_alg, step='before_batch_plot')
+tc_tmp = apply_transformation_logic(tc, tc_eff_length, transform_method, batch_effect_alg, step='before_batch_plot', sra=sra)
 save_plot(tc_tmp, sra, NULL, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".mapping_cutoff"),
           selected_curate_groups, fontsize, transform_method, batch_effect_alg)
 out = batch_effect_subtraction(tc, sra, batch_effect_alg, transform_method, clip_negative)
@@ -1072,7 +1086,7 @@ sva_out = out[["sva"]]
 if (!is.null(sva_out)) {
     save(sva_out, file=file.path(dir_rdata, paste0(sub(" ", "_", scientific_name),".", batch_effect_alg,".", round, ".RData")))
 }
-tc_batch_corrected_tmp = apply_transformation_logic(tc_batch_corrected, tc_eff_length, transform_method, batch_effect_alg, step='after_batch')
+tc_batch_corrected_tmp = apply_transformation_logic(tc_batch_corrected, tc_eff_length, transform_method, batch_effect_alg, step='after_batch', sra=sra)
 save_plot(tc_batch_corrected_tmp, sra, sva_out, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".mapping_cutoff", ".", batch_effect_alg),
           selected_curate_groups, fontsize, transform_method, batch_effect_alg)
 
@@ -1095,10 +1109,10 @@ while (end_flag == 0) {
         if (!is.null(sva_out)) {
             save(sva_out, file=file.path(dir_rdata, paste0(sub(" ", "_", scientific_name),".", batch_effect_alg, ".", round, ".RData")))
         }
-        tc_cwtc_tmp = apply_transformation_logic(tc_cwtc, tc_eff_length, transform_method, batch_effect_alg, step='before_batch_plot')
+        tc_cwtc_tmp = apply_transformation_logic(tc_cwtc, tc_eff_length, transform_method, batch_effect_alg, step='before_batch_plot', sra=sra)
         save_plot(tc_cwtc_tmp, sra, NULL, dist_method, paste0(sub(" ", "_", scientific_name), ".", round,
                                                           ".correlation_cutoff"), selected_curate_groups, fontsize, transform_method, batch_effect_alg)
-        tc_batch_corrected_tmp = apply_transformation_logic(tc_batch_corrected, tc_eff_length, transform_method, batch_effect_alg, step='after_batch')
+        tc_batch_corrected_tmp = apply_transformation_logic(tc_batch_corrected, tc_eff_length, transform_method, batch_effect_alg, step='after_batch', sra=sra)
         save_plot(tc_batch_corrected_tmp, sra, sva_out, dist_method, paste0(sub(" ", "_", scientific_name), ".", round,
                                                             ".correlation_cutoff",".", batch_effect_alg), selected_curate_groups, fontsize, transform_method, batch_effect_alg)
     }
