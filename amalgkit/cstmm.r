@@ -221,7 +221,7 @@ save_mean_expression_boxplot = function(df_nonzero, cnf_out2, uncorrected, corre
     df_nonzero_tmm = df_nonzero
     for (col in colnames(df_nonzero_tmm)) {
         tmm_normalization_factor = cnf_out2[[2]][col,'norm.factors']
-        df_nonzero_tmm[,col] = df_nonzero_tmm[,col] * tmm_normalization_factor # manually apply TMM normalization factors
+        df_nonzero_tmm[,col] = df_nonzero_tmm[,col] / tmm_normalization_factor # manually apply TMM normalization factors
     }
     mean_before = apply(df_nonzero, 2, function(x){mean(x, na.rm=TRUE)})
     mean_after = apply(df_nonzero_tmm, 2, function(x){mean(x, na.rm=TRUE)})
@@ -288,7 +288,7 @@ save_corrected_output_files = function(uncorrected) {
       for (i in 1:length(df_nf_sp[,1])){
         SRR = as.character(row.names(df_nf_sp[i,]))
         tmm_normalization_factor = as.double(df_nf_sp[i,"norm.factors"])
-        dat[,SRR] = dat[,SRR] * tmm_normalization_factor # manually apply TMM normalization factors
+        dat[,SRR] = dat[,SRR] / tmm_normalization_factor # manually apply TMM normalization factors
       }
       dat_out = cbind(target_id=rownames(dat), dat)
       rownames(dat_out) = NULL
