@@ -311,6 +311,9 @@ pcu.add_argument('--batch_effect_alg', metavar='(no|sva|ruvseq|combatseq)', choi
 pcu.add_argument('--clip_negative', metavar='yes|no', default='yes', type=strtobool, required=False, action='store',
                  help='default=%(default)s: Negative values will be clipped to 0 after the batch effect removal, '
                       'if the log*p1-* transformation is applied before the batch effect removal.')
+pcu.add_argument('--maintain_zero', metavar='yes|no', default='yes', type=strtobool, required=False, action='store',
+                 help='default=%(default)s: Any instances of zero expression levels in the input will remain as '
+                      'zero-values in the output tables, even if the process of batch effect removal causes deviation.')
 pcu.set_defaults(handler=command_curate)
 
 # Sub parser: sanity

@@ -29,6 +29,7 @@ if (debug_mode == "debug") {
     batch_effect_alg = 'sva'
     dist_method = "pearson"
     clip_negative = as.logical(1)
+    maintain_zero = as.logical(1)
     setwd(file.path(out_dir, 'curate'))
 } else if (debug_mode == "batch") {
     args = commandArgs(trailingOnly = TRUE)
@@ -46,6 +47,7 @@ if (debug_mode == "debug") {
     correlation_threshold = as.numeric(args[12])
     batch_effect_alg = args[13]
     clip_negative = as.logical(as.integer(args[14]))
+    maintain_zero = as.logical(as.integer(args[15]))
 }
 cat('est_counts_path:', est_counts_path, "\n")
 cat('metadata_path:', metadata_path, "\n")
@@ -1040,6 +1042,7 @@ out = sort_tc_and_metadata(tc, sra) ; tc = out[["tc"]] ; sra = out[["sra"]]
 tc_eff_length = exclude_inappropriate_sample_from_eff_length(tc_eff_length, tc)
 tc = apply_transformation_logic(tc, tc_eff_length, transform_method, batch_effect_alg, step='before_batch', sra=sra)
 tc_tmp = apply_transformation_logic(tc, tc_eff_length, transform_method, batch_effect_alg, step='before_batch_plot', sra=sra)
+is_input_zero = data.frame(tc_tmp==0, check.names=FALSE)
 file_name = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".uncorrected.tc.tsv"))
 write_table_with_index_name(df=tc_tmp, file_path=file_name, index_name='GeneID')
 out = curate_group_mean(tc_tmp, sra, selected_curate_groups)
@@ -1128,6 +1131,15 @@ cat("Finished checking within-curate_group correlation.\n")
 if (batch_effect_alg != 'sva') {
     cat("Batch-effect removal algorithm is: ",batch_effect_alg ,". Applying transformation on final batch-removed counts.\n")
     tc_batch_corrected = tc_batch_corrected_tmp
+}
+if (maintain_zero) {
+    cat('Any zero expression levels in the input will remain as zero-values in the output tables.\n')
+    tc_batch_corrected = tc_batch_corrected[order(rownames(tc_batch_corrected)),]
+    is_input_zero = is_input_zero[order(rownames(is_input_zero)),]
+    stopifnot(all(rownames(is_input_zero)==rownames(tc_batch_corrected)))
+    for (col in colnames(is_input_zero)) {
+        tc_batch_corrected[is_input_zero[[col]],col] = 0
+    }
 }
 cat("Writing summary files for", scientific_name, "\n")
 file = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".metadata.tsv"))

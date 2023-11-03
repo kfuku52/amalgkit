@@ -66,6 +66,7 @@ def run_curate_r_script(args, metadata, sp, input_dir):
             str(correlation_threshold),
             str(args.batch_effect_alg),
             str(args.clip_negative),
+            str(args.maintain_zero),
          ])
     return curate_r_exit_code
 
