@@ -349,7 +349,7 @@ pin.add_argument('--fastq_dir', metavar='PATH', default=None, type=str, required
 pin.add_argument('--getfastq_dir', metavar='PATH', default=None, type=str, required=False, action='store',
                  help='default=%(default)s: PATH to index directory. Only required if getfastq directory is not '
                       'out_dir/getfastq/')
-pin.add_argument('--remove_tmp', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
+pin.add_argument('--remove_tmp', metavar='yes|no', default='yes', type=strtobool, required=False, action='store',
                  help='default=%(default)s: Remove temporary files.')
 pin.add_argument('--accurate_size', metavar='yes|no', default='yes', type=strtobool, required=False, action='store',
                  help='default=%(default)s: ONLY APPLIES TO .gz COMPRESSED FASTQ FILES. If no, runs seqkit only on the first 1000 sequences in the fastq file to get an estimate for information like average read length. '
