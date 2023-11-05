@@ -30,6 +30,7 @@ if (debug_mode == "debug") {
     dist_method = "pearson"
     clip_negative = as.logical(1)
     maintain_zero = as.logical(1)
+    r_util_path = 'foo'
     setwd(file.path(out_dir, 'curate'))
 } else if (debug_mode == "batch") {
     args = commandArgs(trailingOnly = TRUE)
@@ -48,6 +49,7 @@ if (debug_mode == "debug") {
     batch_effect_alg = args[13]
     clip_negative = as.logical(as.integer(args[14]))
     maintain_zero = as.logical(as.integer(args[15]))
+    r_util_path = file.path(args[16])
 }
 cat('est_counts_path:', est_counts_path, "\n")
 cat('metadata_path:', metadata_path, "\n")
@@ -63,6 +65,10 @@ cat('one_outlier_per_iteration:', one_outlier_per_iteration, "\n")
 cat('correlation_threshold:', correlation_threshold, "\n")
 cat('batch_effect_alg:', batch_effect_alg, "\n")
 cat('clip_negative:', clip_negative, "\n")
+cat('r_util_path:', r_util_path, "\n")
+cat('r_util_path:', r_util_path, "\n")
+
+source(r_util_path)
 
 if (batch_effect_alg == "ruvseq") {
     suppressWarnings(suppressPackageStartupMessages(library(RUVSeq, quietly = TRUE)))
@@ -1005,16 +1011,6 @@ exclude_inappropriate_sample_from_eff_length = function(tc_eff_length, tc) {
     row.names(tc_eff_length) = tc_eff_length[, 1]
     tc_eff_length = tc_eff_length[, colnames(tc)]
     return(tc_eff_length)
-}
-
-write_table_with_index_name = function(df, file_path, index_name='GeneID', sort=TRUE) {
-    df_index = data.frame(placeholder_name=rownames(df), stringsAsFactors=FALSE)
-    colnames(df_index) = index_name
-    df = cbind(df_index, df)
-    if (sort) {
-        df = df[order(df[[index_name]]),]
-    }
-    write.table(df, file=file_path, sep='\t', row.names=FALSE, col.names=TRUE, quote=FALSE)
 }
 
 ########cd############END OF FUNCTION DECLARATION####################################################

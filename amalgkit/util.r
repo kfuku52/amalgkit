@@ -33,3 +33,13 @@ impute_expression = function(dat, num_pc=4) {
   imputed_dat[imputed_dat < 0] = 0
   return(imputed_dat)
 }
+
+write_table_with_index_name = function(df, file_path, index_name='GeneID', sort=TRUE) {
+    df_index = data.frame(placeholder_name=rownames(df), stringsAsFactors=FALSE)
+    colnames(df_index) = index_name
+    df = cbind(df_index, df)
+    if (sort) {
+        df = df[order(df[[index_name]]),]
+    }
+    write.table(df, file=file_path, sep='\t', row.names=FALSE, col.names=TRUE, quote=FALSE)
+}

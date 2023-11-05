@@ -149,10 +149,12 @@ draw_multisp_heatmap = function(tc, df_label) {
   tc_dist_matrix[is.na(tc_dist_matrix)] = 0
   ann_label = df_label[,c('scientific_name','curate_group')]
   colnames(ann_label) = c('species', 'curate_group')
-  sp_color = df_label[!duplicated(df_label[['sp_color']]), 'sp_color']
-  sp_color = sp_color[order(df_label[!duplicated(df_label[['scientific_name']]), 'scientific_name'])]
-  curate_group_color = df_label[!duplicated(df_label[['curate_group_color']]), 'curate_group_color']
-  curate_group_color = curate_group_color[order(df_label[!duplicated(df_label[['curate_group']]), 'curate_group'])]
+  is_sp_first_appearance = (!duplicated(df_label[['sp_color']]))
+  sp_color = df_label[is_sp_first_appearance, 'sp_color']
+  sp_color = sp_color[order(df_label[is_sp_first_appearance, 'scientific_name'])]
+  is_cg_first_appearance = (!duplicated(df_label[['curate_group_color']]))
+  curate_group_color = df_label[is_cg_first_appearance, 'curate_group_color']
+  curate_group_color = curate_group_color[order(df_label[is_cg_first_appearance, 'curate_group'])]
   ann_color = list(species=sp_color, curate_group=curate_group_color)
   breaks = c(0, seq(0.3, 1, 0.01))
   NMF::aheatmap(tc_dist_matrix, color="-RdYlBu2:71", Rowv=NA, Colv=NA, revC=TRUE, legend=TRUE, breaks=breaks,
@@ -211,7 +213,18 @@ draw_multisp_pca = function(tc, df_label) {
   pca = prcomp(tc_dist_matrix)
   xlabel = paste0("PC 1 (", round(summary(pca)$importance[2,1]*100, digits=1), "%)")
   ylabel = paste0("PC 2 (", round(summary(pca)$importance[2,2]*100, digits=1), "%)")
-  plot(pca$rotation[,1], pca$rotation[,2], pch=21, cex=2, lwd=1, bg=df_label$curate_group_color, col=df_label$sp_color, xlab=xlabel, ylab=ylabel, las=1)
+  plot(
+      pca[['x']][,1],
+      pca[['x']][,2],
+      pch=21,
+      cex=2,
+      lwd=1,
+      bg=df_label[['curate_group_color']],
+      col=df_label[['sp_color']],
+      xlab=xlabel,
+      ylab=ylabel,
+      las=1
+  )
 }
 
 draw_multisp_mds = function(tc, df_label) {
@@ -446,10 +459,12 @@ save_unaveraged_pca_plot = function(unaveraged_orthologs, df_color_unaveraged, d
     colnames(tmp2) = c('run', pc_cols2)
     df_metadata = merge(df_metadata, tmp2, all.x=TRUE, by='run', sort=FALSE)
     df_metadata = df_metadata[,sorted_cols]
+    df_color_uniq = unique(df_color_unaveraged[,c('curate_group','curate_group_color')])
+    curate_group_colors = df_color_uniq[['curate_group_color']]
+    names(curate_group_colors) = df_color_uniq[['curate_group']]
     for (pcxy in list(c(1,2),c(3,4))) {
       pcx = pcxy[1]
       pcy = pcxy[2]
-
       colx = paste0('PC', pcx)
       coly = paste0('PC', pcy)
       xmin = min(tmp[[colx]], na.rm=TRUE)
@@ -457,15 +472,11 @@ save_unaveraged_pca_plot = function(unaveraged_orthologs, df_color_unaveraged, d
       xunit = (xmax-xmin)*0.01
       xmin = xmin - xunit
       xmax = xmax + xunit
-
       ymin = min(tmp[[coly]], na.rm=TRUE)
       ymax = max(tmp[[coly]], na.rm=TRUE)
       yunit = (ymax-ymin)*0.01
       ymin = ymin - yunit
       ymax = ymax + yunit
-
-      curate_group_colors = unique(df_color_unaveraged[,c('curate_group','curate_group_color')])[['curate_group_color']]
-
       g = ggplot(tmp, aes(x=!!rlang::sym(colx), y=!!rlang::sym(coly), color=curate_group))
       g = g + theme_bw()
       g = g + geom_point(size=0.5, alpha=0.3)
@@ -501,6 +512,9 @@ get_tsne_coordinates = function(tc, df_label, by='run') {
 
 save_unaveraged_tsne_plot = function(unaveraged_orthologs, df_color_unaveraged) {
   cat('Generating unaveraged t-SNE plot.\n')
+  df_color_uniq = unique(df_color_unaveraged[,c('curate_group','curate_group_color')])
+  curate_group_colors = df_color_uniq[['curate_group_color']]
+  names(curate_group_colors) = df_color_uniq[['curate_group']]
   for (d in c('uncorrected', 'corrected')) {
     tmp = get_tsne_coordinates(tc=unaveraged_orthologs[[d]], df_label=df_color_unaveraged)
     pcx = 1
@@ -523,7 +537,6 @@ save_unaveraged_tsne_plot = function(unaveraged_orthologs, df_color_unaveraged) 
     g = g + theme_bw()
     g = g + geom_point(size=0.5)
     g = g + geom_density_2d(mapping=aes(color=curate_group), bins=12, linewidth=0.25)
-    curate_group_colors = unique(df_color_unaveraged[,c('curate_group','curate_group_color')])[['curate_group_color']]
     g = g + scale_color_manual(values=curate_group_colors)
     g = g + xlab('t-SNE dimension 1')
     g = g + ylab('t-SNE dimension 2')
@@ -622,10 +635,6 @@ save_averaged_box_plot = function(averaged_orthologs, df_color_averaged) {
     tc_dist_matrix[is.na(tc_dist_matrix)] = 0
     draw_multisp_boxplot(df_color_averaged, tc_dist_matrix, fontsize=8)
   }
-  d = 'corrected'
-  tc = averaged_orthologs[[d]]
-  df_label = df_color_averaged
-  par(mar=c(2.5,2.5,0.3,0.1), cex=1, ps=8, mgp=c(1.5, 0.7, 0)); draw_multisp_tsne(tc=tc, df_label=df_label[['sp_color']])
   graphics.off()
 }
 
@@ -852,12 +861,32 @@ cat('Applying expression level imputation for missing orthologs.\n')
 imputed_averaged_orthologs = list()
 imputed_unaveraged_orthologs = list()
 for (d in c('uncorrected','corrected')) {
-  imputed_averaged_orthologs[[d]] = impute_expression(averaged_orthologs[[d]])
-  imputed_unaveraged_orthologs[[d]] = impute_expression(unaveraged_orthologs[[d]])
-  write.table(averaged_orthologs[[d]], file=paste0('csca_ortholog_averaged.',d,'.tsv'), sep="\t", row.names=FALSE, quote=FALSE)
-  write.table(unaveraged_orthologs[[d]], file=paste0('csca_ortholog_unaveraged.',d,'.tsv'), sep="\t", row.names=FALSE, quote=FALSE)
-  write.table(imputed_averaged_orthologs[[d]], file=paste0('csca_ortholog_averaged.imputed.',d,'.tsv'), sep="\t", row.names=FALSE, quote=FALSE)
-  write.table(imputed_unaveraged_orthologs[[d]], file=paste0('csca_ortholog_unaveraged.imputed.',d,'.tsv'), sep="\t", row.names=FALSE, quote=FALSE)
+    imputed_averaged_orthologs[[d]] = impute_expression(averaged_orthologs[[d]])
+    imputed_unaveraged_orthologs[[d]] = impute_expression(unaveraged_orthologs[[d]])
+    write_table_with_index_name(
+        df=averaged_orthologs[[d]],
+        file_path=paste0('csca_ortholog_averaged.',d,'.tsv'),
+        index_name='GeneID',
+        sort=FALSE
+    )
+    write_table_with_index_name(
+        df=unaveraged_orthologs[[d]],
+        file_path=paste0('csca_ortholog_unaveraged.',d,'.tsv'),
+        index_name='GeneID',
+        sort=FALSE
+    )
+    write_table_with_index_name(
+        df=imputed_averaged_orthologs[[d]],
+        file_path=paste0('csca_ortholog_averaged.imputed.',d,'.tsv'),
+        index_name='GeneID',
+        sort=FALSE
+    )
+    write_table_with_index_name(
+        df=imputed_unaveraged_orthologs[[d]],
+        file_path=paste0('csca_ortholog_unaveraged.imputed.',d,'.tsv'),
+        index_name='GeneID',
+        sort=FALSE
+    )
 }
 cat(nrow(imputed_unaveraged_orthologs[[d]]), 'orthologs were found after filtering and imputation.\n')
 df_metadata = calculate_correlation_within_group(unaveraged_orthologs, averaged_orthologs, df_metadata, selected_curate_groups)

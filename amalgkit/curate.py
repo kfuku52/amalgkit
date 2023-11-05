@@ -30,8 +30,9 @@ def run_curate_r_script(args, metadata, sp, input_dir):
     correlation_threshold = args.correlation_threshold
     intermediate = args.plot_intermediate
     curate_group = get_curate_group(args, metadata)
-    amalgkit_script_dir = os.path.dirname(os.path.realpath(__file__))
-    r_script_path = os.path.join(amalgkit_script_dir, 'curate.r')
+    dir_amalgkit_script = os.path.dirname(os.path.realpath(__file__))
+    r_script_path = os.path.join(dir_amalgkit_script, 'curate.r')
+    r_util_path = os.path.join(dir_amalgkit_script, 'util.r')
     path_curate_input_metadata = os.path.join(input_dir, 'metadata.tsv')
     len_file = os.path.join(os.path.abspath(input_dir), sp, sp + '_eff_length.tsv')
     if 'cstmm' in input_dir:
@@ -67,6 +68,7 @@ def run_curate_r_script(args, metadata, sp, input_dir):
             str(args.batch_effect_alg),
             str(args.clip_negative),
             str(args.maintain_zero),
+            os.path.realpath(r_util_path),
          ])
     return curate_r_exit_code
 
