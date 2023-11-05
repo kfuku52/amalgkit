@@ -68,7 +68,7 @@ def get_fastq_stats(args):
             subprocess.run(seqkit_command, stdout=seqkit_stdout)
             seqkit_stdout.close()
             tmp_stat_df = pandas.read_csv(tmp_file, sep='\t', header=0)
-            total_spots = tmp_stat_df.loc[0, 'num_seqs']
+            total_spots = tmp_stat_df.at[0, 'num_seqs']
         else:
             OS = platform.system()
             if OS == 'Darwin':
@@ -90,33 +90,36 @@ def get_fastq_stats(args):
             total_spots = int(total_lines / 4)
         if args.remove_tmp:
             os.remove(tmp_file)
-        tmp_stat_df.loc[0,'id'] = id
+        tmp_stat_df['id'] = pandas.Series(dtype='str')
+        tmp_stat_df['file1'] = pandas.Series(dtype='str')
+        tmp_stat_df['file2'] = pandas.Series(dtype='str')
+        tmp_stat_df.at[0,'id'] = id
         if len(fastq_files) == 2:
-            tmp_stat_df.loc[0, 'file2'] = fastq_files[1]
+            tmp_stat_df.at[0, 'file2'] = fastq_files[1]
         elif len(fastq_files) == 1:
-            tmp_stat_df.loc[0, 'file2'] = 'unavailable'
+            tmp_stat_df.at[0, 'file2'] = 'unavailable'
         else:
             raise ValueError('Too many files found for set {}'.format(fastq_files))
-        tmp_metadata.loc[row, 'scientific_name'] = 'Please add in format: Genus species'
-        tmp_metadata.loc[row,'curate_group'] = 'Please add'
-        tmp_metadata.loc[row,'run'] = tmp_stat_df.loc[0,'id']
-        tmp_metadata.loc[row,'read1_path'] = os.path.abspath(fastq_files[0])
-        if tmp_stat_df.loc[0, 'file2'] != 'unavailable':
-            tmp_metadata.loc[row,'read2_path'] = os.path.abspath(tmp_stat_df.loc[0,'file2'])
+        tmp_metadata.at[row, 'scientific_name'] = 'Please add in format: Genus species'
+        tmp_metadata.at[row,'curate_group'] = 'Please add'
+        tmp_metadata.at[row,'run'] = tmp_stat_df.at[0,'id']
+        tmp_metadata.at[row,'read1_path'] = os.path.abspath(fastq_files[0])
+        if tmp_stat_df.at[0, 'file2'] != 'unavailable':
+            tmp_metadata.at[row,'read2_path'] = os.path.abspath(tmp_stat_df.at[0,'file2'])
         else:
-            tmp_metadata.loc[row, 'read2_path'] = 'unavailable'
-        tmp_metadata.loc[row,'is_sampled'] = 'yes'
-        tmp_metadata.loc[row,'is_qualified'] = 'yes'
-        tmp_metadata.loc[row, 'exclusion'] = 'no'
-        tmp_metadata.loc[row,'lib_layout'] = lib_layout
-        tmp_metadata.loc[row,'total_spots'] = total_spots
-        tmp_metadata.loc[row,'size'] = os.path.getsize(fastq_files[0])
-        tmp_metadata.loc[row, 'private_file'] = 'yes'
-        tmp_metadata.loc[row,'spot_length'] = int(tmp_stat_df.loc[0,'avg_len'])
-        total_bases = total_spots * int(tmp_stat_df.loc[0,'avg_len'])
+            tmp_metadata.at[row, 'read2_path'] = 'unavailable'
+        tmp_metadata.at[row,'is_sampled'] = 'yes'
+        tmp_metadata.at[row,'is_qualified'] = 'yes'
+        tmp_metadata.at[row, 'exclusion'] = 'no'
+        tmp_metadata.at[row,'lib_layout'] = lib_layout
+        tmp_metadata.at[row,'total_spots'] = total_spots
+        tmp_metadata.at[row,'size'] = os.path.getsize(fastq_files[0])
+        tmp_metadata.at[row, 'private_file'] = 'yes'
+        tmp_metadata.at[row,'spot_length'] = int(tmp_stat_df.at[0,'avg_len'])
+        total_bases = total_spots * int(tmp_stat_df.at[0,'avg_len'])
         if lib_layout == 'paired':
             total_bases = total_bases * 2
-        tmp_metadata.loc[row,'total_bases'] = total_bases
+        tmp_metadata.at[row,'total_bases'] = total_bases
         row += 1
     if not os.path.exists(os.path.join(args.out_dir, 'metadata')):
         os.makedirs(os.path.join(args.out_dir, 'metadata'))
