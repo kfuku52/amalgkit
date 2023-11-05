@@ -705,6 +705,8 @@ def sequence_extraction_private(i, metadata, sra_stat, args):
     if args.fastp:
         metadata = run_fastp(sra_stat, args, sra_stat['getfastq_sra_dir'], metadata)
     inext = get_newest_intermediate_file_extension(sra_stat, work_dir=sra_stat['getfastq_sra_dir'])
+    if (inext=='no_extension_found')&(sra_stat['layout']=='paired'):
+        raise Exception('Paired-end file names may be invalid. They should contain _1 and _2 to indicate a pair: {}'.format(sra_stat['sra_id']))
     outext = '.amalgkit.fastq.gz'
     rename_fastq(sra_stat, sra_stat['getfastq_sra_dir'], inext, outext)
     return metadata
