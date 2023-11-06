@@ -10,6 +10,7 @@ import os
 import re
 import subprocess
 import sys
+import warnings
 
 from distutils.util import strtobool
 
@@ -560,9 +561,9 @@ def generate_multisp_busco_table(dir_busco, outfile):
             continue
         tmp_table = pandas.read_table(path_to_table, sep='\t', header=None, comment='#', names=col_names)
         tmp_table.loc[:, 'sequence'] = tmp_table.loc[:, 'sequence'].str.replace(':[-\.0-9]*$', '', regex=True)
-        tmp_table.loc[(tmp_table.loc[:, 'sequence'].isnull()), 'sequence'] = '-'
-        tmp_table.loc[(tmp_table.loc[:, 'orthodb_url'].isnull()), 'orthodb_url'] = '-'
-        tmp_table.loc[(tmp_table.loc[:, 'description'].isnull()), 'description'] = '-'
+        for col in ['sequence', 'orthodb_url', 'description']:
+            tmp_table[col] = tmp_table[col].fillna('').astype(str)
+            tmp_table.loc[(tmp_table[col]==''), col] = '-'
         if species_infile == species_infiles[0]:
             merged_table = tmp_table.loc[:, ['busco_id', 'orthodb_url', 'description']]
             merged_table = merged_table.drop_duplicates(keep='first', inplace=False, ignore_index=True)
