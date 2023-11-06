@@ -837,6 +837,8 @@ write_pivot_table = function(df_metadata, unaveraged_tcs, selected_curate_groups
 
 df_og = read.table(file_orthogroup, header=TRUE, sep='\t', row.names=1, quote='', check.names=FALSE)
 df_gc = read.table(file_genecount, header=TRUE, sep='\t', quote='', check.names=FALSE)
+rownames(df_gc) = df_gc[['orthogroup_id']]
+df_gc[,'orthogroup_id'] = NULL
 spp_filled = colnames(df_gc)
 
 is_singlecopy = get_singlecopy_bool_index(df_gc, spp_filled)

@@ -28,7 +28,7 @@ def get_count_files(dir_count):
         if (num_sciname_count_file==0):
             sys.stderr.write('No est_counts.tsv file found in: {}\n'.format(sciname_path))
         elif (num_sciname_count_file==1):
-            print('One est_counts.tsv file found in {}'.format(sciname_path), flush=True)
+            continue # good to go
         elif (num_sciname_count_file>=2):
             raise Exception('Multiple est_counts.tsv files found in: {}\n'.format(sciname_path))
     if (len(count_files)==0):
@@ -54,7 +54,7 @@ def cstmm_main(args):
     else:
         dir_count = os.path.realpath(args.dir_count)
     if args.dir_busco is not None:
-        file_orthogroup_table = os.path.join(dir_cstmm, 'multispecies_busco_table.tsv')
+        file_orthogroup_table = os.path.join(dir_cstmm, 'cstmm_multispecies_busco_table.tsv')
         generate_multisp_busco_table(dir_busco=args.dir_busco, outfile=file_orthogroup_table)
     elif args.orthogroup_table is not None:
         file_orthogroup_table = os.path.realpath(args.orthogroup_table)
@@ -68,7 +68,7 @@ def cstmm_main(args):
               'Cross-species TMM normalization will be applied with single-copy orthologs.'
         print(txt, flush=True)
         mode_tmm = 'multi_species'
-    file_genecount = os.path.join(dir_cstmm, 'amalgkit_orthogroup_genecount.tsv')
+    file_genecount = os.path.join(dir_cstmm, 'cstmm_orthogroup_genecount.tsv')
     spp = filepath2spp(count_files)
     orthogroup2genecount(file_orthogroup=file_orthogroup_table, file_genecount=file_genecount, spp=spp)
     dir_amalgkit_script = os.path.dirname(os.path.realpath(__file__))

@@ -530,6 +530,7 @@ def check_rscript():
 
 def orthogroup2genecount(file_orthogroup, file_genecount, spp):
     df = pandas.read_csv(file_orthogroup, sep='\t', header=0, low_memory=False)
+    orthogroup_ids = df['busco_id'].values
     is_spp = df.columns.isin(spp)
     df = df.loc[:,is_spp]
     df[df.isnull()] = ''
@@ -540,6 +541,9 @@ def orthogroup2genecount(file_orthogroup, file_genecount, spp):
         gc[col] = 0
         gc.loc[(df[col] != '') & ~is_comma, col] = 1
         gc.loc[is_comma, col] = df.loc[is_comma, col].str.count(',') + 1
+    col_order = ['orthogroup_id',] + gc.columns.tolist()
+    gc['orthogroup_id'] = orthogroup_ids
+    gc = gc.loc[:,col_order]
     gc.to_csv(file_genecount, index=False, sep='\t')
 
 def check_ortholog_parameter_compatibility(args):
@@ -552,9 +556,9 @@ def generate_multisp_busco_table(dir_busco, outfile):
     print('Generating multi-species BUSCO table.', flush=True)
     col_names = ['busco_id', 'status', 'sequence', 'score', 'length', 'orthodb_url', 'description']
     species_infiles = [f for f in os.listdir(path=dir_busco) if f.endswith('.tsv')]
+    species_infiles = sorted(species_infiles)
     print('BUSCO full tables for {} species were detected at: {}'.format(len(species_infiles), dir_busco), flush=True)
     for species_infile in species_infiles:
-        print('Working on {}'.format(species_infile), flush=True)
         path_to_table = os.path.join(dir_busco, species_infile)
         if not os.path.exists(path_to_table):
             warnings.warn('full_table.tsv does not exist. Skipping: '.format(species_infile))

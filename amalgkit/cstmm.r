@@ -9,8 +9,8 @@ mode = ifelse(length(commandArgs(trailingOnly=TRUE))==1, 'debug', 'batch')
 if (mode=="debug") {
   dir_work = '/Users/kf/Dropbox/data/evolutionary_transcriptomics/20230527_gfe_pipeline/amalgkit_out'
   dir_count = file.path(dir_work, "merge")
-  file_orthogroup_table = file.path(dir_work, 'cstmm', 'multispecies_busco_table.tsv')
-  file_genecount = file.path(dir_work, 'cstmm', 'amalgkit_orthogroup_genecount.tsv')
+  file_orthogroup_table = file.path(dir_work, 'cstmm', 'cstmm_multispecies_busco_table.tsv')
+  file_genecount = file.path(dir_work, 'cstmm', 'cstmm_orthogroup_genecount.tsv')
   dir_cstmm = file.path(dir_work, "cstmm")
   mode_tmm = 'multi_species'
   r_util_path = '/Users/kf/Dropbox/repos/amalgkit/amalgkit/util.r'
@@ -74,6 +74,8 @@ get_uncorrected = function(dir_count, file_genecount=NA) {
     df_gc = NA
   } else {
     df_gc = read.table(file_genecount, header=TRUE, sep='\t', check.names=FALSE, quote='', comment.char='')
+    rownames(df_gc) = df_gc[['orthogroup_id']]
+    df_gc[,'orthogroup_id'] = NULL
   }
   spp_filled = get_spp_filled(dir_count, df_gc)
   uncorrected = list()
@@ -89,6 +91,8 @@ get_uncorrected = function(dir_count, file_genecount=NA) {
 
 get_df_exp_single_copy_ortholog = function(file_genecount, file_orthogroup_table, dir_count, uncorrected) {
   df_gc = read.table(file_genecount, header=TRUE, sep='\t', check.names=FALSE, quote='', comment.char='')
+  rownames(df_gc) = df_gc[['orthogroup_id']]
+  df_gc[,'orthogroup_id'] = NULL
   df_og = read.table(file_orthogroup_table, header=TRUE, sep='\t', row.names=1, check.names=FALSE, quote='', comment.char='')
   spp_filled = get_spp_filled(dir_count, df_gc)
   is_singlecopy = get_singlecopy_bool_index(df_gc, spp_filled)
