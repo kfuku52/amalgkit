@@ -14,10 +14,10 @@ debug_mode = ifelse(length(commandArgs(trailingOnly = TRUE)) == 1, "debug", "bat
 log_prefix = "transcriptome_curation.r:"
 cat(log_prefix, "mode =", debug_mode, "\n")
 if (debug_mode == "debug") {
-    out_dir = '/Users/kf/Dropbox/data/evolutionary_transcriptomics/20230527_gfe_pipeline/amalgkit_out'
-    metadata_path = '/Users/kf/Dropbox/data/evolutionary_transcriptomics/20230527_gfe_pipeline/amalgkit_out/cstmm/metadata.tsv'
-    est_counts_path = '/Users/kf/Dropbox/data/evolutionary_transcriptomics/20230527_gfe_pipeline/amalgkit_out/cstmm/Stylidium_debile/Stylidium_debile_cstmm_counts.tsv'
-    eff_length_path = '/Users/kf/Dropbox/data/evolutionary_transcriptomics/20230527_gfe_pipeline/amalgkit_out/cstmm/Stylidium_debile/Stylidium_debile_eff_length.tsv'
+    out_dir = '/Users/kf/Dropbox/data/evolutionary_transcriptomics/20230527_amalgkit/amalgkit_out'
+    metadata_path = '/Users/kf/Dropbox/data/evolutionary_transcriptomics/20230527_amalgkit/amalgkit_out/cstmm/metadata.tsv'
+    est_counts_path = '/Users/kf/Dropbox/data/evolutionary_transcriptomics/20230527_amalgkit/amalgkit_out/cstmm/Actinidia_chinensis/Actinidia_chinensis_cstmm_counts.tsv'
+    eff_length_path = '/Users/kf/Dropbox/data/evolutionary_transcriptomics/20230527_amalgkit/amalgkit_out/cstmm/Actinidia_chinensis/Actinidia_chinensis_eff_length.tsv'
     dist_method = "pearson"
     mapping_rate_cutoff = .20
     min_dif = 0
@@ -30,7 +30,7 @@ if (debug_mode == "debug") {
     dist_method = "pearson"
     clip_negative = as.logical(1)
     maintain_zero = as.logical(1)
-    r_util_path = 'foo'
+    r_util_path = '/Users/kf/Dropbox/repos/amalgkit/amalgkit/util.r'
     setwd(file.path(out_dir, 'curate'))
 } else if (debug_mode == "batch") {
     args = commandArgs(trailingOnly = TRUE)
@@ -1117,8 +1117,8 @@ while (end_flag == 0) {
         save_plot(tc_cwtc_tmp, sra, NULL, dist_method, paste0(sub(" ", "_", scientific_name), ".", round,
                                                           ".correlation_cutoff"), selected_curate_groups, fontsize, transform_method, batch_effect_alg)
         tc_batch_corrected_tmp = apply_transformation_logic(tc_batch_corrected, tc_eff_length, transform_method, batch_effect_alg, step='after_batch', sra=sra)
-        save_plot(tc_batch_corrected_tmp, sra, sva_out, dist_method, paste0(sub(" ", "_", scientific_name), ".", round,
-                                                            ".correlation_cutoff",".", batch_effect_alg), selected_curate_groups, fontsize, transform_method, batch_effect_alg)
+        file_base = paste0(sub(" ", "_", scientific_name), ".", round, ".correlation_cutoff", ".", batch_effect_alg)
+        save_plot(tc_batch_corrected_tmp, sra, sva_out, dist_method, file_base, selected_curate_groups, fontsize, transform_method, batch_effect_alg)
     }
     cat("Round:", round, ": # before =", num_run_before, ": # after =", num_run_after, "\n\n")
     if (num_run_before == num_run_after) {
@@ -1130,7 +1130,7 @@ while (end_flag == 0) {
 
 cat("Finished checking within-curate_group correlation.\n")
 if (batch_effect_alg != 'sva') {
-    cat("Batch-effect removal algorithm is: ",batch_effect_alg ,". Applying transformation on final batch-removed counts.\n")
+    cat("Batch-effect removal algorithm is: ",batch_effect_alg, ". Applying transformation on final batch-removed counts.\n")
     tc_batch_corrected = tc_batch_corrected_tmp
 }
 if (maintain_zero) {
@@ -1138,7 +1138,7 @@ if (maintain_zero) {
     tc_batch_corrected = tc_batch_corrected[order(rownames(tc_batch_corrected)),]
     is_input_zero = is_input_zero[rownames(tc_batch_corrected),]
     stopifnot(all(rownames(is_input_zero)==rownames(tc_batch_corrected)))
-    for (col in colnames(is_input_zero)) {
+    for (col in colnames(tc_batch_corrected)) {
         tc_batch_corrected[is_input_zero[[col]],col] = 0
     }
 }
