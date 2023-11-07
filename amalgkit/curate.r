@@ -65,7 +65,7 @@ cat('one_outlier_per_iteration:', one_outlier_per_iteration, "\n")
 cat('correlation_threshold:', correlation_threshold, "\n")
 cat('batch_effect_alg:', batch_effect_alg, "\n")
 cat('clip_negative:', clip_negative, "\n")
-cat('r_util_path:', r_util_path, "\n")
+cat('maintain_zero:', maintain_zero, "\n")
 cat('r_util_path:', r_util_path, "\n")
 
 source(r_util_path)
