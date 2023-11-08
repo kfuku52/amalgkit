@@ -92,11 +92,12 @@ def curate_main(args):
                    "If input data are CSTMM-normalized, "
                    "please switch --norm to any of the 'fpkm' normalization methods instead.")
             sys.stderr.write(txt)
-    spp = metadata.df.loc[:, 'scientific_name'].drop_duplicates().values
+    is_selected = (metadata.df['exclusion']=='no')
+    spp = metadata.df.loc[is_selected, 'scientific_name'].drop_duplicates().values
     curate_dir = os.path.join(args.out_dir, 'curate')
     if not os.path.exists(curate_dir):
         os.mkdir(curate_dir)
-    print('Number of species in the metadata table: {}'.format(len(spp)), flush=True)
+    print('Number of species in the selected metadata table ("exclusion"=="no"): {}'.format(len(spp)), flush=True)
     for sp in spp:
         sp = sp.replace(" ", "_")
         file_curate_completion_flag = os.path.join(curate_dir, sp, 'curate_completion_flag.txt')
