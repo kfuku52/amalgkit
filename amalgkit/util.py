@@ -614,3 +614,10 @@ def get_getfastq_run_dir(args, sra_id):
     if not os.path.exists(run_output_dir):
         os.makedirs(run_output_dir)
     return run_output_dir
+
+def check_seqkit_dependency():
+    try:
+        subprocess.run(['seqkit','-h'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        print("SeqKit dependency satisfied. Moving on.")
+    except FileNotFoundError:
+        raise Exception("SeqKit not found. Please make sure SeqKit is installed properly.")

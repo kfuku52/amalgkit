@@ -276,7 +276,8 @@ def download_sra(metadata, sra_stat, args, work_dir, overwrite=False):
         subprocess.run(['mv', os.path.join(individual_sra_tmp_dir, sra_stat['sra_id'] + '.sra'), path_downloaded_sra],
                        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         shutil.rmtree(individual_sra_tmp_dir)
-    assert os.path.exists(path_downloaded_sra), 'SRA file download failed: ' + sra_stat['sra_id']
+    err_txt = 'SRA file download failed for {}. Expected PATH: {}'.format(sra_stat['sra_id'], path_downloaded_sra)
+    assert os.path.exists(path_downloaded_sra), err_txt
 
 def check_getfastq_dependency(args):
     if args.pfd:
@@ -288,17 +289,8 @@ def check_getfastq_dependency(args):
     if args.fastp:
         test_fp = subprocess.run([args.fastp_exe, '--help'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         assert (test_fp.returncode == 0), "fastp PATH cannot be found: " + args.fastp_exe
-    test_pigz = subprocess.run(['pigz', '--help'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if test_pigz.returncode == 0:
-        print('pigz found. It will be used for compression/decompression in read name formatting.')
-        gz_exe = 'pigz -p ' + str(args.threads)
-        ungz_exe = 'unpigz -p' + str(args.threads)
-    else:
-        print('pigz not found. gzip/gunzip will be used for compression/decompression in read name formatting.')
-        gz_exe = 'gzip'
-        ungz_exe = 'gunzip'
-    return gz_exe, ungz_exe
-
+    check_seqkit_dependency()
+    return None
 def run_pfd(sra_stat, args, metadata, start, end):
     path_downloaded_sra = os.path.join(sra_stat['getfastq_sra_dir'], sra_stat['sra_id'] + '.sra')
     pfd_command = ['parallel-fastq-dump', '-t', str(args.threads), '--minReadLen', str(args.min_read_length),
@@ -396,25 +388,48 @@ def run_fastp(sra_stat, args, output_dir, metadata):
     metadata.df.at[ind_sra,'bp_fastp_out'] += sum(bp_out)
     return metadata
 
-def rename_reads(sra_stat, args, output_dir, gz_exe, ungz_exe):
+def rename_reads(sra_stat, args, output_dir):
     inext = get_newest_intermediate_file_extension(sra_stat, work_dir=output_dir)
     outext = '.rename.fastq.gz'
+    seqkit_command_base = ['seqkit', 'replace', '--threads', str(args.threads), '--pattern', '[[:space:]].*', ]
     if sra_stat['layout'] == 'single':
         inbase = os.path.join(output_dir, sra_stat['sra_id'])
         if os.path.exists(inbase + inext):
             infile = inbase + inext
-            os.system(
-                ungz_exe + ' -c "' + infile + '" | sed -e "s|[[:space:]].*|/1|" | ' + gz_exe + ' -c > "' + inbase + outext + '"')
+            outfile = inbase + outext
+            seqkit_command = seqkit_command_base + ['--replacement', "'/1'", '--out-file', outfile, infile]
+            print('Command:', ' '.join(seqkit_command))
+            seqkit_out = subprocess.run(seqkit_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            print('SeqKit stdout:')
+            print(seqkit_out.stdout.decode('utf8'))
+            print('SeqKit stderr:')
+            print(seqkit_out.stderr.decode('utf8'))
+            if (seqkit_out.returncode != 0):
+                raise Exception("SeqKit did not finish safely.")
     elif sra_stat['layout'] == 'paired':
         inbase1 = os.path.join(output_dir, sra_stat['sra_id'] + '_1')
         inbase2 = os.path.join(output_dir, sra_stat['sra_id'] + '_2')
         if os.path.exists(inbase1 + inext):
             infile1 = inbase1 + inext
             infile2 = inbase2 + inext
-            os.system(
-                ungz_exe + ' -c "' + infile1 + '" | sed -e "s|[[:space:]].*|/1|" | ' + gz_exe + ' -c > "' + inbase1 + outext + '"')
-            os.system(
-                ungz_exe + ' -c "' + infile2 + '" | sed -e "s|[[:space:]].*|/2|" | ' + gz_exe + ' -c > "' + inbase2 + outext + '"')
+            outfile1 = inbase1 + outext
+            outfile2 = inbase2 + outext
+            seqkit_command1 = seqkit_command_base + ['--replacement', '/1', '--out-file', outfile1, infile1]
+            seqkit_command2 = seqkit_command_base + ['--replacement', '/2', '--out-file', outfile2, infile2]
+            print('Command1:', ' '.join(seqkit_command1))
+            print('Command2:', ' '.join(seqkit_command2))
+            seqkit_out1 = subprocess.run(seqkit_command1, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            seqkit_out2 = subprocess.run(seqkit_command2, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            print('SeqKit stdout1:')
+            print(seqkit_out1.stdout.decode('utf8'))
+            print('SeqKit stderr1:')
+            print(seqkit_out1.stderr.decode('utf8'))
+            print('SeqKit stdout2:')
+            print(seqkit_out2.stdout.decode('utf8'))
+            print('SeqKit stderr2:')
+            print(seqkit_out2.stderr.decode('utf8'))
+            if (seqkit_out1.returncode != 0) or (seqkit_out2.returncode != 0):
+                raise Exception("SeqKit did not finish safely.")
     if args.remove_tmp:
         remove_intermediate_files(sra_stat, ext=inext, work_dir=output_dir)
 
@@ -505,8 +520,8 @@ def getfastq_metadata(args):
         sra_id = args.id
         search_term = getfastq_search_term(sra_id, args.entrez_additional_search_term)
         print('Entrez search term:', search_term)
-        xml_root = getfastq_getxml(search_term)
-        metadata = Metadata.from_xml(xml_root)
+        xml_root = getfastq_getxml(search_term=search_term)
+        metadata = Metadata.from_xml(xml_root=xml_root)
         print('Filtering SRA entry with --layout:', args.layout)
         layout = get_layout(args, metadata)
         metadata.df = metadata.df.loc[(metadata.df['lib_layout'] == layout), :]
@@ -575,11 +590,12 @@ def remove_experiment_without_run(metadata):
     return metadata
 
 def initialize_columns(metadata, g):
-    keys = ['num_dumped', 'num_rejected', 'num_written', 'num_fastp_in', 'num_fastp_out','bp_amalgkit',
+    time_keys = ['time_start_1st', 'time_end_1st', 'time_start_2nd', 'time_end_2nd',]
+    spot_keys = ['spot_start_1st', 'spot_end_1st', 'spot_start_2nd', 'spot_end_2nd',]
+    keys = (['num_dumped', 'num_rejected', 'num_written', 'num_fastp_in', 'num_fastp_out','bp_amalgkit',
             'bp_dumped', 'bp_rejected', 'bp_written', 'bp_fastp_in', 'bp_fastp_out', 'bp_discarded',
-            'bp_still_available', 'bp_specified_for_extraction','rate_obtained','layout_amalgkit',
-            'time_start_1st', 'time_end_1st', 'time_start_2nd', 'time_end_2nd',
-            'spot_start_1st', 'spot_end_1st', 'spot_start_2nd', 'spot_end_2nd', ]
+            'bp_still_available', 'bp_specified_for_extraction','rate_obtained','layout_amalgkit',]
+            + time_keys + spot_keys)
     for key in keys:
         if key=='layout_amalgkit':
             metadata.df.loc[:,key] = ''
@@ -591,7 +607,9 @@ def initialize_columns(metadata, g):
     cols = ['total_spots','total_bases','size','nominal_length','nominal_sdev','spot_length']
     for col in cols:
         if any([ dtype in str(metadata.df[col].dtype) for dtype in ['str','object'] ]):
-            metadata.df[col] = metadata.df.loc[:,col].str.replace('^$', 'nan', regex=True).astype(float)
+            metadata.df[col] = metadata.df.loc[:,col].astype(str).str.replace('^$', 'nan', regex=True).astype(float)
+    for col in time_keys:
+        metadata.df[col] = metadata.df[col].astype(float)
     return metadata
 
 def sequence_extraction(args, sra_stat, metadata, g, start, end):
@@ -609,7 +627,7 @@ def sequence_extraction(args, sra_stat, metadata, g, start, end):
         bp_discarded = metadata.df.at[ind_sra,'bp_dumped'] - metadata.df.at[ind_sra,'bp_fastp_out']
         metadata.df.at[ind_sra,'bp_discarded'] += bp_discarded
     if args.read_name == 'trinity':
-        rename_reads(sra_stat, args, sra_stat['getfastq_sra_dir'], g['gz_exe'], g['ungz_exe'])
+        rename_reads(sra_stat, args, sra_stat['getfastq_sra_dir'])
     inext = get_newest_intermediate_file_extension(sra_stat, work_dir=sra_stat['getfastq_sra_dir'])
     outext = '.amalgkit.fastq.gz'
     rename_fastq(sra_stat, sra_stat['getfastq_sra_dir'], inext, outext)
@@ -737,15 +755,13 @@ def check_metadata_validity(metadata):
         print(txt.format(metadata.df.at[i, 'run'], metadata.df.at[i, 'total_bases']))
     return metadata
 
-def initialize_global_params(args, metadata, gz_exe, ungz_exe):
+def initialize_global_params(args, metadata):
     g = dict()
     g['start_time'] = time.time()
     g['max_bp'] = int(args.max_bp.replace(',', ''))
     g['num_sra'] = metadata.df.shape[0]
     g['num_bp_per_sra'] = int(g['max_bp'] / g['num_sra'])
     g['total_sra_bp'] = metadata.df.loc[:,'total_bases'].sum()
-    g['gz_exe'] = gz_exe
-    g['ungz_exe'] = ungz_exe
     print('Number of SRAs to be processed: {:,}'.format(g['num_sra']))
     print('Total target size (--max_bp): {:,} bp'.format(g['max_bp']))
     print('The sum of SRA sizes: {:,} bp'.format(g['total_sra_bp']))
@@ -753,11 +769,11 @@ def initialize_global_params(args, metadata, gz_exe, ungz_exe):
     return g
 
 def getfastq_main(args):
-    gz_exe, ungz_exe = check_getfastq_dependency(args)
+    check_getfastq_dependency(args)
     metadata = getfastq_metadata(args)
     metadata = remove_experiment_without_run(metadata)
     metadata = check_metadata_validity(metadata)
-    g = initialize_global_params(args, metadata, gz_exe, ungz_exe)
+    g = initialize_global_params(args, metadata)
     metadata = initialize_columns(metadata, g)
     flag_private_file = False
     flag_any_output_file_present = False

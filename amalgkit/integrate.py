@@ -10,15 +10,6 @@ import warnings
 from amalgkit.sanity import check_getfastq_outputs
 from amalgkit.util import *
 
-def check_seqkit_dependency():
-    print("checking SeqKit dependency")
-    try:
-        subprocess.run(['seqkit','-h'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        print("SeqKit dependency satisfied. Moving on.")
-    except FileNotFoundError:
-        raise FileNotFoundError("SeqKit not found. Please make sure SeqKit is installed properly.")
-
-
 def get_fastq_stats(args):
     print("Starting integration of fastq-file metadata...")
     if not os.path.exists(args.fastq_dir):
