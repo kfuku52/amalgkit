@@ -34,7 +34,7 @@ impute_expression = function(dat, num_pc=4) {
   return(imputed_dat)
 }
 
-write_table_with_index_name = function(df, file_path, index_name='GeneID', sort=TRUE) {
+write_table_with_index_name = function(df, file_path, index_name='target_id', sort=TRUE) {
     df_index = data.frame(placeholder_name=rownames(df), stringsAsFactors=FALSE)
     colnames(df_index) = index_name
     df = cbind(df_index, df)

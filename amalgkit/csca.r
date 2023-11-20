@@ -868,25 +868,25 @@ for (d in c('uncorrected','corrected')) {
     write_table_with_index_name(
         df=averaged_orthologs[[d]],
         file_path=paste0('csca_ortholog_averaged.',d,'.tsv'),
-        index_name='GeneID',
+        index_name='target_id',
         sort=FALSE
     )
     write_table_with_index_name(
         df=unaveraged_orthologs[[d]],
         file_path=paste0('csca_ortholog_unaveraged.',d,'.tsv'),
-        index_name='GeneID',
+        index_name='target_id',
         sort=FALSE
     )
     write_table_with_index_name(
         df=imputed_averaged_orthologs[[d]],
         file_path=paste0('csca_ortholog_averaged.imputed.',d,'.tsv'),
-        index_name='GeneID',
+        index_name='target_id',
         sort=FALSE
     )
     write_table_with_index_name(
         df=imputed_unaveraged_orthologs[[d]],
         file_path=paste0('csca_ortholog_unaveraged.imputed.',d,'.tsv'),
-        index_name='GeneID',
+        index_name='target_id',
         sort=FALSE
     )
 }

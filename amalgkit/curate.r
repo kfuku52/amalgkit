@@ -1045,12 +1045,12 @@ tc = apply_transformation_logic(tc, tc_eff_length, transform_method, batch_effec
 tc_tmp = apply_transformation_logic(tc, tc_eff_length, transform_method, batch_effect_alg, step='before_batch_plot', sra=sra)
 is_input_zero = data.frame(tc_tmp==0, check.names=FALSE)
 file_name = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".uncorrected.tc.tsv"))
-write_table_with_index_name(df=tc_tmp, file_path=file_name, index_name='GeneID')
+write_table_with_index_name(df=tc_tmp, file_path=file_name, index_name='target_id')
 out = curate_group_mean(tc_tmp, sra, selected_curate_groups)
 tc_curate_group_uncorrected = out[['tc_ave']]
 selected_curate_groups = out[['selected_curate_groups']]
 file_name = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".uncorrected.curate_group.mean.tsv"))
-write_table_with_index_name(df=tc_curate_group_uncorrected, file_path=file_name, index_name='GeneID')
+write_table_with_index_name(df=tc_curate_group_uncorrected, file_path=file_name, index_name='target_id')
 
 cat("Removing samples with mapping rate of 0.\n")
 round = 0
@@ -1146,13 +1146,13 @@ cat("Writing summary files for", scientific_name, "\n")
 file = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".metadata.tsv"))
 write.table(sra[,colnames(sra)!='index'], file=file, sep="\t", row.names=FALSE, col.names=TRUE, quote=FALSE)
 file = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".", batch_effect_alg , ".tc.tsv"))
-write_table_with_index_name(df=tc_batch_corrected, file_path=file, index_name='GeneID')
+write_table_with_index_name(df=tc_batch_corrected, file_path=file, index_name='target_id')
 out = curate_group_mean(tc_batch_corrected, sra, selected_curate_groups)
 tc_curate_group = out[['tc_ave']]
 file = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".", batch_effect_alg , ".curate_group.mean.tsv"))
-write_table_with_index_name(df=tc_curate_group, file_path=file, index_name='GeneID')
+write_table_with_index_name(df=tc_curate_group, file_path=file, index_name='target_id')
 tc_tau = curate_group2tau(tc_curate_group, rich.annotation = TRUE, transform_method)
 file = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".", batch_effect_alg , ".tau.tsv"))
-write_table_with_index_name(df=tc_tau, file_path=file, index_name='GeneID')
+write_table_with_index_name(df=tc_tau, file_path=file, index_name='target_id')
 cat(log_prefix, "Completed.\n")
 quit(save='no', status=0)
