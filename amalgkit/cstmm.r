@@ -372,4 +372,8 @@ plot_norm_factor_scatter(df_metadata=df_metadata)
 corrected = save_corrected_output_files(uncorrected)
 save_mean_expression_boxplot(df_nonzero, cnf_out2, uncorrected, corrected, font_size=8)
 
+cat(sprintf('Number of SRA samples for exclusion potting: %s\n', formatC(nrow(df_metadata), format='d', big.mark=',')))
+out_path = file.path(dir_cstmm, 'cstmm_exclusion.pdf')
+save_exclusion_plot(df=df_metadata, out_path=out_path, font_size=8)
+
 cat('cstmm.r completed!\n')

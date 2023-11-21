@@ -43,3 +43,30 @@ write_table_with_index_name = function(df, file_path, index_name='target_id', so
     }
     write.table(df, file=file_path, sep='\t', row.names=FALSE, col.names=TRUE, quote=FALSE)
 }
+
+save_exclusion_plot = function(df, out_path, font_size) {
+    data_summary = aggregate(cbind(count=exclusion) ~ scientific_name + exclusion, df, length)
+    data_summary[['total']] = ave(data_summary[['count']], data_summary[['scientific_name']], FUN=sum)
+    data_summary[['proportion']] = data_summary[['count']] / data_summary[['total']]
+    g = ggplot(data_summary, aes(x=scientific_name, y=count, fill=exclusion))
+    g = g + geom_bar(stat = "identity")
+    g = g + labs(x = "", y = "Count", fill = "exclusion")
+    g = g + theme_bw(base_size=font_size)
+    g = g + theme(
+        axis.text=element_text(size=font_size, color='black'),
+        axis.text.x=element_text(angle=90, hjust=1, vjust=0.5),
+        axis.title=element_text(size=font_size, color='black'),
+        #panel.grid.major.y=element_blank(),
+        panel.grid.major.x=element_blank(),
+        panel.grid.minor.y=element_blank(),
+        panel.grid.minor.x=element_blank(),
+        legend.title=element_blank(),
+        legend.text=element_text(size=font_size, color='black'),
+        legend.position='bottom',
+        rect=element_rect(fill="transparent"),
+        plot.margin=unit(rep(0.1, 4), "cm")
+    )
+    num_spp = length(unique(df[['scientific_name']]))
+    plot_width = max(3.6, 0.11 * num_spp)
+    ggsave(out_path, plot=g, width=plot_width, height=3.6, units='in')
+}

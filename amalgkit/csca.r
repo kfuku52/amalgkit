@@ -905,6 +905,10 @@ save_unaveraged_tsne_plot(imputed_unaveraged_orthologs, df_color_unaveraged)
 file_metadata_out = file.path(dir_csca, 'metadata.tsv')
 write.table(df_metadata, file_metadata_out, row.names=FALSE, sep='\t', quote=FALSE)
 
+cat(sprintf('Number of SRA samples for exclusion potting: %s\n', formatC(nrow(df_metadata), format='d', big.mark=',')))
+out_path = file.path(dir_csca, 'csca_exclusion.pdf')
+save_exclusion_plot(df=df_metadata, out_path=out_path, font_size=8)
+
 if (file.exists('Rplots.pdf')) {
   file.remove('Rplots.pdf')
 }

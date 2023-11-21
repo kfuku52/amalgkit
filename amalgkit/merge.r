@@ -127,32 +127,8 @@ plot_width = max(3.6, 0.11 * num_spp)
 out_path = file.path(dir_merge, 'merge_library_layout.pdf')
 ggsave(out_path, plot=g, width=plot_width, height=3.6, units='in')
 
-df2 = df[((!is_excluded)),]
-cat(sprintf('Number of SRA samples for curate_group potting: %s\n', formatC(nrow(df2), format='d', big.mark=',')))
-data_summary = aggregate(cbind(count=curate_group) ~ scientific_name + curate_group, df2, length)
-data_summary[['total']] = ave(data_summary[['count']], data_summary[['scientific_name']], FUN=sum)
-data_summary[['proportion']] = data_summary[['count']] / data_summary[['total']]
-g = ggplot(data_summary, aes(x=scientific_name, y=count, fill=curate_group))
-g = g + geom_bar(stat = "identity")
-g = g + labs(x = "", y = "Count", fill = "curate_group")
-g = g + theme_bw(base_size=font_size)
-g = g + theme(
-    axis.text=element_text(size=font_size, color='black'),
-    axis.text.x=element_text(angle=90, hjust=1, vjust=0.5),
-    axis.title=element_text(size=font_size, color='black'),
-    #panel.grid.major.y=element_blank(),
-    panel.grid.major.x=element_blank(),
-    panel.grid.minor.y=element_blank(),
-    panel.grid.minor.x=element_blank(),
-    legend.title=element_blank(),
-    legend.text=element_text(size=font_size, color='black'),
-    legend.position='bottom',
-    rect=element_rect(fill="transparent"),
-    plot.margin=unit(rep(0.1, 4), "cm")
-)
-num_spp = length(unique(df[['scientific_name']]))
-plot_width = max(3.6, 0.11 * num_spp)
-out_path = file.path(dir_merge, 'merge_curate_group.pdf')
-ggsave(out_path, plot=g, width=plot_width, height=3.6, units='in')
+cat(sprintf('Number of SRA samples for exclusion potting: %s\n', formatC(nrow(df), format='d', big.mark=',')))
+out_path = file.path(dir_merge, 'merge_exclusion.pdf')
+save_exclusion_plot(df=df, out_path=out_path, font_size=font_size)
 
 cat('merge.r completed!\n')
