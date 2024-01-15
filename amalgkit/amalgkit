@@ -314,7 +314,7 @@ pcu.add_argument('--clip_negative', metavar='yes|no', default='yes', type=strtob
 pcu.add_argument('--maintain_zero', metavar='yes|no', default='yes', type=strtobool, required=False, action='store',
                  help='default=%(default)s: Any instances of zero expression levels in the input will remain as '
                       'zero-values in the output tables, even if the process of batch effect removal causes deviation.')
-pcu.add_argument('--skip_curation', metavar='yes|no', default='yes', type=strtobool, required=False, action='store',
+pcu.add_argument('--skip_curation', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
                  help='default=%(default)s: stops curate before mapping-rate based sample removal step. Outputs only '
                       'uncorrected + transformed (see --norm) count-table and the corresponding mean count-table.')
 pcu.set_defaults(handler=command_curate)

@@ -1059,7 +1059,7 @@ if (skip_curation_flag == TRUE) {
     cat("Files created: \n")
     cat(file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".uncorrected.tc.tsv")) , "\n")
     cat(file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".uncorrected.curate_group.mean.tsv")), "\n")
-    cat("Transformation applied: ", transform_method)
+    cat("Transformation applied: ", transform_method , "\n")
     cat(log_prefix, "Completed.\n")
     quit(save='no', status=0)
 }
