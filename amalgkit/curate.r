@@ -68,6 +68,7 @@ cat('batch_effect_alg:', batch_effect_alg, "\n")
 cat('clip_negative:', clip_negative, "\n")
 cat('maintain_zero:', maintain_zero, "\n")
 cat('r_util_path:', r_util_path, "\n")
+cat('skip_curation_flag:', skip_curation_flag, "\n")
 
 source(r_util_path)
 
@@ -1054,9 +1055,11 @@ file_name = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".uncorrec
 write_table_with_index_name(df=tc_curate_group_uncorrected, file_path=file_name, index_name='target_id')
 
 if (skip_curation_flag == TRUE) {
-    cat("No curation requested, finishing early. Files created: \n")
+    cat("No curation requested, finishing early.\n")
+    cat("Files created: \n")
     cat(file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".uncorrected.tc.tsv")) , "\n")
     cat(file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".uncorrected.curate_group.mean.tsv")), "\n")
+    cat("Transformation applied: ", transform_method)
     cat(log_prefix, "Completed.\n")
     quit(save='no', status=0)
 }
