@@ -50,6 +50,7 @@ if (debug_mode == "debug") {
     clip_negative = as.logical(as.integer(args[14]))
     maintain_zero = as.logical(as.integer(args[15]))
     r_util_path = file.path(args[16])
+    skip_curation_flag = as.logical(as.integer(args[17]))
 }
 cat('est_counts_path:', est_counts_path, "\n")
 cat('metadata_path:', metadata_path, "\n")
@@ -1051,6 +1052,14 @@ tc_curate_group_uncorrected = out[['tc_ave']]
 selected_curate_groups = out[['selected_curate_groups']]
 file_name = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".uncorrected.curate_group.mean.tsv"))
 write_table_with_index_name(df=tc_curate_group_uncorrected, file_path=file_name, index_name='target_id')
+
+if (skip_curation_flag == TRUE) {
+    cat("No curation requested, finishing early. Files created: \n")
+    cat(file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".uncorrected.tc.tsv")) , "\n")
+    cat(file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".uncorrected.curate_group.mean.tsv")), "\n")
+    cat(log_prefix, "Completed.\n")
+    quit(save='no', status=0)
+}
 
 cat("Removing samples with mapping rate of 0.\n")
 round = 0

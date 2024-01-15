@@ -69,6 +69,7 @@ def run_curate_r_script(args, metadata, sp, input_dir):
             str(args.clip_negative),
             str(args.maintain_zero),
             os.path.realpath(r_util_path),
+            str(args.skip_curation)
          ])
     return curate_r_exit_code
 
