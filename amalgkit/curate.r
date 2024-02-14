@@ -929,7 +929,7 @@ save_correlation = function( tc, sra, dist_method) {
     assign("correlation_statistics", correlation_statistics, envir = .GlobalEnv)
   } else {
     correlation_statistics <- get("correlation_statistics", envir = .GlobalEnv)
-    new_row <- matrix(tc_dist_stats, ncol = 12)
+    new_row <- data.frame(matrix(tc_dist_stats, ncol = 12, dimnames = list(NULL, c("bwbw_mean","bwbw_median","bwbw_variance", "wibw_mean","wibw_median","wibw_variance", "bwwi_mean","bwwi_median","bwwi_variance", "wiwi_mean","wiwi_median","wiwi_variance"))))
     rownames(new_row) <- generate_row_names()
     correlation_statistics <- rbind(correlation_statistics, new_row)
     assign("correlation_statistics", correlation_statistics, envir = .GlobalEnv)
