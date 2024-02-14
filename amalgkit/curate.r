@@ -887,7 +887,7 @@ save_correlation = function( tc, sra, dist_method) {
     is_same_curate_group = outer(sra[['curate_group']], sra[['curate_group']], function(x, y) {
         x == y
     })
-    counter <- 0
+    counter <- -1
 
   # Internal function to generate row names
     generate_row_names <- function() {
@@ -921,7 +921,7 @@ save_correlation = function( tc, sra, dist_method) {
   wiwi_var = var(tc_dist_wiwi)
 
   tc_dist_stats = c(bwbw_mea, bwbw_med, bwbw_var, wibw_mea, wibw_med, wibw_var, bwwi_mea, bwwi_med, bwwi_var, wiwi_mea, wiwi_med, wiwi_var)
-
+  cat(tc_dist_stats)
   # Check if dataframe exists in environment, if not create it
   if (!exists("correlation_statistics", envir = .GlobalEnv)) {
     correlation_statistics <- data.frame(matrix(tc_dist_stats, ncol = 12, dimnames = list(NULL, c("bwbw_mean","bwbw_median","bwbw_variance", "wibw_mean","wibw_median","wibw_variance", "bwwi_mean","bwwi_median","bwwi_variance", "wiwi_mean","wiwi_median","wiwi_variance"))))
@@ -1231,7 +1231,7 @@ tc_curate_group = out[['tc_ave']]
 file = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".", batch_effect_alg , ".curate_group.mean.tsv"))
 write_table_with_index_name(df=tc_curate_group, file_path=file, index_name='target_id')
 file = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".", batch_effect_alg , ".correlation_statistics.tsv"))
-write.table(correlation_statistics, file = file, row.names=TRUE, sep="\t")
+write.table(correlation_statistics, file = file, row.names=TRUE, sep="\t", quotes=FALSE)
 tc_tau = curate_group2tau(tc_curate_group, rich.annotation = TRUE, transform_method)
 file = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".", batch_effect_alg , ".tau.tsv"))
 write_table_with_index_name(df=tc_tau, file_path=file, index_name='target_id')
