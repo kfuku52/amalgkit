@@ -880,7 +880,7 @@ save_plot = function(tc, sra, sva_out, dist_method, file, selected_curate_groups
 }
 
 
-save_correlation = function(sra, tc, dist_method) {
+save_correlation = function( tc, sra, dist_method) {
     is_same_bp = outer(sra[['bioproject']], sra[['bioproject']], function(x, y) {
         x == y
     })
