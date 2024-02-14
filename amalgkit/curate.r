@@ -1234,7 +1234,7 @@ tc_curate_group = out[['tc_ave']]
 file = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".", batch_effect_alg , ".curate_group.mean.tsv"))
 write_table_with_index_name(df=tc_curate_group, file_path=file, index_name='target_id')
 file = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".", batch_effect_alg , ".correlation_statistics.tsv"))
-write.table(correlation_statistics, file = file, row.names=TRUE, sep="\t", quotes=FALSE)
+write.table(correlation_statistics, file = file, row.names=TRUE, sep="\t", quote=FALSE)
 tc_tau = curate_group2tau(tc_curate_group, rich.annotation = TRUE, transform_method)
 file = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".", batch_effect_alg , ".tau.tsv"))
 write_table_with_index_name(df=tc_tau, file_path=file, index_name='target_id')
