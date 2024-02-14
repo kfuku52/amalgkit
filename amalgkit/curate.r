@@ -915,7 +915,7 @@ save_correlation = function( tc, sra, dist_method) {
   bwwi_med = median(tc_dist_bwwi)
   bwwi_var = var(tc_dist_bwwi)
 
-  tc_dist_wiwi = btc_dist_matrix[(is_same_bp) & (is_same_curate_group)]
+  tc_dist_wiwi = tc_dist_matrix[(is_same_bp) & (is_same_curate_group)]
   wiwi_mea = mean(tc_dist_wiwi)
   wiwi_med = median(tc_dist_wiwi)
   wiwi_var = var(tc_dist_wiwi)
