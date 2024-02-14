@@ -917,7 +917,7 @@ save_correlation = function( tc, sra, dist_method, round) {
   wiwi_var = var(tc_dist_wiwi)
 
   tc_dist_stats = c(bwbw_mea, bwbw_med, bwbw_var, wibw_mea, wibw_med, wibw_var, bwwi_mea, bwwi_med, bwwi_var, wiwi_mea, wiwi_med, wiwi_var)
-  cat(tc_dist_stats)
+
   # Check if dataframe exists in environment, if not create it
   if (!exists("correlation_statistics", envir = .GlobalEnv)) {
     correlation_statistics <- data.frame(matrix(tc_dist_stats, ncol = 12, dimnames = list(NULL, c("bwbw_mean","bwbw_median","bwbw_variance", "wibw_mean","wibw_median","wibw_variance", "bwwi_mean","bwwi_median","bwwi_variance", "wiwi_mean","wiwi_median","wiwi_variance"))))
