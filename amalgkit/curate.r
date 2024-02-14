@@ -880,7 +880,7 @@ save_plot = function(tc, sra, sva_out, dist_method, file, selected_curate_groups
 }
 
 
-save_correlation = function( tc, sra, dist_method) {
+save_correlation = function( tc, sra, dist_method, round) {
     out = tc_metadata_intersect(tc, sra)
     tc = out[["tc"]]
     sra = out[["sra"]]
@@ -890,13 +890,6 @@ save_correlation = function( tc, sra, dist_method) {
     is_same_curate_group = outer(sra[['curate_group']], sra[['curate_group']], function(x, y) {
         x == y
     })
-    counter <- -1
-
-  # Internal function to generate row names
-    generate_row_names <- function() {
-        counter <<- counter + 1
-        return(paste0("round_", counter))
-    }
 
 
   tc_dist_matrix = cor(tc, method = dist_method)
@@ -928,12 +921,12 @@ save_correlation = function( tc, sra, dist_method) {
   # Check if dataframe exists in environment, if not create it
   if (!exists("correlation_statistics", envir = .GlobalEnv)) {
     correlation_statistics <- data.frame(matrix(tc_dist_stats, ncol = 12, dimnames = list(NULL, c("bwbw_mean","bwbw_median","bwbw_variance", "wibw_mean","wibw_median","wibw_variance", "bwwi_mean","bwwi_median","bwwi_variance", "wiwi_mean","wiwi_median","wiwi_variance"))))
-    rownames(correlation_statistics) <- generate_row_names()
+    rownames(correlation_statistics) <- paste0("round_", round)
     assign("correlation_statistics", correlation_statistics, envir = .GlobalEnv)
   } else {
     correlation_statistics <- get("correlation_statistics", envir = .GlobalEnv)
     new_row <- data.frame(matrix(tc_dist_stats, ncol = 12, dimnames = list(NULL, c("bwbw_mean","bwbw_median","bwbw_variance", "wibw_mean","wibw_median","wibw_variance", "bwwi_mean","bwwi_median","bwwi_variance", "wiwi_mean","wiwi_median","wiwi_variance"))))
-    rownames(new_row) <- generate_row_names()
+    rownames(new_row) <- paste0("round_", round)
     correlation_statistics <- rbind(correlation_statistics, new_row)
     assign("correlation_statistics", correlation_statistics, envir = .GlobalEnv)
   }
@@ -1140,7 +1133,7 @@ sra = out[["sra"]]
 tc_tmp = apply_transformation_logic(tc, tc_eff_length, transform_method, batch_effect_alg, step='before_batch_plot', sra=sra)
 save_plot(tc_tmp, sra, NULL, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".original"),
           selected_curate_groups, fontsize, transform_method, batch_effect_alg)
-save_correlation(tc_tmp, sra, dist_method)
+save_correlation(tc_tmp, sra, dist_method, round)
 out = batch_effect_subtraction(tc, sra, batch_effect_alg, transform_method, clip_negative)
 tc_batch_corrected = out[["tc"]]
 sva_out = out[["sva"]]
@@ -1172,7 +1165,7 @@ if (!is.null(sva_out)) {
 tc_batch_corrected_tmp = apply_transformation_logic(tc_batch_corrected, tc_eff_length, transform_method, batch_effect_alg, step='after_batch', sra=sra)
 save_plot(tc_batch_corrected_tmp, sra, sva_out, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".mapping_cutoff", ".", batch_effect_alg),
           selected_curate_groups, fontsize, transform_method, batch_effect_alg)
-save_correlation(tc_batch_corrected_tmp, sra, dist_method)
+save_correlation(tc_batch_corrected_tmp, sra, dist_method, round)
 
 round = 2
 end_flag = 0
@@ -1199,7 +1192,7 @@ while (end_flag == 0) {
         tc_batch_corrected_tmp = apply_transformation_logic(tc_batch_corrected, tc_eff_length, transform_method, batch_effect_alg, step='after_batch', sra=sra)
         file_base = paste0(sub(" ", "_", scientific_name), ".", round, ".correlation_cutoff", ".", batch_effect_alg)
         save_plot(tc_batch_corrected_tmp, sra, sva_out, dist_method, file_base, selected_curate_groups, fontsize, transform_method, batch_effect_alg)
-        save_correlation(tc_batch_corrected_tmp, sra, dist_method)
+        save_correlation(tc_batch_corrected_tmp, sra, dist_method, round)
 
     }
     cat("Round:", round, ": # before =", num_run_before, ": # after =", num_run_after, "\n\n")
