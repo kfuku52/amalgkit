@@ -881,6 +881,9 @@ save_plot = function(tc, sra, sva_out, dist_method, file, selected_curate_groups
 
 
 save_correlation = function( tc, sra, dist_method) {
+    out = tc_metadata_intersect(tc, sra)
+    tc = out[["tc"]]
+    sra = out[["sra"]]
     is_same_bp = outer(sra[['bioproject']], sra[['bioproject']], function(x, y) {
         x == y
     })
