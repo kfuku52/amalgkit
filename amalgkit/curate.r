@@ -879,6 +879,68 @@ save_plot = function(tc, sra, sva_out, dist_method, file, selected_curate_groups
     graphics.off()
 }
 
+
+save_correlation = function(sra, tc, dist_method) {
+    is_same_bp = outer(sra[['bioproject']], sra[['bioproject']], function(x, y) {
+        x == y
+    })
+    is_same_curate_group = outer(sra[['curate_group']], sra[['curate_group']], function(x, y) {
+        x == y
+    })
+    counter <- 0
+
+  # Internal function to generate row names
+    generate_row_names <- function() {
+        counter <<- counter + 1
+        return(paste0("round_", counter))
+    }
+
+
+  tc_dist_matrix = cor(tc, method = dist_method)
+  tc_dist_matrix[is.na(tc_dist_matrix)] = 0
+
+  # bw = between; wi = within; order: Bioproject -> Curate Group; tc_dist_bwwi: between BPs, within CGs
+  tc_dist_bwbw = tc_dist_matrix[(!is_same_bp) & (!is_same_curate_group)]
+  bwbw_mea = mean(tc_dist_bwbw)
+  bwbw_med = median(tc_dist_bwbw)
+  bwbw_var = var(tc_dist_bwbw)
+
+  tc_dist_wibw = tc_dist_matrix[(is_same_bp) & (!is_same_curate_group)]
+  wibw_mea = mean(tc_dist_wibw)
+  wibw_med = median(tc_dist_wibw)
+  wibw_var = var(tc_dist_wibw)
+
+  tc_dist_bwwi = tc_dist_matrix[(!is_same_bp) & (is_same_curate_group)]
+  bwwi_mea = mean(tc_dist_bwwi)
+  bwwi_med = median(tc_dist_bwwi)
+  bwwi_var = var(tc_dist_bwwi)
+
+  tc_dist_wiwi = btc_dist_matrix[(is_same_bp) & (is_same_curate_group)]
+  wiwi_mea = mean(tc_dist_wiwi)
+  wiwi_med = median(tc_dist_wiwi)
+  wiwi_var = var(tc_dist_wiwi)
+
+  tc_dist_stats = c(bwbw_mea, bwbw_med, bwbw_var, wibw_mea, wibw_med, wibw_var, bwwi_mea, bwwi_med, bwwi_var, wiwi_mea, wiwi_med, wiwi_var)
+
+  # Check if dataframe exists in environment, if not create it
+  if (!exists("correlation_statistics", envir = .GlobalEnv)) {
+    correlation_statistics <- data.frame(matrix(tc_dist_stats, ncol = 12, dimnames = list(NULL, c("bwbw_mean","bwbw_median","bwbw_variance", "wibw_mean","wibw_median","wibw_variance", "bwwi_mean","bwwi_median","bwwi_variance", "wiwi_mean","wiwi_median","wiwi_variance"))))
+    rownames(correlation_statistics) <- generate_row_names()
+    assign("correlation_statistics", correlation_statistics, envir = .GlobalEnv)
+  } else {
+    correlation_statistics <- get("correlation_statistics", envir = .GlobalEnv)
+    new_row <- matrix(tc_dist_stats, ncol = 12)
+    rownames(new_row) <- generate_row_names()
+    correlation_statistics <- rbind(correlation_statistics, new_row)
+    assign("correlation_statistics", correlation_statistics, envir = .GlobalEnv)
+  }
+
+  return(correlation_statistics)
+
+
+}
+
+
 transform_raw_to_fpkm = function(counts, effective_lengths, sra) {
     if ('tmm_library_size' %in% colnames(sra)) {
         cat('FPKM transformation with the original library sizes from amalgkit cstmm output.\n')
@@ -1054,6 +1116,7 @@ selected_curate_groups = out[['selected_curate_groups']]
 file_name = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".uncorrected.curate_group.mean.tsv"))
 write_table_with_index_name(df=tc_curate_group_uncorrected, file_path=file_name, index_name='target_id')
 
+
 if (skip_curation_flag == TRUE) {
     cat("No curation requested, finishing early.\n")
     cat("Files created: \n")
@@ -1074,6 +1137,7 @@ sra = out[["sra"]]
 tc_tmp = apply_transformation_logic(tc, tc_eff_length, transform_method, batch_effect_alg, step='before_batch_plot', sra=sra)
 save_plot(tc_tmp, sra, NULL, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".original"),
           selected_curate_groups, fontsize, transform_method, batch_effect_alg)
+save_correlation(tc_tmp, sra, dist_method)
 out = batch_effect_subtraction(tc, sra, batch_effect_alg, transform_method, clip_negative)
 tc_batch_corrected = out[["tc"]]
 sva_out = out[["sva"]]
@@ -1105,6 +1169,7 @@ if (!is.null(sva_out)) {
 tc_batch_corrected_tmp = apply_transformation_logic(tc_batch_corrected, tc_eff_length, transform_method, batch_effect_alg, step='after_batch', sra=sra)
 save_plot(tc_batch_corrected_tmp, sra, sva_out, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".mapping_cutoff", ".", batch_effect_alg),
           selected_curate_groups, fontsize, transform_method, batch_effect_alg)
+save_correlation(tc_batch_corrected_tmp, sra, dist_method)
 
 round = 2
 end_flag = 0
@@ -1131,6 +1196,8 @@ while (end_flag == 0) {
         tc_batch_corrected_tmp = apply_transformation_logic(tc_batch_corrected, tc_eff_length, transform_method, batch_effect_alg, step='after_batch', sra=sra)
         file_base = paste0(sub(" ", "_", scientific_name), ".", round, ".correlation_cutoff", ".", batch_effect_alg)
         save_plot(tc_batch_corrected_tmp, sra, sva_out, dist_method, file_base, selected_curate_groups, fontsize, transform_method, batch_effect_alg)
+        save_correlation(tc_batch_corrected_tmp, sra, dist_method)
+
     }
     cat("Round:", round, ": # before =", num_run_before, ": # after =", num_run_after, "\n\n")
     if (num_run_before == num_run_after) {
@@ -1163,6 +1230,8 @@ out = curate_group_mean(tc_batch_corrected, sra, selected_curate_groups)
 tc_curate_group = out[['tc_ave']]
 file = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".", batch_effect_alg , ".curate_group.mean.tsv"))
 write_table_with_index_name(df=tc_curate_group, file_path=file, index_name='target_id')
+file = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".", batch_effect_alg , ".correlation_statistics.tsv"))
+write.table(correlation_statistics, file = file, row.names=TRUE, sep="\t")
 tc_tau = curate_group2tau(tc_curate_group, rich.annotation = TRUE, transform_method)
 file = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".", batch_effect_alg , ".tau.tsv"))
 write_table_with_index_name(df=tc_tau, file_path=file, index_name='target_id')
