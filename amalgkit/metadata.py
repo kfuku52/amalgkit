@@ -81,7 +81,7 @@ def metadata_main(args):
     metadata = Metadata.from_xml(xml_root=root)
     metadata.df['tissue'] = metadata.df['tissue'].astype(str)
     metadata.df.loc[(metadata.df['tissue']=='nan'), 'tissue'] = ''
-    metadata.df.loc[:, 'curate_group'] = metadata.df.loc[:, 'tissue'].str.lower()
+    metadata.df.loc[:, 'sample_group'] = metadata.df.loc[:, 'tissue'].str.lower()
     metadata.reorder(omit_misc=False)
     metadata.df.to_csv(metadata_outfile_path, sep="\t", index=False)
     if metadata.df.shape[0]==0:

@@ -28,7 +28,7 @@ def get_fastq_stats(args):
     id_list = [basename.rsplit('_', 1)[0] for basename in id_list]
     # duplicates (i.e. doublets) should indicate paired-end library
     num_fastq_files = {id: id_list.count(id) for id in id_list}
-    column_names = ['scientific_name', 'curate_group', 'run', 'read1_path','read2_path', 'is_sampled',
+    column_names = ['scientific_name', 'sample_group', 'run', 'read1_path','read2_path', 'is_sampled',
                     'is_qualified','exclusion', 'lib_layout', 'spot_length', 'total_spots', 'total_bases', 'size', 'private_file']
     tmp_metadata = pd.DataFrame(columns = column_names)
     row = 0
@@ -92,7 +92,7 @@ def get_fastq_stats(args):
         else:
             raise ValueError('Too many files found for set {}'.format(fastq_files))
         tmp_metadata.at[row, 'scientific_name'] = 'Please add in format: Genus species'
-        tmp_metadata.at[row,'curate_group'] = 'Please add'
+        tmp_metadata.at[row,'sample_group'] = 'Please add'
         tmp_metadata.at[row,'run'] = tmp_stat_df.at[0,'id']
         tmp_metadata.at[row,'read1_path'] = os.path.abspath(fastq_files[0])
         if tmp_stat_df.at[0, 'file2'] != 'unavailable':

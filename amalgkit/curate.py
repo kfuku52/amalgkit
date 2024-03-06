@@ -9,27 +9,27 @@ import warnings
 from amalgkit.util import *
 
 
-def get_curate_group(args, metadata):
-    if args.curate_group is None:
-        curate_group = metadata.df.loc[:, 'curate_group'].dropna().unique()
+def get_sample_group(args, metadata):
+    if args.sample_group is None:
+        sample_group = metadata.df.loc[:, 'sample_group'].dropna().unique()
     else:
-        curate_group = re.findall(r"[\w]+", args.curate_group)
-    if (len(curate_group)==0):
-        txt = 'The "curate_group" column in --metadata ({}) is not filled. Please manually edit the file.\n'
+        sample_group = re.findall(r"[\w]+", args.sample_group)
+    if (len(sample_group)==0):
+        txt = 'The "sample_group" column in --metadata ({}) is not filled. Please manually edit the file.\n'
         txt += '`amalgkit curate` recognizes samples with the same string in this columns to belong the same group.\n'
         txt += 'Exiting.\n'
         sys.stderr.write(txt.format(args.metadata))
         sys.exit(1)
-    print('Tissues to be included: {}'.format(', '.join(curate_group)))
-    curate_group = '|'.join(curate_group)
-    return curate_group
+    print('Tissues to be included: {}'.format(', '.join(sample_group)))
+    sample_group = '|'.join(sample_group)
+    return sample_group
 
 def run_curate_r_script(args, metadata, sp, input_dir):
     dist_method = args.dist_method
     mr_cut = args.mapping_rate
     correlation_threshold = args.correlation_threshold
     intermediate = args.plot_intermediate
-    curate_group = get_curate_group(args, metadata)
+    sample_group = get_sample_group(args, metadata)
     dir_amalgkit_script = os.path.dirname(os.path.realpath(__file__))
     r_script_path = os.path.join(dir_amalgkit_script, 'curate.r')
     r_util_path = os.path.join(dir_amalgkit_script, 'util.r')
@@ -61,7 +61,7 @@ def run_curate_r_script(args, metadata, sp, input_dir):
             str(mr_cut),
             '0',
             str(intermediate),
-            curate_group,
+            sample_group,
             str(args.norm),
             str(args.one_outlier_per_iter),
             str(correlation_threshold),

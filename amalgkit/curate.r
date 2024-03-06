@@ -22,7 +22,7 @@ if (debug_mode == "debug") {
     mapping_rate_cutoff = .20
     min_dif = 0
     plot_intermediate = as.logical(0)
-    selected_curate_groups = c("root", "flower", "leaf")
+    selected_sample_groups = c("root", "flower", "leaf")
     transform_method = "log2p1-fpkm"
     one_outlier_per_iteration = as.logical(0)
     correlation_threshold = 0.3
@@ -42,7 +42,7 @@ if (debug_mode == "debug") {
     mapping_rate_cutoff = as.numeric(args[6])
     min_dif = as.numeric(args[7])
     plot_intermediate = as.logical(as.integer(args[8]))
-    selected_curate_groups = strsplit(args[9], "\\|")[[1]]
+    selected_sample_groups = strsplit(args[9], "\\|")[[1]]
     transform_method = args[10]
     one_outlier_per_iteration = as.integer(args[11])
     correlation_threshold = as.numeric(args[12])
@@ -60,7 +60,7 @@ cat('dist_method:', dist_method, "\n")
 cat('mapping_rate_cutoff:', mapping_rate_cutoff, "\n")
 cat('min_dif:', min_dif, "\n")
 cat('plot_intermediate:', plot_intermediate, "\n")
-cat('selected_curate_groups:', selected_curate_groups, "\n")
+cat('selected_sample_groups:', selected_sample_groups, "\n")
 cat('transform_method:', transform_method, "\n")
 cat('one_outlier_per_iteration:', one_outlier_per_iteration, "\n")
 cat('correlation_threshold:', correlation_threshold, "\n")
@@ -92,38 +92,38 @@ remove_nonexpressed_gene = function(tc) {
     return(list(tc_ex = tc_ex, tc_ne = tc_ne))
 }
 
-add_color_to_metadata = function(sra, selected_curate_groups) {
-    sra = sra[, (!colnames(sra) %in% c("bp_color", "sp_color", "curate_group_color"))]
+add_color_to_metadata = function(sra, selected_sample_groups) {
+    sra = sra[, (!colnames(sra) %in% c("bp_color", "sp_color", "sample_group_color"))]
     bioproject = as.character(sra[['bioproject']])
     bioproject_u = sort(unique(bioproject))
     scientific_name = as.character(sra[['scientific_name']])
     scientific_name_u = sort(unique(scientific_name))
-    curate_group = as.character(sra[['curate_group']])
-    curate_group_u = sort(unique(curate_group))
-    if (length(selected_curate_groups) <= 8) {
-        curate_group_color = brewer.pal(8, "Dark2")
-        curate_group_color = curate_group_color[1:length(selected_curate_groups)] # To avoid the warning "minimal value for n is 3, returning requested palette with 3 different levels"
+    sample_group = as.character(sra[['sample_group']])
+    sample_group_u = sort(unique(sample_group))
+    if (length(selected_sample_groups) <= 8) {
+        sample_group_color = brewer.pal(8, "Dark2")
+        sample_group_color = sample_group_color[1:length(selected_sample_groups)] # To avoid the warning "minimal value for n is 3, returning requested palette with 3 different levels"
         bp_color = rainbow_hcl(length(bioproject_u), c = 50)
         sp_color = rainbow_hcl(length(scientific_name_u), c = 100)
-    } else if (length(selected_curate_groups) <= 12) {
-        curate_group_color = brewer.pal(length(unique(curate_group)), "Paired")
+    } else if (length(selected_sample_groups) <= 12) {
+        sample_group_color = brewer.pal(length(unique(sample_group)), "Paired")
         bp_color = rainbow_hcl(length(bioproject_u), c = 50)
         sp_color = rainbow_hcl(length(scientific_name_u), c = 100)
     } else {
-        curate_group_color = rainbow_hcl(length(selected_curate_groups), c = 100)
+        sample_group_color = rainbow_hcl(length(selected_sample_groups), c = 100)
         bp_color = rainbow_hcl(length(bioproject_u), c = 50)
         sp_color = rainbow_hcl(length(scientific_name_u), c = 150)
     }
-    df_curate_group = data.frame(curate_group=curate_group_u, curate_group_color=curate_group_color[1:length(curate_group_u)], stringsAsFactors = FALSE)
+    df_sample_group = data.frame(sample_group=sample_group_u, sample_group_color=sample_group_color[1:length(sample_group_u)], stringsAsFactors = FALSE)
     df_bp = data.frame(bioproject=bioproject_u, bp_color=bp_color[1:length(bioproject_u)], stringsAsFactors = FALSE)
     df_sp = data.frame(scientific_name=scientific_name_u, sp_color=sp_color[1:length(scientific_name_u)], stringsAsFactors = FALSE)
     sra = merge(sra, df_bp, sort = FALSE, all.y = FALSE)
     sra = merge(sra, df_sp, sort = FALSE, all.y = FALSE)
-    sra = merge(sra, df_curate_group, sort = FALSE, all.y = FALSE)
+    sra = merge(sra, df_sample_group, sort = FALSE, all.y = FALSE)
     return(sra)
 }
 
-sort_tc_and_metadata = function(tc, sra, sort_columns = c("curate_group", "scientific_name", "bioproject")) {
+sort_tc_and_metadata = function(tc, sra, sort_columns = c("sample_group", "scientific_name", "bioproject")) {
     for (column in rev(sort_columns)) {
         sra = sra[order(sra[[column]]), ]
     }
@@ -136,13 +136,13 @@ sort_averaged_tc = function(tc) {
     split_colnames = strsplit(colnames(tc), "_")
     genus_names = c()
     specific_names = c()
-    curate_group_names = c()
+    sample_group_names = c()
     for (i in 1:length(split_colnames)) {
         genus_names = c(genus_names, split_colnames[[i]][1])
         specific_names = c(specific_names, split_colnames[[i]][2])
-        curate_group_names = c(curate_group_names, split_colnames[[i]][3])
+        sample_group_names = c(sample_group_names, split_colnames[[i]][3])
     }
-    colname_order = order(curate_group_names, genus_names, specific_names)
+    colname_order = order(sample_group_names, genus_names, specific_names)
     tc = tc[, colname_order, drop=FALSE]
     return(tc)
 }
@@ -155,43 +155,43 @@ cleanY = function(y, mod, svs) {
     return(y - t(as.matrix(X[, -c(1:P)]) %*% beta[-c(1:P), ]))
 }
 
-curate_group_mean = function(tc, sra, selected_curate_groups = NA, balance_bp = FALSE) {
+sample_group_mean = function(tc, sra, selected_sample_groups = NA, balance_bp = FALSE) {
     # if the data are SVA-corrected, balance_bp would not be necessary because project-specfic effects
     # were removed in SVA already.
-    if (all(is.na(selected_curate_groups))) {
-        sp_curate_groups = unique(sra[['curate_group']])
+    if (all(is.na(selected_sample_groups))) {
+        sp_sample_groups = unique(sra[['sample_group']])
     } else {
-        sp_curate_groups = selected_curate_groups[selected_curate_groups %in% unique(sra[['curate_group']])]
+        sp_sample_groups = selected_sample_groups[selected_sample_groups %in% unique(sra[['sample_group']])]
     }
-    tc_ave = data.frame(matrix(rep(NA, length(sp_curate_groups) * nrow(tc)), nrow = nrow(tc)))
-    colnames(tc_ave) = sp_curate_groups
+    tc_ave = data.frame(matrix(rep(NA, length(sp_sample_groups) * nrow(tc)), nrow = nrow(tc)))
+    colnames(tc_ave) = sp_sample_groups
     rownames(tc_ave) = rownames(tc)
-    for (curate_group in sp_curate_groups) {
-        exclusion_curate_group = sra[(sra[['curate_group']] == curate_group),'exclusion']
-        run_curate_group = sra[(sra[['curate_group']] == curate_group),'run']
-        run_curate_group = run_curate_group[run_curate_group %in% colnames(tc)]
-        if (all(exclusion_curate_group!= "no")) {
-          warning_message = paste0('All samples of curate_group ', curate_group, ' are marked for exclusion. This curate_group will be omitted from further analysis.')
-          selected_curate_groups = selected_curate_groups[!selected_curate_groups==curate_group]
-          tc_ave = tc_ave[, !names(tc_ave) %in% c(curate_group)]
+    for (sample_group in sp_sample_groups) {
+        exclusion_sample_group = sra[(sra[['sample_group']] == sample_group),'exclusion']
+        run_sample_group = sra[(sra[['sample_group']] == sample_group),'run']
+        run_sample_group = run_sample_group[run_sample_group %in% colnames(tc)]
+        if (all(exclusion_sample_group!= "no")) {
+          warning_message = paste0('All samples of sample_group ', sample_group, ' are marked for exclusion. This sample_group will be omitted from further analysis.')
+          selected_sample_groups = selected_sample_groups[!selected_sample_groups==sample_group]
+          tc_ave = tc_ave[, !names(tc_ave) %in% c(sample_group)]
           warning(warning_message)
           next
         }
-        if (length(run_curate_group) == 1) {
-            exp_curate_group = tc[,run_curate_group]
+        if (length(run_sample_group) == 1) {
+            exp_sample_group = tc[,run_sample_group]
         } else {
             if (balance_bp) {
                 is_run = (sra[['run']] %in% colnames(tc))
-                is_curate_group = (sra[['curate_group']] == curate_group)
+                is_sample_group = (sra[['sample_group']] == sample_group)
                 is_no_exclusion = (sra[['exclusion']] == "no")
-                bps = unique(sra[is_run & is_curate_group & is_no_exclusion, "bioproject"])
+                bps = unique(sra[is_run & is_sample_group & is_no_exclusion, "bioproject"])
                 df_tmp = data.frame(matrix(rep(NA, nrow(tc) * length(bps)), nrow = nrow(tc), ncol = length(bps)))
                 colnames(df_tmp) = bps
                 for (bp in bps) {
                     is_bp = (sra[['bioproject']] == bp)
-                    is_curate_group = (sra[['curate_group']] == curate_group)
+                    is_sample_group = (sra[['sample_group']] == sample_group)
                     is_no_exclusion = (sra[['exclusion']] == "no")
-                    sra_ids = sra[is_bp & is_curate_group & is_no_exclusion, "run"]
+                    sra_ids = sra[is_bp & is_sample_group & is_no_exclusion, "run"]
                     tc_bp = tc[, sra_ids]
                     if (class(tc_bp) == "numeric") {
                         df_tmp[bp] = tc_bp
@@ -199,53 +199,53 @@ curate_group_mean = function(tc, sra, selected_curate_groups = NA, balance_bp = 
                         df_tmp[bp] = rowMeans(tc_bp)
                     }
                 }
-                exp_curate_group = rowMeans(df_tmp)
+                exp_sample_group = rowMeans(df_tmp)
             } else {
-                exp_curate_group = rowMeans(tc[, run_curate_group])
+                exp_sample_group = rowMeans(tc[, run_sample_group])
             }
         }
-        tc_ave[, curate_group] = exp_curate_group
+        tc_ave[, sample_group] = exp_sample_group
     }
-    return(list(tc_ave=tc_ave, selected_curate_groups=selected_curate_groups))
+    return(list(tc_ave=tc_ave, selected_sample_groups=selected_sample_groups))
 }
 
 row_tau = function(row) {
   is_nonzero = row > 0
   if (sum(is_nonzero) > 0) {
     exp_order = order(row[is_nonzero], decreasing = TRUE)
-    curate_group_ordered = colnames(tc_curate_group)[is_nonzero][exp_order]
-    highest = curate_group_ordered[1]
-    order = paste(curate_group_ordered, collapse = "|")
+    sample_group_ordered = colnames(tc_sample_group)[is_nonzero][exp_order]
+    highest = sample_group_ordered[1]
+    order = paste(sample_group_ordered, collapse = "|")
     return(c(highest, order))
   } else {
     return(c(NA, NA))  # Return NA values if no nonzero elements
   }
 }
 
-curate_group2tau = function(tc_curate_group, rich.annotation = TRUE, transform_method) {
+sample_group2tau = function(tc_sample_group, rich.annotation = TRUE, transform_method) {
     if (rich.annotation) {
         cols = c("tau", "highest", "order")
     } else {
         cols = c("tau")
     }
-    df_tau = data.frame(matrix(rep(NA, length(cols) * nrow(tc_curate_group)), nrow = nrow(tc_curate_group)))
+    df_tau = data.frame(matrix(rep(NA, length(cols) * nrow(tc_sample_group)), nrow = nrow(tc_sample_group)))
     colnames(df_tau) = cols
-    rownames(df_tau) = rownames(tc_curate_group)
+    rownames(df_tau) = rownames(tc_sample_group)
     if (grepl('logn-', transform_method)) {
-        tc_curate_group = exp(tc_curate_group)
+        tc_sample_group = exp(tc_sample_group)
     } else if (grepl('log2-', transform_method)) {
-        tc_curate_group = 2**tc_curate_group
+        tc_sample_group = 2**tc_sample_group
     } else if (grepl('lognp1-', transform_method)) {
-        tc_curate_group = exp(tc_curate_group) - 1
+        tc_sample_group = exp(tc_sample_group) - 1
     } else if (grepl('log2p1-', transform_method)) {
-        tc_curate_group = 2**tc_curate_group - 1
+        tc_sample_group = 2**tc_sample_group - 1
     }
-    tc_curate_group[tc_curate_group < 0] = 0
-    xmax = apply(tc_curate_group, 1, function(x){max(x, na.rm=TRUE)})
-    df_tau[,'tau'] = apply((1 - (tc_curate_group/xmax))/(ncol(tc_curate_group) - 1), 1, sum)
+    tc_sample_group[tc_sample_group < 0] = 0
+    xmax = apply(tc_sample_group, 1, function(x){max(x, na.rm=TRUE)})
+    df_tau[,'tau'] = apply((1 - (tc_sample_group/xmax))/(ncol(tc_sample_group) - 1), 1, sum)
     if (rich.annotation) {
-        tc_curate_group[is.na(tc_curate_group)] = 0
-        results = t(apply(tc_curate_group, 1, row_tau))
+        tc_sample_group[is.na(tc_sample_group)] = 0
+        results = t(apply(tc_sample_group, 1, row_tau))
         df_tau[ , c("highest", "order")] = results
     }
     return(df_tau)
@@ -275,103 +275,103 @@ check_mapping_rate = function(tc, sra, mapping_rate_cutoff) {
     return(list(tc = tc, sra = sra))
 }
 
-check_within_curate_group_correlation = function(tc, sra, dist_method, min_dif, selected_curate_groups, one_out_per_iter = TRUE, correlation_threshold) {
-    if (length(selected_curate_groups)==1) {
-        cat('Only one curate_group category is available. Outlier removal will be skipped.\n')
+check_within_sample_group_correlation = function(tc, sra, dist_method, min_dif, selected_sample_groups, one_out_per_iter = TRUE, correlation_threshold) {
+    if (length(selected_sample_groups)==1) {
+        cat('Only one sample_group category is available. Outlier removal will be skipped.\n')
         return(list(tc = tc, sra = sra))
     }
     out = tc_metadata_intersect(tc, sra)
     tc = out[["tc"]]
     sra2 = out[["sra"]]
-    sra2[,'num_other_run_same_bp_curate_group'] = 0
-    selected_curate_groups = selected_curate_groups[selected_curate_groups %in% unique(sra2[['curate_group']])]
+    sra2[,'num_other_run_same_bp_sample_group'] = 0
+    selected_sample_groups = selected_sample_groups[selected_sample_groups %in% unique(sra2[['sample_group']])]
     exclude_runs = c()
     for (sra_run in colnames(tc)) {
         is_sra = (sra2[['run']] == sra_run)
-        my_curate_group = sra2[is_sra, "curate_group"]
+        my_sample_group = sra2[is_sra, "sample_group"]
         my_bioproject = sra2[is_sra, "bioproject"]
         is_not_my_bp = (sra2[['bioproject']] != my_bioproject)
-        is_my_curate_group = (sra2[['curate_group']] == my_curate_group)
-        run_other_bp = sra2[(is_not_my_bp | !is_my_curate_group), "run"]
+        is_my_sample_group = (sra2[['sample_group']] == my_sample_group)
+        run_other_bp = sra2[(is_not_my_bp | !is_my_sample_group), "run"]
         run_other_bp = run_other_bp[run_other_bp %in% colnames(tc)]
         tc_other_bp = tc[, run_other_bp]
-        num_other_run_same_bp_curate_group = length(unique(sra2[(is_not_my_bp & is_my_curate_group), "bioproject"]))
-        sra2[is_sra, "num_other_run_same_bp_curate_group"] = num_other_run_same_bp_curate_group
+        num_other_run_same_bp_sample_group = length(unique(sra2[(is_not_my_bp & is_my_sample_group), "bioproject"]))
+        sra2[is_sra, "num_other_run_same_bp_sample_group"] = num_other_run_same_bp_sample_group
         sra2_other_bp <- sra2[sra2[['run']] %in% run_other_bp,]
 
-        # If one curate_group is completely sourced from the same bioproject, we can't remove the whole bioproject for tc_ave_other_bp
+        # If one sample_group is completely sourced from the same bioproject, we can't remove the whole bioproject for tc_ave_other_bp
 
-        num_other_bp_same_curate_group = sum(sra2_other_bp[['curate_group']] == my_curate_group, na.rm=TRUE)
-        if (num_other_bp_same_curate_group == 0) {
-            tc_ave_other_bp = curate_group_mean(tc, sra2, selected_curate_groups)[['tc_ave']]
+        num_other_bp_same_sample_group = sum(sra2_other_bp[['sample_group']] == my_sample_group, na.rm=TRUE)
+        if (num_other_bp_same_sample_group == 0) {
+            tc_ave_other_bp = sample_group_mean(tc, sra2, selected_sample_groups)[['tc_ave']]
         } else {
-            tc_ave_other_bp = curate_group_mean(tc_other_bp, sra2, selected_curate_groups)[['tc_ave']]
+            tc_ave_other_bp = sample_group_mean(tc_other_bp, sra2, selected_sample_groups)[['tc_ave']]
         }
-        tc_ave = curate_group_mean(tc, sra2, selected_curate_groups)[['tc_ave']]
+        tc_ave = sample_group_mean(tc, sra2, selected_sample_groups)[['tc_ave']]
         coef = c()
         coef_other_bp = c()
-        for (curate_group in selected_curate_groups) {
-            tmp_coef = cor(tc[, sra_run], tc_ave[, curate_group], method=dist_method)
-            if ((num_other_bp_same_curate_group == 0) & (curate_group == my_curate_group)) {
-              tmp_coef_other_bp = cor(tc[, sra_run], tc_ave[, curate_group], method=dist_method)
+        for (sample_group in selected_sample_groups) {
+            tmp_coef = cor(tc[, sra_run], tc_ave[, sample_group], method=dist_method)
+            if ((num_other_bp_same_sample_group == 0) & (sample_group == my_sample_group)) {
+              tmp_coef_other_bp = cor(tc[, sra_run], tc_ave[, sample_group], method=dist_method)
             } else {
-              tmp_coef_other_bp = cor(tc[, sra_run], tc_ave_other_bp[, curate_group], method=dist_method)
+              tmp_coef_other_bp = cor(tc[, sra_run], tc_ave_other_bp[, sample_group], method=dist_method)
             }
-            if (curate_group == my_curate_group) {
+            if (sample_group == my_sample_group) {
                 tmp_coef = tmp_coef - min_dif
                 tmp_coef_other_bp = tmp_coef_other_bp - min_dif
             }
             coef = c(coef, tmp_coef)
             coef_other_bp = c(coef_other_bp, tmp_coef_other_bp)
         }
-        names(coef) = selected_curate_groups
-        names(coef_other_bp) = selected_curate_groups
-        if (max(coef, na.rm=TRUE) != coef[my_curate_group]) {
+        names(coef) = selected_sample_groups
+        names(coef_other_bp) = selected_sample_groups
+        if (max(coef, na.rm=TRUE) != coef[my_sample_group]) {
             cat('Registered as a candidate for exclusion. Better correlation to other categories:', sra_run, '\n')
             exclude_runs = c(exclude_runs, sra_run)
         }
-        if (coef_other_bp[my_curate_group] < correlation_threshold) {
+        if (coef_other_bp[my_sample_group] < correlation_threshold) {
             cat('Registered as a candidate for exclusion. Low within-category correlation:', sra_run, '\n')
             exclude_runs = c(exclude_runs, sra_run)
         }
     }
     if (length(exclude_runs)) {
       if(one_out_per_iter == TRUE){
-          cat("Excluding only one outlier per bioproject or same curate_group. \n")
-          exclude_run_bps_and_curate_group = sra2[(sra2$run %in% exclude_runs), c("bioproject", "run", "curate_group")]
-          first_bp_hit = exclude_run_bps_and_curate_group[match(unique(exclude_run_bps_and_curate_group$bioproject), exclude_run_bps_and_curate_group$bioproject),]
-          first_same_curate_group_hit = exclude_run_bps_and_curate_group[match(unique(exclude_run_bps_and_curate_group$curate_group), exclude_run_bps_and_curate_group$curate_group),]
-          # if a first_same_curate_group_hit is part of the same bioproject as the other removal candidates, ommit the same curate_group candidates
-          if(any(first_same_curate_group_hit$bioproject %in% first_bp_hit$bioproject)){
-              exclude_runs_tmp = c(first_bp_hit$run,first_same_curate_group_hit[!first_same_curate_group_hit$bioproject %in% first_bp_hit$bioproject]$run)
+          cat("Excluding only one outlier per bioproject or same sample_group. \n")
+          exclude_run_bps_and_sample_group = sra2[(sra2$run %in% exclude_runs), c("bioproject", "run", "sample_group")]
+          first_bp_hit = exclude_run_bps_and_sample_group[match(unique(exclude_run_bps_and_sample_group$bioproject), exclude_run_bps_and_sample_group$bioproject),]
+          first_same_sample_group_hit = exclude_run_bps_and_sample_group[match(unique(exclude_run_bps_and_sample_group$sample_group), exclude_run_bps_and_sample_group$sample_group),]
+          # if a first_same_sample_group_hit is part of the same bioproject as the other removal candidates, ommit the same sample_group candidates
+          if(any(first_same_sample_group_hit$bioproject %in% first_bp_hit$bioproject)){
+              exclude_runs_tmp = c(first_bp_hit$run,first_same_sample_group_hit[!first_same_sample_group_hit$bioproject %in% first_bp_hit$bioproject]$run)
           }else{
-              exclude_runs_tmp = c(first_bp_hit$run,first_same_curate_group_hit$run)
+              exclude_runs_tmp = c(first_bp_hit$run,first_same_sample_group_hit$run)
           }
           exclude_runs = unique(exclude_runs_tmp)
-          # TODO This boolean vector should be all TRUE by definition. ???: exclude_run_bps_and_curate_group$run %in% exclude_runs
-          exclude_bps = exclude_run_bps_and_curate_group[exclude_run_bps_and_curate_group$run %in% exclude_runs, "bioproject"]
+          # TODO This boolean vector should be all TRUE by definition. ???: exclude_run_bps_and_sample_group$run %in% exclude_runs
+          exclude_bps = exclude_run_bps_and_sample_group[exclude_run_bps_and_sample_group$run %in% exclude_runs, "bioproject"]
       } else {
-        exclude_run_bps = sra2[(sra2[['run']] %in% exclude_runs), c("bioproject", "run", "num_other_run_same_bp_curate_group")]
+        exclude_run_bps = sra2[(sra2[['run']] %in% exclude_runs), c("bioproject", "run", "num_other_run_same_bp_sample_group")]
         exclude_bp_counts = data.frame(table(exclude_run_bps[['bioproject']]))
         exclude_run_bps = merge(exclude_run_bps, exclude_bp_counts, by.x = "bioproject", by.y = "Var1")
-        exclude_run_bps = exclude_run_bps[order(exclude_run_bps[['num_other_run_same_bp_curate_group']], exclude_run_bps[['Freq']]),]
+        exclude_run_bps = exclude_run_bps[order(exclude_run_bps[['num_other_run_same_bp_sample_group']], exclude_run_bps[['Freq']]),]
         rownames(exclude_run_bps) = 1:nrow(exclude_run_bps)
-        min_other_run_same_bp_curate_group = exclude_run_bps[1, "num_other_run_same_bp_curate_group"]
+        min_other_run_same_bp_sample_group = exclude_run_bps[1, "num_other_run_same_bp_sample_group"]
         semimin_bp_count = exclude_run_bps[1, "Freq"]
-        cat("minimum number of other BioProjects within curate_group:", min_other_run_same_bp_curate_group, "\n")
+        cat("minimum number of other BioProjects within sample_group:", min_other_run_same_bp_sample_group, "\n")
         cat("semi-minimum count of exclusion-candidate BioProjects:", semimin_bp_count, "\n")
         conditions = (exclude_run_bps[['Freq']] == semimin_bp_count)
-        conditions = conditions & (exclude_run_bps[['num_other_run_same_bp_curate_group']] == min_other_run_same_bp_curate_group)
+        conditions = conditions & (exclude_run_bps[['num_other_run_same_bp_sample_group']] == min_other_run_same_bp_sample_group)
         exclude_bps = unique(exclude_run_bps[conditions, "bioproject"])
         exclude_runs = exclude_run_bps[(exclude_run_bps[['bioproject']] %in% exclude_bps), "run"]
       }
     }
     if (length(exclude_runs)) {
-        cat('Partially removed BioProjects due to low within-curate_group correlation:', paste(exclude_bps, collapse=' '), '\n')
-        cat('Removed Runs due to low within-curate_group correlation:', paste(exclude_runs, collapse=' '), '\n')
+        cat('Partially removed BioProjects due to low within-sample_group correlation:', paste(exclude_bps, collapse=' '), '\n')
+        cat('Removed Runs due to low within-sample_group correlation:', paste(exclude_runs, collapse=' '), '\n')
     }
     tc = tc[, !colnames(tc) %in% exclude_runs, drop=FALSE]
-    sra[(sra[['run']] %in% exclude_runs), "exclusion"] = "low_within_curate_group_correlation"
+    sra[(sra[['run']] %in% exclude_runs), "exclusion"] = "low_within_sample_group_correlation"
     return(list(tc = tc, sra = sra))
 }
 
@@ -390,7 +390,7 @@ batch_effect_subtraction = function(tc, sra, batch_effect_alg, transform_method,
     tc = out[["tc_ex"]]
     tc_ne = out[["tc_ne"]]
     if (batch_effect_alg == "sva") {
-        mod = try(model.matrix(~curate_group, data = sra))
+        mod = try(model.matrix(~sample_group, data = sra))
         if ("try-error" %in% class(mod)) {
             return(list(tc = tc, sva = NULL))
         }
@@ -413,7 +413,7 @@ batch_effect_subtraction = function(tc, sra, batch_effect_alg, transform_method,
         tc_combat = tc[, colnames(tc) %in% run_bp_freq_gt1]
         tcc_cn = colnames(tc_combat)
         batch = sra[(sra[,"bioproject"] %in% bp_freq_gt1),"bioproject"]
-        group = sra[(sra[,"run"] %in% run_bp_freq_gt1),"curate_group"]
+        group = sra[(sra[,"run"] %in% run_bp_freq_gt1),"sample_group"]
         tc_combat = try(ComBat_seq(as.matrix(tc_combat), batch=batch, group=group))
         if (class(tc_combat)[1] != "try-error") {
             cat("These runs are being removed, due to the bioproject only having 1 sample: \n")
@@ -429,8 +429,8 @@ batch_effect_subtraction = function(tc, sra, batch_effect_alg, transform_method,
             sva1 = ''
         }
     } else if (batch_effect_alg == "ruvseq") {
-        x = as.factor(sra$curate_group)
-        design = try(model.matrix(~curate_group, data = sra))
+        x = as.factor(sra$sample_group)
+        design = try(model.matrix(~sample_group, data = sra))
         if ("try-error" %in% class(design)) {
             return(list(tc = tc, sva = NULL))
         }
@@ -490,11 +490,11 @@ map_color = function(redundant_variables, c) {
 
 draw_heatmap = function(sra, tc_dist_matrix, legend = TRUE, fontsize = 7) {
     bp_fac = factor(sub(";.*", "", sra[, c("bioproject")]))
-    curate_group_fac = factor(sra[, c("curate_group")])
-    ann_label = data.frame(bioproject = bp_fac, curate_group = curate_group_fac)
+    sample_group_fac = factor(sra[, c("sample_group")])
+    ann_label = data.frame(bioproject = bp_fac, sample_group = sample_group_fac)
     bp_col_uniq = unique(sra[order(sra[['bioproject']]), 'bp_color'])
-    curate_group_col_uniq = unique(sra[order(sra[['curate_group']]), 'curate_group_color'])
-    ann_color = list(bioproject = bp_col_uniq, curate_group = curate_group_col_uniq)
+    sample_group_col_uniq = unique(sra[order(sra[['sample_group']]), 'sample_group_color'])
+    ann_color = list(bioproject = bp_col_uniq, sample_group = sample_group_col_uniq)
     breaks = c(0, seq(0.3, 1, 0.01))
     colnames(tc_dist_matrix) = sra[sra$run %in% colnames(tc_dist_matrix), 'run']
     head_half = substr(colnames(tc_dist_matrix), 1, 4)
@@ -522,7 +522,7 @@ color_children2parent = function(node) {
 
 draw_dendrogram = function(sra, tc_dist_dist, fontsize = 7) {
     dend = as.dendrogram(hclust(tc_dist_dist))
-    dend_colors = sra[order.dendrogram(dend),'curate_group_color']
+    dend_colors = sra[order.dendrogram(dend),'sample_group_color']
     labels_colors(dend) = dend_colors
     dend_labels = sra[order.dendrogram(dend), 'run']
     dend = color_branches(dend, labels = dend_labels, col = dend_colors)
@@ -545,14 +545,14 @@ draw_dendrogram = function(sra, tc_dist_dist, fontsize = 7) {
       inches = 0.02,
       xpd = TRUE,
       lwd = 1,
-      bg = sra[order.dendrogram(dend), 'curate_group_color'],
+      bg = sra[order.dendrogram(dend), 'sample_group_color'],
       fg = sra[order.dendrogram(dend), 'bp_color']
     )
 }
 
 draw_dendrogram_ggplot = function(sra, tc_dist_dist, fontsize = 7) {
 
-  cg_col = unique(sra[,c('curate_group', 'curate_group_color')])
+  cg_col = unique(sra[,c('sample_group', 'sample_group_color')])
   bp_col = unique(sra[,c('bioproject', 'bp_color')])
   colnames(cg_col) = c('Group', 'Color')
   colnames(bp_col) = c('Group', 'Color')
@@ -565,15 +565,15 @@ draw_dendrogram_ggplot = function(sra, tc_dist_dist, fontsize = 7) {
   dendr    <- dendro_data(hc, type="rectangle") # convert for ggplot
 
 
-  clust.df <- data.frame(label=sra$run, curate_group=factor(sra[sra$run %in% dendr$labels$label,'curate_group']), bioproject = factor(sra[sra$run %in% dendr$labels$label,'bioproject']))
+  clust.df <- data.frame(label=sra$run, sample_group=factor(sra[sra$run %in% dendr$labels$label,'sample_group']), bioproject = factor(sra[sra$run %in% dendr$labels$label,'bioproject']))
   dendr[["labels"]] <- merge(dendr[["labels"]],clust.df, by="label")
   ggplot() +
     geom_segment(data=dendr$segments, aes(x=x, y=y, xend=xend, yend=yend), size = .8, show.legend = FALSE) +
-    geom_segment(data=merge(dendr$segments[dendr$segments$yend==0,], dendr$labels[,c('label', 'curate_group', 'x')], by = 'x'), aes(x=x, y=y, xend=xend, yend=yend, color = curate_group), size = .8, show.legend = FALSE) +
-    geom_text(data=dendr$labels, aes(x, y - .008, label=label, hjust=0, angle = 270, color = curate_group ), size=3, show.legend = FALSE) +
+    geom_segment(data=merge(dendr$segments[dendr$segments$yend==0,], dendr$labels[,c('label', 'sample_group', 'x')], by = 'x'), aes(x=x, y=y, xend=xend, yend=yend, color = sample_group), size = .8, show.legend = FALSE) +
+    geom_text(data=dendr$labels, aes(x, y - .008, label=label, hjust=0, angle = 270, color = sample_group ), size=3, show.legend = FALSE) +
     scale_y_continuous(expand = c(.2, .1)) +
     geom_point(data = dendr$labels, aes(x,y, color = bioproject), size = 3, show.legend = FALSE) +
-    geom_point(data = dendr$labels, aes(x,y, color = curate_group), size = 2, show.legend = FALSE) +
+    geom_point(data = dendr$labels, aes(x,y, color = sample_group), size = 2, show.legend = FALSE) +
     theme(axis.line.x=element_blank(),
           axis.ticks.x=element_blank(),
           axis.text.x=element_blank(),
@@ -602,7 +602,7 @@ draw_dendrogram_pvclust = function(sra, tc, nboot, pvclust_file, fontsize = 7) {
         save(result, file = pvclust_file)
     }
     dend = as.dendrogram(result)
-    dend_colors = sra[order.dendrogram(dend), 'curate_group_color']
+    dend_colors = sra[order.dendrogram(dend), 'sample_group_color']
     labels_colors(dend) = dend_colors
     dend_labels = sra[order.dendrogram(dend), 'run']
     dend = color_branches(dend, labels = dend_labels, col = dend_colors)
@@ -623,7 +623,7 @@ draw_dendrogram_pvclust = function(sra, tc, nboot, pvclust_file, fontsize = 7) {
       inches = 0.04,
       xpd = TRUE,
       lwd = 2,
-      bg = sra[order.dendrogram(dend), 'curate_group_color'],
+      bg = sra[order.dendrogram(dend), 'sample_group_color'],
       fg = sra[order.dendrogram(dend), 'bp_color']
     )
     text(result, print.num = FALSE, cex = 1, col.pv = "black")
@@ -639,13 +639,13 @@ draw_pca = function(sra, tc_dist_matrix, fontsize = 7) {
       pch = 21,
       cex = 2,
       lwd = 1,
-      bg = sra[['curate_group_color']],
+      bg = sra[['sample_group_color']],
       col = sra[['bp_color']],
       xlab = xlabel,
       ylab = ylabel,
       las = 1
     )
-    # plot(pca$x[,1], pca$x[,2], pch=21, cex=2, lwd=2, bg=sra$curate_group_color, col=sra$bp_color, main=title,
+    # plot(pca$x[,1], pca$x[,2], pch=21, cex=2, lwd=2, bg=sra$sample_group_color, col=sra$bp_color, main=title,
     # xlab=xlabel, ylab=ylabel, las=1)
 }
 
@@ -666,7 +666,7 @@ draw_mds = function(sra, tc_dist_dist, fontsize = 7) {
           pch = 21,
           cex = 2,
           lwd = 1,
-          bg = sra[['curate_group_color']],
+          bg = sra[['sample_group_color']],
           col = sra[['bp_color']],
           xlab = "MDS dimension 1",
           ylab = "MDS dimension 2",
@@ -702,7 +702,7 @@ draw_tsne = function(sra, tc, fontsize = 7) {
           pch = 21,
           cex = 2,
           lwd = 1,
-          bg = sra[['curate_group_color']],
+          bg = sra[['sample_group_color']],
           col = sra[['bp_color']],
           xlab = "t-SNE dimension 1",
           ylab = "t-SNE dimension 2",
@@ -730,7 +730,7 @@ draw_sva_summary = function(sva_out, tc, sra, fontsize) {
         sra = out[["sra"]]
         sra[['log10_total_spots']] = log10(sra[['total_spots']])
         sra[['log10_total_bases']] = log10(sra[['total_bases']])
-        cols = c("curate_group","bioproject","lib_layout","lib_selection","instrument","mapping_rate",'log10_total_spots','log10_total_bases')
+        cols = c("sample_group","bioproject","lib_layout","lib_selection","instrument","mapping_rate",'log10_total_spots','log10_total_bases')
         label_cols = c("Group","BioProject","Library layout","Library selection","Instrument","Mapping rate",'Log10 total reads','Log10 total bases')
         if ('tmm_normalization_factor' %in% colnames(sra)) {
             cols = c(cols, 'tmm_normalization_factor')
@@ -769,23 +769,23 @@ draw_boxplot = function(sra, tc_dist_matrix, fontsize = 7) {
     is_same_bp = outer(sra[['bioproject']], sra[['bioproject']], function(x, y) {
         x == y
     })
-    is_same_curate_group = outer(sra[['curate_group']], sra[['curate_group']], function(x, y) {
+    is_same_sample_group = outer(sra[['sample_group']], sra[['sample_group']], function(x, y) {
         x == y
     })
     plot(c(0.5, 4.5), c(0, 1), type = "n", xlab = "", ylab = "Pearson's correlation\ncoefficient", las = 1,
          xaxt = "n")
-    boxplot(tc_dist_matrix[(!is_same_bp) & (!is_same_curate_group)], at = 1, add = TRUE, col = "gray", yaxt = "n")
-    boxplot(tc_dist_matrix[(is_same_bp) & (!is_same_curate_group)], at = 2, add = TRUE, col = "gray", yaxt = "n")
-    boxplot(tc_dist_matrix[(!is_same_bp) & (is_same_curate_group)], at = 3, add = TRUE, col = "gray", yaxt = "n")
-    boxplot(tc_dist_matrix[(is_same_bp) & (is_same_curate_group)], at = 4, add = TRUE, col = "gray", yaxt = "n")
+    boxplot(tc_dist_matrix[(!is_same_bp) & (!is_same_sample_group)], at = 1, add = TRUE, col = "gray", yaxt = "n")
+    boxplot(tc_dist_matrix[(is_same_bp) & (!is_same_sample_group)], at = 2, add = TRUE, col = "gray", yaxt = "n")
+    boxplot(tc_dist_matrix[(!is_same_bp) & (is_same_sample_group)], at = 3, add = TRUE, col = "gray", yaxt = "n")
+    boxplot(tc_dist_matrix[(is_same_bp) & (is_same_sample_group)], at = 4, add = TRUE, col = "gray", yaxt = "n")
     labels = c("bw\nbw", "bw\nwi", "wi\nbw", "wi\nwi")
     axis(side = 1, at = c(1, 2, 3, 4), labels = labels, padj = 0.5)
     axis(side = 1, at = 0.35, labels = "Organ\nBioProject", padj = 0.5, hadj = 1, tick = FALSE)
 
 }
 
-draw_tau_histogram = function(tc, sra, selected_curate_groups, fontsize = 7, transform_method) {
-    df_tau = curate_group2tau(curate_group_mean(tc, sra, selected_curate_groups)[['tc_ave']], rich.annotation = FALSE, transform_method)
+draw_tau_histogram = function(tc, sra, selected_sample_groups, fontsize = 7, transform_method) {
+    df_tau = sample_group2tau(sample_group_mean(tc, sra, selected_sample_groups)[['tc_ave']], rich.annotation = FALSE, transform_method)
     hist_out = hist(df_tau[['tau']], breaks = seq(0, 1, 0.05), las = 1, xlab = "Tau (expression specificity)",
                     ylab = "Gene count", main = "", col = "gray")
     num_noexp = sum(is.na(df_tau[['tau']]))
@@ -794,9 +794,9 @@ draw_tau_histogram = function(tc, sra, selected_curate_groups, fontsize = 7, tra
     text(0, max(hist_out[['counts']], na.rm=TRUE) * 0.85, text_noexp, pos = 4)
 }
 
-draw_exp_level_histogram = function(tc, sra, selected_curate_groups, fontsize = 7, transform_method) {
-    tc_curate_group = curate_group_mean(tc, sra, selected_curate_groups)[['tc_ave']]
-    xmax = apply(tc_curate_group, 1, max)
+draw_exp_level_histogram = function(tc, sra, selected_sample_groups, fontsize = 7, transform_method) {
+    tc_sample_group = sample_group_mean(tc, sra, selected_sample_groups)[['tc_ave']]
+    xmax = apply(tc_sample_group, 1, max)
     xmax[xmax < 0] = 0
     xmax[xmax > 15] = 15
     breaks = seq(0, 15, 1)
@@ -808,22 +808,22 @@ draw_legend = function(sra, new = TRUE, pos = "center", fontsize = 7, nlabel.in.
     if (new) {
         plot.new()
     }
-    curate_group_unique = unique(sra[['curate_group']])
+    sample_group_unique = unique(sra[['sample_group']])
     bp_unique = unique(sub(";.*", "", sra[['bioproject']]))
-    curate_group_color_unique = unique(sra[['curate_group_color']])
+    sample_group_color_unique = unique(sra[['sample_group_color']])
     bp_color_unique = unique(sra[['bp_color']])
-    ncol = ceiling((length(curate_group_unique) + length(bp_unique) + 2)/nlabel.in.col)
-    legend_text = c("Organ", as.character(curate_group_unique), "", "BioProject", as.character(bp_unique))
-    legend_color = c(rgb(1, 1, 1, 0), rep(rgb(1, 1, 1, 0), length(curate_group_color_unique)), rgb(1, 1, 1,
+    ncol = ceiling((length(sample_group_unique) + length(bp_unique) + 2)/nlabel.in.col)
+    legend_text = c("Organ", as.character(sample_group_unique), "", "BioProject", as.character(bp_unique))
+    legend_color = c(rgb(1, 1, 1, 0), rep(rgb(1, 1, 1, 0), length(sample_group_color_unique)), rgb(1, 1, 1,
                                                                                              0), rgb(1, 1, 1, 0), bp_color_unique)
-    legend_bg = c(rgb(1, 1, 1, 0), curate_group_color_unique, rgb(1, 1, 1, 0), rgb(1, 1, 1, 0), rep(rgb(1,
+    legend_bg = c(rgb(1, 1, 1, 0), sample_group_color_unique, rgb(1, 1, 1, 0), rgb(1, 1, 1, 0), rep(rgb(1,
                                                                                                   1, 1, 0), length(bp_color_unique)))
-    legend_font = c(2, rep(1, length(curate_group_color_unique)), 1, 2, rep(1, length(bp_color_unique)))
+    legend_font = c(2, rep(1, length(sample_group_color_unique)), 1, 2, rep(1, length(bp_color_unique)))
     legend(pos, legend = legend_text, pch = 21, lwd = 1, lty = 0, col = legend_color, pt.bg = legend_bg,
            text.font = legend_font, ncol = ncol, bty = "n")
 }
 
-save_plot = function(tc, sra, sva_out, dist_method, file, selected_curate_groups, fontsize = 7, transform_method, batch_effect_alg) {
+save_plot = function(tc, sra, sva_out, dist_method, file, selected_sample_groups, fontsize = 7, transform_method, batch_effect_alg) {
     if (ncol(tc)==1) {
         cat('Only 1 sample is available. Skipping the plot.\n')
         return()
@@ -831,7 +831,7 @@ save_plot = function(tc, sra, sva_out, dist_method, file, selected_curate_groups
     out = tc_metadata_intersect(tc, sra)
     tc = out[["tc"]]
     sra = out[["sra"]]
-    sra = add_color_to_metadata(sra, selected_curate_groups)
+    sra = add_color_to_metadata(sra, selected_sample_groups)
     out = sort_tc_and_metadata(tc, sra)
     tc = out[["tc"]]
     sra = out[["sra"]]
@@ -864,9 +864,9 @@ save_plot = function(tc, sra, sva_out, dist_method, file, selected_curate_groups
     par(mar = c(4, 5, 0.1, 1))
     draw_boxplot(sra, tc_dist_matrix, fontsize)
     par(mar = c(4, 4, 1, 1))
-    draw_exp_level_histogram(tc, sra, selected_curate_groups, fontsize, transform_method)
+    draw_exp_level_histogram(tc, sra, selected_sample_groups, fontsize, transform_method)
     par(mar = c(4, 4, 1, 1))
-    draw_tau_histogram(tc, sra, selected_curate_groups, fontsize, transform_method)
+    draw_tau_histogram(tc, sra, selected_sample_groups, fontsize, transform_method)
     par(mar = rep(0.1, 4))
     if (batch_effect_alg == 'sva') {
         df_r2 = draw_sva_summary(sva_out, tc, sra, fontsize)
@@ -988,12 +988,12 @@ standardize_metadata_all = function(sra_all) {
     return(sra_all)
 }
 
-get_species_metadata = function(sra_all, scientific_name, selected_curate_groups) {
+get_species_metadata = function(sra_all, scientific_name, selected_sample_groups) {
     is_sp = (sra_all[,'scientific_name'] == scientific_name)
-    is_curate_group = (sra_all[,'curate_group'] %in% selected_curate_groups)
+    is_sample_group = (sra_all[,'sample_group'] %in% selected_sample_groups)
     cat('Number of SRA runs for this species:', sum(is_sp), '\n')
-    cat('Number of SRA runs for selected curate groups:', sum(is_curate_group), '\n')
-    sra = sra_all[(is_sp & is_curate_group),]
+    cat('Number of SRA runs for selected curate groups:', sum(is_sample_group), '\n')
+    sra = sra_all[(is_sp & is_sample_group),]
     conditions = (sra[['exclusion']] == "no") & (!sra[['run']] %in% colnames(tc))
     if (any(conditions)) {
         cat("Failed quantification:", sra[conditions, "run"], "\n")
@@ -1039,7 +1039,7 @@ dir.create(dir_tsv, showWarnings=FALSE, recursive=TRUE)
 setwd(dir_curate)
 cat(log_prefix, "Working at:", getwd(), "\n")
 
-sra = get_species_metadata(sra_all, scientific_name, selected_curate_groups)
+sra = get_species_metadata(sra_all, scientific_name, selected_sample_groups)
 tc = exclude_inappropriate_sample_from_tc(tc, sra)
 out = sort_tc_and_metadata(tc, sra) ; tc = out[["tc"]] ; sra = out[["sra"]]
 tc_eff_length = exclude_inappropriate_sample_from_eff_length(tc_eff_length, tc)
@@ -1048,17 +1048,17 @@ tc_tmp = apply_transformation_logic(tc, tc_eff_length, transform_method, batch_e
 is_input_zero = data.frame(tc_tmp==0, check.names=FALSE)
 file_name = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".uncorrected.tc.tsv"))
 write_table_with_index_name(df=tc_tmp, file_path=file_name, index_name='target_id')
-out = curate_group_mean(tc_tmp, sra, selected_curate_groups)
-tc_curate_group_uncorrected = out[['tc_ave']]
-selected_curate_groups = out[['selected_curate_groups']]
-file_name = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".uncorrected.curate_group.mean.tsv"))
-write_table_with_index_name(df=tc_curate_group_uncorrected, file_path=file_name, index_name='target_id')
+out = sample_group_mean(tc_tmp, sra, selected_sample_groups)
+tc_sample_group_uncorrected = out[['tc_ave']]
+selected_sample_groups = out[['selected_sample_groups']]
+file_name = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".uncorrected.sample_group.mean.tsv"))
+write_table_with_index_name(df=tc_sample_group_uncorrected, file_path=file_name, index_name='target_id')
 
 if (skip_curation_flag == TRUE) {
     cat("No curation requested, finishing early.\n")
     cat("Files created: \n")
     cat(file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".uncorrected.tc.tsv")) , "\n")
-    cat(file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".uncorrected.curate_group.mean.tsv")), "\n")
+    cat(file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".uncorrected.sample_group.mean.tsv")), "\n")
     cat("Transformation applied: ", transform_method , "\n")
     cat(log_prefix, "Completed.\n")
     quit(save='no', status=0)
@@ -1073,7 +1073,7 @@ tc = out[["tc"]]
 sra = out[["sra"]]
 tc_tmp = apply_transformation_logic(tc, tc_eff_length, transform_method, batch_effect_alg, step='before_batch_plot', sra=sra)
 save_plot(tc_tmp, sra, NULL, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".original"),
-          selected_curate_groups, fontsize, transform_method, batch_effect_alg)
+          selected_sample_groups, fontsize, transform_method, batch_effect_alg)
 out = batch_effect_subtraction(tc, sra, batch_effect_alg, transform_method, clip_negative)
 tc_batch_corrected = out[["tc"]]
 sva_out = out[["sva"]]
@@ -1083,7 +1083,7 @@ if (!is.null(sva_out)) {
 }
 tc_batch_corrected_tmp = apply_transformation_logic(tc_batch_corrected, tc_eff_length, transform_method, batch_effect_alg, step='after_batch', sra=sra)
 save_plot(tc_batch_corrected_tmp, sra, sva_out, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".original", ".", batch_effect_alg),
-          selected_curate_groups, fontsize, transform_method, batch_effect_alg)
+          selected_sample_groups, fontsize, transform_method, batch_effect_alg)
 
 cat("Removing samples with the mapping rate smaller than", mapping_rate_cutoff, "\n")
 round = 1
@@ -1095,7 +1095,7 @@ sra = out[["sra"]]
 
 tc_tmp = apply_transformation_logic(tc, tc_eff_length, transform_method, batch_effect_alg, step='before_batch_plot', sra=sra)
 save_plot(tc_tmp, sra, NULL, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".mapping_cutoff"),
-          selected_curate_groups, fontsize, transform_method, batch_effect_alg)
+          selected_sample_groups, fontsize, transform_method, batch_effect_alg)
 out = batch_effect_subtraction(tc, sra, batch_effect_alg, transform_method, clip_negative)
 tc_batch_corrected = out[["tc"]]
 sva_out = out[["sva"]]
@@ -1104,15 +1104,15 @@ if (!is.null(sva_out)) {
 }
 tc_batch_corrected_tmp = apply_transformation_logic(tc_batch_corrected, tc_eff_length, transform_method, batch_effect_alg, step='after_batch', sra=sra)
 save_plot(tc_batch_corrected_tmp, sra, sva_out, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".mapping_cutoff", ".", batch_effect_alg),
-          selected_curate_groups, fontsize, transform_method, batch_effect_alg)
+          selected_sample_groups, fontsize, transform_method, batch_effect_alg)
 
 round = 2
 end_flag = 0
 while (end_flag == 0) {
-    cat("Iteratively checking within-curate_group correlation, round:", round, "\n")
+    cat("Iteratively checking within-sample_group correlation, round:", round, "\n")
     tc_cwtc = NULL
     num_run_before = sum(sra[['exclusion']] == "no")
-    out = check_within_curate_group_correlation(tc, sra, dist_method, min_dif, selected_curate_groups, one_outlier_per_iteration, correlation_threshold)
+    out = check_within_sample_group_correlation(tc, sra, dist_method, min_dif, selected_sample_groups, one_outlier_per_iteration, correlation_threshold)
     tc_cwtc = out[["tc"]]
     sra = out[["sra"]]
     num_run_after = sum(sra[['exclusion']] == "no")
@@ -1127,10 +1127,10 @@ while (end_flag == 0) {
         }
         tc_cwtc_tmp = apply_transformation_logic(tc_cwtc, tc_eff_length, transform_method, batch_effect_alg, step='before_batch_plot', sra=sra)
         save_plot(tc_cwtc_tmp, sra, NULL, dist_method, paste0(sub(" ", "_", scientific_name), ".", round,
-                                                          ".correlation_cutoff"), selected_curate_groups, fontsize, transform_method, batch_effect_alg)
+                                                          ".correlation_cutoff"), selected_sample_groups, fontsize, transform_method, batch_effect_alg)
         tc_batch_corrected_tmp = apply_transformation_logic(tc_batch_corrected, tc_eff_length, transform_method, batch_effect_alg, step='after_batch', sra=sra)
         file_base = paste0(sub(" ", "_", scientific_name), ".", round, ".correlation_cutoff", ".", batch_effect_alg)
-        save_plot(tc_batch_corrected_tmp, sra, sva_out, dist_method, file_base, selected_curate_groups, fontsize, transform_method, batch_effect_alg)
+        save_plot(tc_batch_corrected_tmp, sra, sva_out, dist_method, file_base, selected_sample_groups, fontsize, transform_method, batch_effect_alg)
     }
     cat("Round:", round, ": # before =", num_run_before, ": # after =", num_run_after, "\n\n")
     if (num_run_before == num_run_after) {
@@ -1140,7 +1140,7 @@ while (end_flag == 0) {
     round = round + 1
 }
 
-cat("Finished checking within-curate_group correlation.\n")
+cat("Finished checking within-sample_group correlation.\n")
 if (batch_effect_alg != 'sva') {
     cat("Batch-effect removal algorithm is: ",batch_effect_alg, ". Applying transformation on final batch-removed counts.\n")
     tc_batch_corrected = tc_batch_corrected_tmp
@@ -1159,11 +1159,11 @@ file = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".metadata.tsv"
 write.table(sra[,colnames(sra)!='index'], file=file, sep="\t", row.names=FALSE, col.names=TRUE, quote=FALSE)
 file = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".", batch_effect_alg , ".tc.tsv"))
 write_table_with_index_name(df=tc_batch_corrected, file_path=file, index_name='target_id')
-out = curate_group_mean(tc_batch_corrected, sra, selected_curate_groups)
-tc_curate_group = out[['tc_ave']]
-file = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".", batch_effect_alg , ".curate_group.mean.tsv"))
-write_table_with_index_name(df=tc_curate_group, file_path=file, index_name='target_id')
-tc_tau = curate_group2tau(tc_curate_group, rich.annotation = TRUE, transform_method)
+out = sample_group_mean(tc_batch_corrected, sra, selected_sample_groups)
+tc_sample_group = out[['tc_ave']]
+file = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".", batch_effect_alg , ".sample_group.mean.tsv"))
+write_table_with_index_name(df=tc_sample_group, file_path=file, index_name='target_id')
+tc_tau = sample_group2tau(tc_sample_group, rich.annotation = TRUE, transform_method)
 file = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".", batch_effect_alg , ".tau.tsv"))
 write_table_with_index_name(df=tc_tau, file_path=file, index_name='target_id')
 cat(log_prefix, "Completed.\n")

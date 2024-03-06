@@ -15,7 +15,7 @@ import warnings
 from distutils.util import strtobool
 
 class Metadata:
-    column_names = ['scientific_name', 'tissue', 'curate_group', 'genotype', 'sex', 'age',
+    column_names = ['scientific_name', 'tissue', 'sample_group', 'genotype', 'sex', 'age',
                     'treatment', 'source_name',
                     'is_sampled', 'is_qualified', 'exclusion', 'protocol', 'bioproject', 'biosample',
                     'experiment', 'run', 'sra_primary', 'sra_sample', 'sra_study', 'study_title', 'exp_title', 'design',
@@ -43,10 +43,10 @@ class Metadata:
             misc_columns = [col for col in self.df.columns if col not in column_names]
             self.df = self.df.loc[:, column_names + misc_columns]
         self.df.loc[:, 'exclusion'] = self.df.loc[:, 'exclusion'].replace('', 'no')
-        # reorder curate_group to the front
-        if 'curate_group' in self.df.columns:
+        # reorder sample_group to the front
+        if 'sample_group' in self.df.columns:
             cols = list(self.df)
-            cols.insert(1, cols.pop(cols.index('curate_group')))
+            cols.insert(1, cols.pop(cols.index('sample_group')))
             self.df = self.df.loc[:, cols]
         self.df = self.df.reset_index(drop=True)
 
@@ -302,9 +302,9 @@ class Metadata:
 
     def label_sampled_data(self, max_sample=10):
         pandas.set_option('mode.chained_assignment', None)
-        txt = '{}: Selecting subsets of SRA IDs for >{:,} samples per curate_group per species'
+        txt = '{}: Selecting subsets of SRA IDs for >{:,} samples per sample_group per species'
         print(txt.format(datetime.datetime.now(), max_sample), flush=True)
-        is_empty = (self.df['curate_group'] == '')
+        is_empty = (self.df['sample_group'] == '')
         self.df.loc[is_empty,'is_qualified'] = 'no'
         self.df.loc[is_empty,'exclusion'] = 'no_tissue_label'
         self.df['bioproject'] = self.df['bioproject'].fillna('unknown').values
@@ -315,13 +315,13 @@ class Metadata:
         species = self.df.loc[:, 'scientific_name'].unique()
         for sp in species:
             sp_table = self.df.loc[(self.df.loc[:, 'scientific_name'] == sp), :]
-            curate_groups = sp_table.loc[:, 'curate_group'].unique()
-            for curate_group in curate_groups:
-                sp_curate_group = sp_table.loc[(sp_table.loc[:, 'curate_group'] == curate_group), :]
-                if sp_curate_group.shape[0] == 0:
+            sample_groups = sp_table.loc[:, 'sample_group'].unique()
+            for sample_group in sample_groups:
+                sp_sample_group = sp_table.loc[(sp_table.loc[:, 'sample_group'] == sample_group), :]
+                if sp_sample_group.shape[0] == 0:
                     continue
-                sp_curate_group = self._maximize_bioproject_sampling(df=sp_curate_group, target_n=max_sample)
-                df_labeled = pandas.concat([df_labeled, sp_curate_group], axis=0)
+                sp_sample_group = self._maximize_bioproject_sampling(df=sp_sample_group, target_n=max_sample)
+                df_labeled = pandas.concat([df_labeled, sp_sample_group], axis=0)
         self.df = df_labeled
         self.reorder(omit_misc=False)
         pandas.set_option('mode.chained_assignment', 'warn')
@@ -341,8 +341,8 @@ class Metadata:
             df = df.loc[(df.loc[:, 'is_qualified'] == 'yes'), :]
         if sampled_only:
             df = df.loc[(df.loc[:, 'is_sampled'] == 'yes'), :]
-        df_reduced = df.loc[:, ['scientific_name', 'biosample', 'curate_group']]
-        pivot = df_reduced.pivot_table(columns='curate_group', index='scientific_name', aggfunc='count')
+        df_reduced = df.loc[:, ['scientific_name', 'biosample', 'sample_group']]
+        pivot = df_reduced.pivot_table(columns='sample_group', index='scientific_name', aggfunc='count')
         pivot.columns = pivot.columns.get_level_values(1)
         column_sort = pivot.count(axis='index').sort_values(ascending=False).index
         index_sort = pivot.count(axis='columns').sort_values(ascending=False).index

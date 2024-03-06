@@ -130,10 +130,10 @@ pp_threads = argparse.ArgumentParser(add_help=False)
 pp_threads.add_argument('--threads', metavar='INT', default=1, type=int, required=False, action='store',
                  help='default=%(default)s: Number of threads.')
 pp_cg = argparse.ArgumentParser(add_help=False)
-pp_cg.add_argument('--curate_group', metavar='STR', default=None, type=str, required=False, action='store',
+pp_cg.add_argument('--sample_group', metavar='STR', default=None, type=str, required=False, action='store',
                  help='default=%(default)s: "Comma separated list of primary condition or tissue used in curate analysis. '
                       'Example input may look like "root,flower,leaf" or "heat stressed,cold stressed,light stressed". '
-                      'By default, all curate_group values in metadata.tsv are passed.')
+                      'By default, all sample_group values in metadata.tsv are passed.')
 
 # Sub parser: metadata
 pme_help = 'NCBI SRA metadata retrieval and curation. See `amalgkit metadata -h`'
