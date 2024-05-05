@@ -1028,7 +1028,7 @@ tc_eff_length = read.table(eff_length_path, sep = "\t", stringsAsFactors = FALSE
 sra_all = read.table(metadata_path, sep = "\t", header = TRUE, quote = "", fill = TRUE, comment.char = "", stringsAsFactors = FALSE, check.names=FALSE)
 sra_all = standardize_metadata_all(sra_all)
 
-scientific_name = unique(sra_all[(sra_all[['run']] %in% colnames(tc)), "scientific_name"])
+scientific_name = sra_all[(sra_all[['run']] %in% colnames(tc)), "scientific_name"][1]
 dir_curate = file.path(out_dir, 'curate')
 dir_pdf = file.path(dir_curate, sub(" ", "_", scientific_name), 'plots')
 dir.create(dir_pdf, showWarnings=FALSE, recursive=TRUE)
