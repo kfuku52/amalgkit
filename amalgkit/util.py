@@ -364,9 +364,9 @@ def read_config_file(file_name, dir_path):
         df = df.iloc[:,0]
     return df
 
-def load_metadata(args):
+def load_metadata(args, dir_subcommand='metadata'):
     if args.metadata=='inferred':
-        relative_path = os.path.join(args.out_dir, 'metadata', 'metadata.tsv')
+        relative_path = os.path.join(args.out_dir, dir_subcommand, 'metadata.tsv')
         real_path = os.path.realpath(relative_path)
     else:
         real_path = os.path.realpath(args.metadata)

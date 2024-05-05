@@ -75,18 +75,20 @@ def run_curate_r_script(args, metadata, sp, input_dir):
 
 def curate_main(args):
     check_rscript()
-    metadata = load_metadata(args)
     if args.input_dir=='inferred':
         dir_merge = os.path.realpath(os.path.join(args.out_dir, 'merge'))
         dir_cstmm = os.path.realpath(os.path.join(args.out_dir, 'cstmm'))
         if os.path.exists(dir_cstmm):
             print('Subdirectory for amalgkit cstmm will be used as input: {}'.format(dir_cstmm))
+            metadata = load_metadata(args, dir_subcommand='cstmm')
             input_dir = dir_cstmm
         else:
             print('Subdirectory for amalgkit merge will be used as input: {}'.format(dir_merge))
+            metadata = load_metadata(args, dir_subcommand='merge')
             input_dir = dir_merge
     else:
         print('Input_directory: {}'.format(args.input_dir))
+        metadata = load_metadata(args, dir_subcommand=os.path.basename(args.input_dir))
         input_dir = args.input_dir
     if ('tpm' in args.norm) & ('cstmm' in input_dir):
             txt = ("TPM and TMM are incompatible. "
