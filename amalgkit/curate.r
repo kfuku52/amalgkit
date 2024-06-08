@@ -31,6 +31,7 @@ if (debug_mode == "debug") {
     clip_negative = as.logical(1)
     maintain_zero = as.logical(1)
     r_util_path = '/Users/kf/Dropbox/repos/amalgkit/amalgkit/util.r'
+    skip_curation_flag = FALSE
     setwd(file.path(out_dir, 'curate'))
 } else if (debug_mode == "batch") {
     args = commandArgs(trailingOnly = TRUE)
@@ -94,12 +95,17 @@ remove_nonexpressed_gene = function(tc) {
 
 add_color_to_metadata = function(sra, selected_sample_groups) {
     sra = sra[, (!colnames(sra) %in% c("bp_color", "sp_color", "sample_group_color"))]
-    bioproject = as.character(sra[['bioproject']])
-    bioproject_u = sort(unique(bioproject))
+    if ('bioproject' %in% colnames(sra)) {
+        bioproject = as.character(sra[['bioproject']])
+        bioproject_u = sort(unique(bioproject))
+    } else {
+        bioproject_u = rep('PLACEHOLDER', nrow(sra))
+    }
     scientific_name = as.character(sra[['scientific_name']])
     scientific_name_u = sort(unique(scientific_name))
     sample_group = as.character(sra[['sample_group']])
     sample_group_u = sort(unique(sample_group))
+    print(head(sra))
     if (length(selected_sample_groups) <= 8) {
         sample_group_color = brewer.pal(8, "Dark2")
         sample_group_color = sample_group_color[1:length(selected_sample_groups)] # To avoid the warning "minimal value for n is 3, returning requested palette with 3 different levels"
@@ -125,6 +131,9 @@ add_color_to_metadata = function(sra, selected_sample_groups) {
 
 sort_tc_and_metadata = function(tc, sra, sort_columns = c("sample_group", "scientific_name", "bioproject")) {
     for (column in rev(sort_columns)) {
+        if (! column %in% colnames(sra)) {
+            next
+        }
         sra = sra[order(sra[[column]]), ]
     }
     sra_intersection = sra[(sra[['run']] %in% colnames(tc)),'run']
@@ -982,6 +991,9 @@ apply_transformation_logic = function(tc, tc_eff_length, transform_method, batch
 
 standardize_metadata_all = function(sra_all) {
     for (col in c('instrument','bioproject')) {
+        if (! col %in% colnames(sra_all)) {
+            next
+        }
         is_missing = (sra_all[,col] == "")|(is.na(sra_all[,col]))
         sra_all[is_missing, col] = "not_provided"
     }
@@ -1010,8 +1022,7 @@ exclude_inappropriate_sample_from_tc = function(tc, sra) {
 }
 
 exclude_inappropriate_sample_from_eff_length = function(tc_eff_length, tc) {
-    row.names(tc_eff_length) = tc_eff_length[, 1]
-    tc_eff_length = tc_eff_length[, colnames(tc)]
+    tc_eff_length = tc_eff_length[, colnames(tc), drop = FALSE]
     return(tc_eff_length)
 }
 
@@ -1023,7 +1034,7 @@ exclude_inappropriate_sample_from_eff_length = function(tc_eff_length, tc) {
 fontsize = 7
 
 tc = read.table(est_counts_path, sep = "\t", stringsAsFactors = FALSE, header = TRUE, quote = "", fill = FALSE, row.names = 1, check.names=FALSE)
-tc_eff_length = read.table(eff_length_path, sep = "\t", stringsAsFactors = FALSE, header = TRUE, quote = "", fill = FALSE, check.names=FALSE)
+tc_eff_length = read.table(eff_length_path, sep = "\t", stringsAsFactors = FALSE, header = TRUE, quote = "", fill = FALSE, row.names = 1, check.names=FALSE)
 
 sra_all = read.table(metadata_path, sep = "\t", header = TRUE, quote = "", fill = TRUE, comment.char = "", stringsAsFactors = FALSE, check.names=FALSE)
 sra_all = standardize_metadata_all(sra_all)
