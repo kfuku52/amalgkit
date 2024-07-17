@@ -131,7 +131,7 @@ pp_threads.add_argument('--threads', metavar='INT', default=1, type=int, require
                  help='default=%(default)s: Number of threads.')
 pp_cg = argparse.ArgumentParser(add_help=False)
 pp_cg.add_argument('--sample_group', metavar='STR', default=None, type=str, required=False, action='store',
-                 help='default=%(default)s: "Comma separated list of primary condition or tissue used in curate analysis. '
+                 help='default=%(default)s: "Comma separated list of sample groups. '
                       'Example input may look like "root,flower,leaf" or "heat stressed,cold stressed,light stressed". '
                       'By default, all sample_group values in metadata.tsv are passed.')
 
@@ -154,7 +154,7 @@ pse.add_argument('--config_dir', metavar='PATH', default='inferred', type=str, r
 pse.add_argument('--min_nspots', metavar='INT', default=5000000, type=int, required=False, action='store',
                  help='default=%(default)s: Minimum number of RNA-seq reads per sample.')
 pse.add_argument('--max_sample', metavar='INT', default=99999, type=int, required=False, action='store',
-                 help='default=%(default)s: Maximum number of RNA-seq data to retain for one tissue in a species.')
+                 help='default=%(default)s: Maximum number of RNA-seq data to retain for one sample group in a species.')
 pse.add_argument('--mark_redundant_biosamples', metavar='no|yes', default='no', type=strtobool,
                  required=False, action='store',
                  help='default=%(default)s: Whether to label SRAs with the same BioSample ID as unqualified.')
@@ -166,7 +166,8 @@ pge = subparsers.add_parser('getfastq', help=pge_help, parents=[pp_out, pp_meta,
 pge.add_argument('--entrez_email', metavar='aaa@bbb.com', default='', type=str, required=False, action='store',
                  help='default=%(default)s: Your email address. See https://www.ncbi.nlm.nih.gov/books/NBK25497/')
 pge.add_argument('--id', metavar='XXXXX0000', default=None, type=str, required=False, action='store',
-                 help='default=%(default)s: BioProject/BioSample/SRR ID.')
+                 help='default=%(default)s: BioProject/BioSample/SRR ID. This option can be used to directly specify '
+                      'an ID to start FASTQ generation without running `amalgkit metadata` beforehand.')
 pge.add_argument('--id_list', metavar='PATH', default=None, type=str, required=False, action='store',
                  help='default=%(default)s: Location of file containing a list of SRA IDs. Otherwise works like --id')
 pge.add_argument('--layout', metavar='single|paired|auto', default='auto', type=str, required=False, action='store',
@@ -290,7 +291,7 @@ pcu.add_argument('--correlation_threshold', metavar='FLOAT', default=0.30, type=
 pcu.add_argument('--plot_intermediate', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
                  help='default=%(default)s: If yes, calculates and plots SVA correction after each iteration of outlier removal. Drastically increases computing times!')
 pcu.add_argument('--one_outlier_per_iter', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
-                 help='default=%(default)s: If yes, allows curate to remove only 1 sample per same-tissue or same-bioproject. Increases computing times!')
+                 help='default=%(default)s: If yes, allows curate to remove only 1 sample per same-sample-group or same-bioproject. Increases computing times!')
 pcu.add_argument('--norm', metavar='(logn|log2|lognp1|log2p1|none)-(fpkm|tpm|none)',
                  default='log2p1-fpkm', type=str, required=False, action='store',
                  help='default=%(default)s: Expression level transformation before the batch effect removal. '

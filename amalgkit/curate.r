@@ -336,17 +336,17 @@ check_within_sample_group_correlation = function(tc, sra, dist_method, min_dif, 
         names(coef) = selected_sample_groups
         names(coef_other_bp) = selected_sample_groups
         if (max(coef, na.rm=TRUE) != coef[my_sample_group]) {
-            cat('Registered as a candidate for exclusion. Better correlation to other categories:', sra_run, '\n')
+            cat('Registered as a candidate for exclusion. Better correlation to other sample group(s):', sra_run, '\n')
             exclude_runs = c(exclude_runs, sra_run)
         }
         if (coef_other_bp[my_sample_group] < correlation_threshold) {
-            cat('Registered as a candidate for exclusion. Low within-category correlation:', sra_run, '\n')
+            cat('Registered as a candidate for exclusion. Low within-sample-group correlation:', sra_run, '\n')
             exclude_runs = c(exclude_runs, sra_run)
         }
     }
     if (length(exclude_runs)) {
       if(one_out_per_iter == TRUE){
-          cat("Excluding only one outlier per bioproject or same sample_group. \n")
+          cat("Excluding only one outlier per BioProject or same sample_group. \n")
           exclude_run_bps_and_sample_group = sra2[(sra2$run %in% exclude_runs), c("bioproject", "run", "sample_group")]
           first_bp_hit = exclude_run_bps_and_sample_group[match(unique(exclude_run_bps_and_sample_group$bioproject), exclude_run_bps_and_sample_group$bioproject),]
           first_same_sample_group_hit = exclude_run_bps_and_sample_group[match(unique(exclude_run_bps_and_sample_group$sample_group), exclude_run_bps_and_sample_group$sample_group),]
@@ -367,8 +367,8 @@ check_within_sample_group_correlation = function(tc, sra, dist_method, min_dif, 
         rownames(exclude_run_bps) = 1:nrow(exclude_run_bps)
         min_other_run_same_bp_sample_group = exclude_run_bps[1, "num_other_run_same_bp_sample_group"]
         semimin_bp_count = exclude_run_bps[1, "Freq"]
-        cat("minimum number of other BioProjects within sample_group:", min_other_run_same_bp_sample_group, "\n")
-        cat("semi-minimum count of exclusion-candidate BioProjects:", semimin_bp_count, "\n")
+        cat("Minimum number of other BioProjects within sample_group:", min_other_run_same_bp_sample_group, "\n")
+        cat("Semi-minimum count of exclusion-candidate BioProjects:", semimin_bp_count, "\n")
         conditions = (exclude_run_bps[['Freq']] == semimin_bp_count)
         conditions = conditions & (exclude_run_bps[['num_other_run_same_bp_sample_group']] == min_other_run_same_bp_sample_group)
         exclude_bps = unique(exclude_run_bps[conditions, "bioproject"])
