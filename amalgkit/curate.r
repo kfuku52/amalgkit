@@ -791,7 +791,92 @@ draw_boxplot = function(sra, tc_dist_matrix, fontsize = 7) {
     axis(side = 1, at = c(1, 2, 3, 4), labels = labels, padj = 0.5)
     axis(side = 1, at = 0.35, labels = "Organ\nBioProject", padj = 0.5, hadj = 1, tick = FALSE)
 
+    # Add mean PCC
+    means <- c(
+        mean(tc_dist_matrix[(!is_same_bp) & (!is_same_sample_group)], na.rm = TRUE),
+        mean(tc_dist_matrix[(is_same_bp) & (!is_same_sample_group)], na.rm = TRUE),
+        mean(tc_dist_matrix[(!is_same_bp) & (is_same_sample_group)], na.rm = TRUE),
+        mean(tc_dist_matrix[(is_same_bp) & (is_same_sample_group)], na.rm = TRUE)
+    )
+
+    points(1:4, means, col = "red", pch = 16)
+    lines(c(1, 2), means[1:2], col = "red")
+    lines(c(3, 4), means[3:4], col = "red")
+
+    text(x = 1.5, y = max(means[1:2]) + 0.05, labels = round(abs(means[1] - means[2]), 2), col = "red", cex = 0.8)
+    text(x = 3.5, y = max(means[3:4]) + 0.05, labels = round(abs(means[3] - means[4]), 2), col = "red", cex = 0.8)
+
+    labels = c("bw\nbw", "bw\nwi", "wi\nbw", "wi\nwi")
+    axis(side = 1, at = c(1, 2, 3, 4), labels = labels, padj = 0.5)
+    axis(side = 1, at = 0.35, labels = "Organ\nBioProject", padj = 0.5, hadj = 1, tick = FALSE)
+
+     # Add legend in the bottom left corner
+    legend("bottomleft", legend = c("mean PCC", expression(Delta ~ "mean PCC")),
+           pch = c(16, NA), col = c("red", "red"),
+           lty = c(NA, 1), bty = "n", cex = 0.8,
+           text.width = max(strwidth(c("mean PCC", expression(Delta ~ "mean PCC")))))  # Align text
+
 }
+
+save_correlation = function( tc, sra, dist_method, round) {
+    out = tc_metadata_intersect(tc, sra)
+    tc = out[["tc"]]
+    sra = out[["sra"]]
+    is_same_bp = outer(sra[['bioproject']], sra[['bioproject']], function(x, y) {
+        x == y
+    })
+    is_same_sample_group = outer(sra[['sample_group']], sra[['sample_group']], function(x, y) {
+        x == y
+    })
+
+
+  tc_dist_matrix = cor(tc, method = dist_method)
+  tc_dist_matrix[is.na(tc_dist_matrix)] = 0
+
+  # bw = between; wi = within; order: Bioproject -> Sample Group; tc_dist_bwwi: between BPs, within CGs
+  tc_dist_bwbw = tc_dist_matrix[(!is_same_bp) & (!is_same_sample_group)]
+  bwbw_mea = mean(tc_dist_bwbw)
+  bwbw_med = median(tc_dist_bwbw)
+  bwbw_var = var(tc_dist_bwbw)
+
+  tc_dist_wibw = tc_dist_matrix[(is_same_bp) & (!is_same_sample_group)]
+  wibw_mea = mean(tc_dist_wibw)
+  wibw_med = median(tc_dist_wibw)
+  wibw_var = var(tc_dist_wibw)
+
+  tc_dist_bwwi = tc_dist_matrix[(!is_same_bp) & (is_same_sample_group)]
+  bwwi_mea = mean(tc_dist_bwwi)
+  bwwi_med = median(tc_dist_bwwi)
+  bwwi_var = var(tc_dist_bwwi)
+
+  tc_dist_wiwi = tc_dist_matrix[(is_same_bp) & (is_same_sample_group)]
+  wiwi_mea = mean(tc_dist_wiwi)
+  wiwi_med = median(tc_dist_wiwi)
+  wiwi_var = var(tc_dist_wiwi)
+
+  tc_dist_stats = c(bwbw_mea, bwbw_med, bwbw_var, wibw_mea, wibw_med, wibw_var, bwwi_mea, bwwi_med, bwwi_var, wiwi_mea, wiwi_med, wiwi_var)
+
+  # Check if dataframe exists in environment, if not create it
+  if (!exists("correlation_statistics", envir = .GlobalEnv)) {
+    correlation_statistics <- data.frame(matrix(tc_dist_stats, ncol = 12, dimnames = list(NULL, c("bwbw_mean","bwbw_median","bwbw_variance", "wibw_mean","wibw_median","wibw_variance", "bwwi_mean","bwwi_median","bwwi_variance", "wiwi_mean","wiwi_median","wiwi_variance"))))
+    rownames(correlation_statistics) <- paste0("round_", round)
+    assign("correlation_statistics", correlation_statistics, envir = .GlobalEnv)
+  } else {
+    correlation_statistics <- get("correlation_statistics", envir = .GlobalEnv)
+    new_row <- data.frame(matrix(tc_dist_stats, ncol = 12, dimnames = list(NULL, c("bwbw_mean","bwbw_median","bwbw_variance", "wibw_mean","wibw_median","wibw_variance", "bwwi_mean","bwwi_median","bwwi_variance", "wiwi_mean","wiwi_median","wiwi_variance"))))
+    rownames(new_row) <- paste0("round_", round)
+    correlation_statistics <- rbind(correlation_statistics, new_row)
+    assign("correlation_statistics", correlation_statistics, envir = .GlobalEnv)
+  }
+
+  return(correlation_statistics)
+
+
+}
+
+
+
+
 
 draw_tau_histogram = function(tc, sra, selected_sample_groups, fontsize = 7, transform_method) {
     df_tau = sample_group2tau(sample_group_mean(tc, sra, selected_sample_groups)[['tc_ave']], rich.annotation = FALSE, transform_method)
@@ -1085,6 +1170,7 @@ sra = out[["sra"]]
 tc_tmp = apply_transformation_logic(tc, tc_eff_length, transform_method, batch_effect_alg, step='before_batch_plot', sra=sra)
 save_plot(tc_tmp, sra, NULL, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".original"),
           selected_sample_groups, fontsize, transform_method, batch_effect_alg)
+save_correlation(tc_tmp, sra, dist_method, round)
 out = batch_effect_subtraction(tc, sra, batch_effect_alg, transform_method, clip_negative)
 tc_batch_corrected = out[["tc"]]
 sva_out = out[["sva"]]
@@ -1116,6 +1202,7 @@ if (!is.null(sva_out)) {
 tc_batch_corrected_tmp = apply_transformation_logic(tc_batch_corrected, tc_eff_length, transform_method, batch_effect_alg, step='after_batch', sra=sra)
 save_plot(tc_batch_corrected_tmp, sra, sva_out, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".mapping_cutoff", ".", batch_effect_alg),
           selected_sample_groups, fontsize, transform_method, batch_effect_alg)
+save_correlation(tc_batch_corrected_tmp, sra, dist_method, round)
 
 round = 2
 end_flag = 0
@@ -1142,6 +1229,7 @@ while (end_flag == 0) {
         tc_batch_corrected_tmp = apply_transformation_logic(tc_batch_corrected, tc_eff_length, transform_method, batch_effect_alg, step='after_batch', sra=sra)
         file_base = paste0(sub(" ", "_", scientific_name), ".", round, ".correlation_cutoff", ".", batch_effect_alg)
         save_plot(tc_batch_corrected_tmp, sra, sva_out, dist_method, file_base, selected_sample_groups, fontsize, transform_method, batch_effect_alg)
+        save_correlation(tc_batch_corrected_tmp, sra, dist_method, round)
     }
     cat("Round:", round, ": # before =", num_run_before, ": # after =", num_run_after, "\n\n")
     if (num_run_before == num_run_after) {
@@ -1174,6 +1262,8 @@ out = sample_group_mean(tc_batch_corrected, sra, selected_sample_groups)
 tc_sample_group = out[['tc_ave']]
 file = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".", batch_effect_alg , ".sample_group.mean.tsv"))
 write_table_with_index_name(df=tc_sample_group, file_path=file, index_name='target_id')
+file = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".", batch_effect_alg , ".correlation_statistics.tsv"))
+write.table(correlation_statistics, file = file, row.names=TRUE, sep="\t", quote=FALSE)
 tc_tau = sample_group2tau(tc_sample_group, rich.annotation = TRUE, transform_method)
 file = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".", batch_effect_alg , ".tau.tsv"))
 write_table_with_index_name(df=tc_tau, file_path=file, index_name='target_id')
