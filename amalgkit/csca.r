@@ -494,7 +494,16 @@ save_unaveraged_pca_plot = function(unaveraged_orthologs, df_color_unaveraged, d
         legend.title=element_text(size=font_size)
       )
       filename = paste0('csca_unaveraged_pca_PC', pcx, pcy, '.', d, '.pdf')
-      ggsave(file=filename, g, height=2.15, width=4.25)
+      tryCatch(
+        {
+          ggsave(file=filename, g, height=2.15, width=4.25)
+        },
+        error = function(cond) {
+            message(paste("PCA could not be computed for file", filename))
+            #message("original error message:")
+            #message(conditionMessage(cond))
+        }
+      )
     }
   }
   return(df_metadata)
@@ -549,7 +558,18 @@ save_unaveraged_tsne_plot = function(unaveraged_orthologs, df_color_unaveraged) 
       legend.title=element_text(size=font_size)
     )
     filename = paste0('csca_unaveraged_tsne.', d, '.pdf')
-    ggsave(file=filename, g, height=2.15, width=4.25)
+    tryCatch(
+        {
+          ggsave(file=filename, g, height=2.15, width=4.25)
+        },
+        error = function(cond) {
+            message(paste("t-SNE could not be computed for file", filename))
+            #message("original error message:")
+            #message(conditionMessage(cond))
+        }
+    )
+
+
   }
 }
 
@@ -646,7 +666,7 @@ calculate_correlation_within_group = function(unaveraged_orthologs, averaged_ort
         rownames(ortholog_med) = rownames(averaged_orthologs[[d]])
         for (sample_group in selected_sample_groups) {
             is_sample_group = endsWith(colnames(averaged_orthologs[[d]]), sample_group)
-            ortholog_med[,sample_group] = apply(averaged_orthologs[[d]][,is_sample_group], 1, my_fun1)
+            ortholog_med[,sample_group] = apply(as.data.frame(averaged_orthologs[[d]][,is_sample_group]), 1, my_fun1)
         }
         stopifnot(all(rownames(unaveraged_orthologs[[d]])==rownames(ortholog_med)))
         target_col = paste0('within_group_cor_', d)
