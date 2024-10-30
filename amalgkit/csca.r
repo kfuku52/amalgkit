@@ -855,6 +855,91 @@ write_pivot_table = function(df_metadata, unaveraged_tcs, selected_sample_groups
     write.table(pivot_table, 'csca_pivot_selected_samples.tsv', sep='\t', row.names=FALSE, quote=FALSE)
 }
 
+save_delta_pcc_plot = function(directory, plot_title) {
+
+  first_row_means <- list()
+  last_row_means <- list()
+  all_data_points <- list()
+
+  file_list <- list.files(directory, pattern = "\\.correlation_statistics\\.tsv$")
+  for (filename in file_list) {
+    filepath <- file.path(directory, filename)
+
+    df <- read.table(filepath, sep = '\t', header = TRUE)
+
+    first_row_means[[filename]] <- df[1, c('bwbw_mean', 'bwwi_mean', 'wiwi_mean', 'wibw_mean')]
+    last_row_means[[filename]] <- df[nrow(df), c('bwbw_mean', 'bwwi_mean', 'wiwi_mean', 'wibw_mean')]
+
+    all_data_points[[filename]] <- as.numeric(unlist(df[c('bwbw_mean', 'bwwi_mean', 'wiwi_mean', 'wibw_mean')]))
+  }
+
+  # Concatenate the mean values for the first and last rows into DataFrames
+  first_row_means_df <- do.call(rbind, first_row_means)
+  colnames(first_row_means_df) <- c('bwbw_uncorrected', 'bwwi_uncorrected', 'wiwi_uncorrected', 'wibw_uncorrected')
+
+  last_row_means_df <- do.call(rbind, last_row_means)
+  colnames(last_row_means_df) <- c('bwbw_corrected', 'bwwi_corrected', 'wiwi_corrected', 'wibw_corrected')
+
+  combined_means_df <- cbind(first_row_means_df, last_row_means_df)
+
+  cat("Combined Means DataFrame:\n")
+  print(combined_means_df)
+
+  # Calculate deltas
+  combined_means_df$delta_bwbw_wibw_uncorrected <- combined_means_df$bwbw_uncorrected - combined_means_df$wibw_uncorrected
+  combined_means_df$delta_bwbw_wibw_corrected <- combined_means_df$bwbw_corrected - combined_means_df$wibw_corrected
+  combined_means_df$delta_wiwi_bwwi_uncorrected <- combined_means_df$bwwi_uncorrected - combined_means_df$wiwi_uncorrected
+  combined_means_df$delta_wiwi_bwwi_corrected <- combined_means_df$bwwi_corrected - combined_means_df$wiwi_corrected
+
+  # Select only the delta columns and take the absolute values
+  delta_means_df <- combined_means_df[, c('delta_bwbw_wibw_uncorrected', 'delta_bwbw_wibw_corrected',
+                                          'delta_wiwi_bwwi_uncorrected', 'delta_wiwi_bwwi_corrected')]
+  delta_means_df <- abs(delta_means_df)
+  delta_means_df <- na.omit(delta_means_df)
+
+  cat("\nDelta Means DataFrame:\n")
+  print(delta_means_df)
+
+  # Shapiro-Wilk tests
+  cat("\nShapiro-Wilk Test Results:\n")
+  cat("delta_bwbw_wibw_uncorrected: ", shapiro.test(delta_means_df$delta_bwbw_wibw_uncorrected)$p.value, "\n")
+  cat("delta_bwbw_wibw_corrected: ", shapiro.test(delta_means_df$delta_bwbw_wibw_corrected)$p.value, "\n")
+  cat("delta_wiwi_bwwi_uncorrected: ", shapiro.test(delta_means_df$delta_wiwi_bwwi_uncorrected)$p.value, "\n")
+  cat("delta_wiwi_bwwi_corrected: ", shapiro.test(delta_means_df$delta_wiwi_bwwi_corrected)$p.value, "\n")
+
+  # Dependent t-tests
+  cat("\nDependent T-Test Results:\n")
+  t_test_result_bw = t.test(delta_means_df$delta_bwbw_wibw_uncorrected, delta_means_df$delta_bwbw_wibw_corrected, paired = TRUE)$p.value
+  t_test_result_wi = t.test(delta_means_df$delta_wiwi_bwwi_uncorrected, delta_means_df$delta_wiwi_bwwi_corrected, paired = TRUE)$p.value
+  cat("delta_bwbw_wibw_uncorrected vs delta_bwbw_wibw_corrected: ",
+      t_test_result_bw, "\n")
+  cat("delta_wiwi_bwwi_uncorrected vs delta_wiwi_bwwi_corrected: ",
+      t_test_result_wi, "\n")
+
+  p_label1 <- paste("p =", signif(t_test_result_bw, 3))
+  p_label2 <- paste("p =", signif(t_test_result_wi, 3))
+
+  pdf(plot_title, height=3.6, width=3.6,fonts = "Helvetica", pointsize = 7)
+
+  plot(c(0.5, 4.5), c(0, 0.45), type = 'n', xlab='', ylab=expression(Delta ~ "mean PCC"), las=1, xaxt='n')
+  boxplot(delta_means_df$delta_bwbw_wibw_uncorrected, at=1, add=TRUE, col='gray', yaxt='n')
+  boxplot(delta_means_df$delta_bwbw_wibw_corrected, at=2, add=TRUE, col='gray', yaxt='n')
+  boxplot(delta_means_df$delta_wiwi_bwwi_uncorrected, at=3, add=TRUE, col='gray', yaxt='n')
+  boxplot(delta_means_df$delta_wiwi_bwwi_corrected, at=4, add=TRUE, col='gray', yaxt='n')
+
+  segments(x0 = 1, y0 = mean(delta_means_df$delta_bwbw_wibw_uncorrected)+ 0.2, x1 = 2, y1 = mean(delta_means_df$delta_bwbw_wibw_uncorrected)+ 0.2, col = "black", lwd = 0.5)
+  segments(x0 = 3, y0 = mean(delta_means_df$delta_wiwi_bwwi_uncorrected)+ 0.2, x1 = 4, y1 = mean(delta_means_df$delta_wiwi_bwwi_uncorrected)+ 0.2, col = "black", lwd = 0.5)
+  text(x = 1.5, y = mean(delta_means_df$delta_bwbw_wibw_uncorrected)+ 0.22, labels = p_label1, xpd = TRUE, srt = 0)
+  text(x = 3.5, y = mean(delta_means_df$delta_wiwi_bwwi_uncorrected)+ 0.22, labels = p_label2, xpd = TRUE, srt = 0)
+
+  axis(side = 1, at = c(1, 2, 3, 4), labels = c("uncorr.\n", "corr.\n", "uncorr.\n", "corr.\n"), padj = 0.5, tick = FALSE)
+  axis(side = 1, at = 0.35, labels='Correction\nGroup', padj=0.5, hadj=1, tick=FALSE)
+  axis(side = 1, at = c(1.5, 3.5), labels = c("\nbetween group", "\nwithin group"), padj = 0.5 , tick = FALSE)
+  graphics.off()
+
+}
+
+
 df_og = read.table(file_orthogroup, header=TRUE, sep='\t', row.names=1, quote='', check.names=FALSE)
 df_gc = read.table(file_genecount, header=TRUE, sep='\t', quote='', check.names=FALSE)
 rownames(df_gc) = df_gc[['orthogroup_id']]
@@ -874,6 +959,12 @@ cat('Number of selected species:', length(spp), '\n')
 
 unaveraged_tcs = load_unaveraged_expression_tables(dir_csca_input_table, spp_filled, batch_effect_alg)
 unaveraged_tcs = extract_selected_tc_only(unaveraged_tcs, df_metadata)
+
+# if a species was skipped during load_unaveraged_expression_tables(), it will cause indexing issues down the line, due to df_singleog having more species entries than the tcs
+if(length(unaveraged_tcs[['corrected']]) < length(colnames(df_singleog))){
+  df_singleog = df_singleog[,names(unaveraged_tcs[['corrected']])]
+}
+
 unaveraged_orthologs = extract_ortholog_unaveraged_expression_table(df_singleog, unaveraged_tcs)
 averaged_tcs = unaveraged2averaged(unaveraged_tcs, df_metadata, selected_sample_groups)
 averaged_orthologs = extract_ortholog_mean_expression_table(df_singleog, averaged_tcs, label_orders)
@@ -921,6 +1012,7 @@ save_averaged_dimensionality_reduction_summary(imputed_averaged_orthologs, df_co
 save_averaged_box_plot(imputed_averaged_orthologs, df_color_averaged)
 df_metadata = save_unaveraged_pca_plot(imputed_unaveraged_orthologs, df_color_unaveraged, df_metadata)
 save_unaveraged_tsne_plot(imputed_unaveraged_orthologs, df_color_unaveraged)
+save_delta_pcc_plot(directory = dir_csca_input_table, plot_title = 'csca_delta_pcc_boxplot.pdf')
 
 file_metadata_out = file.path(dir_csca, 'metadata.tsv')
 write.table(df_metadata, file_metadata_out, row.names=FALSE, sep='\t', quote=FALSE)
