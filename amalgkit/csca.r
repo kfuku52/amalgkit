@@ -14,15 +14,19 @@ suppressWarnings(suppressPackageStartupMessages(library(pcaMethods, quietly=TRUE
 options(stringsAsFactors = FALSE)
 
 debug_mode = ifelse(length(commandArgs(trailingOnly = TRUE)) == 1, "debug", "batch")
+debug_mode = "debug"
 font_size = 8
 
 if (debug_mode == "debug") {
-  selected_sample_groups = c('root','flower', 'leaf')
-  dir_work = '/Users/kf/Dropbox/data/evolutionary_transcriptomics/20230527_gfe_pipeline/amalgkit_out'
+  selected_sample_groups = c('root', 'flower', 'leaf')
+  dir_work = '/home/s229181/projects/amalgkit_paper/Plant_set'
+
+  #selected_sample_groups = c('Amicoumacin_low','Amicoumacin_high','anaerobic','Azithromycin_low','Azithromycin_high','control','ciprofloxacin_low','ciprofloxacin_high','colistin_low','colistin_high','H2O2','heat','meropenem_low','meropenem_high','NaCl','Anaerobic','IPTG','biofilm_medium','acid','H202','butyrate','aerobic','Ampicillin','Vancomycin','ciprofloxacin','colistin','glucose','Glucose','rifampicin','probiotic','cleaner','ampicillin','tetracycline','pediocin','glycerol','Pyruvate','Ca2+','Glycerol','H2o2','anhydrotetracycline','TB47','treated','iron','Lactate','rion','phage','Ag','biofilm','MIC','AZM','citrate','NaNO2','Acetate','sucrose','coumermycin','copper','mitomycin','arabinose','Cefotaxime','Cellulose','vancomycin','mupirocin','galactose','macrophages','tobramycin')
+  #dir_work = '/home/s229181/projects/amalgkit_paper/Prokaryote_set'
   dir_csca_input_table = file.path(dir_work,'csca/csca_input_symlinks')
   file_orthogroup = file.path(dir_work, 'csca/multispecies_busco_table.tsv')
   file_genecount = file.path(dir_work, 'csca/multispecies_genecount.tsv')
-  r_util_path = '/Users/kf/Dropbox/repos/amalgkit/amalgkit/util.r'
+  r_util_path = '/home/s229181/projects/amalgkit_paper/amalgkit/amalgkit/util.r'
   dir_csca = file.path(dir_work, 'csca')
   batch_effect_alg = 'sva'
 } else if (debug_mode == "batch") {
@@ -933,7 +937,7 @@ save_delta_pcc_plot = function(directory, plot_title) {
   text(x = 3.5, y = mean(delta_means_df$delta_wiwi_bwwi_uncorrected)+ 0.22, labels = p_label2, xpd = TRUE, srt = 0)
 
   axis(side = 1, at = c(1, 2, 3, 4), labels = c("uncorr.\n", "corr.\n", "uncorr.\n", "corr.\n"), padj = 0.5, tick = FALSE)
-  axis(side = 1, at = 0.35, labels='Correction\nGroup', padj=0.5, hadj=1, tick=FALSE)
+  axis(side = 1, at = 0.35, labels='Correction\nSample Group', padj=0.5, hadj=1, tick=FALSE)
   axis(side = 1, at = c(1.5, 3.5), labels = c("\nbetween group", "\nwithin group"), padj = 0.5 , tick = FALSE)
   graphics.off()
 
@@ -1025,3 +1029,6 @@ if (file.exists('Rplots.pdf')) {
   file.remove('Rplots.pdf')
 }
 cat('csca.r completed!\n')
+
+
+

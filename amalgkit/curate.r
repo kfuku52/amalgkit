@@ -789,7 +789,7 @@ draw_boxplot = function(sra, tc_dist_matrix, fontsize = 7) {
     boxplot(tc_dist_matrix[(is_same_bp) & (is_same_sample_group)], at = 4, add = TRUE, col = "gray", yaxt = "n")
     labels = c("bw\nbw", "bw\nwi", "wi\nbw", "wi\nwi")
     axis(side = 1, at = c(1, 2, 3, 4), labels = labels, padj = 0.5)
-    axis(side = 1, at = 0.35, labels = "Organ\nBioProject", padj = 0.5, hadj = 1, tick = FALSE)
+    axis(side = 1, at = 0.35, labels = "Sample Group\nBioProject", padj = 0.5, hadj = 1, tick = FALSE)
 
     # Add mean PCC
     means <- c(
@@ -808,7 +808,7 @@ draw_boxplot = function(sra, tc_dist_matrix, fontsize = 7) {
 
     labels = c("bw\nbw", "bw\nwi", "wi\nbw", "wi\nwi")
     axis(side = 1, at = c(1, 2, 3, 4), labels = labels, padj = 0.5)
-    axis(side = 1, at = 0.35, labels = "Organ\nBioProject", padj = 0.5, hadj = 1, tick = FALSE)
+    axis(side = 1, at = 0.35, labels = "Sample Group\nBioProject", padj = 0.5, hadj = 1, tick = FALSE)
 
      # Add legend in the bottom left corner
     legend("bottomleft", legend = c("mean PCC", expression(Delta ~ "mean PCC")),
@@ -907,7 +907,7 @@ draw_legend = function(sra, new = TRUE, pos = "center", fontsize = 7, nlabel.in.
     sample_group_color_unique = unique(sra[['sample_group_color']])
     bp_color_unique = unique(sra[['bp_color']])
     ncol = ceiling((length(sample_group_unique) + length(bp_unique) + 2)/nlabel.in.col)
-    legend_text = c("Organ", as.character(sample_group_unique), "", "BioProject", as.character(bp_unique))
+    legend_text = c("Sample Group", as.character(sample_group_unique), "", "BioProject", as.character(bp_unique))
     legend_color = c(rgb(1, 1, 1, 0), rep(rgb(1, 1, 1, 0), length(sample_group_color_unique)), rgb(1, 1, 1,
                                                                                              0), rgb(1, 1, 1, 0), bp_color_unique)
     legend_bg = c(rgb(1, 1, 1, 0), sample_group_color_unique, rgb(1, 1, 1, 0), rgb(1, 1, 1, 0), rep(rgb(1,
@@ -1089,7 +1089,7 @@ get_species_metadata = function(sra_all, scientific_name, selected_sample_groups
     is_sp = (sra_all[,'scientific_name'] == scientific_name)
     is_sample_group = (sra_all[,'sample_group'] %in% selected_sample_groups)
     cat('Number of SRA runs for this species:', sum(is_sp), '\n')
-    cat('Number of SRA runs for selected curate groups:', sum(is_sample_group), '\n')
+    cat('Number of SRA runs for selected sample groups:', sum(is_sample_group), '\n')
     sra = sra_all[(is_sp & is_sample_group),]
     conditions = (sra[['exclusion']] == "no") & (!sra[['run']] %in% colnames(tc))
     if (any(conditions)) {
