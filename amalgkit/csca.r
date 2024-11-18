@@ -14,7 +14,6 @@ suppressWarnings(suppressPackageStartupMessages(library(pcaMethods, quietly=TRUE
 options(stringsAsFactors = FALSE)
 
 debug_mode = ifelse(length(commandArgs(trailingOnly = TRUE)) == 1, "debug", "batch")
-debug_mode = "debug"
 font_size = 8
 
 if (debug_mode == "debug") {
@@ -923,7 +922,7 @@ save_delta_pcc_plot = function(directory, plot_title) {
   p_label1 <- paste("p =", signif(t_test_result_bw, 3))
   p_label2 <- paste("p =", signif(t_test_result_wi, 3))
 
-  pdf(plot_title, height=3.6, width=3.6,fonts = "Helvetica", pointsize = 7)
+  pdf(plot_title, height=4.5, width=4.5,fonts = "Helvetica", pointsize = 7)
 
   plot(c(0.5, 4.5), c(0, 0.45), type = 'n', xlab='', ylab=expression(Delta ~ "mean PCC"), las=1, xaxt='n')
   boxplot(delta_means_df$delta_bwbw_wibw_uncorrected, at=1, add=TRUE, col='gray', yaxt='n')
