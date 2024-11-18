@@ -433,9 +433,21 @@ batch_effect_subtraction = function(tc, sra, batch_effect_alg, transform_method,
             tc = rbind(tc_combat, tc_ne[, colnames(tc_combat)])
             sva1 = ''
         } else {
-            stop("Combatseq correction failed.")
-            # tc = rbind(tc, tc_ne) # Original tc shouldn't be returned as it is confusing. We may need a logic to retrieve the result of the previous round as final output.
-            sva1 = ''
+            cat("Combatseq correction failed. Trying again without group parameter. \n")
+            tc_combat = tc[, colnames(tc) %in% run_bp_freq_gt1]
+            tc_combat = try(ComBat_seq(as.matrix(tc_combat), batch=batch))
+                if (class(tc_combat)[1] != "try-error"){
+                    cat("These runs are being removed, due to the bioproject only having 1 sample: \n")
+                    print(run_bp_freq_eq1)
+                    cat("Combatseq correction was correctly performed.\n")
+                    tc_combat = as.data.frame(tc_combat)
+                    colnames(tc_combat) = tcc_cn
+                    tc = rbind(tc_combat, tc_ne[, colnames(tc_combat)])
+                    sva1 = ''
+                }
+                else{
+                    stop("Combatseq correction failed.")
+                }
         }
     } else if (batch_effect_alg == "ruvseq") {
         x = as.factor(sra$sample_group)
@@ -1173,6 +1185,9 @@ save_plot(tc_tmp, sra, NULL, dist_method, paste0(sub(" ", "_", scientific_name),
 save_correlation(tc_tmp, sra, dist_method, round)
 out = batch_effect_subtraction(tc, sra, batch_effect_alg, transform_method, clip_negative)
 tc_batch_corrected = out[["tc"]]
+if(batch_effect_alg == "combatseq"){
+    tc = tc[,colnames(tc_batch_corrected)]
+}
 sva_out = out[["sva"]]
 if (!is.null(sva_out)) {
     file_name = paste0(sub(" ", "_", scientific_name), ".", batch_effect_alg, ".", round, ".RData")
@@ -1195,6 +1210,9 @@ save_plot(tc_tmp, sra, NULL, dist_method, paste0(sub(" ", "_", scientific_name),
           selected_sample_groups, fontsize, transform_method, batch_effect_alg)
 out = batch_effect_subtraction(tc, sra, batch_effect_alg, transform_method, clip_negative)
 tc_batch_corrected = out[["tc"]]
+if(batch_effect_alg == "combatseq"){
+    tc = tc[,colnames(tc_batch_corrected)]
+}
 sva_out = out[["sva"]]
 if (!is.null(sva_out)) {
     save(sva_out, file=file.path(dir_rdata, paste0(sub(" ", "_", scientific_name),".", batch_effect_alg,".", round, ".RData")))
@@ -1219,6 +1237,9 @@ while (end_flag == 0) {
         tc_batch_corrected = NULL
         out = batch_effect_subtraction(tc[,colnames(tc_cwtc)], sra, batch_effect_alg, transform_method, clip_negative)
         tc_batch_corrected = out[["tc"]]
+        if(batch_effect_alg == "combatseq"){
+            tc = tc[,colnames(tc_batch_corrected)]
+        }
         sva_out = out[["sva"]]
         if (!is.null(sva_out)) {
             save(sva_out, file=file.path(dir_rdata, paste0(sub(" ", "_", scientific_name),".", batch_effect_alg, ".", round, ".RData")))
