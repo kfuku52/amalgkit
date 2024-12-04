@@ -530,20 +530,19 @@ def check_rscript():
 
 def orthogroup2genecount(file_orthogroup, file_genecount, spp):
     df = pandas.read_csv(file_orthogroup, sep='\t', header=0, low_memory=False)
-    orthogroup_ids = df['busco_id'].values
+    orthogroup_df = pd.DataFrame({'orthogroup_id': df['busco_id'].to_numpy()})
     is_spp = df.columns.isin(spp)
     df = df.loc[:,is_spp]
     df[df.isnull()] = ''
     df[df=='-'] = ''
-    gc = df.copy()
-    for col in gc.columns:
-        is_comma = (df[col].str.contains(','))
-        gc[col] = 0
-        gc.loc[(df[col] != '') & ~is_comma, col] = 1
-        gc.loc[is_comma, col] = df.loc[is_comma, col].str.count(',') + 1
-    col_order = ['orthogroup_id',] + gc.columns.tolist()
-    gc['orthogroup_id'] = orthogroup_ids
-    gc = gc.loc[:,col_order]
+    gc = pandas.DataFrame(0, index=df.index, columns=df.columns)
+    no_comma = (df != '') & (~df.apply(lambda x: x.str.contains(',')))
+    gc[no_comma] = 1
+    has_comma = df.apply(lambda x: x.str.contains(','))
+    gc[has_comma] = df[has_comma].apply(lambda x: x.str.count(',') + 1)
+    gc = pandas.concat([orthogroup_df, gc], axis=1)
+    col_order = ['orthogroup_id'] + [col for col in gc.columns if col != 'orthogroup_id']
+    gc = gc[col_order]
     gc.to_csv(file_genecount, index=False, sep='\t')
 
 def check_ortholog_parameter_compatibility(args):
