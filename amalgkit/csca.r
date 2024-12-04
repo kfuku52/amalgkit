@@ -17,17 +17,28 @@ debug_mode = ifelse(length(commandArgs(trailingOnly = TRUE)) == 1, "debug", "bat
 font_size = 8
 
 if (debug_mode == "debug") {
-    selected_sample_groups = c('root', 'flower', 'leaf')
-    dir_work = '/home/s229181/projects/amalgkit_paper/Plant_set'
-
-    #selected_sample_groups = c('Amicoumacin_low','Amicoumacin_high','anaerobic','Azithromycin_low','Azithromycin_high','control','ciprofloxacin_low','ciprofloxacin_high','colistin_low','colistin_high','H2O2','heat','meropenem_low','meropenem_high','NaCl','Anaerobic','IPTG','biofilm_medium','acid','H202','butyrate','aerobic','Ampicillin','Vancomycin','ciprofloxacin','colistin','glucose','Glucose','rifampicin','probiotic','cleaner','ampicillin','tetracycline','pediocin','glycerol','Pyruvate','Ca2+','Glycerol','H2o2','anhydrotetracycline','TB47','treated','iron','Lactate','rion','phage','Ag','biofilm','MIC','AZM','citrate','NaNO2','Acetate','sucrose','coumermycin','copper','mitomycin','arabinose','Cefotaxime','Cellulose','vancomycin','mupirocin','galactose','macrophages','tobramycin')
-    #dir_work = '/home/s229181/projects/amalgkit_paper/Prokaryote_set'
-    dir_csca_input_table = file.path(dir_work, 'csca/csca_input_symlinks')
-    file_orthogroup = file.path(dir_work, 'csca/multispecies_busco_table.tsv')
-    file_genecount = file.path(dir_work, 'csca/multispecies_genecount.tsv')
-    r_util_path = '/home/s229181/projects/amalgkit_paper/amalgkit/amalgkit/util.r'
-    dir_csca = file.path(dir_work, 'csca')
-    batch_effect_alg = 'sva'
+    developer = 'kf'
+    if (developer == 'mf') {
+        selected_sample_groups = c('root', 'flower', 'leaf')
+        dir_work = '/home/s229181/projects/amalgkit_paper/Plant_set'
+        #selected_sample_groups = c('Amicoumacin_low','Amicoumacin_high','anaerobic','Azithromycin_low','Azithromycin_high','control','ciprofloxacin_low','ciprofloxacin_high','colistin_low','colistin_high','H2O2','heat','meropenem_low','meropenem_high','NaCl','Anaerobic','IPTG','biofilm_medium','acid','H202','butyrate','aerobic','Ampicillin','Vancomycin','ciprofloxacin','colistin','glucose','Glucose','rifampicin','probiotic','cleaner','ampicillin','tetracycline','pediocin','glycerol','Pyruvate','Ca2+','Glycerol','H2o2','anhydrotetracycline','TB47','treated','iron','Lactate','rion','phage','Ag','biofilm','MIC','AZM','citrate','NaNO2','Acetate','sucrose','coumermycin','copper','mitomycin','arabinose','Cefotaxime','Cellulose','vancomycin','mupirocin','galactose','macrophages','tobramycin')
+        #dir_work = '/home/s229181/projects/amalgkit_paper/Prokaryote_set'
+        dir_csca_input_table = file.path(dir_work, 'csca/csca_input_symlinks')
+        file_orthogroup = file.path(dir_work, 'csca/multispecies_busco_table.tsv')
+        file_genecount = file.path(dir_work, 'csca/multispecies_genecount.tsv')
+        r_util_path = '/home/s229181/projects/amalgkit_paper/amalgkit/amalgkit/util.r'
+        dir_csca = file.path(dir_work, 'csca')
+        batch_effect_alg = 'sva'
+    } else if (developer == 'kf') {
+        selected_sample_groups = c('root', 'flower', 'leaf')
+        dir_work = '/Users/kf/Library/CloudStorage/GoogleDrive-kenji.fukushima@nig.ac.jp/My Drive/psnl/data/evolutionary_transcriptomics/20230527_amalgkit/amalgkit_out'
+        dir_csca_input_table = file.path(dir_work, 'csca/csca_input_symlinks')
+        file_orthogroup = file.path(dir_work, 'csca/multispecies_busco_table.tsv')
+        file_genecount = file.path(dir_work, 'csca/multispecies_genecount.tsv')
+        r_util_path = '/Users/kf/Library/CloudStorage/GoogleDrive-kenji.fukushima@nig.ac.jp/My Drive/psnl/repos/amalgkit/amalgkit/util.r'
+        dir_csca = file.path(dir_work, 'csca')
+        batch_effect_alg = 'sva'
+    }
 } else if (debug_mode == "batch") {
     args = commandArgs(trailingOnly = TRUE)
     selected_sample_groups = strsplit(args[1], "\\|")[[1]]
@@ -951,9 +962,60 @@ save_delta_pcc_plot = function(directory, plot_title) {
     axis(side = 1, at = 0.35, labels = 'Correction\nSample Group', padj = 0.5, hadj = 1, tick = FALSE)
     axis(side = 1, at = c(1.5, 3.5), labels = c("\nbetween group", "\nwithin group"), padj = 0.5, tick = FALSE)
     graphics.off()
-
 }
 
+save_sample_number_heatmap <- function(df_metadata, font_size = 8, dpi = 300) {
+    sampled_data <- df_metadata[df_metadata$is_sampled == 'yes', c('scientific_name', 'sample_group')]
+    freq_table <- table(sampled_data$scientific_name, sampled_data$sample_group)
+    df_sample_count <- as.data.frame(freq_table)
+    names(df_sample_count) <- c('scientific_name', 'sample_group', 'Freq')
+    all_scientific_names <- unique(df_metadata$scientific_name)
+    all_sample_groups <- unique(df_metadata$sample_group)
+    complete_grid <- expand.grid(scientific_name = all_scientific_names, sample_group = all_sample_groups, stringsAsFactors = FALSE)
+    df_sample_count <- merge(complete_grid, df_sample_count, by = c("scientific_name", "sample_group"), all.x = TRUE)
+    df_sample_count$Freq[is.na(df_sample_count$Freq)] <- 0
+    df_sample_count$log2_Freq <- ifelse(df_sample_count$Freq > 0, log2(df_sample_count$Freq + 1), 0)
+    fill_max <- max(df_sample_count$log2_Freq)
+    freq_breaks <- c(0, 1, 2, 4, 8, 16, 32, 64, 128)
+    freq_breaks <- freq_breaks[freq_breaks <= max(df_sample_count$Freq)]
+    if (!0 %in% freq_breaks) { freq_breaks <- c(0, freq_breaks) }
+    if (!1 %in% freq_breaks) { freq_breaks <- c(freq_breaks, 1) }
+    freq_breaks <- sort(unique(freq_breaks))
+    log2_breaks <- log2(freq_breaks + 1)
+    log2_breaks <- log2_breaks[log2_breaks <= fill_max]
+    n_sample_groups <- length(all_sample_groups)
+    n_scientific_names <- length(all_scientific_names)
+    base_width <- 5
+    base_height <- 5
+    per_sample_group_width <- 0.1
+    per_scientific_name_height <- 0.1
+    width <- base_width + (per_sample_group_width * n_sample_groups)
+    height <- base_height + (per_scientific_name_height * n_scientific_names)
+    p <- ggplot(data = df_sample_count, aes(x = sample_group, y = scientific_name, fill = log2_Freq)) +
+        geom_tile(color = "grey80") +
+        geom_text(aes(label = Freq), size = 3, color = "black") +
+        scale_fill_gradientn(
+            colors = c("white", "#440154", "#482878", "#3E4989", "#31688E", "#35B779", "#4DCD63", "#76D730", "#B8DE29", "#FDE725"),
+            values = sort(unique(c(0, log2_breaks / fill_max, 1))),
+            limits = c(0, fill_max),
+            name = "# of samples",
+            breaks = log2_breaks,
+            labels = freq_breaks
+        ) +
+        xlab('') +
+        ylab('') +
+        scale_y_discrete(
+            limits = rev(unique(df_sample_count$scientific_name))
+        ) +
+        theme_minimal() +
+        theme(
+            axis.text.y = element_text(size = font_size),
+            axis.text.x = element_text(size = font_size, angle = 90, hjust = 1),
+            legend.title = element_text(size = font_size),
+            legend.text = element_text(size = font_size)
+        )
+    ggsave('csca_sample_number_heatmap.pdf', plot = p, width = width, height = height, dpi = dpi)
+}
 
 df_og = read.table(file_orthogroup, header = TRUE, sep = '\t', row.names = 1, quote = '', check.names = FALSE)
 df_gc = read.table(file_genecount, header = TRUE, sep = '\t', quote = '', check.names = FALSE)
@@ -971,6 +1033,7 @@ df_color_unaveraged = get_df_labels_unaveraged(df_metadata, selected_sample_grou
 cat('Number of orthologs in input table:', nrow(df_og), '\n')
 cat('Number of selected single-copy orthologs:', nrow(df_singleog), '\n')
 cat('Number of selected species:', length(spp), '\n')
+save_sample_number_heatmap(df_metadata, font_size = font_size, dpi = 300)
 
 unaveraged_tcs = load_unaveraged_expression_tables(dir_csca_input_table, spp_filled, batch_effect_alg)
 unaveraged_tcs = extract_selected_tc_only(unaveraged_tcs, df_metadata)
