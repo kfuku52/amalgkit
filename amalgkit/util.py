@@ -530,7 +530,7 @@ def check_rscript():
 
 def orthogroup2genecount(file_orthogroup, file_genecount, spp):
     df = pandas.read_csv(file_orthogroup, sep='\t', header=0, low_memory=False)
-    orthogroup_df = pd.DataFrame({'orthogroup_id': df['busco_id'].to_numpy()})
+    orthogroup_df = pandas.DataFrame({'orthogroup_id': df['busco_id'].to_numpy()})
     is_spp = df.columns.isin(spp)
     df = df.loc[:,is_spp]
     df[df.isnull()] = ''
