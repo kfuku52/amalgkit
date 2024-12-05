@@ -22,6 +22,7 @@ if (debug_mode == "debug") {
         selected_sample_groups = c('root', 'flower', 'leaf')
         dir_work = '/home/s229181/projects/amalgkit_paper/Plant_set'
         #selected_sample_groups = c('Amicoumacin_low','Amicoumacin_high','anaerobic','Azithromycin_low','Azithromycin_high','control','ciprofloxacin_low','ciprofloxacin_high','colistin_low','colistin_high','H2O2','heat','meropenem_low','meropenem_high','NaCl','Anaerobic','IPTG','biofilm_medium','acid','H202','butyrate','aerobic','Ampicillin','Vancomycin','ciprofloxacin','colistin','glucose','Glucose','rifampicin','probiotic','cleaner','ampicillin','tetracycline','pediocin','glycerol','Pyruvate','Ca2+','Glycerol','H2o2','anhydrotetracycline','TB47','treated','iron','Lactate','rion','phage','Ag','biofilm','MIC','AZM','citrate','NaNO2','Acetate','sucrose','coumermycin','copper','mitomycin','arabinose','Cefotaxime','Cellulose','vancomycin','mupirocin','galactose','macrophages','tobramycin')
+        sample_group_colors = 'DEFAULT'
         #dir_work = '/home/s229181/projects/amalgkit_paper/Prokaryote_set'
         dir_csca_input_table = file.path(dir_work, 'csca/csca_input_symlinks')
         file_orthogroup = file.path(dir_work, 'csca/multispecies_busco_table.tsv')
@@ -31,6 +32,7 @@ if (debug_mode == "debug") {
         batch_effect_alg = 'sva'
     } else if (developer == 'kf') {
         selected_sample_groups = c('root', 'flower', 'leaf')
+        sample_group_colors = c('#d95f02ff', '#1b9e77ff', '#7570b3ff')
         dir_work = '/Users/kf/Library/CloudStorage/GoogleDrive-kenji.fukushima@nig.ac.jp/My Drive/psnl/data/evolutionary_transcriptomics/20230527_amalgkit/amalgkit_out'
         dir_csca_input_table = file.path(dir_work, 'csca/csca_input_symlinks')
         file_orthogroup = file.path(dir_work, 'csca/multispecies_busco_table.tsv')
@@ -42,17 +44,19 @@ if (debug_mode == "debug") {
 } else if (debug_mode == "batch") {
     args = commandArgs(trailingOnly = TRUE)
     selected_sample_groups = strsplit(args[1], "\\|")[[1]]
-    dir_work = args[2]
-    dir_csca_input_table = args[3]
-    file_orthogroup = args[4]
-    file_genecount = args[5]
-    r_util_path = args[6]
-    dir_csca = args[7]
-    batch_effect_alg = args[8]
+    sample_group_colors = strsplit(args[2], ",")[[1]]
+    dir_work = args[3]
+    dir_csca_input_table = args[4]
+    file_orthogroup = args[5]
+    file_genecount = args[6]
+    r_util_path = args[7]
+    dir_csca = args[8]
+    batch_effect_alg = args[9]
 }
 source(r_util_path)
 setwd(dir_csca)
 cat('selected_sample_groups:', selected_sample_groups, "\n")
+cat('selected_sample_group_colors:', sample_group_colors, "\n")
 cat('dir_work:', dir_work, "\n")
 cat('dir_csca_input_table:', dir_csca_input_table, "\n")
 cat('file_orthogroup:', file_orthogroup, "\n")
@@ -60,41 +64,6 @@ cat('file_genecount:', file_genecount, "\n")
 cat('r_util_path:', r_util_path, "\n")
 cat('dir_csca:', dir_csca, "\n")
 cat('batch_effect_alg:', batch_effect_alg, "\n")
-
-add_color_to_metadata = function(df, selected_sample_groups) {
-    df = df[, (!colnames(df) %in% c('bp_color', 'sp_color', 'sample_group_color'))]
-    scientific_name = as.character(df[['scientific_name']])
-    sample_group = as.character(df[['sample_group']])
-    scientific_name_unique = sort(scientific_name[!duplicated(scientific_name)])
-    sample_group_unique = sort(sample_group[!duplicated(sample_group)])
-    if (length(selected_sample_groups) <= 8) {
-        sample_group_color = brewer.pal(length(unique(sample_group)), "Dark2")
-        sp_color = rainbow_hcl(length(unique(scientific_name)), c = 100)
-    } else if (length(selected_sample_groups) <= 12) {
-        sample_group_color = brewer.pal(length(unique(sample_group)), "Paired")
-        sp_color = rainbow_hcl(length(unique(scientific_name)), c = 100)
-    } else {
-        sample_group_color = rainbow_hcl(length(selected_sample_groups), c = 100)
-        sp_color = rainbow_hcl(length(unique(scientific_name)), c = 150)
-    }
-    df_sample_group = data.frame(sample_group = sort(sample_group_unique), sample_group_color = sample_group_color[1:length(sample_group_unique)], stringsAsFactors = FALSE)
-    df_sp = data.frame(scientific_name = scientific_name_unique, sp_color = sp_color[1:length(scientific_name_unique)], stringsAsFactors = FALSE)
-    df = merge(df, df_sp, sort = FALSE, all.y = FALSE)
-    df = merge(df, df_sample_group, sort = FALSE, all.y = FALSE)
-    if ('bioproject' %in% colnames(df)) {
-        bioproject = as.character(df$bioproject)
-        if (length(selected_sample_groups) <= 8) {
-            bp_color = rainbow_hcl(length(unique(bioproject)), c = 50)
-        } else if (length(selected_sample_groups) <= 12) {
-            bp_color = rainbow_hcl(length(unique(bioproject)), c = 50)
-        } else {
-            bp_color = rainbow_hcl(length(unique(bioproject)), c = 50)
-        }
-        df_bp = data.frame(bioproject = unique(bioproject), bp_color = bp_color[1:length(unique(bioproject))], stringsAsFactors = FALSE)
-        df = merge(df, df_bp, sort = FALSE, all.y = FALSE)
-    }
-    return(df)
-}
 
 sort_labels = function(df_label, label_orders) {
     df_tmp = data.frame()
@@ -376,7 +345,7 @@ extract_ortholog_unaveraged_expression_table = function(df_singleog, unaveraged_
     return(unaveraged_orthologs)
 }
 
-get_df_labels_averaged = function(df_metadata, label_orders) {
+get_df_labels_averaged = function(df_metadata, label_orders, selected_sample_groups, sample_group_colors) {
     metadata_tmp = df_metadata[(df_metadata[['exclusion']] == 'no'),]
     df_label = unique(metadata_tmp[, c('scientific_name', 'sample_group')])
     categories = list(scientific_name = metadata_tmp[['scientific_name']], sample_group = metadata_tmp[['sample_group']])
@@ -388,22 +357,59 @@ get_df_labels_averaged = function(df_metadata, label_orders) {
     df_label = merge(df_label, df_run, all.x = TRUE, all.y = FALSE)
     df_label = df_label[order(df_label[['sample_group']], df_label[['scientific_name']]),]
     df_label = sort_labels(df_label, label_orders)
-    df_label = add_color_to_metadata(df_label, selected_sample_groups)
+    df_label = add_color_to_metadata(df_label, selected_sample_groups, sample_group_colors)
     df_label = sort_labels(df_label, label_orders)
     rownames(df_label) = NULL
     write.table(df_label, paste0('csca_color_averaged.tsv'), sep = '\t', row.names = FALSE, quote = FALSE)
     return(df_label)
 }
 
-get_df_labels_unaveraged = function(df_metadata, selected_sample_groups) {
+get_df_labels_unaveraged = function(df_metadata, selected_sample_groups, sample_group_colors) {
     cols = c('run', 'bioproject', 'sample_group', 'scientific_name', 'sp_color', 'sample_group_color', 'bp_color')
     metadata_tmp = df_metadata[(df_metadata[['exclusion']] == 'no'),]
-    df_color = add_color_to_metadata(metadata_tmp, selected_sample_groups)
+    df_color = add_color_to_metadata(metadata_tmp, selected_sample_groups, sample_group_colors)
     df_color = df_color[, cols]
     label_order = order(df_color[['run']])
     df_color = df_color[label_order,]
     write.table(df_color, paste0('csca_color_unaveraged.tsv'), sep = '\t', row.names = FALSE, quote = FALSE)
     return(df_color)
+}
+
+add_color_to_metadata = function(df, selected_sample_groups, sample_group_colors) {
+    df = df[, (!colnames(df) %in% c('bp_color', 'sp_color', 'sample_group_color'))]
+    scientific_name = as.character(df[['scientific_name']])
+    sample_group = as.character(df[['sample_group']])
+    scientific_name_unique = sort(scientific_name[!duplicated(scientific_name)])
+    if (length(sample_group_colors) == 1 && sample_group_colors == 'DEFAULT') {
+        if (length(selected_sample_groups) <= 8) {
+            sample_group_color = brewer.pal(length(unique(sample_group)), "Dark2")
+            sp_color = rainbow_hcl(length(unique(scientific_name)), c = 100)
+        } else if (length(selected_sample_groups) <= 12) {
+            sample_group_color = brewer.pal(length(unique(sample_group)), "Paired")
+            sp_color = rainbow_hcl(length(unique(scientific_name)), c = 100)
+        } else {
+            sample_group_color = rainbow_hcl(length(selected_sample_groups), c = 100)
+            sp_color = rainbow_hcl(length(unique(scientific_name)), c = 150)
+        }
+    } else {
+        if (length(sample_group_colors) != length(selected_sample_groups)) {
+            stop("Length of sample_group_colors must match length of selected_sample_groups")
+        }
+        sample_group_color = sample_group_colors
+        sp_color = rainbow_hcl(length(unique(scientific_name)), c = 100)
+    }
+    sample_group_unique = selected_sample_groups
+    df_sample_group = data.frame(sample_group = sample_group_unique, sample_group_color = sample_group_color[1:length(sample_group_unique)], stringsAsFactors = FALSE)
+    df_sp = data.frame(scientific_name = scientific_name_unique, sp_color = sp_color[1:length(scientific_name_unique)], stringsAsFactors = FALSE)
+    df = merge(df, df_sp, sort = FALSE, all.y = FALSE)
+    df = merge(df, df_sample_group, sort = FALSE, all.y = FALSE)
+    if ('bioproject' %in% colnames(df)) {
+        bioproject = as.character(df$bioproject)
+        bp_color = rainbow_hcl(length(unique(bioproject)), c = 50)
+        df_bp = data.frame(bioproject = unique(bioproject), bp_color = bp_color[1:length(unique(bioproject))], stringsAsFactors = FALSE)
+        df = merge(df, df_bp, sort = FALSE, all.y = FALSE)
+    }
+    return(df)
 }
 
 save_averaged_tsne_plot = function(tc, df_label) {
@@ -1028,8 +1034,8 @@ df_singleog = df_og[is_singlecopy, spp_filled]
 spp = sub('_', ' ', spp_filled)
 df_metadata = prepare_metadata_table(dir_csca_input_table, selected_sample_groups, spp)
 label_orders = get_label_orders(df_metadata)
-df_color_averaged = get_df_labels_averaged(df_metadata, label_orders)
-df_color_unaveraged = get_df_labels_unaveraged(df_metadata, selected_sample_groups)
+df_color_averaged = get_df_labels_averaged(df_metadata, label_orders, selected_sample_groups, sample_group_colors)
+df_color_unaveraged = get_df_labels_unaveraged(df_metadata, selected_sample_groups, sample_group_colors)
 cat('Number of orthologs in input table:', nrow(df_og), '\n')
 cat('Number of selected single-copy orthologs:', nrow(df_singleog), '\n')
 cat('Number of selected species:', length(spp), '\n')

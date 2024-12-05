@@ -6,15 +6,15 @@ import os
 import shutil
 import sys
 
-def get_sample_group(args):
+def get_sample_group_string(args):
     if args.sample_group is None:
         metadata = load_metadata(args)
         sample_group = metadata.df.loc[:, 'sample_group'].dropna().unique()
     else:
         sample_group = re.findall(r"[\w]+", args.sample_group)
     print('sample_groups to be included: {}'.format(', '.join(sample_group)))
-    sample_group = '|'.join(sample_group)
-    return sample_group
+    sample_group_string = '|'.join(sample_group)
+    return sample_group_string
 
 def get_spp_from_dir(dir_curate):
     files = os.listdir(dir_curate)
@@ -45,7 +45,7 @@ def csca_main(args):
     dir_csca_input_table = os.path.join(dir_csca, 'csca_input_symlinks')
     spp = get_spp_from_dir(dir_curate)
     generate_csca_input_symlinks(dir_csca_input_table, dir_curate, spp)
-    sample_group = get_sample_group(args)
+    sample_group_string = get_sample_group_string(args)
     if not os.path.exists(dir_csca):
         os.makedirs(dir_csca)
     if args.dir_busco is not None:
@@ -58,16 +58,19 @@ def csca_main(args):
     r_util_path = os.path.join(dir_amalgkit_script, 'util.r')
     file_genecount = os.path.join(dir_csca, 'multispecies_genecount.tsv')
     orthogroup2genecount(file_orthogroup=file_orthogroup_table, file_genecount=file_genecount, spp=spp)
-    subprocess.call(['Rscript',
-                     csca_r_script_path,
-                     sample_group,
-                     dir_out,
-                     dir_csca_input_table,
-                     file_orthogroup_table,
-                     file_genecount,
-                     r_util_path,
-                     dir_csca,
-                     args.batch_effect_alg,
-                     ])
+    call_list = ['Rscript',
+                 csca_r_script_path,
+                 sample_group_string,
+                 args.sample_group_color,
+                 dir_out,
+                 dir_csca_input_table,
+                 file_orthogroup_table,
+                 file_genecount,
+                 r_util_path,
+                 dir_csca,
+                 args.batch_effect_alg,
+                 ]
+    print(f"Rscript command: {' '.join(call_list)}")
+    subprocess.call(call_list)
     for f in glob.glob("tmp.amalgkit.*"):
         os.remove(f)

@@ -122,18 +122,24 @@ pp_out.add_argument('--out_dir', metavar='PATH', default='./', type=str, require
                  help='default=%(default)s: PATH to the directory where intermediate and output files are generated.')
 pp_batch = argparse.ArgumentParser(add_help=False)
 pp_batch.add_argument('--batch', metavar='INT', default=None, type=int, required=False, action='store',
-                 help='default=%(default)s: One-based index of metadata table (--metadata). If set, process only one SRA record. This function is intended for array job processing.')
+                 help='default=%(default)s: One-based index of metadata table (--metadata). '
+                      'If set, process only one SRA record. This function is intended for array job processing.')
 pp_redo = argparse.ArgumentParser(add_help=False)
 pp_redo.add_argument('--redo', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
                  help='default=%(default)s: Redo the analysis even if previous output files are detected.')
 pp_threads = argparse.ArgumentParser(add_help=False)
 pp_threads.add_argument('--threads', metavar='INT', default=1, type=int, required=False, action='store',
                  help='default=%(default)s: Number of threads.')
-pp_cg = argparse.ArgumentParser(add_help=False)
-pp_cg.add_argument('--sample_group', metavar='STR', default=None, type=str, required=False, action='store',
+pp_sg = argparse.ArgumentParser(add_help=False)
+pp_sg.add_argument('--sample_group', metavar='tissueA,tissueB,tissueC,...', default=None, type=str, required=False, action='store',
                  help='default=%(default)s: "Comma separated list of sample groups. '
-                      'Example input may look like "root,flower,leaf" or "heat stressed,cold stressed,light stressed". '
                       'By default, all sample_group values in metadata.tsv are passed.')
+pp_sgc = argparse.ArgumentParser(add_help=False)
+pp_sgc.add_argument('--sample_group_color', metavar='#d95f02ff,#1b9e77ff,#7570b3ff,...', default='DEFAULT', type=str, required=False, action='store',
+                 help='default=%(default)s: "Comma separated list of sample groups colors. '
+                      'The order should be the same as --sample_group. '
+                      'The number of colors should be the same as the number of selected sample groups. '
+                      'By default, all colors are automatically assigned.')
 
 # Sub parser: metadata
 pme_help = 'NCBI SRA metadata retrieval and curation. See `amalgkit metadata -h`'
@@ -148,7 +154,7 @@ pme.set_defaults(handler=command_metadata)
 
 # Sub parser: select
 pse_help = 'Selecting SRA entries for analysis. See `amalgkit select -h`'
-pse = subparsers.add_parser('select', help=pse_help, parents=[pp_out, pp_meta, pp_cg])
+pse = subparsers.add_parser('select', help=pse_help, parents=[pp_out, pp_meta, pp_sg])
 pse.add_argument('--config_dir', metavar='PATH', default='inferred', type=str, required=False, action='store',
                  help='default=%(default)s: PATH to the config directory. "inferred" = out_dir/config')
 pse.add_argument('--min_nspots', metavar='INT', default=5000000, type=int, required=False, action='store',
@@ -264,7 +270,7 @@ pcs.set_defaults(handler=command_cstmm)
 
 # Sub parser: csca
 pca_help = 'Generating plots with cross-species correlation analysis. See `amalgkit csca -h`'
-pca = subparsers.add_parser('csca', help=pca_help, parents=[pp_out, pp_meta, pp_cg])
+pca = subparsers.add_parser('csca', help=pca_help, parents=[pp_out, pp_meta, pp_sg, pp_sgc])
 pca.add_argument('--orthogroup_table', metavar='PATH', default=None, type=str, required=False, action='store',
                  help='default=%(default)s: PATH to orthogroup table, which is, for example, Orthogroups.tsv and N0.tsv in OrthoFinder.'
                       'Specify `--orthogroup_table ""` for single-species TMM normalization.')
@@ -278,7 +284,7 @@ pca.set_defaults(handler=command_csca)
 
 # Sub parser: curate
 pcu_help = 'Automatic removal of outlier samples and SVA-based unwanted biases. See `amalgkit curate -h`'
-pcu = subparsers.add_parser('curate', help=pcu_help, parents=[pp_out, pp_meta, pp_batch, pp_cg, pp_redo])
+pcu = subparsers.add_parser('curate', help=pcu_help, parents=[pp_out, pp_meta, pp_batch, pp_sg, pp_sgc, pp_redo])
 pcu.add_argument('--input_dir', metavar='PATH', default='inferred', type=str, required=False, action='store',
                  help='default=%(default)s: PATH to `amalgkit merge` or `amalgkit cstmm` output folder. '
                       '"inferred" = out_dir/cstmm if exist, else out_dir/merge.')

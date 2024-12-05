@@ -23,6 +23,7 @@ if (debug_mode == "debug") {
     min_dif = 0
     plot_intermediate = as.logical(0)
     selected_sample_groups = c("root", "flower", "leaf")
+    sample_group_colors = 'DEFAULT'
     transform_method = "log2p1-fpkm"
     one_outlier_per_iteration = as.logical(0)
     correlation_threshold = 0.3
@@ -44,14 +45,15 @@ if (debug_mode == "debug") {
     min_dif = as.numeric(args[7])
     plot_intermediate = as.logical(as.integer(args[8]))
     selected_sample_groups = strsplit(args[9], "\\|")[[1]]
-    transform_method = args[10]
-    one_outlier_per_iteration = as.integer(args[11])
-    correlation_threshold = as.numeric(args[12])
-    batch_effect_alg = args[13]
-    clip_negative = as.logical(as.integer(args[14]))
-    maintain_zero = as.logical(as.integer(args[15]))
-    r_util_path = file.path(args[16])
-    skip_curation_flag = as.logical(as.integer(args[17]))
+    sample_group_colors = strsplit(args[10], ",")[[1]]
+    transform_method = args[11]
+    one_outlier_per_iteration = as.integer(args[12])
+    correlation_threshold = as.numeric(args[13])
+    batch_effect_alg = args[14]
+    clip_negative = as.logical(as.integer(args[15]))
+    maintain_zero = as.logical(as.integer(args[16]))
+    r_util_path = file.path(args[17])
+    skip_curation_flag = as.logical(as.integer(args[18]))
 }
 cat('est_counts_path:', est_counts_path, "\n")
 cat('metadata_path:', metadata_path, "\n")
@@ -62,6 +64,7 @@ cat('mapping_rate_cutoff:', mapping_rate_cutoff, "\n")
 cat('min_dif:', min_dif, "\n")
 cat('plot_intermediate:', plot_intermediate, "\n")
 cat('selected_sample_groups:', selected_sample_groups, "\n")
+cat('selected_sample_group_colors:', sample_group_colors, "\n")
 cat('transform_method:', transform_method, "\n")
 cat('one_outlier_per_iteration:', one_outlier_per_iteration, "\n")
 cat('correlation_threshold:', correlation_threshold, "\n")
@@ -93,7 +96,7 @@ remove_nonexpressed_gene = function(tc) {
     return(list(tc_ex = tc_ex, tc_ne = tc_ne))
 }
 
-add_color_to_metadata = function(sra, selected_sample_groups) {
+add_color_to_curate_metadata = function(sra, selected_sample_groups, sample_group_colors) {
     sra = sra[, (!colnames(sra) %in% c("bp_color", "sp_color", "sample_group_color"))]
     if ('bioproject' %in% colnames(sra)) {
         bioproject = as.character(sra[['bioproject']])
@@ -104,21 +107,29 @@ add_color_to_metadata = function(sra, selected_sample_groups) {
     scientific_name = as.character(sra[['scientific_name']])
     scientific_name_u = sort(unique(scientific_name))
     sample_group = as.character(sra[['sample_group']])
-    sample_group_u = sort(unique(sample_group))
-    print(head(sra))
-    if (length(selected_sample_groups) <= 8) {
-        sample_group_color = brewer.pal(8, "Dark2")
-        sample_group_color = sample_group_color[1:length(selected_sample_groups)] # To avoid the warning "minimal value for n is 3, returning requested palette with 3 different levels"
-        bp_color = rainbow_hcl(length(bioproject_u), c = 50)
-        sp_color = rainbow_hcl(length(scientific_name_u), c = 100)
-    } else if (length(selected_sample_groups) <= 12) {
-        sample_group_color = brewer.pal(length(unique(sample_group)), "Paired")
-        bp_color = rainbow_hcl(length(bioproject_u), c = 50)
-        sp_color = rainbow_hcl(length(scientific_name_u), c = 100)
+    sample_group_u = selected_sample_groups
+    if (length(sample_group_colors) == 1 && sample_group_colors == "DEFAULT") {
+        if (length(selected_sample_groups) <= 8) {
+            sample_group_color = brewer.pal(8, "Dark2")
+            sample_group_color = sample_group_color[1:length(selected_sample_groups)]
+            bp_color = rainbow_hcl(length(bioproject_u), c = 50)
+            sp_color = rainbow_hcl(length(scientific_name_u), c = 100)
+        } else if (length(selected_sample_groups) <= 12) {
+            sample_group_color = brewer.pal(length(selected_sample_groups), "Paired")
+            bp_color = rainbow_hcl(length(bioproject_u), c = 50)
+            sp_color = rainbow_hcl(length(scientific_name_u), c = 100)
+        } else {
+            sample_group_color = rainbow_hcl(length(selected_sample_groups), c = 100)
+            bp_color = rainbow_hcl(length(bioproject_u), c = 50)
+            sp_color = rainbow_hcl(length(scientific_name_u), c = 150)
+        }
     } else {
-        sample_group_color = rainbow_hcl(length(selected_sample_groups), c = 100)
+        if (length(sample_group_colors) != length(selected_sample_groups)) {
+            stop("Length of sample_group_colors must match length of selected_sample_groups")
+        }
+        sample_group_color = sample_group_colors
         bp_color = rainbow_hcl(length(bioproject_u), c = 50)
-        sp_color = rainbow_hcl(length(scientific_name_u), c = 150)
+        sp_color = rainbow_hcl(length(scientific_name_u), c = 100)
     }
     df_sample_group = data.frame(sample_group = sample_group_u, sample_group_color = sample_group_color[1:length(sample_group_u)], stringsAsFactors = FALSE)
     df_bp = data.frame(bioproject = bioproject_u, bp_color = bp_color[1:length(bioproject_u)], stringsAsFactors = FALSE)
@@ -128,6 +139,7 @@ add_color_to_metadata = function(sra, selected_sample_groups) {
     sra = merge(sra, df_sample_group, sort = FALSE, all.y = FALSE)
     return(sra)
 }
+
 
 sort_tc_and_metadata = function(tc, sra, sort_columns = c("sample_group", "scientific_name", "bioproject")) {
     for (column in rev(sort_columns)) {
@@ -931,7 +943,7 @@ draw_legend = function(sra, new = TRUE, pos = "center", fontsize = 7, nlabel.in.
            text.font = legend_font, ncol = ncol, bty = "n")
 }
 
-save_plot = function(tc, sra, sva_out, dist_method, file, selected_sample_groups, fontsize = 7, transform_method, batch_effect_alg) {
+save_plot = function(tc, sra, sva_out, dist_method, file, selected_sample_groups, sample_group_colors, fontsize = 7, transform_method, batch_effect_alg) {
     if (ncol(tc) == 1) {
         cat('Only 1 sample is available. Skipping the plot.\n')
         return()
@@ -939,7 +951,7 @@ save_plot = function(tc, sra, sva_out, dist_method, file, selected_sample_groups
     out = tc_metadata_intersect(tc, sra)
     tc = out[["tc"]]
     sra = out[["sra"]]
-    sra = add_color_to_metadata(sra, selected_sample_groups)
+    sra = add_color_to_curate_metadata(sra, selected_sample_groups, sample_group_colors)
     out = sort_tc_and_metadata(tc, sra)
     tc = out[["tc"]]
     sra = out[["sra"]]
@@ -1183,7 +1195,7 @@ tc = out[["tc"]]
 sra = out[["sra"]]
 tc_tmp = apply_transformation_logic(tc, tc_eff_length, transform_method, batch_effect_alg, step = 'before_batch_plot', sra = sra)
 save_plot(tc_tmp, sra, NULL, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".original"),
-          selected_sample_groups, fontsize, transform_method, batch_effect_alg)
+          selected_sample_groups, sample_group_colors, fontsize, transform_method, batch_effect_alg)
 save_correlation(tc_tmp, sra, dist_method, round)
 out = batch_effect_subtraction(tc, sra, batch_effect_alg, transform_method, clip_negative)
 tc_batch_corrected = out[["tc"]]
@@ -1197,7 +1209,7 @@ if (!is.null(sva_out)) {
 }
 tc_batch_corrected_tmp = apply_transformation_logic(tc_batch_corrected, tc_eff_length, transform_method, batch_effect_alg, step = 'after_batch', sra = sra)
 save_plot(tc_batch_corrected_tmp, sra, sva_out, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".original", ".", batch_effect_alg),
-          selected_sample_groups, fontsize, transform_method, batch_effect_alg)
+          selected_sample_groups, sample_group_colors, fontsize, transform_method, batch_effect_alg)
 
 cat("Removing samples with the mapping rate smaller than", mapping_rate_cutoff, "\n")
 round = 1
@@ -1209,7 +1221,7 @@ sra = out[["sra"]]
 
 tc_tmp = apply_transformation_logic(tc, tc_eff_length, transform_method, batch_effect_alg, step = 'before_batch_plot', sra = sra)
 save_plot(tc_tmp, sra, NULL, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".mapping_cutoff"),
-          selected_sample_groups, fontsize, transform_method, batch_effect_alg)
+          selected_sample_groups, sample_group_colors, fontsize, transform_method, batch_effect_alg)
 out = batch_effect_subtraction(tc, sra, batch_effect_alg, transform_method, clip_negative)
 tc_batch_corrected = out[["tc"]]
 if (batch_effect_alg == "combatseq") {
@@ -1221,7 +1233,7 @@ if (!is.null(sva_out)) {
 }
 tc_batch_corrected_tmp = apply_transformation_logic(tc_batch_corrected, tc_eff_length, transform_method, batch_effect_alg, step = 'after_batch', sra = sra)
 save_plot(tc_batch_corrected_tmp, sra, sva_out, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".mapping_cutoff", ".", batch_effect_alg),
-          selected_sample_groups, fontsize, transform_method, batch_effect_alg)
+          selected_sample_groups, sample_group_colors, fontsize, transform_method, batch_effect_alg)
 save_correlation(tc_batch_corrected_tmp, sra, dist_method, round)
 
 round = 2
@@ -1247,11 +1259,11 @@ while (end_flag == 0) {
             save(sva_out, file = file.path(dir_rdata, paste0(sub(" ", "_", scientific_name), ".", batch_effect_alg, ".", round, ".RData")))
         }
         tc_cwtc_tmp = apply_transformation_logic(tc_cwtc, tc_eff_length, transform_method, batch_effect_alg, step = 'before_batch_plot', sra = sra)
-        save_plot(tc_cwtc_tmp, sra, NULL, dist_method, paste0(sub(" ", "_", scientific_name), ".", round,
-                                                              ".correlation_cutoff"), selected_sample_groups, fontsize, transform_method, batch_effect_alg)
+        save_plot(tc_cwtc_tmp, sra, NULL, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".correlation_cutoff"),
+                  selected_sample_groups, sample_group_colors, fontsize, transform_method, batch_effect_alg)
         tc_batch_corrected_tmp = apply_transformation_logic(tc_batch_corrected, tc_eff_length, transform_method, batch_effect_alg, step = 'after_batch', sra = sra)
         file_base = paste0(sub(" ", "_", scientific_name), ".", round, ".correlation_cutoff", ".", batch_effect_alg)
-        save_plot(tc_batch_corrected_tmp, sra, sva_out, dist_method, file_base, selected_sample_groups, fontsize, transform_method, batch_effect_alg)
+        save_plot(tc_batch_corrected_tmp, sra, sva_out, dist_method, file_base, selected_sample_groups, sample_group_colors, fontsize, transform_method, batch_effect_alg)
         save_correlation(tc_batch_corrected_tmp, sra, dist_method, round)
     }
     cat("Round:", round, ": # before =", num_run_before, ": # after =", num_run_after, "\n\n")

@@ -62,6 +62,7 @@ def run_curate_r_script(args, metadata, sp, input_dir):
             '0',
             str(intermediate),
             sample_group,
+            args.sample_group_color,
             str(args.norm),
             str(args.one_outlier_per_iter),
             str(correlation_threshold),
