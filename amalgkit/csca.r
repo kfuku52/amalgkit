@@ -479,49 +479,72 @@ save_unaveraged_pca_plot = function(unaveraged_orthologs, df_color_unaveraged, d
         colnames(tmp2) = c('run', pc_cols2)
         df_metadata = merge(df_metadata, tmp2, all.x = TRUE, by = 'run', sort = FALSE)
         df_metadata = df_metadata[, sorted_cols]
+
         df_color_uniq = unique(df_color_unaveraged[, c('sample_group', 'sample_group_color')])
         sample_group_colors = df_color_uniq[['sample_group_color']]
         names(sample_group_colors) = df_color_uniq[['sample_group']]
+
         for (pcxy in list(c(1, 2), c(3, 4))) {
             pcx = pcxy[1]
             pcy = pcxy[2]
             colx = paste0('PC', pcx)
             coly = paste0('PC', pcy)
-            xmin = min(tmp[[colx]], na.rm = TRUE)
-            xmax = max(tmp[[colx]], na.rm = TRUE)
+
+            # Check if data is finite
+            xvals = tmp[[colx]]
+            yvals = tmp[[coly]]
+            finite_x = xvals[is.finite(xvals)]
+            finite_y = yvals[is.finite(yvals)]
+
+            if (length(finite_x) == 0 || length(finite_y) == 0) {
+                message(sprintf("Skipping PC%d vs PC%d plot for '%s' - no finite data.", pcx, pcy, d))
+                next
+            }
+
+            xmin = min(finite_x)
+            xmax = max(finite_x)
+            ymin = min(finite_y)
+            ymax = max(finite_y)
+
+            # Check if there's any range to plot
+            if (xmin == xmax || ymin == ymax) {
+                message(sprintf("Skipping PC%d vs PC%d plot for '%s' - no variation in data.", pcx, pcy, d))
+                next
+            }
+
+            # Add a small buffer around the min/max
             xunit = (xmax - xmin) * 0.01
+            yunit = (ymax - ymin) * 0.01
             xmin = xmin - xunit
             xmax = xmax + xunit
-            ymin = min(tmp[[coly]], na.rm = TRUE)
-            ymax = max(tmp[[coly]], na.rm = TRUE)
-            yunit = (ymax - ymin) * 0.01
             ymin = ymin - yunit
             ymax = ymax + yunit
-            g = ggplot(tmp, aes(x = !!rlang::sym(colx), y = !!rlang::sym(coly), color = sample_group))
-            g = g + theme_bw()
-            g = g + geom_point(size = 0.5, alpha = 0.3)
-            g = g + geom_density_2d(mapping = aes(color = sample_group), bins = 12, linewidth = 0.25)
-            g = g + geom_density_2d(mapping = aes(color = sample_group), bins = 12, linewidth = 0.25)
-            g = g + scale_color_manual(values = sample_group_colors)
-            g = g + xlab(pc_contributions[pcx])
-            g = g + ylab(pc_contributions[pcy])
-            g = g + xlim(xmin, xmax)
-            g = g + ylim(ymin, ymax)
-            g = g + theme(
-                axis.text = element_text(size = font_size),
-                axis.title = element_text(size = font_size),
-                legend.text = element_text(size = font_size),
-                legend.title = element_text(size = font_size)
-            )
+
+            g = ggplot(tmp, aes(x = !!rlang::sym(colx), y = !!rlang::sym(coly), color = sample_group)) +
+                theme_bw() +
+                geom_point(size = 0.5, alpha = 0.3) +
+                # Add density lines only if there is more than one unique point
+                # This reduces the chance of zero contour issues.
+                geom_density_2d(mapping = aes(color = sample_group), bins = 12, linewidth = 0.25) +
+                scale_color_manual(values = sample_group_colors) +
+                xlab(pc_contributions[pcx]) +
+                ylab(pc_contributions[pcy]) +
+                xlim(xmin, xmax) +
+                ylim(ymin, ymax) +
+                theme(
+                    axis.text = element_text(size = font_size),
+                    axis.title = element_text(size = font_size),
+                    legend.text = element_text(size = font_size),
+                    legend.title = element_text(size = font_size)
+                )
+
             filename = paste0('csca_unaveraged_pca_PC', pcx, pcy, '.', d, '.pdf')
             tryCatch(
-            {
-                ggsave(file = filename, g, height = 2.15, width = 4.25)
-            },
+                {
+                    ggsave(file = filename, g, height = 2.15, width = 4.25)
+                },
                 error = function(cond) {
                     message(paste("PCA could not be computed for file", filename))
-                    #message("original error message:")
-                    #message(conditionMessage(cond))
                 }
             )
         }
@@ -588,8 +611,6 @@ save_unaveraged_tsne_plot = function(unaveraged_orthologs, df_color_unaveraged) 
                 #message(conditionMessage(cond))
             }
         )
-
-
     }
 }
 
@@ -724,24 +745,34 @@ calculate_correlation_within_group = function(unaveraged_orthologs, averaged_ort
 
 save_group_cor_histogram = function(df_metadata, font_size = 8) {
     cat('Generating unaveraged group correlation histogram.\n')
-    max_count <- 0
-    for (col in c('within_group_cor_uncorrected', 'within_group_cor_corrected')) {
-        for (fill_by in c('sample_group', 'scientific_name')) {
-            tmp = df_metadata[(!is.na(df_metadata[[col]])),]
-            bin_counts <- table(cut(tmp[[col]], breaks = seq(0, 1, length.out = 41)))
-            max_count <- max(max_count, max(bin_counts, na.rm = TRUE), na.rm = TRUE)  # Update max_count if necessary
-        }
+
+    # Columns we will iterate over
+    cor_cols = c('within_group_cor_uncorrected', 'within_group_cor_corrected')
+    fill_by_vars = c('sample_group', 'scientific_name')
+
+    # Pre-filter the data to remove rows with NA/Non-finite values in these columns
+    df_clean = df_metadata
+    for (col in cor_cols) {
+        df_clean = df_clean[is.finite(df_clean[[col]]), ]
     }
+
+    # Limit values to avoid out-of-range warnings if needed, e.g. to [0, 1]
+    # Adjust or remove this if not required.
+    for (col in cor_cols) {
+        df_clean = df_clean[!is.na(df_clean[[col]]) & df_clean[[col]] >= 0 & df_clean[[col]] <= 1, ]
+    }
+
+    max_count <- 0
     plot_list <- list()
-    for (col in c('within_group_cor_uncorrected', 'within_group_cor_corrected')) {
-        for (fill_by in c('sample_group', 'scientific_name')) {
-            tmp = df_metadata[(!is.na(df_metadata[[col]])),]
+
+    for (col in cor_cols) {
+        for (fill_by in fill_by_vars) {
+            tmp = df_clean[!is.na(df_clean[[col]]), ]
             g = ggplot2::ggplot(tmp) +
                 geom_histogram(aes(x = !!rlang::sym(col), fill = !!rlang::sym(fill_by)),
-                               position = "stack", alpha = 0.7, bins = 40) +
+                               position = "stack", alpha = 0.7, bins = 40, na.rm = TRUE) +
                 theme_bw(base_size = font_size) +
                 xlim(c(0, 1)) +
-                ylim(c(0, max_count)) +
                 labs(x = col, y = 'Count') +
                 theme(
                     axis.text = element_text(size = font_size, color = 'black'),
@@ -750,20 +781,17 @@ save_group_cor_histogram = function(df_metadata, font_size = 8) {
                     panel.grid.minor.y = element_blank(),
                     panel.grid.minor.x = element_blank(),
                     rect = element_rect(fill = "transparent"),
-                    plot.margin = unit(rep(0.1, 4), "cm"),
-                    legend.position = c(0, 1),
-                    legend.justification = c(0, 1),
-                    legend.key.height = unit(font_size, "pt"),
-                    legend.key.width = unit(font_size, "pt"),
-                    legend.text = element_text(size = font_size),
+                    plot.margin = unit(rep(0.1, 4), "cm")
                 )
             plot_list[[paste0(col, "_", fill_by)]] <- g
         }
     }
+
     final_plot <- (plot_list[['within_group_cor_uncorrected_scientific_name']] +
         plot_list[['within_group_cor_corrected_scientific_name']]) /
         (plot_list[['within_group_cor_uncorrected_sample_group']] +
             plot_list[['within_group_cor_corrected_sample_group']])
+
     ggsave(filename = "csca_within_group_cor.pdf", plot = final_plot, width = 7.2, height = 6.0)
 }
 
@@ -831,41 +859,51 @@ save_group_cor_scatter = function(df_metadata, font_size = 8) {
     alpha_value = 0.2
     improvement_xymin = 0.5
     improvement_xymax = 2.0
+
+    # Compute new columns
     df_metadata[['corrected_per_uncorrected_group_cor']] = df_metadata[['within_group_cor_corrected']] / df_metadata[['within_group_cor_uncorrected']]
     df_metadata[['corrected_per_uncorrected_max_nongroup_cor']] = df_metadata[['max_nongroup_cor_corrected']] / df_metadata[['max_nongroup_cor_uncorrected']]
-    for (col in c('corrected_per_uncorrected_group_cor', 'corrected_per_uncorrected_max_nongroup_cor')) {
-        df_metadata[[col]] = ifelse(df_metadata[[col]] < improvement_xymin, improvement_xymin, df_metadata[[col]])
-        df_metadata[[col]] = ifelse(df_metadata[[col]] > improvement_xymax, improvement_xymax, df_metadata[[col]])
-    }
+
+    # Limit values to the specified range
+    df_metadata[['corrected_per_uncorrected_group_cor']] = pmax(pmin(df_metadata[['corrected_per_uncorrected_group_cor']], improvement_xymax), improvement_xymin)
+    df_metadata[['corrected_per_uncorrected_max_nongroup_cor']] = pmax(pmin(df_metadata[['corrected_per_uncorrected_max_nongroup_cor']], improvement_xymax), improvement_xymin)
+
+    # Remove rows with NA, NaN, or Inf
+    df_clean <- df_metadata[is.finite(df_metadata$within_group_cor_uncorrected) &
+                            is.finite(df_metadata$within_group_cor_corrected) &
+                            is.finite(df_metadata$max_nongroup_cor_uncorrected) &
+                            is.finite(df_metadata$max_nongroup_cor_corrected) &
+                            is.finite(df_metadata$corrected_per_uncorrected_group_cor) &
+                            is.finite(df_metadata$corrected_per_uncorrected_max_nongroup_cor), ]
+
+    # Plotting
     ps = list()
-    ps[[1]] = ggplot(df_metadata, aes(x = max_nongroup_cor_uncorrected, y = within_group_cor_uncorrected)) +
-        xlim(c(0, 1)) +
-        ylim(c(0, 1))
-    ps[[2]] = ggplot(df_metadata, aes(x = max_nongroup_cor_corrected, y = within_group_cor_corrected)) +
-        xlim(c(0, 1)) +
-        ylim(c(0, 1))
-    ps[[3]] = ggplot(df_metadata, aes(x = within_group_cor_uncorrected, y = within_group_cor_corrected)) +
-        xlim(c(0, 1)) +
-        ylim(c(0, 1))
-    ps[[4]] = ggplot(df_metadata, aes(x = max_nongroup_cor_uncorrected, y = max_nongroup_cor_corrected)) +
-        xlim(c(0, 1)) +
-        ylim(c(0, 1))
-    ps[[5]] = ggplot(df_metadata, aes(x = corrected_per_uncorrected_max_nongroup_cor, y = corrected_per_uncorrected_group_cor)) +
-        xlim(c(improvement_xymin, improvement_xymax)) +
-        ylim(c(improvement_xymin, improvement_xymax))
-    for (i in 1:length(ps)) {
-        ps[[i]] = ps[[i]] + geom_point(alpha = alpha_value)
-        ps[[i]] = ps[[i]] + geom_abline(intercept = 0, slope = 1, linetype = 'dashed', color = 'blue')
-        ps[[i]] = ps[[i]] + theme_bw()
-        ps[[i]] = ps[[i]] + geom_density_2d(bins = 12, linewidth = 0.25, color = 'gray')
-        ps[[i]] = ps[[i]] + theme(
-            text = element_text(size = font_size),
-            axis.text = element_text(size = font_size),
-            axis.title = element_text(size = font_size),
-            legend.text = element_text(size = font_size),
-            legend.title = element_text(size = font_size)
-        )
+    ps[[1]] = ggplot(df_clean, aes(x = max_nongroup_cor_uncorrected, y = within_group_cor_uncorrected)) +
+        xlim(c(0, 1)) + ylim(c(0, 1))
+    ps[[2]] = ggplot(df_clean, aes(x = max_nongroup_cor_corrected, y = within_group_cor_corrected)) +
+        xlim(c(0, 1)) + ylim(c(0, 1))
+    ps[[3]] = ggplot(df_clean, aes(x = within_group_cor_uncorrected, y = within_group_cor_corrected)) +
+        xlim(c(0, 1)) + ylim(c(0, 1))
+    ps[[4]] = ggplot(df_clean, aes(x = max_nongroup_cor_uncorrected, y = max_nongroup_cor_corrected)) +
+        xlim(c(0, 1)) + ylim(c(0, 1))
+    ps[[5]] = ggplot(df_clean, aes(x = corrected_per_uncorrected_max_nongroup_cor, y = corrected_per_uncorrected_group_cor)) +
+        xlim(c(improvement_xymin, improvement_xymax)) + ylim(c(improvement_xymin, improvement_xymax))
+
+    for (i in seq_along(ps)) {
+        ps[[i]] = ps[[i]] +
+            geom_point(alpha = alpha_value, na.rm = TRUE) +
+            geom_abline(intercept = 0, slope = 1, linetype = 'dashed', color = 'blue') +
+            theme_bw() +
+            stat_density_2d(bins = 12, linewidth = 0.25, color = 'gray', na.rm = TRUE) +
+            theme(
+                text = element_text(size = font_size),
+                axis.text = element_text(size = font_size),
+                axis.title = element_text(size = font_size),
+                legend.text = element_text(size = font_size),
+                legend.title = element_text(size = font_size)
+            )
     }
+
     ps[[6]] = ggplot() + theme_void()
     combined_plot = wrap_plots(ps)
     ggsave(filename = "csca_group_cor_scatter.pdf", plot = combined_plot, width = 7.2, height = 4.8)
@@ -932,24 +970,25 @@ save_delta_pcc_plot = function(directory, plot_title) {
     #cat("\nDelta Means DataFrame:\n")
     #print(delta_means_df)
 
-    # Shapiro-Wilk tests
-    cat("\nShapiro-Wilk Test Results:\n")
-    cat("delta_bwbw_wibw_uncorrected: ", shapiro.test(delta_means_df$delta_bwbw_wibw_uncorrected)$p.value, "\n")
-    cat("delta_bwbw_wibw_corrected: ", shapiro.test(delta_means_df$delta_bwbw_wibw_corrected)$p.value, "\n")
-    cat("delta_wiwi_bwwi_uncorrected: ", shapiro.test(delta_means_df$delta_wiwi_bwwi_uncorrected)$p.value, "\n")
-    cat("delta_wiwi_bwwi_corrected: ", shapiro.test(delta_means_df$delta_wiwi_bwwi_corrected)$p.value, "\n")
+    if (nrow(delta_means_df) > 2) {
+        cat("\nShapiro-Wilk Test Results:\n")
+        cat("delta_bwbw_wibw_uncorrected: ", shapiro.test(delta_means_df$delta_bwbw_wibw_uncorrected)$p.value, "\n")
+        cat("delta_bwbw_wibw_corrected: ", shapiro.test(delta_means_df$delta_bwbw_wibw_corrected)$p.value, "\n")
+        cat("delta_wiwi_bwwi_uncorrected: ", shapiro.test(delta_means_df$delta_wiwi_bwwi_uncorrected)$p.value, "\n")
+        cat("delta_wiwi_bwwi_corrected: ", shapiro.test(delta_means_df$delta_wiwi_bwwi_corrected)$p.value, "\n")
 
-    # Dependent t-tests
-    cat("\nDependent T-Test Results:\n")
-    t_test_result_bw = t.test(delta_means_df$delta_bwbw_wibw_uncorrected, delta_means_df$delta_bwbw_wibw_corrected, paired = TRUE)$p.value
-    t_test_result_wi = t.test(delta_means_df$delta_wiwi_bwwi_uncorrected, delta_means_df$delta_wiwi_bwwi_corrected, paired = TRUE)$p.value
-    cat("delta_bwbw_wibw_uncorrected vs delta_bwbw_wibw_corrected: ",
-        t_test_result_bw, "\n")
-    cat("delta_wiwi_bwwi_uncorrected vs delta_wiwi_bwwi_corrected: ",
-        t_test_result_wi, "\n")
+        cat("\nDependent T-Test Results:\n")
+        t_test_result_bw = t.test(delta_means_df$delta_bwbw_wibw_uncorrected, delta_means_df$delta_bwbw_wibw_corrected, paired = TRUE)$p.value
+        t_test_result_wi = t.test(delta_means_df$delta_wiwi_bwwi_uncorrected, delta_means_df$delta_wiwi_bwwi_corrected, paired = TRUE)$p.value
+        cat("delta_bwbw_wibw_uncorrected vs delta_bwbw_wibw_corrected: ", t_test_result_bw, "\n")
+        cat("delta_wiwi_bwwi_uncorrected vs delta_wiwi_bwwi_corrected: ", t_test_result_wi, "\n")
 
-    p_label1 <- paste("p =", signif(t_test_result_bw, 3))
-    p_label2 <- paste("p =", signif(t_test_result_wi, 3))
+        p_label1 <- paste("p =", signif(t_test_result_bw, 3))
+        p_label2 <- paste("p =", signif(t_test_result_wi, 3))
+    } else {
+        cat("Not enough data points to perform statistical tests. P values will not be shown.\n")
+    }
+
 
     pdf(plot_title, height = 4.5, width = 4.5, fonts = "Helvetica", pointsize = 7)
 
@@ -959,10 +998,12 @@ save_delta_pcc_plot = function(directory, plot_title) {
     boxplot(delta_means_df$delta_wiwi_bwwi_uncorrected, at = 3, add = TRUE, col = 'gray', yaxt = 'n')
     boxplot(delta_means_df$delta_wiwi_bwwi_corrected, at = 4, add = TRUE, col = 'gray', yaxt = 'n')
 
-    segments(x0 = 1, y0 = mean(delta_means_df$delta_bwbw_wibw_uncorrected) + 0.2, x1 = 2, y1 = mean(delta_means_df$delta_bwbw_wibw_uncorrected) + 0.2, col = "black", lwd = 0.5)
-    segments(x0 = 3, y0 = mean(delta_means_df$delta_wiwi_bwwi_uncorrected) + 0.2, x1 = 4, y1 = mean(delta_means_df$delta_wiwi_bwwi_uncorrected) + 0.2, col = "black", lwd = 0.5)
-    text(x = 1.5, y = mean(delta_means_df$delta_bwbw_wibw_uncorrected) + 0.22, labels = p_label1, xpd = TRUE, srt = 0)
-    text(x = 3.5, y = mean(delta_means_df$delta_wiwi_bwwi_uncorrected) + 0.22, labels = p_label2, xpd = TRUE, srt = 0)
+    if (nrow(delta_means_df) > 2) {
+        segments(x0 = 1, y0 = mean(delta_means_df$delta_bwbw_wibw_uncorrected) + 0.2, x1 = 2, y1 = mean(delta_means_df$delta_bwbw_wibw_uncorrected) + 0.2, col = "black", lwd = 0.5)
+        segments(x0 = 3, y0 = mean(delta_means_df$delta_wiwi_bwwi_uncorrected) + 0.2, x1 = 4, y1 = mean(delta_means_df$delta_wiwi_bwwi_uncorrected) + 0.2, col = "black", lwd = 0.5)
+        text(x = 1.5, y = mean(delta_means_df$delta_bwbw_wibw_uncorrected) + 0.22, labels = p_label1, xpd = TRUE, srt = 0)
+        text(x = 3.5, y = mean(delta_means_df$delta_wiwi_bwwi_uncorrected) + 0.22, labels = p_label2, xpd = TRUE, srt = 0)
+    }
 
     axis(side = 1, at = c(1, 2, 3, 4), labels = c("uncorr.\n", "corr.\n", "uncorr.\n", "corr.\n"), padj = 0.5, tick = FALSE)
     axis(side = 1, at = 0.35, labels = 'Correction\nSample Group', padj = 0.5, hadj = 1, tick = FALSE)
@@ -971,7 +1012,7 @@ save_delta_pcc_plot = function(directory, plot_title) {
 }
 
 save_sample_number_heatmap <- function(df_metadata, font_size = 8, dpi = 300) {
-    sampled_data <- df_metadata[df_metadata$is_sampled == 'yes', c('scientific_name', 'sample_group')]
+    sampled_data <- df_metadata[df_metadata$exclusion == 'no', c('scientific_name', 'sample_group')]
     freq_table <- table(sampled_data$scientific_name, sampled_data$sample_group)
     df_sample_count <- as.data.frame(freq_table)
     names(df_sample_count) <- c('scientific_name', 'sample_group', 'Freq')

@@ -1170,9 +1170,13 @@ tc_tmp = apply_transformation_logic(tc, tc_eff_length, transform_method, batch_e
 is_input_zero = data.frame(tc_tmp == 0, check.names = FALSE)
 file_name = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".uncorrected.tc.tsv"))
 write_table_with_index_name(df = tc_tmp, file_path = file_name, index_name = 'target_id')
+original_sample_groups = selected_sample_groups
 out = sample_group_mean(tc_tmp, sra, selected_sample_groups)
 tc_sample_group_uncorrected = out[['tc_ave']]
 selected_sample_groups = out[['selected_sample_groups']]
+if (length(selected_sample_groups) != length(original_sample_groups)) {
+    sample_group_colors = sample_group_colors[match(selected_sample_groups, original_sample_groups)]
+}
 file_name = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".uncorrected.sample_group.mean.tsv"))
 write_table_with_index_name(df = tc_sample_group_uncorrected, file_path = file_name, index_name = 'target_id')
 
