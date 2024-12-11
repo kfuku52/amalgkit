@@ -914,8 +914,8 @@ save_delta_pcc_plot = function(directory, plot_title) {
 
     combined_means_df <- cbind(first_row_means_df, last_row_means_df)
 
-    cat("Combined Means DataFrame:\n")
-    print(combined_means_df)
+    #cat("Combined Means DataFrame:\n")
+    #print(combined_means_df)
 
     # Calculate deltas
     combined_means_df$delta_bwbw_wibw_uncorrected <- combined_means_df$bwbw_uncorrected - combined_means_df$wibw_uncorrected
@@ -929,8 +929,8 @@ save_delta_pcc_plot = function(directory, plot_title) {
     delta_means_df <- abs(delta_means_df)
     delta_means_df <- na.omit(delta_means_df)
 
-    cat("\nDelta Means DataFrame:\n")
-    print(delta_means_df)
+    #cat("\nDelta Means DataFrame:\n")
+    #print(delta_means_df)
 
     # Shapiro-Wilk tests
     cat("\nShapiro-Wilk Test Results:\n")
