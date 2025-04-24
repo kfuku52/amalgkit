@@ -12,7 +12,14 @@ import subprocess
 import sys
 import warnings
 
-from distutils.util import strtobool
+def strtobool(val):
+    val = val.lower()
+    if val in ("y", "yes", "t", "true", "on", "1"):
+        return True
+    elif val in ("n", "no", "f", "false", "off", "0"):
+        return False
+    else:
+        raise ValueError(f"invalid truth value {val!r}")
 
 class Metadata:
     column_names = ['scientific_name', 'tissue', 'sample_group', 'genotype', 'sex', 'age',
