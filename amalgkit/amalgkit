@@ -3,13 +3,21 @@
 import argparse
 import sys
 import time
-from distutils.util import strtobool
 
 from amalgkit.__init__ import __version__
 
 print('AMALGKIT version: {}'.format(__version__))
 print('AMALGKIT command: {}'.format(' '.join(sys.argv)))
 print('AMALGKIT bug report: https://github.com/kfuku52/amalgkit/issues')
+
+def strtobool(val):
+    val = val.lower()
+    if val in ("y", "yes", "t", "true", "on", "1"):
+        return True
+    elif val in ("n", "no", "f", "false", "off", "0"):
+        return False
+    else:
+        raise ValueError(f"invalid truth value {val!r}")
 
 def command_metadata(args):
     sys.stdout.write('amalgkit metadata: start\n')
