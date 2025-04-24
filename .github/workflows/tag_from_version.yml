@@ -19,7 +19,7 @@ jobs:
         run: |
           echo "🔍 Searching for __init__.py that contains __version__..."
 
-          # Find __init__.py that actually defines __version__
+          # Search for the correct __init__.py
           INIT_PATH=$(grep -rl '__version__' . --include='__init__.py' | head -n1)
 
           if [ -z "$INIT_PATH" ]; then
@@ -29,19 +29,19 @@ jobs:
 
           echo "✅ Found: $INIT_PATH"
 
-          # Create Python script to extract version string using AST
-          cat <<EOF > get_version.py
-import ast
-with open("$INIT_PATH") as f:
-    tree = ast.parse(f.read())
-for node in ast.walk(tree):
-    if isinstance(node, ast.Assign):
-        if getattr(node.targets[0], "id", None) == "__version__":
-            print(node.value.s)
-            break
-EOF
+          # Create Python script line by line
+          echo 'import ast'                         >  get_version.py
+          echo 'import sys'                        >> get_version.py
+          echo 'with open(sys.argv[1]) as f:'      >> get_version.py
+          echo '    tree = ast.parse(f.read())'    >> get_version.py
+          echo 'for node in ast.walk(tree):'       >> get_version.py
+          echo '    if isinstance(node, ast.Assign):' >> get_version.py
+          echo '        if getattr(node.targets[0], "id", None) == "__version__":' >> get_version.py
+          echo '            print(node.value.s)'   >> get_version.py
+          echo '            break'                 >> get_version.py
 
-          VERSION=$(python3 get_version.py)
+          # Extract version
+          VERSION=$(python3 get_version.py "$INIT_PATH")
           PACKAGE=$(basename $(dirname "$INIT_PATH"))
 
           if [ -z "$VERSION" ]; then
