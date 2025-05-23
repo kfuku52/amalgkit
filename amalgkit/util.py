@@ -234,7 +234,7 @@ class Metadata:
             exclude_keyword = config.iloc[i, 2]
             num_detected = 0
             for col in cols:
-                has_bad_keyword = self.df.loc[:, col].str.contains(exclude_keyword, regex=True, case=False).fillna(False)
+                has_bad_keyword = self.df.loc[:, col].astype(str).str.contains(exclude_keyword, regex=True, case=False).fillna(False)
                 self.df.loc[has_bad_keyword, 'exclusion'] = reason
                 num_detected += has_bad_keyword.sum()
             txt = '{}: Marking {:,} SRAs with keyword "{}"'
@@ -261,7 +261,7 @@ class Metadata:
             num_control = 0
             num_treatment = 0
             for col in cols:
-                is_control = self.df.loc[:, col].str.contains(control_term, regex=True, case=False).fillna(False)
+                is_control = self.df.loc[:, col].astype(str).str.contains(control_term, regex=True, case=False).fillna(False)
                 if not any(is_control):
                     continue
                 bioprojects = self.df.loc[is_control, 'bioproject'].unique()
