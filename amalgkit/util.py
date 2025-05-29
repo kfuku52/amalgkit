@@ -168,8 +168,8 @@ class Metadata:
                 tag = sa.xpath('./TAG')
                 if not tag[0].text == None:
                     tag = tag[0].text.lower()
-                    tag = re.sub(" \(.*", "", tag)
-                    tag = re.sub(" ", "_", tag)
+                    tag = re.sub(r" \(.*", "", tag)
+                    tag = re.sub(r" ", "_", tag)
                     if not tag in row_df.columns:
                         value = sa.xpath('./VALUE')
                         if len(value):
@@ -336,11 +336,11 @@ class Metadata:
     def remove_specialchars(self):
         for col, dtype in zip(self.df.dtypes.index, self.df.dtypes.values):
             if any([key in str(dtype) for key in ['str', 'object']]):
-                self.df.loc[:, col] = self.df[col].replace('\r', '', regex=True)
-                self.df.loc[:, col] = self.df[col].replace('\n', '', regex=True)
-                self.df.loc[:, col] = self.df[col].replace('\'', '', regex=True)
-                self.df.loc[:, col] = self.df[col].replace('\"', '', regex=True)
-                self.df.loc[:, col] = self.df[col].replace('\|', '', regex=True)
+                self.df.loc[:, col] = self.df[col].replace(r'\r', '', regex=True)
+                self.df.loc[:, col] = self.df[col].replace(r'\n', '', regex=True)
+                self.df.loc[:, col] = self.df[col].replace(r'\'', '', regex=True)
+                self.df.loc[:, col] = self.df[col].replace(r'\"', '', regex=True)
+                self.df.loc[:, col] = self.df[col].replace(r'\|', '', regex=True)
 
     def pivot(self, n_sp_cutoff=0, qualified_only=True, sampled_only=False):
         df = self.df
@@ -570,7 +570,7 @@ def generate_multisp_busco_table(dir_busco, outfile):
             warnings.warn('full_table.tsv does not exist. Skipping: '.format(species_infile))
             continue
         tmp_table = pandas.read_table(path_to_table, sep='\t', header=None, comment='#', names=col_names)
-        tmp_table.loc[:, 'sequence'] = tmp_table.loc[:, 'sequence'].str.replace(':[-\.0-9]*$', '', regex=True)
+        tmp_table.loc[:, 'sequence'] = tmp_table.loc[:, 'sequence'].str.replace(r':[-\.0-9]*$', '', regex=True)
         for col in ['sequence', 'orthodb_url', 'description']:
             tmp_table[col] = tmp_table[col].fillna('').astype(str)
             tmp_table.loc[(tmp_table[col]==''), col] = '-'
@@ -588,9 +588,9 @@ def generate_multisp_busco_table(dir_busco, outfile):
             lambda x: ','.join(x))
         tmp_table = tmp_table.reset_index()
         species_colname = species_infile
-        species_colname = re.sub('_', 'PLACEHOLDER', species_colname)
-        species_colname = re.sub('[-\._].*', '',  species_colname)
-        species_colname = re.sub('PLACEHOLDER', '_', species_colname)
+        species_colname = re.sub(r'_', 'PLACEHOLDER', species_colname)
+        species_colname = re.sub(r'[-\._].*', '',  species_colname)
+        species_colname = re.sub(r'PLACEHOLDER', '_', species_colname)
         tmp_table = tmp_table.rename(columns={'sequence': species_colname})
         merged_table = merged_table.merge(tmp_table, on='busco_id', how='outer')
     merged_table.to_csv(outfile, sep='\t', index=None, doublequote=False)
