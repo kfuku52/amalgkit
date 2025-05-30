@@ -168,8 +168,8 @@ class Metadata:
                 tag = sa.xpath('./TAG')
                 if not tag[0].text == None:
                     tag = tag[0].text.lower()
-                    tag = re.sub(" \(.*", "", tag)
-                    tag = re.sub(" ", "_", tag)
+                    tag = re.sub(r" \(.*", "", tag)
+                    tag = re.sub(r" ", "_", tag)
                     if not tag in row_df.columns:
                         value = sa.xpath('./VALUE')
                         if len(value):
@@ -183,7 +183,11 @@ class Metadata:
             counter += 1
         if len(df_list)==0:
             return metadata
-        df = pandas.concat(df_list, ignore_index=True, sort=False)
+        if len(df_list) <= 1000:
+            df = pandas.concat(df_list, ignore_index=True)
+        else:
+            chunked = [pandas.concat(df_list[i:i+1000], ignore_index=True) for i in range(0, len(df_list), 1000)]
+            df = pandas.concat(chunked, ignore_index=True)
         now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         print('{}: Finished converting {:,} samples'.format(now, counter), flush=True)
         metadata.df = df
@@ -318,7 +322,7 @@ class Metadata:
         self.df['is_sampled'] = 'no'
         self.df['is_qualified'] = 'no'
         self.df.loc[(self.df.loc[:, 'exclusion'] == 'no'), 'is_qualified'] = 'yes'
-        df_labeled = pandas.DataFrame()
+        df_list = list()
         species = self.df.loc[:, 'scientific_name'].unique()
         for sp in species:
             sp_table = self.df.loc[(self.df.loc[:, 'scientific_name'] == sp), :]
@@ -328,19 +332,23 @@ class Metadata:
                 if sp_sample_group.shape[0] == 0:
                     continue
                 sp_sample_group = self._maximize_bioproject_sampling(df=sp_sample_group, target_n=max_sample)
-                df_labeled = pandas.concat([df_labeled, sp_sample_group], axis=0)
-        self.df = df_labeled
+                df_list.append(sp_sample_group)
+        if len(df_list) <= 1000:
+            self.df = pandas.concat(df_list, ignore_index=True)
+        else:
+            chunked = [pandas.concat(df_list[i:i+1000], ignore_index=True) for i in range(0, len(df_list), 1000)]
+            self.df = pandas.concat(chunked, ignore_index=True)
         self.reorder(omit_misc=False)
         pandas.set_option('mode.chained_assignment', 'warn')
 
     def remove_specialchars(self):
         for col, dtype in zip(self.df.dtypes.index, self.df.dtypes.values):
             if any([key in str(dtype) for key in ['str', 'object']]):
-                self.df.loc[:, col] = self.df[col].replace('\r', '', regex=True)
-                self.df.loc[:, col] = self.df[col].replace('\n', '', regex=True)
-                self.df.loc[:, col] = self.df[col].replace('\'', '', regex=True)
-                self.df.loc[:, col] = self.df[col].replace('\"', '', regex=True)
-                self.df.loc[:, col] = self.df[col].replace('\|', '', regex=True)
+                self.df.loc[:, col] = self.df[col].replace(r'\r', '', regex=True)
+                self.df.loc[:, col] = self.df[col].replace(r'\n', '', regex=True)
+                self.df.loc[:, col] = self.df[col].replace(r'\'', '', regex=True)
+                self.df.loc[:, col] = self.df[col].replace(r'\"', '', regex=True)
+                self.df.loc[:, col] = self.df[col].replace(r'\|', '', regex=True)
 
     def pivot(self, n_sp_cutoff=0, qualified_only=True, sampled_only=False):
         df = self.df
@@ -570,7 +578,7 @@ def generate_multisp_busco_table(dir_busco, outfile):
             warnings.warn('full_table.tsv does not exist. Skipping: '.format(species_infile))
             continue
         tmp_table = pandas.read_table(path_to_table, sep='\t', header=None, comment='#', names=col_names)
-        tmp_table.loc[:, 'sequence'] = tmp_table.loc[:, 'sequence'].str.replace(':[-\.0-9]*$', '', regex=True)
+        tmp_table.loc[:, 'sequence'] = tmp_table.loc[:, 'sequence'].str.replace(r':[-\.0-9]*$', '', regex=True)
         for col in ['sequence', 'orthodb_url', 'description']:
             tmp_table[col] = tmp_table[col].fillna('').astype(str)
             tmp_table.loc[(tmp_table[col]==''), col] = '-'
@@ -588,9 +596,9 @@ def generate_multisp_busco_table(dir_busco, outfile):
             lambda x: ','.join(x))
         tmp_table = tmp_table.reset_index()
         species_colname = species_infile
-        species_colname = re.sub('_', 'PLACEHOLDER', species_colname)
-        species_colname = re.sub('[-\._].*', '',  species_colname)
-        species_colname = re.sub('PLACEHOLDER', '_', species_colname)
+        species_colname = re.sub(r'_', 'PLACEHOLDER', species_colname)
+        species_colname = re.sub(r'[-\._].*', '',  species_colname)
+        species_colname = re.sub(r'PLACEHOLDER', '_', species_colname)
         tmp_table = tmp_table.rename(columns={'sequence': species_colname})
         merged_table = merged_table.merge(tmp_table, on='busco_id', how='outer')
     merged_table.to_csv(outfile, sep='\t', index=None, doublequote=False)

@@ -54,7 +54,7 @@ def fetch_sra_xml(search_term, retmax=1000):
     elapsed_time = int(time.time() - start_time)
     print('{}: SRA XML retrieval ended.'.format(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
     print('SRA XML retrieval time: {:,.1f} sec'.format(elapsed_time), flush=True)
-    xml_string = lxml.etree.tostring(root, pretty_print=True)
+    xml_string = lxml.etree.tostring(root, encoding='UTF-8', pretty_print=True)
     for line in str(xml_string).split('\n'):
         if '<Error>' in line:
             print(line)
