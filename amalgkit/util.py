@@ -333,10 +333,10 @@ class Metadata:
                     continue
                 sp_sample_group = self._maximize_bioproject_sampling(df=sp_sample_group, target_n=max_sample)
                 df_list.append(sp_sample_group)
-        if len(df_list) <= 1000:
+        if len(df_list) <= 100:
             self.df = pandas.concat(df_list, ignore_index=True)
         else:
-            chunked = [pandas.concat(df_list[i:i+1000], ignore_index=True) for i in range(0, len(df_list), 1000)]
+            chunked = [pandas.concat(df_list[i:i+100], ignore_index=True) for i in range(0, len(df_list), 100)]
             self.df = pandas.concat(chunked, ignore_index=True)
         self.reorder(omit_misc=False)
         pandas.set_option('mode.chained_assignment', 'warn')
