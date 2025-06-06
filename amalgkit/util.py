@@ -274,8 +274,8 @@ class Metadata:
                     self.df.loc[(is_bioproject & -is_control), 'exclusion'] = 'non_control'
                     num_control += (is_bioproject & is_control).sum()
                     num_treatment += (is_bioproject & -is_control).sum()
-            txt = '{}: Applying control term "{}": Detected control and treatment SRAs: {:,} and {:,}'
-            print(txt.format(datetime.datetime.now(), control_term, num_control, num_treatment), flush=True)
+            txt = '{}: Applying control term "{}" to "{}": Detected control and treatment SRAs: {:,} and {:,}'
+            print(txt.format(datetime.datetime.now(), control_term, ','.join(cols), num_control, num_treatment), flush=True)
 
     def nspot_cutoff(self, min_nspots):
         print('{}: Marking SRAs with less than {:,} reads'.format(datetime.datetime.now(), min_nspots), flush=True)
