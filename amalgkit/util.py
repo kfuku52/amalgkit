@@ -274,8 +274,8 @@ class Metadata:
                     self.df.loc[(is_bioproject & -is_control), 'exclusion'] = 'non_control'
                     num_control += (is_bioproject & is_control).sum()
                     num_treatment += (is_bioproject & -is_control).sum()
-            txt = '{}: Applying control term "{}": Detected control and treatment SRAs: {:,} and {:,}'
-            print(txt.format(datetime.datetime.now(), control_term, num_control, num_treatment), flush=True)
+            txt = '{}: Applying control term "{}" to "{}": Detected control and treatment SRAs: {:,} and {:,}'
+            print(txt.format(datetime.datetime.now(), control_term, ','.join(cols), num_control, num_treatment), flush=True)
 
     def nspot_cutoff(self, min_nspots):
         print('{}: Marking SRAs with less than {:,} reads'.format(datetime.datetime.now(), min_nspots), flush=True)
@@ -333,10 +333,10 @@ class Metadata:
                     continue
                 sp_sample_group = self._maximize_bioproject_sampling(df=sp_sample_group, target_n=max_sample)
                 df_list.append(sp_sample_group)
-        if len(df_list) <= 1000:
+        if len(df_list) <= 100:
             self.df = pandas.concat(df_list, ignore_index=True)
         else:
-            chunked = [pandas.concat(df_list[i:i+1000], ignore_index=True) for i in range(0, len(df_list), 1000)]
+            chunked = [pandas.concat(df_list[i:i+100], ignore_index=True) for i in range(0, len(df_list), 100)]
             self.df = pandas.concat(chunked, ignore_index=True)
         self.reorder(omit_misc=False)
         pandas.set_option('mode.chained_assignment', 'warn')
