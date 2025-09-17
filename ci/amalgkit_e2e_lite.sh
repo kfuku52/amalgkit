@@ -22,29 +22,37 @@ amalgkit integrate \
   --fastq_dir "$FASTQ" \
   --out_dir "$WORK"
 
-META="$WORK/metadata/metadata.tsv"
-test -s "$META" || (echo "metadata.tsv not found" >&2; exit 1)
-echo "[ok] integrate -> $META"
+# === resolve metadata tsv path robustly ===
+# amalgkit integrate は状況により metadata.tsv か
+# metadata_updated_for_private_fastq.tsv を出力する
+META="$(find "$WORK" -maxdepth 2 -type f \( -name 'metadata.tsv' -o -name 'metadata_updated_for_private_fastq.tsv' \) | head -n1 || true)"
 
-# --- 3) scientific_name / curate_group を追記
-python - << 'PY'
+if [ -z "$META" ] || [ ! -s "$META" ]; then
+  echo "metadata.tsv not found under $WORK" >&2
+  echo "-- debug: list candidates --" >&2
+  find "$WORK" -maxdepth 3 -type f -name 'metadata*.tsv' -ls >&2 || true
+  exit 1
+fi
+
+echo "Found metadata sheet: $META"
+
+# scientific_name / curate_group を埋める（必要に応じて）
+python - <<'PY'
 import csv, sys
-meta_path = sys.argv[1]
-rows = []
-with open(meta_path, newline='', encoding='utf-8') as f:
-    reader = csv.DictReader(f, delimiter='\t')
-    rows = list(reader)
-# 必須列がなければ追加
+import pathlib
+meta_path = pathlib.Path(r'''$META''')
+rows = list(csv.DictReader(meta_path.open("r", newline=""), delimiter="\t"))
+# 例として 2 サンプルに固定で入れる（テスト用）
 for r in rows:
-    r['scientific_name'] = r.get('scientific_name') or 'Testus testus'
-# グループは行により変える
-for i, r in enumerate(rows, 1):
-    r['curate_group'] = f"group{i}"
-# 上書き
-with open(meta_path, 'w', newline='', encoding='utf-8') as f:
-    w = csv.DictWriter(f, fieldnames=rows[0].keys(), delimiter='\t')
+    if r.get("run") in ("S1", "S2"):
+        r["scientific_name"] = r.get("scientific_name") or "Testus example"
+        r["curate_group"] = r.get("curate_group") or ("liver" if r["run"]=="S1" else "brain")
+
+fieldnames = rows[0].keys()
+with meta_path.open("w", newline="") as f:
+    w = csv.DictWriter(f, fieldnames=fieldnames, delimiter="\t")
     w.writeheader(); w.writerows(rows)
-print("patched:", meta_path, "rows:", len(rows))
+print(f"Updated metadata: {meta_path}")
 PY
 "$META"
 
