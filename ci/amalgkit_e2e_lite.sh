@@ -53,16 +53,15 @@ with meta_path.open("r", newline="", encoding="utf-8") as f:
     rows = list(reader)
     fieldnames = list(reader.fieldnames or [])
 
-# 無ければ列を追加、空なら埋める（テスト用に固定値）
+# 無ければ列を追加、空なら埋める（テスト用の固定値）
 for r in rows:
     if 'scientific_name' not in r or not r['scientific_name']:
         r['scientific_name'] = 'Testus testus'
     if 'curate_group' not in r or not r['curate_group']:
         r['curate_group'] = 'group1'
 
-# DictWriter のために全行のキーをユニオン
-all_fields = []
-seen = set()
+# DictWriter 用に全列のユニオン
+all_fields, seen = [], set()
 for k in fieldnames + [k for row in rows for k in row.keys()]:
     if k not in seen:
         seen.add(k); all_fields.append(k)
