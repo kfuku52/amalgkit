@@ -1,0 +1,99 @@
+name: amalgkit-e2e-lite
+
+on:
+  pull_request:
+  push:
+    paths:
+      - ".github/workflows/amalgkit-e2e-lite.yaml"
+      - "ci/amalgkit_e2e_lite.sh"
+      - "amalgkit/**"
+      - "setup.py"
+      - "pyproject.toml"
+  workflow_dispatch:
+
+jobs:
+  e2e-lite:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package (editable)
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+
+      # seqkit は integrate で必要（静的バイナリを取得）
+      - name: Install seqkit (static binary, pinned)
+        run: |
+          set -eux
+          mkdir -p "$GITHUB_WORKSPACE/bin"
+          curl -fsSL -o /tmp/seqkit.tgz \
+            https://github.com/shenwei356/seqkit/releases/download/v2.10.1/seqkit_linux_amd64.tar.gz
+          tar -C /tmp -xzf /tmp/seqkit.tgz
+          mv /tmp/seqkit "$GITHUB_WORKSPACE/bin/seqkit"
+          chmod +x "$GITHUB_WORKSPACE/bin/seqkit"
+          echo "$GITHUB_WORKSPACE/bin" >> $GITHUB_PATH
+
+      # 本物の kallisto は重いので、モックを PATH に追加
+      - name: Install fake kallisto (mock)
+        shell: bash
+        run: |
+          set -eux
+          mkdir -p "$GITHUB_WORKSPACE/bin"
+          cat > "$GITHUB_WORKSPACE/bin/kallisto" << 'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          if [[ $# -lt 1 ]]; then
+            echo "fake kallisto" >&2; exit 0
+          fi
+          cmd="$1"; shift
+          case "$cmd" in
+            index)
+              # 例: kallisto index -i /path/to/index.idx transcript.fa
+              idx=""
+              while [[ $# -gt 0 ]]; do
+                case "$1" in
+                  -i) idx="$2"; shift 2;;
+                  *) shift;;
+                esac
+              done
+              [[ -n "${idx:-}" ]] || idx="./index.idx"
+              mkdir -p "$(dirname "$idx")"
+              echo "FAKEIDX" > "$idx"
+              ;;
+            quant)
+              # 例: kallisto quant -i index.idx -o outdir reads_1.fq.gz reads_2.fq.gz
+              outdir="./"
+              while [[ $# -gt 0 ]]; do
+                case "$1" in
+                  -o) outdir="$2"; shift 2;;
+                  -i) shift 2;;    # 使わないが受理
+                  --threads) shift 2;;
+                  *) shift;;
+                esac
+              done
+              mkdir -p "$outdir"
+              cat > "$outdir/abundance.tsv" <<TSV
+          target_id	length	eff_length	est_counts	tpm
+          tx1	1000	900	10	5
+          tx2	2000	1800	0	0
+          TSV
+              echo '{"n_targets":2,"mock":true}' > "$outdir/run_info.json"
+              ;;
+            *)
+              echo "fake kallisto: $cmd" >&2; exit 0;;
+          esac
+          EOF
+          chmod +x "$GITHUB_WORKSPACE/bin/kallisto"
+          echo "$GITHUB_WORKSPACE/bin" >> $GITHUB_PATH
+
+      - name: Run e2e-lite script
+        run: bash ci/amalgkit_e2e_lite.sh
