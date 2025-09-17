@@ -23,9 +23,16 @@ amalgkit integrate \
   --out_dir "$WORK"
 
 # === resolve metadata tsv path robustly ===
-# amalgkit integrate は状況により metadata.tsv か
-# metadata_updated_for_private_fastq.tsv を出力する
-META="$(find "$WORK" -maxdepth 2 -type f \( -name 'metadata.tsv' -o -name 'metadata_updated_for_private_fastq.tsv' \) | head -n1 || true)"
+# ローカルFASTQのみの場合は metadata_private_fastq.tsv、
+# 既存メタと統合した場合は metadata_updated_for_private_fastq.tsv、
+# それ以外は metadata.tsv が出力される可能性あり。
+META="$(
+  find "$WORK" -maxdepth 2 -type f \
+    \( -name 'metadata_private_fastq.tsv' \
+       -o -name 'metadata_updated_for_private_fastq.tsv' \
+       -o -name 'metadata.tsv' \) \
+  | head -n1 || true
+)"
 
 if [ -z "$META" ] || [ ! -s "$META" ]; then
   echo "metadata.tsv not found under $WORK" >&2
@@ -36,22 +43,34 @@ fi
 
 echo "Found metadata sheet: $META"
 
-# scientific_name / curate_group を埋める（必要に応じて）
-python - <<'PY'
-import csv, sys
-import pathlib
-meta_path = pathlib.Path(r'''$META''')
-rows = list(csv.DictReader(meta_path.open("r", newline=""), delimiter="\t"))
-# 例として 2 サンプルに固定で入れる（テスト用）
-for r in rows:
-    if r.get("run") in ("S1", "S2"):
-        r["scientific_name"] = r.get("scientific_name") or "Testus example"
-        r["curate_group"] = r.get("curate_group") or ("liver" if r["run"]=="S1" else "brain")
+# scientific_name / curate_group を埋める（全行を対象に安全に追記）
+python - "$META" <<'PY'
+import csv, sys, pathlib
+meta_path = pathlib.Path(sys.argv[1])
 
-fieldnames = rows[0].keys()
-with meta_path.open("w", newline="") as f:
-    w = csv.DictWriter(f, fieldnames=fieldnames, delimiter="\t")
+with meta_path.open("r", newline="", encoding="utf-8") as f:
+    reader = csv.DictReader(f, delimiter="\t")
+    rows = list(reader)
+    fieldnames = list(reader.fieldnames or [])
+
+# 無ければ列を追加、空なら埋める（テスト用に固定値）
+for r in rows:
+    if 'scientific_name' not in r or not r['scientific_name']:
+        r['scientific_name'] = 'Testus testus'
+    if 'curate_group' not in r or not r['curate_group']:
+        r['curate_group'] = 'group1'
+
+# DictWriter のために全行のキーをユニオン
+all_fields = []
+seen = set()
+for k in fieldnames + [k for row in rows for k in row.keys()]:
+    if k not in seen:
+        seen.add(k); all_fields.append(k)
+
+with meta_path.open("w", newline="", encoding="utf-8") as f:
+    w = csv.DictWriter(f, fieldnames=all_fields, delimiter="\t")
     w.writeheader(); w.writerows(rows)
+
 print(f"Updated metadata: {meta_path}")
 PY
 "$META"
