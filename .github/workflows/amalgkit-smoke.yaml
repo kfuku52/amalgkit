@@ -10,6 +10,7 @@ on:
       - "pyproject.toml"
       - "requirements*.txt"
       - ".github/workflows/amalgkit-smoke.yml"
+      - ".github/workflows/amalgkit-smoke.yaml"
       - "ci/amalgkit_smoke.sh"
   pull_request:
     paths:
@@ -20,6 +21,7 @@ on:
       - "pyproject.toml"
       - "requirements*.txt"
       - ".github/workflows/amalgkit-smoke.yml"
+      - ".github/workflows/amalgkit-smoke.yaml"
       - "ci/amalgkit_smoke.sh"
   workflow_dispatch:
 
