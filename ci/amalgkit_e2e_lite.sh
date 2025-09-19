@@ -101,9 +101,6 @@ rows = list(csv.DictReader(p.open("r", encoding="utf-8"), delimiter="\t"))
 print("[debug] unique scientific_name:", sorted({r.get("scientific_name","") for r in rows}))
 PY
 
-echo "[debug] FASTA exact hits for Testus_testus:"
-ls -l "$FASTA"/Testus_testus.* || true
-
 # ---- FASTA を先に作る → getfastq リンク → quant ----
 
 # 参照配列（FASTA）を検出されやすい配置で用意
@@ -144,6 +141,16 @@ ln -sf "$FASTA/Testus_testus.fasta" "$FASTA/Testus_testus_cdna.fa"
 gzip -c "$FASTA/Testus_testus.fasta" > "$FASTA/Testus_testus.fa.gz"
 ln -sf "$FASTA/Testus_testus.fa.gz" "$FASTA/Testus_testus.fasta.gz" || true
 
+# ★ ここでダミー index を先に用意（get_index の FASTA 検索を回避）
+mkdir -p "$WORK/index"
+: > "$WORK/index/Testus_testus.idx"
+
+# 作成済みファイルの確認（作成後にチェック）
+echo "[debug] FASTA exact hits for Testus_testus:"
+ls -l "$FASTA"/Testus_testus.* || true
+echo "[debug] index file:"
+ls -l "$WORK/index/Testus_testus.idx" || true
+
 # quant が期待する getfastq 出力の場所へ、ダミー FASTQ をリンク
 for id in S1 S2; do
   d="$WORK/getfastq/$id"
@@ -160,7 +167,8 @@ find "$FASTA" -maxdepth 2 \( -type f -o -type l \) -printf "%p -> %l\n" | sort
 echo "[debug] getfastq tree:"; find "$WORK/getfastq" -maxdepth 2 \( -type f -o -type l \) -ls | sed -n '1,20p' || true
 
 # ★ quant はここで1回だけ実行（バッチ無し）
-amalgkit quant --metadata "$META" --out_dir "$WORK" --fasta_dir "$FASTA" --build_index yes --threads 1
+#    → 既に index を置いたので build はスキップ
+amalgkit quant --metadata "$META" --out_dir "$WORK" --fasta_dir "$FASTA" --build_index no --threads 1
 echo "[ok] quant (mocked)"
 
 
