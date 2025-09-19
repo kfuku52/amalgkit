@@ -144,11 +144,9 @@ jobs:
 
       - name: Install fake Rscript (mock)
         run: |
-          set -eux
           mkdir -p "$GITHUB_WORKSPACE/bin"
           cat > "$GITHUB_WORKSPACE/bin/Rscript" << 'EOF'
           #!/usr/bin/env bash
-          # mock Rscript: no-op for CI
           exit 0
           EOF
           chmod +x "$GITHUB_WORKSPACE/bin/Rscript"

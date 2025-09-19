@@ -94,9 +94,9 @@ if rows:
 print("post-select patch ->", p)
 PY
 
-# ---- ここから順序が大事：FASTA を先に作る → getfastq リンク → quant ----
+# ---- FASTA を先に作る → getfastq リンク → quant ----
 
-# 参照配列（FASTA）を正規名で用意（検出の要）
+# 参照配列（FASTA）を検出されやすい配置で用意
 mkdir -p "$FASTA"
 cat > "$FASTA/Testus_testus.fasta" <<'FA'
 >tx1
@@ -104,9 +104,14 @@ ACGTACGT
 >tx2
 ACGTACGT
 FA
-# 互換のためのエイリアス
+# 互換エイリアス（拡張子/別名）
 ln -sf "$FASTA/Testus_testus.fasta" "$FASTA/Testus_testus.fa"
 ln -sf "$FASTA/Testus_testus.fasta" "$FASTA/Testus_testus_dummy.fasta"
+
+# ★サブディレクトリにも同名を用意（実装が <fasta_dir>/<Genus_species>/*.fa を探す場合に対応）
+mkdir -p "$FASTA/Testus_testus"
+ln -sf "$FASTA/Testus_testus.fasta" "$FASTA/Testus_testus/Testus_testus.fasta"
+ln -sf "$FASTA/Testus_testus.fasta" "$FASTA/Testus_testus/Testus_testus.fa"
 
 # quant が期待する getfastq 出力の場所へ、ダミー FASTQ をリンク
 for id in S1 S2; do
@@ -118,48 +123,14 @@ for id in S1 S2; do
   ln -sf "$FASTQ/${id}_2.fq.gz" "$d/${id}_2.fastq.gz"
 done
 
-# デバッグ（存在確認）
-echo "[debug] FASTA dir:"; ls -l "$FASTA" || true
-echo "[debug] getfastq tree:"; find "$WORK/getfastq" -maxdepth 2 -type f -ls | head -n 10 || true
+# デバッグ（シンボリックリンクも見えるように -type f/-type l 両方）
+echo "[debug] FASTA dir tree:"; find "$FASTA" -maxdepth 2 \( -type f -o -type l \) -ls | sed -n '1,20p' || true
+echo "[debug] getfastq tree:"; find "$WORK/getfastq" -maxdepth 2 \( -type f -o -type l \) -ls | sed -n '1,20p' || true
 
-# ★ ここで初めて quant を1回だけ実行（バッチ無し）
+# ★ quant はここで1回だけ実行（バッチ無し）
 amalgkit quant --metadata "$META" --out_dir "$WORK" --fasta_dir "$FASTA" --build_index yes --threads 1
 echo "[ok] quant (mocked)"
 
-# kallisto モックを使って一括実行
-amalgkit quant --metadata "$META" --out_dir "$WORK" --fasta_dir "$FASTA" --build_index yes --threads 1
-
-# --- 5) quant：モックの kallisto を使って軽量実行
-
-# 参照配列（FASTA）を正規名で用意（← これ超重要）
-mkdir -p "$FASTA"
-cat > "$FASTA/Testus_testus.fasta" <<'FA'
->tx1
-ACGTACGT
->tx2
-ACGTACGT
-FA
-# 互換のためにエイリアスも置く
-ln -sf "$FASTA/Testus_testus.fasta" "$FASTA/Testus_testus.fa"
-ln -sf "$FASTA/Testus_testus.fasta" "$FASTA/Testus_testus_dummy.fasta"
-
-# quant が期待する getfastq 出力の場所へ、ダミー FASTQ をリンク
-for id in S1 S2; do
-  d="$WORK/getfastq/$id"
-  mkdir -p "$d"
-  ln -sf "$FASTQ/${id}_1.fq.gz" "$d/${id}_1.fq.gz"
-  ln -sf "$FASTQ/${id}_2.fq.gz" "$d/${id}_2.fq.gz"
-  ln -sf "$FASTQ/${id}_1.fq.gz" "$d/${id}_1.fastq.gz"
-  ln -sf "$FASTQ/${id}_2.fq.gz" "$d/${id}_2.fastq.gz"
-done
-
-# デバッグ（ログに必ず出るので存在確認できる）
-echo "[debug] FASTA dir:"; ls -l "$FASTA" || true
-echo "[debug] getfastq tree:"; find "$WORK/getfastq" -maxdepth 2 -type f -ls | head -n 10 || true
-
-# バッチ無しで一括
-amalgkit quant --metadata "$META" --out_dir "$WORK" --fasta_dir "$FASTA" --build_index yes --threads 1
-echo "[ok] quant (mocked)"
 
 # --- 6) merge：統合テーブル生成
 amalgkit merge --out_dir "$WORK"
