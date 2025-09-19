@@ -84,34 +84,47 @@ with p.open("r", newline="", encoding="utf-8") as f:
 if rows:
     fields = list(rows[0].keys())
     for col in ("is_sampled", "scientific_name"):
-        if col not in fields:
-            fields.append(col)
+        if col not in fields: fields.append(col)
     for r in rows:
         r["is_sampled"] = "yes"
         r["scientific_name"] = "Testus testus"
     with p.open("w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=fields, delimiter="\t")
-        w.writeheader()
-        w.writerows(rows)
+        w.writeheader(); w.writerows(rows)
 print("post-select patch ->", p)
 PY
 
-# quant が期待するディレクトリ構造にダミーFastQをリンク
+# ---- ここから順序が大事：FASTA を先に作る → getfastq リンク → quant ----
+
+# 参照配列（FASTA）を正規名で用意（検出の要）
+mkdir -p "$FASTA"
+cat > "$FASTA/Testus_testus.fasta" <<'FA'
+>tx1
+ACGTACGT
+>tx2
+ACGTACGT
+FA
+# 互換のためのエイリアス
+ln -sf "$FASTA/Testus_testus.fasta" "$FASTA/Testus_testus.fa"
+ln -sf "$FASTA/Testus_testus.fasta" "$FASTA/Testus_testus_dummy.fasta"
+
+# quant が期待する getfastq 出力の場所へ、ダミー FASTQ をリンク
 for id in S1 S2; do
   d="$WORK/getfastq/$id"
   mkdir -p "$d"
-  # 元ファイル（.fq.gz）から、想定されうる両拡張子の名前でリンクを張っておく
   ln -sf "$FASTQ/${id}_1.fq.gz" "$d/${id}_1.fq.gz"
   ln -sf "$FASTQ/${id}_2.fq.gz" "$d/${id}_2.fq.gz"
   ln -sf "$FASTQ/${id}_1.fq.gz" "$d/${id}_1.fastq.gz"
   ln -sf "$FASTQ/${id}_2.fq.gz" "$d/${id}_2.fastq.gz"
 done
 
-# 確認（任意）
-find "$WORK/getfastq" -maxdepth 2 -type f -ls | sed -n '1,6p'
+# デバッグ（存在確認）
+echo "[debug] FASTA dir:"; ls -l "$FASTA" || true
+echo "[debug] getfastq tree:"; find "$WORK/getfastq" -maxdepth 2 -type f -ls | head -n 10 || true
 
-# 参照配列の用意（済みならOK）
-# cat > "$FASTA/Testus_testus_dummy.fasta" <<FA ... FA
+# ★ ここで初めて quant を1回だけ実行（バッチ無し）
+amalgkit quant --metadata "$META" --out_dir "$WORK" --fasta_dir "$FASTA" --build_index yes --threads 1
+echo "[ok] quant (mocked)"
 
 # kallisto モックを使って一括実行
 amalgkit quant --metadata "$META" --out_dir "$WORK" --fasta_dir "$FASTA" --build_index yes --threads 1
