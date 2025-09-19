@@ -75,33 +75,25 @@ ls -l "$WORK"/config* || true
 
 amalgkit select --metadata "$META" --out_dir "$WORK" --max_sample 99
 
-# ★ 重要：select 後に is_sampled=yes を強制（select が no にするため）
+# post-select patch: is_sampled=yes & scientific_name=Testus testus を強制
 python - "$META" <<'PY'
 import csv, sys, pathlib
 p = pathlib.Path(sys.argv[1])
-rows = list(csv.DictReader(p.open("r", newline="", encoding="utf-8"), delimiter="\t"))
-if rows:
-    for r in rows:
-        r["is_sampled"] = "yes"
-    with p.open("w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=list(rows[0].keys()), delimiter="\t")
-        w.writeheader(); w.writerows(rows)
-print("patched is_sampled=yes (post-select) ->", p)
-
-# ★ 保険：select後に scientific_name を再度固定
-python - "$META" <<'PY'
-import csv, sys, pathlib
-p = pathlib.Path(sys.argv[1])
-rows = list(csv.DictReader(p.open("r", newline="", encoding="utf-8"), delimiter="\t"))
+with p.open("r", newline="", encoding="utf-8") as f:
+    rows = list(csv.DictReader(f, delimiter="\t"))
 if rows:
     fields = list(rows[0].keys())
-    if "scientific_name" not in fields: fields.append("scientific_name")
+    for col in ("is_sampled", "scientific_name"):
+        if col not in fields:
+            fields.append(col)
     for r in rows:
+        r["is_sampled"] = "yes"
         r["scientific_name"] = "Testus testus"
     with p.open("w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=fields, delimiter="\t")
-        w.writeheader(); w.writerows(rows)
-print("re-force scientific_name=Testus testus (post-select) ->", p)
+        w.writeheader()
+        w.writerows(rows)
+print("post-select patch ->", p)
 PY
 
 # --- 5) quant：モック kallisto を使って軽量実行（バッチ無しで一括）
