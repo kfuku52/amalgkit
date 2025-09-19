@@ -1,0 +1,168 @@
+name: amalgkit ci
+
+on:
+  pull_request:
+  push:
+    branches: ["**"]
+    paths:
+      - "amalgkit/**"
+      - "util/**"
+      - "**.py"
+      - "setup.py"
+      - "requirements*.txt"
+      - ".github/workflows/amalgkit-ci.yaml"  # 両方拾う
+      - ".github/workflows/amalgkit-ci.yml"
+      - "ci/**"
+  workflow_dispatch:
+  schedule:
+    - cron: "0 19 * * 0"  # 毎週月曜 04:00 JST（= 日曜19:00 UTC）
+
+concurrency:
+  group: amalgkit-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: smoke (py${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.11", "3.12"]
+    continue-on-error: ${{ matrix.python == '3.12' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: |
+            setup.py
+            requirements*.txt
+            pyproject.toml
+
+      - name: Install (editable)
+        run: |
+          python -V
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+
+      - name: Run smoke script
+        shell: bash
+        run: |
+          chmod +x ci/amalgkit_smoke.sh
+          ci/amalgkit_smoke.sh
+
+  e2e-lite:
+    name: e2e-lite
+    runs-on: ubuntu-latest
+    needs: smoke
+    if: ${{ needs.smoke.result == 'success' || needs.smoke.result == 'skipped' }}
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            setup.py
+            requirements*.txt
+            pyproject.toml
+
+      - name: Install (editable)
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+
+      - name: Install seqkit (static binary, pinned)
+        run: |
+          set -eux
+          mkdir -p "$GITHUB_WORKSPACE/bin"
+          curl -fsSL -o /tmp/seqkit.tgz \
+            https://github.com/shenwei356/seqkit/releases/download/v2.10.1/seqkit_linux_amd64.tar.gz
+          tar -C /tmp -xzf /tmp/seqkit.tgz
+          mv /tmp/seqkit "$GITHUB_WORKSPACE/bin/seqkit"
+          chmod +x "$GITHUB_WORKSPACE/bin/seqkit"
+          echo "$GITHUB_WORKSPACE/bin" >> "$GITHUB_PATH"
+
+      - name: Install fake kallisto (mock)
+        run: |
+          set -eux
+          mkdir -p "$GITHUB_WORKSPACE/bin"
+          cat > "$GITHUB_WORKSPACE/bin/kallisto" << 'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          cmd="${1:-}"; shift || true
+          case "$cmd" in
+            index)
+              idx="./index.idx"
+              while [[ $# -gt 0 ]]; do
+                case "$1" in
+                  -i) idx="$2"; shift 2;;
+                  *) shift;;
+                esac
+              done
+              mkdir -p "$(dirname "$idx")"
+              echo "FAKEIDX" > "$idx"
+              ;;
+            quant)
+              outdir="./"
+              while [[ $# -gt 0 ]]; do
+                case "$1" in
+                  -o) outdir="$2"; shift 2;;
+                  -i|--threads) shift 2;;
+                  *) shift;;
+                esac
+              done
+              mkdir -p "$outdir"
+              cat > "$outdir/abundance.tsv" <<TSV
+          target_id	length	eff_length	est_counts	tpm
+          tx1	1000	900	10	5
+          tx2	2000	1800	0	0
+          TSV
+              echo '{"n_targets":2,"mock":true}' > "$outdir/run_info.json"
+              ;;
+            *) exit 0;;
+          esac
+          EOF
+          chmod +x "$GITHUB_WORKSPACE/bin/kallisto"
+          echo "$GITHUB_WORKSPACE/bin" >> "$GITHUB_PATH"
+
+      - name: Run e2e-lite script
+        run: |
+          chmod +x ci/amalgkit_e2e_lite.sh
+          bash ci/amalgkit_e2e_lite.sh
+
+      - name: Upload artifacts (merged tables & logs)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-lite-artifacts
+          path: |
+            .amalgkit_e2e_work/**/*.tsv
+            .amalgkit_e2e_work/**/*.json
+          if-no-files-found: ignore
+
+  heavy:
+    name: heavy (real tools) [optional]
+    runs-on: ubuntu-latest
+    needs: e2e-lite
+    if: ${{ github.repository_owner == 'kfuku52' && (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - run: echo "heavy job placeholder"
