@@ -38,23 +38,27 @@ mkdir -p "$WORK/metadata"
 cp -f "$META" "$WORK/metadata/metadata.tsv"
 META="$WORK/metadata/metadata.tsv"
 
-# --- 3) scientific_name / curate_group を付与（後工程のため）
+# --- 3) scientific_name / curate_group を強制上書き
 python - "$META" <<'PY'
 import csv, sys, pathlib
 p = pathlib.Path(sys.argv[1])
 rows = list(csv.DictReader(p.open("r", newline="", encoding="utf-8"), delimiter="\t"))
 if rows:
+    # ヘッダに列を追加（無ければ）
+    fields = list(rows[0].keys())
+    for col in ("scientific_name","curate_group"):
+        if col not in fields: fields.append(col)
+
     for r in rows:
-        r.setdefault("scientific_name", "")
-        r.setdefault("curate_group", "")
-        if not r["scientific_name"]:
-            r["scientific_name"] = "Testus testus"
-        if not r["curate_group"]:
+        # ★ 常に上書き（placeholderを確実に消す）
+        r["scientific_name"] = "Testus testus"
+        if not r.get("curate_group"):
             r["curate_group"] = "group1"
+
     with p.open("w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=list(rows[0].keys()), delimiter="\t")
+        w = csv.DictWriter(f, fieldnames=fields, delimiter="\t")
         w.writeheader(); w.writerows(rows)
-print("patched scientific_name/curate_group ->", p)
+print("force-set scientific_name=Testus testus, curate_group=group1 ->", p)
 PY
 
 # --- 4) config / select
@@ -83,6 +87,21 @@ if rows:
         w = csv.DictWriter(f, fieldnames=list(rows[0].keys()), delimiter="\t")
         w.writeheader(); w.writerows(rows)
 print("patched is_sampled=yes (post-select) ->", p)
+
+# ★ 保険：select後に scientific_name を再度固定
+python - "$META" <<'PY'
+import csv, sys, pathlib
+p = pathlib.Path(sys.argv[1])
+rows = list(csv.DictReader(p.open("r", newline="", encoding="utf-8"), delimiter="\t"))
+if rows:
+    fields = list(rows[0].keys())
+    if "scientific_name" not in fields: fields.append("scientific_name")
+    for r in rows:
+        r["scientific_name"] = "Testus testus"
+    with p.open("w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=fields, delimiter="\t")
+        w.writeheader(); w.writerows(rows)
+print("re-force scientific_name=Testus testus (post-select) ->", p)
 PY
 
 # --- 5) quant：モック kallisto を使って軽量実行（バッチ無しで一括）
