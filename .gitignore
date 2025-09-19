@@ -1,3 +1,6 @@
 *.pyc
 /data
 /tests
+.DS_Store
+.github/.DS_Store
+.github/workflows/.DS_Store
