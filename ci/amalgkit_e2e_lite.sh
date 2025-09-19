@@ -96,6 +96,26 @@ if rows:
 print("post-select patch ->", p)
 PY
 
+# quant が期待するディレクトリ構造にダミーFastQをリンク
+for id in S1 S2; do
+  d="$WORK/getfastq/$id"
+  mkdir -p "$d"
+  # 元ファイル（.fq.gz）から、想定されうる両拡張子の名前でリンクを張っておく
+  ln -sf "$FASTQ/${id}_1.fq.gz" "$d/${id}_1.fq.gz"
+  ln -sf "$FASTQ/${id}_2.fq.gz" "$d/${id}_2.fq.gz"
+  ln -sf "$FASTQ/${id}_1.fq.gz" "$d/${id}_1.fastq.gz"
+  ln -sf "$FASTQ/${id}_2.fq.gz" "$d/${id}_2.fastq.gz"
+done
+
+# 確認（任意）
+find "$WORK/getfastq" -maxdepth 2 -type f -ls | sed -n '1,6p'
+
+# 参照配列の用意（済みならOK）
+# cat > "$FASTA/Testus_testus_dummy.fasta" <<FA ... FA
+
+# kallisto モックを使って一括実行
+amalgkit quant --metadata "$META" --out_dir "$WORK" --fasta_dir "$FASTA" --build_index yes --threads 1
+
 # --- 5) quant：モック kallisto を使って軽量実行（バッチ無しで一括）
 # 参照配列（FASTA）。ファイル名は "Genus_species*.fasta"
 cat > "$FASTA/Testus_testus_dummy.fasta" <<FA
