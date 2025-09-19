@@ -113,6 +113,23 @@ mkdir -p "$FASTA/Testus_testus"
 ln -sf "$FASTA/Testus_testus.fasta" "$FASTA/Testus_testus/Testus_testus.fasta"
 ln -sf "$FASTA/Testus_testus.fasta" "$FASTA/Testus_testus/Testus_testus.fa"
 
+# ★ 追加：空白名・小文字・別名も全て用意（実装の探索パターン総当たり）
+ln -sf "$FASTA/Testus_testus.fasta" "$FASTA/Testus testus.fasta"
+ln -sf "$FASTA/Testus_testus.fasta" "$FASTA/Testus testus.fa"
+mkdir -p "$FASTA/Testus testus"
+ln -sf "$FASTA/Testus_testus.fasta" "$FASTA/Testus testus/Testus testus.fasta"
+ln -sf "$FASTA/Testus_testus.fasta" "$FASTA/Testus testus/Testus testus.fa"
+
+ln -sf "$FASTA/Testus_testus.fasta" "$FASTA/testus_testus.fasta"
+ln -sf "$FASTA/Testus_testus.fasta" "$FASTA/testus_testus.fa"
+mkdir -p "$FASTA/testus_testus"
+ln -sf "$FASTA/Testus_testus.fasta" "$FASTA/testus_testus/testus_testus.fasta"
+ln -sf "$FASTA/Testus_testus.fasta" "$FASTA/testus_testus/testus_testus.fa"
+
+# ありがちな別名も置いておく
+ln -sf "$FASTA/Testus_testus.fasta" "$FASTA/Testus_testus_transcripts.fa"
+ln -sf "$FASTA/Testus_testus.fasta" "$FASTA/Testus_testus_cdna.fa"
+
 # quant が期待する getfastq 出力の場所へ、ダミー FASTQ をリンク
 for id in S1 S2; do
   d="$WORK/getfastq/$id"
@@ -124,7 +141,8 @@ for id in S1 S2; do
 done
 
 # デバッグ（シンボリックリンクも見えるように -type f/-type l 両方）
-echo "[debug] FASTA dir tree:"; find "$FASTA" -maxdepth 2 \( -type f -o -type l \) -ls | sed -n '1,20p' || true
+echo "[debug] FASTA dir tree (wide):"
+find "$FASTA" -maxdepth 2 \( -type f -o -type l \) -printf "%p -> %l\n" | sort
 echo "[debug] getfastq tree:"; find "$WORK/getfastq" -maxdepth 2 \( -type f -o -type l \) -ls | sed -n '1,20p' || true
 
 # ★ quant はここで1回だけ実行（バッチ無し）
