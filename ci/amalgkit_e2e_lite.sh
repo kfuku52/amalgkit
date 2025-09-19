@@ -79,7 +79,17 @@ print(f"Updated metadata: {meta_path}")
 PY
 
 # --- 4) config / select：最低限動作
-amalgkit config --config base --out_dir "$WORK"   # ← out_dir を必ず指定
+amalgkit config --config base --out_dir "$WORK"   # $WORK/config_base を作る
+
+# ★ 追加：select が期待する $WORK/config を用意（リンク or コピー）
+if [ ! -d "$WORK/config" ]; then
+  ln -s "$WORK/config_base" "$WORK/config" 2>/dev/null || {
+    mkdir -p "$WORK/config"
+    cp -f "$WORK"/config_base/*.config "$WORK/config/" || true
+  }
+fi
+ls -l "$WORK"/config* || true
+
 amalgkit select --metadata "$META" --out_dir "$WORK" --max_sample 99
 
 # --- 5) quant：モックの kallisto を使って軽量実行
