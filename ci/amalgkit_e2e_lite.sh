@@ -116,16 +116,37 @@ find "$WORK/getfastq" -maxdepth 2 -type f -ls | sed -n '1,6p'
 # kallisto モックを使って一括実行
 amalgkit quant --metadata "$META" --out_dir "$WORK" --fasta_dir "$FASTA" --build_index yes --threads 1
 
-# --- 5) quant：モック kallisto を使って軽量実行（バッチ無しで一括）
-# 参照配列（FASTA）。ファイル名は "Genus_species*.fasta"
-cat > "$FASTA/Testus_testus_dummy.fasta" <<FA
+# --- 5) quant：モックの kallisto を使って軽量実行
+
+# 参照配列（FASTA）を正規名で用意（検出が安定）
+# ★重要: "Genus_species.fasta" を必ず作る
+cat > "$FASTA/Testus_testus.fasta" <<FA
 >tx1
 ACGTACGT
 >tx2
 ACGTACGT
 FA
+# 別拡張子・別名も拾う実装に備えてエイリアスを置く（どれかがヒットする）
+ln -sf "$FASTA/Testus_testus.fasta" "$FASTA/Testus_testus.fa"
+ln -sf "$FASTA/Testus_testus.fasta" "$FASTA/Testus_testus_dummy.fasta"
 
+# quant が期待する getfastq 出力の場所へ、ダミーFASTQをリンク
+for id in S1 S2; do
+  d="$WORK/getfastq/$id"
+  mkdir -p "$d"
+  ln -sf "$FASTQ/${id}_1.fq.gz" "$d/${id}_1.fq.gz"
+  ln -sf "$FASTQ/${id}_2.fq.gz" "$d/${id}_2.fq.gz"
+  ln -sf "$FASTQ/${id}_1.fq.gz" "$d/${id}_1.fastq.gz"
+  ln -sf "$FASTQ/${id}_2.fq.gz" "$d/${id}_2.fastq.gz"
+done
+
+# デバッグ出力（何かあったらここで気づける）
+echo "[debug] FASTA dir:"; ls -l "$FASTA" || true
+echo "[debug] getfastq tree:"; find "$WORK/getfastq" -maxdepth 2 -type f -ls | head -n 10 || true
+
+# バッチ無しで一括
 amalgkit quant --metadata "$META" --out_dir "$WORK" --fasta_dir "$FASTA" --build_index yes --threads 1
+
 echo "[ok] quant (mocked)"
 
 # --- 6) merge：統合テーブル生成
