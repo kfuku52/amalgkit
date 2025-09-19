@@ -43,6 +43,11 @@ fi
 
 echo "Found metadata sheet: $META"
 
+# ★ 追加: 以降のコマンドが期待する既定パスに合わせてコピー
+mkdir -p "$WORK/metadata"
+cp -f "$META" "$WORK/metadata/metadata.tsv"
+META="$WORK/metadata/metadata.tsv"
+
 # scientific_name / curate_group を埋める（全行を対象に安全に追記）
 python - "$META" <<'PY'
 import csv, sys, pathlib
@@ -74,9 +79,8 @@ print(f"Updated metadata: {meta_path}")
 PY
 
 # --- 4) config / select：最低限動作
-amalgkit config --config base
-# サンプル数を多めに設定して誰も落とさない
-amalgkit select --metadata "$META" --out_dir "$WORK" --max_sample 99 || true
+amalgkit config --config base --out_dir "$WORK"   # ← out_dir を必ず指定
+amalgkit select --metadata "$META" --out_dir "$WORK" --max_sample 99
 
 # --- 5) quant：モックの kallisto を使って軽量実行
 # 参照配列（FASTA）を用意。ファイル名は "Genus_species*.fasta" 形式が望ましい
@@ -89,8 +93,8 @@ FA
 
 # インデックス作成も quant 側に任せる（--build_index yes）
 # バッチ指定で 1行ずつ処理
-amalgkit quant --out_dir "$WORK" --fasta_dir "$FASTA" --build_index yes --threads 1 --batch 1
-amalgkit quant --out_dir "$WORK" --fasta_dir "$FASTA" --build_index yes --threads 1 --batch 2
+amalgkit quant --metadata "$META" --out_dir "$WORK" --fasta_dir "$FASTA" --build_index yes --threads 1 --batch 1
+amalgkit quant --metadata "$META" --out_dir "$WORK" --fasta_dir "$FASTA" --build_index yes --threads 1 --batch 2
 echo "[ok] quant (mocked)"
 
 # --- 6) merge：種ごとに統合テーブル生成
