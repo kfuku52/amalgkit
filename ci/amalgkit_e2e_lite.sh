@@ -51,14 +51,14 @@ if rows:
 
     for r in rows:
         # ★ 常に上書き（placeholderを確実に消す）
-        r["scientific_name"] = "Testus testus"
+        r["scientific_name"] = "Testus_testus"
         if not r.get("curate_group"):
             r["curate_group"] = "group1"
 
     with p.open("w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=fields, delimiter="\t")
         w.writeheader(); w.writerows(rows)
-print("force-set scientific_name=Testus testus, curate_group=group1 ->", p)
+print("force-set scientific_name=Testus_testus, curate_group=group1 ->", p)
 PY
 
 # --- 4) config / select
@@ -87,12 +87,22 @@ if rows:
         if col not in fields: fields.append(col)
     for r in rows:
         r["is_sampled"] = "yes"
-        r["scientific_name"] = "Testus testus"
+        r["scientific_name"] = "Testus_testus"
     with p.open("w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=fields, delimiter="\t")
         w.writeheader(); w.writerows(rows)
 print("post-select patch ->", p)
 PY
+
+python - "$META" <<'PY'
+import csv, pathlib, sys
+p = pathlib.Path(sys.argv[1])
+rows = list(csv.DictReader(p.open("r", encoding="utf-8"), delimiter="\t"))
+print("[debug] unique scientific_name:", sorted({r.get("scientific_name","") for r in rows}))
+PY
+
+echo "[debug] FASTA exact hits for Testus_testus:"
+ls -l "$FASTA"/Testus_testus.* || true
 
 # ---- FASTA を先に作る → getfastq リンク → quant ----
 
@@ -129,6 +139,10 @@ ln -sf "$FASTA/Testus_testus.fasta" "$FASTA/testus_testus/testus_testus.fa"
 # ありがちな別名も置いておく
 ln -sf "$FASTA/Testus_testus.fasta" "$FASTA/Testus_testus_transcripts.fa"
 ln -sf "$FASTA/Testus_testus.fasta" "$FASTA/Testus_testus_cdna.fa"
+
+# FASTA を作った直後に追加
+gzip -c "$FASTA/Testus_testus.fasta" > "$FASTA/Testus_testus.fa.gz"
+ln -sf "$FASTA/Testus_testus.fa.gz" "$FASTA/Testus_testus.fasta.gz" || true
 
 # quant が期待する getfastq 出力の場所へ、ダミー FASTQ をリンク
 for id in S1 S2; do
