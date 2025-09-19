@@ -72,7 +72,6 @@ with meta_path.open("w", newline="", encoding="utf-8") as f:
 
 print(f"Updated metadata: {meta_path}")
 PY
-"$META"
 
 # --- 4) config / select：最低限動作
 amalgkit config --config base
