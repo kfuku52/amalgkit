@@ -168,7 +168,7 @@ echo "[debug] getfastq tree:"; find "$WORK/getfastq" -maxdepth 2 \( -type f -o -
 
 # ★ quant はここで1回だけ実行（バッチ無し）
 #    → 既に index を置いたので build はスキップ
-amalgkit quant --metadata "$META" --out_dir "$WORK" --fasta_dir "$FASTA" --build_index no --threads 1
+amalgkit quant --metadata "$META" --out_dir "$WORK" --fasta_dir "$FASTA" --build_index no --threads 1 --clean_fastq no
 echo "[ok] quant (mocked)"
 
 # --- merge 前: run_info.json をダミーで整える（両方のファイル名を同一内容に）
@@ -217,7 +217,7 @@ for id in $(awk -F'\t' 'NR>1{print $1}' "$META" | sort -u); do
 done
 
 # --- 7) sanity
-amalgkit sanity --metadata "$META" --out_dir "$WORK" --all
+amalgkit sanity --metadata "$META" --out_dir "$WORK" --index --quant
 
 echo "[ok] sanity"
 
