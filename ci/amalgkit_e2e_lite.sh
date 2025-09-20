@@ -206,17 +206,20 @@ find "$WORK/quant" -maxdepth 2 -name '*run_info.json' -ls
 # --- 6) merge：統合テーブル生成
 amalgkit merge --out_dir "$WORK"
 
-# (追加) quant が getfastq の入力を消すので sanity の前に復元する
-# メタの run_id を列挙して復元（今回は S1/S2 固定でもOK）
+# (追加) sanity のために getfastq を復元
+# メタから run_id を拾って再リンク（S1/S2固定でもOK）
 for id in $(awk -F'\t' 'NR>1{print $1}' "$META" | sort -u); do
   d="$WORK/getfastq/$id"
   mkdir -p "$d"
-  # どちらの拡張子でも拾われるように両方貼る
   ln -sf "$FASTQ/${id}_1.fq.gz" "$d/${id}_1.fq.gz"
   ln -sf "$FASTQ/${id}_2.fq.gz" "$d/${id}_2.fq.gz"
   ln -sf "$FASTQ/${id}_1.fq.gz" "$d/${id}_1.fastq.gz"
   ln -sf "$FASTQ/${id}_2.fq.gz" "$d/${id}_2.fastq.gz"
 done
+
+# 1) --rmfastq を消す
+sed -i 's/ --rmfastq no//g' ci/amalgkit_e2e_lite.sh
+# 2) （上の復元ブロックが未挿入なら）merge の直後に追記
 
 # --- 7) sanity
 amalgkit sanity --metadata "$META" --out_dir "$WORK" --all
