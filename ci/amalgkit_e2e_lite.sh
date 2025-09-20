@@ -171,6 +171,30 @@ echo "[debug] getfastq tree:"; find "$WORK/getfastq" -maxdepth 2 \( -type f -o -
 amalgkit quant --metadata "$META" --out_dir "$WORK" --fasta_dir "$FASTA" --build_index no --threads 1
 echo "[ok] quant (mocked)"
 
+# --- merge の直前にダミー run_info.json を補う（モックkallistoは出力しないため）
+for id in S1 S2; do
+  qdir="$WORK/quant/$id"
+  mkdir -p "$qdir"
+  # どちらのファイル名でも拾われるよう両方置く
+  for f in "${id}_run_info.json" "run_info.json"; do
+    if [ ! -s "$qdir/$f" ]; then
+      cat > "$qdir/$f" <<'JSON'
+{
+  "n_targets": 2,
+  "n_bootstraps": 0,
+  "n_processed": 16,
+  "n_pseudoaligned": 16,
+  "p_pseudoaligned": 1.0,
+  "p_unique": 1.0,
+  "kallisto_version": "mock-0.0.0"
+}
+JSON
+    fi
+  done
+done
+
+# 参考: 置けたか確認（任意）
+find "$WORK/quant" -maxdepth 2 -name '*run_info.json' -ls || true
 
 # --- 6) merge：統合テーブル生成
 amalgkit merge --out_dir "$WORK"
