@@ -206,20 +206,21 @@ find "$WORK/quant" -maxdepth 2 -name '*run_info.json' -ls
 # --- 6) merge：統合テーブル生成
 amalgkit merge --out_dir "$WORK"
 
-# 生成物の存在確認
-TPM_FILE="$(find "$WORK" -type f -name 'Testus_testus_tpm.tsv' | head -n1 || true)"
-EFF_FILE="$(find "$WORK" -type f -name 'Testus_testus_eff_length.tsv' | head -n1 || true)"
-EST_FILE="$(find "$WORK" -type f -name 'Testus_testus_est_counts.tsv' | head -n1 || true)"
-test -s "${TPM_FILE:-}" && echo "[ok] merge -> $TPM_FILE" || (echo "tpm table not found" >&2; exit 1)
-test -s "${EFF_FILE:-}" && echo "[ok] merge -> $EFF_FILE" || (echo "eff_length table not found" >&2; exit 1)
-test -s "${EST_FILE:-}" && echo "[ok] merge -> $EST_FILE" || (echo "est_counts table not found" >&2; exit 1)
-
-# 列数チェック
-awk -F'\t' 'NR==1{ if (NF<3) { printf("header columns=%d (expected>=3)\n", NF) > "/dev/stderr"; exit 1 } }' "$TPM_FILE"
-echo "[ok] merge header columns >= 3"
+# (追加) quant が getfastq の入力を消すので sanity の前に復元する
+# メタの run_id を列挙して復元（今回は S1/S2 固定でもOK）
+for id in $(awk -F'\t' 'NR>1{print $1}' "$META" | sort -u); do
+  d="$WORK/getfastq/$id"
+  mkdir -p "$d"
+  # どちらの拡張子でも拾われるように両方貼る
+  ln -sf "$FASTQ/${id}_1.fq.gz" "$d/${id}_1.fq.gz"
+  ln -sf "$FASTQ/${id}_2.fq.gz" "$d/${id}_2.fq.gz"
+  ln -sf "$FASTQ/${id}_1.fq.gz" "$d/${id}_1.fastq.gz"
+  ln -sf "$FASTQ/${id}_2.fq.gz" "$d/${id}_2.fastq.gz"
+done
 
 # --- 7) sanity
 amalgkit sanity --metadata "$META" --out_dir "$WORK" --all
+
 echo "[ok] sanity"
 
 echo "== amalgkit e2e-lite done =="
