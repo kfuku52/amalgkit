@@ -158,6 +158,8 @@ pme.add_argument('--search_string', metavar='PATH', default=None, type=str, requ
                       'Example: "Cephalotus follicularis"[Organism] AND "Illumina"[Platform] AND "RNA-seq"[Strategy]')
 pme.add_argument('--entrez_email', metavar='aaa@bbb.com', default='', type=str, required=False, action='store',
                  help='default=%(default)s: Your email address. See https://www.ncbi.nlm.nih.gov/books/NBK25497/')
+pme.add_argument('--resolve_names', metavar='yes|no', default='yes', type=strtobool, required=False, action='store',
+                 help='default=%(default)s: Whether to resolve scientific names based on NCBI Taxonomy IDs.')
 pme.set_defaults(handler=command_metadata)
 
 # Sub parser: select
@@ -169,6 +171,9 @@ pse.add_argument('--min_nspots', metavar='INT', default=5000000, type=int, requi
                  help='default=%(default)s: Minimum number of RNA-seq reads per sample.')
 pse.add_argument('--max_sample', metavar='INT', default=99999, type=int, required=False, action='store',
                  help='default=%(default)s: Maximum number of RNA-seq data to retain for one sample group in a species.')
+pse.add_argument('--mark_missing_rank', metavar='species|genus|family|order|class|phylum|kingdom|domain|none', default='species', type=str, required=False, action='store',
+                 choices=['species', 'genus', 'family', 'order', 'class', 'phylum', 'kingdom', 'domain', 'none'],
+                 help='default=%(default)s: Mark samples lacking taxid information at the specified rank as unqualified.')
 pse.add_argument('--mark_redundant_biosamples', metavar='no|yes', default='no', type=strtobool,
                  required=False, action='store',
                  help='default=%(default)s: Whether to label SRAs with the same BioSample ID as unqualified.')

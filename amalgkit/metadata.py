@@ -82,6 +82,10 @@ def metadata_main(args):
     metadata.df['tissue'] = metadata.df['tissue'].astype(str)
     metadata.df.loc[(metadata.df['tissue']=='nan'), 'tissue'] = ''
     metadata.df.loc[:, 'sample_group'] = metadata.df.loc[:, 'tissue'].str.lower()
+    metadata.df['taxid'] = pandas.to_numeric(metadata.df['taxid'], errors='coerce').astype('Int64')
+    metadata.add_standard_rank_taxids()
+    if args.resolve_names:
+        metadata.resolve_scientific_names()
     metadata.reorder(omit_misc=False)
     metadata.df.to_csv(metadata_outfile_path, sep="\t", index=False)
     if metadata.df.shape[0]==0:

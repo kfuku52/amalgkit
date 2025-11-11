@@ -32,6 +32,7 @@ def select_main(args):
         selected_sample_groups = args.sample_group.split(',')
         metadata.df = metadata.df.loc[metadata.df['sample_group'].isin(selected_sample_groups),:].reset_index(drop=True)
     metadata.nspot_cutoff(args.min_nspots)
+    metadata.mark_missing_rank(args.mark_missing_rank)
     metadata.mark_redundant_biosample(args.mark_redundant_biosamples)
     metadata.remove_specialchars()
     metadata.group_attributes(dir_config)

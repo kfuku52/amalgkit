@@ -3,6 +3,7 @@ import numpy
 import pandas
 import lxml.etree
 import datetime
+import ete4
 
 import glob
 import inspect
@@ -194,6 +195,36 @@ class Metadata:
         metadata.reorder(omit_misc=False)
         return metadata
 
+    def add_standard_rank_taxids(self):
+        standard_ranks = ['domain', 'kingdom', 'phylum', 'class', 'order', 'family', 'genus', 'species']
+        ncbi = ete4.NCBITaxa()
+        assert self.df['taxid'].dtype == 'Int64', 'taxid column must be Int64 dtype'
+        lineage_taxid_row_list = []
+        for taxid in self.df['taxid'].dropna().unique().tolist():
+            lineage_taxid_row = {'taxid': taxid}
+            for rank in standard_ranks:
+                lineage_taxid_row['taxid_' + rank] = numpy.nan
+            try:
+                lineage = ncbi.get_lineage(taxid)
+                rank_dict = ncbi.get_rank(lineage)
+                for lineage_taxid, rank in rank_dict.items():
+                    if rank in standard_ranks:
+                        lineage_taxid_row['taxid_' + rank] = lineage_taxid
+            except:
+                pass
+            lineage_taxid_row_list.append(lineage_taxid_row)
+        lineage_taxid_df = pandas.DataFrame(lineage_taxid_row_list)
+        lineage_taxid_df = lineage_taxid_df.reindex(columns=['taxid'] + ['taxid_' + rank for rank in standard_ranks], fill_value=numpy.nan)
+        lineage_taxid_df = lineage_taxid_df.astype('Int64')
+        self.df = self.df.merge(lineage_taxid_df, on='taxid', how='left')
+
+    def resolve_scientific_names(self):
+        self.df['scientific_name_original'] = self.df['scientific_name']
+        ncbi = ete4.NCBITaxa()
+        assert self.df['taxid'].dtype == 'Int64', 'taxid column must be Int64 dtype'
+        taxid2sciname = ncbi.get_taxid_translator(self.df['taxid'].dropna().unique().tolist())
+        self.df['scientific_name'] = self.df['taxid'].map(taxid2sciname).fillna(self.df['scientific_name_original'])
+
     def group_attributes(self, dir_config):
         try:
             config = pandas.read_csv(os.path.join(dir_config, 'group_attribute.config'),
@@ -283,6 +314,13 @@ class Metadata:
         self.df['total_spots'] = self.df.loc[:, 'total_spots'].fillna(0).astype(int)
         self.df.loc[-(self.df.loc[:, 'total_spots'] == 0) & (
                     self.df.loc[:, 'total_spots'] < min_nspots), 'exclusion'] = 'low_nspots'
+
+    def mark_missing_rank(self, rank_name):
+        if rank_name=='none':
+            return
+        print('{}: Marking SRAs with missing taxid at the {} level'.format(datetime.datetime.now(), rank_name), flush=True)
+        is_empty = (self.df['taxid_' + rank_name].isna())
+        self.df.loc[is_empty, 'exclusion'] = 'missing_taxid'
 
     def mark_redundant_biosample(self, exe_flag):
         if exe_flag:
