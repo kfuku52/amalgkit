@@ -158,6 +158,8 @@ pme.add_argument('--search_string', metavar='PATH', default=None, type=str, requ
                       'Example: "Cephalotus follicularis"[Organism] AND "Illumina"[Platform] AND "RNA-seq"[Strategy]')
 pme.add_argument('--entrez_email', metavar='aaa@bbb.com', default='', type=str, required=False, action='store',
                  help='default=%(default)s: Your email address. See https://www.ncbi.nlm.nih.gov/books/NBK25497/')
+pme.add_argument('--resolve_names', metavar='yes|no', default='yes', type=strtobool, required=False, action='store',
+                 help='default=%(default)s: Whether to resolve scientific names based on NCBI Taxonomy IDs.')
 pme.set_defaults(handler=command_metadata)
 
 # Sub parser: select

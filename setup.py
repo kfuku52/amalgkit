@@ -18,7 +18,7 @@ setup(
     url                     = 'https://github.com/kfuku52/amalgkit.git',
     keywords                = 'transcriptome amalgamation',
     packages                = find_packages(),
-    install_requires        = ['numpy','pandas','biopython','lxml'],
+    install_requires        = ['numpy','pandas','biopython','lxml','ete4'],
     scripts                 = ['amalgkit/amalgkit',],
     include_package_data    = True
 )

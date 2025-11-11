@@ -3,6 +3,7 @@ import numpy
 import pandas
 import lxml.etree
 import datetime
+import ete4
 
 import glob
 import inspect
@@ -193,6 +194,13 @@ class Metadata:
         metadata.df = df
         metadata.reorder(omit_misc=False)
         return metadata
+
+    def resolve_scientific_names(self):
+        self.df['scientific_name_original'] = self.df['scientific_name']
+        ncbi = ete4.NCBITaxa()
+        assert self.df['taxid'].dtype == 'Int64', 'taxid column must be Int64 dtype'
+        taxid2sciname = ncbi.get_taxid_translator(self.df['taxid'].dropna().unique().tolist())
+        self.df['scientific_name'] = self.df['taxid'].map(taxid2sciname).fillna(self.df['scientific_name_original'])
 
     def group_attributes(self, dir_config):
         try:
