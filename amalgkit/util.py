@@ -315,6 +315,13 @@ class Metadata:
         self.df.loc[-(self.df.loc[:, 'total_spots'] == 0) & (
                     self.df.loc[:, 'total_spots'] < min_nspots), 'exclusion'] = 'low_nspots'
 
+    def mark_missing_rank(self, rank_name):
+        if rank_name=='none':
+            return
+        print('{}: Marking SRAs with missing taxid at the {} level'.format(datetime.datetime.now(), rank_name), flush=True)
+        is_empty = (self.df['taxid_' + rank_name].isna())
+        self.df.loc[is_empty, 'exclusion'] = 'missing_taxid'
+
     def mark_redundant_biosample(self, exe_flag):
         if exe_flag:
             print('{}: Marking SRAs with redundant BioSample IDs'.format(datetime.datetime.now()), flush=True)
