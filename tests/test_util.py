@@ -1,0 +1,907 @@
+import json
+import os
+import pytest
+import pandas
+import numpy
+import lxml.etree
+
+from amalgkit.util import (
+    strtobool,
+    Metadata,
+    read_config_file,
+    get_sra_stat,
+    check_ortholog_parameter_compatibility,
+    orthogroup2genecount,
+    check_config_dir,
+    load_metadata,
+    detect_layout_from_file,
+    is_there_unpaired_file,
+    get_newest_intermediate_file_extension,
+    get_mapping_rate,
+    get_getfastq_run_dir,
+    generate_multisp_busco_table,
+)
+
+
+# ---------------------------------------------------------------------------
+# strtobool
+# ---------------------------------------------------------------------------
+
+class TestStrtobool:
+    @pytest.mark.parametrize("val", ["y", "yes", "Yes", "YES", "t", "true", "True", "on", "1"])
+    def test_true_values(self, val):
+        assert strtobool(val) is True
+
+    @pytest.mark.parametrize("val", ["n", "no", "No", "NO", "f", "false", "False", "off", "0"])
+    def test_false_values(self, val):
+        assert strtobool(val) is False
+
+    def test_invalid_value(self):
+        with pytest.raises(ValueError):
+            strtobool("maybe")
+
+
+# ---------------------------------------------------------------------------
+# Metadata class
+# ---------------------------------------------------------------------------
+
+class TestMetadataInit:
+    def test_empty_metadata(self):
+        m = Metadata()
+        assert isinstance(m.df, pandas.DataFrame)
+        assert m.df.shape[0] == 0
+        assert 'scientific_name' in m.df.columns
+        assert 'run' in m.df.columns
+
+    def test_column_names_present(self):
+        m = Metadata()
+        for col in ['tissue', 'sample_group', 'bioproject', 'biosample',
+                     'lib_layout', 'total_spots', 'exclusion']:
+            assert col in m.df.columns
+
+
+class TestMetadataReorder:
+    def test_reorder_empty(self):
+        m = Metadata()
+        result = m.reorder()
+        assert result is None  # returns None for empty df
+
+    def test_reorder_sets_exclusion_default(self, sample_metadata_df):
+        df = sample_metadata_df.copy()
+        df['exclusion'] = ''
+        m = Metadata()
+        m.df = df
+        m.reorder()
+        assert (m.df['exclusion'] == 'no').all()
+
+    def test_reorder_sample_group_near_front(self, sample_metadata):
+        cols = list(sample_metadata.df.columns)
+        assert cols.index('sample_group') == 1
+
+
+class TestMetadataFromDataFrame:
+    def test_roundtrip(self, sample_metadata_df):
+        m = Metadata.from_DataFrame(sample_metadata_df)
+        assert isinstance(m, Metadata)
+        assert m.df.shape[0] == 5
+        assert 'scientific_name' in m.df.columns
+
+    def test_exclusion_filled(self, sample_metadata_df):
+        df = sample_metadata_df.copy()
+        df['exclusion'] = ''
+        m = Metadata.from_DataFrame(df)
+        assert (m.df['exclusion'] == 'no').all()
+
+
+class TestMetadataFromXml:
+    def test_parse_minimal_xml(self):
+        xml_str = b"""<?xml version="1.0" encoding="UTF-8"?>
+        <EXPERIMENT_PACKAGE_SET>
+          <EXPERIMENT_PACKAGE>
+            <EXPERIMENT alias="test">
+              <IDENTIFIERS><PRIMARY_ID>SRX000001</PRIMARY_ID></IDENTIFIERS>
+              <TITLE>Test experiment</TITLE>
+              <STUDY_REF>
+                <IDENTIFIERS><PRIMARY_ID>SRP000001</PRIMARY_ID></IDENTIFIERS>
+              </STUDY_REF>
+              <DESIGN>
+                <DESIGN_DESCRIPTION>test</DESIGN_DESCRIPTION>
+                <LIBRARY_DESCRIPTOR>
+                  <LIBRARY_NAME>testlib</LIBRARY_NAME>
+                  <LIBRARY_STRATEGY>RNA-Seq</LIBRARY_STRATEGY>
+                  <LIBRARY_SOURCE>TRANSCRIPTOMIC</LIBRARY_SOURCE>
+                  <LIBRARY_SELECTION>cDNA</LIBRARY_SELECTION>
+                  <LIBRARY_LAYOUT><PAIRED NOMINAL_LENGTH="200"/></LIBRARY_LAYOUT>
+                </LIBRARY_DESCRIPTOR>
+              </DESIGN>
+              <PLATFORM><ILLUMINA><INSTRUMENT_MODEL>HiSeq 2500</INSTRUMENT_MODEL></ILLUMINA></PLATFORM>
+            </EXPERIMENT>
+            <SUBMISSION accession="SRA000001" lab_name="TestLab" center_name="TestCenter">
+              <IDENTIFIERS>
+                <PRIMARY_ID>SRA000001</PRIMARY_ID>
+                <SUBMITTER_ID>sub1</SUBMITTER_ID>
+              </IDENTIFIERS>
+            </SUBMISSION>
+            <STUDY>
+              <DESCRIPTOR><STUDY_TITLE>Test Study</STUDY_TITLE></DESCRIPTOR>
+            </STUDY>
+            <SAMPLE>
+              <IDENTIFIERS><PRIMARY_ID>SRS000001</PRIMARY_ID></IDENTIFIERS>
+              <TITLE>Test sample</TITLE>
+              <SAMPLE_NAME>
+                <SCIENTIFIC_NAME>Homo sapiens</SCIENTIFIC_NAME>
+                <TAXON_ID>9606</TAXON_ID>
+              </SAMPLE_NAME>
+              <DESCRIPTION>A test sample</DESCRIPTION>
+              <SAMPLE_ATTRIBUTES>
+                <SAMPLE_ATTRIBUTE><TAG>tissue</TAG><VALUE>brain</VALUE></SAMPLE_ATTRIBUTE>
+              </SAMPLE_ATTRIBUTES>
+            </SAMPLE>
+            <RUN_SET>
+              <RUN accession="SRR000001" total_spots="1000000" total_bases="200000000" size="50000000" published="2020-01-01">
+                <IDENTIFIERS><PRIMARY_ID>SRR000001</PRIMARY_ID></IDENTIFIERS>
+                <SRAFiles>
+                  <SRAFile supertype="Primary ETL">
+                    <Alternatives org="NCBI" url="https://ncbi.example.com/SRR000001"/>
+                  </SRAFile>
+                </SRAFiles>
+              </RUN>
+            </RUN_SET>
+            <Pool>
+              <Member>
+                <EXTERNAL_ID namespace="BioProject">PRJNA000001</EXTERNAL_ID>
+                <EXTERNAL_ID namespace="BioSample">SAMN000001</EXTERNAL_ID>
+              </Member>
+            </Pool>
+          </EXPERIMENT_PACKAGE>
+        </EXPERIMENT_PACKAGE_SET>"""
+        root = lxml.etree.fromstring(xml_str)
+        tree = lxml.etree.ElementTree(root)
+        m = Metadata.from_xml(tree)
+        assert m.df.shape[0] == 1
+        assert m.df.loc[0, 'scientific_name'] == 'Homo sapiens'
+        assert m.df.loc[0, 'run'] == 'SRR000001'
+        assert m.df.loc[0, 'lib_layout'] == 'paired'
+        assert m.df.loc[0, 'bioproject'] == 'PRJNA000001'
+
+    def test_parse_empty_xml(self):
+        xml_str = b"""<EXPERIMENT_PACKAGE_SET></EXPERIMENT_PACKAGE_SET>"""
+        root = lxml.etree.fromstring(xml_str)
+        tree = lxml.etree.ElementTree(root)
+        m = Metadata.from_xml(tree)
+        assert m.df.shape[0] == 0
+
+
+class TestMetadataNspotCutoff:
+    def test_marks_low_spots(self, sample_metadata):
+        m = sample_metadata
+        m.nspot_cutoff(1000000)
+        # SRR003 has 100 spots, SRR005 has 200 spots - both below cutoff
+        low = m.df.loc[m.df['run'].isin(['SRR003', 'SRR005']), 'exclusion']
+        assert (low == 'low_nspots').all()
+        # SRR001 has 10M spots - should remain 'no'
+        high = m.df.loc[m.df['run'] == 'SRR001', 'exclusion'].values[0]
+        assert high == 'no'
+
+
+class TestMetadataMarkExcludeKeywords:
+    def test_marks_matching_keyword(self, sample_metadata, tmp_config_dir):
+        m = sample_metadata
+        m.df.loc[0, 'sample_description'] = 'cancer tissue sample'
+        m.mark_exclude_keywords(tmp_config_dir)
+        assert m.df.loc[0, 'exclusion'] == 'disease'
+
+    def test_no_false_positives(self, sample_metadata, tmp_config_dir):
+        m = sample_metadata
+        m.mark_exclude_keywords(tmp_config_dir)
+        assert (m.df['exclusion'] == 'no').all()
+
+    def test_marks_antibody(self, sample_metadata, tmp_config_dir):
+        m = sample_metadata
+        m.df.loc[1, 'antibody'] = 'H3K4me3'
+        m.mark_exclude_keywords(tmp_config_dir)
+        assert m.df.loc[1, 'exclusion'] == 'immunoprecipitation'
+
+    def test_marks_cell_culture(self, sample_metadata, tmp_config_dir):
+        m = sample_metadata
+        m.df.loc[2, 'cell'] = 'HeLa'
+        m.mark_exclude_keywords(tmp_config_dir)
+        assert m.df.loc[2, 'exclusion'] == 'cell_culture'
+
+
+class TestMetadataMarkTreatmentTerms:
+    def test_marks_non_control(self, tmp_config_dir):
+        data = {
+            'scientific_name': ['Sp1'] * 4,
+            'sample_group': ['leaf'] * 4,
+            'treatment': ['wild type', 'wild type', 'drought', 'heat'],
+            'bioproject': ['PRJ1'] * 4,
+            'biosample': ['S1', 'S2', 'S3', 'S4'],
+            'run': ['R1', 'R2', 'R3', 'R4'],
+            'exclusion': ['no'] * 4,
+        }
+        df = pandas.DataFrame(data)
+        m = Metadata.from_DataFrame(df)
+        m.mark_treatment_terms(tmp_config_dir)
+        assert m.df.loc[m.df['run'] == 'R1', 'exclusion'].values[0] == 'no'
+        assert m.df.loc[m.df['run'] == 'R2', 'exclusion'].values[0] == 'no'
+        assert m.df.loc[m.df['run'] == 'R3', 'exclusion'].values[0] == 'non_control'
+        assert m.df.loc[m.df['run'] == 'R4', 'exclusion'].values[0] == 'non_control'
+
+
+class TestMetadataMarkRedundantBiosample:
+    def test_marks_duplicates(self, sample_metadata_df):
+        df = sample_metadata_df.copy()
+        # Add a duplicate biosample within same bioproject
+        new_row = df.iloc[0].copy()
+        new_row['run'] = 'SRR006'
+        new_row['experiment'] = 'SRX6'
+        # same bioproject PRJNA1, same biosample SAMN1
+        df = pandas.concat([df, pandas.DataFrame([new_row])], ignore_index=True)
+        m = Metadata.from_DataFrame(df)
+        m.mark_redundant_biosample(True)
+        dup = m.df.loc[m.df['run'] == 'SRR006', 'exclusion'].values[0]
+        assert dup == 'redundant_biosample'
+
+    def test_no_action_when_disabled(self, sample_metadata):
+        m = sample_metadata
+        m.mark_redundant_biosample(False)
+        assert (m.df['exclusion'] == 'no').all()
+
+
+class TestMetadataRemoveSpecialchars:
+    def test_removes_special_characters(self):
+        data = {
+            'scientific_name': ['Homo\rsapiens'],
+            'sample_group': ['brain\ntissue'],
+            'tissue': ["brain'tissue"],
+            'run': ['SRR|001'],
+            'exclusion': ['no'],
+        }
+        df = pandas.DataFrame(data)
+        m = Metadata.from_DataFrame(df)
+        m.remove_specialchars()
+        assert '\r' not in m.df.loc[0, 'scientific_name']
+        assert '\n' not in m.df.loc[0, 'sample_group']
+        assert "'" not in m.df.loc[0, 'tissue']
+        assert '|' not in m.df.loc[0, 'run']
+
+
+class TestMetadataPivot:
+    def test_pivot_shape(self, sample_metadata):
+        m = sample_metadata
+        pivot = m.pivot(qualified_only=False, sampled_only=False)
+        assert isinstance(pivot, pandas.DataFrame)
+        # 2 species x 2 sample_groups
+        assert pivot.shape[0] == 2
+        assert pivot.shape[1] == 2
+
+    def test_pivot_qualified_only(self, sample_metadata):
+        m = sample_metadata
+        m.df.loc[0, 'is_qualified'] = 'no'
+        pivot = m.pivot(qualified_only=True, sampled_only=False)
+        assert isinstance(pivot, pandas.DataFrame)
+
+
+class TestMetadataLabelSampledData:
+    def test_labels_samples(self, sample_metadata):
+        m = sample_metadata
+        m.label_sampled_data(max_sample=2)
+        assert 'is_sampled' in m.df.columns
+        assert 'is_qualified' in m.df.columns
+        sampled = m.df.loc[m.df['is_sampled'] == 'yes']
+        assert len(sampled) > 0
+
+    def test_max_sample_respected(self):
+        # Create 20 samples in one group
+        n = 20
+        data = {
+            'scientific_name': ['Sp1'] * n,
+            'sample_group': ['brain'] * n,
+            'bioproject': [f'PRJ{i}' for i in range(n)],
+            'biosample': [f'S{i}' for i in range(n)],
+            'run': [f'R{i}' for i in range(n)],
+            'exclusion': ['no'] * n,
+        }
+        df = pandas.DataFrame(data)
+        m = Metadata.from_DataFrame(df)
+        m.label_sampled_data(max_sample=5)
+        sampled = m.df.loc[
+            (m.df['is_sampled'] == 'yes') & (m.df['exclusion'] == 'no')
+        ]
+        assert len(sampled) == 5
+
+
+class TestMaximizeBioprojSampling:
+    def test_sampling_across_bioprojects(self):
+        n = 12
+        data = {
+            'scientific_name': ['Sp1'] * n,
+            'sample_group': ['brain'] * n,
+            'bioproject': ['PRJ1'] * 4 + ['PRJ2'] * 4 + ['PRJ3'] * 4,
+            'biosample': [f'S{i}' for i in range(n)],
+            'run': [f'R{i}' for i in range(n)],
+            'exclusion': ['no'] * n,
+            'is_sampled': ['no'] * n,
+        }
+        df = pandas.DataFrame(data)
+        m = Metadata()
+        result = m._maximize_bioproject_sampling(df, target_n=6)
+        sampled = result.loc[result['is_sampled'] == 'yes']
+        assert len(sampled) == 6
+        # Should have samples from multiple bioprojects
+        assert len(sampled['bioproject'].unique()) > 1
+
+
+# ---------------------------------------------------------------------------
+# Utility functions
+# ---------------------------------------------------------------------------
+
+class TestReadConfigFile:
+    def test_reads_config(self, tmp_path):
+        config = tmp_path / 'test.config'
+        config.write_text('col1\tcol2\tcol3\n')
+        df = read_config_file('test.config', str(tmp_path))
+        assert df.shape == (1, 3)
+
+    def test_missing_file_returns_empty(self, tmp_path):
+        df = read_config_file('nonexistent.config', str(tmp_path))
+        assert isinstance(df, pandas.DataFrame)
+        assert df.empty
+
+    def test_single_column_returns_series(self, tmp_path):
+        config = tmp_path / 'single.config'
+        config.write_text('value1\nvalue2\nvalue3\n')
+        result = read_config_file('single.config', str(tmp_path))
+        assert isinstance(result, pandas.Series)
+        assert len(result) == 3
+
+
+class TestGetSraStat:
+    def test_basic_stats(self, sample_metadata):
+        stat = get_sra_stat('SRR001', sample_metadata)
+        assert stat['sra_id'] == 'SRR001'
+        assert stat['layout'] == 'paired'
+        assert stat['total_spot'] == 10000000
+        assert stat['spot_length'] == 200
+
+    def test_inferred_spot_length(self, sample_metadata):
+        m = sample_metadata
+        m.df.loc[m.df['run'] == 'SRR001', 'spot_length'] = 0
+        stat = get_sra_stat('SRR001', m)
+        # total_bases / total_spots = 2000000000 / 10000000 = 200
+        assert stat['spot_length'] == 200
+
+    def test_num_read_per_sra(self, sample_metadata):
+        stat = get_sra_stat('SRR001', sample_metadata, num_bp_per_sra=1000000)
+        # num_bp_per_sra / spot_length = 1000000 / 200 = 5000
+        assert stat['num_read_per_sra'] == 5000
+
+
+class TestCheckOrthologParameterCompatibility:
+    def test_both_none_raises(self):
+        class Args:
+            orthogroup_table = None
+            dir_busco = None
+        with pytest.raises(Exception, match="One of"):
+            check_ortholog_parameter_compatibility(Args())
+
+    def test_both_set_raises(self):
+        class Args:
+            orthogroup_table = 'table.tsv'
+            dir_busco = '/path/to/busco'
+        with pytest.raises(Exception, match="Only one"):
+            check_ortholog_parameter_compatibility(Args())
+
+    def test_only_orthogroup_ok(self):
+        class Args:
+            orthogroup_table = 'table.tsv'
+            dir_busco = None
+        check_ortholog_parameter_compatibility(Args())  # should not raise
+
+    def test_only_busco_ok(self):
+        class Args:
+            orthogroup_table = None
+            dir_busco = '/path/to/busco'
+        check_ortholog_parameter_compatibility(Args())  # should not raise
+
+
+class TestOrthogroup2Genecount:
+    def test_basic_transformation(self, tmp_path):
+        ortho_file = tmp_path / 'orthogroups.tsv'
+        ortho_file.write_text(
+            'busco_id\tSpecies_A\tSpecies_B\n'
+            'OG0001\tgene1\tgene2,gene3\n'
+            'OG0002\tgene4,gene5,gene6\t-\n'
+            'OG0003\t\tgene7\n'
+        )
+        out_file = tmp_path / 'genecount.tsv'
+        orthogroup2genecount(
+            str(ortho_file), str(out_file),
+            spp=['Species_A', 'Species_B']
+        )
+        result = pandas.read_csv(str(out_file), sep='\t')
+        assert list(result.columns) == ['orthogroup_id', 'Species_A', 'Species_B']
+        assert result.loc[0, 'Species_A'] == 1  # gene1
+        assert result.loc[0, 'Species_B'] == 2  # gene2,gene3
+        assert result.loc[1, 'Species_A'] == 3  # gene4,gene5,gene6
+        assert result.loc[1, 'Species_B'] == 0  # '-' -> empty -> 0
+        assert result.loc[2, 'Species_A'] == 0  # empty
+        assert result.loc[2, 'Species_B'] == 1  # gene7
+
+
+# ---------------------------------------------------------------------------
+# group_attributes (wiki: column merging via group_attribute.config)
+# ---------------------------------------------------------------------------
+
+class TestMetadataGroupAttributes:
+    def test_aggregates_source_to_target(self, tmp_path):
+        """Wiki: group_attribute.config merges heterogeneous SRA attribute columns."""
+        ga = tmp_path / 'group_attribute.config'
+        ga.write_text('tissue\tsource_name\n')
+        data = {
+            'scientific_name': ['Sp1'],
+            'sample_group': [''],
+            'tissue': [''],
+            'source_name': ['brain cortex'],
+            'run': ['R1'],
+            'exclusion': ['no'],
+        }
+        m = Metadata.from_DataFrame(pandas.DataFrame(data))
+        m.group_attributes(str(tmp_path))
+        assert 'brain cortex[source_name]' in m.df.loc[0, 'tissue']
+
+    def test_aggregates_appends_to_nonempty_target(self, tmp_path):
+        """When target already has a value, append with semicolon separator."""
+        ga = tmp_path / 'group_attribute.config'
+        ga.write_text('tissue\tsource_name\n')
+        data = {
+            'scientific_name': ['Sp1'],
+            'sample_group': [''],
+            'tissue': ['brain'],
+            'source_name': ['frontal lobe'],
+            'run': ['R1'],
+            'exclusion': ['no'],
+        }
+        m = Metadata.from_DataFrame(pandas.DataFrame(data))
+        m.group_attributes(str(tmp_path))
+        assert 'brain' in m.df.loc[0, 'tissue']
+        assert 'frontal lobe[source_name]' in m.df.loc[0, 'tissue']
+
+    def test_missing_config_no_error(self, tmp_path):
+        """Issue #108: Missing config should not raise error."""
+        m = Metadata.from_DataFrame(pandas.DataFrame({
+            'scientific_name': ['Sp1'], 'run': ['R1'], 'exclusion': ['no'],
+        }))
+        m.group_attributes(str(tmp_path))  # no config file present
+
+
+# ---------------------------------------------------------------------------
+# mark_missing_rank
+# ---------------------------------------------------------------------------
+
+class TestMetadataMarkMissingRank:
+    def test_marks_missing_taxid(self):
+        data = {
+            'scientific_name': ['Sp1', 'Sp2'],
+            'run': ['R1', 'R2'],
+            'exclusion': ['no', 'no'],
+            'taxid_species': [9606, pandas.NA],
+        }
+        df = pandas.DataFrame(data)
+        df['taxid_species'] = df['taxid_species'].astype('Int64')
+        m = Metadata.from_DataFrame(df)
+        m.mark_missing_rank('species')
+        assert m.df.loc[m.df['run'] == 'R1', 'exclusion'].values[0] == 'no'
+        assert m.df.loc[m.df['run'] == 'R2', 'exclusion'].values[0] == 'missing_taxid'
+
+    def test_none_rank_skips(self, sample_metadata):
+        """rank_name='none' should do nothing."""
+        m = sample_metadata
+        m.mark_missing_rank('none')
+        assert (m.df['exclusion'] == 'no').all()
+
+
+# ---------------------------------------------------------------------------
+# label_sampled_data: empty sample_group handling (wiki: select)
+# ---------------------------------------------------------------------------
+
+class TestMetadataLabelSampledDataEdgeCases:
+    def test_empty_sample_group_marked_unqualified(self):
+        """Wiki/select: samples with empty sample_group get exclusion=no_tissue_label."""
+        data = {
+            'scientific_name': ['Sp1', 'Sp1'],
+            'sample_group': ['brain', ''],
+            'bioproject': ['PRJ1', 'PRJ2'],
+            'biosample': ['S1', 'S2'],
+            'run': ['R1', 'R2'],
+            'exclusion': ['no', 'no'],
+        }
+        m = Metadata.from_DataFrame(pandas.DataFrame(data))
+        m.label_sampled_data(max_sample=10)
+        empty_sg = m.df.loc[m.df['run'] == 'R2']
+        assert empty_sg['exclusion'].values[0] == 'no_tissue_label'
+        assert empty_sg['is_qualified'].values[0] == 'no'
+
+
+# ---------------------------------------------------------------------------
+# Metadata.from_xml: SAMPLE_ATTRIBUTES extraction
+# ---------------------------------------------------------------------------
+
+class TestMetadataFromXmlAttributes:
+    def test_sample_attributes_extracted(self):
+        """Wiki: XML SAMPLE_ATTRIBUTES are parsed into extra columns."""
+        xml_str = b"""<?xml version="1.0" encoding="UTF-8"?>
+        <EXPERIMENT_PACKAGE_SET>
+          <EXPERIMENT_PACKAGE>
+            <EXPERIMENT alias="test">
+              <IDENTIFIERS><PRIMARY_ID>SRX000001</PRIMARY_ID></IDENTIFIERS>
+              <TITLE>Test</TITLE>
+              <STUDY_REF>
+                <IDENTIFIERS><PRIMARY_ID>SRP000001</PRIMARY_ID></IDENTIFIERS>
+              </STUDY_REF>
+              <DESIGN>
+                <DESIGN_DESCRIPTION/>
+                <LIBRARY_DESCRIPTOR>
+                  <LIBRARY_NAME/>
+                  <LIBRARY_STRATEGY>RNA-Seq</LIBRARY_STRATEGY>
+                  <LIBRARY_SOURCE>TRANSCRIPTOMIC</LIBRARY_SOURCE>
+                  <LIBRARY_SELECTION>cDNA</LIBRARY_SELECTION>
+                  <LIBRARY_LAYOUT><SINGLE/></LIBRARY_LAYOUT>
+                </LIBRARY_DESCRIPTOR>
+              </DESIGN>
+              <PLATFORM><ILLUMINA><INSTRUMENT_MODEL>HiSeq 2500</INSTRUMENT_MODEL></ILLUMINA></PLATFORM>
+            </EXPERIMENT>
+            <SUBMISSION accession="SRA1" lab_name="" center_name="">
+              <IDENTIFIERS><PRIMARY_ID>SRA1</PRIMARY_ID><SUBMITTER_ID/></IDENTIFIERS>
+            </SUBMISSION>
+            <STUDY><DESCRIPTOR><STUDY_TITLE>Study</STUDY_TITLE></DESCRIPTOR></STUDY>
+            <SAMPLE>
+              <IDENTIFIERS><PRIMARY_ID>SRS1</PRIMARY_ID></IDENTIFIERS>
+              <TITLE/>
+              <SAMPLE_NAME>
+                <SCIENTIFIC_NAME>Mus musculus</SCIENTIFIC_NAME>
+                <TAXON_ID>10090</TAXON_ID>
+              </SAMPLE_NAME>
+              <DESCRIPTION/>
+              <SAMPLE_ATTRIBUTES>
+                <SAMPLE_ATTRIBUTE><TAG>tissue</TAG><VALUE>liver</VALUE></SAMPLE_ATTRIBUTE>
+                <SAMPLE_ATTRIBUTE><TAG>sex</TAG><VALUE>female</VALUE></SAMPLE_ATTRIBUTE>
+                <SAMPLE_ATTRIBUTE><TAG>age</TAG><VALUE>8 weeks</VALUE></SAMPLE_ATTRIBUTE>
+              </SAMPLE_ATTRIBUTES>
+            </SAMPLE>
+            <RUN_SET>
+              <RUN accession="SRR1" total_spots="5000000" total_bases="500000000" size="100000000" published="2021-01-01">
+                <IDENTIFIERS><PRIMARY_ID>SRR1</PRIMARY_ID></IDENTIFIERS>
+              </RUN>
+            </RUN_SET>
+            <Pool>
+              <Member>
+                <EXTERNAL_ID namespace="BioProject">PRJNA1</EXTERNAL_ID>
+                <EXTERNAL_ID namespace="BioSample">SAMN1</EXTERNAL_ID>
+              </Member>
+            </Pool>
+          </EXPERIMENT_PACKAGE>
+        </EXPERIMENT_PACKAGE_SET>"""
+        root = lxml.etree.fromstring(xml_str)
+        tree = lxml.etree.ElementTree(root)
+        m = Metadata.from_xml(tree)
+        assert m.df.loc[0, 'tissue'] == 'liver'
+        assert m.df.loc[0, 'lib_layout'] == 'single'
+        assert m.df.loc[0, 'scientific_name'] == 'Mus musculus'
+
+
+# ---------------------------------------------------------------------------
+# check_config_dir (issue #108: missing configs should warn, not crash)
+# ---------------------------------------------------------------------------
+
+class TestCheckConfigDir:
+    def test_all_configs_present(self, tmp_config_dir):
+        """No error when all config files are present."""
+        check_config_dir(tmp_config_dir, mode='select')
+
+    def test_missing_config_warns(self, tmp_path):
+        """Issue #108: Missing config files should print warning, not raise."""
+        # Create only one of the three required files
+        ga = tmp_path / 'group_attribute.config'
+        ga.write_text('tissue\tsource_name\n')
+        # Should not raise an exception
+        check_config_dir(str(tmp_path), mode='select')
+
+
+# ---------------------------------------------------------------------------
+# Metadata.reorder: extra columns preserved
+# ---------------------------------------------------------------------------
+
+class TestMetadataReorderExtraCols:
+    def test_extra_columns_preserved(self):
+        """Extra columns not in column_names should be kept after reorder."""
+        data = {
+            'scientific_name': ['Sp1'],
+            'run': ['R1'],
+            'exclusion': ['no'],
+            'my_custom_column': ['custom_value'],
+        }
+        m = Metadata.from_DataFrame(pandas.DataFrame(data))
+        assert 'my_custom_column' in m.df.columns
+
+    def test_reorder_preserves_data(self, sample_metadata):
+        """Reorder should not lose any rows."""
+        original_rows = sample_metadata.df.shape[0]
+        sample_metadata.reorder()
+        assert sample_metadata.df.shape[0] == original_rows
+
+
+# ---------------------------------------------------------------------------
+# Metadata.nspot_cutoff edge cases (issue #96, #110)
+# ---------------------------------------------------------------------------
+
+class TestMetadataNspotCutoffEdgeCases:
+    def test_zero_spots_not_marked(self):
+        """Rows with total_spots=0 should NOT be marked low_nspots (they are unknown)."""
+        data = {
+            'scientific_name': ['Sp1'],
+            'run': ['R1'],
+            'exclusion': ['no'],
+            'total_spots': [0],
+        }
+        m = Metadata.from_DataFrame(pandas.DataFrame(data))
+        m.nspot_cutoff(1000000)
+        # Zero spots: the negation -(0==0) is False, so row is NOT marked
+        assert m.df.loc[0, 'exclusion'] == 'no'
+
+    def test_empty_string_spots(self):
+        """Empty string total_spots should be handled gracefully."""
+        data = {
+            'scientific_name': ['Sp1'],
+            'run': ['R1'],
+            'exclusion': ['no'],
+            'total_spots': [''],
+        }
+        m = Metadata.from_DataFrame(pandas.DataFrame(data))
+        m.nspot_cutoff(1000000)
+        # Empty string -> converted to 0, not marked
+        assert m.df.loc[0, 'exclusion'] == 'no'
+
+
+# ---------------------------------------------------------------------------
+# Metadata.pivot: sampled_only filter
+# ---------------------------------------------------------------------------
+
+class TestMetadataPivotSampledOnly:
+    def test_pivot_sampled_only(self, sample_metadata):
+        m = sample_metadata
+        m.label_sampled_data(max_sample=2)
+        pivot = m.pivot(qualified_only=True, sampled_only=True)
+        assert isinstance(pivot, pandas.DataFrame)
+
+    def test_pivot_n_sp_cutoff(self, sample_metadata):
+        """n_sp_cutoff filters columns with fewer species than cutoff."""
+        m = sample_metadata
+        pivot = m.pivot(n_sp_cutoff=3, qualified_only=False, sampled_only=False)
+        # With cutoff=3, columns where fewer than 3 species appear are dropped
+        assert isinstance(pivot, pandas.DataFrame)
+
+
+# ---------------------------------------------------------------------------
+# load_metadata (loads metadata from file)
+# ---------------------------------------------------------------------------
+
+class TestLoadMetadata:
+    def test_load_from_explicit_path(self, tmp_path, sample_metadata):
+        """Loads metadata from an explicit file path."""
+        path = tmp_path / 'metadata.tsv'
+        sample_metadata.df.to_csv(str(path), sep='\t', index=False)
+        class Args:
+            metadata = str(path)
+            out_dir = str(tmp_path)
+        m = load_metadata(Args())
+        assert isinstance(m, Metadata)
+        assert m.df.shape[0] == 5
+
+    def test_load_from_inferred_path(self, tmp_path, sample_metadata):
+        """When metadata='inferred', loads from out_dir/metadata/metadata.tsv."""
+        meta_dir = tmp_path / 'metadata'
+        meta_dir.mkdir()
+        path = meta_dir / 'metadata.tsv'
+        sample_metadata.df.to_csv(str(path), sep='\t', index=False)
+        class Args:
+            metadata = 'inferred'
+            out_dir = str(tmp_path)
+        m = load_metadata(Args())
+        assert isinstance(m, Metadata)
+        assert m.df.shape[0] == 5
+
+
+# ---------------------------------------------------------------------------
+# detect_layout_from_file (corrects layout based on actual files)
+# ---------------------------------------------------------------------------
+
+class TestDetectLayoutFromFile:
+    def test_paired_files_detected(self, tmp_path):
+        """Paired-end files detected -> layout corrected to 'paired'."""
+        sra_stat = {
+            'sra_id': 'SRR001',
+            'layout': 'single',
+            'getfastq_sra_dir': str(tmp_path),
+        }
+        (tmp_path / 'SRR001_1.amalgkit.fastq.gz').write_text('data')
+        (tmp_path / 'SRR001_2.amalgkit.fastq.gz').write_text('data')
+        result = detect_layout_from_file(sra_stat)
+        assert result['layout'] == 'paired'
+
+    def test_single_files_detected(self, tmp_path):
+        """Single-end file detected -> layout corrected to 'single'."""
+        sra_stat = {
+            'sra_id': 'SRR001',
+            'layout': 'paired',
+            'getfastq_sra_dir': str(tmp_path),
+        }
+        (tmp_path / 'SRR001.amalgkit.fastq.gz').write_text('data')
+        result = detect_layout_from_file(sra_stat)
+        assert result['layout'] == 'single'
+
+    def test_no_files_keeps_layout(self, tmp_path):
+        """No fastq files -> layout unchanged."""
+        sra_stat = {
+            'sra_id': 'SRR001',
+            'layout': 'paired',
+            'getfastq_sra_dir': str(tmp_path),
+        }
+        result = detect_layout_from_file(sra_stat)
+        assert result['layout'] == 'paired'
+
+
+# ---------------------------------------------------------------------------
+# is_there_unpaired_file
+# ---------------------------------------------------------------------------
+
+class TestIsThereUnpairedFile:
+    def test_unpaired_file_present(self, tmp_path):
+        sra_stat = {
+            'sra_id': 'SRR001',
+            'getfastq_sra_dir': str(tmp_path),
+        }
+        (tmp_path / 'SRR001.amalgkit.fastq.gz').write_text('data')
+        assert is_there_unpaired_file(sra_stat, ['.amalgkit.fastq.gz']) is True
+
+    def test_no_unpaired_file(self, tmp_path):
+        sra_stat = {
+            'sra_id': 'SRR001',
+            'getfastq_sra_dir': str(tmp_path),
+        }
+        assert is_there_unpaired_file(sra_stat, ['.amalgkit.fastq.gz']) is False
+
+
+# ---------------------------------------------------------------------------
+# get_newest_intermediate_file_extension
+# ---------------------------------------------------------------------------
+
+class TestGetNewestIntermediateFileExtension:
+    def test_finds_amalgkit_extension(self, tmp_path):
+        """Finds .amalgkit.fastq.gz as the newest extension."""
+        sra_stat = {
+            'sra_id': 'SRR001',
+            'layout': 'paired',
+            'getfastq_sra_dir': str(tmp_path),
+        }
+        (tmp_path / 'SRR001_1.amalgkit.fastq.gz').write_text('data')
+        (tmp_path / 'SRR001_2.amalgkit.fastq.gz').write_text('data')
+        (tmp_path / 'SRR001_1.fastq.gz').write_text('data')
+        (tmp_path / 'SRR001_2.fastq.gz').write_text('data')
+        ext = get_newest_intermediate_file_extension(sra_stat, str(tmp_path))
+        assert ext == '.amalgkit.fastq.gz'
+
+    def test_finds_fastq_extension(self, tmp_path):
+        """Falls back to .fastq.gz when no downstream extensions exist."""
+        sra_stat = {
+            'sra_id': 'SRR001',
+            'layout': 'single',
+            'getfastq_sra_dir': str(tmp_path),
+        }
+        (tmp_path / 'SRR001.fastq.gz').write_text('data')
+        ext = get_newest_intermediate_file_extension(sra_stat, str(tmp_path))
+        assert ext == '.fastq.gz'
+
+    def test_safely_removed(self, tmp_path):
+        """Detects .safely_removed flag."""
+        sra_stat = {
+            'sra_id': 'SRR001',
+            'layout': 'paired',
+            'getfastq_sra_dir': str(tmp_path),
+        }
+        (tmp_path / 'SRR001_1.amalgkit.fastq.gz.safely_removed').write_text('')
+        ext = get_newest_intermediate_file_extension(sra_stat, str(tmp_path))
+        assert ext == '.safely_removed'
+
+    def test_no_extension_found(self, tmp_path):
+        """No matching files -> 'no_extension_found'."""
+        sra_stat = {
+            'sra_id': 'SRR001',
+            'layout': 'single',
+            'getfastq_sra_dir': str(tmp_path),
+        }
+        ext = get_newest_intermediate_file_extension(sra_stat, str(tmp_path))
+        assert ext == 'no_extension_found'
+
+
+# ---------------------------------------------------------------------------
+# get_mapping_rate (extracts p_pseudoaligned from quant run_info.json)
+# ---------------------------------------------------------------------------
+
+class TestGetMappingRate:
+    def test_extracts_mapping_rate(self, tmp_path, sample_metadata):
+        """Reads p_pseudoaligned from run_info.json into mapping_rate column."""
+        quant_dir = tmp_path / 'quant'
+        sra_dir = quant_dir / 'SRR001'
+        sra_dir.mkdir(parents=True)
+        run_info = {'p_pseudoaligned': 85.5}
+        (sra_dir / 'SRR001_run_info.json').write_text(json.dumps(run_info))
+        m = get_mapping_rate(sample_metadata, str(quant_dir))
+        assert m.df.loc[m.df['run'] == 'SRR001', 'mapping_rate'].values[0] == 85.5
+
+    def test_missing_quant_dir(self, sample_metadata, tmp_path):
+        """Missing quant directory does not raise."""
+        m = get_mapping_rate(sample_metadata, str(tmp_path / 'nonexistent'))
+        assert isinstance(m, Metadata)
+
+    def test_missing_run_info(self, tmp_path, sample_metadata):
+        """Missing run_info.json for an SRA -> mapping_rate stays NaN."""
+        quant_dir = tmp_path / 'quant'
+        sra_dir = quant_dir / 'SRR001'
+        sra_dir.mkdir(parents=True)
+        # No run_info.json
+        m = get_mapping_rate(sample_metadata, str(quant_dir))
+        assert numpy.isnan(m.df.loc[m.df['run'] == 'SRR001', 'mapping_rate'].values[0])
+
+
+# ---------------------------------------------------------------------------
+# get_getfastq_run_dir (creates SRA-specific output directory)
+# ---------------------------------------------------------------------------
+
+class TestGetGetfastqRunDir:
+    def test_creates_directory(self, tmp_path):
+        """Creates getfastq/SRR001 directory and returns path."""
+        class Args:
+            out_dir = str(tmp_path)
+        result = get_getfastq_run_dir(Args(), 'SRR001')
+        assert os.path.isdir(result)
+        assert result.endswith(os.path.join('getfastq', 'SRR001'))
+
+    def test_existing_directory(self, tmp_path):
+        """Returns existing directory without error."""
+        class Args:
+            out_dir = str(tmp_path)
+        gf_dir = tmp_path / 'getfastq' / 'SRR001'
+        gf_dir.mkdir(parents=True)
+        result = get_getfastq_run_dir(Args(), 'SRR001')
+        assert os.path.isdir(result)
+
+
+# ---------------------------------------------------------------------------
+# generate_multisp_busco_table (merges BUSCO full_table.tsv files)
+# ---------------------------------------------------------------------------
+
+class TestGenerateMultispBuscoTable:
+    def test_merges_two_species(self, tmp_path):
+        """Merges BUSCO tables from two species into one output file."""
+        busco_dir = tmp_path / 'busco'
+        busco_dir.mkdir()
+        content_a = (
+            '# comment line\n'
+            'OG0001\tComplete\tgene1\t100\t200\thttp://odb\tgene desc\n'
+            'OG0002\tComplete\tgene2\t90\t150\thttp://odb2\tgene desc2\n'
+        )
+        content_b = (
+            '# comment line\n'
+            'OG0001\tComplete\tgeneA\t95\t180\t-\t-\n'
+            'OG0002\tMissing\t-\t0\t0\t-\t-\n'
+        )
+        (busco_dir / 'Species_A.tsv').write_text(content_a)
+        (busco_dir / 'Species_B.tsv').write_text(content_b)
+        outfile = tmp_path / 'merged.tsv'
+        generate_multisp_busco_table(str(busco_dir), str(outfile))
+        result = pandas.read_csv(str(outfile), sep='\t')
+        assert 'Species_A' in result.columns
+        assert 'Species_B' in result.columns
+        assert result.shape[0] == 2

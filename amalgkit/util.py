@@ -157,7 +157,7 @@ class Metadata:
                         row.append(str(item[1][0]))
                     else:
                         row.append(item[1][0].text)
-                except:
+                except (IndexError, TypeError, AttributeError):
                     row.append("")
             colnames = []
             for item in items:
@@ -310,8 +310,7 @@ class Metadata:
 
     def nspot_cutoff(self, min_nspots):
         print('{}: Marking SRAs with less than {:,} reads'.format(datetime.datetime.now(), min_nspots), flush=True)
-        self.df['total_spots'] = self.df.loc[:, 'total_spots'].replace('', 0)
-        self.df['total_spots'] = self.df.loc[:, 'total_spots'].fillna(0).astype(int)
+        self.df['total_spots'] = pandas.to_numeric(self.df['total_spots'], errors='coerce').fillna(0).astype(int)
         self.df.loc[-(self.df.loc[:, 'total_spots'] == 0) & (
                     self.df.loc[:, 'total_spots'] < min_nspots), 'exclusion'] = 'low_nspots'
 
@@ -345,7 +344,7 @@ class Metadata:
                 for bioproject in selected_bioprojects:
                     is_bp = (df_unselected.loc[:, 'bioproject'] == bioproject)
                     index = numpy.random.choice(df_unselected.index[is_bp], size=1, replace=False)
-                    selected_index.append(int(index))
+                    selected_index.append(int(index.item()))
                 df.loc[selected_index, 'is_sampled'] = 'yes'
         return df
 
@@ -613,7 +612,7 @@ def generate_multisp_busco_table(dir_busco, outfile):
     for species_infile in species_infiles:
         path_to_table = os.path.join(dir_busco, species_infile)
         if not os.path.exists(path_to_table):
-            warnings.warn('full_table.tsv does not exist. Skipping: '.format(species_infile))
+            warnings.warn('full_table.tsv does not exist. Skipping: {}'.format(species_infile))
             continue
         tmp_table = pandas.read_table(path_to_table, sep='\t', header=None, comment='#', names=col_names)
         tmp_table.loc[:, 'sequence'] = tmp_table.loc[:, 'sequence'].str.replace(r':[-\.0-9]*$', '', regex=True)

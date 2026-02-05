@@ -40,7 +40,7 @@ def parse_metadata(args, metadata):
 def check_getfastq_outputs(args, sra_ids, metadata, output_dir):
     print("checking for getfastq outputs: ")
     if args.getfastq_dir:
-        getfastq_path = args.getfastq
+        getfastq_path = args.getfastq_dir
     else:
         getfastq_path = os.path.join(args.out_dir, "getfastq")
     data_available = []
@@ -77,14 +77,12 @@ def check_getfastq_outputs(args, sra_ids, metadata, output_dir):
 
     if data_unavailable:
         print("writing SRA IDs without getfastq output to: ", os.path.join(output_dir, "SRA_IDs_without_fastq.txt"))
-        file = open(os.path.join(output_dir, "SRA_IDs_without_fastq.txt"), "w")
-        for sra_id in data_unavailable:
-            file.write(sra_id + "\n")
-        file.close()
+        with open(os.path.join(output_dir, "SRA_IDs_without_fastq.txt"), "w") as f:
+            for sra_id in data_unavailable:
+                f.write(sra_id + "\n")
     else:
         txt = "The getfastq output files for all SRA IDs in --metadata ({}) were found."
         print(txt.format(args.metadata))
-
 
     return data_available, data_unavailable
 
@@ -135,10 +133,9 @@ def check_quant_index(args, uni_species, output_dir):
 
         if index_unavailable:
             print("writing species without index to: ", os.path.join(output_dir, "species_without_index.txt"))
-            file = open(os.path.join(output_dir, "species_without_index.txt"), "w")
-            for species in index_unavailable:
-                file.write(species + "\n")
-            file.close()
+            with open(os.path.join(output_dir, "species_without_index.txt"), "w") as f:
+                for species in index_unavailable:
+                    f.write(species + "\n")
         else:
             print("index found for all species in --metadata ({})".format(args.metadata))
     else:
@@ -188,10 +185,9 @@ def check_quant_output(args, sra_ids, output_dir):
 
     if data_unavailable:
         print("writing SRA IDs without quant output to: ", os.path.join(output_dir, "SRA_IDs_without_quant.txt"))
-        file = open(os.path.join(output_dir, "SRA_IDs_without_quant.txt"), "w")
-        for sra_id in data_unavailable:
-            file.write(sra_id + "\n")
-        file.close()
+        with open(os.path.join(output_dir, "SRA_IDs_without_quant.txt"), "w") as f:
+            for sra_id in data_unavailable:
+                f.write(sra_id + "\n")
     else:
         print("Quant outputs found for all SRA IDs in --metadata ({})".format(args.metadata))
 
