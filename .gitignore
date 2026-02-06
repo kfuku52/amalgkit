@@ -1,3 +1,15 @@
 *.pyc
 /data
 test_out/
+
+# local build/package artifacts
+amalgkit.egg-info/
+build/
+dist/
+
+# local BUSCO outputs
+busco_*.log
+busco_downloads/
+
+# local pipeline scratch
+tests/test_pipeline/
