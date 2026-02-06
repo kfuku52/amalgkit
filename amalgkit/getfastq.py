@@ -1,6 +1,7 @@
 from Bio import Entrez
 import itertools
 import numpy
+import gzip
 
 from amalgkit.util import *
 
@@ -14,6 +15,9 @@ import sys
 import time
 import urllib.request
 from urllib.error import HTTPError
+
+IDENTICAL_PAIRED_RATIO_THRESHOLD = 0.99
+IDENTICAL_PAIRED_CHECKED_READS = 2000
 
 def getfastq_search_term(ncbi_id, additional_search_term=None):
     # https://www.ncbi.nlm.nih.gov/books/NBK49540/
@@ -338,6 +342,63 @@ def remove_unpaired_files(sra_stat):
                 print('Removing 3rd fastq file: {}'.format(single_fastq_file), flush=True)
                 os.remove(single_fastq_file)
 
+def get_identical_paired_ratio(read1_path, read2_path, num_checked_reads=IDENTICAL_PAIRED_CHECKED_READS):
+    num_identical = 0
+    num_checked = 0
+    read_length = 0
+    with gzip.open(read1_path, 'rt') as read1, gzip.open(read2_path, 'rt') as read2:
+        while num_checked < num_checked_reads:
+            block1 = [read1.readline() for _ in range(4)]
+            block2 = [read2.readline() for _ in range(4)]
+            if any([line == '' for line in block1 + block2]):
+                break
+            seq1 = block1[1].strip()
+            seq2 = block2[1].strip()
+            if num_checked == 0:
+                read_length = len(seq1)
+            if seq1 == seq2:
+                num_identical += 1
+            num_checked += 1
+    identical_ratio = num_identical / num_checked if num_checked else 0
+    return identical_ratio, num_checked, read_length
+
+def maybe_treat_paired_as_single(sra_stat, metadata, work_dir,
+                                 threshold=IDENTICAL_PAIRED_RATIO_THRESHOLD,
+                                 num_checked_reads=IDENTICAL_PAIRED_CHECKED_READS):
+    if sra_stat['layout'] != 'paired':
+        return metadata, sra_stat
+    inext = get_newest_intermediate_file_extension(sra_stat, work_dir=work_dir)
+    if inext == 'no_extension_found':
+        return metadata, sra_stat
+    read1_path = os.path.join(work_dir, sra_stat['sra_id'] + '_1' + inext)
+    read2_path = os.path.join(work_dir, sra_stat['sra_id'] + '_2' + inext)
+    if not (os.path.exists(read1_path) and os.path.exists(read2_path)):
+        return metadata, sra_stat
+    identical_ratio, num_checked, read_length = get_identical_paired_ratio(
+        read1_path=read1_path,
+        read2_path=read2_path,
+        num_checked_reads=num_checked_reads,
+    )
+    if (num_checked > 0) and (identical_ratio >= threshold):
+        txt = 'Read1 and Read2 are nearly identical ({:.2%} of {:,} pairs): {}. '
+        txt += 'Treating as single-end reads and removing redundant read2 file.\n'
+        sys.stderr.write(txt.format(identical_ratio, num_checked, sra_stat['sra_id']))
+        single_path = os.path.join(work_dir, sra_stat['sra_id'] + inext)
+        if os.path.exists(single_path):
+            os.remove(single_path)
+        os.rename(read1_path, single_path)
+        os.remove(read2_path)
+        sra_stat['layout'] = 'single'
+        ind_sra = metadata.df.index[metadata.df.loc[:, 'run'] == sra_stat['sra_id']].values[0]
+        if 'layout_amalgkit' in metadata.df.columns:
+            metadata.df.at[ind_sra, 'layout_amalgkit'] = 'single'
+        if (read_length > 0) and ('spot_length' in metadata.df.columns):
+            sra_stat['spot_length'] = read_length
+            metadata.df.at[ind_sra, 'spot_length'] = read_length
+            if 'spot_length_amalgkit' in metadata.df.columns:
+                metadata.df.at[ind_sra, 'spot_length_amalgkit'] = read_length
+    return metadata, sra_stat
+
 def run_fastp(sra_stat, args, output_dir, metadata):
     inext = get_newest_intermediate_file_extension(sra_stat, work_dir=output_dir)
     outext = '.fastp.fastq.gz'
@@ -622,8 +683,14 @@ def sequence_extraction(args, sra_stat, metadata, g, start, end):
     ind_sra = metadata.df.index[metadata.df.loc[:,'run'] == sra_id].values[0]
     if args.pfd:
         metadata,sra_stat = run_pfd(sra_stat, args, metadata, start, end)
+        metadata, sra_stat = maybe_treat_paired_as_single(
+            sra_stat=sra_stat,
+            metadata=metadata,
+            work_dir=sra_stat['getfastq_sra_dir'],
+        )
         bp_discarded = metadata.df.at[ind_sra,'bp_dumped'] - metadata.df.at[ind_sra,'bp_written']
         metadata.df.at[ind_sra,'bp_discarded'] += bp_discarded
+    metadata.df.at[ind_sra,'layout_amalgkit'] = sra_stat['layout']
     no_read_written = (metadata.df.loc[(metadata.df.loc[:,'run']==sra_id),'num_written'].values[0]==0)
     if no_read_written:
         return metadata

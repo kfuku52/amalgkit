@@ -2,6 +2,7 @@ import pytest
 import pandas
 import numpy
 import time
+import gzip
 
 import os
 
@@ -18,6 +19,8 @@ from amalgkit.getfastq import (
     is_getfastq_output_present,
     initialize_columns,
     is_2nd_round_needed,
+    get_identical_paired_ratio,
+    maybe_treat_paired_as_single,
 )
 from amalgkit.util import Metadata
 
@@ -383,3 +386,91 @@ class TestIs2ndRoundNeeded:
     def test_custom_tolerance_boundary(self):
         assert not is_2nd_round_needed(rate_obtained_1st=0.95, tol=5.0)
         assert is_2nd_round_needed(rate_obtained_1st=0.9499, tol=5.0)
+
+
+class TestIdenticalPairedReads:
+    @staticmethod
+    def _write_fastq_gz(path, seqs):
+        with gzip.open(path, 'wt') as out:
+            for i, seq in enumerate(seqs, start=1):
+                out.write('@read{}\n{}\n+\n{}\n'.format(i, seq, 'I' * len(seq)))
+
+    def test_get_identical_paired_ratio(self, tmp_path):
+        read1 = tmp_path / 'read1.fastq.gz'
+        read2 = tmp_path / 'read2.fastq.gz'
+        self._write_fastq_gz(read1, ['AAAA', 'CCCC', 'GGGG'])
+        self._write_fastq_gz(read2, ['AAAA', 'TTTT', 'GGGG'])
+        ratio, num_checked, read_length = get_identical_paired_ratio(str(read1), str(read2), num_checked_reads=3)
+        assert ratio == pytest.approx(2 / 3)
+        assert num_checked == 3
+        assert read_length == 4
+
+    def test_maybe_treat_paired_as_single_converts_files(self, tmp_path):
+        sra_id = 'SRR001'
+        read1 = tmp_path / '{}_1.fastq.gz'.format(sra_id)
+        read2 = tmp_path / '{}_2.fastq.gz'.format(sra_id)
+        self._write_fastq_gz(read1, ['AAAA', 'CCCC', 'GGGG'])
+        self._write_fastq_gz(read2, ['AAAA', 'CCCC', 'GGGG'])
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': [sra_id],
+            'lib_layout': ['paired'],
+            'layout_amalgkit': ['paired'],
+            'spot_length': [8],
+            'total_spots': [3],
+            'total_bases': [24],
+            'scientific_name': ['sp'],
+            'exclusion': ['no'],
+        }))
+        sra_stat = {
+            'sra_id': sra_id,
+            'layout': 'paired',
+            'getfastq_sra_dir': str(tmp_path),
+            'spot_length': 8,
+        }
+        metadata, sra_stat = maybe_treat_paired_as_single(
+            sra_stat=sra_stat,
+            metadata=metadata,
+            work_dir=str(tmp_path),
+            threshold=0.99,
+            num_checked_reads=3,
+        )
+        assert sra_stat['layout'] == 'single'
+        assert os.path.exists(str(tmp_path / '{}.fastq.gz'.format(sra_id)))
+        assert not os.path.exists(str(read1))
+        assert not os.path.exists(str(read2))
+        assert metadata.df.loc[0, 'layout_amalgkit'] == 'single'
+        assert metadata.df.loc[0, 'spot_length'] == 4
+
+    def test_maybe_treat_paired_as_single_keeps_paired_when_ratio_low(self, tmp_path):
+        sra_id = 'SRR001'
+        read1 = tmp_path / '{}_1.fastq.gz'.format(sra_id)
+        read2 = tmp_path / '{}_2.fastq.gz'.format(sra_id)
+        self._write_fastq_gz(read1, ['AAAA', 'CCCC', 'GGGG'])
+        self._write_fastq_gz(read2, ['TTTT', 'CCCC', 'AAAA'])
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': [sra_id],
+            'lib_layout': ['paired'],
+            'layout_amalgkit': ['paired'],
+            'spot_length': [8],
+            'total_spots': [3],
+            'total_bases': [24],
+            'scientific_name': ['sp'],
+            'exclusion': ['no'],
+        }))
+        sra_stat = {
+            'sra_id': sra_id,
+            'layout': 'paired',
+            'getfastq_sra_dir': str(tmp_path),
+            'spot_length': 8,
+        }
+        metadata, sra_stat = maybe_treat_paired_as_single(
+            sra_stat=sra_stat,
+            metadata=metadata,
+            work_dir=str(tmp_path),
+            threshold=0.99,
+            num_checked_reads=3,
+        )
+        assert sra_stat['layout'] == 'paired'
+        assert os.path.exists(str(read1))
+        assert os.path.exists(str(read2))
+        assert metadata.df.loc[0, 'layout_amalgkit'] == 'paired'

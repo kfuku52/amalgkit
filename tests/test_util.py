@@ -377,6 +377,12 @@ class TestGetSraStat:
         # num_bp_per_sra / spot_length = 1000000 / 200 = 5000
         assert stat['num_read_per_sra'] == 5000
 
+    def test_prefers_layout_amalgkit_when_available(self, sample_metadata):
+        m = sample_metadata
+        m.df.loc[m.df['run'] == 'SRR001', 'layout_amalgkit'] = 'single'
+        stat = get_sra_stat('SRR001', m)
+        assert stat['layout'] == 'single'
+
 
 class TestCheckOrthologParameterCompatibility:
     def test_both_none_raises(self):

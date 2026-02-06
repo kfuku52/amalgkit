@@ -465,7 +465,12 @@ def get_sra_stat(sra_id, metadata, num_bp_per_sra=None):
     sra_stat['sra_id'] = sra_id
     is_sra = (metadata.df.loc[:,'run']==sra_id)
     assert is_sra.sum()==1, 'There are multiple metadata rows with the same SRA ID: '+sra_id
-    sra_stat['layout'] = metadata.df.loc[is_sra,'lib_layout'].values[0]
+    layout = metadata.df.loc[is_sra,'lib_layout'].values[0]
+    if 'layout_amalgkit' in metadata.df.columns:
+        layout_amalgkit = metadata.df.loc[is_sra,'layout_amalgkit'].values[0]
+        if layout_amalgkit in ['single', 'paired']:
+            layout = layout_amalgkit
+    sra_stat['layout'] = layout
     sra_stat['total_spot'] = int(metadata.df.loc[is_sra,'total_spots'].values[0])
     original_spot_len = metadata.df.loc[is_sra,'spot_length'].values[0]
     if (numpy.isnan(original_spot_len) | (original_spot_len==0)):
