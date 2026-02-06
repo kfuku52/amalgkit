@@ -1,5 +1,6 @@
 import json
 import os
+import warnings
 import pytest
 import pandas
 import numpy
@@ -481,6 +482,26 @@ class TestMetadataGroupAttributes:
         }))
         m.group_attributes(str(tmp_path))  # no config file present
 
+    def test_no_futurewarning_when_target_column_is_float(self, tmp_path):
+        """String aggregation into float target must not emit pandas FutureWarning."""
+        ga = tmp_path / 'group_attribute.config'
+        ga.write_text('treatment\tgrowth_condition\n')
+        data = {
+            'scientific_name': ['Sp1', 'Sp1'],
+            'sample_group': ['g1', 'g2'],
+            'run': ['R1', 'R2'],
+            'exclusion': ['no', 'no'],
+            'growth_condition': ['sd medium', 'sd medium'],
+            # Simulate dtype inferred from all-missing values at file-load time.
+            'treatment': [numpy.nan, numpy.nan],
+        }
+        m = Metadata.from_DataFrame(pandas.DataFrame(data))
+        with warnings.catch_warnings(record=True) as captured:
+            warnings.simplefilter('always')
+            m.group_attributes(str(tmp_path))
+        future_warnings = [w for w in captured if issubclass(w.category, FutureWarning)]
+        assert len(future_warnings) == 0
+
 
 # ---------------------------------------------------------------------------
 # mark_missing_rank
@@ -528,6 +549,25 @@ class TestMetadataLabelSampledDataEdgeCases:
         empty_sg = m.df.loc[m.df['run'] == 'R2']
         assert empty_sg['exclusion'].values[0] == 'no_tissue_label'
         assert empty_sg['is_qualified'].values[0] == 'no'
+
+    def test_no_futurewarning_when_is_qualified_starts_float(self):
+        """Assigning qualification flags should be dtype-safe even from float columns."""
+        data = {
+            'scientific_name': ['Sp1', 'Sp1'],
+            'sample_group': ['brain', ''],
+            'bioproject': ['PRJ1', 'PRJ2'],
+            'biosample': ['S1', 'S2'],
+            'run': ['R1', 'R2'],
+            'exclusion': ['no', 'no'],
+            # Simulate pandas float inference from all-missing text column.
+            'is_qualified': [numpy.nan, numpy.nan],
+        }
+        m = Metadata.from_DataFrame(pandas.DataFrame(data))
+        with warnings.catch_warnings(record=True) as captured:
+            warnings.simplefilter('always')
+            m.label_sampled_data(max_sample=10)
+        future_warnings = [w for w in captured if issubclass(w.category, FutureWarning)]
+        assert len(future_warnings) == 0
 
 
 # ---------------------------------------------------------------------------

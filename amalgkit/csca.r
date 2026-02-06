@@ -4,6 +4,10 @@ suppressWarnings(suppressPackageStartupMessages(library(amap, quietly = TRUE)))
 suppressWarnings(suppressPackageStartupMessages(library(RColorBrewer, quietly = TRUE)))
 suppressWarnings(suppressPackageStartupMessages(library(colorspace, quietly = TRUE)))
 suppressWarnings(suppressPackageStartupMessages(library(dendextend, quietly = TRUE)))
+detected_cores = tryCatch(parallel::detectCores(), error = function(e) NA_integer_)
+if (is.na(detected_cores) && (is.null(getOption("cores")) || is.na(getOption("cores")))) {
+    options(cores = 1L)
+}
 suppressWarnings(suppressPackageStartupMessages(library(NMF, quietly = TRUE)))
 suppressWarnings(suppressPackageStartupMessages(library(MASS, quietly = TRUE)))
 suppressWarnings(suppressPackageStartupMessages(library(pvclust, quietly = TRUE)))

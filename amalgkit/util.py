@@ -239,7 +239,10 @@ class Metadata:
             if (aggregate_from in self.df.columns) & (aggregate_from != ''):
                 print('{}: Aggregating column "{}" to column "{}"'.format(datetime.datetime.now(), aggregate_from, aggregate_to), flush=True)
                 if not aggregate_to in self.df.columns:
-                    self.df.loc[:, aggregate_to] = ''
+                    self.df[aggregate_to] = ''
+                else:
+                    # Prevent assigning strings into float columns (pandas FutureWarning).
+                    self.df[aggregate_to] = self.df[aggregate_to].fillna('').astype(str)
                 is_from_empty = (self.df.loc[:, aggregate_from].isnull()) | (
                             self.df.loc[:, aggregate_from].astype(str) == '')
                 is_to_empty = (self.df.loc[:, aggregate_to].isnull()) | (self.df.loc[:, aggregate_to].astype(str) == '')
@@ -352,12 +355,13 @@ class Metadata:
         pandas.set_option('mode.chained_assignment', None)
         txt = '{}: Selecting subsets of SRA IDs for >{:,} samples per sample_group per species'
         print(txt.format(datetime.datetime.now(), max_sample), flush=True)
-        is_empty = (self.df['sample_group'] == '')
-        self.df.loc[is_empty,'is_qualified'] = 'no'
-        self.df.loc[is_empty,'exclusion'] = 'no_tissue_label'
-        self.df['bioproject'] = self.df['bioproject'].fillna('unknown').values
+        self.df['sample_group'] = self.df['sample_group'].fillna('').astype(str)
+        self.df['exclusion'] = self.df['exclusion'].fillna('no').astype(str)
+        self.df['bioproject'] = self.df['bioproject'].fillna('unknown').astype(str).values
         self.df['is_sampled'] = 'no'
         self.df['is_qualified'] = 'no'
+        is_empty = (self.df['sample_group'] == '')
+        self.df.loc[is_empty,'exclusion'] = 'no_tissue_label'
         self.df.loc[(self.df.loc[:, 'exclusion'] == 'no'), 'is_qualified'] = 'yes'
         df_list = list()
         species = self.df.loc[:, 'scientific_name'].unique()

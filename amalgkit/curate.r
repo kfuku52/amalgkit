@@ -4,6 +4,10 @@ suppressWarnings(suppressPackageStartupMessages(library(pcaMethods, quietly = TR
 suppressWarnings(suppressPackageStartupMessages(library(colorspace, quietly = TRUE)))
 suppressWarnings(suppressPackageStartupMessages(library(RColorBrewer, quietly = TRUE)))
 suppressWarnings(suppressPackageStartupMessages(library(MASS, quietly = TRUE)))
+detected_cores = tryCatch(parallel::detectCores(), error = function(e) NA_integer_)
+if (is.na(detected_cores) && (is.null(getOption("cores")) || is.na(getOption("cores")))) {
+    options(cores = 1L)
+}
 suppressWarnings(suppressPackageStartupMessages(library(NMF, quietly = TRUE)))
 suppressWarnings(suppressPackageStartupMessages(library(dendextend, quietly = TRUE)))
 suppressWarnings(suppressPackageStartupMessages(library(amap, quietly = TRUE)))
@@ -97,6 +101,12 @@ remove_nonexpressed_gene = function(tc) {
 }
 
 add_color_to_curate_metadata = function(sra, selected_sample_groups, sample_group_colors) {
+    if (nrow(sra) == 0) {
+        sra[['bp_color']] = character(0)
+        sra[['sp_color']] = character(0)
+        sra[['sample_group_color']] = character(0)
+        return(sra)
+    }
     sra = sra[, (!colnames(sra) %in% c("bp_color", "sp_color", "sample_group_color"))]
     if ('bioproject' %in% colnames(sra)) {
         bioproject = as.character(sra[['bioproject']])
@@ -179,6 +189,11 @@ cleanY = function(y, mod, svs) {
 sample_group_mean = function(tc, sra, selected_sample_groups = NA, balance_bp = FALSE) {
     # if the data are SVA-corrected, balance_bp would not be necessary because project-specfic effects
     # were removed in SVA already.
+    if ((ncol(tc) == 0) || (nrow(tc) == 0)) {
+        tc_ave = data.frame(matrix(numeric(0), nrow = nrow(tc), ncol = 0))
+        rownames(tc_ave) = rownames(tc)
+        return(list(tc_ave = tc_ave, selected_sample_groups = selected_sample_groups))
+    }
     if (all(is.na(selected_sample_groups))) {
         sp_sample_groups = unique(sra[['sample_group']])
     } else {
@@ -249,6 +264,11 @@ sample_group2tau = function(tc_sample_group, rich.annotation = TRUE, transform_m
     } else {
         cols = c("tau")
     }
+    if ((nrow(tc_sample_group) == 0) || (ncol(tc_sample_group) == 0)) {
+        df_tau = data.frame(matrix(nrow = 0, ncol = length(cols)))
+        colnames(df_tau) = cols
+        return(df_tau)
+    }
     df_tau = data.frame(matrix(rep(NA, length(cols) * nrow(tc_sample_group)), nrow = nrow(tc_sample_group)))
     colnames(df_tau) = cols
     rownames(df_tau) = rownames(tc_sample_group)
@@ -304,8 +324,16 @@ check_within_sample_group_correlation = function(tc, sra, dist_method, min_dif, 
     out = tc_metadata_intersect(tc, sra)
     tc = out[["tc"]]
     sra2 = out[["sra"]]
+    if ((ncol(tc) == 0) || (nrow(sra2) == 0)) {
+        cat('No sample is available. Outlier removal will be skipped.\n')
+        return(list(tc = tc, sra = sra))
+    }
     sra2[, 'num_other_run_same_bp_sample_group'] = 0
     selected_sample_groups = selected_sample_groups[selected_sample_groups %in% unique(sra2[['sample_group']])]
+    if (length(selected_sample_groups) <= 1) {
+        cat('Less than two sample_group categories are available after filtering. Outlier removal will be skipped.\n')
+        return(list(tc = tc, sra = sra))
+    }
     exclude_runs = c()
     for (sra_run in colnames(tc)) {
         is_sra = (sra2[['run']] == sra_run)
@@ -849,6 +877,22 @@ save_correlation = function(tc, sra, dist_method, round) {
     out = tc_metadata_intersect(tc, sra)
     tc = out[["tc"]]
     sra = out[["sra"]]
+    if (ncol(tc) <= 1) {
+        cat('Not enough samples for correlation statistics. Recording NA values.\n')
+        tc_dist_stats = rep(NA_real_, 12)
+        if (!exists("correlation_statistics", envir = .GlobalEnv)) {
+            correlation_statistics <- data.frame(matrix(tc_dist_stats, ncol = 12, dimnames = list(NULL, c("bwbw_mean", "bwbw_median", "bwbw_variance", "wibw_mean", "wibw_median", "wibw_variance", "bwwi_mean", "bwwi_median", "bwwi_variance", "wiwi_mean", "wiwi_median", "wiwi_variance"))))
+            rownames(correlation_statistics) <- paste0("round_", round)
+            assign("correlation_statistics", correlation_statistics, envir = .GlobalEnv)
+        } else {
+            correlation_statistics <- get("correlation_statistics", envir = .GlobalEnv)
+            new_row <- data.frame(matrix(tc_dist_stats, ncol = 12, dimnames = list(NULL, c("bwbw_mean", "bwbw_median", "bwbw_variance", "wibw_mean", "wibw_median", "wibw_variance", "bwwi_mean", "bwwi_median", "bwwi_variance", "wiwi_mean", "wiwi_median", "wiwi_variance"))))
+            rownames(new_row) <- paste0("round_", round)
+            correlation_statistics <- rbind(correlation_statistics, new_row)
+            assign("correlation_statistics", correlation_statistics, envir = .GlobalEnv)
+        }
+        return(correlation_statistics)
+    }
     is_same_bp = outer(sra[['bioproject']], sra[['bioproject']], function(x, y) {
         x == y
     })
@@ -944,8 +988,8 @@ draw_legend = function(sra, new = TRUE, pos = "center", fontsize = 7, nlabel.in.
 }
 
 save_plot = function(tc, sra, sva_out, dist_method, file, selected_sample_groups, sample_group_colors, fontsize = 7, transform_method, batch_effect_alg) {
-    if (ncol(tc) == 1) {
-        cat('Only 1 sample is available. Skipping the plot.\n')
+    if (ncol(tc) <= 1) {
+        cat('1 or fewer samples are available. Skipping the plot.\n')
         return()
     }
     out = tc_metadata_intersect(tc, sra)
@@ -1137,6 +1181,68 @@ exclude_inappropriate_sample_from_eff_length = function(tc_eff_length, tc) {
     return(tc_eff_length)
 }
 
+initialize_round_summary = function() {
+    data.frame(
+        step = character(0),
+        round = integer(0),
+        reason = character(0),
+        num_runs_before = integer(0),
+        num_runs_after = integer(0),
+        num_runs_removed = integer(0),
+        removed_runs = character(0),
+        stringsAsFactors = FALSE
+    )
+}
+
+append_round_summary = function(round_summary, step, round, reason, runs_before, runs_after) {
+    removed_runs = setdiff(runs_before, runs_after)
+    removed_runs_txt = if (length(removed_runs) == 0) '' else paste(removed_runs, collapse = ' ')
+    new_row = data.frame(
+        step = step,
+        round = as.integer(round),
+        reason = reason,
+        num_runs_before = as.integer(length(runs_before)),
+        num_runs_after = as.integer(length(runs_after)),
+        num_runs_removed = as.integer(length(removed_runs)),
+        removed_runs = removed_runs_txt,
+        stringsAsFactors = FALSE
+    )
+    rbind(round_summary, new_row)
+}
+
+write_curation_summaries = function(round_summary, sra, scientific_name, batch_effect_alg,
+                                    dir_tsv, mapping_rate_cutoff, correlation_threshold,
+                                    one_outlier_per_iteration, num_total_runs_species,
+                                    num_runs_after_sample_group_filter, script_start_elapsed) {
+    species_tag = sub(" ", "_", scientific_name)
+    file_round = file.path(dir_tsv, paste0(species_tag, ".", batch_effect_alg, ".curation_round_summary.tsv"))
+    write.table(round_summary, file = file_round, sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
+
+    is_kept = (sra[['exclusion']] == "no")
+    kept_runs = sra[is_kept, 'run']
+    excluded_runs = sra[!is_kept, 'run']
+    kept_runs_txt = if (length(kept_runs) == 0) '' else paste(kept_runs, collapse = ' ')
+    excluded_runs_txt = if (length(excluded_runs) == 0) '' else paste(excluded_runs, collapse = ' ')
+    total_runtime_sec = as.numeric(proc.time()[["elapsed"]] - script_start_elapsed)
+    final_summary = data.frame(
+        scientific_name = scientific_name,
+        batch_effect_alg = batch_effect_alg,
+        mapping_rate_cutoff = mapping_rate_cutoff,
+        correlation_threshold = correlation_threshold,
+        one_outlier_per_iteration = as.logical(one_outlier_per_iteration),
+        total_runtime_sec = round(total_runtime_sec, 6),
+        num_total_runs_in_species = as.integer(num_total_runs_species),
+        num_runs_after_sample_group_filter = as.integer(num_runs_after_sample_group_filter),
+        num_runs_final_kept = as.integer(sum(is_kept)),
+        num_runs_final_excluded = as.integer(sum(!is_kept)),
+        final_kept_runs = kept_runs_txt,
+        final_excluded_runs = excluded_runs_txt,
+        stringsAsFactors = FALSE
+    )
+    file_final = file.path(dir_tsv, paste0(species_tag, ".", batch_effect_alg, ".curation_final_summary.tsv"))
+    write.table(final_summary, file = file_final, sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
+}
+
 ########cd############END OF FUNCTION DECLARATION####################################################
 
 ################################################# START OF SVA CORRECTION ########################################################
@@ -1151,6 +1257,8 @@ sra_all = read.table(metadata_path, sep = "\t", header = TRUE, quote = "", fill 
 sra_all = standardize_metadata_all(sra_all)
 
 scientific_name = sra_all[(sra_all[['run']] %in% colnames(tc)), "scientific_name"][1]
+script_start_elapsed = as.numeric(proc.time()[["elapsed"]])
+num_total_runs_species = sum(sra_all[, 'scientific_name'] == scientific_name, na.rm = TRUE)
 dir_curate = file.path(out_dir, 'curate')
 dir_pdf = file.path(dir_curate, sub(" ", "_", scientific_name), 'plots')
 dir.create(dir_pdf, showWarnings = FALSE, recursive = TRUE)
@@ -1162,6 +1270,8 @@ setwd(dir_curate)
 cat(log_prefix, "Working at:", getwd(), "\n")
 
 sra = get_species_metadata(sra_all, scientific_name, selected_sample_groups)
+num_runs_after_sample_group_filter = nrow(sra)
+round_summary = initialize_round_summary()
 tc = exclude_inappropriate_sample_from_tc(tc, sra)
 out = sort_tc_and_metadata(tc, sra); tc = out[["tc"]]; sra = out[["sra"]]
 tc_eff_length = exclude_inappropriate_sample_from_eff_length(tc_eff_length, tc)
@@ -1195,6 +1305,27 @@ if (skip_curation_flag == TRUE) {
     cat(file_corrected_mean, "\n")
     cat(file_metadata, "\n")
     cat("Transformation applied: ", transform_method, "\n")
+    round_summary = append_round_summary(
+        round_summary = round_summary,
+        step = 'skip_curation',
+        round = -1,
+        reason = 'skip_curation_requested',
+        runs_before = colnames(tc),
+        runs_after = colnames(tc)
+    )
+    write_curation_summaries(
+        round_summary = round_summary,
+        sra = sra,
+        scientific_name = scientific_name,
+        batch_effect_alg = batch_effect_alg,
+        dir_tsv = dir_tsv,
+        mapping_rate_cutoff = mapping_rate_cutoff,
+        correlation_threshold = correlation_threshold,
+        one_outlier_per_iteration = one_outlier_per_iteration,
+        num_total_runs_species = num_total_runs_species,
+        num_runs_after_sample_group_filter = num_runs_after_sample_group_filter,
+        script_start_elapsed = script_start_elapsed
+    )
     cat(log_prefix, "Completed.\n")
     quit(save = 'no', status = 0)
 }
@@ -1203,9 +1334,19 @@ cat("Removing samples with mapping rate of 0.\n")
 round = 0
 sva_out = NULL
 tc_batch_corrected = NULL
+runs_before = colnames(tc)
 out = check_mapping_rate(tc, sra, 0)
 tc = out[["tc"]]
 sra = out[["sra"]]
+runs_after = colnames(tc)
+round_summary = append_round_summary(
+    round_summary = round_summary,
+    step = 'mapping_rate_zero',
+    round = round,
+    reason = 'mapping_rate_below_or_equal_0',
+    runs_before = runs_before,
+    runs_after = runs_after
+)
 tc_tmp = apply_transformation_logic(tc, tc_eff_length, transform_method, batch_effect_alg, step = 'before_batch_plot', sra = sra)
 save_plot(tc_tmp, sra, NULL, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".original"),
           selected_sample_groups, sample_group_colors, fontsize, transform_method, batch_effect_alg)
@@ -1228,9 +1369,19 @@ cat("Removing samples with the mapping rate smaller than", mapping_rate_cutoff, 
 round = 1
 sva_out = NULL
 tc_batch_corrected = NULL
+runs_before = colnames(tc)
 out = check_mapping_rate(tc, sra, mapping_rate_cutoff)
 tc = out[["tc"]]
 sra = out[["sra"]]
+runs_after = colnames(tc)
+round_summary = append_round_summary(
+    round_summary = round_summary,
+    step = 'mapping_rate_cutoff',
+    round = round,
+    reason = paste0('mapping_rate_below_or_equal_', mapping_rate_cutoff * 100, '_percent'),
+    runs_before = runs_before,
+    runs_after = runs_after
+)
 
 tc_tmp = apply_transformation_logic(tc, tc_eff_length, transform_method, batch_effect_alg, step = 'before_batch_plot', sra = sra)
 save_plot(tc_tmp, sra, NULL, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".mapping_cutoff"),
@@ -1254,11 +1405,21 @@ end_flag = 0
 while (end_flag == 0) {
     cat("Iteratively checking within-sample_group correlation, round:", round, "\n")
     tc_cwtc = NULL
+    runs_before = colnames(tc)
     num_run_before = sum(sra[['exclusion']] == "no")
     out = check_within_sample_group_correlation(tc, sra, dist_method, min_dif, selected_sample_groups, one_outlier_per_iteration, correlation_threshold)
     tc_cwtc = out[["tc"]]
     sra = out[["sra"]]
+    runs_after = colnames(tc_cwtc)
     num_run_after = sum(sra[['exclusion']] == "no")
+    round_summary = append_round_summary(
+        round_summary = round_summary,
+        step = 'correlation_iter',
+        round = round,
+        reason = 'low_within_sample_group_correlation',
+        runs_before = runs_before,
+        runs_after = runs_after
+    )
     if ((num_run_before == num_run_after) | (plot_intermediate)) {
         sva_out = NULL
         tc_batch_corrected = NULL
@@ -1315,5 +1476,18 @@ write.table(correlation_statistics, file = file, row.names = TRUE, sep = "\t", q
 tc_tau = sample_group2tau(tc_sample_group, rich.annotation = TRUE, transform_method)
 file = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".", batch_effect_alg, ".tau.tsv"))
 write_table_with_index_name(df = tc_tau, file_path = file, index_name = 'target_id')
+write_curation_summaries(
+    round_summary = round_summary,
+    sra = sra,
+    scientific_name = scientific_name,
+    batch_effect_alg = batch_effect_alg,
+    dir_tsv = dir_tsv,
+    mapping_rate_cutoff = mapping_rate_cutoff,
+    correlation_threshold = correlation_threshold,
+    one_outlier_per_iteration = one_outlier_per_iteration,
+    num_total_runs_species = num_total_runs_species,
+    num_runs_after_sample_group_filter = num_runs_after_sample_group_filter,
+    script_start_elapsed = script_start_elapsed
+)
 cat(log_prefix, "Completed.\n")
 quit(save = 'no', status = 0)

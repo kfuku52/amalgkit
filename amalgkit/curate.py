@@ -99,8 +99,8 @@ def curate_main(args):
     is_selected = (metadata.df['exclusion']=='no')
     spp = metadata.df.loc[is_selected, 'scientific_name'].drop_duplicates().values
     curate_dir = os.path.join(args.out_dir, 'curate')
-    if not os.path.exists(curate_dir):
-        os.mkdir(curate_dir)
+    os.makedirs(curate_dir, exist_ok=True)
+    failed_species = list()
     print('Number of species in the selected metadata table ("exclusion"=="no"): {}'.format(len(spp)), flush=True)
     for sp in spp:
         sp = sp.replace(" ", "_")
@@ -117,3 +117,10 @@ def curate_main(args):
         if exit_status == 0:
             with open(file_curate_completion_flag, 'w') as f:
                 f.write('amalgkit curate completed at {}\n'.format(datetime.datetime.now()))
+        else:
+            failed_species.append(sp)
+            sys.stderr.write('amalgkit curate failed for species: {}\n'.format(sp))
+    if len(failed_species) > 0:
+        txt = 'amalgkit curate failed for {}/{} species: {}\n'
+        sys.stderr.write(txt.format(len(failed_species), len(spp), ', '.join(failed_species)))
+        sys.exit(1)

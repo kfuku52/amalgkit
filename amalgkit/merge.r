@@ -50,9 +50,9 @@ save_frequency_plot = function(df, value_col, out_path, x_label, font_size = 8, 
     }
     g = ggplot(data = df2)
     if (is.null(bin_breaks)) {
-        g = g + geom_histogram(aes_string(x = value_col), bins = bins, color = 'black', fill = 'gray70')
+        g = g + geom_histogram(aes(x = .data[[value_col]]), bins = bins, color = 'black', fill = 'gray70')
     } else {
-        g = g + geom_histogram(aes_string(x = value_col), breaks = bin_breaks, color = 'black', fill = 'gray70')
+        g = g + geom_histogram(aes(x = .data[[value_col]]), breaks = bin_breaks, color = 'black', fill = 'gray70')
     }
     if (!is.null(x_breaks)) {
         g = g + scale_x_continuous(breaks = x_breaks)
