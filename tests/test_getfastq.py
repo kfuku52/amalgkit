@@ -17,6 +17,7 @@ from amalgkit.getfastq import (
     remove_intermediate_files,
     is_getfastq_output_present,
     initialize_columns,
+    is_2nd_round_needed,
 )
 from amalgkit.util import Metadata
 
@@ -363,3 +364,22 @@ class TestInitializeColumns:
         assert m.df.loc[0, 'bp_until_target_size'] == 1000000
         assert m.df.loc[0, 'bp_dumped'] == 0
         assert m.df.loc[0, 'layout_amalgkit'] == ''
+
+
+# ---------------------------------------------------------------------------
+# is_2nd_round_needed (triggers compensatory extraction based on tolerated loss)
+# ---------------------------------------------------------------------------
+
+class TestIs2ndRoundNeeded:
+    def test_zero_obtained_requires_second_round(self):
+        assert is_2nd_round_needed(rate_obtained_1st=0.0, tol=1.0)
+
+    def test_half_obtained_requires_second_round_at_default_tol(self):
+        assert is_2nd_round_needed(rate_obtained_1st=0.5, tol=1.0)
+
+    def test_within_default_tolerance_skips_second_round(self):
+        assert not is_2nd_round_needed(rate_obtained_1st=0.99, tol=1.0)
+
+    def test_custom_tolerance_boundary(self):
+        assert not is_2nd_round_needed(rate_obtained_1st=0.95, tol=5.0)
+        assert is_2nd_round_needed(rate_obtained_1st=0.9499, tol=5.0)

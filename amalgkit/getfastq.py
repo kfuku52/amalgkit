@@ -481,6 +481,11 @@ def calc_2nd_ranges(metadata):
     metadata.df.loc[:,'spot_end_2nd'] = end_2nds
     return metadata
 
+def is_2nd_round_needed(rate_obtained_1st, tol):
+    # tol is acceptable percentage loss relative to --max_bp.
+    required_rate = 1 - (tol * 0.01)
+    return rate_obtained_1st < required_rate
+
 def print_read_stats(args, metadata, g, sra_stat=None, individual=False):
     if sra_stat is None:
         df = metadata.df
@@ -808,9 +813,7 @@ def getfastq_main(args):
     # 2nd round sequence extraction
     if (not flag_private_file) & (not flag_any_output_file_present):
         g['rate_obtained_1st'] = metadata.df.loc[:,'bp_amalgkit'].sum() / g['max_bp']
-        if (g['rate_obtained_1st'] < (args.tol*0.01)):
-            print('Sufficient data were obtained in the 1st-round sequence extraction. Proceeding without the 2nd round.')
-        else:
+        if is_2nd_round_needed(g['rate_obtained_1st'], args.tol):
             txt = 'Only {:,.2f}% ({:,}/{:,}) of the target size (--max_bp) was obtained in the 1st round. Proceeding to the 2nd round read extraction.'
             print(txt.format(g['rate_obtained_1st']*100, metadata.df.loc[:,'bp_amalgkit'].sum(), g['max_bp']), flush=True)
             metadata = calc_2nd_ranges(metadata)
@@ -819,6 +822,8 @@ def getfastq_main(args):
                 sra_stat = get_sra_stat(sra_id, metadata, g['num_bp_per_sra'])
                 sra_stat['getfastq_sra_dir'] = get_getfastq_run_dir(args, sra_id)
                 metadata = sequence_extraction_2nd_round(args, sra_stat, metadata, g)
+        else:
+            print('Sufficient data were obtained in the 1st-round sequence extraction. Proceeding without the 2nd round.')
         g['rate_obtained_2nd'] = metadata.df.loc[:, 'bp_amalgkit'].sum() / g['max_bp']
         txt = '2nd round read extraction improved % bp from {:,.2f}% to {:,.2f}%'
         print(txt.format(g['rate_obtained_1st']*100, g['rate_obtained_2nd']*100), flush=True)
