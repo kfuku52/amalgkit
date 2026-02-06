@@ -2,6 +2,7 @@ from Bio import Entrez
 import itertools
 import numpy
 import gzip
+import pandas
 
 from amalgkit.util import *
 
@@ -417,6 +418,51 @@ def maybe_treat_paired_as_single(sra_stat, metadata, work_dir,
                 metadata.df.at[ind_sra, 'spot_length_amalgkit'] = read_length
     return metadata, sra_stat
 
+def parse_fastp_metrics(stderr_txt):
+    duplication_rate = numpy.nan
+    insert_size_peak = numpy.nan
+    for line in stderr_txt.split('\n'):
+        if line.startswith('Duplication rate:'):
+            matched = re.search(r'Duplication rate:\s*([0-9.]+)%', line)
+            if matched:
+                duplication_rate = float(matched.group(1))
+        if line.startswith('Insert size peak'):
+            matched = re.search(r'Insert size peak.*:\s*([0-9.]+)', line)
+            if matched:
+                insert_size_peak = float(matched.group(1))
+    return duplication_rate, insert_size_peak
+
+def update_fastp_metrics(metadata, ind_sra, current_num_in, duplication_rate, insert_size_peak):
+    previous_num_in = metadata.df.at[ind_sra, 'num_fastp_in']
+    total_num_in = previous_num_in + current_num_in
+    metric_pairs = [
+        ('fastp_duplication_rate', duplication_rate),
+        ('fastp_insert_size_peak', insert_size_peak),
+    ]
+    for metric_key, current_value in metric_pairs:
+        if numpy.isnan(current_value):
+            continue
+        previous_value = metadata.df.at[ind_sra, metric_key]
+        if (current_num_in <= 0) or numpy.isnan(previous_value) or (previous_num_in <= 0):
+            metadata.df.at[ind_sra, metric_key] = current_value
+        else:
+            weighted_mean = ((previous_value * previous_num_in) + (current_value * current_num_in)) / total_num_in
+            metadata.df.at[ind_sra, metric_key] = weighted_mean
+
+def write_fastp_stats(sra_stat, metadata, output_dir):
+    ind_sra = metadata.df.index[metadata.df.loc[:, 'run'] == sra_stat['sra_id']].values[0]
+    out_df = pandas.DataFrame([{
+        'run': sra_stat['sra_id'],
+        'fastp_duplication_rate': metadata.df.at[ind_sra, 'fastp_duplication_rate'],
+        'fastp_insert_size_peak': metadata.df.at[ind_sra, 'fastp_insert_size_peak'],
+        'num_fastp_in': metadata.df.at[ind_sra, 'num_fastp_in'],
+        'num_fastp_out': metadata.df.at[ind_sra, 'num_fastp_out'],
+        'bp_fastp_in': metadata.df.at[ind_sra, 'bp_fastp_in'],
+        'bp_fastp_out': metadata.df.at[ind_sra, 'bp_fastp_out'],
+    }])
+    out_path = os.path.join(output_dir, 'fastp_stats.tsv')
+    out_df.to_csv(out_path, sep='\t', index=False)
+
 def run_fastp(sra_stat, args, output_dir, metadata):
     inext = get_newest_intermediate_file_extension(sra_stat, work_dir=output_dir)
     outext = '.fastp.fastq.gz'
@@ -448,7 +494,8 @@ def run_fastp(sra_stat, args, output_dir, metadata):
         print(fp_out.stderr.decode('utf8'))
     if args.remove_tmp:
         remove_intermediate_files(sra_stat, ext=inext, work_dir=output_dir)
-    bps = fp_out.stderr.decode('utf8').split('\n')
+    fp_stderr = fp_out.stderr.decode('utf8')
+    bps = fp_stderr.split('\n')
     num_in = list()
     num_out = list()
     bp_in = list()
@@ -461,10 +508,14 @@ def run_fastp(sra_stat, args, output_dir, metadata):
             num_out.append(int(bps[i + 1].replace('total reads: ', '')))
             bp_out.append(int(bps[i + 2].replace('total bases: ', '')))
     ind_sra = metadata.df.index[metadata.df.loc[:,'run'] == sra_stat['sra_id']].values[0]
+    current_num_in = sum(num_in)
+    duplication_rate, insert_size_peak = parse_fastp_metrics(fp_stderr)
+    update_fastp_metrics(metadata, ind_sra, current_num_in, duplication_rate, insert_size_peak)
     metadata.df.at[ind_sra,'num_fastp_in'] += sum(num_in)
     metadata.df.at[ind_sra,'num_fastp_out'] += sum(num_out)
     metadata.df.at[ind_sra,'bp_fastp_in'] += sum(bp_in)
     metadata.df.at[ind_sra,'bp_fastp_out'] += sum(bp_out)
+    write_fastp_stats(sra_stat, metadata, output_dir)
     return metadata
 
 def rename_reads(sra_stat, args, output_dir):
@@ -678,12 +729,13 @@ def initialize_columns(metadata, g):
     spot_keys = ['spot_start_1st', 'spot_end_1st', 'spot_start_2nd', 'spot_end_2nd',]
     keys = (['num_dumped', 'num_rejected', 'num_written', 'num_fastp_in', 'num_fastp_out','bp_amalgkit',
             'bp_dumped', 'bp_rejected', 'bp_written', 'bp_fastp_in', 'bp_fastp_out', 'bp_discarded',
-            'bp_still_available', 'bp_specified_for_extraction','rate_obtained','layout_amalgkit',]
+            'bp_still_available', 'bp_specified_for_extraction','rate_obtained','layout_amalgkit',
+            'fastp_duplication_rate', 'fastp_insert_size_peak',]
             + time_keys + spot_keys)
     for key in keys:
         if key=='layout_amalgkit':
             metadata.df.loc[:,key] = ''
-        elif key=='rate_obtained':
+        elif key in ['rate_obtained', 'fastp_duplication_rate', 'fastp_insert_size_peak']:
             metadata.df.loc[:, key] = numpy.nan
         else:
             metadata.df.loc[:,key] = 0

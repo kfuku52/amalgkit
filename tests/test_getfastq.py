@@ -22,6 +22,9 @@ from amalgkit.getfastq import (
     is_2nd_round_needed,
     get_identical_paired_ratio,
     maybe_treat_paired_as_single,
+    parse_fastp_metrics,
+    update_fastp_metrics,
+    write_fastp_stats,
     run_pfd,
     remove_sra_path,
 )
@@ -367,9 +370,13 @@ class TestInitializeColumns:
         assert 'bp_dumped' in m.df.columns
         assert 'rate_obtained' in m.df.columns
         assert 'layout_amalgkit' in m.df.columns
+        assert 'fastp_duplication_rate' in m.df.columns
+        assert 'fastp_insert_size_peak' in m.df.columns
         assert m.df.loc[0, 'bp_until_target_size'] == 1000000
         assert m.df.loc[0, 'bp_dumped'] == 0
         assert m.df.loc[0, 'layout_amalgkit'] == ''
+        assert numpy.isnan(m.df.loc[0, 'fastp_duplication_rate'])
+        assert numpy.isnan(m.df.loc[0, 'fastp_insert_size_peak'])
 
 
 # ---------------------------------------------------------------------------
@@ -389,6 +396,82 @@ class TestIs2ndRoundNeeded:
     def test_custom_tolerance_boundary(self):
         assert not is_2nd_round_needed(rate_obtained_1st=0.95, tol=5.0)
         assert is_2nd_round_needed(rate_obtained_1st=0.9499, tol=5.0)
+
+
+class TestFastpMetrics:
+    def test_parse_fastp_metrics_extracts_duplication_and_insert_size(self):
+        stderr_txt = '\n'.join([
+            'Filtering result:',
+            'reads passed filter: 274442354',
+            'Duplication rate: 22.9565%',
+            'Insert size peak (evaluated by paired-end reads): 138',
+            'JSON report: /dev/null',
+        ])
+        duplication_rate, insert_size_peak = parse_fastp_metrics(stderr_txt)
+        assert duplication_rate == pytest.approx(22.9565)
+        assert insert_size_peak == pytest.approx(138.0)
+
+    def test_parse_fastp_metrics_returns_nan_when_not_present(self):
+        duplication_rate, insert_size_peak = parse_fastp_metrics('no matching lines')
+        assert numpy.isnan(duplication_rate)
+        assert numpy.isnan(insert_size_peak)
+
+    def test_update_fastp_metrics_weighted_average(self):
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001'],
+            'num_fastp_in': [100],
+            'fastp_duplication_rate': [10.0],
+            'fastp_insert_size_peak': [200.0],
+        }))
+        update_fastp_metrics(
+            metadata=metadata,
+            ind_sra=0,
+            current_num_in=300,
+            duplication_rate=20.0,
+            insert_size_peak=100.0,
+        )
+        assert metadata.df.loc[0, 'fastp_duplication_rate'] == pytest.approx(17.5)
+        assert metadata.df.loc[0, 'fastp_insert_size_peak'] == pytest.approx(125.0)
+
+    def test_update_fastp_metrics_sets_initial_values(self):
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001'],
+            'num_fastp_in': [0],
+            'fastp_duplication_rate': [numpy.nan],
+            'fastp_insert_size_peak': [numpy.nan],
+        }))
+        update_fastp_metrics(
+            metadata=metadata,
+            ind_sra=0,
+            current_num_in=50,
+            duplication_rate=33.0,
+            insert_size_peak=222.0,
+        )
+        assert metadata.df.loc[0, 'fastp_duplication_rate'] == pytest.approx(33.0)
+        assert metadata.df.loc[0, 'fastp_insert_size_peak'] == pytest.approx(222.0)
+
+    def test_write_fastp_stats_writes_tsv(self, tmp_path):
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001'],
+            'fastp_duplication_rate': [22.9565],
+            'fastp_insert_size_peak': [138.0],
+            'num_fastp_in': [1000],
+            'num_fastp_out': [900],
+            'bp_fastp_in': [100000],
+            'bp_fastp_out': [90000],
+        }))
+        sra_stat = {'sra_id': 'SRR001'}
+        write_fastp_stats(sra_stat=sra_stat, metadata=metadata, output_dir=str(tmp_path))
+        out_path = tmp_path / 'fastp_stats.tsv'
+        assert out_path.exists()
+        out = pandas.read_csv(out_path, sep='\t')
+        assert out.loc[0, 'run'] == 'SRR001'
+        assert out.loc[0, 'fastp_duplication_rate'] == pytest.approx(22.9565)
+        assert out.loc[0, 'fastp_insert_size_peak'] == pytest.approx(138.0)
+        assert out.loc[0, 'num_fastp_in'] == 1000
+        assert out.loc[0, 'num_fastp_out'] == 900
+        assert out.loc[0, 'bp_fastp_in'] == 100000
+        assert out.loc[0, 'bp_fastp_out'] == 90000
 
 
 class TestIdenticalPairedReads:
