@@ -1,5 +1,13 @@
 ![](logo/logo_amalgkit_large.png)
 
+[![Run Tests](https://github.com/kfuku52/amalgkit/actions/workflows/tests.yml/badge.svg)](https://github.com/kfuku52/amalgkit/actions/workflows/tests.yml)
+[![GitHub release](https://img.shields.io/github/v/tag/kfuku52/amalgkit?label=release)](https://github.com/kfuku52/amalgkit/releases)
+[![Bioconda](https://img.shields.io/conda/vn/bioconda/amalgkit.svg)](https://anaconda.org/bioconda/amalgkit)
+[![Python](https://img.shields.io/badge/python-3.9%20%7C%203.10%20%7C%203.11%20%7C%203.12-blue)](https://github.com/kfuku52/amalgkit)
+[![Platforms](https://img.shields.io/conda/pn/bioconda/amalgkit.svg)](https://anaconda.org/bioconda/amalgkit)
+[![Downloads](https://img.shields.io/conda/dn/bioconda/amalgkit.svg)](https://anaconda.org/bioconda/amalgkit)
+[![License](https://img.shields.io/badge/License-BSD_3--Clause-blue.svg)](https://opensource.org/licenses/BSD-3-Clause)
+
 ## Overview
 **AMALGKIT** ([/əm`ælgkit/](http://ipa-reader.xyz/?text=%C9%99m%60%C3%A6lgkit&voice=Joanna)) is a toolkit to integrate RNA-seq data from [the NCBI SRA database](https://www.ncbi.nlm.nih.gov/sra) and from private fastq files to generate unbiased cross-species transcript abundance dataset for a large-scale evolutionary gene expression analysis.
 
