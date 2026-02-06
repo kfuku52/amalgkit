@@ -251,7 +251,7 @@ draw_multisp_legend = function(df_label) {
     sample_group_color_unique = df_label$sample_group_color[!duplicated(df_label$sample_group_color)]
     sp_color_unique = df_label$sp_color[!duplicated(df_label$sp_color)]
     toumei = rgb(1, 1, 1, 0)
-    legend_text = c('Tissue', as.character(sample_group_unique), "", 'Species', as.character(sp_unique))
+    legend_text = c('Sample group', as.character(sample_group_unique), "", 'Species', as.character(sp_unique))
     legend_bg = c(toumei, sample_group_color_unique, toumei, toumei, rep(toumei, length(sp_color_unique)))
     legend_fg = c(toumei, rep(toumei, length(sample_group_color_unique)), toumei, toumei, sp_color_unique)
     legend_pch = c(1, rep(21, length(sample_group_color_unique)), 1, 1, rep(1, length(sp_color_unique)))
@@ -681,7 +681,7 @@ draw_multisp_boxplot = function(df_metadata, tc_dist_matrix, fontsize = 8) {
     boxplot(tc_dist_matrix[(is_same_sp) & (is_same_sample_group)], at = 4, add = TRUE, col = 'gray', yaxt = 'n')
     labels = c('bw\nbw', 'bw\nwi', 'wi\nbw', 'wi\nwi')
     axis(side = 1, at = c(1, 2, 3, 4), labels = labels, padj = 0.5)
-    axis(side = 1, at = 0.35, labels = 'Group\nSpecies', padj = 0.5, hadj = 1, tick = FALSE)
+    axis(side = 1, at = 0.35, labels = 'Sample group\nSpecies', padj = 0.5, hadj = 1, tick = FALSE)
 }
 
 save_averaged_box_plot = function(averaged_orthologs, df_color_averaged) {
@@ -1018,8 +1018,8 @@ save_delta_pcc_plot = function(directory, plot_title) {
     }
 
     axis(side = 1, at = c(1, 2, 3, 4), labels = c("uncorr.\n", "corr.\n", "uncorr.\n", "corr.\n"), padj = 0.5, tick = FALSE)
-    axis(side = 1, at = 0.35, labels = 'Correction\nSample Group', padj = 0.5, hadj = 1, tick = FALSE)
-    axis(side = 1, at = c(1.5, 3.5), labels = c("\nbetween group", "\nwithin group"), padj = 0.5, tick = FALSE)
+    axis(side = 1, at = 0.35, labels = 'Correction\nSample group', padj = 0.5, hadj = 1, tick = FALSE)
+    axis(side = 1, at = c(1.5, 3.5), labels = c("\nbetween sample group", "\nwithin sample group"), padj = 0.5, tick = FALSE)
     graphics.off()
 }
 
