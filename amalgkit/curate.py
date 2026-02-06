@@ -60,17 +60,17 @@ def run_curate_r_script(args, metadata, sp, input_dir):
             dist_method,
             str(mr_cut),
             '0',
-            str(intermediate),
+            str(int(intermediate)),
             sample_group,
             args.sample_group_color,
             str(args.norm),
-            str(args.one_outlier_per_iter),
+            str(int(args.one_outlier_per_iter)),
             str(correlation_threshold),
             str(args.batch_effect_alg),
-            str(args.clip_negative),
-            str(args.maintain_zero),
+            str(int(args.clip_negative)),
+            str(int(args.maintain_zero)),
             os.path.realpath(r_util_path),
-            str(args.skip_curation)
+            str(int(args.skip_curation))
          ])
     return curate_r_exit_code
 

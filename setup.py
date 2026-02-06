@@ -18,6 +18,13 @@ setup(
     url                     = 'https://github.com/kfuku52/amalgkit.git',
     keywords                = 'transcriptome amalgamation',
     packages                = find_packages(),
+    package_data            = {
+        'amalgkit': [
+            'datasets/yeast/*.fa.gz',
+            'datasets/yeast/*.tsv',
+            'datasets/yeast/*.config',
+        ],
+    },
     install_requires        = ['numpy','pandas','biopython','lxml','ete4'],
     scripts                 = ['amalgkit/amalgkit',],
     include_package_data    = True

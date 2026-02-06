@@ -1182,9 +1182,18 @@ write_table_with_index_name(df = tc_sample_group_uncorrected, file_path = file_n
 
 if (skip_curation_flag == TRUE) {
     cat("No curation requested, finishing early.\n")
+    file_metadata = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".metadata.tsv"))
+    write.table(sra[, colnames(sra) != 'index'], file = file_metadata, sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
+    file_corrected_tc = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".", batch_effect_alg, ".tc.tsv"))
+    write_table_with_index_name(df = tc_tmp, file_path = file_corrected_tc, index_name = 'target_id')
+    file_corrected_mean = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".", batch_effect_alg, ".sample_group.mean.tsv"))
+    write_table_with_index_name(df = tc_sample_group_uncorrected, file_path = file_corrected_mean, index_name = 'target_id')
     cat("Files created: \n")
     cat(file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".uncorrected.tc.tsv")), "\n")
     cat(file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".uncorrected.sample_group.mean.tsv")), "\n")
+    cat(file_corrected_tc, "\n")
+    cat(file_corrected_mean, "\n")
+    cat(file_metadata, "\n")
     cat("Transformation applied: ", transform_method, "\n")
     cat(log_prefix, "Completed.\n")
     quit(save = 'no', status = 0)

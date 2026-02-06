@@ -889,24 +889,36 @@ save_group_cor_scatter = function(df_metadata, font_size = 8) {
     ps[[5]] = ggplot(df_clean, aes(x = corrected_per_uncorrected_max_nongroup_cor, y = corrected_per_uncorrected_group_cor)) +
         xlim(c(improvement_xymin, improvement_xymax)) + ylim(c(improvement_xymin, improvement_xymax))
 
-    for (i in seq_along(ps)) {
-        ps[[i]] = ps[[i]] +
-            geom_point(alpha = alpha_value, na.rm = TRUE) +
-            geom_abline(intercept = 0, slope = 1, linetype = 'dashed', color = 'blue') +
-            theme_bw() +
-            stat_density_2d(bins = 12, linewidth = 0.25, color = 'gray', na.rm = TRUE) +
-            theme(
-                text = element_text(size = font_size),
-                axis.text = element_text(size = font_size),
-                axis.title = element_text(size = font_size),
-                legend.text = element_text(size = font_size),
-                legend.title = element_text(size = font_size)
-            )
-    }
+    base_layers = list(
+        geom_point(alpha = alpha_value, na.rm = TRUE),
+        geom_abline(intercept = 0, slope = 1, linetype = 'dashed', color = 'blue'),
+        theme_bw(),
+        theme(
+            text = element_text(size = font_size),
+            axis.text = element_text(size = font_size),
+            axis.title = element_text(size = font_size),
+            legend.text = element_text(size = font_size),
+            legend.title = element_text(size = font_size)
+        )
+    )
+    density_layer = stat_density_2d(bins = 12, linewidth = 0.25, color = 'gray', na.rm = TRUE)
 
+    # Try with density contours; fall back to scatter-only if density estimation fails
+    for (i in seq_along(ps)) {
+        ps[[i]] = Reduce('+', base_layers, ps[[i]])
+    }
+    ps_with_density = lapply(ps, function(p) p + density_layer)
+    ps_with_density[[6]] = ggplot() + theme_void()
     ps[[6]] = ggplot() + theme_void()
-    combined_plot = wrap_plots(ps)
-    ggsave(filename = "csca_group_cor_scatter.pdf", plot = combined_plot, width = 7.2, height = 4.8)
+
+    combined_plot = wrap_plots(ps_with_density)
+    tryCatch({
+        ggsave(filename = "csca_group_cor_scatter.pdf", plot = combined_plot, width = 7.2, height = 4.8)
+    }, error = function(e) {
+        cat("Density estimation failed (insufficient data points), plotting scatter only.\n")
+        combined_plot = wrap_plots(ps)
+        ggsave(filename = "csca_group_cor_scatter.pdf", plot = combined_plot, width = 7.2, height = 4.8)
+    })
 }
 
 write_pivot_table = function(df_metadata, unaveraged_tcs, selected_sample_groups) {
@@ -1128,16 +1140,16 @@ for (d in c('uncorrected', 'corrected')) {
 }
 cat(nrow(imputed_unaveraged_orthologs[[d]]), 'orthologs were found after filtering and imputation.\n')
 df_metadata = calculate_correlation_within_group(unaveraged_orthologs, averaged_orthologs, df_metadata, selected_sample_groups)
-save_group_cor_scatter(df_metadata, font_size = 8)
-save_group_cor_histogram(df_metadata, font_size = 8)
-save_averaged_tsne_plot(tc = imputed_unaveraged_orthologs[['corrected']], df_label = df_color_unaveraged)
-save_averaged_heatmap_plot(imputed_averaged_orthologs, df_color_averaged)
-save_averaged_dendrogram_plot(imputed_averaged_orthologs, df_color_averaged)
-save_averaged_dimensionality_reduction_summary(imputed_averaged_orthologs, df_color_averaged)
-save_averaged_box_plot(imputed_averaged_orthologs, df_color_averaged)
-df_metadata = save_unaveraged_pca_plot(imputed_unaveraged_orthologs, df_color_unaveraged, df_metadata)
-save_unaveraged_tsne_plot(imputed_unaveraged_orthologs, df_color_unaveraged)
-save_delta_pcc_plot(directory = dir_csca_input_table, plot_title = 'csca_delta_pcc_boxplot.pdf')
+tryCatch(save_group_cor_scatter(df_metadata, font_size = 8), error = function(e) cat("Warning: save_group_cor_scatter skipped:", conditionMessage(e), "\n"))
+tryCatch(save_group_cor_histogram(df_metadata, font_size = 8), error = function(e) cat("Warning: save_group_cor_histogram skipped:", conditionMessage(e), "\n"))
+tryCatch(save_averaged_tsne_plot(tc = imputed_unaveraged_orthologs[['corrected']], df_label = df_color_unaveraged), error = function(e) cat("Warning: save_averaged_tsne_plot skipped:", conditionMessage(e), "\n"))
+tryCatch(save_averaged_heatmap_plot(imputed_averaged_orthologs, df_color_averaged), error = function(e) cat("Warning: save_averaged_heatmap_plot skipped:", conditionMessage(e), "\n"))
+tryCatch(save_averaged_dendrogram_plot(imputed_averaged_orthologs, df_color_averaged), error = function(e) cat("Warning: save_averaged_dendrogram_plot skipped:", conditionMessage(e), "\n"))
+tryCatch(save_averaged_dimensionality_reduction_summary(imputed_averaged_orthologs, df_color_averaged), error = function(e) cat("Warning: save_averaged_dimensionality_reduction_summary skipped:", conditionMessage(e), "\n"))
+tryCatch(save_averaged_box_plot(imputed_averaged_orthologs, df_color_averaged), error = function(e) cat("Warning: save_averaged_box_plot skipped:", conditionMessage(e), "\n"))
+tryCatch({df_metadata = save_unaveraged_pca_plot(imputed_unaveraged_orthologs, df_color_unaveraged, df_metadata)}, error = function(e) cat("Warning: save_unaveraged_pca_plot skipped:", conditionMessage(e), "\n"))
+tryCatch(save_unaveraged_tsne_plot(imputed_unaveraged_orthologs, df_color_unaveraged), error = function(e) cat("Warning: save_unaveraged_tsne_plot skipped:", conditionMessage(e), "\n"))
+tryCatch(save_delta_pcc_plot(directory = dir_csca_input_table, plot_title = 'csca_delta_pcc_boxplot.pdf'), error = function(e) cat("Warning: save_delta_pcc_plot skipped:", conditionMessage(e), "\n"))
 
 file_metadata_out = file.path(dir_csca, 'metadata.tsv')
 write.table(df_metadata, file_metadata_out, row.names = FALSE, sep = '\t', quote = FALSE)

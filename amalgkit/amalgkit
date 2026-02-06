@@ -111,6 +111,14 @@ def command_config(args):
     print('Time elapsed: {:,} sec'.format(int(time.time() - start)))
     sys.stdout.write('amalgkit config: end\n')
 
+def command_dataset(args):
+    sys.stdout.write('amalgkit dataset: start\n')
+    start = time.time()
+    from amalgkit.dataset import dataset_main
+    dataset_main(args)
+    print('Time elapsed: {:,} sec'.format(int(time.time() - start)))
+    sys.stdout.write('amalgkit dataset: end\n')
+
 def command_help(args):
     print(parser.parse_args([args.command, '--help']))
 
@@ -392,6 +400,17 @@ pco.add_argument('--config', metavar='base|test|plantae|vertebrate', default='ba
 pco.add_argument('--overwrite', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
                  help='default=%(default)s: allow to overwrite config files in out_dir/config/config_name/ .')
 pco.set_defaults(handler=command_config)
+
+# Sub parser: dataset
+pda_help = 'Extracting bundled test datasets. See `amalgkit dataset -h`'
+pda = subparsers.add_parser('dataset', help=pda_help, parents=[pp_out])
+pda.add_argument('--name', metavar='yeast|...', default=None, type=str, required=False, action='store',
+                 help='default=%(default)s: Name of the dataset to extract. Use --list to see available datasets.')
+pda.add_argument('--list', default=False, required=False, action='store_true',
+                 help='List available datasets and exit.')
+pda.add_argument('--overwrite', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
+                 help='default=%(default)s: Allow overwriting existing files.')
+pda.set_defaults(handler=command_dataset)
 
 # Sub parser: help
 parser_help = subparsers.add_parser('help', help='Printing help messages')
