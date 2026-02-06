@@ -39,6 +39,8 @@ See [Wiki](https://github.com/kfuku52/amalgkit/wiki) for details.
 
 - [`amalgkit sanity`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-sanity): Checking the integrity of AMALGKIT input and output files
 
+- [`amalgkit dataset`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-dataset): Extracting bundled test datasets
+
 ## Citation
 Although **AMALGKIT** supports novel unpublished functions, some functionalities including metadata curation, expression level quantification, and further curation steps have been described in this paper, in which we reported the transcriptome amalgamation of 21 vertebrate species.
 
