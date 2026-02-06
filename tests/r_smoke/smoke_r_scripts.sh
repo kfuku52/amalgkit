@@ -2,10 +2,14 @@
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
+FIXTURE_DIR="$REPO_DIR/tests/r_smoke/fixtures"
 TMP_ROOT="${1:-$(mktemp -d /tmp/amalgkit_r_smoke.XXXXXX)}"
 
 echo "[r-smoke] repo: $REPO_DIR"
+echo "[r-smoke] fixture: $FIXTURE_DIR"
 echo "[r-smoke] tmp:  $TMP_ROOT"
+
+test -d "$FIXTURE_DIR" || { echo "[r-smoke] ERROR: fixture directory not found: $FIXTURE_DIR"; exit 1; }
 
 run_rscript_checked() {
     local name="$1"
@@ -26,7 +30,7 @@ run_rscript_checked() {
 }
 
 # 1) merge.r smoke
-cp -R "$REPO_DIR/tests/test_pipeline/test_out/merge" "$TMP_ROOT/merge"
+cp -R "$FIXTURE_DIR/merge" "$TMP_ROOT/merge"
 run_rscript_checked \
     merge \
     "$REPO_DIR/amalgkit/merge.r" \
@@ -40,10 +44,10 @@ mkdir -p "$TMP_ROOT/curate_out"
 run_rscript_checked \
     curate \
     "$REPO_DIR/amalgkit/curate.r" \
-    "$REPO_DIR/tests/test_pipeline/test_out/cstmm/Saccharomyces_cerevisiae/Saccharomyces_cerevisiae_cstmm_counts.tsv" \
-    "$REPO_DIR/tests/test_pipeline/test_out/cstmm/metadata.tsv" \
+    "$FIXTURE_DIR/cstmm/Saccharomyces_cerevisiae/Saccharomyces_cerevisiae_cstmm_counts.tsv" \
+    "$FIXTURE_DIR/cstmm/metadata.tsv" \
     "$TMP_ROOT/curate_out" \
-    "$REPO_DIR/tests/test_pipeline/test_out/cstmm/Saccharomyces_cerevisiae/Saccharomyces_cerevisiae_eff_length.tsv" \
+    "$FIXTURE_DIR/cstmm/Saccharomyces_cerevisiae/Saccharomyces_cerevisiae_eff_length.tsv" \
     "pearson" \
     "0.2" \
     "0" \
@@ -61,14 +65,14 @@ run_rscript_checked \
 test -f "$TMP_ROOT/curate_out/curate/Saccharomyces_cerevisiae/tables/Saccharomyces_cerevisiae.no.curation_final_summary.tsv"
 
 # 3) csca.r smoke
-cp -R "$REPO_DIR/tests/test_pipeline/test_out/csca" "$TMP_ROOT/csca"
+cp -R "$FIXTURE_DIR/csca" "$TMP_ROOT/csca"
 run_rscript_checked \
     csca \
     "$REPO_DIR/amalgkit/csca.r" \
     "h2bk119r|wt|ire1-delta|wild_type_genotype" \
     "DEFAULT" \
     "$TMP_ROOT/csca" \
-    "$TMP_ROOT/csca/csca_input_symlinks" \
+    "$TMP_ROOT/csca/csca_input" \
     "$TMP_ROOT/csca/multispecies_busco_table.tsv" \
     "$TMP_ROOT/csca/multispecies_genecount.tsv" \
     "$REPO_DIR/amalgkit/util.r" \
