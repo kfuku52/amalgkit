@@ -3,6 +3,7 @@ import pandas
 import numpy
 import time
 import gzip
+import subprocess
 
 import os
 
@@ -21,6 +22,8 @@ from amalgkit.getfastq import (
     is_2nd_round_needed,
     get_identical_paired_ratio,
     maybe_treat_paired_as_single,
+    run_pfd,
+    remove_sra_path,
 )
 from amalgkit.util import Metadata
 
@@ -474,3 +477,152 @@ class TestIdenticalPairedReads:
         assert os.path.exists(str(read1))
         assert os.path.exists(str(read2))
         assert metadata.df.loc[0, 'layout_amalgkit'] == 'paired'
+
+
+class TestSraRecovery:
+    @staticmethod
+    def _metadata_for_pfd(sra_id):
+        return Metadata.from_DataFrame(pandas.DataFrame({
+            'run': [sra_id],
+            'num_dumped': [0],
+            'num_rejected': [0],
+            'num_written': [0],
+            'bp_dumped': [0],
+            'bp_rejected': [0],
+            'bp_written': [0],
+            'layout_amalgkit': ['paired'],
+        }))
+
+    @staticmethod
+    def _args_for_pfd():
+        class Args:
+            threads = 2
+            min_read_length = 25
+            pfd_print = False
+        return Args()
+
+    def test_remove_sra_path_file_and_directory(self, tmp_path):
+        file_path = tmp_path / 'SRR001.sra'
+        file_path.write_text('dummy')
+        remove_sra_path(str(file_path))
+        assert not file_path.exists()
+
+        dir_path = tmp_path / 'SRR002.sra'
+        (dir_path / 'tbl').mkdir(parents=True)
+        (dir_path / 'tbl' / 'x').write_text('dummy')
+        remove_sra_path(str(dir_path))
+        assert not dir_path.exists()
+
+    def test_run_pfd_retries_once_after_redownload(self, tmp_path, monkeypatch):
+        sra_id = 'SRR001'
+        sra_path = tmp_path / '{}.sra'.format(sra_id)
+        sra_path.mkdir()
+        metadata = self._metadata_for_pfd(sra_id)
+        sra_stat = {
+            'sra_id': sra_id,
+            'getfastq_sra_dir': str(tmp_path),
+            'spot_length': 100,
+            'layout': 'paired',
+        }
+        args = self._args_for_pfd()
+        run_calls = {'count': 0}
+
+        def fake_run(cmd, stdout=None, stderr=None):
+            run_calls['count'] += 1
+            if run_calls['count'] == 1:
+                return subprocess.CompletedProcess(cmd, 1, stdout=b'', stderr=b'pfd failed')
+            stdout_txt = '\n'.join([
+                'Read 10 spots for file',
+                'Rejected 1 READS because of Quality-Filtering',
+                'Written 9 spots for file',
+            ])
+            return subprocess.CompletedProcess(cmd, 0, stdout=stdout_txt.encode('utf8'), stderr=b'')
+
+        redownload_calls = []
+
+        def fake_download_sra(metadata, sra_stat, args, work_dir, overwrite=False):
+            redownload_calls.append(overwrite)
+            with open(os.path.join(work_dir, sra_stat['sra_id'] + '.sra'), 'w') as fh:
+                fh.write('fresh')
+
+        monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
+        monkeypatch.setattr('amalgkit.getfastq.download_sra', fake_download_sra)
+        monkeypatch.setattr('amalgkit.getfastq.detect_layout_from_file', lambda x: x)
+        monkeypatch.setattr('amalgkit.getfastq.remove_unpaired_files', lambda x: None)
+
+        metadata, _ = run_pfd(sra_stat, args, metadata, start=1, end=10)
+        assert run_calls['count'] == 2
+        assert redownload_calls == [True]
+        assert sra_path.is_file()
+        assert metadata.df.loc[0, 'num_dumped'] == 10
+        assert metadata.df.loc[0, 'num_rejected'] == 1
+        assert metadata.df.loc[0, 'num_written'] == 9
+        assert metadata.df.loc[0, 'bp_dumped'] == 1000
+        assert metadata.df.loc[0, 'bp_rejected'] == 100
+        assert metadata.df.loc[0, 'bp_written'] == 900
+
+    def test_run_pfd_exits_when_retry_fails(self, tmp_path, monkeypatch):
+        sra_id = 'SRR001'
+        sra_path = tmp_path / '{}.sra'.format(sra_id)
+        sra_path.write_text('broken')
+        metadata = self._metadata_for_pfd(sra_id)
+        sra_stat = {
+            'sra_id': sra_id,
+            'getfastq_sra_dir': str(tmp_path),
+            'spot_length': 100,
+            'layout': 'paired',
+        }
+        args = self._args_for_pfd()
+        run_calls = {'count': 0}
+
+        def fake_run(cmd, stdout=None, stderr=None):
+            run_calls['count'] += 1
+            return subprocess.CompletedProcess(cmd, 1, stdout=b'', stderr=b'pfd failed')
+
+        redownload_calls = []
+
+        def fake_download_sra(metadata, sra_stat, args, work_dir, overwrite=False):
+            redownload_calls.append(overwrite)
+            with open(os.path.join(work_dir, sra_stat['sra_id'] + '.sra'), 'w') as fh:
+                fh.write('fresh')
+
+        monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
+        monkeypatch.setattr('amalgkit.getfastq.download_sra', fake_download_sra)
+
+        with pytest.raises(SystemExit):
+            run_pfd(sra_stat, args, metadata, start=1, end=10)
+        assert run_calls['count'] == 2
+        assert redownload_calls == [True]
+
+    def test_run_pfd_no_redownload_when_first_attempt_succeeds(self, tmp_path, monkeypatch):
+        sra_id = 'SRR001'
+        metadata = self._metadata_for_pfd(sra_id)
+        sra_stat = {
+            'sra_id': sra_id,
+            'getfastq_sra_dir': str(tmp_path),
+            'spot_length': 100,
+            'layout': 'paired',
+        }
+        args = self._args_for_pfd()
+        run_calls = {'count': 0}
+
+        def fake_run(cmd, stdout=None, stderr=None):
+            run_calls['count'] += 1
+            stdout_txt = '\n'.join([
+                'Read 5 spots for file',
+                'Rejected 0 READS because of Quality-Filtering',
+                'Written 5 spots for file',
+            ])
+            return subprocess.CompletedProcess(cmd, 0, stdout=stdout_txt.encode('utf8'), stderr=b'')
+
+        def fail_download(*_args, **_kwargs):
+            raise AssertionError('download_sra should not be called when pfd succeeds.')
+
+        monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
+        monkeypatch.setattr('amalgkit.getfastq.download_sra', fail_download)
+        monkeypatch.setattr('amalgkit.getfastq.detect_layout_from_file', lambda x: x)
+        monkeypatch.setattr('amalgkit.getfastq.remove_unpaired_files', lambda x: None)
+
+        metadata, _ = run_pfd(sra_stat, args, metadata, start=1, end=5)
+        assert run_calls['count'] == 1
+        assert metadata.df.loc[0, 'num_written'] == 5

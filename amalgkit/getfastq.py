@@ -295,6 +295,16 @@ def check_getfastq_dependency(args):
         assert (test_fp.returncode == 0), "fastp PATH cannot be found: " + args.fastp_exe
     check_seqkit_dependency()
     return None
+
+def remove_sra_path(path_downloaded_sra):
+    if not os.path.lexists(path_downloaded_sra):
+        return
+    print('Removing cached SRA object before retry: {}'.format(path_downloaded_sra))
+    if os.path.isdir(path_downloaded_sra) and (not os.path.islink(path_downloaded_sra)):
+        shutil.rmtree(path_downloaded_sra)
+    else:
+        os.remove(path_downloaded_sra)
+
 def run_pfd(sra_stat, args, metadata, start, end):
     path_downloaded_sra = os.path.join(sra_stat['getfastq_sra_dir'], sra_stat['sra_id'] + '.sra')
     pfd_command = ['parallel-fastq-dump', '-t', str(args.threads), '--minReadLen', str(args.min_read_length),
@@ -306,16 +316,24 @@ def run_pfd(sra_stat, args, metadata, start, end):
     # If sra_stat['sra_id'], not path_downloaded_sra, is provided, pfd couldn't find pre-downloaded .sra files
     # and start downloading it to $HOME/ncbi/public/sra/
     pfd_command = pfd_command + ['-s', path_downloaded_sra]
-    print('Command:', ' '.join(pfd_command))
-    pfd_out = subprocess.run(pfd_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if args.pfd_print:
-        print('parallel-fastq-dump stdout:')
-        print(pfd_out.stdout.decode('utf8'))
-        print('parallel-fastq-dump stderr:')
-        print(pfd_out.stderr.decode('utf8'))
+    def run_pfd_command(prefix='Command'):
+        print('{}: {}'.format(prefix, ' '.join(pfd_command)))
+        pfd_out = subprocess.run(pfd_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if args.pfd_print:
+            print('parallel-fastq-dump stdout:')
+            print(pfd_out.stdout.decode('utf8'))
+            print('parallel-fastq-dump stderr:')
+            print(pfd_out.stderr.decode('utf8'))
+        return pfd_out
+    pfd_out = run_pfd_command(prefix='Command')
     if (pfd_out.returncode != 0):
-        sys.stderr.write("pfd did not finish safely.\n")
-        sys.exit(1)
+        sys.stderr.write("pfd did not finish safely. Removing the cached SRA file and retrying once.\n")
+        remove_sra_path(path_downloaded_sra)
+        download_sra(metadata=metadata, sra_stat=sra_stat, args=args, work_dir=sra_stat['getfastq_sra_dir'], overwrite=True)
+        pfd_out = run_pfd_command(prefix='Retry command')
+        if (pfd_out.returncode != 0):
+            sys.stderr.write("pfd did not finish safely after re-download.\n")
+            sys.exit(1)
     stdout = pfd_out.stdout.decode('utf8')
     nd = [int(line.replace('Read ', '').split(' ')[0]) for line in stdout.split('\n') if line.startswith('Read')]
     nr = [int(line.replace('Rejected ', '').split(' ')[0]) for line in stdout.split('\n') if line.startswith('Rejected')]
