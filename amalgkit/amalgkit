@@ -206,9 +206,11 @@ pge.add_argument('--max_bp', metavar='INT', default='999,999,999,999,999', type=
 pge.add_argument('--min_read_length', metavar='INT', default=25, type=int, required=False, action='store',
                  help='default=%(default)s: Minimum read length.')
 pge.add_argument('--pfd', metavar='yes|no', default='yes', type=strtobool, required=False, action='store',
-                 help='default=%(default)s: Run parallel-fastq-dump.')
+                 help='default=%(default)s: Use parallel-fastq-dump for public SRA extraction. If no, use fastq-dump.')
 pge.add_argument('--pfd_exe', metavar='PATH', default='parallel-fastq-dump', type=str, required=False, action='store',
                  help='default=%(default)s: PATH to parallel-fastq-dump executable.')
+pge.add_argument('--fastq_dump_exe', metavar='PATH', default='fastq-dump', type=str, required=False, action='store',
+                 help='default=%(default)s: PATH to fastq-dump executable (used when --pfd no).')
 pge.add_argument('--prefetch_exe', metavar='PATH', default='prefetch', type=str, required=False, action='store',
                  help='default=%(default)s: PATH to prefetch executable.')
 pge.add_argument('--fastp', metavar='yes|no', default='yes', type=strtobool, required=False, action='store',

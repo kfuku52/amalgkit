@@ -27,6 +27,8 @@ from amalgkit.getfastq import (
     update_fastp_metrics,
     write_fastp_stats,
     run_pfd,
+    run_fastq_dump,
+    check_getfastq_dependency,
     remove_sra_path,
 )
 from amalgkit.util import Metadata
@@ -605,6 +607,16 @@ class TestSraRecovery:
             threads = 2
             min_read_length = 25
             pfd_print = False
+            pfd_exe = 'parallel-fastq-dump'
+        return Args()
+
+    @staticmethod
+    def _args_for_fastq_dump():
+        class Args:
+            threads = 2
+            min_read_length = 25
+            pfd_print = False
+            fastq_dump_exe = 'fastq-dump'
         return Args()
 
     def test_remove_sra_path_file_and_directory(self, tmp_path):
@@ -732,3 +744,139 @@ class TestSraRecovery:
         metadata, _ = run_pfd(sra_stat, args, metadata, start=1, end=5)
         assert run_calls['count'] == 1
         assert metadata.df.loc[0, 'num_written'] == 5
+
+    def test_run_fastq_dump_retries_once_after_redownload(self, tmp_path, monkeypatch):
+        sra_id = 'SRR001'
+        sra_path = tmp_path / '{}.sra'.format(sra_id)
+        sra_path.mkdir()
+        metadata = self._metadata_for_pfd(sra_id)
+        sra_stat = {
+            'sra_id': sra_id,
+            'getfastq_sra_dir': str(tmp_path),
+            'spot_length': 100,
+            'layout': 'paired',
+        }
+        args = self._args_for_fastq_dump()
+        run_calls = {'count': 0}
+
+        def _write_fastq(path, num_reads):
+            with gzip.open(path, 'wt') as fh:
+                for i in range(num_reads):
+                    fh.write('@r{}\n'.format(i))
+                    fh.write('ACGT\n')
+                    fh.write('+\n')
+                    fh.write('IIII\n')
+
+        def fake_run(cmd, stdout=None, stderr=None):
+            run_calls['count'] += 1
+            if run_calls['count'] == 1:
+                return subprocess.CompletedProcess(cmd, 1, stdout=b'', stderr=b'fastq-dump failed')
+            _write_fastq(os.path.join(str(tmp_path), sra_id + '_1.fastq.gz'), 3)
+            _write_fastq(os.path.join(str(tmp_path), sra_id + '_2.fastq.gz'), 3)
+            _write_fastq(os.path.join(str(tmp_path), sra_id + '.fastq.gz'), 1)
+            return subprocess.CompletedProcess(cmd, 0, stdout=b'', stderr=b'')
+
+        redownload_calls = []
+
+        def fake_download_sra(metadata, sra_stat, args, work_dir, overwrite=False):
+            redownload_calls.append(overwrite)
+            with open(os.path.join(work_dir, sra_stat['sra_id'] + '.sra'), 'w') as fh:
+                fh.write('fresh')
+
+        monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
+        monkeypatch.setattr('amalgkit.getfastq.download_sra', fake_download_sra)
+
+        metadata, sra_stat_out = run_fastq_dump(sra_stat, args, metadata, start=1, end=10)
+        assert run_calls['count'] == 2
+        assert redownload_calls == [True]
+        assert sra_path.is_file()
+        assert metadata.df.loc[0, 'num_written'] == 4
+        assert metadata.df.loc[0, 'num_dumped'] == 4
+        assert metadata.df.loc[0, 'num_rejected'] == 0
+        assert metadata.df.loc[0, 'bp_written'] == 400
+        assert metadata.df.loc[0, 'bp_dumped'] == 400
+        assert metadata.df.loc[0, 'bp_rejected'] == 0
+        assert sra_stat_out['layout'] == 'paired'
+        assert os.path.exists(os.path.join(str(tmp_path), sra_id + '_1.fastq.gz'))
+        assert os.path.exists(os.path.join(str(tmp_path), sra_id + '_2.fastq.gz'))
+        assert not os.path.exists(os.path.join(str(tmp_path), sra_id + '.fastq.gz'))
+
+    def test_run_fastq_dump_exits_when_retry_fails(self, tmp_path, monkeypatch):
+        sra_id = 'SRR001'
+        sra_path = tmp_path / '{}.sra'.format(sra_id)
+        sra_path.write_text('broken')
+        metadata = self._metadata_for_pfd(sra_id)
+        sra_stat = {
+            'sra_id': sra_id,
+            'getfastq_sra_dir': str(tmp_path),
+            'spot_length': 100,
+            'layout': 'paired',
+        }
+        args = self._args_for_fastq_dump()
+        run_calls = {'count': 0}
+
+        def fake_run(cmd, stdout=None, stderr=None):
+            run_calls['count'] += 1
+            return subprocess.CompletedProcess(cmd, 1, stdout=b'', stderr=b'fastq-dump failed')
+
+        redownload_calls = []
+
+        def fake_download_sra(metadata, sra_stat, args, work_dir, overwrite=False):
+            redownload_calls.append(overwrite)
+            with open(os.path.join(work_dir, sra_stat['sra_id'] + '.sra'), 'w') as fh:
+                fh.write('fresh')
+
+        monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
+        monkeypatch.setattr('amalgkit.getfastq.download_sra', fake_download_sra)
+
+        with pytest.raises(SystemExit):
+            run_fastq_dump(sra_stat, args, metadata, start=1, end=10)
+        assert run_calls['count'] == 2
+        assert redownload_calls == [True]
+
+
+class TestGetfastqDependencyChecks:
+    def test_pfd_disabled_uses_fastq_dump_and_skips_seqkit_if_not_trinity(self, monkeypatch):
+        class Args:
+            pfd = False
+            pfd_exe = 'parallel-fastq-dump'
+            fastq_dump_exe = 'fastq-dump'
+            fastp = False
+            fastp_exe = 'fastp'
+            read_name = 'default'
+
+        called = {'cmds': []}
+
+        def fake_run(cmd, stdout=None, stderr=None):
+            called['cmds'].append(cmd)
+            return subprocess.CompletedProcess(cmd, 0, stdout=b'', stderr=b'')
+
+        def fail_seqkit():
+            raise AssertionError('check_seqkit_dependency should not be called when read_name is default')
+
+        monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
+        monkeypatch.setattr('amalgkit.getfastq.check_seqkit_dependency', fail_seqkit)
+        check_getfastq_dependency(Args())
+        assert called['cmds'][0][0] == 'fastq-dump'
+
+    def test_trinity_requires_seqkit_dependency_check(self, monkeypatch):
+        class Args:
+            pfd = False
+            pfd_exe = 'parallel-fastq-dump'
+            fastq_dump_exe = 'fastq-dump'
+            fastp = False
+            fastp_exe = 'fastp'
+            read_name = 'trinity'
+
+        called = {'seqkit': 0}
+
+        def fake_run(cmd, stdout=None, stderr=None):
+            return subprocess.CompletedProcess(cmd, 0, stdout=b'', stderr=b'')
+
+        def fake_seqkit():
+            called['seqkit'] += 1
+
+        monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
+        monkeypatch.setattr('amalgkit.getfastq.check_seqkit_dependency', fake_seqkit)
+        check_getfastq_dependency(Args())
+        assert called['seqkit'] == 1

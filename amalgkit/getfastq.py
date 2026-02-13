@@ -291,10 +291,15 @@ def check_getfastq_dependency(args):
         # commented out because prefetch is often not activatable in containers and no longer strictly required for getfastq.
         #test_prefetch = subprocess.run([args.prefetch_exe, '-h'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         #assert (test_prefetch.returncode == 0), "prefetch (SRA toolkit) PATH cannot be found: " + args.prefetch_exe
+    else:
+        fastq_dump_exe = getattr(args, 'fastq_dump_exe', 'fastq-dump')
+        test_fqd = subprocess.run([fastq_dump_exe, '-h'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        assert (test_fqd.returncode == 0), "fastq-dump PATH cannot be found: " + fastq_dump_exe
     if args.fastp:
         test_fp = subprocess.run([args.fastp_exe, '--help'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         assert (test_fp.returncode == 0), "fastp PATH cannot be found: " + args.fastp_exe
-    check_seqkit_dependency()
+    if args.read_name == 'trinity':
+        check_seqkit_dependency()
     return None
 
 def remove_sra_path(path_downloaded_sra):
@@ -308,7 +313,7 @@ def remove_sra_path(path_downloaded_sra):
 
 def run_pfd(sra_stat, args, metadata, start, end):
     path_downloaded_sra = os.path.join(sra_stat['getfastq_sra_dir'], sra_stat['sra_id'] + '.sra')
-    pfd_command = ['parallel-fastq-dump', '-t', str(args.threads), '--minReadLen', str(args.min_read_length),
+    pfd_command = [args.pfd_exe, '-t', str(args.threads), '--minReadLen', str(args.min_read_length),
                    '--qual-filter-1',
                    '--skip-technical', '--split-3', '--clip', '--gzip', '--outdir', sra_stat['getfastq_sra_dir'],
                    '--tmpdir', sra_stat['getfastq_sra_dir']]
@@ -339,6 +344,89 @@ def run_pfd(sra_stat, args, metadata, start, end):
     nd = [int(line.replace('Read ', '').split(' ')[0]) for line in stdout.split('\n') if line.startswith('Read')]
     nr = [int(line.replace('Rejected ', '').split(' ')[0]) for line in stdout.split('\n') if line.startswith('Rejected')]
     nw = [int(line.replace('Written ', '').split(' ')[0]) for line in stdout.split('\n') if line.startswith('Written')]
+    ind_sra = metadata.df.index[metadata.df.loc[:,'run'] == sra_stat['sra_id']].values[0]
+    metadata.df.at[ind_sra,'num_dumped'] += sum(nd)
+    metadata.df.at[ind_sra,'num_rejected'] += sum(nr)
+    metadata.df.at[ind_sra,'num_written'] += sum(nw)
+    metadata.df.at[ind_sra,'bp_dumped'] += sum(nd) * sra_stat['spot_length']
+    metadata.df.at[ind_sra,'bp_rejected'] += sum(nr) * sra_stat['spot_length']
+    metadata.df.at[ind_sra,'bp_written'] += sum(nw) * sra_stat['spot_length']
+    sra_stat = detect_layout_from_file(sra_stat)
+    remove_unpaired_files(sra_stat)
+    metadata.df.at[ind_sra,'layout_amalgkit'] = sra_stat['layout']
+    return metadata,sra_stat
+
+def count_fastq_records(path_fastq):
+    num_lines = 0
+    open_func = gzip.open if path_fastq.endswith('.gz') else open
+    with open_func(path_fastq, 'rt') as f:
+        for _ in f:
+            num_lines += 1
+    if (num_lines % 4) != 0:
+        txt = 'FASTQ line count is not divisible by 4 and may be truncated: {}\n'
+        sys.stderr.write(txt.format(path_fastq))
+    return int(num_lines / 4)
+
+def estimate_num_written_spots_from_fastq(sra_stat):
+    work_dir = sra_stat['getfastq_sra_dir']
+    sra_id = sra_stat['sra_id']
+    single_path = os.path.join(work_dir, sra_id + '.fastq.gz')
+    pair1_path = os.path.join(work_dir, sra_id + '_1.fastq.gz')
+    pair2_path = os.path.join(work_dir, sra_id + '_2.fastq.gz')
+    num_single = count_fastq_records(single_path) if os.path.exists(single_path) else 0
+    num_pair1 = count_fastq_records(pair1_path) if os.path.exists(pair1_path) else 0
+    num_pair2 = count_fastq_records(pair2_path) if os.path.exists(pair2_path) else 0
+    return max(num_pair1, num_pair2) + num_single
+
+def run_fastq_dump(sra_stat, args, metadata, start, end):
+    path_downloaded_sra = os.path.join(sra_stat['getfastq_sra_dir'], sra_stat['sra_id'] + '.sra')
+    fastq_dump_exe = getattr(args, 'fastq_dump_exe', 'fastq-dump')
+    fastq_dump_command = [
+        fastq_dump_exe,
+        '--minSpotId', str(int(start)),
+        '--maxSpotId', str(int(end)),
+        '--minReadLen', str(args.min_read_length),
+        '--qual-filter-1',
+        '--skip-technical',
+        '--split-3',
+        '--clip',
+        '--gzip',
+        '--legacy-report',
+        '--outdir', sra_stat['getfastq_sra_dir'],
+        path_downloaded_sra,
+    ]
+    print('Total sampled bases:', "{:,}".format(sra_stat['spot_length'] * (end - start + 1)), 'bp')
+
+    def run_fastq_dump_command(prefix='Command'):
+        print('{}: {}'.format(prefix, ' '.join(fastq_dump_command)))
+        fqd_out = subprocess.run(fastq_dump_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if args.pfd_print:
+            print('fastq-dump stdout:')
+            print(fqd_out.stdout.decode('utf8'))
+            print('fastq-dump stderr:')
+            print(fqd_out.stderr.decode('utf8'))
+        return fqd_out
+
+    fqd_out = run_fastq_dump_command(prefix='Command')
+    if (fqd_out.returncode != 0):
+        sys.stderr.write("fastq-dump did not finish safely. Removing the cached SRA file and retrying once.\n")
+        remove_sra_path(path_downloaded_sra)
+        download_sra(metadata=metadata, sra_stat=sra_stat, args=args, work_dir=sra_stat['getfastq_sra_dir'], overwrite=True)
+        fqd_out = run_fastq_dump_command(prefix='Retry command')
+        if (fqd_out.returncode != 0):
+            sys.stderr.write("fastq-dump did not finish safely after re-download.\n")
+            sys.exit(1)
+
+    stdout = fqd_out.stdout.decode('utf8')
+    nd = [int(line.replace('Read ', '').split(' ')[0]) for line in stdout.split('\n') if line.startswith('Read')]
+    nr = [int(line.replace('Rejected ', '').split(' ')[0]) for line in stdout.split('\n') if line.startswith('Rejected')]
+    nw = [int(line.replace('Written ', '').split(' ')[0]) for line in stdout.split('\n') if line.startswith('Written')]
+    if len(nw) == 0:
+        nw = [estimate_num_written_spots_from_fastq(sra_stat)]
+    if len(nd) == 0:
+        nd = [sum(nw)]
+    if len(nr) == 0:
+        nr = [0]
     ind_sra = metadata.df.index[metadata.df.loc[:,'run'] == sra_stat['sra_id']].values[0]
     metadata.df.at[ind_sra,'num_dumped'] += sum(nd)
     metadata.df.at[ind_sra,'num_rejected'] += sum(nr)
@@ -753,13 +841,15 @@ def sequence_extraction(args, sra_stat, metadata, g, start, end):
     ind_sra = metadata.df.index[metadata.df.loc[:,'run'] == sra_id].values[0]
     if args.pfd:
         metadata,sra_stat = run_pfd(sra_stat, args, metadata, start, end)
-        metadata, sra_stat = maybe_treat_paired_as_single(
-            sra_stat=sra_stat,
-            metadata=metadata,
-            work_dir=sra_stat['getfastq_sra_dir'],
-        )
-        bp_discarded = metadata.df.at[ind_sra,'bp_dumped'] - metadata.df.at[ind_sra,'bp_written']
-        metadata.df.at[ind_sra,'bp_discarded'] += bp_discarded
+    else:
+        metadata,sra_stat = run_fastq_dump(sra_stat, args, metadata, start, end)
+    metadata, sra_stat = maybe_treat_paired_as_single(
+        sra_stat=sra_stat,
+        metadata=metadata,
+        work_dir=sra_stat['getfastq_sra_dir'],
+    )
+    bp_discarded = metadata.df.at[ind_sra,'bp_dumped'] - metadata.df.at[ind_sra,'bp_written']
+    metadata.df.at[ind_sra,'bp_discarded'] += bp_discarded
     metadata.df.at[ind_sra,'layout_amalgkit'] = sra_stat['layout']
     no_read_written = (metadata.df.loc[(metadata.df.loc[:,'run']==sra_id),'num_written'].values[0]==0)
     if no_read_written:
