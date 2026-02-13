@@ -8,7 +8,7 @@ get_singlecopy_bool_index = function(df_gc, spp_filled, percent_singlecopy_thres
     }
 
     num_sp = length(spp_filled)
-    is_singlecopy = apply(df_gc[, spp_filled], 1, function(x) { is_ge_singlecopy_threshold(x, num_sp, percent_singlecopy_threshold) })
+    is_singlecopy = apply(df_gc[, spp_filled, drop = FALSE], 1, function(x) { is_ge_singlecopy_threshold(x, num_sp, percent_singlecopy_threshold) })
     num_sc = sum(is_singlecopy)
     txt = 'Number of single-copy orthogroups (>=%s percent species) detected for the %s species: %s\n'
     cat(sprintf(txt, percent_singlecopy_threshold, formatC(length(spp_filled), big.mark = ','), formatC(num_sc, big.mark = ',')))

@@ -232,7 +232,13 @@ draw_multisp_mds = function(tc, df_label) {
 }
 
 draw_multisp_tsne = function(tc, df_label) {
-    perplexity = min(30, floor(ncol(tc) / 4), na.rm = TRUE)
+    num_samples = ncol(tc)
+    perplexity = min(30, floor(num_samples / 4), na.rm = TRUE)
+    if ((num_samples < 4) || (!is.finite(perplexity)) || (perplexity <= 0)) {
+        cat('t-SNE skipped: insufficient number of samples.\n')
+        plot(c(0, 1), c(0, 1), ann = F, bty = 'n', type = 'n', xaxt = 'n', yaxt = 'n')
+        return(invisible(NULL))
+    }
     set.seed(1)
     out_tsne = Rtsne(as.matrix(t(tc)), theta = 0, check_duplicates = FALSE, verbose = FALSE, perplexity = perplexity, dims = 2)
     try_out = tryCatch(
@@ -418,12 +424,17 @@ add_color_to_metadata = function(df, selected_sample_groups, sample_group_colors
 
 save_averaged_tsne_plot = function(tc, df_label) {
     cat('Generating averaged t-SNE plot.\n')
-    perplexity = min(30, floor(ncol(tc) / 4), na.rm = TRUE)
+    num_samples = ncol(tc)
+    perplexity = min(30, floor(num_samples / 4), na.rm = TRUE)
+    if ((num_samples < 4) || (!is.finite(perplexity)) || (perplexity <= 0)) {
+        cat('Skipping averaged t-SNE: insufficient number of samples.\n')
+        return()
+    }
     set.seed(1)
     out_tsne = try(Rtsne(as.matrix(t(tc)), theta = 0, check_duplicates = FALSE, verbose = FALSE, perplexity = perplexity, dims = 2))
     if ("try-error" %in% class(out_tsne)) {
         flag_tsne_success = FALSE
-        print(out_tsne)
+        cat("t-SNE failed and will be skipped.\n")
     } else {
         flag_tsne_success = TRUE
     }
@@ -448,15 +459,23 @@ get_pca_coordinates = function(tc, df_label, by = 'species_sample_group') {
     tc_dist_matrix[is.na(tc_dist_matrix)] = 0
     #set.seed(1)
     pca = prcomp(tc_dist_matrix)
+    pca_summary = summary(pca)
+    num_pc_available = ncol(pca[['x']])
     labels = c()
     for (i in 1:5) {
-        labels = c(labels, paste0("Principal component ", i, " (", round(summary(pca)$importance[2, i] * 100, digits = 1), "%)"))
+        if (i <= num_pc_available) {
+            labels = c(labels, paste0("Principal component ", i, " (", round(pca_summary$importance[2, i] * 100, digits = 1), "%)"))
+        } else {
+            labels = c(labels, paste0("Principal component ", i, " (NA%)"))
+        }
     }
-    PC1 = pca[['x']][, 'PC1']
-    PC2 = pca[['x']][, 'PC2']
-    PC3 = pca[['x']][, 'PC3']
-    PC4 = pca[['x']][, 'PC4']
-    PC5 = pca[['x']][, 'PC5']
+    pca_x = pca[['x']]
+    empty_pc = rep(NA_real_, nrow(pca_x))
+    PC1 = if ('PC1' %in% colnames(pca_x)) pca_x[, 'PC1'] else empty_pc
+    PC2 = if ('PC2' %in% colnames(pca_x)) pca_x[, 'PC2'] else empty_pc
+    PC3 = if ('PC3' %in% colnames(pca_x)) pca_x[, 'PC3'] else empty_pc
+    PC4 = if ('PC4' %in% colnames(pca_x)) pca_x[, 'PC4'] else empty_pc
+    PC5 = if ('PC5' %in% colnames(pca_x)) pca_x[, 'PC5'] else empty_pc
     tmp = data.frame(PC1, PC2, PC3, PC4, PC5)
     if (by == 'species_sample_group') {
         df_label[by] = paste0(sub(' ', '_', df_label[['scientific_name']]), '_', df_label[['sample_group']])
@@ -557,7 +576,11 @@ save_unaveraged_pca_plot = function(unaveraged_orthologs, df_color_unaveraged, d
 }
 
 get_tsne_coordinates = function(tc, df_label, by = 'run') {
-    perplexity = min(30, floor(ncol(tc) / 4), na.rm = TRUE)
+    num_samples = ncol(tc)
+    perplexity = min(30, floor(num_samples / 4), na.rm = TRUE)
+    if ((num_samples < 4) || (!is.finite(perplexity)) || (perplexity <= 0)) {
+        return(NULL)
+    }
     set.seed(1)
     out_tsne = Rtsne(as.matrix(t(tc)), theta = 0, check_duplicates = FALSE, verbose = FALSE, perplexity = perplexity, dims = 2)
     tmp = data.frame(tsne1 = out_tsne$Y[, 1], tsne2 = out_tsne$Y[, 2])
@@ -573,6 +596,10 @@ save_unaveraged_tsne_plot = function(unaveraged_orthologs, df_color_unaveraged) 
     names(sample_group_colors) = df_color_uniq[['sample_group']]
     for (d in c('uncorrected', 'corrected')) {
         tmp = get_tsne_coordinates(tc = unaveraged_orthologs[[d]], df_label = df_color_unaveraged)
+        if (is.null(tmp)) {
+            cat(sprintf('Skipping unaveraged t-SNE (%s): insufficient number of samples.\n', d))
+            next
+        }
         pcx = 1
         pcy = 2
         colx = paste0('tsne', pcx)
@@ -1087,7 +1114,7 @@ df_gc[, 'orthogroup_id'] = NULL
 spp_filled = colnames(df_gc)
 
 is_singlecopy = get_singlecopy_bool_index(df_gc, spp_filled)
-df_singleog = df_og[is_singlecopy, spp_filled]
+df_singleog = df_og[is_singlecopy, spp_filled, drop = FALSE]
 spp = sub('_', ' ', spp_filled)
 df_metadata = prepare_metadata_table(dir_csca_input_table, selected_sample_groups, spp)
 label_orders = get_label_orders(df_metadata)
@@ -1103,7 +1130,7 @@ unaveraged_tcs = extract_selected_tc_only(unaveraged_tcs, df_metadata)
 
 # if a species was skipped during load_unaveraged_expression_tables(), it will cause indexing issues down the line, due to df_singleog having more species entries than the tcs
 if (length(unaveraged_tcs[['corrected']]) < length(colnames(df_singleog))) {
-    df_singleog = df_singleog[, names(unaveraged_tcs[['corrected']])]
+    df_singleog = df_singleog[, names(unaveraged_tcs[['corrected']]), drop = FALSE]
 }
 
 unaveraged_orthologs = extract_ortholog_unaveraged_expression_table(df_singleog, unaveraged_tcs)

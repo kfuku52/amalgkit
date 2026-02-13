@@ -579,11 +579,11 @@ def calc_2nd_ranges(metadata):
     spot_lengths = metadata.df.loc[:,'spot_length_amalgkit']
     total_spots = metadata.df.loc[:,'total_spots']
     sra_target_reads = numpy.zeros_like(sra_target_bp)
-    for i in numpy.arange(sra_target_reads.shape[0]):
-        if numpy.isnan(rate_obtained[i]):
-            sra_target_reads[i] = (sra_target_bp[i]/spot_lengths[i]).astype(int)+1 # If no read was extracted in 1st.
+    for i, ind in enumerate(metadata.df.index):
+        if numpy.isnan(rate_obtained.loc[ind]):
+            sra_target_reads[i] = (sra_target_bp.loc[ind]/spot_lengths.loc[ind]).astype(int)+1 # If no read was extracted in 1st.
         else:
-            sra_target_reads[i] = ((sra_target_bp[i]/spot_lengths[i])/rate_obtained[i]).astype(int)+1
+            sra_target_reads[i] = ((sra_target_bp.loc[ind]/spot_lengths.loc[ind])/rate_obtained.loc[ind]).astype(int)+1
     start_2nds = metadata.df.loc[:,'spot_end_1st'] + 1
     end_2nds = start_2nds + sra_target_reads
     pooled_missing_bp = metadata.df.loc[:,'bp_until_target_size'].sum()

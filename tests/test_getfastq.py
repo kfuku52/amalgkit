@@ -19,6 +19,7 @@ from amalgkit.getfastq import (
     remove_intermediate_files,
     is_getfastq_output_present,
     initialize_columns,
+    calc_2nd_ranges,
     is_2nd_round_needed,
     get_identical_paired_ratio,
     maybe_treat_paired_as_single,
@@ -396,6 +397,28 @@ class TestIs2ndRoundNeeded:
     def test_custom_tolerance_boundary(self):
         assert not is_2nd_round_needed(rate_obtained_1st=0.95, tol=5.0)
         assert is_2nd_round_needed(rate_obtained_1st=0.9499, tol=5.0)
+
+
+class TestCalc2ndRanges:
+    def test_non_zero_index_uses_label_based_access(self):
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'bp_until_target_size': [300.0, 600.0, 900.0],
+            'rate_obtained': [0.5, numpy.nan, 1.0],
+            'spot_length_amalgkit': [100.0, 200.0, 300.0],
+            'total_spots': [1000, 1000, 1000],
+            'spot_end_1st': [100, 200, 300],
+        }))
+        metadata.df.index = [10, 20, 30]
+
+        out = calc_2nd_ranges(metadata)
+
+        assert list(out.df.index) == [10, 20, 30]
+        assert out.df.loc[10, 'spot_start_2nd'] == 101
+        assert out.df.loc[20, 'spot_start_2nd'] == 201
+        assert out.df.loc[30, 'spot_start_2nd'] == 301
+        assert out.df.loc[10, 'spot_end_2nd'] == 108
+        assert out.df.loc[20, 'spot_end_2nd'] == 205
+        assert out.df.loc[30, 'spot_end_2nd'] == 305
 
 
 class TestFastpMetrics:

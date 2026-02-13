@@ -118,7 +118,13 @@ add_color_to_curate_metadata = function(sra, selected_sample_groups, sample_grou
     scientific_name_u = sort(unique(scientific_name))
     sample_group = as.character(sra[['sample_group']])
     sample_group_u = selected_sample_groups
-    if (length(sample_group_colors) == 1 && sample_group_colors == "DEFAULT") {
+    is_default_palette = (length(sample_group_colors) == 1) && (sample_group_colors == "DEFAULT")
+    if ((!is_default_palette) && any(is.na(sample_group_colors))) {
+        warning("Detected NA in sample_group_colors; falling back to DEFAULT colors.")
+        sample_group_colors = "DEFAULT"
+        is_default_palette = TRUE
+    }
+    if (is_default_palette) {
         if (length(selected_sample_groups) <= 8) {
             sample_group_color = brewer.pal(8, "Dark2")
             sample_group_color = sample_group_color[1:length(selected_sample_groups)]
@@ -573,7 +579,7 @@ color_children2parent = function(node) {
         child1_color = attributes(node[[1]])[['edgePar']][["col"]]
         child2_color = attributes(node[[2]])[['edgePar']][["col"]]
         if ((!is.null(child1_color)) & (!is.null(child2_color))) {
-            if (child1_color == child2_color) {
+            if ((!is.na(child1_color)) & (!is.na(child2_color)) & identical(child1_color, child2_color)) {
                 attributes(node)[['edgePar']][["col"]] = child1_color
             }
         }
@@ -1285,7 +1291,9 @@ out = sample_group_mean(tc_tmp, sra, selected_sample_groups)
 tc_sample_group_uncorrected = out[['tc_ave']]
 selected_sample_groups = out[['selected_sample_groups']]
 if (length(selected_sample_groups) != length(original_sample_groups)) {
-    sample_group_colors = sample_group_colors[match(selected_sample_groups, original_sample_groups)]
+    if (!(length(sample_group_colors) == 1 && sample_group_colors == "DEFAULT")) {
+        sample_group_colors = sample_group_colors[match(selected_sample_groups, original_sample_groups)]
+    }
 }
 file_name = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".uncorrected.sample_group.mean.tsv"))
 write_table_with_index_name(df = tc_sample_group_uncorrected, file_path = file_name, index_name = 'target_id')
