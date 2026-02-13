@@ -25,13 +25,15 @@ def call_kallisto(args, in_files, metadata, sra_stat, output_dir, index):
             txt = "Library layout: {} and expected 1 input file. " \
                   "Received {} input file[s]. Please check your inputs and metadata."
             raise ValueError(txt.format(lib_layout, len(in_files)))
-        nominal_length = metadata.df.loc[:, 'nominal_length'].values[0]
-        if nominal_length:
-            print('Nominal length in metadata is unusually small ({}). Setting it to 200.'.format(nominal_length))
-            if nominal_length < 200 or numpy.isnan(nominal_length):
-                nominal_length = 200
-        else:
+        is_sra = (metadata.df.loc[:, 'run'] == sra_id)
+        nominal_length_values = metadata.df.loc[is_sra, 'nominal_length'].values
+        nominal_length = nominal_length_values[0] if len(nominal_length_values) else numpy.nan
+        nominal_length = pandas.to_numeric(nominal_length, errors='coerce')
+        if numpy.isnan(nominal_length) or nominal_length <= 0:
             print("Could not find nominal length in metadata. Assuming fragment length.")
+            nominal_length = 200
+        elif nominal_length < 200:
+            print('Nominal length in metadata is unusually small ({}). Setting it to 200.'.format(nominal_length))
             nominal_length = 200
         print("Fragment length set to: {}".format(nominal_length))
         fragment_sd = nominal_length / 10
@@ -46,6 +48,8 @@ def call_kallisto(args, in_files, metadata, sra_stat, output_dir, index):
         print("Paired-end reads detected. Running in paired read mode.")
         kallisto_cmd = ["kallisto", "quant", "--threads", str(args.threads), "-i", index, "-o",
                         output_dir, in_files[0], in_files[1]]
+    else:
+        raise ValueError("Unsupported library layout: {}. Expected 'single' or 'paired'.".format(lib_layout))
 
     print('Command: {}'.format(' '.join(kallisto_cmd)))
     kallisto_out = subprocess.run(kallisto_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -154,7 +158,7 @@ def get_index(args, sci_name):
             if len(fasta_files) > 1:
                 txt = "Found multiple reference fasta files for this species: {}\n"
                 txt += "Please make sure there is only one index file for this species.\n{}"
-                raise ValueError(txt.format(', '.join(sci_name, fasta_files)))
+                raise ValueError(txt.format(sci_name, ', '.join(fasta_files)))
             elif len(fasta_files) == 0:
                 txt = "Could not find reference fasta file for this species: {}\n".format(sci_name)
                 txt += 'If the reference fasta file is correctly placed, the column "scientific_name" of the --metadata file may need to be edited.'

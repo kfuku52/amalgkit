@@ -3,11 +3,12 @@ import itertools
 import numpy
 import gzip
 import pandas
+import shlex
 
 from amalgkit.util import *
 
 import glob
-import lxml
+import xml.etree.ElementTree as ET
 import os
 import re
 import shutil
@@ -19,6 +20,10 @@ from urllib.error import HTTPError
 
 IDENTICAL_PAIRED_RATIO_THRESHOLD = 0.99
 IDENTICAL_PAIRED_CHECKED_READS = 2000
+
+def append_file_binary(src_path, dst_path, chunk_size=1024 * 1024):
+    with open(src_path, 'rb') as src_handle, open(dst_path, 'ab') as dst_handle:
+        shutil.copyfileobj(src_handle, dst_handle, length=chunk_size)
 
 def getfastq_search_term(ncbi_id, additional_search_term=None):
     # https://www.ncbi.nlm.nih.gov/books/NBK49540/
@@ -39,26 +44,27 @@ def getfastq_getxml(search_term, retmax=1000):
     record_ids = sra_record["IdList"]
     num_record = len(record_ids)
     print('Number of SRA records:', num_record)
+    if num_record == 0:
+        return ET.Element('EXPERIMENT_PACKAGE_SET')
     root = None
-    for i in numpy.arange(numpy.ceil(num_record // retmax) + 1):
-        start = int(i * retmax)
-        end = int(((i + 1) * retmax) - 1) if num_record >= int(((i + 1) * retmax) - 1) else num_record
-        print('processing SRA records:', start, '-', end, flush=True)
+    for start in range(0, num_record, retmax):
+        end = min(start + retmax, num_record)
+        print('processing SRA records:', start, '-', end - 1, flush=True)
         try:
             handle = Entrez.efetch(db="sra", id=record_ids[start:end], rettype="full", retmode="xml", retmax=retmax)
         except HTTPError as e:
             print(e, '- Trying Entrez.efetch() again...')
             handle = Entrez.efetch(db="sra", id=record_ids[start:end], rettype="full", retmode="xml", retmax=retmax)
-        chunk = lxml.etree.parse(handle).getroot()
+        chunk = ET.parse(handle).getroot()
         if root is None:
             root = chunk
         else:
             root.append(chunk)
-    xml_string = lxml.etree.tostring(root, pretty_print=True)
-    for line in str(xml_string).split('\n'):
+    xml_string = ET.tostring(root, encoding='unicode')
+    for line in xml_string.split('\n'):
         if '<Error>' in line:
             print(line)
-            raise Exception('\<Error> found in the xml. Search term: '+search_term)
+            raise Exception('<Error> found in the xml. Search term: ' + search_term)
     return root
 
 def get_range(sra_stat, offset, total_sra_bp, max_bp):
@@ -101,9 +107,9 @@ def concat_fastq(args, metadata, output_dir, g):
         print('Only 1 pair of', inext, 'files were detected. No concatenation will happen.', flush=True)
         for infile in infiles:
             if args.id is not None:
-                outfile = args.id + re.sub('.*(_[1-2])', '\g<1>', infile)
+                outfile = args.id + re.sub('.*(_[1-2])', r'\g<1>', infile)
             elif args.id_list is not None:
-                outfile = os.path.basename(args.id_list) + re.sub('.*(_[1-2])', '\g<1>', infile)
+                outfile = os.path.basename(args.id_list) + re.sub('.*(_[1-2])', r'\g<1>', infile)
             if infile != outfile:
                 print('Replacing ID in the output file name:', infile, outfile)
                 infile_path = os.path.join(output_dir, infile)
@@ -129,7 +135,7 @@ def concat_fastq(args, metadata, output_dir, g):
                 infile_path = os.path.join(output_dir, infile)
                 assert os.path.exists(infile_path), 'Dumped fastq not found: ' + infile_path
                 print('Concatenated file:', infile_path, flush=True)
-                os.system('cat "' + infile_path + '" >> "' + outfile_path + '"')
+                append_file_binary(infile_path, outfile_path)
             print('')
         if args.remove_tmp:
             for i in metadata.df.index:
@@ -188,7 +194,6 @@ def remove_intermediate_files(sra_stat, ext, work_dir):
 
 def download_sra(metadata, sra_stat, args, work_dir, overwrite=False):
     path_downloaded_sra = os.path.join(work_dir, sra_stat['sra_id'] + '.sra')
-    individual_sra_tmp_dir = os.path.join(work_dir, sra_stat['sra_id'] + '/')
     if os.path.exists(path_downloaded_sra):
         print('Previously-downloaded sra file was detected at: {}'.format(path_downloaded_sra))
         if (overwrite):
@@ -243,63 +248,29 @@ def download_sra(metadata, sra_stat, args, work_dir, overwrite=False):
         else:
             assert os.path.exists(path_downloaded_sra), 'SRA file download failed: ' + sra_stat['sra_id']
             return
-
-    if not os.path.exists(path_downloaded_sra):
-        print('Trying to download the SRA file using prefetch.')
-        if os.path.exists(individual_sra_tmp_dir):
-            shutil.rmtree(individual_sra_tmp_dir)
-        prefetch_command = [args.prefetch_exe, '--force', 'no', '--max-size', '100G',
-                            '--output-directory', './', str(sra_stat['sra_id'])]
-        print('Command:', ' '.join(prefetch_command))
-        prefetch_out = subprocess.run(prefetch_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        print('prefetch stdout:')
-        print(prefetch_out.stdout.decode('utf8'))
-        print('prefetch stderr:')
-        print(prefetch_out.stderr.decode('utf8'))
-        if (prefetch_out.returncode):
-            sys.stderr.write("prefetch did not finish safely. Trying prefetch again.\n")
-            prefetch_command = [args.prefetch_exe, '--force', 'no', '--max-size', '100G',
-                                sra_stat['sra_id']]
-            prefetch_out = subprocess.run(prefetch_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            print('prefetch stdout:')
-            print(prefetch_out.stdout.decode('utf8'))
-            print('prefetch stderr:')
-            print(prefetch_out.stderr.decode('utf8'))
-            if (prefetch_out.returncode !=0):
-                sys.stderr.write("Again, prefetch did not finish safely.\n")
-    # Move files downloaded by prefetch. This is necessary because absolute path didn't work for prefetch --output-directory
-    if os.path.exists(os.path.join('./', sra_stat['sra_id'] + '/', sra_stat['sra_id'] + '.sra')):
-        subprocess.run(['mv', os.path.join('./', sra_stat['sra_id'] + '/', sra_stat['sra_id'] + '.sra'), path_downloaded_sra],
-                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        shutil.rmtree(os.path.join('./', sra_stat['sra_id'] + '/'))
-    elif os.path.exists(os.path.expanduser(os.path.join('~/ncbi/public/sra/', sra_stat['sra_id'] + '.sra'))):
-        subprocess.run(
-            ['mv', os.path.expanduser(os.path.join('~/ncbi/public/sra/', sra_stat['sra_id'] + '.sra')), path_downloaded_sra],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    # Move files downloaded by ascp
-    if os.path.exists(os.path.join(individual_sra_tmp_dir, sra_stat['sra_id'] + '.sra')):
-        subprocess.run(['mv', os.path.join(individual_sra_tmp_dir, sra_stat['sra_id'] + '.sra'), path_downloaded_sra],
-                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        shutil.rmtree(individual_sra_tmp_dir)
-    err_txt = 'SRA file download failed for {}. Expected PATH: {}'.format(sra_stat['sra_id'], path_downloaded_sra)
-    assert os.path.exists(path_downloaded_sra), err_txt
+    err_txt = 'SRA file download failed for {}. Expected PATH: {}. '
+    err_txt += 'Cloud URL download sources were exhausted and prefetch fallback is obsolete.'
+    assert os.path.exists(path_downloaded_sra), err_txt.format(sra_stat['sra_id'], path_downloaded_sra)
 
 def check_getfastq_dependency(args):
-    if args.pfd:
-        test_pfd = subprocess.run([args.pfd_exe, '-h'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        assert (test_pfd.returncode == 0), "parallel-fastq-dump PATH cannot be found: " + args.pfd_exe
-        # commented out because prefetch is often not activatable in containers and no longer strictly required for getfastq.
-        #test_prefetch = subprocess.run([args.prefetch_exe, '-h'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        #assert (test_prefetch.returncode == 0), "prefetch (SRA toolkit) PATH cannot be found: " + args.prefetch_exe
-    else:
-        fastq_dump_exe = getattr(args, 'fastq_dump_exe', 'fastq-dump')
-        test_fqd = subprocess.run([fastq_dump_exe, '-h'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        assert (test_fqd.returncode == 0), "fastq-dump PATH cannot be found: " + fastq_dump_exe
+    obsolete_pfd = getattr(args, 'obsolete_pfd', getattr(args, 'pfd', None))
+    obsolete_pfd_exe = getattr(args, 'obsolete_pfd_exe', getattr(args, 'pfd_exe', None))
+    obsolete_fastq_dump_exe = getattr(args, 'obsolete_fastq_dump_exe', getattr(args, 'fastq_dump_exe', None))
+    if obsolete_pfd is not None:
+        sys.stderr.write('--pfd is obsolete and ignored. fasterq-dump is always used for extraction.\n')
+    if obsolete_pfd_exe:
+        sys.stderr.write('--pfd_exe is obsolete and ignored.\n')
+    if obsolete_fastq_dump_exe:
+        sys.stderr.write('--fastq_dump_exe is obsolete and ignored.\n')
+    obsolete_prefetch_exe = getattr(args, 'obsolete_prefetch_exe', getattr(args, 'prefetch_exe', None))
+    if obsolete_prefetch_exe:
+        sys.stderr.write('--prefetch_exe is obsolete and ignored.\n')
+    fasterq_dump_exe = getattr(args, 'fasterq_dump_exe', 'fasterq-dump')
+    test_fqd = subprocess.run([fasterq_dump_exe, '-h'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    assert (test_fqd.returncode == 0), "fasterq-dump PATH cannot be found: " + fasterq_dump_exe
     if args.fastp:
         test_fp = subprocess.run([args.fastp_exe, '--help'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         assert (test_fp.returncode == 0), "fastp PATH cannot be found: " + args.fastp_exe
-    if args.read_name == 'trinity':
-        check_seqkit_dependency()
     return None
 
 def remove_sra_path(path_downloaded_sra):
@@ -311,50 +282,14 @@ def remove_sra_path(path_downloaded_sra):
     else:
         os.remove(path_downloaded_sra)
 
-def run_pfd(sra_stat, args, metadata, start, end):
-    path_downloaded_sra = os.path.join(sra_stat['getfastq_sra_dir'], sra_stat['sra_id'] + '.sra')
-    pfd_command = [args.pfd_exe, '-t', str(args.threads), '--minReadLen', str(args.min_read_length),
-                   '--qual-filter-1',
-                   '--skip-technical', '--split-3', '--clip', '--gzip', '--outdir', sra_stat['getfastq_sra_dir'],
-                   '--tmpdir', sra_stat['getfastq_sra_dir']]
-    print('Total sampled bases:', "{:,}".format(sra_stat['spot_length'] * (end - start + 1)), 'bp')
-    pfd_command = pfd_command + ['--minSpotId', str(int(start)), '--maxSpotId', str(int(end))]
-    # If sra_stat['sra_id'], not path_downloaded_sra, is provided, pfd couldn't find pre-downloaded .sra files
-    # and start downloading it to $HOME/ncbi/public/sra/
-    pfd_command = pfd_command + ['-s', path_downloaded_sra]
-    def run_pfd_command(prefix='Command'):
-        print('{}: {}'.format(prefix, ' '.join(pfd_command)))
-        pfd_out = subprocess.run(pfd_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        if args.pfd_print:
-            print('parallel-fastq-dump stdout:')
-            print(pfd_out.stdout.decode('utf8'))
-            print('parallel-fastq-dump stderr:')
-            print(pfd_out.stderr.decode('utf8'))
-        return pfd_out
-    pfd_out = run_pfd_command(prefix='Command')
-    if (pfd_out.returncode != 0):
-        sys.stderr.write("pfd did not finish safely. Removing the cached SRA file and retrying once.\n")
-        remove_sra_path(path_downloaded_sra)
-        download_sra(metadata=metadata, sra_stat=sra_stat, args=args, work_dir=sra_stat['getfastq_sra_dir'], overwrite=True)
-        pfd_out = run_pfd_command(prefix='Retry command')
-        if (pfd_out.returncode != 0):
-            sys.stderr.write("pfd did not finish safely after re-download.\n")
-            sys.exit(1)
-    stdout = pfd_out.stdout.decode('utf8')
-    nd = [int(line.replace('Read ', '').split(' ')[0]) for line in stdout.split('\n') if line.startswith('Read')]
-    nr = [int(line.replace('Rejected ', '').split(' ')[0]) for line in stdout.split('\n') if line.startswith('Rejected')]
-    nw = [int(line.replace('Written ', '').split(' ')[0]) for line in stdout.split('\n') if line.startswith('Written')]
-    ind_sra = metadata.df.index[metadata.df.loc[:,'run'] == sra_stat['sra_id']].values[0]
-    metadata.df.at[ind_sra,'num_dumped'] += sum(nd)
-    metadata.df.at[ind_sra,'num_rejected'] += sum(nr)
-    metadata.df.at[ind_sra,'num_written'] += sum(nw)
-    metadata.df.at[ind_sra,'bp_dumped'] += sum(nd) * sra_stat['spot_length']
-    metadata.df.at[ind_sra,'bp_rejected'] += sum(nr) * sra_stat['spot_length']
-    metadata.df.at[ind_sra,'bp_written'] += sum(nw) * sra_stat['spot_length']
-    sra_stat = detect_layout_from_file(sra_stat)
-    remove_unpaired_files(sra_stat)
-    metadata.df.at[ind_sra,'layout_amalgkit'] = sra_stat['layout']
-    return metadata,sra_stat
+def should_print_getfastq_command_output(args):
+    dump_print = getattr(args, 'dump_print', None)
+    if dump_print is not None:
+        return dump_print
+    legacy_dump_print = getattr(args, 'pfd_print', None)
+    if legacy_dump_print is not None:
+        return legacy_dump_print
+    return True
 
 def count_fastq_records(path_fastq):
     num_lines = 0
@@ -370,63 +305,130 @@ def count_fastq_records(path_fastq):
 def estimate_num_written_spots_from_fastq(sra_stat):
     work_dir = sra_stat['getfastq_sra_dir']
     sra_id = sra_stat['sra_id']
-    single_path = os.path.join(work_dir, sra_id + '.fastq.gz')
-    pair1_path = os.path.join(work_dir, sra_id + '_1.fastq.gz')
-    pair2_path = os.path.join(work_dir, sra_id + '_2.fastq.gz')
-    num_single = count_fastq_records(single_path) if os.path.exists(single_path) else 0
-    num_pair1 = count_fastq_records(pair1_path) if os.path.exists(pair1_path) else 0
-    num_pair2 = count_fastq_records(pair2_path) if os.path.exists(pair2_path) else 0
+    def detect_fastq_path(prefix):
+        for ext in ['.fastq.gz', '.fastq']:
+            path = os.path.join(work_dir, prefix + ext)
+            if os.path.exists(path):
+                return path
+        return None
+    single_path = detect_fastq_path(sra_id)
+    pair1_path = detect_fastq_path(sra_id + '_1')
+    pair2_path = detect_fastq_path(sra_id + '_2')
+    num_single = count_fastq_records(single_path) if single_path is not None else 0
+    num_pair1 = count_fastq_records(pair1_path) if pair1_path is not None else 0
+    num_pair2 = count_fastq_records(pair2_path) if pair2_path is not None else 0
     return max(num_pair1, num_pair2) + num_single
 
-def run_fastq_dump(sra_stat, args, metadata, start, end):
+def trim_fastq_by_spot_range(path_fastq, start, end):
+    if not os.path.exists(path_fastq):
+        return 0
+    start = max(1, int(start))
+    end = max(0, int(end))
+    tmp_path = path_fastq + '.trimtmp'
+    kept = 0
+    spot_index = 0
+    with open(path_fastq, 'rt') as fin, open(tmp_path, 'wt') as fout:
+        while True:
+            line1 = fin.readline()
+            if line1 == '':
+                break
+            line2 = fin.readline()
+            line3 = fin.readline()
+            line4 = fin.readline()
+            if any([line == '' for line in [line2, line3, line4]]):
+                raise Exception('Malformed FASTQ (record truncated): {}'.format(path_fastq))
+            spot_index += 1
+            if spot_index < start:
+                continue
+            if spot_index > end:
+                break
+            fout.write(line1)
+            fout.write(line2)
+            fout.write(line3)
+            fout.write(line4)
+            kept += 1
+    os.replace(tmp_path, path_fastq)
+    return kept
+
+def trim_fasterq_output_files(sra_stat, start, end):
+    work_dir = sra_stat['getfastq_sra_dir']
+    sra_id = sra_stat['sra_id']
+    for suffix in ['', '_1', '_2']:
+        path_fastq = os.path.join(work_dir, sra_id + suffix + '.fastq')
+        trim_fastq_by_spot_range(path_fastq=path_fastq, start=start, end=end)
+
+def compress_fasterq_output_files(sra_stat, args):
+    work_dir = sra_stat['getfastq_sra_dir']
+    sra_id = sra_stat['sra_id']
+    files = list()
+    for suffix in ['', '_1', '_2']:
+        path_fastq = os.path.join(work_dir, sra_id + suffix + '.fastq')
+        if os.path.exists(path_fastq):
+            files.append(path_fastq)
+    if len(files) == 0:
+        return
+    pigz_exe = shutil.which('pigz')
+    def compress_fastq_with_python(path_fastq):
+        path_fastq_gz = path_fastq + '.gz'
+        with open(path_fastq, 'rb') as f_in, gzip.open(path_fastq_gz, 'wb') as f_out:
+            shutil.copyfileobj(f_in, f_out)
+        os.remove(path_fastq)
+    if (pigz_exe is not None) and (args.threads > 1):
+        command = [pigz_exe, '-p', str(args.threads)] + files
+        print('Command:', ' '.join(command))
+        out = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if should_print_getfastq_command_output(args):
+            print('Compression stdout:')
+            print(out.stdout.decode('utf8'))
+            print('Compression stderr:')
+            print(out.stderr.decode('utf8'))
+        if out.returncode != 0:
+            raise Exception('Compression failed.')
+    else:
+        print('Using Python gzip fallback for compression.')
+        for path_fastq in files:
+            print('Compressing: {} -> {}'.format(path_fastq, path_fastq + '.gz'))
+            compress_fastq_with_python(path_fastq)
+
+def run_fasterq_dump(sra_stat, args, metadata, start, end):
     path_downloaded_sra = os.path.join(sra_stat['getfastq_sra_dir'], sra_stat['sra_id'] + '.sra')
-    fastq_dump_exe = getattr(args, 'fastq_dump_exe', 'fastq-dump')
-    fastq_dump_command = [
-        fastq_dump_exe,
-        '--minSpotId', str(int(start)),
-        '--maxSpotId', str(int(end)),
-        '--minReadLen', str(args.min_read_length),
-        '--qual-filter-1',
-        '--skip-technical',
+    fasterq_dump_exe = getattr(args, 'fasterq_dump_exe', 'fasterq-dump')
+    fasterq_dump_command = [
+        fasterq_dump_exe,
         '--split-3',
-        '--clip',
-        '--gzip',
-        '--legacy-report',
-        '--outdir', sra_stat['getfastq_sra_dir'],
+        '--skip-technical',
+        '--min-read-len', str(args.min_read_length),
+        '-e', str(max(1, args.threads)),
+        '-O', sra_stat['getfastq_sra_dir'],
+        '-t', sra_stat['getfastq_sra_dir'],
         path_downloaded_sra,
     ]
     print('Total sampled bases:', "{:,}".format(sra_stat['spot_length'] * (end - start + 1)), 'bp')
 
-    def run_fastq_dump_command(prefix='Command'):
-        print('{}: {}'.format(prefix, ' '.join(fastq_dump_command)))
-        fqd_out = subprocess.run(fastq_dump_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        if args.pfd_print:
-            print('fastq-dump stdout:')
+    def run_fasterq_dump_command(prefix='Command'):
+        print('{}: {}'.format(prefix, ' '.join(fasterq_dump_command)))
+        fqd_out = subprocess.run(fasterq_dump_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if should_print_getfastq_command_output(args):
+            print('fasterq-dump stdout:')
             print(fqd_out.stdout.decode('utf8'))
-            print('fastq-dump stderr:')
+            print('fasterq-dump stderr:')
             print(fqd_out.stderr.decode('utf8'))
         return fqd_out
 
-    fqd_out = run_fastq_dump_command(prefix='Command')
+    fqd_out = run_fasterq_dump_command(prefix='Command')
     if (fqd_out.returncode != 0):
-        sys.stderr.write("fastq-dump did not finish safely. Removing the cached SRA file and retrying once.\n")
+        sys.stderr.write("fasterq-dump did not finish safely. Removing the cached SRA file and retrying once.\n")
         remove_sra_path(path_downloaded_sra)
         download_sra(metadata=metadata, sra_stat=sra_stat, args=args, work_dir=sra_stat['getfastq_sra_dir'], overwrite=True)
-        fqd_out = run_fastq_dump_command(prefix='Retry command')
+        fqd_out = run_fasterq_dump_command(prefix='Retry command')
         if (fqd_out.returncode != 0):
-            sys.stderr.write("fastq-dump did not finish safely after re-download.\n")
+            sys.stderr.write("fasterq-dump did not finish safely after re-download.\n")
             sys.exit(1)
-
-    stdout = fqd_out.stdout.decode('utf8')
-    nd = [int(line.replace('Read ', '').split(' ')[0]) for line in stdout.split('\n') if line.startswith('Read')]
-    nr = [int(line.replace('Rejected ', '').split(' ')[0]) for line in stdout.split('\n') if line.startswith('Rejected')]
-    nw = [int(line.replace('Written ', '').split(' ')[0]) for line in stdout.split('\n') if line.startswith('Written')]
-    if len(nw) == 0:
-        nw = [estimate_num_written_spots_from_fastq(sra_stat)]
-    if len(nd) == 0:
-        nd = [sum(nw)]
-    if len(nr) == 0:
-        nr = [0]
+    trim_fasterq_output_files(sra_stat=sra_stat, start=start, end=end)
+    compress_fasterq_output_files(sra_stat=sra_stat, args=args)
+    nw = [estimate_num_written_spots_from_fastq(sra_stat), ]
+    nd = [sum(nw), ]
+    nr = [0, ]
     ind_sra = metadata.df.index[metadata.df.loc[:,'run'] == sra_stat['sra_id']].values[0]
     metadata.df.at[ind_sra,'num_dumped'] += sum(nd)
     metadata.df.at[ind_sra,'num_rejected'] += sum(nr)
@@ -520,6 +522,37 @@ def parse_fastp_metrics(stderr_txt):
                 insert_size_peak = float(matched.group(1))
     return duplication_rate, insert_size_peak
 
+def parse_fastp_summary_counts(stderr_txt):
+    lines = stderr_txt.split('\n')
+    num_in = []
+    num_out = []
+    bp_in = []
+    bp_out = []
+
+    def _parse_total_line(lines, idx, expected_prefix, section_name):
+        if idx >= len(lines):
+            raise RuntimeError('Unexpected fastp stderr format: missing "{}" in {} section.'.format(expected_prefix, section_name))
+        raw = lines[idx].strip()
+        if not raw.startswith(expected_prefix):
+            raise RuntimeError('Unexpected fastp stderr format: expected "{}" in {} section, got "{}".'.format(
+                expected_prefix, section_name, raw
+            ))
+        value_txt = raw.replace(expected_prefix, '').replace(',', '').strip()
+        try:
+            return int(value_txt)
+        except ValueError as e:
+            raise RuntimeError('Unexpected fastp stderr format: non-integer value "{}" for {}.'.format(value_txt, expected_prefix)) from e
+
+    for i, line in enumerate(lines):
+        if ' before filtering:' in line:
+            num_in.append(_parse_total_line(lines, i + 1, 'total reads:', 'before filtering'))
+            bp_in.append(_parse_total_line(lines, i + 2, 'total bases:', 'before filtering'))
+        if (' after filtering:' in line) or (' aftering filtering:' in line):
+            num_out.append(_parse_total_line(lines, i + 1, 'total reads:', 'after filtering'))
+            bp_out.append(_parse_total_line(lines, i + 2, 'total bases:', 'after filtering'))
+
+    return num_in, num_out, bp_in, bp_out
+
 def update_fastp_metrics(metadata, ind_sra, current_num_in, duplication_rate, insert_size_peak):
     previous_num_in = metadata.df.at[ind_sra, 'num_fastp_in']
     total_num_in = previous_num_in + current_num_in
@@ -559,8 +592,15 @@ def run_fastp(sra_stat, args, output_dir, metadata):
         fastp_thread = 16
     else:
         fastp_thread = args.threads
-    fp_command = ['fastp', '--thread', str(fastp_thread), '--length_required',
-                  str(args.min_read_length)] + args.fastp_option.split(' ')
+    fastp_exe = getattr(args, 'fastp_exe', 'fastp')
+    if args.fastp_option:
+        try:
+            fastp_option_args = shlex.split(args.fastp_option)
+        except ValueError as e:
+            raise ValueError('Invalid --fastp_option string: {}'.format(args.fastp_option)) from e
+    else:
+        fastp_option_args = []
+    fp_command = [fastp_exe, '--thread', str(fastp_thread), '--length_required', str(args.min_read_length)] + fastp_option_args
     if sra_stat['layout'] == 'single':
         infile = os.path.join(output_dir, sra_stat['sra_id'])
         fp_command = fp_command + ['--in1', infile + inext, '--out1', infile + outext]
@@ -571,30 +611,24 @@ def run_fastp(sra_stat, args, output_dir, metadata):
                                    '--out2', infile2 + outext]
     fp_command = [fc for fc in fp_command if fc != '']
     print('Command:', ' '.join(fp_command))
-    try:
-        fp_out = subprocess.run(fp_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    except subprocess.CalledProcessError as e:
-        raise RuntimeError("command '{}' returned with error (code {}): {}".format(e.cmd, e.returncode, e.output))
+    fp_out = subprocess.run(fp_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if args.fastp_print:
         print('fastp stdout:')
         print(fp_out.stdout.decode('utf8'))
         print('fastp stderr:')
         print(fp_out.stderr.decode('utf8'))
+    if fp_out.returncode != 0:
+        raise RuntimeError(
+            'fastp did not finish safely (exit code {}). Command: {}\n{}'.format(
+                fp_out.returncode,
+                ' '.join(fp_command),
+                fp_out.stderr.decode('utf8', errors='replace'),
+            )
+        )
     if args.remove_tmp:
         remove_intermediate_files(sra_stat, ext=inext, work_dir=output_dir)
     fp_stderr = fp_out.stderr.decode('utf8')
-    bps = fp_stderr.split('\n')
-    num_in = list()
-    num_out = list()
-    bp_in = list()
-    bp_out = list()
-    for i in range(len(bps)):
-        if (' before filtering:' in bps[i]):
-            num_in.append(int(bps[i + 1].replace('total reads: ', '')))
-            bp_in.append(int(bps[i + 2].replace('total bases: ', '')))
-        if (' after filtering:' in bps[i]) | (' aftering filtering:' in bps[i]):
-            num_out.append(int(bps[i + 1].replace('total reads: ', '')))
-            bp_out.append(int(bps[i + 2].replace('total bases: ', '')))
+    num_in, num_out, bp_in, bp_out = parse_fastp_summary_counts(fp_stderr)
     ind_sra = metadata.df.index[metadata.df.loc[:,'run'] == sra_stat['sra_id']].values[0]
     current_num_in = sum(num_in)
     duplication_rate, insert_size_peak = parse_fastp_metrics(fp_stderr)
@@ -609,21 +643,35 @@ def run_fastp(sra_stat, args, output_dir, metadata):
 def rename_reads(sra_stat, args, output_dir):
     inext = get_newest_intermediate_file_extension(sra_stat, work_dir=output_dir)
     outext = '.rename.fastq.gz'
-    seqkit_command_base = ['seqkit', 'replace', '--threads', str(args.threads), '--pattern', '[[:space:]].*', ]
+    def open_fastq(path, mode):
+        if path.endswith('.gz'):
+            return gzip.open(path, mode)
+        return open(path, mode)
+
+    def rewrite_headers(infile, outfile, suffix):
+        with open_fastq(infile, 'rt') as fin, open_fastq(outfile, 'wt') as fout:
+            while True:
+                line1 = fin.readline()
+                if line1 == '':
+                    break
+                line2 = fin.readline()
+                line3 = fin.readline()
+                line4 = fin.readline()
+                if any([line == '' for line in [line2, line3, line4]]):
+                    raise Exception('Malformed FASTQ (record truncated): {}'.format(infile))
+                header = line1.rstrip('\n').split()[0]
+                fout.write(header + suffix + '\n')
+                fout.write(line2)
+                fout.write(line3)
+                fout.write(line4)
+
     if sra_stat['layout'] == 'single':
         inbase = os.path.join(output_dir, sra_stat['sra_id'])
         if os.path.exists(inbase + inext):
             infile = inbase + inext
             outfile = inbase + outext
-            seqkit_command = seqkit_command_base + ['--replacement', "'/1'", '--out-file', outfile, infile]
-            print('Command:', ' '.join(seqkit_command))
-            seqkit_out = subprocess.run(seqkit_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            print('SeqKit stdout:')
-            print(seqkit_out.stdout.decode('utf8'))
-            print('SeqKit stderr:')
-            print(seqkit_out.stderr.decode('utf8'))
-            if (seqkit_out.returncode != 0):
-                raise Exception("SeqKit did not finish safely.")
+            print('Rewriting read headers for Trinity format: {} -> {}'.format(infile, outfile))
+            rewrite_headers(infile=infile, outfile=outfile, suffix='/1')
     elif sra_stat['layout'] == 'paired':
         inbase1 = os.path.join(output_dir, sra_stat['sra_id'] + '_1')
         inbase2 = os.path.join(output_dir, sra_stat['sra_id'] + '_2')
@@ -632,22 +680,10 @@ def rename_reads(sra_stat, args, output_dir):
             infile2 = inbase2 + inext
             outfile1 = inbase1 + outext
             outfile2 = inbase2 + outext
-            seqkit_command1 = seqkit_command_base + ['--replacement', '/1', '--out-file', outfile1, infile1]
-            seqkit_command2 = seqkit_command_base + ['--replacement', '/2', '--out-file', outfile2, infile2]
-            print('Command1:', ' '.join(seqkit_command1))
-            print('Command2:', ' '.join(seqkit_command2))
-            seqkit_out1 = subprocess.run(seqkit_command1, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            seqkit_out2 = subprocess.run(seqkit_command2, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            print('SeqKit stdout1:')
-            print(seqkit_out1.stdout.decode('utf8'))
-            print('SeqKit stderr1:')
-            print(seqkit_out1.stderr.decode('utf8'))
-            print('SeqKit stdout2:')
-            print(seqkit_out2.stdout.decode('utf8'))
-            print('SeqKit stderr2:')
-            print(seqkit_out2.stderr.decode('utf8'))
-            if (seqkit_out1.returncode != 0) or (seqkit_out2.returncode != 0):
-                raise Exception("SeqKit did not finish safely.")
+            print('Rewriting read headers for Trinity format: {} -> {}'.format(infile1, outfile1))
+            rewrite_headers(infile=infile1, outfile=outfile1, suffix='/1')
+            print('Rewriting read headers for Trinity format: {} -> {}'.format(infile2, outfile2))
+            rewrite_headers(infile=infile2, outfile=outfile2, suffix='/2')
     if args.remove_tmp:
         remove_intermediate_files(sra_stat, ext=inext, work_dir=output_dir)
 
@@ -711,10 +747,9 @@ def print_read_stats(args, metadata, g, sra_stat=None, individual=False):
     else:
         df = metadata.df.loc[(metadata.df['run']==sra_stat['sra_id']),:]
         print('Individual target size: {:,} bp'.format(g['num_bp_per_sra']))
-    if args.pfd:
-        print('Sum of fastq_dump dumped reads: {:,} bp'.format(df['bp_dumped'].sum()))
-        print('Sum of fastq_dump rejected reads: {:,} bp'.format(df['bp_rejected'].sum()))
-        print('Sum of fastq_dump written reads: {:,} bp'.format(df['bp_written'].sum()))
+    print('Sum of extracted dumped reads: {:,} bp'.format(df['bp_dumped'].sum()))
+    print('Sum of extracted rejected reads: {:,} bp'.format(df['bp_rejected'].sum()))
+    print('Sum of extracted written reads: {:,} bp'.format(df['bp_written'].sum()))
     if args.fastp:
         print('Sum of fastp input reads: {:,} bp'.format(df['bp_fastp_in'].sum()))
         print('Sum of fastp output reads: {:,} bp'.format(df['bp_fastp_out'].sum()))
@@ -722,10 +757,9 @@ def print_read_stats(args, metadata, g, sra_stat=None, individual=False):
         print('Individual SRA IDs:', ' '.join(df['run'].values))
         read_types = list()
         keys = list()
-        if args.pfd:
-            read_types = read_types + ['fastq_dump dumped reads', 'fastq_dump rejected reads',
-                                       'fastq_dump written reads']
-            keys = keys + ['bp_dumped', 'bp_rejected', 'bp_written']
+        read_types = read_types + ['extracted dumped reads', 'extracted rejected reads',
+                                   'extracted written reads']
+        keys = keys + ['bp_dumped', 'bp_rejected', 'bp_written']
         if args.fastp:
             read_types = read_types + ['fastp input reads', 'fastp output reads']
             keys = keys + ['bp_fastp_in', 'bp_fastp_out']
@@ -754,7 +788,12 @@ def getfastq_metadata(args):
     if args.id_list is not None:
         print('--id_list is specified. Downloading SRA metadata from Entrez.')
         Entrez.email = args.entrez_email
-        sra_id_list = [line.rstrip('\n') for line in open(args.id_list) if not line.startswith('#')]
+        with open(args.id_list) as fin:
+            sra_id_list = [
+                line.strip()
+                for line in fin
+                if (line.strip() != '') and (not line.lstrip().startswith('#'))
+            ]
         metadata_dict = dict()
         for sra_id in sra_id_list:
             search_term = getfastq_search_term(sra_id, args.entrez_additional_search_term)
@@ -839,10 +878,7 @@ def initialize_columns(metadata, g):
 def sequence_extraction(args, sra_stat, metadata, g, start, end):
     sra_id = sra_stat['sra_id']
     ind_sra = metadata.df.index[metadata.df.loc[:,'run'] == sra_id].values[0]
-    if args.pfd:
-        metadata,sra_stat = run_pfd(sra_stat, args, metadata, start, end)
-    else:
-        metadata,sra_stat = run_fastq_dump(sra_stat, args, metadata, start, end)
+    metadata,sra_stat = run_fasterq_dump(sra_stat, args, metadata, start, end)
     metadata, sra_stat = maybe_treat_paired_as_single(
         sra_stat=sra_stat,
         metadata=metadata,
@@ -875,7 +911,7 @@ def sequence_extraction(args, sra_stat, metadata, g, start, end):
     return metadata
 
 def sequence_extraction_1st_round(args, sra_stat, metadata, g):
-    offset = 10000  # https://edwards.sdsu.edu/research/fastq-dump/
+    offset = 10000
     ind_sra = metadata.df.index[metadata.df.loc[:,'run'] == sra_stat['sra_id']].values[0]
     metadata.df.at[ind_sra, 'time_start_1st'] = time.time()
     start, end = get_range(sra_stat, offset, g['total_sra_bp'], g['max_bp'])
@@ -929,7 +965,7 @@ def sequence_extraction_2nd_round(args, sra_stat, metadata, g):
         adding_path = os.path.join(sra_stat['getfastq_sra_dir'], sra_id + subext + ext_main)
         assert os.path.exists(added_path), 'Dumped fastq not found: ' + added_path
         assert os.path.exists(adding_path), 'Dumped fastq not found: ' + adding_path
-        os.system('cat "' + adding_path + '" >> "' + added_path + '"')
+        append_file_binary(adding_path, added_path)
         os.remove(adding_path)
         os.rename(added_path, adding_path)
     metadata.df.at[ind_sra, 'time_end_2nd'] = time.time()

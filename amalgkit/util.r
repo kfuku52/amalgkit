@@ -16,6 +16,16 @@ get_singlecopy_bool_index = function(df_gc, spp_filled, percent_singlecopy_thres
 }
 
 impute_expression = function(dat, num_pc = 4) {
+    impute_with_row_mean = function(mat) {
+        row_means = rowMeans(mat, na.rm = TRUE)
+        row_means[is.na(row_means)] = 0
+        for (i in seq_len(nrow(mat))) {
+            if (any(is.na(mat[i, ]))) {
+                mat[i, is.na(mat[i, ])] = row_means[i]
+            }
+        }
+        return(mat)
+    }
     is_all_na_row = apply(dat, 1, function(x) { all(is.na(x)) })
     tmp = dat[!is_all_na_row,]
     txt = 'Number of removed rows with all NA values in the expression matrix: %s\n'
@@ -26,8 +36,32 @@ impute_expression = function(dat, num_pc = 4) {
     num_all = num_sp * num_gene
     txt = 'Imputing %s missing values in a total of %s observations (%s genes x %s samples).\n'
     cat(sprintf(txt, formatC(num_na, big.mark = ','), formatC(num_all, big.mark = ','), formatC(num_gene, big.mark = ','), formatC(num_sp, big.mark = ',')))
-    pc = pcaMethods::pca(tmp, nPcs = num_pc, method = 'ppca')
-    imputed_dat = pcaMethods::completeObs(pc)
+    if ((nrow(tmp) == 0) || (ncol(tmp) == 0)) {
+        cat('No data available for imputation. Returning empty matrix.\n')
+        return(tmp)
+    }
+    max_pc = min(nrow(tmp) - 1, ncol(tmp) - 1)
+    if (is.na(max_pc) || max_pc < 1) {
+        cat('Too few observations for PPCA. Falling back to row-mean imputation.\n')
+        imputed_dat = impute_with_row_mean(tmp)
+    } else {
+        if (num_pc > max_pc) {
+            num_pc = max_pc
+        }
+        pc = tryCatch(
+            pcaMethods::pca(tmp, nPcs = num_pc, method = 'ppca'),
+            error = function(e) {
+                cat('PPCA failed: ', conditionMessage(e), '\n', sep = '')
+                return(NULL)
+            }
+        )
+        if (is.null(pc)) {
+            cat('Falling back to row-mean imputation.\n')
+            imputed_dat = impute_with_row_mean(tmp)
+        } else {
+            imputed_dat = pcaMethods::completeObs(pc)
+        }
+    }
     num_negative = sum(imputed_dat < 0)
     txt = 'Number of negative values clipped to zero in the imputed expression matrix: %s\n'
     cat(sprintf(txt, formatC(num_negative, big.mark = ',')))

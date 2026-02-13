@@ -25,7 +25,7 @@ setup(
             'datasets/yeast/*.config',
         ],
     },
-    install_requires        = ['numpy','pandas','biopython','lxml','ete4'],
+    install_requires        = ['numpy','pandas','biopython','ete4'],
     scripts                 = ['amalgkit/amalgkit',],
     include_package_data    = True
 )

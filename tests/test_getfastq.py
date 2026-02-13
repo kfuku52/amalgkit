@@ -4,17 +4,21 @@ import numpy
 import time
 import gzip
 import subprocess
+import xml.etree.ElementTree as ET
 
 import os
 
 from amalgkit.getfastq import (
     getfastq_search_term,
+    getfastq_getxml,
+    getfastq_metadata,
     get_range,
     get_layout,
     remove_experiment_without_run,
     check_metadata_validity,
     initialize_global_params,
     rename_fastq,
+    rename_reads,
     remove_old_intermediate_files,
     remove_intermediate_files,
     is_getfastq_output_present,
@@ -24,10 +28,12 @@ from amalgkit.getfastq import (
     get_identical_paired_ratio,
     maybe_treat_paired_as_single,
     parse_fastp_metrics,
+    parse_fastp_summary_counts,
     update_fastp_metrics,
     write_fastp_stats,
-    run_pfd,
-    run_fastq_dump,
+    run_fastp,
+    compress_fasterq_output_files,
+    run_fasterq_dump,
     check_getfastq_dependency,
     remove_sra_path,
 )
@@ -45,6 +51,97 @@ class TestGetfastqSearchTerm:
     def test_none_additional(self):
         result = getfastq_search_term('PRJNA1', None)
         assert result == 'PRJNA1'
+
+
+class TestGetfastqXmlRetrieval:
+    class _DummyTree:
+        def __init__(self, root):
+            self._root = root
+
+        def getroot(self):
+            return self._root
+
+    def test_returns_empty_root_when_no_records(self, monkeypatch):
+        monkeypatch.setattr('amalgkit.getfastq.Entrez.esearch', lambda **kwargs: object())
+        monkeypatch.setattr('amalgkit.getfastq.Entrez.read', lambda handle: {'IdList': []})
+        monkeypatch.setattr('amalgkit.getfastq.Entrez.efetch', lambda **kwargs: (_ for _ in ()).throw(AssertionError('efetch should not be called')))
+
+        root = getfastq_getxml(search_term='SRR000000', retmax=1000)
+
+        assert root.tag == 'EXPERIMENT_PACKAGE_SET'
+
+    def test_batches_without_extra_request_on_exact_multiple(self, monkeypatch):
+        id_list = ['ID{}'.format(i) for i in range(2000)]
+        efetch_calls = []
+
+        monkeypatch.setattr('amalgkit.getfastq.Entrez.esearch', lambda **kwargs: object())
+        monkeypatch.setattr('amalgkit.getfastq.Entrez.read', lambda handle: {'IdList': id_list})
+
+        def fake_efetch(**kwargs):
+            efetch_calls.append(list(kwargs['id']))
+            return object()
+
+        monkeypatch.setattr('amalgkit.getfastq.Entrez.efetch', fake_efetch)
+        monkeypatch.setattr(
+            'amalgkit.getfastq.ET.parse',
+            lambda handle: self._DummyTree(ET.Element('EXPERIMENT_PACKAGE'))
+        )
+
+        root = getfastq_getxml(search_term='SRR000000', retmax=1000)
+
+        assert root is not None
+        assert len(efetch_calls) == 2
+        assert [len(c) for c in efetch_calls] == [1000, 1000]
+
+
+class TestGetfastqMetadataIdListParsing:
+    def test_ignores_blank_and_comment_lines(self, tmp_path, monkeypatch):
+        id_list_path = tmp_path / 'ids.txt'
+        id_list_path.write_text('\n'.join([
+            '# comment',
+            'SRR100',
+            '',
+            '   # indented comment',
+            'SRR200  ',
+            '   ',
+        ]))
+
+        called_terms = []
+
+        def fake_getxml(search_term, retmax=1000):
+            called_terms.append(search_term)
+            root = ET.Element('ROOT')
+            root.set('sid', search_term.split(' AND ')[0])
+            return root
+
+        def fake_from_xml(xml_root):
+            sid = xml_root.get('sid')
+            return Metadata.from_DataFrame(pandas.DataFrame({
+                'run': [sid],
+                'lib_layout': ['single'],
+                'scientific_name': ['Testus species'],
+                'total_bases': ['100'],
+                'spot_length': ['50'],
+                'exclusion': ['no'],
+            }))
+
+        class Args:
+            id = None
+            id_list = str(id_list_path)
+            entrez_email = 'test@example.org'
+            entrez_additional_search_term = None
+            layout = 'single'
+            sci_name = None
+            metadata = 'unused'
+            out_dir = str(tmp_path)
+
+        monkeypatch.setattr('amalgkit.getfastq.getfastq_getxml', fake_getxml)
+        monkeypatch.setattr('amalgkit.getfastq.Metadata.from_xml', fake_from_xml)
+
+        metadata = getfastq_metadata(Args())
+
+        assert called_terms == ['SRR100', 'SRR200']
+        assert set(metadata.df['run'].tolist()) == {'SRR100', 'SRR200'}
 
 
 class TestGetRange:
@@ -441,6 +538,15 @@ class TestFastpMetrics:
         assert numpy.isnan(duplication_rate)
         assert numpy.isnan(insert_size_peak)
 
+    def test_parse_fastp_summary_counts_raises_on_truncated_section(self):
+        stderr_txt = '\n'.join([
+            ' before filtering:',
+            'total reads: 10',
+            # missing total bases line
+        ])
+        with pytest.raises(RuntimeError, match='Unexpected fastp stderr format'):
+            parse_fastp_summary_counts(stderr_txt)
+
     def test_update_fastp_metrics_weighted_average(self):
         metadata = Metadata.from_DataFrame(pandas.DataFrame({
             'run': ['SRR001'],
@@ -497,6 +603,119 @@ class TestFastpMetrics:
         assert out.loc[0, 'num_fastp_out'] == 900
         assert out.loc[0, 'bp_fastp_in'] == 100000
         assert out.loc[0, 'bp_fastp_out'] == 90000
+
+
+class TestRunFastp:
+    @staticmethod
+    def _build_metadata():
+        return Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001'],
+            'num_fastp_in': [0],
+            'num_fastp_out': [0],
+            'bp_fastp_in': [0],
+            'bp_fastp_out': [0],
+            'fastp_duplication_rate': [numpy.nan],
+            'fastp_insert_size_peak': [numpy.nan],
+        }))
+
+    def test_uses_configured_fastp_exe_and_shlex_parsing(self, tmp_path, monkeypatch):
+        metadata = self._build_metadata()
+        sra_stat = {'sra_id': 'SRR001', 'layout': 'single'}
+        captured = {}
+
+        class Args:
+            threads = 4
+            min_read_length = 25
+            fastp_option = '--adapter_sequence "A B"'
+            fastp_print = False
+            remove_tmp = False
+            fastp_exe = 'fastp-custom'
+
+        monkeypatch.setattr(
+            'amalgkit.getfastq.get_newest_intermediate_file_extension',
+            lambda sra_stat, work_dir: '.fastq.gz'
+        )
+
+        stderr_txt = '\n'.join([
+            ' before filtering:',
+            'total reads: 10',
+            'total bases: 100',
+            ' after filtering:',
+            'total reads: 8',
+            'total bases: 80',
+            'Duplication rate: 20.0%',
+            'Insert size peak (evaluated by paired-end reads): 150',
+        ]).encode('utf8')
+
+        def fake_run(cmd, stdout=None, stderr=None):
+            captured['cmd'] = cmd
+            return subprocess.CompletedProcess(cmd, 0, stdout=b'', stderr=stderr_txt)
+
+        monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
+
+        run_fastp(sra_stat=sra_stat, args=Args(), output_dir=str(tmp_path), metadata=metadata)
+
+        assert captured['cmd'][0] == 'fastp-custom'
+        assert '--adapter_sequence' in captured['cmd']
+        assert 'A B' in captured['cmd']
+        assert metadata.df.loc[0, 'num_fastp_in'] == 10
+        assert metadata.df.loc[0, 'num_fastp_out'] == 8
+        assert metadata.df.loc[0, 'bp_fastp_in'] == 100
+        assert metadata.df.loc[0, 'bp_fastp_out'] == 80
+
+    def test_raises_when_fastp_exits_nonzero(self, tmp_path, monkeypatch):
+        metadata = self._build_metadata()
+        sra_stat = {'sra_id': 'SRR001', 'layout': 'single'}
+
+        class Args:
+            threads = 1
+            min_read_length = 25
+            fastp_option = ''
+            fastp_print = False
+            remove_tmp = False
+            fastp_exe = 'fastp-custom'
+
+        monkeypatch.setattr(
+            'amalgkit.getfastq.get_newest_intermediate_file_extension',
+            lambda sra_stat, work_dir: '.fastq.gz'
+        )
+
+        def fake_run(cmd, stdout=None, stderr=None):
+            return subprocess.CompletedProcess(cmd, 1, stdout=b'', stderr=b'fastp failed')
+
+        monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
+
+        with pytest.raises(RuntimeError, match='fastp did not finish safely'):
+            run_fastp(sra_stat=sra_stat, args=Args(), output_dir=str(tmp_path), metadata=metadata)
+
+    def test_raises_when_fastp_stderr_is_truncated(self, tmp_path, monkeypatch):
+        metadata = self._build_metadata()
+        sra_stat = {'sra_id': 'SRR001', 'layout': 'single'}
+
+        class Args:
+            threads = 1
+            min_read_length = 25
+            fastp_option = ''
+            fastp_print = False
+            remove_tmp = False
+            fastp_exe = 'fastp-custom'
+
+        monkeypatch.setattr(
+            'amalgkit.getfastq.get_newest_intermediate_file_extension',
+            lambda sra_stat, work_dir: '.fastq.gz'
+        )
+
+        def fake_run(cmd, stdout=None, stderr=None):
+            bad_stderr = '\n'.join([
+                ' before filtering:',
+                'total reads: 10',
+            ]).encode('utf8')
+            return subprocess.CompletedProcess(cmd, 0, stdout=b'', stderr=bad_stderr)
+
+        monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
+
+        with pytest.raises(RuntimeError, match='Unexpected fastp stderr format'):
+            run_fastp(sra_stat=sra_stat, args=Args(), output_dir=str(tmp_path), metadata=metadata)
 
 
 class TestIdenticalPairedReads:
@@ -589,7 +808,7 @@ class TestIdenticalPairedReads:
 
 class TestSraRecovery:
     @staticmethod
-    def _metadata_for_pfd(sra_id):
+    def _metadata_for_extraction(sra_id):
         return Metadata.from_DataFrame(pandas.DataFrame({
             'run': [sra_id],
             'num_dumped': [0],
@@ -602,21 +821,12 @@ class TestSraRecovery:
         }))
 
     @staticmethod
-    def _args_for_pfd():
+    def _args_for_fasterq_dump():
         class Args:
             threads = 2
             min_read_length = 25
-            pfd_print = False
-            pfd_exe = 'parallel-fastq-dump'
-        return Args()
-
-    @staticmethod
-    def _args_for_fastq_dump():
-        class Args:
-            threads = 2
-            min_read_length = 25
-            pfd_print = False
-            fastq_dump_exe = 'fastq-dump'
+            dump_print = False
+            fasterq_dump_exe = 'fasterq-dump'
         return Args()
 
     def test_remove_sra_path_file_and_directory(self, tmp_path):
@@ -631,149 +841,24 @@ class TestSraRecovery:
         remove_sra_path(str(dir_path))
         assert not dir_path.exists()
 
-    def test_run_pfd_retries_once_after_redownload(self, tmp_path, monkeypatch):
+    def test_run_fasterq_dump_retries_once_after_redownload(self, tmp_path, monkeypatch):
         sra_id = 'SRR001'
         sra_path = tmp_path / '{}.sra'.format(sra_id)
         sra_path.mkdir()
-        metadata = self._metadata_for_pfd(sra_id)
+        metadata = self._metadata_for_extraction(sra_id)
         sra_stat = {
             'sra_id': sra_id,
             'getfastq_sra_dir': str(tmp_path),
             'spot_length': 100,
             'layout': 'paired',
         }
-        args = self._args_for_pfd()
+        args = self._args_for_fasterq_dump()
         run_calls = {'count': 0}
 
         def fake_run(cmd, stdout=None, stderr=None):
             run_calls['count'] += 1
             if run_calls['count'] == 1:
-                return subprocess.CompletedProcess(cmd, 1, stdout=b'', stderr=b'pfd failed')
-            stdout_txt = '\n'.join([
-                'Read 10 spots for file',
-                'Rejected 1 READS because of Quality-Filtering',
-                'Written 9 spots for file',
-            ])
-            return subprocess.CompletedProcess(cmd, 0, stdout=stdout_txt.encode('utf8'), stderr=b'')
-
-        redownload_calls = []
-
-        def fake_download_sra(metadata, sra_stat, args, work_dir, overwrite=False):
-            redownload_calls.append(overwrite)
-            with open(os.path.join(work_dir, sra_stat['sra_id'] + '.sra'), 'w') as fh:
-                fh.write('fresh')
-
-        monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
-        monkeypatch.setattr('amalgkit.getfastq.download_sra', fake_download_sra)
-        monkeypatch.setattr('amalgkit.getfastq.detect_layout_from_file', lambda x: x)
-        monkeypatch.setattr('amalgkit.getfastq.remove_unpaired_files', lambda x: None)
-
-        metadata, _ = run_pfd(sra_stat, args, metadata, start=1, end=10)
-        assert run_calls['count'] == 2
-        assert redownload_calls == [True]
-        assert sra_path.is_file()
-        assert metadata.df.loc[0, 'num_dumped'] == 10
-        assert metadata.df.loc[0, 'num_rejected'] == 1
-        assert metadata.df.loc[0, 'num_written'] == 9
-        assert metadata.df.loc[0, 'bp_dumped'] == 1000
-        assert metadata.df.loc[0, 'bp_rejected'] == 100
-        assert metadata.df.loc[0, 'bp_written'] == 900
-
-    def test_run_pfd_exits_when_retry_fails(self, tmp_path, monkeypatch):
-        sra_id = 'SRR001'
-        sra_path = tmp_path / '{}.sra'.format(sra_id)
-        sra_path.write_text('broken')
-        metadata = self._metadata_for_pfd(sra_id)
-        sra_stat = {
-            'sra_id': sra_id,
-            'getfastq_sra_dir': str(tmp_path),
-            'spot_length': 100,
-            'layout': 'paired',
-        }
-        args = self._args_for_pfd()
-        run_calls = {'count': 0}
-
-        def fake_run(cmd, stdout=None, stderr=None):
-            run_calls['count'] += 1
-            return subprocess.CompletedProcess(cmd, 1, stdout=b'', stderr=b'pfd failed')
-
-        redownload_calls = []
-
-        def fake_download_sra(metadata, sra_stat, args, work_dir, overwrite=False):
-            redownload_calls.append(overwrite)
-            with open(os.path.join(work_dir, sra_stat['sra_id'] + '.sra'), 'w') as fh:
-                fh.write('fresh')
-
-        monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
-        monkeypatch.setattr('amalgkit.getfastq.download_sra', fake_download_sra)
-
-        with pytest.raises(SystemExit):
-            run_pfd(sra_stat, args, metadata, start=1, end=10)
-        assert run_calls['count'] == 2
-        assert redownload_calls == [True]
-
-    def test_run_pfd_no_redownload_when_first_attempt_succeeds(self, tmp_path, monkeypatch):
-        sra_id = 'SRR001'
-        metadata = self._metadata_for_pfd(sra_id)
-        sra_stat = {
-            'sra_id': sra_id,
-            'getfastq_sra_dir': str(tmp_path),
-            'spot_length': 100,
-            'layout': 'paired',
-        }
-        args = self._args_for_pfd()
-        run_calls = {'count': 0}
-
-        def fake_run(cmd, stdout=None, stderr=None):
-            run_calls['count'] += 1
-            stdout_txt = '\n'.join([
-                'Read 5 spots for file',
-                'Rejected 0 READS because of Quality-Filtering',
-                'Written 5 spots for file',
-            ])
-            return subprocess.CompletedProcess(cmd, 0, stdout=stdout_txt.encode('utf8'), stderr=b'')
-
-        def fail_download(*_args, **_kwargs):
-            raise AssertionError('download_sra should not be called when pfd succeeds.')
-
-        monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
-        monkeypatch.setattr('amalgkit.getfastq.download_sra', fail_download)
-        monkeypatch.setattr('amalgkit.getfastq.detect_layout_from_file', lambda x: x)
-        monkeypatch.setattr('amalgkit.getfastq.remove_unpaired_files', lambda x: None)
-
-        metadata, _ = run_pfd(sra_stat, args, metadata, start=1, end=5)
-        assert run_calls['count'] == 1
-        assert metadata.df.loc[0, 'num_written'] == 5
-
-    def test_run_fastq_dump_retries_once_after_redownload(self, tmp_path, monkeypatch):
-        sra_id = 'SRR001'
-        sra_path = tmp_path / '{}.sra'.format(sra_id)
-        sra_path.mkdir()
-        metadata = self._metadata_for_pfd(sra_id)
-        sra_stat = {
-            'sra_id': sra_id,
-            'getfastq_sra_dir': str(tmp_path),
-            'spot_length': 100,
-            'layout': 'paired',
-        }
-        args = self._args_for_fastq_dump()
-        run_calls = {'count': 0}
-
-        def _write_fastq(path, num_reads):
-            with gzip.open(path, 'wt') as fh:
-                for i in range(num_reads):
-                    fh.write('@r{}\n'.format(i))
-                    fh.write('ACGT\n')
-                    fh.write('+\n')
-                    fh.write('IIII\n')
-
-        def fake_run(cmd, stdout=None, stderr=None):
-            run_calls['count'] += 1
-            if run_calls['count'] == 1:
-                return subprocess.CompletedProcess(cmd, 1, stdout=b'', stderr=b'fastq-dump failed')
-            _write_fastq(os.path.join(str(tmp_path), sra_id + '_1.fastq.gz'), 3)
-            _write_fastq(os.path.join(str(tmp_path), sra_id + '_2.fastq.gz'), 3)
-            _write_fastq(os.path.join(str(tmp_path), sra_id + '.fastq.gz'), 1)
+                return subprocess.CompletedProcess(cmd, 1, stdout=b'', stderr=b'fasterq-dump failed')
             return subprocess.CompletedProcess(cmd, 0, stdout=b'', stderr=b'')
 
         redownload_calls = []
@@ -785,8 +870,13 @@ class TestSraRecovery:
 
         monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
         monkeypatch.setattr('amalgkit.getfastq.download_sra', fake_download_sra)
+        monkeypatch.setattr('amalgkit.getfastq.trim_fasterq_output_files', lambda *args, **kwargs: None)
+        monkeypatch.setattr('amalgkit.getfastq.compress_fasterq_output_files', lambda *args, **kwargs: None)
+        monkeypatch.setattr('amalgkit.getfastq.estimate_num_written_spots_from_fastq', lambda _s: 4)
+        monkeypatch.setattr('amalgkit.getfastq.detect_layout_from_file', lambda x: x)
+        monkeypatch.setattr('amalgkit.getfastq.remove_unpaired_files', lambda x: None)
 
-        metadata, sra_stat_out = run_fastq_dump(sra_stat, args, metadata, start=1, end=10)
+        metadata, sra_stat_out = run_fasterq_dump(sra_stat, args, metadata, start=1, end=10)
         assert run_calls['count'] == 2
         assert redownload_calls == [True]
         assert sra_path.is_file()
@@ -797,27 +887,24 @@ class TestSraRecovery:
         assert metadata.df.loc[0, 'bp_dumped'] == 400
         assert metadata.df.loc[0, 'bp_rejected'] == 0
         assert sra_stat_out['layout'] == 'paired'
-        assert os.path.exists(os.path.join(str(tmp_path), sra_id + '_1.fastq.gz'))
-        assert os.path.exists(os.path.join(str(tmp_path), sra_id + '_2.fastq.gz'))
-        assert not os.path.exists(os.path.join(str(tmp_path), sra_id + '.fastq.gz'))
 
-    def test_run_fastq_dump_exits_when_retry_fails(self, tmp_path, monkeypatch):
+    def test_run_fasterq_dump_exits_when_retry_fails(self, tmp_path, monkeypatch):
         sra_id = 'SRR001'
         sra_path = tmp_path / '{}.sra'.format(sra_id)
         sra_path.write_text('broken')
-        metadata = self._metadata_for_pfd(sra_id)
+        metadata = self._metadata_for_extraction(sra_id)
         sra_stat = {
             'sra_id': sra_id,
             'getfastq_sra_dir': str(tmp_path),
             'spot_length': 100,
             'layout': 'paired',
         }
-        args = self._args_for_fastq_dump()
+        args = self._args_for_fasterq_dump()
         run_calls = {'count': 0}
 
         def fake_run(cmd, stdout=None, stderr=None):
             run_calls['count'] += 1
-            return subprocess.CompletedProcess(cmd, 1, stdout=b'', stderr=b'fastq-dump failed')
+            return subprocess.CompletedProcess(cmd, 1, stdout=b'', stderr=b'fasterq-dump failed')
 
         redownload_calls = []
 
@@ -830,17 +917,76 @@ class TestSraRecovery:
         monkeypatch.setattr('amalgkit.getfastq.download_sra', fake_download_sra)
 
         with pytest.raises(SystemExit):
-            run_fastq_dump(sra_stat, args, metadata, start=1, end=10)
+            run_fasterq_dump(sra_stat, args, metadata, start=1, end=10)
         assert run_calls['count'] == 2
         assert redownload_calls == [True]
 
+    def test_run_fasterq_dump_no_redownload_when_first_attempt_succeeds(self, tmp_path, monkeypatch):
+        sra_id = 'SRR001'
+        metadata = self._metadata_for_extraction(sra_id)
+        sra_stat = {
+            'sra_id': sra_id,
+            'getfastq_sra_dir': str(tmp_path),
+            'spot_length': 100,
+            'layout': 'paired',
+        }
+        args = self._args_for_fasterq_dump()
+        run_calls = {'count': 0}
+
+        def fake_run(cmd, stdout=None, stderr=None):
+            run_calls['count'] += 1
+            return subprocess.CompletedProcess(cmd, 0, stdout=b'', stderr=b'')
+
+        def fail_download(*_args, **_kwargs):
+            raise AssertionError('download_sra should not be called when first extraction succeeds.')
+
+        monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
+        monkeypatch.setattr('amalgkit.getfastq.download_sra', fail_download)
+        monkeypatch.setattr('amalgkit.getfastq.trim_fasterq_output_files', lambda *args, **kwargs: None)
+        monkeypatch.setattr('amalgkit.getfastq.compress_fasterq_output_files', lambda *args, **kwargs: None)
+        monkeypatch.setattr('amalgkit.getfastq.estimate_num_written_spots_from_fastq', lambda _s: 5)
+        monkeypatch.setattr('amalgkit.getfastq.detect_layout_from_file', lambda x: x)
+        monkeypatch.setattr('amalgkit.getfastq.remove_unpaired_files', lambda x: None)
+
+        metadata, _ = run_fasterq_dump(sra_stat, args, metadata, start=1, end=10)
+        assert run_calls['count'] == 1
+        assert metadata.df.loc[0, 'num_written'] == 5
+        assert metadata.df.loc[0, 'num_dumped'] == 5
+        assert metadata.df.loc[0, 'num_rejected'] == 0
+        assert metadata.df.loc[0, 'bp_written'] == 500
+        assert metadata.df.loc[0, 'bp_dumped'] == 500
+
+    def test_run_fasterq_dump_ignores_written_total_line(self, tmp_path, monkeypatch):
+        sra_id = 'SRR001'
+        metadata = self._metadata_for_extraction(sra_id)
+        sra_stat = {
+            'sra_id': sra_id,
+            'getfastq_sra_dir': str(tmp_path),
+            'spot_length': 100,
+            'layout': 'paired',
+        }
+        args = self._args_for_fasterq_dump()
+
+        def fake_run(cmd, stdout=None, stderr=None):
+            return subprocess.CompletedProcess(cmd, 0, stdout=b'written markers should be ignored', stderr=b'')
+
+        monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
+        monkeypatch.setattr('amalgkit.getfastq.trim_fasterq_output_files', lambda *args, **kwargs: None)
+        monkeypatch.setattr('amalgkit.getfastq.compress_fasterq_output_files', lambda *args, **kwargs: None)
+        monkeypatch.setattr('amalgkit.getfastq.estimate_num_written_spots_from_fastq', lambda _s: 6667)
+        monkeypatch.setattr('amalgkit.getfastq.detect_layout_from_file', lambda x: x)
+        monkeypatch.setattr('amalgkit.getfastq.remove_unpaired_files', lambda x: None)
+
+        metadata, _ = run_fasterq_dump(sra_stat, args, metadata, start=1, end=10)
+        assert metadata.df.loc[0, 'num_written'] == 6667
+        assert metadata.df.loc[0, 'num_dumped'] == 6667
+        assert metadata.df.loc[0, 'num_rejected'] == 0
+
 
 class TestGetfastqDependencyChecks:
-    def test_pfd_disabled_uses_fastq_dump_and_skips_seqkit_if_not_trinity(self, monkeypatch):
+    def test_uses_fasterq_dump_dependency(self, monkeypatch):
         class Args:
-            pfd = False
-            pfd_exe = 'parallel-fastq-dump'
-            fastq_dump_exe = 'fastq-dump'
+            fasterq_dump_exe = 'fasterq-dump'
             fastp = False
             fastp_exe = 'fastp'
             read_name = 'default'
@@ -851,32 +997,114 @@ class TestGetfastqDependencyChecks:
             called['cmds'].append(cmd)
             return subprocess.CompletedProcess(cmd, 0, stdout=b'', stderr=b'')
 
-        def fail_seqkit():
-            raise AssertionError('check_seqkit_dependency should not be called when read_name is default')
+        monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
+        check_getfastq_dependency(Args())
+        assert called['cmds'][0][0] == 'fasterq-dump'
+
+    def test_obsolete_flags_are_ignored_and_still_uses_fasterq_dump(self, monkeypatch):
+        class Args:
+            obsolete_pfd = True
+            obsolete_pfd_exe = '/tmp/legacy_pfd_exe'
+            obsolete_fastq_dump_exe = '/tmp/legacy_fastq_dump_exe'
+            obsolete_prefetch_exe = '/tmp/legacy_prefetch_exe'
+            fasterq_dump_exe = 'fasterq-dump'
+            fastp = False
+            fastp_exe = 'fastp'
+            read_name = 'default'
+
+        called = {'cmds': []}
+
+        def fake_run(cmd, stdout=None, stderr=None):
+            called['cmds'].append(cmd)
+            return subprocess.CompletedProcess(cmd, 0, stdout=b'', stderr=b'')
 
         monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
-        monkeypatch.setattr('amalgkit.getfastq.check_seqkit_dependency', fail_seqkit)
         check_getfastq_dependency(Args())
-        assert called['cmds'][0][0] == 'fastq-dump'
+        assert called['cmds'][0][0] == 'fasterq-dump'
 
-    def test_trinity_requires_seqkit_dependency_check(self, monkeypatch):
+    def test_trinity_mode_uses_same_dependencies(self, monkeypatch):
         class Args:
-            pfd = False
-            pfd_exe = 'parallel-fastq-dump'
-            fastq_dump_exe = 'fastq-dump'
+            fasterq_dump_exe = 'fasterq-dump'
             fastp = False
             fastp_exe = 'fastp'
             read_name = 'trinity'
 
-        called = {'seqkit': 0}
+        called = {'cmds': []}
 
         def fake_run(cmd, stdout=None, stderr=None):
+            called['cmds'].append(cmd)
             return subprocess.CompletedProcess(cmd, 0, stdout=b'', stderr=b'')
 
-        def fake_seqkit():
-            called['seqkit'] += 1
-
         monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
-        monkeypatch.setattr('amalgkit.getfastq.check_seqkit_dependency', fake_seqkit)
         check_getfastq_dependency(Args())
-        assert called['seqkit'] == 1
+        assert called['cmds'][0][0] == 'fasterq-dump'
+
+
+class TestFasterqCompressionFallback:
+    def _write_fastq(self, path, reads):
+        with open(path, 'wt') as out:
+            for i, seq in enumerate(reads):
+                out.write('@r{}\n'.format(i))
+                out.write(seq + '\n')
+                out.write('+\n')
+                out.write('I' * len(seq) + '\n')
+
+    def test_uses_python_gzip_when_pigz_not_available(self, tmp_path, monkeypatch):
+        sra_id = 'SRR999'
+        fastq_path = tmp_path / '{}.fastq'.format(sra_id)
+        self._write_fastq(str(fastq_path), ['ACGT', 'TGCA'])
+
+        class Args:
+            threads = 2
+            dump_print = False
+
+        sra_stat = {
+            'sra_id': sra_id,
+            'getfastq_sra_dir': str(tmp_path),
+        }
+
+        def fail_run(*_args, **_kwargs):
+            raise AssertionError('subprocess.run should not be used when pigz is unavailable.')
+
+        monkeypatch.setattr('amalgkit.getfastq.shutil.which', lambda _x: None)
+        monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fail_run)
+        compress_fasterq_output_files(sra_stat=sra_stat, args=Args())
+
+        gz_path = tmp_path / '{}.fastq.gz'.format(sra_id)
+        assert not fastq_path.exists()
+        assert gz_path.exists()
+        with gzip.open(str(gz_path), 'rt') as f:
+            content = f.read()
+        assert '@r0' in content
+        assert '@r1' in content
+
+
+class TestRenameReadsPythonFallback:
+    def _write_fastq_gz(self, path, headers_and_seqs):
+        with gzip.open(path, 'wt') as out:
+            for header, seq in headers_and_seqs:
+                out.write(header + '\n')
+                out.write(seq + '\n')
+                out.write('+\n')
+                out.write('I' * len(seq) + '\n')
+
+    def test_single_end_trinity_rename(self, tmp_path):
+        sra_id = 'SRR777'
+        in_path = tmp_path / '{}.fastq.gz'.format(sra_id)
+        self._write_fastq_gz(str(in_path), [('@r0 comment', 'ACGT'), ('@r1 x', 'TGCA')])
+        sra_stat = {
+            'sra_id': sra_id,
+            'layout': 'single',
+            'getfastq_sra_dir': str(tmp_path),
+        }
+
+        class Args:
+            threads = 1
+            remove_tmp = False
+
+        rename_reads(sra_stat=sra_stat, args=Args(), output_dir=str(tmp_path))
+        out_path = tmp_path / '{}.rename.fastq.gz'.format(sra_id)
+        assert out_path.exists()
+        with gzip.open(str(out_path), 'rt') as f:
+            lines = [f.readline().rstrip('\n') for _ in range(4)]
+        assert lines[0] == '@r0/1'

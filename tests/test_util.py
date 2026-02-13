@@ -4,7 +4,7 @@ import warnings
 import pytest
 import pandas
 import numpy
-import lxml.etree
+import xml.etree.ElementTree as ET
 
 from amalgkit.util import (
     strtobool,
@@ -156,8 +156,8 @@ class TestMetadataFromXml:
             </Pool>
           </EXPERIMENT_PACKAGE>
         </EXPERIMENT_PACKAGE_SET>"""
-        root = lxml.etree.fromstring(xml_str)
-        tree = lxml.etree.ElementTree(root)
+        root = ET.fromstring(xml_str)
+        tree = ET.ElementTree(root)
         m = Metadata.from_xml(tree)
         assert m.df.shape[0] == 1
         assert m.df.loc[0, 'scientific_name'] == 'Homo sapiens'
@@ -167,8 +167,8 @@ class TestMetadataFromXml:
 
     def test_parse_empty_xml(self):
         xml_str = b"""<EXPERIMENT_PACKAGE_SET></EXPERIMENT_PACKAGE_SET>"""
-        root = lxml.etree.fromstring(xml_str)
-        tree = lxml.etree.ElementTree(root)
+        root = ET.fromstring(xml_str)
+        tree = ET.ElementTree(root)
         m = Metadata.from_xml(tree)
         assert m.df.shape[0] == 0
 
@@ -629,8 +629,8 @@ class TestMetadataFromXmlAttributes:
             </Pool>
           </EXPERIMENT_PACKAGE>
         </EXPERIMENT_PACKAGE_SET>"""
-        root = lxml.etree.fromstring(xml_str)
-        tree = lxml.etree.ElementTree(root)
+        root = ET.fromstring(xml_str)
+        tree = ET.ElementTree(root)
         m = Metadata.from_xml(tree)
         assert m.df.loc[0, 'tissue'] == 'liver'
         assert m.df.loc[0, 'lib_layout'] == 'single'

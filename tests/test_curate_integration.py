@@ -11,14 +11,7 @@ from amalgkit.curate import curate_main
 
 
 REQUIRED_R_PACKAGES = [
-    'pcaMethods',
-    'colorspace',
-    'RColorBrewer',
-    'MASS',
     'NMF',
-    'dendextend',
-    'amap',
-    'pvclust',
     'Rtsne',
     'sva',
 ]

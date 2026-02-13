@@ -1,18 +1,105 @@
 #!/usr/bin/env Rscript
 
-suppressWarnings(suppressPackageStartupMessages(library(pcaMethods, quietly = TRUE)))
-suppressWarnings(suppressPackageStartupMessages(library(colorspace, quietly = TRUE)))
-suppressWarnings(suppressPackageStartupMessages(library(RColorBrewer, quietly = TRUE)))
-suppressWarnings(suppressPackageStartupMessages(library(MASS, quietly = TRUE)))
+rainbow_hcl = function(n, c = 100, l = 65, start = 0, end = 360, alpha = NULL) {
+    if (n <= 0) {
+        return(character(0))
+    }
+    hues = seq(start, end, length.out = n + 1)[1:n]
+    grDevices::hcl(h = hues, c = c, l = l, alpha = alpha, fixup = TRUE)
+}
+
+brewer.pal = function(n, name) {
+    dark2 = c("#1B9E77", "#D95F02", "#7570B3", "#E7298A", "#66A61E", "#E6AB02", "#A6761D", "#666666")
+    paired = c("#A6CEE3", "#1F78B4", "#B2DF8A", "#33A02C", "#FB9A99", "#E31A1C",
+               "#FDBF6F", "#FF7F00", "#CAB2D6", "#6A3D9A", "#FFFF99", "#B15928")
+    palette_values = switch(
+        name,
+        "Dark2" = dark2,
+        "Paired" = paired,
+        stop(paste0("Unsupported palette name: ", name))
+    )
+    if (n <= 0) {
+        stop("n must be positive")
+    }
+    if (n > length(palette_values)) {
+        warning(sprintf("Requested %d colors for %s; truncating to %d.", n, name, length(palette_values)))
+        n = length(palette_values)
+    }
+    palette_values[seq_len(n)]
+}
+
 detected_cores = tryCatch(parallel::detectCores(), error = function(e) NA_integer_)
 if (is.na(detected_cores) && (is.null(getOption("cores")) || is.na(getOption("cores")))) {
     options(cores = 1L)
 }
 suppressWarnings(suppressPackageStartupMessages(library(NMF, quietly = TRUE)))
-suppressWarnings(suppressPackageStartupMessages(library(dendextend, quietly = TRUE)))
-suppressWarnings(suppressPackageStartupMessages(library(amap, quietly = TRUE)))
-suppressWarnings(suppressPackageStartupMessages(library(pvclust, quietly = TRUE)))
 suppressWarnings(suppressPackageStartupMessages(library(Rtsne, quietly = TRUE)))
+
+calc_sample_distance = function(tc, method = 'pearson', na_fill = 1, epsilon = 0) {
+    num_samples = ncol(tc)
+    if (num_samples <= 1) {
+        return(as.dist(matrix(0, nrow = num_samples, ncol = num_samples)))
+    }
+    if (method %in% c('pearson', 'spearman', 'kendall')) {
+        cor_mat = suppressWarnings(cor(tc, method = method, use = 'pairwise.complete.obs'))
+        dist_mat = 1 - cor_mat
+    } else {
+        dist_mat = as.matrix(stats::dist(t(tc), method = method))
+    }
+    dist_mat[!is.finite(dist_mat)] = na_fill
+    dist_mat = (dist_mat + t(dist_mat)) / 2
+    dist_mat = dist_mat + epsilon
+    diag(dist_mat) = 0
+    as.dist(dist_mat)
+}
+
+apply_leaf_label_colors = function(dend, label_colors) {
+    idx = 0
+    dendrapply(dend, function(node) {
+        if (is.leaf(node)) {
+            idx <<- idx + 1
+            if (idx <= length(label_colors)) {
+                node_par = attr(node, "nodePar")
+                if (is.null(node_par)) {
+                    node_par = list()
+                }
+                node_par[['lab.col']] = label_colors[[idx]]
+                attr(node, "nodePar") = node_par
+            }
+        }
+        node
+    })
+}
+
+apply_leaf_edge_colors = function(dend, edge_colors) {
+    idx = 0
+    dendrapply(dend, function(node) {
+        if (is.leaf(node)) {
+            idx <<- idx + 1
+            if (idx <= length(edge_colors)) {
+                edge_par = attr(node, "edgePar")
+                if (is.null(edge_par)) {
+                    edge_par = list()
+                }
+                edge_par[['col']] = edge_colors[[idx]]
+                attr(node, "edgePar") = edge_par
+            }
+        }
+        node
+    })
+}
+
+set_edge_lwd = function(dend, lwd = 1) {
+    dendrapply(dend, function(node) {
+        edge_par = attr(node, "edgePar")
+        if (is.null(edge_par)) {
+            edge_par = list()
+        }
+        edge_par[['lwd']] = lwd
+        attr(node, "edgePar") = edge_par
+        node
+    })
+}
 
 debug_mode = ifelse(length(commandArgs(trailingOnly = TRUE)) == 1, "debug", "batch")
 log_prefix = "transcriptome_curation.r:"
@@ -590,13 +677,12 @@ color_children2parent = function(node) {
 draw_dendrogram = function(sra, tc_dist_dist, fontsize = 7) {
     dend = as.dendrogram(hclust(tc_dist_dist))
     dend_colors = sra[order.dendrogram(dend), 'sample_group_color']
-    labels_colors(dend) = dend_colors
-    dend_labels = sra[order.dendrogram(dend), 'run']
-    dend = color_branches(dend, labels = dend_labels, col = dend_colors)
-    dend = set(dend, "branches_lwd", 1)
+    dend = apply_leaf_label_colors(dend, dend_colors)
+    dend = apply_leaf_edge_colors(dend, dend_colors)
     for (i in 1:ncol(tc)) {
         dend = dendrapply(dend, color_children2parent)
     }
+    dend = set_edge_lwd(dend, lwd = 1)
     cex.xlab = min(fontsize, max(0.2, 0.5 / log10(nrow(sra)), na.rm = TRUE), na.rm = TRUE)
     par(cex = cex.xlab)
     plot(dend, las = 1, axes = FALSE)
@@ -655,31 +741,15 @@ draw_dendrogram_ggplot = function(sra, tc_dist_dist, fontsize = 7) {
 }
 
 draw_dendrogram_pvclust = function(sra, tc, nboot, pvclust_file, fontsize = 7) {
-
-    dist_fun = function(x) {
-        Dist(t(x), method = "pearson")
-    }
-
-    sp = sub(" ", "_", sra[['scientific_name']][1])
-    if (file.exists(pvclust_file)) {
-        if (file.info(pvclust_file)[['size']]) {
-            cat("pvclust intermediate file found.\n")
-            load(pvclust_file)
-        }
-    } else {
-        cat("no pvclust intermediate file found. Start bootstrapping.\n")
-        result = pvclust(tc, method.dist = dist_fun, method.hclust = "average", nboot = nboot, parallel = FALSE)  # UPGMA
-        save(result, file = pvclust_file)
-    }
-    dend = as.dendrogram(result)
+    cat("draw_dendrogram_pvclust(): bootstrap support is deprecated. Using hclust without bootstrap.\n")
+    dend = as.dendrogram(hclust(calc_sample_distance(tc, method = 'pearson'), method = "average"))
     dend_colors = sra[order.dendrogram(dend), 'sample_group_color']
-    labels_colors(dend) = dend_colors
-    dend_labels = sra[order.dendrogram(dend), 'run']
-    dend = color_branches(dend, labels = dend_labels, col = dend_colors)
-    dend = set(dend, "branches_lwd", 2)
+    dend = apply_leaf_label_colors(dend, dend_colors)
+    dend = apply_leaf_edge_colors(dend, dend_colors)
     for (i in 1:ncol(tc)) {
         dend = dendrapply(dend, color_children2parent)
     }
+    dend = set_edge_lwd(dend, lwd = 2)
     cex.xlab = min(0.2 + 1 / log10(fontsize), na.rm = TRUE)
     par(cex = cex.xlab)
     plot(dend, las = 1, ylab = "Distance", cex.axis = 1 / cex.xlab, cex.lab = 1 / cex.xlab)
@@ -696,7 +766,6 @@ draw_dendrogram_pvclust = function(sra, tc, nboot, pvclust_file, fontsize = 7) {
         bg = sra[order.dendrogram(dend), 'sample_group_color'],
         fg = sra[order.dendrogram(dend), 'bp_color']
     )
-    text(result, print.num = FALSE, cex = 1, col.pv = "black")
 }
 
 draw_pca = function(sra, tc_dist_matrix, fontsize = 7) {
@@ -720,19 +789,18 @@ draw_pca = function(sra, tc_dist_matrix, fontsize = 7) {
 }
 
 draw_mds = function(sra, tc_dist_dist, fontsize = 7) {
-    try_out = tryCatch({
-        isoMDS(tc_dist_dist, k = 2, maxit = 100)
+    mds_points = tryCatch({
+        as.matrix(stats::cmdscale(tc_dist_dist, k = 2))
     }, error = function(a) {
-        return("MDS failed.")
+        NULL
     })
-    if (mode(try_out) == "character") {
+    if (is.null(mds_points) || (ncol(mds_points) < 2)) {
         cat("MDS failed.\n")
         plot(c(0, 1), c(0, 1), ann = F, bty = "n", type = "n", xaxt = "n", yaxt = "n")
     } else {
-        mds <- try_out
         plot(
-            mds[['points']][, 1],
-            mds[['points']][, 2],
+            mds_points[, 1],
+            mds_points[, 2],
             pch = 21,
             cex = 2,
             lwd = 1,
@@ -1018,13 +1086,12 @@ save_plot = function(tc, sra, sva_out, dist_method, file, selected_sample_groups
     ##
     tc_dist_matrix = cor(tc, method = dist_method)
     tc_dist_matrix[is.na(tc_dist_matrix)] = 0
-    tc_dist_dist = Dist(t(tc), method = dist_method) + 1e-09
-    tc_dist_dist[is.na(tc_dist_dist)] = 1
+    tc_dist_dist = calc_sample_distance(tc, method = dist_method, na_fill = 1, epsilon = 1e-09)
     par(mar = c(6, 6, 1, 0))
     draw_dendrogram(sra, tc_dist_dist, fontsize)
     par(mar = c(0, 0, 0, 0))
     draw_heatmap(sra, tc_dist_matrix, legend = FALSE)
-    # draw_dendrogram(sra, tc, nboot=1000, cex.xlab=0.6, pvclust_file=paste0(file, '.pvclust.RData'))
+    # draw_dendrogram_pvclust(sra, tc, nboot=0, pvclust_file=NULL, cex.xlab=0.6)
     par(mar = c(4, 4, 0.1, 1))
     draw_pca(sra, tc_dist_matrix, fontsize)
     par(mar = c(4, 4, 0.1, 1))

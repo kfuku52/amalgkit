@@ -2,7 +2,6 @@
 
 suppressWarnings(suppressPackageStartupMessages(library(edgeR, quietly = TRUE)))
 suppressWarnings(suppressPackageStartupMessages(library(ggplot2, quietly = TRUE)))
-suppressWarnings(suppressPackageStartupMessages(library(patchwork, quietly = TRUE)))
 
 mode = ifelse(length(commandArgs(trailingOnly = TRUE)) == 1, 'debug', 'batch')
 
@@ -290,9 +289,13 @@ save_mean_expression_boxplot = function(df_nonzero, cnf_out2, uncorrected, corre
             )
     }
 
-    p = ps[[1]] + ps[[2]]
     filename = file.path(dir_cstmm, 'cstmm_mean_expression_boxplot.pdf')
-    ggsave(file = filename, p, height = 3.6, width = 3.6)
+    grDevices::pdf(file = filename, height = 3.6, width = 3.6)
+    grid::grid.newpage()
+    grid::pushViewport(grid::viewport(layout = grid::grid.layout(nrow = 1, ncol = 2)))
+    print(ps[[1]], vp = grid::viewport(layout.pos.row = 1, layout.pos.col = 1))
+    print(ps[[2]], vp = grid::viewport(layout.pos.row = 1, layout.pos.col = 2))
+    grDevices::dev.off()
 }
 
 save_corrected_output_files = function(uncorrected) {

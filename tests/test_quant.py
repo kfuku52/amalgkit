@@ -1,7 +1,11 @@
 import os
+import subprocess
 import pytest
+import pandas
+from types import SimpleNamespace
 
-from amalgkit.quant import quant_output_exists, check_layout_mismatch
+from amalgkit.quant import quant_output_exists, check_layout_mismatch, get_index, call_kallisto
+from amalgkit.util import Metadata
 
 
 # ---------------------------------------------------------------------------
@@ -44,3 +48,68 @@ class TestCheckLayoutMismatch:
         sra_stat = {'sra_id': 'SRR001', 'layout': 'single'}
         result = check_layout_mismatch(sra_stat, str(tmp_path))
         assert result['layout'] == 'single'
+
+
+class TestQuantEdgeCases:
+    def test_call_kallisto_uses_per_sra_nominal_length(self, tmp_path, monkeypatch):
+        args = SimpleNamespace(threads=1)
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001', 'SRR002'],
+            'nominal_length': [150, 350],
+            'exclusion': ['no', 'no'],
+        }))
+        sra_stat = {'sra_id': 'SRR002', 'layout': 'single'}
+        captured = {}
+
+        def fake_run(cmd, stdout, stderr):
+            captured['cmd'] = cmd
+            return SimpleNamespace(returncode=0, stdout=b'', stderr=b'')
+
+        monkeypatch.setattr(subprocess, 'run', fake_run)
+        call_kallisto(
+            args=args,
+            in_files=['dummy.fastq.gz'],
+            metadata=metadata,
+            sra_stat=sra_stat,
+            output_dir=str(tmp_path),
+            index='dummy.idx',
+        )
+        idx = captured['cmd'].index('-l')
+        assert captured['cmd'][idx + 1] == '350'
+
+    def test_get_index_raises_clear_error_for_multiple_fasta_candidates(self, tmp_path):
+        out_dir = tmp_path / 'out'
+        fasta_dir = tmp_path / 'fasta'
+        index_dir = tmp_path / 'index'
+        out_dir.mkdir()
+        fasta_dir.mkdir()
+        index_dir.mkdir()
+        (fasta_dir / 'Homo_sapiens_a.fa').write_text('>a\nAAAA\n')
+        (fasta_dir / 'Homo_sapiens_b.fasta').write_text('>b\nCCCC\n')
+
+        args = SimpleNamespace(
+            out_dir=str(out_dir),
+            index_dir=str(index_dir),
+            build_index=True,
+            fasta_dir=str(fasta_dir),
+        )
+        with pytest.raises(ValueError, match='Found multiple reference fasta files'):
+            get_index(args, 'Homo_sapiens')
+
+    def test_call_kallisto_rejects_unsupported_layout(self, tmp_path):
+        args = SimpleNamespace(threads=1)
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001'],
+            'nominal_length': [200],
+            'exclusion': ['no'],
+        }))
+        sra_stat = {'sra_id': 'SRR001', 'layout': 'unknown'}
+        with pytest.raises(ValueError, match='Unsupported library layout'):
+            call_kallisto(
+                args=args,
+                in_files=['dummy.fastq.gz'],
+                metadata=metadata,
+                sra_stat=sra_stat,
+                output_dir=str(tmp_path),
+                index='dummy.idx',
+            )

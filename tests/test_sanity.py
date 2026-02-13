@@ -3,7 +3,7 @@ import pytest
 import pandas
 import numpy as np
 
-from amalgkit.sanity import list_duplicates, parse_metadata, check_quant_output, check_quant_index
+from amalgkit.sanity import list_duplicates, parse_metadata, check_quant_output, check_quant_index, check_getfastq_outputs
 from amalgkit.util import Metadata
 
 
@@ -118,6 +118,44 @@ class TestCheckQuantOutput:
         assert avail == []
         # unavail is empty because the code only populates it when quant_path exists
         assert unavail == []
+
+
+# ---------------------------------------------------------------------------
+# check_getfastq_outputs (filesystem checks)
+# ---------------------------------------------------------------------------
+
+class TestCheckGetfastqOutputs:
+    def test_outputs_present(self, tmp_path, sample_metadata):
+        class Args:
+            out_dir = str(tmp_path)
+            getfastq_dir = None
+            metadata = 'metadata.tsv'
+
+        sra_dir = tmp_path / 'getfastq' / 'SRR001'
+        sra_dir.mkdir(parents=True)
+        (sra_dir / 'SRR001_1.fastq.gz').write_text('data')
+        (sra_dir / 'SRR001_2.fastq.gz').write_text('data')
+
+        output_dir = tmp_path / 'sanity'
+        output_dir.mkdir()
+        sra_ids = pandas.Series(['SRR001'])
+        avail, unavail = check_getfastq_outputs(Args(), sra_ids, sample_metadata, str(output_dir))
+        assert avail == ['SRR001']
+        assert unavail == []
+
+    def test_missing_fastq_files(self, tmp_path, sample_metadata):
+        class Args:
+            out_dir = str(tmp_path)
+            getfastq_dir = None
+            metadata = 'metadata.tsv'
+
+        (tmp_path / 'getfastq' / 'SRR001').mkdir(parents=True)
+        output_dir = tmp_path / 'sanity'
+        output_dir.mkdir()
+        sra_ids = pandas.Series(['SRR001'])
+        avail, unavail = check_getfastq_outputs(Args(), sra_ids, sample_metadata, str(output_dir))
+        assert avail == []
+        assert unavail == ['SRR001']
 
 
 # ---------------------------------------------------------------------------

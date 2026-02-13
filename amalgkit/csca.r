@@ -1,21 +1,120 @@
 #!/usr/bin/env Rscript
 
-suppressWarnings(suppressPackageStartupMessages(library(amap, quietly = TRUE)))
-suppressWarnings(suppressPackageStartupMessages(library(RColorBrewer, quietly = TRUE)))
-suppressWarnings(suppressPackageStartupMessages(library(colorspace, quietly = TRUE)))
-suppressWarnings(suppressPackageStartupMessages(library(dendextend, quietly = TRUE)))
+rainbow_hcl = function(n, c = 100, l = 65, start = 0, end = 360, alpha = NULL) {
+    if (n <= 0) {
+        return(character(0))
+    }
+    hues = seq(start, end, length.out = n + 1)[1:n]
+    grDevices::hcl(h = hues, c = c, l = l, alpha = alpha, fixup = TRUE)
+}
+
+brewer.pal = function(n, name) {
+    dark2 = c("#1B9E77", "#D95F02", "#7570B3", "#E7298A", "#66A61E", "#E6AB02", "#A6761D", "#666666")
+    paired = c("#A6CEE3", "#1F78B4", "#B2DF8A", "#33A02C", "#FB9A99", "#E31A1C",
+               "#FDBF6F", "#FF7F00", "#CAB2D6", "#6A3D9A", "#FFFF99", "#B15928")
+    palette_values = switch(
+        name,
+        "Dark2" = dark2,
+        "Paired" = paired,
+        stop(paste0("Unsupported palette name: ", name))
+    )
+    if (n <= 0) {
+        stop("n must be positive")
+    }
+    if (n > length(palette_values)) {
+        warning(sprintf("Requested %d colors for %s; truncating to %d.", n, name, length(palette_values)))
+        n = length(palette_values)
+    }
+    palette_values[seq_len(n)]
+}
+
 detected_cores = tryCatch(parallel::detectCores(), error = function(e) NA_integer_)
 if (is.na(detected_cores) && (is.null(getOption("cores")) || is.na(getOption("cores")))) {
     options(cores = 1L)
 }
 suppressWarnings(suppressPackageStartupMessages(library(NMF, quietly = TRUE)))
-suppressWarnings(suppressPackageStartupMessages(library(MASS, quietly = TRUE)))
-suppressWarnings(suppressPackageStartupMessages(library(pvclust, quietly = TRUE)))
 suppressWarnings(suppressPackageStartupMessages(library(Rtsne, quietly = TRUE)))
 suppressWarnings(suppressPackageStartupMessages(library(ggplot2, quietly = TRUE)))
-suppressWarnings(suppressPackageStartupMessages(library(patchwork, quietly = TRUE)))
 suppressWarnings(suppressPackageStartupMessages(library(pcaMethods, quietly = TRUE)))
 options(stringsAsFactors = FALSE)
+
+calc_sample_distance = function(tc, method = 'pearson', na_fill = 1, epsilon = 0) {
+    num_samples = ncol(tc)
+    if (num_samples <= 1) {
+        return(as.dist(matrix(0, nrow = num_samples, ncol = num_samples)))
+    }
+    if (method %in% c('pearson', 'spearman', 'kendall')) {
+        cor_mat = suppressWarnings(cor(tc, method = method, use = 'pairwise.complete.obs'))
+        dist_mat = 1 - cor_mat
+    } else {
+        dist_mat = as.matrix(stats::dist(t(tc), method = method))
+    }
+    dist_mat[!is.finite(dist_mat)] = na_fill
+    dist_mat = (dist_mat + t(dist_mat)) / 2
+    dist_mat = dist_mat + epsilon
+    diag(dist_mat) = 0
+    as.dist(dist_mat)
+}
+
+apply_leaf_label_colors = function(dend, label_colors) {
+    idx = 0
+    dendrapply(dend, function(node) {
+        if (is.leaf(node)) {
+            idx <<- idx + 1
+            if (idx <= length(label_colors)) {
+                node_par = attr(node, "nodePar")
+                if (is.null(node_par)) {
+                    node_par = list()
+                }
+                node_par[['lab.col']] = label_colors[[idx]]
+                attr(node, "nodePar") = node_par
+            }
+        }
+        node
+    })
+}
+
+apply_leaf_edge_colors = function(dend, edge_colors) {
+    idx = 0
+    dendrapply(dend, function(node) {
+        if (is.leaf(node)) {
+            idx <<- idx + 1
+            if (idx <= length(edge_colors)) {
+                edge_par = attr(node, "edgePar")
+                if (is.null(edge_par)) {
+                    edge_par = list()
+                }
+                edge_par[['col']] = edge_colors[[idx]]
+                attr(node, "edgePar") = edge_par
+            }
+        }
+        node
+    })
+}
+
+set_edge_lwd = function(dend, lwd = 1) {
+    dendrapply(dend, function(node) {
+        edge_par = attr(node, "edgePar")
+        if (is.null(edge_par)) {
+            edge_par = list()
+        }
+        edge_par[['lwd']] = lwd
+        attr(node, "edgePar") = edge_par
+        node
+    })
+}
+
+save_ggplot_grid = function(plots, filename, width, height, nrow, ncol) {
+    grDevices::pdf(file = filename, width = width, height = height)
+    on.exit(grDevices::dev.off(), add = TRUE)
+    grid::grid.newpage()
+    grid::pushViewport(grid::viewport(layout = grid::grid.layout(nrow = nrow, ncol = ncol)))
+    for (idx in seq_along(plots)) {
+        row = ((idx - 1) %/% ncol) + 1
+        col = ((idx - 1) %% ncol) + 1
+        print(plots[[idx]], vp = grid::viewport(layout.pos.row = row, layout.pos.col = col))
+    }
+}
 
 debug_mode = ifelse(length(commandArgs(trailingOnly = TRUE)) == 1, "debug", "batch")
 font_size = 8
@@ -148,32 +247,23 @@ draw_multisp_heatmap = function(tc, df_label) {
                   annCol = ann_label, annRow = ann_label, annColors = ann_color, annLegend = FALSE, labRow = NA, labCol = NA)
 }
 
-draw_multisp_dendrogram = function(tc, df_label, df_metadata, nboot, cex.xlab, cex.yaxis, pvclust_file = 'pvclust.RData') {
-    colnames(tc) = sub("_.*", "", sub('_', ' ', colnames(tc)))
-    dist_fun = function(x) { Dist(t(x), method = 'pearson') }
-    if (file.exists(pvclust_file)) {
-        if (file.info(pvclust_file)$size) {
-            cat('pvclust file found.\n')
-            load(pvclust_file)
-        }
-    } else {
-        cat('No pvclust file found. Start bootstrapping.\n')
-        result = pvclust(tc, method.dist = dist_fun, method.hclust = "average", nboot = nboot, parallel = FALSE) # UPGMA
-        save(result, file = pvclust_file)
+draw_multisp_dendrogram = function(tc, df_label, df_metadata, cex.xlab, cex.yaxis, nboot = NULL, pvclust_file = NULL) {
+    if (!is.null(nboot) || !is.null(pvclust_file)) {
+        cat('Bootstrap-based dendrogram support is deprecated. Using hclust without bootstrap.\n')
     }
-    dend = as.dendrogram(result)
+    colnames(tc) = sub("_.*", "", sub('_', ' ', colnames(tc)))
+    hc = hclust(calc_sample_distance(tc, method = 'pearson'), method = 'average')
+    dend = as.dendrogram(hc)
     dend_colors = df_label[order.dendrogram(dend), 'sample_group_color']
     label_colors = df_label[order.dendrogram(dend), 'sp_color']
-    labels_colors(dend) = label_colors
-    dend_labels <- df_metadata[order.dendrogram(dend), 'run']
-    dend <- color_branches(dend, labels = dend_labels, col = dend_colors)
-    dend <- set(dend, "branches_lwd", 2)
+    dend = apply_leaf_label_colors(dend, label_colors)
+    dend = apply_leaf_edge_colors(dend, dend_colors)
     for (i in 1:ncol(tc)) {
         dend = dendrapply(dend, color_children2parent)
     }
+    dend = set_edge_lwd(dend, lwd = 2)
     par(cex = cex.xlab)
     plot(dend, las = 1, yaxt = 'n')
-    text(result, print.num = FALSE, cex = 1, col.pv = 'black')
     par(cex = cex.yaxis)
     axis(2, las = 1)
     mtext(text = 'Distance', side = 2, line = 4, cex = cex.yaxis)
@@ -215,19 +305,17 @@ draw_multisp_pca = function(tc, df_label) {
 }
 
 draw_multisp_mds = function(tc, df_label) {
-    tc_dist_dist = Dist(t(tc), method = 'pearson') + 0.000000001
-    tc_dist_dist[is.na(tc_dist_dist)] = 1
+    tc_dist_dist = calc_sample_distance(tc, method = 'pearson', na_fill = 1, epsilon = 0.000000001)
     set.seed(1)
-    try_out = tryCatch(
-    { isoMDS(tc_dist_dist, k = 2, maxit = 100) },
-    error = function(a) { return("MDS failed.") }
+    mds_points = tryCatch(
+    { as.matrix(stats::cmdscale(tc_dist_dist, k = 2)) },
+    error = function(a) { NULL }
     )
-    if (mode(try_out) == "character") {
+    if (is.null(mds_points) || (ncol(mds_points) < 2)) {
         cat('MDS failed.\n')
         plot(c(0, 1), c(0, 1), ann = F, bty = 'n', type = 'n', xaxt = 'n', yaxt = 'n')
     } else {
-        mds <- try_out
-        plot(mds$points[, 1], mds$points[, 2], pch = 21, cex = 2, lwd = 1, bg = df_label$sample_group_color, col = df_label$sp_color, xlab = "MDS dimension 1", ylab = "MDS dimension 2", las = 1)
+        plot(mds_points[, 1], mds_points[, 2], pch = 21, cex = 2, lwd = 1, bg = df_label$sample_group_color, col = df_label$sp_color, xlab = "MDS dimension 1", ylab = "MDS dimension 2", las = 1)
     }
 }
 
@@ -545,22 +633,17 @@ save_unaveraged_pca_plot = function(unaveraged_orthologs, df_color_unaveraged, d
 
             g = ggplot(tmp, aes(x = !!rlang::sym(colx), y = !!rlang::sym(coly), color = sample_group)) +
                 theme_bw() +
-                geom_point(size = 0.5, alpha = 0.3) +
-                # Add density lines only if there is more than one unique point
-                # This reduces the chance of zero contour issues.
-                geom_density_2d(mapping = aes(color = sample_group), bins = 12, linewidth = 0.25) +
+                geom_point(size = 0.5, alpha = 0.3, na.rm = TRUE) +
                 scale_color_manual(values = sample_group_colors) +
                 xlab(pc_contributions[pcx]) +
                 ylab(pc_contributions[pcy]) +
-                xlim(xmin, xmax) +
-                ylim(ymin, ymax) +
+                coord_cartesian(xlim = c(xmin, xmax), ylim = c(ymin, ymax)) +
                 theme(
                     axis.text = element_text(size = font_size),
                     axis.title = element_text(size = font_size),
                     legend.text = element_text(size = font_size),
                     legend.title = element_text(size = font_size)
                 )
-
             filename = paste0('csca_unaveraged_pca_PC', pcx, pcy, '.', d, '.pdf')
             tryCatch(
                 {
@@ -604,27 +687,39 @@ save_unaveraged_tsne_plot = function(unaveraged_orthologs, df_color_unaveraged) 
         pcy = 2
         colx = paste0('tsne', pcx)
         coly = paste0('tsne', pcy)
-        xmin = min(tmp[[colx]], na.rm = TRUE)
-        xmax = max(tmp[[colx]], na.rm = TRUE)
+        finite_x = tmp[[colx]][is.finite(tmp[[colx]])]
+        finite_y = tmp[[coly]][is.finite(tmp[[coly]])]
+        if ((length(finite_x) == 0) || (length(finite_y) == 0)) {
+            cat(sprintf('Skipping unaveraged t-SNE (%s): no finite coordinates.\n', d))
+            next
+        }
+        xmin = min(finite_x)
+        xmax = max(finite_x)
+        if (xmin == xmax) {
+            xmin = xmin - 0.5
+            xmax = xmax + 0.5
+        }
         xunit = (xmax - xmin) * 0.01
         xmin = xmin - xunit
         xmax = xmax + xunit
 
-        ymin = min(tmp[[coly]], na.rm = TRUE)
-        ymax = max(tmp[[coly]], na.rm = TRUE)
+        ymin = min(finite_y)
+        ymax = max(finite_y)
+        if (ymin == ymax) {
+            ymin = ymin - 0.5
+            ymax = ymax + 0.5
+        }
         yunit = (ymax - ymin) * 0.01
         ymin = ymin - yunit
         ymax = ymax + yunit
 
         g = ggplot(tmp, aes(x = !!rlang::sym(colx), !!rlang::sym(coly), color = sample_group))
         g = g + theme_bw()
-        g = g + geom_point(size = 0.5)
-        g = g + geom_density_2d(mapping = aes(color = sample_group), bins = 12, linewidth = 0.25)
+        g = g + geom_point(size = 0.5, na.rm = TRUE)
         g = g + scale_color_manual(values = sample_group_colors)
         g = g + xlab('t-SNE dimension 1')
         g = g + ylab('t-SNE dimension 2')
-        g = g + xlim(xmin, xmax)
-        g = g + ylim(ymin, ymax)
+        g = g + coord_cartesian(xlim = c(xmin, xmax), ylim = c(ymin, ymax))
         g = g + theme(
             axis.text = element_text(size = font_size),
             axis.title = element_text(size = font_size),
@@ -677,9 +772,7 @@ save_averaged_dendrogram_plot = function(averaged_orthologs, df_color_averaged) 
         tc = averaged_orthologs[[d]]
         df_label = df_color_averaged
         par(cex = 0.5, mar = c(10, 5.5, 0, 0), mgp = c(4, 0.7, 0))
-        pvclust_file = paste0('csca_pvclust_', d, '.RData')
-        draw_multisp_dendrogram(tc = tc, df_label = df_label, df_metadata = df_metadata, pvclust_file = pvclust_file,
-                                nboot = 1, cex.xlab = 0.3, cex.yaxis = 0.5)
+        draw_multisp_dendrogram(tc = tc, df_label = df_label, df_metadata = df_metadata, cex.xlab = 0.3, cex.yaxis = 0.5)
     }
     graphics.off()
 }
@@ -706,10 +799,18 @@ draw_multisp_boxplot = function(df_metadata, tc_dist_matrix, fontsize = 8) {
     is_same_sp = outer(df_metadata[['scientific_name']], df_metadata[['scientific_name']], function(x, y) { x == y })
     is_same_sample_group = outer(df_metadata[['sample_group']], df_metadata[['sample_group']], function(x, y) { x == y })
     plot(c(0.5, 4.5), c(0, 1), type = 'n', xlab = '', ylab = "Pearson's correlation\ncoefficient", las = 1, xaxt = 'n')
-    boxplot(tc_dist_matrix[(!is_same_sp) & (!is_same_sample_group)], at = 1, add = TRUE, col = 'gray', yaxt = 'n')
-    boxplot(tc_dist_matrix[(is_same_sp) & (!is_same_sample_group)], at = 2, add = TRUE, col = 'gray', yaxt = 'n')
-    boxplot(tc_dist_matrix[(!is_same_sp) & (is_same_sample_group)], at = 3, add = TRUE, col = 'gray', yaxt = 'n')
-    boxplot(tc_dist_matrix[(is_same_sp) & (is_same_sample_group)], at = 4, add = TRUE, col = 'gray', yaxt = 'n')
+    safe_boxplot = function(values, at) {
+        values = values[is.finite(values)]
+        if (length(values) == 0) {
+            return(invisible(FALSE))
+        }
+        boxplot(values, at = at, add = TRUE, col = 'gray', yaxt = 'n')
+        return(invisible(TRUE))
+    }
+    safe_boxplot(tc_dist_matrix[(!is_same_sp) & (!is_same_sample_group)], at = 1)
+    safe_boxplot(tc_dist_matrix[(is_same_sp) & (!is_same_sample_group)], at = 2)
+    safe_boxplot(tc_dist_matrix[(!is_same_sp) & (is_same_sample_group)], at = 3)
+    safe_boxplot(tc_dist_matrix[(is_same_sp) & (is_same_sample_group)], at = 4)
     labels = c('bw\nbw', 'bw\nwi', 'wi\nbw', 'wi\nwi')
     axis(side = 1, at = c(1, 2, 3, 4), labels = labels, padj = 0.5)
     axis(side = 1, at = 0.35, labels = 'Sample group\nSpecies', padj = 0.5, hadj = 1, tick = FALSE)
@@ -761,11 +862,17 @@ calculate_correlation_within_group = function(unaveraged_orthologs, averaged_ort
                 is_na = (is.na(sample_values) | is.na(med_values))
                 sample_values2 = sample_values[!is_na]
                 med_values2 = med_values[!is_na]
-                cor_coef = cor(sample_values2, med_values2, method = dist_method)
+                cor_coef = suppressWarnings(cor(sample_values2, med_values2, method = dist_method))
                 if (sample_cg == sample_group) {
                     df_metadata[is_sra, target_col] = cor_coef
                 } else {
-                    max_value = max(cor_coef, df_metadata[is_sra, nongroup_col], na.rm = TRUE)
+                    max_candidates = c(cor_coef, df_metadata[is_sra, nongroup_col])
+                    max_candidates = max_candidates[is.finite(max_candidates)]
+                    if (length(max_candidates) == 0) {
+                        max_value = NA_real_
+                    } else {
+                        max_value = max(max_candidates)
+                    }
                     df_metadata[is_sra, nongroup_col] = max_value
                 }
             }
@@ -777,53 +884,58 @@ calculate_correlation_within_group = function(unaveraged_orthologs, averaged_ort
 save_group_cor_histogram = function(df_metadata, font_size = 8) {
     cat('Generating unaveraged group correlation histogram.\n')
 
-    # Columns we will iterate over
     cor_cols = c('within_group_cor_uncorrected', 'within_group_cor_corrected')
     fill_by_vars = c('sample_group', 'scientific_name')
-
-    # Pre-filter the data to remove rows with NA/Non-finite values in these columns
     df_clean = df_metadata
     for (col in cor_cols) {
         df_clean = df_clean[is.finite(df_clean[[col]]), ]
     }
-
-    # Limit values to avoid out-of-range warnings if needed, e.g. to [0, 1]
-    # Adjust or remove this if not required.
     for (col in cor_cols) {
         df_clean = df_clean[!is.na(df_clean[[col]]) & df_clean[[col]] >= 0 & df_clean[[col]] <= 1, ]
     }
 
-    max_count <- 0
     plot_list <- list()
-
     for (col in cor_cols) {
         for (fill_by in fill_by_vars) {
             tmp = df_clean[!is.na(df_clean[[col]]), ]
-            g = ggplot2::ggplot(tmp) +
-                geom_histogram(aes(x = !!rlang::sym(col), fill = !!rlang::sym(fill_by)),
-                               position = "stack", alpha = 0.7, bins = 40, na.rm = TRUE) +
-                theme_bw(base_size = font_size) +
-                xlim(c(0, 1)) +
-                labs(x = col, y = 'Count') +
-                theme(
-                    axis.text = element_text(size = font_size, color = 'black'),
-                    axis.title = element_text(size = font_size, color = 'black'),
-                    panel.grid.major.x = element_blank(),
-                    panel.grid.minor.y = element_blank(),
-                    panel.grid.minor.x = element_blank(),
-                    rect = element_rect(fill = "transparent"),
-                    plot.margin = unit(rep(0.1, 4), "cm")
-                )
+            if (nrow(tmp) == 0) {
+                g = ggplot2::ggplot() +
+                    theme_void() +
+                    annotate('text', x = 0.5, y = 0.5, label = paste('No finite data:', col))
+            } else {
+                g = ggplot2::ggplot(tmp) +
+                    geom_histogram(aes(x = !!rlang::sym(col), fill = !!rlang::sym(fill_by)),
+                                   position = "stack", alpha = 0.7, bins = 40, na.rm = TRUE) +
+                    theme_bw(base_size = font_size) +
+                    coord_cartesian(xlim = c(0, 1)) +
+                    labs(x = col, y = 'Count') +
+                    theme(
+                        axis.text = element_text(size = font_size, color = 'black'),
+                        axis.title = element_text(size = font_size, color = 'black'),
+                        panel.grid.major.x = element_blank(),
+                        panel.grid.minor.y = element_blank(),
+                        panel.grid.minor.x = element_blank(),
+                        rect = element_rect(fill = "transparent"),
+                        plot.margin = unit(rep(0.1, 4), "cm")
+                    )
+            }
             plot_list[[paste0(col, "_", fill_by)]] <- g
         }
     }
 
-    final_plot <- (plot_list[['within_group_cor_uncorrected_scientific_name']] +
-        plot_list[['within_group_cor_corrected_scientific_name']]) /
-        (plot_list[['within_group_cor_uncorrected_sample_group']] +
-            plot_list[['within_group_cor_corrected_sample_group']])
-
-    ggsave(filename = "csca_within_group_cor.pdf", plot = final_plot, width = 7.2, height = 6.0)
+    plot_order = c(
+        'within_group_cor_uncorrected_scientific_name',
+        'within_group_cor_corrected_scientific_name',
+        'within_group_cor_uncorrected_sample_group',
+        'within_group_cor_corrected_sample_group'
+    )
+    plots = lapply(plot_order, function(name) {
+        if (name %in% names(plot_list)) {
+            return(plot_list[[name]])
+        }
+        ggplot2::ggplot() + theme_void() + annotate('text', x = 0.5, y = 0.5, label = paste('Missing panel:', name))
+    })
+    save_ggplot_grid(plots, filename = "csca_within_group_cor.pdf", width = 7.2, height = 6.0, nrow = 2, ncol = 2)
 }
 
 extract_selected_tc_only = function(unaveraged_tcs, df_metadata) {
@@ -906,50 +1018,44 @@ save_group_cor_scatter = function(df_metadata, font_size = 8) {
                             is.finite(df_metadata$max_nongroup_cor_corrected) &
                             is.finite(df_metadata$corrected_per_uncorrected_group_cor) &
                             is.finite(df_metadata$corrected_per_uncorrected_max_nongroup_cor), ]
-
-    # Plotting
-    ps = list()
-    ps[[1]] = ggplot(df_clean, aes(x = max_nongroup_cor_uncorrected, y = within_group_cor_uncorrected)) +
-        xlim(c(0, 1)) + ylim(c(0, 1))
-    ps[[2]] = ggplot(df_clean, aes(x = max_nongroup_cor_corrected, y = within_group_cor_corrected)) +
-        xlim(c(0, 1)) + ylim(c(0, 1))
-    ps[[3]] = ggplot(df_clean, aes(x = within_group_cor_uncorrected, y = within_group_cor_corrected)) +
-        xlim(c(0, 1)) + ylim(c(0, 1))
-    ps[[4]] = ggplot(df_clean, aes(x = max_nongroup_cor_uncorrected, y = max_nongroup_cor_corrected)) +
-        xlim(c(0, 1)) + ylim(c(0, 1))
-    ps[[5]] = ggplot(df_clean, aes(x = corrected_per_uncorrected_max_nongroup_cor, y = corrected_per_uncorrected_group_cor)) +
-        xlim(c(improvement_xymin, improvement_xymax)) + ylim(c(improvement_xymin, improvement_xymax))
-
-    base_layers = list(
-        geom_point(alpha = alpha_value, na.rm = TRUE),
-        geom_abline(intercept = 0, slope = 1, linetype = 'dashed', color = 'blue'),
-        theme_bw(),
-        theme(
-            text = element_text(size = font_size),
-            axis.text = element_text(size = font_size),
-            axis.title = element_text(size = font_size),
-            legend.text = element_text(size = font_size),
-            legend.title = element_text(size = font_size)
-        )
-    )
-    density_layer = stat_density_2d(bins = 12, linewidth = 0.25, color = 'gray', na.rm = TRUE)
-
-    # Try with density contours; fall back to scatter-only if density estimation fails
-    for (i in seq_along(ps)) {
-        ps[[i]] = Reduce('+', base_layers, ps[[i]])
+    if (nrow(df_clean) == 0) {
+        p = ggplot() + theme_void() + annotate('text', x = 0.5, y = 0.5, label = 'No finite data for group-correlation scatter')
+        save_ggplot_grid(c(list(p), rep(list(ggplot() + theme_void()), 5)), filename = "csca_group_cor_scatter.pdf", width = 7.2, height = 4.8, nrow = 2, ncol = 3)
+        return(invisible(NULL))
     }
-    ps_with_density = lapply(ps, function(p) p + density_layer)
-    ps_with_density[[6]] = ggplot() + theme_void()
-    ps[[6]] = ggplot() + theme_void()
 
-    combined_plot = wrap_plots(ps_with_density)
-    tryCatch({
-        ggsave(filename = "csca_group_cor_scatter.pdf", plot = combined_plot, width = 7.2, height = 4.8)
-    }, error = function(e) {
-        cat("Density estimation failed (insufficient data points), plotting scatter only.\n")
-        combined_plot = wrap_plots(ps)
-        ggsave(filename = "csca_group_cor_scatter.pdf", plot = combined_plot, width = 7.2, height = 4.8)
-    })
+    make_scatter_panel = function(x_col, y_col, x_limits, y_limits) {
+        finite_x = df_clean[[x_col]][is.finite(df_clean[[x_col]])]
+        finite_y = df_clean[[y_col]][is.finite(df_clean[[y_col]])]
+        has_density_signal = (length(unique(finite_x)) > 1) && (length(unique(finite_y)) > 1)
+        p = ggplot(df_clean, aes(x = !!rlang::sym(x_col), y = !!rlang::sym(y_col))) +
+            coord_cartesian(xlim = x_limits, ylim = y_limits) +
+            geom_point(alpha = alpha_value, na.rm = TRUE) +
+            geom_abline(intercept = 0, slope = 1, linetype = 'dashed', color = 'blue') +
+            theme_bw() +
+            theme(
+                text = element_text(size = font_size),
+                axis.text = element_text(size = font_size),
+                axis.title = element_text(size = font_size),
+                legend.text = element_text(size = font_size),
+                legend.title = element_text(size = font_size)
+            )
+        if (has_density_signal) {
+            p = p + stat_density_2d(bins = 12, linewidth = 0.25, color = 'gray', na.rm = TRUE)
+        }
+        return(p)
+    }
+
+    ps = list(
+        make_scatter_panel('max_nongroup_cor_uncorrected', 'within_group_cor_uncorrected', c(0, 1), c(0, 1)),
+        make_scatter_panel('max_nongroup_cor_corrected', 'within_group_cor_corrected', c(0, 1), c(0, 1)),
+        make_scatter_panel('within_group_cor_uncorrected', 'within_group_cor_corrected', c(0, 1), c(0, 1)),
+        make_scatter_panel('max_nongroup_cor_uncorrected', 'max_nongroup_cor_corrected', c(0, 1), c(0, 1)),
+        make_scatter_panel('corrected_per_uncorrected_max_nongroup_cor', 'corrected_per_uncorrected_group_cor',
+                           c(improvement_xymin, improvement_xymax), c(improvement_xymin, improvement_xymax)),
+        ggplot() + theme_void()
+    )
+    save_ggplot_grid(ps, filename = "csca_group_cor_scatter.pdf", width = 7.2, height = 4.8, nrow = 2, ncol = 3)
 }
 
 write_pivot_table = function(df_metadata, unaveraged_tcs, selected_sample_groups) {
@@ -973,24 +1079,31 @@ save_delta_pcc_plot = function(directory, plot_title) {
     first_row_means <- list()
     last_row_means <- list()
     all_data_points <- list()
+    mean_cols = c('bwbw_mean', 'bwwi_mean', 'wiwi_mean', 'wibw_mean')
 
     file_list <- list.files(directory, pattern = "\\.correlation_statistics\\.tsv$")
+    if (length(file_list) == 0) {
+        cat('No correlation statistics files found. Skipping delta PCC plot.\n')
+        return(invisible(NULL))
+    }
     for (filename in file_list) {
         filepath <- file.path(directory, filename)
-
         df <- read.table(filepath, sep = '\t', header = TRUE)
-
-        first_row_means[[filename]] <- df[1, c('bwbw_mean', 'bwwi_mean', 'wiwi_mean', 'wibw_mean')]
-        last_row_means[[filename]] <- df[nrow(df), c('bwbw_mean', 'bwwi_mean', 'wiwi_mean', 'wibw_mean')]
-
-        all_data_points[[filename]] <- as.numeric(unlist(df[c('bwbw_mean', 'bwwi_mean', 'wiwi_mean', 'wibw_mean')]))
+        if ((nrow(df) == 0) || (!all(mean_cols %in% colnames(df)))) {
+            next
+        }
+        first_row_means[[filename]] <- as.numeric(df[1, mean_cols, drop = TRUE])
+        last_row_means[[filename]] <- as.numeric(df[nrow(df), mean_cols, drop = TRUE])
+        all_data_points[[filename]] <- as.numeric(unlist(df[mean_cols]))
+    }
+    if (length(first_row_means) == 0) {
+        cat('No valid correlation statistics rows were found. Skipping delta PCC plot.\n')
+        return(invisible(NULL))
     }
 
-    # Concatenate the mean values for the first and last rows into DataFrames
-    first_row_means_df <- do.call(rbind, first_row_means)
+    first_row_means_df <- as.data.frame(do.call(rbind, first_row_means), stringsAsFactors = FALSE)
     colnames(first_row_means_df) <- c('bwbw_uncorrected', 'bwwi_uncorrected', 'wiwi_uncorrected', 'wibw_uncorrected')
-
-    last_row_means_df <- do.call(rbind, last_row_means)
+    last_row_means_df <- as.data.frame(do.call(rbind, last_row_means), stringsAsFactors = FALSE)
     colnames(last_row_means_df) <- c('bwbw_corrected', 'bwwi_corrected', 'wiwi_corrected', 'wibw_corrected')
 
     combined_means_df <- cbind(first_row_means_df, last_row_means_df)
@@ -1009,6 +1122,10 @@ save_delta_pcc_plot = function(directory, plot_title) {
                                             'delta_wiwi_bwwi_uncorrected', 'delta_wiwi_bwwi_corrected')]
     delta_means_df <- abs(delta_means_df)
     delta_means_df <- na.omit(delta_means_df)
+    if (nrow(delta_means_df) == 0) {
+        cat('No finite delta values were found. Skipping delta PCC plot.\n')
+        return(invisible(NULL))
+    }
 
     #cat("\nDelta Means DataFrame:\n")
     #print(delta_means_df)
@@ -1051,7 +1168,7 @@ save_delta_pcc_plot = function(directory, plot_title) {
     axis(side = 1, at = c(1, 2, 3, 4), labels = c("uncorr.\n", "corr.\n", "uncorr.\n", "corr.\n"), padj = 0.5, tick = FALSE)
     axis(side = 1, at = 0.35, labels = 'Correction\nSample group', padj = 0.5, hadj = 1, tick = FALSE)
     axis(side = 1, at = c(1.5, 3.5), labels = c("\nbetween sample group", "\nwithin sample group"), padj = 0.5, tick = FALSE)
-    graphics.off()
+    grDevices::dev.off()
 }
 
 save_sample_number_heatmap <- function(df_metadata, font_size = 8, dpi = 300) {
@@ -1071,8 +1188,13 @@ save_sample_number_heatmap <- function(df_metadata, font_size = 8, dpi = 300) {
     if (!0 %in% freq_breaks) { freq_breaks <- c(0, freq_breaks) }
     if (!1 %in% freq_breaks) { freq_breaks <- c(freq_breaks, 1) }
     freq_breaks <- sort(unique(freq_breaks))
-    log2_breaks <- log2(freq_breaks + 1)
-    log2_breaks <- log2_breaks[log2_breaks <= fill_max]
+    if (!is.finite(fill_max) || (fill_max <= 0)) {
+        log2_breaks <- c(0)
+        fill_max <- 1
+    } else {
+        log2_breaks <- log2(freq_breaks + 1)
+        log2_breaks <- log2_breaks[log2_breaks <= fill_max]
+    }
     n_sample_groups <- length(all_sample_groups)
     n_scientific_names <- length(all_scientific_names)
     base_width <- 5
@@ -1139,11 +1261,21 @@ averaged_orthologs = extract_ortholog_mean_expression_table(df_singleog, average
 write_pivot_table(df_metadata, unaveraged_tcs, selected_sample_groups)
 
 cat('Applying expression level imputation for missing orthologs.\n')
+quiet_impute_expression = function(dat) {
+    withCallingHandlers(
+        impute_expression(dat),
+        warning = function(w) {
+            if (grepl('Precision for components .*below \\.Machine\\$double\\.eps', conditionMessage(w))) {
+                invokeRestart('muffleWarning')
+            }
+        }
+    )
+}
 imputed_averaged_orthologs = list()
 imputed_unaveraged_orthologs = list()
 for (d in c('uncorrected', 'corrected')) {
-    imputed_averaged_orthologs[[d]] = impute_expression(averaged_orthologs[[d]])
-    imputed_unaveraged_orthologs[[d]] = impute_expression(unaveraged_orthologs[[d]])
+    imputed_averaged_orthologs[[d]] = quiet_impute_expression(averaged_orthologs[[d]])
+    imputed_unaveraged_orthologs[[d]] = quiet_impute_expression(unaveraged_orthologs[[d]])
     write_table_with_index_name(
         df = averaged_orthologs[[d]],
         file_path = paste0('csca_ortholog_averaged.', d, '.tsv'),

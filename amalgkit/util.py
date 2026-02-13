@@ -1,7 +1,7 @@
 import json
 import numpy
 import pandas
-import lxml.etree
+import xml.etree.ElementTree as ET
 import datetime
 import ete4
 
@@ -65,10 +65,42 @@ class Metadata:
         return metadata
 
     def from_xml(xml_root):
-        if isinstance(xml_root, lxml.etree._Element):
-            xml_root = lxml.etree.ElementTree(xml_root)
-        root = xml_root
-        assert isinstance(root, lxml.etree._ElementTree), "Unknown input type."
+        if isinstance(xml_root, ET.ElementTree):
+            root = xml_root.getroot()
+        elif isinstance(xml_root, ET.Element):
+            root = xml_root
+        elif hasattr(xml_root, 'getroot'):
+            root = xml_root.getroot()
+        else:
+            raise TypeError("Unknown input type.")
+
+        def get_first_text(entry, path):
+            element = entry.find(path)
+            if element is None:
+                return ""
+            text = element.text
+            if text is None:
+                return ""
+            return str(text)
+
+        def get_first_attr(entry, path, attr_name):
+            element = entry.find(path)
+            if element is None:
+                return ""
+            value = element.get(attr_name)
+            if value is None:
+                return ""
+            return str(value)
+
+        def get_first_external_id(entry, namespace):
+            matches = entry.findall(".//EXTERNAL_ID[@namespace='{}']".format(namespace))
+            if len(matches) == 0:
+                return ""
+            text = matches[0].text
+            if text is None:
+                return ""
+            return str(text)
+
         df_list = list()
         counter = 0
         metadata = Metadata()
@@ -76,110 +108,93 @@ class Metadata:
             if counter % 1000 == 0:
                 now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                 print('{}: Converting {:,}th sample from XML to DataFrame'.format(now, counter), flush=True)
-            items = []
-            bioproject = entry.findall('.//EXTERNAL_ID[@namespace="BioProject"]')
-            if not len(bioproject):
+            bioproject = get_first_external_id(entry, 'BioProject')
+            if bioproject == "":
                 labels = entry.findall('.//LABEL')
                 for label in labels:
                     text = label.text
-                    if text.startswith("PRJ"):
-                        bioproject = [label]
+                    if (text is not None) and text.startswith("PRJ"):
+                        bioproject = text
                         break
             is_single = len(entry.findall('.//LIBRARY_LAYOUT/SINGLE'))
             is_paired = len(entry.findall('.//LIBRARY_LAYOUT/PAIRED'))
             if is_single:
-                library_layout = ["single"]
+                library_layout = "single"
             elif is_paired:
-                library_layout = ["paired"]
+                library_layout = "paired"
             else:
-                library_layout = [""]
-            values = entry.findall('.//VALUE')
-            is_protected = ["No"]
-            if len(values):
-                for value in values:
-                    text = value.text
-                    if not text is None:
-                        if text.endswith("PROTECTED"):
-                            is_protected = ["Yes"]
-                            break
-            items.append(["bioproject", bioproject])
-            items.append(["scientific_name", entry.xpath('./SAMPLE/SAMPLE_NAME/SCIENTIFIC_NAME')])
-            items.append(["biosample", entry.findall('.//EXTERNAL_ID[@namespace="BioSample"]')])
-            items.append(["experiment", entry.xpath('./EXPERIMENT/IDENTIFIERS/PRIMARY_ID')])
-            items.append(["run", entry.xpath('./RUN_SET/RUN/IDENTIFIERS/PRIMARY_ID')])
-            items.append(["sra_primary", entry.xpath('./SUBMISSION/IDENTIFIERS/PRIMARY_ID')])
-            items.append(["sra_sample", entry.xpath('./SAMPLE/IDENTIFIERS/PRIMARY_ID')])
-            items.append(["sra_study", entry.xpath('./EXPERIMENT/STUDY_REF/IDENTIFIERS/PRIMARY_ID')])
-            items.append(["published_date", entry.xpath('./RUN_SET/RUN/@published')])
-            items.append(["exp_title", entry.xpath('./EXPERIMENT/TITLE')])
-            items.append(["design", entry.xpath('./EXPERIMENT/DESIGN/DESIGN_DESCRIPTION')])
-            items.append(["lib_name", entry.xpath('./EXPERIMENT/DESIGN/LIBRARY_DESCRIPTOR/LIBRARY_NAME')])
-            items.append(["lib_strategy", entry.xpath('./EXPERIMENT/DESIGN/LIBRARY_DESCRIPTOR/LIBRARY_STRATEGY')])
-            items.append(["lib_source", entry.xpath('./EXPERIMENT/DESIGN/LIBRARY_DESCRIPTOR/LIBRARY_SOURCE')])
-            items.append(["lib_selection", entry.xpath('./EXPERIMENT/DESIGN/LIBRARY_DESCRIPTOR/LIBRARY_SELECTION')])
-            items.append(["lib_layout", library_layout])
-            items.append(["nominal_length",
-                          entry.xpath('./EXPERIMENT/DESIGN/LIBRARY_DESCRIPTOR/LIBRARY_LAYOUT/PAIRED/@NOMINAL_LENGTH')])
-            items.append(["nominal_sdev",
-                          entry.xpath('./EXPERIMENT/DESIGN/LIBRARY_DESCRIPTOR/LIBRARY_LAYOUT/PAIRED/@NOMINAL_SDEV')])
-            items.append(
-                ["spot_length", entry.xpath('./EXPERIMENT/DESIGN/SPOT_DESCRIPTOR/SPOT_DECODE_SPEC/SPOT_LENGTH')])
-            items.append(["read_index",
-                          entry.xpath('./EXPERIMENT/DESIGN/SPOT_DESCRIPTOR/SPOT_DECODE_SPEC/READ_SPEC/READ_INDEX')])
-            items.append(["read_class",
-                          entry.xpath('./EXPERIMENT/DESIGN/SPOT_DESCRIPTOR/SPOT_DECODE_SPEC/READ_SPEC/READ_CLASS')])
-            items.append(
-                ["read_type", entry.xpath('./EXPERIMENT/DESIGN/SPOT_DESCRIPTOR/SPOT_DECODE_SPEC/READ_SPEC/READ_TYPE')])
-            items.append(["base_coord",
-                          entry.xpath('./EXPERIMENT/DESIGN/SPOT_DESCRIPTOR/SPOT_DECODE_SPEC/READ_SPEC/BASE_COORD')])
-            items.append(["instrument", entry.xpath('./EXPERIMENT/PLATFORM/ILLUMINA/INSTRUMENT_MODEL')])
-            items.append(["lab", entry.xpath('./SUBMISSION/@lab_name')])
-            items.append(["center", entry.xpath('./SUBMISSION/@center_name')])
-            items.append(["submitter_id", entry.xpath('./SUBMISSION/IDENTIFIERS/SUBMITTER_ID')])
-            items.append(["study_title", entry.xpath('./STUDY/DESCRIPTOR/STUDY_TITLE')])
-            items.append(["pubmed_id", entry.xpath('./STUDY/STUDY_LINKS/STUDY_LINK/XREF_LINK/ID')])
-            items.append(["sample_title", entry.xpath('./SAMPLE/TITLE')])
-            items.append(["taxid", entry.xpath('./SAMPLE/SAMPLE_NAME/TAXON_ID')])
-            items.append(["sample_description", entry.xpath('./SAMPLE/DESCRIPTION')])
-            items.append(["total_spots", entry.xpath('./RUN_SET/RUN/@total_spots')])
-            items.append(["total_bases", entry.xpath('./RUN_SET/RUN/@total_bases')])
-            items.append(["size", entry.xpath('./RUN_SET/RUN/@size')])
-            items.append(["NCBI_Link", entry.xpath(
-                './RUN_SET/RUN/SRAFiles/SRAFile[@supertype="Primary ETL"]/Alternatives[@org="NCBI"]/@url')])
-            items.append(["AWS_Link", entry.xpath(
-                './RUN_SET/RUN/SRAFiles/SRAFile[@supertype="Primary ETL"]/Alternatives[@org="AWS"]/@url')])
-            items.append(["GCP_Link", entry.xpath(
-                './RUN_SET/RUN/SRAFiles/SRAFile[@supertype="Primary ETL"]/Alternatives[@org="GCP"]/@url')])
-            row = []
-            for item in items:
-                try:
-                    if isinstance(item[1][0], (lxml.etree._ElementUnicodeResult, int, str)):
-                        row.append(str(item[1][0]))
-                    else:
-                        row.append(item[1][0].text)
-                except (IndexError, TypeError, AttributeError):
-                    row.append("")
-            colnames = []
-            for item in items:
-                colnames.append(item[0])
-            row_df = pandas.DataFrame(row).T
-            row_df.columns = colnames
-            sas = entry.xpath('./SAMPLE/SAMPLE_ATTRIBUTES/SAMPLE_ATTRIBUTE')
+                library_layout = ""
+            row_df = pandas.DataFrame([{
+                "bioproject": bioproject,
+                "scientific_name": get_first_text(entry, './SAMPLE/SAMPLE_NAME/SCIENTIFIC_NAME'),
+                "biosample": get_first_external_id(entry, 'BioSample'),
+                "experiment": get_first_text(entry, './EXPERIMENT/IDENTIFIERS/PRIMARY_ID'),
+                "run": get_first_text(entry, './RUN_SET/RUN/IDENTIFIERS/PRIMARY_ID'),
+                "sra_primary": get_first_text(entry, './SUBMISSION/IDENTIFIERS/PRIMARY_ID'),
+                "sra_sample": get_first_text(entry, './SAMPLE/IDENTIFIERS/PRIMARY_ID'),
+                "sra_study": get_first_text(entry, './EXPERIMENT/STUDY_REF/IDENTIFIERS/PRIMARY_ID'),
+                "published_date": get_first_attr(entry, './RUN_SET/RUN', 'published'),
+                "exp_title": get_first_text(entry, './EXPERIMENT/TITLE'),
+                "design": get_first_text(entry, './EXPERIMENT/DESIGN/DESIGN_DESCRIPTION'),
+                "lib_name": get_first_text(entry, './EXPERIMENT/DESIGN/LIBRARY_DESCRIPTOR/LIBRARY_NAME'),
+                "lib_strategy": get_first_text(entry, './EXPERIMENT/DESIGN/LIBRARY_DESCRIPTOR/LIBRARY_STRATEGY'),
+                "lib_source": get_first_text(entry, './EXPERIMENT/DESIGN/LIBRARY_DESCRIPTOR/LIBRARY_SOURCE'),
+                "lib_selection": get_first_text(entry, './EXPERIMENT/DESIGN/LIBRARY_DESCRIPTOR/LIBRARY_SELECTION'),
+                "lib_layout": library_layout,
+                "nominal_length": get_first_attr(
+                    entry,
+                    "./EXPERIMENT/DESIGN/LIBRARY_DESCRIPTOR/LIBRARY_LAYOUT/PAIRED",
+                    "NOMINAL_LENGTH",
+                ),
+                "nominal_sdev": get_first_attr(
+                    entry,
+                    "./EXPERIMENT/DESIGN/LIBRARY_DESCRIPTOR/LIBRARY_LAYOUT/PAIRED",
+                    "NOMINAL_SDEV",
+                ),
+                "spot_length": get_first_text(entry, './EXPERIMENT/DESIGN/SPOT_DESCRIPTOR/SPOT_DECODE_SPEC/SPOT_LENGTH'),
+                "read_index": get_first_text(entry, './EXPERIMENT/DESIGN/SPOT_DESCRIPTOR/SPOT_DECODE_SPEC/READ_SPEC/READ_INDEX'),
+                "read_class": get_first_text(entry, './EXPERIMENT/DESIGN/SPOT_DESCRIPTOR/SPOT_DECODE_SPEC/READ_SPEC/READ_CLASS'),
+                "read_type": get_first_text(entry, './EXPERIMENT/DESIGN/SPOT_DESCRIPTOR/SPOT_DECODE_SPEC/READ_SPEC/READ_TYPE'),
+                "base_coord": get_first_text(entry, './EXPERIMENT/DESIGN/SPOT_DESCRIPTOR/SPOT_DECODE_SPEC/READ_SPEC/BASE_COORD'),
+                "instrument": get_first_text(entry, './EXPERIMENT/PLATFORM/ILLUMINA/INSTRUMENT_MODEL'),
+                "lab": get_first_attr(entry, './SUBMISSION', 'lab_name'),
+                "center": get_first_attr(entry, './SUBMISSION', 'center_name'),
+                "submitter_id": get_first_text(entry, './SUBMISSION/IDENTIFIERS/SUBMITTER_ID'),
+                "study_title": get_first_text(entry, './STUDY/DESCRIPTOR/STUDY_TITLE'),
+                "pubmed_id": get_first_text(entry, './STUDY/STUDY_LINKS/STUDY_LINK/XREF_LINK/ID'),
+                "sample_title": get_first_text(entry, './SAMPLE/TITLE'),
+                "taxid": get_first_text(entry, './SAMPLE/SAMPLE_NAME/TAXON_ID'),
+                "sample_description": get_first_text(entry, './SAMPLE/DESCRIPTION'),
+                "total_spots": get_first_attr(entry, './RUN_SET/RUN', 'total_spots'),
+                "total_bases": get_first_attr(entry, './RUN_SET/RUN', 'total_bases'),
+                "size": get_first_attr(entry, './RUN_SET/RUN', 'size'),
+                "NCBI_Link": get_first_attr(
+                    entry,
+                    "./RUN_SET/RUN/SRAFiles/SRAFile[@supertype='Primary ETL']/Alternatives[@org='NCBI']",
+                    "url",
+                ),
+                "AWS_Link": get_first_attr(
+                    entry,
+                    "./RUN_SET/RUN/SRAFiles/SRAFile[@supertype='Primary ETL']/Alternatives[@org='AWS']",
+                    "url",
+                ),
+                "GCP_Link": get_first_attr(
+                    entry,
+                    "./RUN_SET/RUN/SRAFiles/SRAFile[@supertype='Primary ETL']/Alternatives[@org='GCP']",
+                    "url",
+                ),
+            }])
+            sas = entry.findall('./SAMPLE/SAMPLE_ATTRIBUTES/SAMPLE_ATTRIBUTE')
             for sa in sas:
-                tag = sa.xpath('./TAG')
-                if not tag[0].text == None:
-                    tag = tag[0].text.lower()
+                tag = get_first_text(sa, './TAG')
+                if tag != "":
+                    tag = tag.lower()
                     tag = re.sub(r" \(.*", "", tag)
                     tag = re.sub(r" ", "_", tag)
-                    if not tag in row_df.columns:
-                        value = sa.xpath('./VALUE')
-                        if len(value):
-                            value = value[0].text
-                            if tag in colnames:
-                                tag = tag + "_2"
-                            sa_df = pandas.DataFrame([value])
-                            sa_df.columns = [tag]
-                            row_df = pandas.concat([row_df, sa_df], axis=1)
+                    if tag not in row_df.columns:
+                        value = get_first_text(sa, './VALUE')
+                        if value != "":
+                            row_df[tag] = value
             df_list.append(row_df)
             counter += 1
         if len(df_list)==0:
@@ -492,6 +507,8 @@ def get_newest_intermediate_file_extension(sra_stat, work_dir):
     ext_out = 'no_extension_found'
     # Order is important in this list. More downstream should come first.
     extensions = ['.amalgkit.fastq.gz','.rename.fastq.gz','.fastp.fastq.gz','.fastq.gz']
+    if 'getfastq_sra_dir' not in sra_stat:
+        sra_stat['getfastq_sra_dir'] = work_dir
     sra_stat = detect_layout_from_file(sra_stat)
     if sra_stat['layout']=='single':
         subext = ''
@@ -674,10 +691,3 @@ def get_getfastq_run_dir(args, sra_id):
     if not os.path.exists(run_output_dir):
         os.makedirs(run_output_dir)
     return run_output_dir
-
-def check_seqkit_dependency():
-    try:
-        subprocess.run(['seqkit','-h'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        print("SeqKit dependency satisfied. Moving on.")
-    except FileNotFoundError:
-        raise Exception("SeqKit not found. Please make sure SeqKit is installed properly.")

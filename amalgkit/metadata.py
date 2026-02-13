@@ -1,5 +1,5 @@
 from Bio import Entrez
-import lxml.etree
+import xml.etree.ElementTree as ET
 import numpy
 import pandas
 
@@ -24,15 +24,17 @@ def fetch_sra_xml(search_term, retmax=1000):
     record_ids = sra_record["IdList"]
     num_record = len(record_ids)
     print('Number of SRA records: {:,}'.format(num_record))
+    if num_record == 0:
+        return ET.Element('EXPERIMENT_PACKAGE_SET')
     start_time = time.time()
     print('{}: SRA XML retrieval started.'.format(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
     root = None
     max_retry = 10
-    for i in numpy.arange(numpy.ceil(num_record//retmax)+1):
-        start = int(i*retmax)
-        end = int(((i+1)*retmax)-1) if num_record >= int(((i+1)*retmax)-1) else num_record
+    for start in range(0, num_record, retmax):
+        end = min(start + retmax, num_record)
         now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        print('{}: Retrieving SRA XML: {:,}-{:,} of {:,} records'.format(now, start, end, num_record), flush=True)
+        print('{}: Retrieving SRA XML: {:,}-{:,} of {:,} records'.format(now, start, end - 1, num_record), flush=True)
+        chunk = None
         for j in range(max_retry):
             try:
                 handle = Entrez.efetch(db="sra", id=record_ids[start:end], rettype="full", retmode="xml", retmax=retmax)
@@ -42,11 +44,15 @@ def fetch_sra_xml(search_term, retmax=1000):
                 time.sleep(sleep_second)
                 continue
             try:
-                chunk = lxml.etree.parse(handle).getroot()
+                chunk = ET.parse(handle).getroot()
             except:
                 print('XML may be truncated. Retrying...', flush=True)
                 continue
             break
+        if chunk is None:
+            raise RuntimeError('Failed to parse Entrez XML chunk after {} retries (records {}-{}).'.format(
+                max_retry, start, end - 1
+            ))
         if root is None:
             root = chunk
         else:
@@ -54,8 +60,8 @@ def fetch_sra_xml(search_term, retmax=1000):
     elapsed_time = int(time.time() - start_time)
     print('{}: SRA XML retrieval ended.'.format(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
     print('SRA XML retrieval time: {:,.1f} sec'.format(elapsed_time), flush=True)
-    xml_string = lxml.etree.tostring(root, encoding='UTF-8', pretty_print=True)
-    for line in str(xml_string).split('\n'):
+    xml_string = ET.tostring(root, encoding='unicode')
+    for line in xml_string.split('\n'):
         if '<Error>' in line:
             print(line)
             raise Exception(',Error. found in the xml.')

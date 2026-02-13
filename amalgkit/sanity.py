@@ -29,8 +29,10 @@ def parse_metadata(args, metadata):
         print(np.unique(sra_ids))
         # check for duplicate runs
         if len(sra_ids) > len(np.unique(sra_ids)):
-            raise ValueError("Duplicate SRA IDs detected, where IDs should be unique. Please check these entries: ",
-                             list_duplicates(sra_ids))
+            dupes = list_duplicates(sra_ids)
+            raise ValueError(
+                "Duplicate SRA IDs detected, where IDs should be unique. Please check these entries: {}".format(dupes)
+            )
     else:
         txt = "{} SRA runs detected. Please check if --metadata ({}) has a 'run' column."
         raise ValueError(txt.format(len(np.unique(sra_ids)), args.metadata))
@@ -56,6 +58,11 @@ def check_getfastq_outputs(args, sra_ids, metadata, output_dir):
                 try:
                     ext = get_newest_intermediate_file_extension(sra_stat, sra_path)
                 except FileNotFoundError:
+                    print("could not find any fastq files for ", sra_id,
+                          "Please make sure amalgkit getfastq ran properly")
+                    data_unavailable.append(sra_id)
+                    continue
+                if ext == 'no_extension_found':
                     print("could not find any fastq files for ", sra_id,
                           "Please make sure amalgkit getfastq ran properly")
                     data_unavailable.append(sra_id)
