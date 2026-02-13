@@ -79,6 +79,14 @@ def command_merge(args):
     print('Time elapsed: {:,} sec'.format(int(time.time() - start)))
     sys.stdout.write('amalgkit merge: end\n')
 
+def command_busco(args):
+    sys.stdout.write('amalgkit busco: start\n')
+    start = time.time()
+    from amalgkit.busco import busco_main
+    busco_main(args)
+    print('Time elapsed: {:,} sec'.format(int(time.time() - start)))
+    sys.stdout.write('amalgkit busco: end\n')
+
 def command_sanity(args):
     sys.stdout.write('amalgkit sanity: start\n')
     start = time.time()
@@ -282,6 +290,28 @@ pqu.set_defaults(handler=command_quant)
 pmg_help = 'Generating transcript abundance tables. See `amalgkit merge -h`'
 pmg = subparsers.add_parser('merge', help=pmg_help, parents=[pp_out, pp_meta])
 pmg.set_defaults(handler=command_merge)
+
+# Sub parser: busco
+pbu_help = 'Generating BUSCO tables for amalgkit cstmm/csca. See `amalgkit busco -h`'
+pbu = subparsers.add_parser('busco', help=pbu_help, parents=[pp_out, pp_meta, pp_threads, pp_redo])
+pbu.add_argument('--tool', metavar='auto|busco|compleasm', default='auto', type=str, required=False, action='store',
+                 choices=['auto', 'busco', 'compleasm'],
+                 help='default=%(default)s: Tool for BUSCO table generation.')
+pbu.add_argument('--lineage', metavar='STR', default=None, type=str, required=True, action='store',
+                 help='Lineage dataset name (e.g., eukaryota_odb12).')
+pbu.add_argument('--fasta_dir', metavar='PATH', default='inferred', type=str, required=False, action='store',
+                 help='default=%(default)s: "inferred" = out_dir/fasta. Directory with transcriptome fasta files.')
+pbu.add_argument('--fasta', metavar='PATH', default=None, type=str, required=False, action='store',
+                 help='Optional: single fasta path to process (requires --species).')
+pbu.add_argument('--species', metavar='STR', default=None, type=str, required=False, action='store',
+                 help='Optional: species name used with --fasta (e.g., "Homo sapiens").')
+pbu.add_argument('--busco_exe', metavar='PATH', default='busco', type=str, required=False, action='store',
+                 help='default=%(default)s: PATH to busco executable.')
+pbu.add_argument('--compleasm_exe', metavar='PATH', default='compleasm', type=str, required=False, action='store',
+                 help='default=%(default)s: PATH to compleasm executable.')
+pbu.add_argument('--tool_args', metavar='STR', default=None, type=str, required=False, action='store',
+                 help='Additional arguments passed to the selected tool.')
+pbu.set_defaults(handler=command_busco)
 
 # Sub parser: cstmm
 pcs_help = 'Applying cross-species TMM normalization using single-copy genes. See `amalgkit cstmm -h`'
