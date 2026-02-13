@@ -45,9 +45,22 @@ def normalize_busco_columns(df):
 
 
 def normalize_busco_table(src_path, dest_path):
-    df = pandas.read_table(src_path, sep='\t', header=0, comment='#', dtype=str, low_memory=False)
+    header = None
+    with open(src_path, 'r') as f:
+        for line in f:
+            if not line.startswith('#'):
+                continue
+            candidate = line.lstrip('#').strip()
+            if candidate.lower().startswith('busco'):
+                header = candidate.split('\t')
+    if header:
+        df = pandas.read_table(src_path, sep='\t', header=None, comment='#', names=header, dtype=str, low_memory=False)
+    else:
+        df = pandas.read_table(src_path, sep='\t', header=0, comment='#', dtype=str, low_memory=False)
     if df.shape[0] == 0:
         raise ValueError('BUSCO table is empty: {}'.format(src_path))
+    if not header and df.shape[1] == len(REQUIRED_COLUMNS):
+        df.columns = REQUIRED_COLUMNS
     df = normalize_busco_columns(df)
     df = df.loc[:, REQUIRED_COLUMNS]
     with open(dest_path, 'w') as f:

@@ -12,7 +12,7 @@ from amalgkit.busco import (
 
 
 def write_busco_table(path, rows):
-    header = "Busco id\tStatus\tSequence\tScore\tLength\tOrthoDB url\tDescription\n"
+    header = "# Busco id\tStatus\tSequence\tScore\tLength\tOrthoDB url\tDescription\n"
     with open(path, 'w') as f:
         f.write("# BUSCO version is: 6.0.0\n")
         f.write(header)
