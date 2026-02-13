@@ -39,6 +39,8 @@ See [Wiki](https://github.com/kfuku52/amalgkit/wiki) for details.
 
 - [`amalgkit merge`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-merge): Generating transcript abundance tables
 
+- [`amalgkit busco`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-busco): Generating BUSCO tables for downstream cstmm/csca
+
 - [`amalgkit cstmm`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-cstmm): Cross-species TMM normalization using single-copy genes
 
 - [`amalgkit curate`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-curate): Automatic removal of outlier samples and unwanted biases
