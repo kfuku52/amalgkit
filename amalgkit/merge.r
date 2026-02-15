@@ -60,7 +60,7 @@ save_frequency_plot = function(df, value_col, out_path, x_label, font_size = 8, 
     if (!is.null(x_limits)) {
         g = g + coord_cartesian(xlim = x_limits)
     }
-    g = g + theme_bw(base_size = font_size)
+    g = g + theme_bw(base_size = font_size, base_family = 'Helvetica')
     x_hjust = ifelse(x_angle == 0, 0.5, 1.0)
     g = g + labs(x = x_label, y = 'Frequency')
     g = g + theme(
@@ -100,8 +100,9 @@ df2 = df[((!is_excluded) & (is_mapping_rate_available)),]
 cat(sprintf('Number of SRA samples for mapping_rate potting: %s\n', formatC(nrow(df2), format = 'd', big.mark = ',')))
 g = ggplot(data = df2)
 g = g + geom_boxplot(aes(x = scientific_name, y = mapping_rate), outlier.size = 0.3)
+g = g + scale_x_discrete(labels = format_genus_species_label)
 g = g + ylim(0, 100)
-g = g + theme_bw(base_size = font_size)
+g = g + theme_bw(base_size = font_size, base_family = 'Helvetica')
 g = g + labs(x = '', y = 'Mapping rate')
 g = g + theme(
     axis.text = element_text(size = font_size, color = 'black'),
@@ -125,8 +126,9 @@ df2 = df[((!is_excluded)),]
 cat(sprintf('Number of SRA samples for total_spots potting: %s\n', formatC(nrow(df2), format = 'd', big.mark = ',')))
 g = ggplot(data = df2)
 g = g + geom_boxplot(aes(x = scientific_name, y = total_spots), outlier.size = 0.3)
-g = g + scale_y_log10()
-g = g + theme_bw(base_size = font_size)
+g = g + scale_x_discrete(labels = format_genus_species_label)
+g = g + coord_cartesian(ylim = c(0, NA))
+g = g + theme_bw(base_size = font_size, base_family = 'Helvetica')
 g = g + labs(x = '', y = 'Total spots')
 g = g + theme(
     axis.text = element_text(size = font_size, color = 'black'),
@@ -150,8 +152,9 @@ df2 = df[((!is_excluded)),]
 cat(sprintf('Number of SRA samples for total_bases potting: %s\n', formatC(nrow(df2), format = 'd', big.mark = ',')))
 g = ggplot(data = df2)
 g = g + geom_boxplot(aes(x = scientific_name, y = total_bases), outlier.size = 0.3)
-g = g + scale_y_log10()
-g = g + theme_bw(base_size = font_size)
+g = g + scale_x_discrete(labels = format_genus_species_label)
+g = g + coord_cartesian(ylim = c(0, NA))
+g = g + theme_bw(base_size = font_size, base_family = 'Helvetica')
 g = g + labs(x = '', y = 'Total bases')
 g = g + theme(
     axis.text = element_text(size = font_size, color = 'black'),
@@ -178,8 +181,9 @@ data_summary[['total']] = ave(data_summary[['count']], data_summary[['scientific
 data_summary[['proportion']] = data_summary[['count']] / data_summary[['total']]
 g = ggplot(data_summary, aes(x = scientific_name, y = count, fill = lib_layout))
 g = g + geom_bar(stat = "identity")
+g = g + scale_x_discrete(labels = format_genus_species_label)
 g = g + labs(x = "", y = "Count", fill = "Library layout")
-g = g + theme_bw(base_size = font_size)
+g = g + theme_bw(base_size = font_size, base_family = 'Helvetica')
 g = g + theme(
     axis.text = element_text(size = font_size, color = 'black'),
     axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),

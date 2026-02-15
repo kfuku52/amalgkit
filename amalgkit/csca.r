@@ -32,10 +32,8 @@ detected_cores = tryCatch(parallel::detectCores(), error = function(e) NA_intege
 if (is.na(detected_cores) && (is.null(getOption("cores")) || is.na(getOption("cores")))) {
     options(cores = 1L)
 }
-suppressWarnings(suppressPackageStartupMessages(library(NMF, quietly = TRUE)))
 suppressWarnings(suppressPackageStartupMessages(library(Rtsne, quietly = TRUE)))
 suppressWarnings(suppressPackageStartupMessages(library(ggplot2, quietly = TRUE)))
-suppressWarnings(suppressPackageStartupMessages(library(pcaMethods, quietly = TRUE)))
 options(stringsAsFactors = FALSE)
 
 calc_sample_distance = function(tc, method = 'pearson', na_fill = 1, epsilon = 0) {
@@ -104,8 +102,8 @@ set_edge_lwd = function(dend, lwd = 1) {
     })
 }
 
-save_ggplot_grid = function(plots, filename, width, height, nrow, ncol) {
-    grDevices::pdf(file = filename, width = width, height = height)
+save_ggplot_grid = function(plots, filename, width, height, nrow, ncol, font_size = 8, font_family = 'Helvetica') {
+    grDevices::pdf(file = filename, width = width, height = height, family = font_family, pointsize = font_size)
     on.exit(grDevices::dev.off(), add = TRUE)
     grid::grid.newpage()
     grid::pushViewport(grid::viewport(layout = grid::grid.layout(nrow = nrow, ncol = ncol)))
@@ -114,6 +112,25 @@ save_ggplot_grid = function(plots, filename, width, height, nrow, ncol) {
         col = ((idx - 1) %% ncol) + 1
         print(plots[[idx]], vp = grid::viewport(layout.pos.row = row, layout.pos.col = col))
     }
+}
+
+# Draw a ggplot object inside the current base-graphics panel (layout/par region).
+draw_ggplot_in_current_plot_panel = function(g) {
+    plot.new()
+    fig = par('fig')
+    plt = par('plt')
+    panel_left = fig[1] + (fig[2] - fig[1]) * plt[1]
+    panel_right = fig[1] + (fig[2] - fig[1]) * plt[2]
+    panel_bottom = fig[3] + (fig[4] - fig[3]) * plt[3]
+    panel_top = fig[3] + (fig[4] - fig[3]) * plt[4]
+    vp = grid::viewport(
+        x = (panel_left + panel_right) / 2,
+        y = (panel_bottom + panel_top) / 2,
+        width = panel_right - panel_left,
+        height = panel_top - panel_bottom,
+        just = c('center', 'center')
+    )
+    print(g, vp = vp, newpage = FALSE)
 }
 
 debug_mode = ifelse(length(commandArgs(trailingOnly = TRUE)) == 1, "debug", "batch")
@@ -180,17 +197,25 @@ sort_labels = function(df_label, label_orders) {
 }
 
 sort_averaged_tc = function(tc) {
-    split_colnames = strsplit(colnames(tc), "_")
-    genus_names = c()
-    specific_names = c()
-    sample_group_names = c()
-    for (i in 1:length(split_colnames)) {
-        genus_names = c(genus_names, split_colnames[[i]][1])
-        specific_names = c(specific_names, split_colnames[[i]][2])
-        sample_group_names = c(sample_group_names, paste0(split_colnames[[i]][3:length(split_colnames[[i]])], collapse = '_'))
+    if (ncol(tc) <= 1) {
+        return(tc)
     }
+    split_colnames = strsplit(colnames(tc), "_", fixed = TRUE)
+    genus_names = vapply(split_colnames, function(x) {
+        if (length(x) >= 1) x[1] else ''
+    }, character(1))
+    specific_names = vapply(split_colnames, function(x) {
+        if (length(x) >= 2) x[2] else ''
+    }, character(1))
+    sample_group_names = vapply(split_colnames, function(x) {
+        if (length(x) <= 2) {
+            ''
+        } else {
+            paste0(x[3:length(x)], collapse = '_')
+        }
+    }, character(1))
     colname_order = order(sample_group_names, genus_names, specific_names)
-    tc = tc[, colname_order]
+    tc = tc[, colname_order, drop = FALSE]
     return(tc)
 }
 
@@ -220,6 +245,35 @@ color_children2parent = function(node) {
     return(node)
 }
 
+propagate_uniform_edge_colors = function(node) {
+    if (is.leaf(node) || (length(node) == 0)) {
+        return(node)
+    }
+    for (i in seq_along(node)) {
+        node[[i]] = propagate_uniform_edge_colors(node[[i]])
+    }
+    if (length(node) != 2) {
+        return(node)
+    }
+    child1_color = attr(node[[1]], "edgePar")[['col']]
+    child2_color = attr(node[[2]], "edgePar")[['col']]
+    if (is.null(child1_color) || is.null(child2_color)) {
+        return(node)
+    }
+    if (is.na(child1_color) || is.na(child2_color)) {
+        return(node)
+    }
+    if (identical(child1_color, child2_color)) {
+        edge_par = attr(node, "edgePar")
+        if (is.null(edge_par)) {
+            edge_par = list()
+        }
+        edge_par[['col']] = child1_color
+        attr(node, "edgePar") = edge_par
+    }
+    return(node)
+}
+
 map_color = function(redundant_variables, c) {
     uniq_var = unique(redundant_variables)
     uniq_col = rainbow_hcl(length(uniq_var), c = c)
@@ -230,37 +284,176 @@ map_color = function(redundant_variables, c) {
     return(df_redundant[['col']])
 }
 
-draw_multisp_heatmap = function(tc, df_label) {
-    tc_dist_matrix = cor(tc, method = 'pearson')
-    tc_dist_matrix[is.na(tc_dist_matrix)] = 0
-    ann_label = df_label[, c('scientific_name', 'sample_group')]
-    colnames(ann_label) = c('species', 'sample_group')
-    is_sp_first_appearance = (!duplicated(df_label[['sp_color']]))
-    sp_color = df_label[is_sp_first_appearance, 'sp_color']
-    sp_color = sp_color[order(df_label[is_sp_first_appearance, 'scientific_name'])]
-    is_cg_first_appearance = (!duplicated(df_label[['sample_group_color']]))
-    sample_group_color = df_label[is_cg_first_appearance, 'sample_group_color']
-    sample_group_color = sample_group_color[order(df_label[is_cg_first_appearance, 'sample_group'])]
-    ann_color = list(species = sp_color, sample_group = sample_group_color)
-    breaks = c(0, seq(0.3, 1, 0.01))
-    NMF::aheatmap(tc_dist_matrix, color = "-RdYlBu2:71", Rowv = NA, Colv = NA, revC = TRUE, legend = TRUE, breaks = breaks,
-                  annCol = ann_label, annRow = ann_label, annColors = ann_color, annLegend = FALSE, labRow = NA, labCol = NA)
+distance_from_correlation_matrix = function(cor_mat, na_fill = 1, epsilon = 0) {
+    cor_mat = as.matrix(cor_mat)
+    dist_mat = 1 - cor_mat
+    dist_mat[!is.finite(dist_mat)] = na_fill
+    dist_mat = (dist_mat + t(dist_mat)) / 2
+    dist_mat = dist_mat + epsilon
+    diag(dist_mat) = 0
+    return(as.dist(dist_mat))
 }
 
-draw_multisp_dendrogram = function(tc, df_label, df_metadata, cex.xlab, cex.yaxis, nboot = NULL, pvclust_file = NULL) {
+build_tc_plot_cache = function(tc) {
+    tc_cor_plot = as.matrix(suppressWarnings(cor(tc, method = 'pearson')))
+    tc_cor_plot[is.na(tc_cor_plot)] = 0
+    tc_nonnegative = tc
+    tc_nonnegative[tc_nonnegative < 0] = 0
+    tc_cor_boxplot = as.matrix(suppressWarnings(cor(tc_nonnegative, method = 'pearson')))
+    tc_cor_boxplot[is.na(tc_cor_boxplot)] = 0
+    tc_cor_pairwise = as.matrix(suppressWarnings(cor(tc, method = 'pearson', use = 'pairwise.complete.obs')))
+    list(
+        tc_cor_plot = tc_cor_plot,
+        tc_cor_boxplot = tc_cor_boxplot,
+        tc_dist_dendrogram = distance_from_correlation_matrix(tc_cor_pairwise, na_fill = 1, epsilon = 0),
+        tc_dist_mds = distance_from_correlation_matrix(tc_cor_pairwise, na_fill = 1, epsilon = 0.000000001)
+    )
+}
+
+build_averaged_plot_cache = function(averaged_orthologs) {
+    cache = list()
+    for (d in c('uncorrected', 'corrected')) {
+        cache[[d]] = build_tc_plot_cache(averaged_orthologs[[d]])
+    }
+    return(cache)
+}
+
+draw_multisp_heatmap = function(tc, df_label, tc_dist_matrix = NULL, font_size = 8) {
+    if (is.null(tc_dist_matrix)) {
+        tc_dist_matrix = as.matrix(suppressWarnings(cor(tc, method = 'pearson')))
+    } else {
+        tc_dist_matrix = as.matrix(tc_dist_matrix)
+    }
+    tc_dist_matrix[is.na(tc_dist_matrix)] = 0
+    n = ncol(tc_dist_matrix)
+    if (n == 0) {
+        g = ggplot2::ggplot() + ggplot2::theme_void(base_size = font_size, base_family = 'Helvetica')
+        draw_ggplot_in_current_plot_panel(g)
+        return(invisible(NULL))
+    }
+    row_names = rownames(tc_dist_matrix)
+    col_names = colnames(tc_dist_matrix)
+    if (is.null(row_names) || length(row_names) != n) {
+        row_names = as.character(seq_len(n))
+    }
+    if (is.null(col_names) || length(col_names) != n) {
+        col_names = as.character(seq_len(n))
+    }
+    label_key = paste0(gsub(' ', '_', as.character(df_label[['scientific_name']])), '_', as.character(df_label[['sample_group']]))
+    label_index = match(col_names, label_key)
+    sample_group_color = as.character(df_label[['sample_group_color']])[label_index]
+    sp_color = as.character(df_label[['sp_color']])[label_index]
+    sample_group_color[is.na(sample_group_color)] = 'gray70'
+    sp_color[is.na(sp_color)] = 'gray40'
+    rownames(tc_dist_matrix) = row_names
+    colnames(tc_dist_matrix) = col_names
+    df_heat = as.data.frame(as.table(tc_dist_matrix), stringsAsFactors = FALSE)
+    colnames(df_heat) = c('row_label', 'col_label', 'value')
+    df_heat[['row_idx']] = match(df_heat[['row_label']], row_names)
+    df_heat[['col_idx']] = match(df_heat[['col_label']], col_names)
+    df_heat[['x']] = df_heat[['col_idx']]
+    df_heat[['y']] = n - df_heat[['row_idx']] + 1
+
+    ann_gap = 0.25
+    top_sample_group_y = n + 1 + ann_gap
+    top_species_y = n + 2 + ann_gap
+    left_sample_group_x = 0 - ann_gap
+    left_species_x = -1 - ann_gap
+    rdylbu11 = c(
+        '#A50026', '#D73027', '#F46D43', '#FDAE61', '#FEE090', '#FFFFBF',
+        '#E0F3F8', '#ABD9E9', '#74ADD1', '#4575B4', '#313695'
+    )
+    heat_breaks = c(0, seq(0.3, 1, 0.01))
+    heat_colors = grDevices::colorRampPalette(rev(rdylbu11))(length(heat_breaks))
+    ann_points = rbind(
+        data.frame(
+            x = seq_len(n),
+            y = rep(top_sample_group_y, n),
+            color = sample_group_color,
+            stringsAsFactors = FALSE
+        ),
+        data.frame(
+            x = seq_len(n),
+            y = rep(top_species_y, n),
+            color = sp_color,
+            stringsAsFactors = FALSE
+        ),
+        data.frame(
+            x = rep(left_sample_group_x, n),
+            y = n - seq_len(n) + 1,
+            color = sample_group_color,
+            stringsAsFactors = FALSE
+        ),
+        data.frame(
+            x = rep(left_species_x, n),
+            y = n - seq_len(n) + 1,
+            color = sp_color,
+            stringsAsFactors = FALSE
+        )
+    )
+    g = ggplot2::ggplot() +
+        ggplot2::geom_tile(
+            data = df_heat,
+            mapping = ggplot2::aes(x = x, y = y, fill = value),
+            width = 0.98,
+            height = 0.98
+        ) +
+        ggplot2::geom_tile(
+            data = ann_points,
+            mapping = ggplot2::aes(x = x, y = y),
+            fill = ann_points[['color']],
+            width = 0.98,
+            height = 0.98,
+            inherit.aes = FALSE,
+            show.legend = FALSE
+        ) +
+        ggplot2::scale_fill_gradientn(
+            colors = heat_colors,
+            values = scales::rescale(heat_breaks, from = c(0, 1)),
+            limits = c(0, 1),
+            oob = scales::squish,
+            na.value = 'gray80',
+            guide = 'none'
+        ) +
+        ggplot2::scale_x_continuous(breaks = NULL, expand = c(0, 0)) +
+        ggplot2::scale_y_continuous(breaks = NULL, expand = c(0, 0)) +
+        ggplot2::coord_fixed(
+            xlim = c(left_species_x - 0.5, n + 0.5),
+            ylim = c(0.5, top_species_y + 0.5),
+            clip = 'off'
+        ) +
+        ggplot2::theme_bw(base_size = font_size, base_family = 'Helvetica') +
+        ggplot2::theme(
+            text = ggplot2::element_text(size = font_size, family = 'Helvetica', color = 'black'),
+            panel.grid = ggplot2::element_blank(),
+            axis.title = ggplot2::element_blank(),
+            axis.text = ggplot2::element_blank(),
+            axis.ticks = ggplot2::element_blank(),
+            panel.border = ggplot2::element_blank(),
+            plot.background = ggplot2::element_blank(),
+            panel.background = ggplot2::element_blank(),
+            plot.margin = ggplot2::margin(0, 0, 0, 0, unit = 'pt')
+        )
+    draw_ggplot_in_current_plot_panel(g)
+    invisible(NULL)
+}
+
+draw_multisp_dendrogram = function(tc, df_label, df_metadata, cex.xlab, cex.yaxis, nboot = NULL, pvclust_file = NULL, tc_dist_dist = NULL) {
     if (!is.null(nboot) || !is.null(pvclust_file)) {
         cat('Bootstrap-based dendrogram support is deprecated. Using hclust without bootstrap.\n')
     }
     colnames(tc) = sub("_.*", "", sub('_', ' ', colnames(tc)))
-    hc = hclust(calc_sample_distance(tc, method = 'pearson'), method = 'average')
+    if (is.null(tc_dist_dist)) {
+        tc_dist_dist = calc_sample_distance(tc, method = 'pearson')
+    }
+    attr(tc_dist_dist, 'Labels') = colnames(tc)
+    hc = hclust(tc_dist_dist, method = 'average')
     dend = as.dendrogram(hc)
     dend_colors = df_label[order.dendrogram(dend), 'sample_group_color']
     label_colors = df_label[order.dendrogram(dend), 'sp_color']
     dend = apply_leaf_label_colors(dend, label_colors)
     dend = apply_leaf_edge_colors(dend, dend_colors)
-    for (i in 1:ncol(tc)) {
-        dend = dendrapply(dend, color_children2parent)
-    }
+    dend = propagate_uniform_edge_colors(dend)
     dend = set_edge_lwd(dend, lwd = 2)
     par(cex = cex.xlab)
     plot(dend, las = 1, yaxt = 'n')
@@ -283,8 +476,12 @@ draw_multisp_dendrogram = function(tc, df_label, df_metadata, cex.xlab, cex.yaxi
     #legend("center", legend=legend_text, cex=1, pch=22, lty=0, lwd=1, pt.bg=legend_bg, col=legend_fg)
 }
 
-draw_multisp_pca = function(tc, df_label) {
-    tc_dist_matrix = cor(tc, method = 'pearson')
+draw_multisp_pca = function(tc, df_label, tc_dist_matrix = NULL) {
+    if (is.null(tc_dist_matrix)) {
+        tc_dist_matrix = as.matrix(suppressWarnings(cor(tc, method = 'pearson')))
+    } else {
+        tc_dist_matrix = as.matrix(tc_dist_matrix)
+    }
     tc_dist_matrix[is.na(tc_dist_matrix)] = 0
     set.seed(1)
     pca = prcomp(tc_dist_matrix)
@@ -304,8 +501,10 @@ draw_multisp_pca = function(tc, df_label) {
     )
 }
 
-draw_multisp_mds = function(tc, df_label) {
-    tc_dist_dist = calc_sample_distance(tc, method = 'pearson', na_fill = 1, epsilon = 0.000000001)
+draw_multisp_mds = function(tc, df_label, tc_dist_dist = NULL) {
+    if (is.null(tc_dist_dist)) {
+        tc_dist_dist = calc_sample_distance(tc, method = 'pearson', na_fill = 1, epsilon = 0.000000001)
+    }
     set.seed(1)
     mds_points = tryCatch(
     { as.matrix(stats::cmdscale(tc_dist_dist, k = 2)) },
@@ -382,16 +581,24 @@ extract_ortholog_mean_expression_table = function(df_singleog, averaged_tcs, lab
     averaged_orthologs = list()
     rowname_order = rownames(df_singleog)
     for (d in c('uncorrected', 'corrected')) {
-        averaged_orthologs[[d]] = df_singleog
-        averaged_orthologs[[d]][, 'busco_id'] = rownames(averaged_orthologs[[d]])
+        tc_slices = list()
         for (sp_filled in colnames(df_singleog)) {
             tc = averaged_tcs[[d]][[sp_filled]]
-            averaged_orthologs[[d]] = merge(averaged_orthologs[[d]], tc, by.x = sp_filled, by.y = "row.names", all.x = TRUE, all.y = FALSE, sort = FALSE)
+            if (is.null(tc)) {
+                next
+            }
+            row_idx = match(df_singleog[[sp_filled]], rownames(tc))
+            tc_slice = tc[row_idx, , drop = FALSE]
+            rownames(tc_slice) = rowname_order
+            tc_slices[[length(tc_slices) + 1]] = tc_slice
         }
-        num_remove_col = ncol(df_singleog) + 1
-        rownames(averaged_orthologs[[d]]) = averaged_orthologs[[d]][['busco_id']]
-        averaged_orthologs[[d]] = averaged_orthologs[[d]][rowname_order,]
-        averaged_orthologs[[d]] = averaged_orthologs[[d]][, -(1:num_remove_col)]
+        if (length(tc_slices) == 0) {
+            averaged_orthologs[[d]] = data.frame(matrix(nrow = length(rowname_order), ncol = 0))
+            rownames(averaged_orthologs[[d]]) = rowname_order
+        } else {
+            averaged_orthologs[[d]] = as.data.frame(do.call(cbind, tc_slices), check.names = FALSE)
+            rownames(averaged_orthologs[[d]]) = rowname_order
+        }
         averaged_orthologs[[d]] = sort_averaged_tc(averaged_orthologs[[d]])
         available_label_orders = label_orders[label_orders %in% colnames(averaged_orthologs[[d]])]
         averaged_orthologs[[d]] = averaged_orthologs[[d]][, available_label_orders]
@@ -426,17 +633,25 @@ extract_ortholog_unaveraged_expression_table = function(df_singleog, unaveraged_
     unaveraged_orthologs = list()
     rowname_order = rownames(df_singleog)
     for (d in c('uncorrected', 'corrected')) {
-        unaveraged_orthologs[[d]] = df_singleog
-        unaveraged_orthologs[[d]][, 'busco_id'] = rownames(unaveraged_orthologs[[d]])
+        tc_slices = list()
         for (sp_filled in colnames(df_singleog)) {
             tc = unaveraged_tcs[[d]][[sp_filled]]
+            if (is.null(tc)) {
+                next
+            }
             colnames(tc) = paste(sp_filled, colnames(tc), sep = '_')
-            unaveraged_orthologs[[d]] = merge(unaveraged_orthologs[[d]], tc, by.x = sp_filled, by.y = "row.names", all.x = TRUE, all.y = FALSE, sort = FALSE)
+            row_idx = match(df_singleog[[sp_filled]], rownames(tc))
+            tc_slice = tc[row_idx, , drop = FALSE]
+            rownames(tc_slice) = rowname_order
+            tc_slices[[length(tc_slices) + 1]] = tc_slice
         }
-        num_remove_col = length(spp) + 1
-        rownames(unaveraged_orthologs[[d]]) = unaveraged_orthologs[[d]][['busco_id']]
-        unaveraged_orthologs[[d]] = unaveraged_orthologs[[d]][rowname_order,]
-        unaveraged_orthologs[[d]] = unaveraged_orthologs[[d]][, -(1:num_remove_col)]
+        if (length(tc_slices) == 0) {
+            unaveraged_orthologs[[d]] = data.frame(matrix(nrow = length(rowname_order), ncol = 0))
+            rownames(unaveraged_orthologs[[d]]) = rowname_order
+        } else {
+            unaveraged_orthologs[[d]] = as.data.frame(do.call(cbind, tc_slices), check.names = FALSE)
+            rownames(unaveraged_orthologs[[d]]) = rowname_order
+        }
         tc_order = order(sub('.*_', '', colnames(unaveraged_orthologs[[d]])))
         unaveraged_orthologs[[d]] = unaveraged_orthologs[[d]][, tc_order]
     }
@@ -632,7 +847,7 @@ save_unaveraged_pca_plot = function(unaveraged_orthologs, df_color_unaveraged, d
             ymax = ymax + yunit
 
             g = ggplot(tmp, aes(x = !!rlang::sym(colx), y = !!rlang::sym(coly), color = sample_group)) +
-                theme_bw() +
+                theme_bw(base_size = font_size, base_family = 'Helvetica') +
                 geom_point(size = 0.5, alpha = 0.3, na.rm = TRUE) +
                 scale_color_manual(values = sample_group_colors) +
                 xlab(pc_contributions[pcx]) +
@@ -714,7 +929,7 @@ save_unaveraged_tsne_plot = function(unaveraged_orthologs, df_color_unaveraged) 
         ymax = ymax + yunit
 
         g = ggplot(tmp, aes(x = !!rlang::sym(colx), !!rlang::sym(coly), color = sample_group))
-        g = g + theme_bw()
+        g = g + theme_bw(base_size = font_size, base_family = 'Helvetica')
         g = g + geom_point(size = 0.5, na.rm = TRUE)
         g = g + scale_color_manual(values = sample_group_colors)
         g = g + xlab('t-SNE dimension 1')
@@ -740,10 +955,10 @@ save_unaveraged_tsne_plot = function(unaveraged_orthologs, df_color_unaveraged) 
     }
 }
 
-save_averaged_heatmap_plot = function(averaged_orthologs, df_color_averaged) {
+save_averaged_heatmap_plot = function(averaged_orthologs, df_color_averaged, averaged_plot_cache = NULL) {
     cat('Generating averaged heatmap.\n')
     file_name = 'csca_SVA_heatmap.pdf'
-    pdf(file_name, height = 3.3, width = 7.2) # full figure size = 9.7 x 7.2
+    pdf(file_name, height = 3.3, width = 7.2, family = 'Helvetica', pointsize = font_size) # full figure size = 9.7 x 7.2
     layout_matrix = matrix(c(
         1, 2, 2, 2, 2, 2, 2, 2, 2, 2,
         1, 3, 3, 3, 3, 3, 3, 3, 3, 3),
@@ -756,40 +971,60 @@ save_averaged_heatmap_plot = function(averaged_orthologs, df_color_averaged) {
     for (d in c('uncorrected', 'corrected')) {
         tc = averaged_orthologs[[d]]
         df_label = df_color_averaged
+        if (!is.null(averaged_plot_cache[[d]]$tc_cor_plot)) {
+            tc_dist_matrix = averaged_plot_cache[[d]]$tc_cor_plot
+        } else {
+            tc_dist_matrix = NULL
+        }
         par(mar = c(0, 0, 0, 0))
-        draw_multisp_heatmap(tc = tc, df_label = df_label)
+        draw_multisp_heatmap(tc = tc, df_label = df_label, tc_dist_matrix = tc_dist_matrix)
     }
     graphics.off()
 }
 
-save_averaged_dendrogram_plot = function(averaged_orthologs, df_color_averaged) {
+save_averaged_dendrogram_plot = function(averaged_orthologs, df_color_averaged, averaged_plot_cache = NULL) {
     cat('Generating averaged dendrogram.\n')
     file_name = 'csca_SVA_dendrogram.pdf'
-    pdf(file_name, height = 2.5, width = 7.2) # full figure size = 9.7 x 7.2
+    pdf(file_name, height = 2.5, width = 7.2, family = 'Helvetica', pointsize = font_size) # full figure size = 9.7 x 7.2
     layout_matrix = matrix(c(1, 2), 2, 1, byrow = TRUE)
     layout(t(layout_matrix))
     for (d in c('uncorrected', 'corrected')) {
         tc = averaged_orthologs[[d]]
         df_label = df_color_averaged
+        if (!is.null(averaged_plot_cache[[d]]$tc_dist_dendrogram)) {
+            tc_dist_dist = averaged_plot_cache[[d]]$tc_dist_dendrogram
+        } else {
+            tc_dist_dist = NULL
+        }
         par(cex = 0.5, mar = c(10, 5.5, 0, 0), mgp = c(4, 0.7, 0))
-        draw_multisp_dendrogram(tc = tc, df_label = df_label, df_metadata = df_metadata, cex.xlab = 0.3, cex.yaxis = 0.5)
+        draw_multisp_dendrogram(tc = tc, df_label = df_label, df_metadata = df_metadata, cex.xlab = 0.3, cex.yaxis = 0.5, tc_dist_dist = tc_dist_dist)
     }
     graphics.off()
 }
 
-save_averaged_dimensionality_reduction_summary = function(averaged_orthologs, df_color_averaged) {
+save_averaged_dimensionality_reduction_summary = function(averaged_orthologs, df_color_averaged, averaged_plot_cache = NULL) {
     cat('Generating averaged dimensionality reduction summary.\n')
     par(cex = 1)
     file_name = 'csca_averaged_summary.pdf'
-    pdf(file_name, height = 7.2, width = 7.2) # full figure size = 9.7 x 7.2
+    pdf(file_name, height = 7.2, width = 7.2, family = 'Helvetica', pointsize = font_size) # full figure size = 9.7 x 7.2
     layout_matrix = matrix(c(1, 1, 1, 4, 4, 4, 7, 7, 2, 2, 2, 5, 5, 5, 7, 7, 3, 3, 3, 6, 6, 6, 7, 7), 3, 8, byrow = TRUE)
     layout(layout_matrix)
     for (d in c('uncorrected', 'corrected')) {
         tc = averaged_orthologs[[d]]
         df_label = df_color_averaged
-        par(mar = c(4, 4, 0.1, 1)); draw_multisp_pca(tc = tc, df_label = df_label)
+        if (!is.null(averaged_plot_cache[[d]]$tc_cor_plot)) {
+            tc_dist_matrix = averaged_plot_cache[[d]]$tc_cor_plot
+        } else {
+            tc_dist_matrix = NULL
+        }
+        if (!is.null(averaged_plot_cache[[d]]$tc_dist_mds)) {
+            tc_dist_dist = averaged_plot_cache[[d]]$tc_dist_mds
+        } else {
+            tc_dist_dist = NULL
+        }
+        par(mar = c(4, 4, 0.1, 1)); draw_multisp_pca(tc = tc, df_label = df_label, tc_dist_matrix = tc_dist_matrix)
         par(mar = c(4, 4, 0.1, 1)); draw_multisp_tsne(tc = tc, df_label = df_label)
-        par(mar = c(4, 4, 0.1, 1)); draw_multisp_mds(tc = tc, df_label = df_label)
+        par(mar = c(4, 4, 0.1, 1)); draw_multisp_mds(tc = tc, df_label = df_label, tc_dist_dist = tc_dist_dist)
     }
     par(mar = c(0, 0, 0, 0)); draw_multisp_legend(df_label)
     graphics.off()
@@ -816,16 +1051,20 @@ draw_multisp_boxplot = function(df_metadata, tc_dist_matrix, fontsize = 8) {
     axis(side = 1, at = 0.35, labels = 'Sample group\nSpecies', padj = 0.5, hadj = 1, tick = FALSE)
 }
 
-save_averaged_box_plot = function(averaged_orthologs, df_color_averaged) {
+save_averaged_box_plot = function(averaged_orthologs, df_color_averaged, averaged_plot_cache = NULL) {
     cat('Generating averaged boxplot.\n')
     file_name = 'csca_boxplot.pdf'
-    pdf(file_name, height = 3.6, width = 7.2) # full figure size = 9.7 x 7.2
+    pdf(file_name, height = 3.6, width = 7.2, family = 'Helvetica', pointsize = font_size) # full figure size = 9.7 x 7.2
     par(mfrow = c(1, 2))
     for (d in c('uncorrected', 'corrected')) {
         tc = averaged_orthologs[[d]]
         tc[tc < 0] = 0
-        tc_dist_matrix = cor(tc, method = 'pearson')
-        tc_dist_matrix[is.na(tc_dist_matrix)] = 0
+        if (!is.null(averaged_plot_cache[[d]]$tc_cor_boxplot)) {
+            tc_dist_matrix = averaged_plot_cache[[d]]$tc_cor_boxplot
+        } else {
+            tc_dist_matrix = as.matrix(suppressWarnings(cor(tc, method = 'pearson')))
+            tc_dist_matrix[is.na(tc_dist_matrix)] = 0
+        }
         draw_multisp_boxplot(df_color_averaged, tc_dist_matrix, fontsize = 8)
     }
     graphics.off()
@@ -844,38 +1083,62 @@ calculate_correlation_within_group = function(unaveraged_orthologs, averaged_ort
         stopifnot(all(rownames(unaveraged_orthologs[[d]]) == rownames(ortholog_med)))
         target_col = paste0('within_group_cor_', d)
         nongroup_col = paste0('max_nongroup_cor_', d)
-        df_metadata[, target_col] = NA
-        df_metadata[, nongroup_col] = NA
-        for (sp_and_run in colnames(unaveraged_orthologs[[d]])) {
-            split_string = strsplit(sp_and_run, "_")[[1]]
-            sp = paste(split_string[1:2], collapse = " ")
-            sra_run = paste(split_string[3:length(split_string)], collapse = '_')
-            is_sra = (df_metadata[['run']] == sra_run) & (df_metadata[['scientific_name']] == sp)
-            if (sum(is_sra) == 0) {
+        df_metadata[, target_col] = NA_real_
+        df_metadata[, nongroup_col] = NA_real_
+        cor_by_group = as.matrix(suppressWarnings(cor(unaveraged_orthologs[[d]], ortholog_med, method = dist_method, use = 'pairwise.complete.obs')))
+        sample_ids = colnames(unaveraged_orthologs[[d]])
+        group_ids = colnames(ortholog_med)
+        is_expected_orientation = identical(rownames(cor_by_group), sample_ids) && identical(colnames(cor_by_group), group_ids)
+        is_transposed_orientation = identical(rownames(cor_by_group), group_ids) && identical(colnames(cor_by_group), sample_ids)
+        if (is_transposed_orientation) {
+            cor_by_group = t(cor_by_group)
+        }
+        expected_nrow = length(sample_ids)
+        expected_ncol = length(group_ids)
+        if ((!is_expected_orientation) && (!is_transposed_orientation)) {
+            if ((nrow(cor_by_group) == expected_ncol) && (ncol(cor_by_group) == expected_nrow)) {
+                cor_by_group = t(cor_by_group)
+            } else if ((nrow(cor_by_group) != expected_nrow) || (ncol(cor_by_group) != expected_ncol)) {
+                stop('Unexpected correlation matrix shape in calculate_correlation_within_group().')
+            }
+        }
+        rownames(cor_by_group) = sample_ids
+        colnames(cor_by_group) = group_ids
+
+        sample_species = sub('_', ' ', sub('^([^_]+_[^_]+)_.*$', '\\1', sample_ids))
+        sample_runs = sub('^[^_]+_[^_]+_', '', sample_ids)
+        sample_keys = paste(sample_species, sample_runs, sep = '|||')
+        metadata_keys = paste(df_metadata[['scientific_name']], df_metadata[['run']], sep = '|||')
+        metadata_key2idx = split(seq_len(nrow(df_metadata)), metadata_keys)
+
+        for (sample_idx in seq_along(sample_ids)) {
+            sp_and_run = sample_ids[[sample_idx]]
+            metadata_rows = metadata_key2idx[[sample_keys[[sample_idx]]]]
+            if (is.null(metadata_rows)) {
                 warning(paste('Sample skipped:', sp_and_run))
                 next
             }
-            sample_cg = df_metadata[is_sra, 'sample_group']
-            sample_values = unaveraged_orthologs[[d]][, sp_and_run]
-            for (sample_group in colnames(ortholog_med)) {
-                med_values = ortholog_med[, sample_group]
-                is_na = (is.na(sample_values) | is.na(med_values))
-                sample_values2 = sample_values[!is_na]
-                med_values2 = med_values[!is_na]
-                cor_coef = suppressWarnings(cor(sample_values2, med_values2, method = dist_method))
-                if (sample_cg == sample_group) {
-                    df_metadata[is_sra, target_col] = cor_coef
+            sample_cg = as.character(df_metadata[metadata_rows[1], 'sample_group'])
+            group_idx = match(sample_cg, colnames(cor_by_group))
+            if (is.na(group_idx)) {
+                warning(paste('Sample group not found in ortholog medians:', sample_cg))
+                next
+            }
+            within_cor = cor_by_group[sample_idx, group_idx]
+            row_vals = cor_by_group[sample_idx, , drop = TRUE]
+            if (length(row_vals) <= 1) {
+                max_nongroup_cor = NA_real_
+            } else {
+                nongroup_vals = row_vals[-group_idx]
+                nongroup_vals = nongroup_vals[is.finite(nongroup_vals)]
+                if (length(nongroup_vals) == 0) {
+                    max_nongroup_cor = NA_real_
                 } else {
-                    max_candidates = c(cor_coef, df_metadata[is_sra, nongroup_col])
-                    max_candidates = max_candidates[is.finite(max_candidates)]
-                    if (length(max_candidates) == 0) {
-                        max_value = NA_real_
-                    } else {
-                        max_value = max(max_candidates)
-                    }
-                    df_metadata[is_sra, nongroup_col] = max_value
+                    max_nongroup_cor = max(nongroup_vals)
                 }
             }
+            df_metadata[metadata_rows, target_col] = within_cor
+            df_metadata[metadata_rows, nongroup_col] = max_nongroup_cor
         }
     }
     return(df_metadata)
@@ -900,13 +1163,13 @@ save_group_cor_histogram = function(df_metadata, font_size = 8) {
             tmp = df_clean[!is.na(df_clean[[col]]), ]
             if (nrow(tmp) == 0) {
                 g = ggplot2::ggplot() +
-                    theme_void() +
-                    annotate('text', x = 0.5, y = 0.5, label = paste('No finite data:', col))
+                    theme_void(base_size = font_size, base_family = 'Helvetica') +
+                    annotate('text', x = 0.5, y = 0.5, label = paste('No finite data:', col), family = 'Helvetica', size = font_size / ggplot2::.pt)
             } else {
                 g = ggplot2::ggplot(tmp) +
                     geom_histogram(aes(x = !!rlang::sym(col), fill = !!rlang::sym(fill_by)),
                                    position = "stack", alpha = 0.7, bins = 40, na.rm = TRUE) +
-                    theme_bw(base_size = font_size) +
+                    theme_bw(base_size = font_size, base_family = 'Helvetica') +
                     coord_cartesian(xlim = c(0, 1)) +
                     labs(x = col, y = 'Count') +
                     theme(
@@ -933,13 +1196,13 @@ save_group_cor_histogram = function(df_metadata, font_size = 8) {
         if (name %in% names(plot_list)) {
             return(plot_list[[name]])
         }
-        ggplot2::ggplot() + theme_void() + annotate('text', x = 0.5, y = 0.5, label = paste('Missing panel:', name))
+        ggplot2::ggplot() + theme_void(base_size = font_size, base_family = 'Helvetica') + annotate('text', x = 0.5, y = 0.5, label = paste('Missing panel:', name), family = 'Helvetica', size = font_size / ggplot2::.pt)
     })
     save_ggplot_grid(plots, filename = "csca_within_group_cor.pdf", width = 7.2, height = 6.0, nrow = 2, ncol = 2)
 }
 
 extract_selected_tc_only = function(unaveraged_tcs, df_metadata) {
-    selected_runs = df_metadata[(df_metadata[['exclusion']] == 'no'), 'run']
+    selected_runs = unique(df_metadata[(df_metadata[['exclusion']] == 'no'), 'run'])
     for (d in c('uncorrected', 'corrected')) {
         scientific_names = names(unaveraged_tcs[[d]])
         for (sci_name in scientific_names) {
@@ -955,42 +1218,52 @@ extract_selected_tc_only = function(unaveraged_tcs, df_metadata) {
 }
 
 unaveraged2averaged = function(unaveraged_tcs, df_metadata, selected_sample_groups) {
-    is_sample_groups = list()
-    for (sample_group in selected_sample_groups) {
-        is_sample_groups[[sample_group]] = (df_metadata[['sample_group']] == sample_group)
-    }
-    is_sci_names = list()
-    for (sci_name in unique(df_metadata[['scientific_name']])) {
-        sci_name_ub = sub(' ', '_', sci_name)
-        is_sci_names[[sci_name_ub]] = (df_metadata[['scientific_name']] == sci_name)
-    }
-    is_not_excluded = (df_metadata[['exclusion']] == 'no')
+    metadata_selected = df_metadata[(df_metadata[['exclusion']] == 'no'), c('scientific_name', 'sample_group', 'run')]
+    metadata_selected[['sci_name_ub']] = sub(' ', '_', metadata_selected[['scientific_name']])
+    metadata_selected[['sci_group_key']] = paste(metadata_selected[['sci_name_ub']], metadata_selected[['sample_group']], sep = '|||')
+    runs_by_sci_group = split(metadata_selected[['run']], metadata_selected[['sci_group_key']])
+
     averaged_tcs = list()
     for (d in c('uncorrected', 'corrected')) {
         averaged_tcs[[d]] = list()
         scientific_names = names(unaveraged_tcs[[d]])
         for (sci_name in scientific_names) {
-            n_rows = nrow(unaveraged_tcs[[d]][[sci_name]])
-            averaged_tcs[[d]][[sci_name]] = data.frame(matrix(ncol = 0, nrow = n_rows))
-            rownames(averaged_tcs[[d]][[sci_name]]) = rownames(unaveraged_tcs[[d]][[sci_name]])
+            tc_df = unaveraged_tcs[[d]][[sci_name]]
+            tc_mat = as.matrix(tc_df)
+            tc_colnames = colnames(tc_mat)
+            averaged_cols = list()
+            averaged_colnames = c()
             for (sample_group in selected_sample_groups) {
-                is_target = (is_sample_groups[[sample_group]] &
-                    is_sci_names[[sci_name]] &
-                    is_not_excluded)
-                target_runs = df_metadata[is_target, 'run']
-                target_runs = target_runs[target_runs %in% colnames(unaveraged_tcs[[d]][[sci_name]])]
-                if (length(target_runs) == 0) {
+                key = paste(sci_name, sample_group, sep = '|||')
+                candidate_runs = runs_by_sci_group[[key]]
+                if (is.null(candidate_runs) || (length(candidate_runs) == 0)) {
                     next
                 }
-                label = paste(sub(' ', '_', sci_name), sample_group, sep = '_')
-                if (sum(is_target) == 1) {
-                    averaged_tcs[[d]][[sci_name]][, label] = unaveraged_tcs[[d]][[sci_name]][, target_runs]
-                } else {
-                    averaged_tcs[[d]][[sci_name]][, label] = apply(unaveraged_tcs[[d]][[sci_name]][, target_runs], 1, mean)
+                run_idx = match(candidate_runs, tc_colnames)
+                run_idx = run_idx[!is.na(run_idx)]
+                if (length(run_idx) == 0) {
+                    next
                 }
+                label = paste(sci_name, sample_group, sep = '_')
+                if (length(run_idx) == 1) {
+                    averaged_col = tc_mat[, run_idx]
+                } else {
+                    averaged_col = rowMeans(tc_mat[, run_idx, drop = FALSE], na.rm = FALSE)
+                }
+                averaged_cols[[length(averaged_cols) + 1]] = averaged_col
+                averaged_colnames = c(averaged_colnames, label)
             }
-            if (ncol(averaged_tcs[[d]][[sci_name]]) == 0) {
+            if (length(averaged_cols) == 0) {
                 averaged_tcs[[d]][[sci_name]] = NULL
+            } else {
+                averaged_df = as.data.frame(do.call(cbind, averaged_cols), check.names = FALSE)
+                if (length(averaged_cols) == 1) {
+                    colnames(averaged_df) = averaged_colnames[1]
+                } else {
+                    colnames(averaged_df) = averaged_colnames
+                }
+                rownames(averaged_df) = rownames(tc_df)
+                averaged_tcs[[d]][[sci_name]] = averaged_df
             }
         }
     }
@@ -1019,8 +1292,8 @@ save_group_cor_scatter = function(df_metadata, font_size = 8) {
                             is.finite(df_metadata$corrected_per_uncorrected_group_cor) &
                             is.finite(df_metadata$corrected_per_uncorrected_max_nongroup_cor), ]
     if (nrow(df_clean) == 0) {
-        p = ggplot() + theme_void() + annotate('text', x = 0.5, y = 0.5, label = 'No finite data for group-correlation scatter')
-        save_ggplot_grid(c(list(p), rep(list(ggplot() + theme_void()), 5)), filename = "csca_group_cor_scatter.pdf", width = 7.2, height = 4.8, nrow = 2, ncol = 3)
+        p = ggplot() + theme_void(base_size = font_size, base_family = 'Helvetica') + annotate('text', x = 0.5, y = 0.5, label = 'No finite data for group-correlation scatter', family = 'Helvetica', size = font_size / ggplot2::.pt)
+        save_ggplot_grid(c(list(p), rep(list(ggplot() + theme_void(base_size = font_size, base_family = 'Helvetica')), 5)), filename = "csca_group_cor_scatter.pdf", width = 7.2, height = 4.8, nrow = 2, ncol = 3)
         return(invisible(NULL))
     }
 
@@ -1032,7 +1305,7 @@ save_group_cor_scatter = function(df_metadata, font_size = 8) {
             coord_cartesian(xlim = x_limits, ylim = y_limits) +
             geom_point(alpha = alpha_value, na.rm = TRUE) +
             geom_abline(intercept = 0, slope = 1, linetype = 'dashed', color = 'blue') +
-            theme_bw() +
+            theme_bw(base_size = font_size, base_family = 'Helvetica') +
             theme(
                 text = element_text(size = font_size),
                 axis.text = element_text(size = font_size),
@@ -1053,7 +1326,7 @@ save_group_cor_scatter = function(df_metadata, font_size = 8) {
         make_scatter_panel('max_nongroup_cor_uncorrected', 'max_nongroup_cor_corrected', c(0, 1), c(0, 1)),
         make_scatter_panel('corrected_per_uncorrected_max_nongroup_cor', 'corrected_per_uncorrected_group_cor',
                            c(improvement_xymin, improvement_xymax), c(improvement_xymin, improvement_xymax)),
-        ggplot() + theme_void()
+        ggplot() + theme_void(base_size = font_size, base_family = 'Helvetica')
     )
     save_ggplot_grid(ps, filename = "csca_group_cor_scatter.pdf", width = 7.2, height = 4.8, nrow = 2, ncol = 3)
 }
@@ -1150,7 +1423,7 @@ save_delta_pcc_plot = function(directory, plot_title) {
     }
 
 
-    pdf(plot_title, height = 4.5, width = 4.5, fonts = "Helvetica", pointsize = 7)
+    pdf(plot_title, height = 4.5, width = 4.5, family = 'Helvetica', pointsize = font_size)
 
     plot(c(0.5, 4.5), c(0, 0.45), type = 'n', xlab = '', ylab = expression(Delta ~ "mean PCC"), las = 1, xaxt = 'n')
     boxplot(delta_means_df$delta_bwbw_wibw_uncorrected, at = 1, add = TRUE, col = 'gray', yaxt = 'n')
@@ -1205,7 +1478,7 @@ save_sample_number_heatmap <- function(df_metadata, font_size = 8, dpi = 300) {
     height <- base_height + (per_scientific_name_height * n_scientific_names)
     p <- ggplot(data = df_sample_count, aes(x = sample_group, y = scientific_name, fill = log2_Freq)) +
         geom_tile(color = "grey80") +
-        geom_text(aes(label = Freq), size = 3, color = "black") +
+        geom_text(aes(label = Freq), size = font_size / ggplot2::.pt, family = 'Helvetica', color = "black") +
         scale_fill_gradientn(
             colors = c("white", "#440154", "#482878", "#3E4989", "#31688E", "#35B779", "#4DCD63", "#76D730", "#B8DE29", "#FDE725"),
             values = sort(unique(c(0, log2_breaks / fill_max, 1))),
@@ -1219,7 +1492,7 @@ save_sample_number_heatmap <- function(df_metadata, font_size = 8, dpi = 300) {
         scale_y_discrete(
             limits = rev(unique(df_sample_count$scientific_name))
         ) +
-        theme_minimal() +
+        theme_minimal(base_size = font_size, base_family = 'Helvetica') +
         theme(
             axis.text.y = element_text(size = font_size),
             axis.text.x = element_text(size = font_size, angle = 90, hjust = 1),
@@ -1303,13 +1576,14 @@ for (d in c('uncorrected', 'corrected')) {
 }
 cat(nrow(imputed_unaveraged_orthologs[[d]]), 'orthologs were found after filtering and imputation.\n')
 df_metadata = calculate_correlation_within_group(unaveraged_orthologs, averaged_orthologs, df_metadata, selected_sample_groups)
+averaged_plot_cache = build_averaged_plot_cache(imputed_averaged_orthologs)
 tryCatch(save_group_cor_scatter(df_metadata, font_size = 8), error = function(e) cat("Warning: save_group_cor_scatter skipped:", conditionMessage(e), "\n"))
 tryCatch(save_group_cor_histogram(df_metadata, font_size = 8), error = function(e) cat("Warning: save_group_cor_histogram skipped:", conditionMessage(e), "\n"))
 tryCatch(save_averaged_tsne_plot(tc = imputed_unaveraged_orthologs[['corrected']], df_label = df_color_unaveraged), error = function(e) cat("Warning: save_averaged_tsne_plot skipped:", conditionMessage(e), "\n"))
-tryCatch(save_averaged_heatmap_plot(imputed_averaged_orthologs, df_color_averaged), error = function(e) cat("Warning: save_averaged_heatmap_plot skipped:", conditionMessage(e), "\n"))
-tryCatch(save_averaged_dendrogram_plot(imputed_averaged_orthologs, df_color_averaged), error = function(e) cat("Warning: save_averaged_dendrogram_plot skipped:", conditionMessage(e), "\n"))
-tryCatch(save_averaged_dimensionality_reduction_summary(imputed_averaged_orthologs, df_color_averaged), error = function(e) cat("Warning: save_averaged_dimensionality_reduction_summary skipped:", conditionMessage(e), "\n"))
-tryCatch(save_averaged_box_plot(imputed_averaged_orthologs, df_color_averaged), error = function(e) cat("Warning: save_averaged_box_plot skipped:", conditionMessage(e), "\n"))
+tryCatch(save_averaged_heatmap_plot(imputed_averaged_orthologs, df_color_averaged, averaged_plot_cache = averaged_plot_cache), error = function(e) cat("Warning: save_averaged_heatmap_plot skipped:", conditionMessage(e), "\n"))
+tryCatch(save_averaged_dendrogram_plot(imputed_averaged_orthologs, df_color_averaged, averaged_plot_cache = averaged_plot_cache), error = function(e) cat("Warning: save_averaged_dendrogram_plot skipped:", conditionMessage(e), "\n"))
+tryCatch(save_averaged_dimensionality_reduction_summary(imputed_averaged_orthologs, df_color_averaged, averaged_plot_cache = averaged_plot_cache), error = function(e) cat("Warning: save_averaged_dimensionality_reduction_summary skipped:", conditionMessage(e), "\n"))
+tryCatch(save_averaged_box_plot(imputed_averaged_orthologs, df_color_averaged, averaged_plot_cache = averaged_plot_cache), error = function(e) cat("Warning: save_averaged_box_plot skipped:", conditionMessage(e), "\n"))
 tryCatch({df_metadata = save_unaveraged_pca_plot(imputed_unaveraged_orthologs, df_color_unaveraged, df_metadata)}, error = function(e) cat("Warning: save_unaveraged_pca_plot skipped:", conditionMessage(e), "\n"))
 tryCatch(save_unaveraged_tsne_plot(imputed_unaveraged_orthologs, df_color_unaveraged), error = function(e) cat("Warning: save_unaveraged_tsne_plot skipped:", conditionMessage(e), "\n"))
 tryCatch(save_delta_pcc_plot(directory = dir_csca_input_table, plot_title = 'csca_delta_pcc_boxplot.pdf'), error = function(e) cat("Warning: save_delta_pcc_plot skipped:", conditionMessage(e), "\n"))

@@ -171,7 +171,7 @@ plot_norm_factor_histogram = function(df_metadata, font_size = 8) {
     for (fill_by in c('scientific_name', 'sample_group')) {
         g = ggplot2::ggplot(tmp) +
             geom_histogram(aes(x = log2(tmm_normalization_factor), fill = !!rlang::sym(fill_by)), position = "stack", alpha = 0.7, bins = 40) +
-            theme_bw(base_size = font_size) +
+            theme_bw(base_size = font_size, base_family = 'Helvetica') +
             xlim(c(-x_limit, x_limit)) +
             labs(x = 'log2(TMM normalization factor)', y = 'Count') +
             guides(fill = guide_legend(ncol = 1)) +
@@ -199,7 +199,7 @@ plot_norm_factor_scatter = function(df_metadata, font_size = 8) {
         geom_point(shape = 21, alpha = 0.7) +
         scale_fill_hue(l = 65) +
         scale_color_hue(l = 45) +
-        theme_bw(base_size = font_size) +
+        theme_bw(base_size = font_size, base_family = 'Helvetica') +
         ylim(c(-x_limit, x_limit)) +
         labs(x = 'log10(Library size)', y = 'log2(TMM normalization factor)') +
         guides(fill = guide_legend(ncol = 1), color = guide_legend(ncol = 1)) +
@@ -275,7 +275,7 @@ save_mean_expression_boxplot = function(df_nonzero, cnf_out2, uncorrected, corre
     for (i in 1:length(ps)) {
         ps[[i]] = ps[[i]] +
             ylim(0, 1000) +
-            theme_bw() +
+            theme_bw(base_size = font_size, base_family = 'Helvetica') +
             theme(
                 axis.text = element_text(size = font_size, color = 'black'),
                 axis.title = element_text(size = font_size, color = 'black'),
@@ -290,7 +290,7 @@ save_mean_expression_boxplot = function(df_nonzero, cnf_out2, uncorrected, corre
     }
 
     filename = file.path(dir_cstmm, 'cstmm_mean_expression_boxplot.pdf')
-    grDevices::pdf(file = filename, height = 3.6, width = 3.6)
+    grDevices::pdf(file = filename, height = 3.6, width = 3.6, family = 'Helvetica', pointsize = font_size)
     grid::grid.newpage()
     grid::pushViewport(grid::viewport(layout = grid::grid.layout(nrow = 1, ncol = 2)))
     print(ps[[1]], vp = grid::viewport(layout.pos.row = 1, layout.pos.col = 1))

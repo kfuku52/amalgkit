@@ -15,8 +15,9 @@ get_singlecopy_bool_index = function(df_gc, spp_filled, percent_singlecopy_thres
     return(is_singlecopy)
 }
 
-impute_expression = function(dat, num_pc = 4) {
+impute_expression = function(dat, num_pc = 4, max_iter = 50, tol = 1e-06) {
     impute_with_row_mean = function(mat) {
+        mat = as.matrix(mat)
         row_means = rowMeans(mat, na.rm = TRUE)
         row_means[is.na(row_means)] = 0
         for (i in seq_len(nrow(mat))) {
@@ -26,8 +27,48 @@ impute_expression = function(dat, num_pc = 4) {
         }
         return(mat)
     }
+    impute_with_iterative_pca = function(mat, n_pc, max_iter, tol) {
+        mat = as.matrix(mat)
+        missing_mask = is.na(mat)
+        if (!any(missing_mask)) {
+            return(mat)
+        }
+        mat_imputed = impute_with_row_mean(mat)
+        for (iter in seq_len(max_iter)) {
+            col_means = colMeans(mat_imputed)
+            centered = sweep(mat_imputed, 2, col_means, '-')
+            pca_fit = tryCatch(
+                stats::prcomp(centered, center = FALSE, scale. = FALSE, rank. = n_pc),
+                error = function(e) { NULL }
+            )
+            if (is.null(pca_fit)) {
+                return(NULL)
+            }
+            k = min(n_pc, ncol(pca_fit[['x']]), ncol(pca_fit[['rotation']]))
+            if (k < 1) {
+                return(NULL)
+            }
+            scores = pca_fit[['x']][, seq_len(k), drop = FALSE]
+            loadings = pca_fit[['rotation']][, seq_len(k), drop = FALSE]
+            reconstructed = scores %*% t(loadings)
+            reconstructed = sweep(reconstructed, 2, col_means, '+')
+            old_vals = mat_imputed[missing_mask]
+            new_vals = reconstructed[missing_mask]
+            if (any(!is.finite(new_vals))) {
+                return(NULL)
+            }
+            mat_imputed[missing_mask] = new_vals
+            delta = max(abs(old_vals - new_vals), na.rm = TRUE)
+            if (!is.finite(delta) || (delta < tol)) {
+                break
+            }
+        }
+        return(mat_imputed)
+    }
+
+    dat = as.matrix(dat)
     is_all_na_row = apply(dat, 1, function(x) { all(is.na(x)) })
-    tmp = dat[!is_all_na_row,]
+    tmp = dat[!is_all_na_row, , drop = FALSE]
     txt = 'Number of removed rows with all NA values in the expression matrix: %s\n'
     cat(sprintf(txt, formatC(sum(is_all_na_row), big.mark = ',')))
     num_na = sum(is.na(tmp))
@@ -42,24 +83,16 @@ impute_expression = function(dat, num_pc = 4) {
     }
     max_pc = min(nrow(tmp) - 1, ncol(tmp) - 1)
     if (is.na(max_pc) || max_pc < 1) {
-        cat('Too few observations for PPCA. Falling back to row-mean imputation.\n')
+        cat('Too few observations for PCA. Falling back to row-mean imputation.\n')
         imputed_dat = impute_with_row_mean(tmp)
     } else {
         if (num_pc > max_pc) {
             num_pc = max_pc
         }
-        pc = tryCatch(
-            pcaMethods::pca(tmp, nPcs = num_pc, method = 'ppca'),
-            error = function(e) {
-                cat('PPCA failed: ', conditionMessage(e), '\n', sep = '')
-                return(NULL)
-            }
-        )
-        if (is.null(pc)) {
-            cat('Falling back to row-mean imputation.\n')
+        imputed_dat = impute_with_iterative_pca(tmp, n_pc = num_pc, max_iter = max_iter, tol = tol)
+        if (is.null(imputed_dat)) {
+            cat('Base PCA imputation failed. Falling back to row-mean imputation.\n')
             imputed_dat = impute_with_row_mean(tmp)
-        } else {
-            imputed_dat = pcaMethods::completeObs(pc)
         }
     }
     num_negative = sum(imputed_dat < 0)
@@ -79,14 +112,30 @@ write_table_with_index_name = function(df, file_path, index_name = 'target_id', 
     write.table(df, file = file_path, sep = '\t', row.names = FALSE, col.names = TRUE, quote = FALSE)
 }
 
+format_genus_species_label = function(x) {
+    x = as.character(x)
+    x = gsub('_', ' ', x)
+    sapply(strsplit(x, '\\s+'), function(tokens) {
+        tokens = tokens[tokens != '']
+        if (length(tokens) >= 2) {
+            paste(tokens[1], paste(tokens[-1], collapse = ' '), sep = '\n')
+        } else if (length(tokens) == 1) {
+            tokens[1]
+        } else {
+            ''
+        }
+    })
+}
+
 save_exclusion_plot = function(df, out_path, font_size) {
     data_summary = aggregate(cbind(count = exclusion) ~ scientific_name + exclusion, df, length)
     data_summary[['total']] = ave(data_summary[['count']], data_summary[['scientific_name']], FUN = sum)
     data_summary[['proportion']] = data_summary[['count']] / data_summary[['total']]
     g = ggplot(data_summary, aes(x = scientific_name, y = count, fill = exclusion))
     g = g + geom_bar(stat = "identity")
+    g = g + scale_x_discrete(labels = format_genus_species_label)
     g = g + labs(x = "", y = "Count", fill = "exclusion")
-    g = g + theme_bw(base_size = font_size)
+    g = g + theme_bw(base_size = font_size, base_family = 'Helvetica')
     g = g + theme(
         axis.text = element_text(size = font_size, color = 'black'),
         axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
