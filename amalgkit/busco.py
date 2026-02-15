@@ -210,6 +210,6 @@ def busco_main(args):
         else:
             tool_out_dir = run_compleasm(fasta_path, sp, busco_dir, args, extra_args)
         full_table = find_full_table(tool_out_dir)
-        out_table = os.path.join(busco_dir, sp.replace(' ', '_') + '.tsv')
+        out_table = os.path.join(busco_dir, sp.replace(' ', '_') + '_busco.tsv')
         normalize_busco_table(full_table, out_table)
         print('BUSCO table written: {}'.format(out_table), flush=True)

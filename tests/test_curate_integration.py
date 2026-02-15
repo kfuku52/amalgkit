@@ -11,9 +11,7 @@ from amalgkit.curate import curate_main
 
 
 REQUIRED_R_PACKAGES = [
-    'NMF',
     'Rtsne',
-    'sva',
 ]
 
 

@@ -323,7 +323,7 @@ pcs.add_argument('--orthogroup_table', metavar='PATH', default=None, type=str, r
                       'Specify `--orthogroup_table ""` for single-species TMM normalization.')
 pcs.add_argument('--dir_busco', metavar='PATH', default=None, type=str, required=False, action='store',
                  help='default=%(default)s: PATH to the directory where per-species BUSCO full tables are stored. '
-                      'File names in this directory are expected to be GENUS_SPECIES_MISC.tsv: e.g., Arabidopsis_thaliana_full_table.tsv')
+                      'File names in this directory are expected to be GENUS_SPECIES_busco.tsv: e.g., Arabidopsis_thaliana_busco.tsv')
 pcs.add_argument('--dir_count', metavar='PATH', default='inferred', type=str, required=False, action='store',
                  help='default=%(default)s: AMALGKIT subfolder PATH to per-species transcript abundance data as produced by `amalgkit merge`. '
                       '"inferred" = out_dir/merge')
@@ -337,7 +337,7 @@ pca.add_argument('--orthogroup_table', metavar='PATH', default=None, type=str, r
                       'Specify `--orthogroup_table ""` for single-species TMM normalization.')
 pca.add_argument('--dir_busco', metavar='PATH', default=None, type=str, required=False, action='store',
                  help='default=%(default)s: PATH to the directory where per-species BUSCO full tables are stored. '
-                      'File names in this directory are expected to be GENUS_SPECIES_MISC.tsv: e.g., Arabidopsis_thaliana_full_table.tsv')
+                      'File names in this directory are expected to be GENUS_SPECIES_busco.tsv: e.g., Arabidopsis_thaliana_busco.tsv')
 pca.add_argument('--batch_effect_alg', metavar='(no|sva|ruvseq|combatseq)', choices=['no', 'sva', 'ruvseq', 'combatseq'],
                  default='sva', type=str, required=False, action='store',
                  help='default=%(default)s: Batch-effect removal algorithm used in `amalgkit curate`.')

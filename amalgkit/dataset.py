@@ -20,8 +20,8 @@ DATASETS = {
                 'Schizosaccharomyces_pombe.fa.gz',
             ],
             'busco': [
-                'Saccharomyces_cerevisiae.tsv',
-                'Schizosaccharomyces_pombe.tsv',
+                'Saccharomyces_cerevisiae_busco.tsv',
+                'Schizosaccharomyces_pombe_busco.tsv',
             ],
             'config': [
                 'control_term.config',

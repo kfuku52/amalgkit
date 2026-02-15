@@ -659,9 +659,11 @@ def generate_multisp_busco_table(dir_busco, outfile):
             lambda x: ','.join(x))
         tmp_table = tmp_table.reset_index()
         species_colname = species_infile
-        species_colname = re.sub(r'_', 'PLACEHOLDER', species_colname)
-        species_colname = re.sub(r'[-\._].*', '',  species_colname)
-        species_colname = re.sub(r'PLACEHOLDER', '_', species_colname)
+        species_colname = re.sub(r'\.tsv(?:\.gz)?$', '', species_colname, flags=re.IGNORECASE)
+        species_colname = re.sub(r'(_busco|_full_table.*)$', '', species_colname, flags=re.IGNORECASE)
+        matched = re.match(r'^([^_]+_[^_]+)', species_colname)
+        if matched is not None:
+            species_colname = matched.group(1)
         tmp_table = tmp_table.rename(columns={'sequence': species_colname})
         merged_table = merged_table.merge(tmp_table, on='busco_id', how='outer')
     merged_table.to_csv(outfile, sep='\t', index=None, doublequote=False)
