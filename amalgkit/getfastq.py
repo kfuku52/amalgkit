@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import time
+import urllib.parse
 import urllib.request
 from urllib.error import HTTPError
 
@@ -192,6 +193,27 @@ def remove_intermediate_files(sra_stat, ext, work_dir):
         else:
             print('Tried to delete but file not found:', file_path)
 
+def normalize_url_for_urllib(source_name, source_url, gcp_project=''):
+    source_url = str(source_url).strip()
+    parsed = urllib.parse.urlparse(source_url)
+    scheme = parsed.scheme.lower()
+    if (source_name == 'GCP') and (scheme == 'gs'):
+        bucket = parsed.netloc
+        object_path = parsed.path.lstrip('/')
+        if (bucket == '') or (object_path == ''):
+            return source_url
+        normalized = 'https://storage.googleapis.com/{}/{}'.format(bucket, object_path)
+        project = str(gcp_project).strip()
+        if project != '':
+            query_pairs = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+            if not any((k == 'userProject') for k, _ in query_pairs):
+                query_pairs.append(('userProject', project))
+            query = urllib.parse.urlencode(query_pairs)
+            if query != '':
+                normalized = normalized + '?' + query
+        return normalized
+    return source_url
+
 def download_sra(metadata, sra_stat, args, work_dir, overwrite=False):
     path_downloaded_sra = os.path.join(work_dir, sra_stat['sra_id'] + '.sra')
     if os.path.exists(path_downloaded_sra):
@@ -231,16 +253,41 @@ def download_sra(metadata, sra_stat, args, work_dir, overwrite=False):
             print('No source URL is available. Check whether --aws, --gcp, and --ncbi are properly set.')
         is_sra_download_completed = False
         for sra_source_name in sra_sources.keys():
-            print("Trying to fetch {} from {}: {}".format(sra_id, sra_source_name, sra_sources[sra_source_name]))
-            if str(sra_sources[sra_source_name])=='nan':
+            source_url_original = str(sra_sources[sra_source_name])
+            source_url = normalize_url_for_urllib(
+                source_name=sra_source_name,
+                source_url=source_url_original,
+                gcp_project=getattr(args, 'gcp_project', ''),
+            )
+            print("Trying to fetch {} from {}: {}".format(sra_id, sra_source_name, source_url_original))
+            if source_url != source_url_original:
+                print("Converted {} URL for urllib: {}".format(sra_source_name, source_url))
+            if source_url=='nan':
                 sys.stderr.write("Skipping. No URL for {}.\n".format(sra_source_name))
                 continue
+            scheme = urllib.parse.urlparse(source_url).scheme.lower()
+            if scheme not in ('http', 'https', 'ftp'):
+                msg = 'Skipping {} download source due to unsupported URL scheme for urllib: {}\n'
+                sys.stderr.write(msg.format(sra_source_name, scheme if scheme else '(none)'))
+                continue
             try:
-                urllib.request.urlretrieve(str(sra_sources[sra_source_name]), path_downloaded_sra)
+                urllib.request.urlretrieve(source_url, path_downloaded_sra)
                 if os.path.exists(path_downloaded_sra):
                     is_sra_download_completed = True
                     print('SRA file was downloaded with urllib.request from {}'.format(sra_source_name), flush=True)
                     break
+            except urllib.error.HTTPError as e:
+                if (sra_source_name == 'GCP') and (e.code == 400):
+                    details = ''
+                    try:
+                        details = e.read().decode('utf-8', errors='ignore')
+                    except Exception:
+                        details = ''
+                    if ('UserProjectMissing' in details) and (str(getattr(args, 'gcp_project', '')).strip() == ''):
+                        txt = 'GCP requester-pays bucket requires --gcp_project for billing context. '
+                        txt += 'Continuing with other download sources.\n'
+                        sys.stderr.write(txt)
+                sys.stderr.write("urllib.request failed SRA download from {}.\n".format(sra_source_name))
             except urllib.error.URLError:
                 sys.stderr.write("urllib.request failed SRA download from {}.\n".format(sra_source_name))
         if not is_sra_download_completed:

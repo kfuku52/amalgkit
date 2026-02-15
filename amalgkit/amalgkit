@@ -251,6 +251,8 @@ pge.add_argument('--aws', metavar='yes|no', default='yes', type=strtobool, requi
                  help='default=%(default)s: Download SRA files from Amazon Cloud (AWS), if available.')
 pge.add_argument('--gcp', metavar='yes|no', default='yes', type=strtobool, required=False, action='store',
                  help='default=%(default)s: Download SRA files from Google Cloud (GCP), if available.')
+pge.add_argument('--gcp_project', metavar='STR', default='', type=str, required=False, action='store',
+                 help='default=%(default)s: Google Cloud project for requester-pays GCP buckets (used when GCP_Link is gs://).')
 pge.add_argument('--read_name', metavar='default|trinity', default='default', type=str, required=False, action='store',
                  choices=['default', 'trinity'],
                  help='default=%(default)s: read name formatting for downstream analysis.')

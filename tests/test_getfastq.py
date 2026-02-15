@@ -7,6 +7,7 @@ import subprocess
 import xml.etree.ElementTree as ET
 
 import os
+import urllib.error
 
 from amalgkit.getfastq import (
     getfastq_search_term,
@@ -33,6 +34,7 @@ from amalgkit.getfastq import (
     write_fastp_stats,
     run_fastp,
     compress_fasterq_output_files,
+    download_sra,
     run_fasterq_dump,
     check_getfastq_dependency,
     remove_sra_path,
@@ -981,6 +983,98 @@ class TestSraRecovery:
         assert metadata.df.loc[0, 'num_written'] == 6667
         assert metadata.df.loc[0, 'num_dumped'] == 6667
         assert metadata.df.loc[0, 'num_rejected'] == 0
+
+
+class TestDownloadSraUrlSchemes:
+    @staticmethod
+    def _make_metadata(sra_id, aws_link, gcp_link, ncbi_link):
+        return Metadata.from_DataFrame(pandas.DataFrame({
+            'run': [sra_id],
+            'AWS_Link': [aws_link],
+            'GCP_Link': [gcp_link],
+            'NCBI_Link': [ncbi_link],
+        }))
+
+    @staticmethod
+    def _make_args(gcp_project=''):
+        args = type('Args', (), {})()
+        args.aws = True
+        args.gcp = True
+        args.ncbi = True
+        args.gcp_project = gcp_project
+        return args
+
+    def test_skips_non_http_schemes_before_urllib(self, tmp_path, monkeypatch, capsys):
+        sra_id = 'SRR_SCHEME'
+        metadata = self._make_metadata(
+            sra_id=sra_id,
+            aws_link='s3://bucket/path/to.sra',
+            gcp_link='gs://bucket/path/to.sra',
+            ncbi_link='https://example.invalid/path/to.sra',
+        )
+        sra_stat = {'sra_id': sra_id}
+        args = self._make_args()
+        called_urls = []
+
+        def fake_urlretrieve(url, _path):
+            called_urls.append(url)
+            raise urllib.error.URLError('network down')
+
+        monkeypatch.setattr('amalgkit.getfastq.urllib.request.urlretrieve', fake_urlretrieve)
+
+        with pytest.raises(AssertionError):
+            download_sra(metadata=metadata, sra_stat=sra_stat, args=args, work_dir=str(tmp_path), overwrite=False)
+
+        assert called_urls == [
+            'https://storage.googleapis.com/bucket/path/to.sra',
+            'https://example.invalid/path/to.sra',
+        ]
+        stderr = capsys.readouterr().err
+        assert 'unsupported URL scheme for urllib: s3' in stderr
+
+    def test_downloads_when_http_source_succeeds(self, tmp_path, monkeypatch):
+        sra_id = 'SRR_OK'
+        metadata = self._make_metadata(
+            sra_id=sra_id,
+            aws_link='',
+            gcp_link='',
+            ncbi_link='https://example.invalid/path/to.sra',
+        )
+        sra_stat = {'sra_id': sra_id}
+        args = self._make_args()
+        out_path = tmp_path / '{}.sra'.format(sra_id)
+
+        def fake_urlretrieve(_url, path):
+            with open(path, 'w') as f:
+                f.write('ok')
+            return (path, None)
+
+        monkeypatch.setattr('amalgkit.getfastq.urllib.request.urlretrieve', fake_urlretrieve)
+        download_sra(metadata=metadata, sra_stat=sra_stat, args=args, work_dir=str(tmp_path), overwrite=False)
+        assert out_path.exists()
+
+    def test_appends_user_project_for_gcp_requester_pays(self, tmp_path, monkeypatch):
+        sra_id = 'SRR_GCP_PROJECT'
+        metadata = self._make_metadata(
+            sra_id=sra_id,
+            aws_link='',
+            gcp_link='gs://bucket/path/to.sra',
+            ncbi_link='',
+        )
+        sra_stat = {'sra_id': sra_id}
+        args = self._make_args(gcp_project='test-project')
+        called_urls = []
+
+        def fake_urlretrieve(url, _path):
+            called_urls.append(url)
+            raise urllib.error.URLError('network down')
+
+        monkeypatch.setattr('amalgkit.getfastq.urllib.request.urlretrieve', fake_urlretrieve)
+
+        with pytest.raises(AssertionError):
+            download_sra(metadata=metadata, sra_stat=sra_stat, args=args, work_dir=str(tmp_path), overwrite=False)
+
+        assert called_urls == ['https://storage.googleapis.com/bucket/path/to.sra?userProject=test-project']
 
 
 class TestGetfastqDependencyChecks:
