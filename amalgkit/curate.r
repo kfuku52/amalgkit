@@ -707,6 +707,36 @@ draw_ggplot_in_current_plot_panel = function(g) {
     print(g, vp = vp, newpage = FALSE)
 }
 
+compute_dense_label_pt = function(num_labels, base_pt = 8, min_pt = 4, soft_limit = 20) {
+    if (is.na(num_labels) || (num_labels <= 0)) {
+        return(base_pt)
+    }
+    if (num_labels <= soft_limit) {
+        return(base_pt)
+    }
+    scaled_pt = base_pt * sqrt(soft_limit / num_labels)
+    max(min_pt, min(base_pt, scaled_pt))
+}
+
+shorten_run_labels = function(run_ids, max_len = 10, prefix_len = 4, suffix_len = 4) {
+    run_ids = as.character(run_ids)
+    short_ids = run_ids
+    is_long = nchar(run_ids) > max_len
+    if (any(is_long)) {
+        head_half = substr(run_ids[is_long], 1, prefix_len)
+        start_idx = pmax(1, nchar(run_ids[is_long]) - suffix_len + 1)
+        tail_half = mapply(
+            function(id, st) { substr(id, st, nchar(id)) },
+            run_ids[is_long],
+            start_idx,
+            USE.NAMES = FALSE
+        )
+        short_ids[is_long] = paste0(head_half, '..', tail_half)
+    }
+    # Avoid duplicated labels, which can break tile indexing.
+    make.unique(short_ids, sep = '.')
+}
+
 prepare_sample_correlation_heatmap_data = function(sra, tc_dist_matrix) {
     run_order = colnames(tc_dist_matrix)
     run_order = run_order[run_order %in% sra[['run']]]
@@ -723,11 +753,9 @@ prepare_sample_correlation_heatmap_data = function(sra, tc_dist_matrix) {
     tc_dist_matrix = as.matrix(tc_dist_matrix[run_order, run_order, drop = FALSE])
     colnames(tc_dist_matrix) = sra[sra$run %in% colnames(tc_dist_matrix), 'run']
     rownames(tc_dist_matrix) = colnames(tc_dist_matrix)
-    head_half = substr(colnames(tc_dist_matrix), 1, 4)
-    tail_half = substr(colnames(tc_dist_matrix), length(colnames(tc_dist_matrix)) - 3, length(colnames(tc_dist_matrix)))
-    short_names = paste0(head_half, '..', tail_half)
-    rownames(tc_dist_matrix) = ifelse(nchar(rownames(tc_dist_matrix)) <= 10, rownames(tc_dist_matrix), short_names)
-    colnames(tc_dist_matrix) = ifelse(nchar(colnames(tc_dist_matrix)) <= 10, colnames(tc_dist_matrix), short_names)
+    short_names = shorten_run_labels(colnames(tc_dist_matrix), max_len = 10, prefix_len = 4, suffix_len = 4)
+    rownames(tc_dist_matrix) = short_names
+    colnames(tc_dist_matrix) = short_names
     sra[['bioproject_primary']] = bp_primary[order_idx]
     return(list(sra = sra, tc_dist_matrix = tc_dist_matrix))
 }
@@ -772,7 +800,9 @@ draw_heatmap_base = function(sra, tc_dist_matrix, legend = TRUE, fontsize = 8) {
 
     has_legend = isTRUE(legend)
     legend_pad = ifelse(has_legend, 2.1, 0)
-    cex_txt = fontsize / 8
+    sample_label_pt = compute_dense_label_pt(num_labels = n, base_pt = fontsize, min_pt = 4, soft_limit = 20)
+    cex_txt = sample_label_pt / fontsize
+    cex_ann = 1
     longest_row_label = if (length(row_labels) > 0) max(nchar(row_labels), na.rm = TRUE) else 0
     row_label_pad = max(2.0, 0.22 * longest_row_label)
     left_axis_x = left_bp_x - row_label_pad
@@ -819,7 +849,7 @@ draw_heatmap_base = function(sra, tc_dist_matrix, legend = TRUE, fontsize = 8) {
     # Labels
     text(x = seq_len(n), y = top_bp_y + 1.10, labels = col_labels, srt = 90, adj = c(1, 0.5), cex = cex_txt, col = 'black', xpd = TRUE)
     text(x = c(left_bp_x, left_sg_x), y = top_bp_y + 1.10, labels = c('BioProject', 'Sample group'),
-         srt = 90, adj = c(1, 0.5), cex = cex_txt, col = 'black', xpd = TRUE)
+         srt = 90, adj = c(1, 0.5), cex = cex_ann, col = 'black', xpd = TRUE)
     text(x = row_label_x, y = n:1, labels = row_labels, adj = c(0, 0.5), cex = cex_txt, col = 'black', xpd = TRUE)
 
     # Border around heatmap body
@@ -843,7 +873,7 @@ draw_heatmap_base = function(sra, tc_dist_matrix, legend = TRUE, fontsize = 8) {
             bar_ytop + 1.25,
             labels = "Pearson's\ncorrelation\ncoefficient",
             adj = c(0, 1),
-            cex = cex_txt,
+            cex = cex_ann,
             col = 'black',
             xpd = TRUE
         )
@@ -851,7 +881,7 @@ draw_heatmap_base = function(sra, tc_dist_matrix, legend = TRUE, fontsize = 8) {
         tick_ys = bar_ybottom + (bar_ytop - bar_ybottom) * tick_vals
         for (i in seq_along(tick_vals)) {
             segments(bar_xright, tick_ys[i], bar_xright + 0.08, tick_ys[i], xpd = TRUE, col = 'black')
-            text(bar_xright + 0.10, tick_ys[i], labels = sprintf('%.1f', tick_vals[i]), adj = c(0, 0.5), cex = cex_txt, col = 'black', xpd = TRUE)
+            text(bar_xright + 0.10, tick_ys[i], labels = sprintf('%.1f', tick_vals[i]), adj = c(0, 0.5), cex = cex_ann, col = 'black', xpd = TRUE)
         }
     }
     invisible(NULL)
@@ -888,14 +918,20 @@ build_numeric_heatmap_ggplot = function(mat, breaks, colors, fontsize = 8, legen
     return(g)
 }
 
-draw_heatmap = function(sra, tc_dist_matrix, legend = TRUE, fontsize = 8) {
-    g = build_heatmap_ggplot(sra = sra, tc_dist_matrix = tc_dist_matrix, legend = legend, fontsize = fontsize)
+draw_heatmap = function(sra, tc_dist_matrix, legend = TRUE, show_colorbar = legend, fontsize = 8) {
+    g = build_heatmap_ggplot(
+        sra = sra,
+        tc_dist_matrix = tc_dist_matrix,
+        legend = legend,
+        show_colorbar = show_colorbar,
+        fontsize = fontsize
+    )
     draw_ggplot_in_current_plot_panel(g)
 }
 
 # ggplot2 heatmap for sample-correlation with row/column annotations.
 # This keeps the same information content: correlation tiles + bioproject/sample_group strips on top and left.
-build_heatmap_ggplot = function(sra, tc_dist_matrix, legend = TRUE, fontsize = 8) {
+build_heatmap_ggplot = function(sra, tc_dist_matrix, legend = TRUE, show_colorbar = legend, fontsize = 8) {
     run_order = colnames(tc_dist_matrix)
     run_order = run_order[run_order %in% sra[['run']]]
     if (length(run_order) == 0) {
@@ -912,16 +948,15 @@ build_heatmap_ggplot = function(sra, tc_dist_matrix, legend = TRUE, fontsize = 8
     tc_dist_matrix = as.matrix(tc_dist_matrix[run_order, run_order, drop = FALSE])
     colnames(tc_dist_matrix) = sra[sra$run %in% colnames(tc_dist_matrix), 'run']
     rownames(tc_dist_matrix) = colnames(tc_dist_matrix)
-    head_half = substr(colnames(tc_dist_matrix), 1, 4)
-    tail_half = substr(colnames(tc_dist_matrix), length(colnames(tc_dist_matrix)) - 3, length(colnames(tc_dist_matrix)))
-    short_names = paste0(head_half, '..', tail_half)
-    rownames(tc_dist_matrix) = ifelse(nchar(rownames(tc_dist_matrix)) <= 10, rownames(tc_dist_matrix), short_names)
-    colnames(tc_dist_matrix) = ifelse(nchar(colnames(tc_dist_matrix)) <= 10, colnames(tc_dist_matrix), short_names)
+    short_names = shorten_run_labels(colnames(tc_dist_matrix), max_len = 10, prefix_len = 4, suffix_len = 4)
+    rownames(tc_dist_matrix) = short_names
+    colnames(tc_dist_matrix) = short_names
     n = ncol(tc_dist_matrix)
     if (n == 0) {
         g = ggplot2::ggplot() + ggplot2::theme_void(base_size = fontsize, base_family = 'Helvetica')
         return(g)
     }
+    sample_label_pt = compute_dense_label_pt(num_labels = n, base_pt = fontsize, min_pt = 4, soft_limit = 20)
 
     # Heatmap matrix values
     row_names = rownames(tc_dist_matrix)
@@ -1042,7 +1077,7 @@ build_heatmap_ggplot = function(sra, tc_dist_matrix, legend = TRUE, fontsize = 8
             na.value = 'gray80',
             name = "Pearson's\ncorrelation\ncoefficient",
             breaks = c(0, 0.5, 1.0),
-            guide = ggplot2::guide_colorbar(order = 1, nbin = 256)
+            guide = if (show_colorbar) ggplot2::guide_colorbar(order = 1, nbin = 256) else 'none'
         ) +
         ggplot2::scale_color_manual(
             values = bp_palette,
@@ -1078,33 +1113,48 @@ build_heatmap_ggplot = function(sra, tc_dist_matrix, legend = TRUE, fontsize = 8
             text = ggplot2::element_text(size = fontsize, family = 'Helvetica', color = 'black'),
             panel.grid = ggplot2::element_blank(),
             axis.title = ggplot2::element_blank(),
-            axis.text.x = ggplot2::element_text(size = fontsize, color = 'black', angle = 90, hjust = 0, vjust = 0.5),
-            axis.text.y = ggplot2::element_text(size = fontsize, color = 'black'),
+            axis.text.x = ggplot2::element_text(size = sample_label_pt, color = 'black', angle = 90, hjust = 0, vjust = 0.5),
+            axis.text.y = ggplot2::element_text(size = sample_label_pt, color = 'black'),
             legend.title = ggplot2::element_text(size = fontsize, color = 'black'),
             legend.text = ggplot2::element_text(size = fontsize, color = 'black'),
             legend.box = 'vertical',
             legend.key.height = grid::unit(0.14, 'in'),
             legend.spacing.y = grid::unit(0.04, 'in'),
-            legend.position = if (legend) 'right' else 'none',
+            legend.position = if (legend || show_colorbar) 'right' else 'none',
             plot.margin = ggplot2::margin(6, 6, 6, 6, unit = 'pt')
         )
 
+    if (!show_colorbar) {
+        g = g + ggplot2::guides(fill = 'none')
+    }
     if (!legend) {
-        g = g + ggplot2::guides(fill = 'none', color = 'none', shape = 'none')
+        g = g + ggplot2::guides(color = 'none', shape = 'none')
     }
     return(g)
 }
 
-draw_heatmap_ggplot = function(sra, tc_dist_matrix, legend = TRUE, fontsize = 8) {
-    g = build_heatmap_ggplot(sra = sra, tc_dist_matrix = tc_dist_matrix, legend = legend, fontsize = fontsize)
+draw_heatmap_ggplot = function(sra, tc_dist_matrix, legend = TRUE, show_colorbar = legend, fontsize = 8) {
+    g = build_heatmap_ggplot(
+        sra = sra,
+        tc_dist_matrix = tc_dist_matrix,
+        legend = legend,
+        show_colorbar = show_colorbar,
+        fontsize = fontsize
+    )
     print(g)
     invisible(g)
 }
 
 save_heatmap_ggplot = function(sra, tc_dist_matrix, out_path, legend = TRUE, fontsize = 8, width = 3.6, height = 3.6,
-                               legend_extra_width = 2.0) {
-    g = build_heatmap_ggplot(sra = sra, tc_dist_matrix = tc_dist_matrix, legend = legend, fontsize = fontsize)
-    out_width = if (legend) width + legend_extra_width else width
+                               legend_extra_width = 2.0, show_colorbar = legend) {
+    g = build_heatmap_ggplot(
+        sra = sra,
+        tc_dist_matrix = tc_dist_matrix,
+        legend = legend,
+        show_colorbar = show_colorbar,
+        fontsize = fontsize
+    )
+    out_width = if (legend || show_colorbar) width + legend_extra_width else width
     ggplot2::ggsave(filename = out_path, plot = g, width = out_width, height = height, units = 'in')
     invisible(g)
 }
@@ -1131,12 +1181,11 @@ draw_dendrogram = function(sra, tc_dist_dist, fontsize = 8) {
         dend = dendrapply(dend, color_children2parent)
     }
     dend = set_edge_lwd(dend, lwd = 1)
-    cex.xlab = min(fontsize, max(0.2, 0.5 / log10(nrow(sra)), na.rm = TRUE), na.rm = TRUE)
-    par(cex = cex.xlab)
-    plot(dend, las = 1, axes = FALSE)
-    par(cex = 1)
-    axis(side = 2, line = 0, las = 1)
-    mtext("Distance", side = 2, line = 8.5, outer = FALSE)
+    sample_label_pt = compute_dense_label_pt(num_labels = nrow(sra), base_pt = fontsize, min_pt = 3.5, soft_limit = 18)
+    sample_label_cex = sample_label_pt / fontsize
+    plot(dend, las = 1, axes = FALSE, cex = sample_label_cex)
+    axis(side = 2, line = 0, las = 1, cex.axis = 1)
+    mtext("Distance", side = 2, line = 8.5, outer = FALSE, cex = 1)
     n = nrow(sra)
     symbols(
         1:n,
@@ -1327,6 +1376,19 @@ draw_sva_summary = function(sva_out, tc, sra, fontsize) {
         if (num_sv == 0) {
             cat('No surrogate variables found.\n')
             plot(c(0, 1), c(0, 1), ann = FALSE, bty = "n", type = "n", xaxt = "n", yaxt = "n")
+            text(
+                x = 0.5,
+                y = 0.58,
+                labels = "No SV detected",
+                cex = 1,
+                font = 2
+            )
+            text(
+                x = 0.5,
+                y = 0.42,
+                labels = "Adjusted R-squared not available",
+                cex = 1
+            )
             return(data.frame())
         }
         df = data.frame(matrix(NA, num_sv, length(cols)))
@@ -1382,8 +1444,8 @@ draw_boxplot = function(sra, tc_dist_matrix, fontsize = 8) {
     lines(c(1, 2), means[1:2], col = "red")
     lines(c(3, 4), means[3:4], col = "red")
 
-    text(x = 1.5, y = max(means[1:2]) + 0.05, labels = round(abs(means[1] - means[2]), 2), col = "red", cex = 0.8)
-    text(x = 3.5, y = max(means[3:4]) + 0.05, labels = round(abs(means[3] - means[4]), 2), col = "red", cex = 0.8)
+    text(x = 1.5, y = max(means[1:2]) + 0.05, labels = round(abs(means[1] - means[2]), 2), col = "red", cex = 1)
+    text(x = 3.5, y = max(means[3:4]) + 0.05, labels = round(abs(means[3] - means[4]), 2), col = "red", cex = 1)
 
     labels = c("bw\nbw", "bw\nwi", "wi\nbw", "wi\nwi")
     axis(side = 1, at = c(1, 2, 3, 4), labels = labels, padj = 0.5)
@@ -1392,7 +1454,7 @@ draw_boxplot = function(sra, tc_dist_matrix, fontsize = 8) {
     # Add legend in the bottom left corner
     legend("bottomleft", legend = c("mean PCC", expression(Delta ~ "mean PCC")),
            pch = c(16, NA), col = c("red", "red"),
-           lty = c(NA, 1), bty = "n", cex = 0.8,
+           lty = c(NA, 1), bty = "n", cex = 1,
            text.width = max(strwidth(c("mean PCC", expression(Delta ~ "mean PCC")))))  # Align text
 
 }
@@ -1539,6 +1601,7 @@ save_plot = function(tc, sra, sva_out, dist_method, file, selected_sample_groups
     tc = out[["tc"]]
     sra = out[["sra"]]
     pdf(file.path(dir_pdf, paste0(file, ".pdf")), height = 8, width = 7.2, family = 'Helvetica', pointsize = fontsize)
+    par(family = 'Helvetica', cex = 1, cex.axis = 1, cex.lab = 1, cex.main = 1)
     layout_matrix = matrix(c(2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1,
                              2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 1, 1,
                              1, 1, 1, 1, 1, 3, 3, 3, 4, 4, 4, 5, 5, 5, 6, 6, 6, 3, 3, 3, 4, 4, 4, 5, 5, 5, 6, 6, 6, 3, 3,
@@ -1565,7 +1628,7 @@ save_plot = function(tc, sra, sva_out, dist_method, file, selected_sample_groups
     par(mar = c(6, 6, 1, 0))
     draw_dendrogram(sra, tc_dist_dist, fontsize)
     par(mar = c(0, 0, 0, 0))
-    draw_heatmap(sra, tc_dist_matrix, legend = FALSE)
+    draw_heatmap(sra, tc_dist_matrix, legend = FALSE, show_colorbar = TRUE)
     # draw_dendrogram_pvclust(sra, tc, nboot=0, pvclust_file=NULL, cex.xlab=0.6)
     par(mar = c(4, 4, 0.1, 1))
     draw_pca(sra, tc_dist_matrix, fontsize)
