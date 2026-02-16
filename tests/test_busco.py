@@ -1,5 +1,6 @@
 import os
 import pytest
+import pandas
 
 from types import SimpleNamespace
 
@@ -7,8 +8,11 @@ from amalgkit.busco import (
     normalize_busco_table,
     find_full_table,
     resolve_species_fasta,
+    collect_species,
     select_tool,
+    busco_main,
 )
+from amalgkit.util import Metadata
 
 
 def write_busco_table(path, rows):
@@ -53,6 +57,16 @@ def test_find_full_table_multiple_raises(tmp_path):
         find_full_table(str(out_dir))
 
 
+def test_find_full_table_nested_gz(tmp_path):
+    out_dir = tmp_path / "busco_out"
+    nested = out_dir / "run_busco" / "busco_output"
+    nested.mkdir(parents=True)
+    table = nested / "full_table.specific.busco.tsv.gz"
+    table.write_text("Busco id\tStatus\tSequence\tScore\tLength\tOrthoDB url\tDescription\n")
+    found = find_full_table(str(out_dir))
+    assert os.path.realpath(found) == os.path.realpath(str(table))
+
+
 def test_resolve_species_fasta(tmp_path):
     fasta_dir = tmp_path / "fasta"
     fasta_dir.mkdir()
@@ -60,6 +74,49 @@ def test_resolve_species_fasta(tmp_path):
     fasta_path.write_text(">seq\nATGC\n")
     result = resolve_species_fasta("Homo sapiens", str(fasta_dir))
     assert os.path.realpath(result) == os.path.realpath(str(fasta_path))
+
+
+def test_resolve_species_fasta_multiple_raises(tmp_path):
+    fasta_dir = tmp_path / "fasta"
+    fasta_dir.mkdir()
+    (fasta_dir / "Homo_sapiens.fa").write_text(">seq1\nATGC\n")
+    (fasta_dir / "Homo_sapiens.v1.fa").write_text(">seq2\nATGC\n")
+    with pytest.raises(ValueError, match="Found multiple reference fasta files"):
+        resolve_species_fasta("Homo sapiens", str(fasta_dir))
+
+
+def test_collect_species_reuses_prefetched_filenames(tmp_path, monkeypatch):
+    out_dir = tmp_path / "out"
+    fasta_dir = out_dir / "fasta"
+    fasta_dir.mkdir(parents=True)
+    metadata = Metadata.from_DataFrame(pandas.DataFrame({
+        'scientific_name': ['Species A', 'Species B'],
+        'run': ['R1', 'R2'],
+        'exclusion': ['no', 'no'],
+    }))
+    args = SimpleNamespace(out_dir=str(out_dir), fasta_dir='inferred', fasta=None)
+
+    prefetched = ['Species_A.fa', 'Species_B.fa']
+    calls = []
+
+    def fake_list_fasta_filenames(_fasta_dir):
+        return prefetched
+
+    def fake_resolve_species_fasta(sp, _fasta_dir, fasta_filenames=None):
+        calls.append(fasta_filenames)
+        return os.path.join(str(fasta_dir), sp.replace(' ', '_') + '.fa')
+
+    monkeypatch.setattr('amalgkit.busco.list_fasta_filenames', fake_list_fasta_filenames)
+    monkeypatch.setattr('amalgkit.busco.resolve_species_fasta', fake_resolve_species_fasta)
+
+    species, fasta_map = collect_species(args, metadata)
+
+    assert species == ['Species A', 'Species B']
+    assert len(calls) == 2
+    assert calls[0] is prefetched
+    assert calls[1] is prefetched
+    assert fasta_map['Species A'].endswith('Species_A.fa')
+    assert fasta_map['Species B'].endswith('Species_B.fa')
 
 
 def test_select_tool_auto_prefers_compleasm(monkeypatch):
@@ -84,3 +141,72 @@ def test_select_tool_auto_falls_back_to_busco(monkeypatch):
 
     monkeypatch.setattr('shutil.which', fake_which)
     assert select_tool(args) == 'busco'
+
+
+def test_busco_main_rejects_nonpositive_species_jobs(tmp_path):
+    args = SimpleNamespace(
+        lineage='eukaryota_odb12',
+        species_jobs=0,
+        tool='auto',
+        tool_args=None,
+        fasta=None,
+        out_dir=str(tmp_path),
+        metadata='inferred',
+        fasta_dir='inferred',
+        threads=1,
+        redo=False,
+        busco_exe='busco',
+        compleasm_exe='compleasm',
+    )
+    with pytest.raises(ValueError, match='--species_jobs must be > 0'):
+        busco_main(args)
+
+
+def test_busco_main_parallel_species_jobs(tmp_path, monkeypatch):
+    out_dir = tmp_path / 'out'
+    fasta_dir = out_dir / 'fasta'
+    out_dir.mkdir()
+    fasta_dir.mkdir(parents=True)
+    (fasta_dir / 'Species_A.fa').write_text('>a\nAAAA\n')
+    (fasta_dir / 'Species_B.fa').write_text('>b\nCCCC\n')
+
+    metadata = Metadata.from_DataFrame(pandas.DataFrame({
+        'scientific_name': ['Species A', 'Species B'],
+        'run': ['R1', 'R2'],
+        'exclusion': ['no', 'no'],
+    }))
+    args = SimpleNamespace(
+        lineage='eukaryota_odb12',
+        species_jobs=2,
+        tool='auto',
+        tool_args=None,
+        fasta=None,
+        out_dir=str(out_dir),
+        metadata='inferred',
+        fasta_dir='inferred',
+        threads=1,
+        redo=False,
+        busco_exe='busco',
+        compleasm_exe='compleasm',
+    )
+    processed = []
+
+    def fake_run_busco(fasta_path, sci_name, output_root, _args, _extra):
+        processed.append(sci_name)
+        out_species = os.path.join(output_root, sci_name.replace(' ', '_'))
+        os.makedirs(out_species, exist_ok=True)
+        table = os.path.join(out_species, 'full_table.tsv')
+        with open(table, 'w') as f:
+            f.write('Busco id\tStatus\tSequence\tScore\tLength\tOrthoDB url\tDescription\n')
+            f.write('BUSCO1\tComplete\tseq1\t100\t200\turl\tdesc\n')
+        return out_species
+
+    monkeypatch.setattr('amalgkit.busco.load_metadata', lambda _args: metadata)
+    monkeypatch.setattr('amalgkit.busco.select_tool', lambda _args: 'busco')
+    monkeypatch.setattr('amalgkit.busco.run_busco', fake_run_busco)
+
+    busco_main(args)
+
+    assert set(processed) == {'Species A', 'Species B'}
+    assert (out_dir / 'busco' / 'Species_A_busco.tsv').exists()
+    assert (out_dir / 'busco' / 'Species_B_busco.tsv').exists()

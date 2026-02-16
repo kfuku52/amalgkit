@@ -17,21 +17,29 @@ def get_sample_group_string(args):
     return sample_group_string
 
 def get_spp_from_dir(dir_curate):
-    files = os.listdir(dir_curate)
-    spp = [ f for f in files if (not f.startswith('.')) & (not f.startswith('tmp.')) ]
-    return spp
+    spp = []
+    with os.scandir(dir_curate) as entries:
+        for entry in entries:
+            if (not entry.is_dir()) or entry.name.startswith('.') or entry.name.startswith('tmp.'):
+                continue
+            spp.append(entry.name)
+    return sorted(spp)
 
 def generate_csca_input_symlinks(dir_csca_input_table, dir_curate, spp):
     if os.path.exists(dir_csca_input_table):
         shutil.rmtree(dir_csca_input_table)
     os.makedirs(dir_csca_input_table)
     for sp in spp:
-        files = os.listdir(os.path.join(dir_curate, sp, 'tables'))
-        files = [ f for f in files if f.endswith('.tsv') ]
-        for file in files:
-            path_src = os.path.join(dir_curate, sp, 'tables', file)
+        path_tables_dir = os.path.join(dir_curate, sp, 'tables')
+        files = []
+        with os.scandir(path_tables_dir) as entries:
+            for entry in entries:
+                if (not entry.is_file()) or (not entry.name.endswith('.tsv')):
+                    continue
+                files.append((entry.name, entry.path))
+        for file, path_src in sorted(files):
             path_dst = os.path.join(dir_csca_input_table, file)
-            if os.path.exists(path_dst):
+            if os.path.lexists(path_dst):
                 os.remove(path_dst)
             os.symlink(path_src, path_dst)
     return None
@@ -72,5 +80,4 @@ def csca_main(args):
                  ]
     print(f"Rscript command: {' '.join(call_list)}")
     subprocess.call(call_list)
-    for f in glob.glob("tmp.amalgkit.*"):
-        os.remove(f)
+    cleanup_tmp_amalgkit_files(work_dir='.')

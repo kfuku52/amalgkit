@@ -15,6 +15,7 @@ from amalgkit.getfastq import (
     getfastq_metadata,
     get_range,
     get_layout,
+    concat_fastq,
     remove_experiment_without_run,
     check_metadata_validity,
     initialize_global_params,
@@ -37,6 +38,8 @@ from amalgkit.getfastq import (
     download_sra,
     run_fasterq_dump,
     check_getfastq_dependency,
+    count_fastq_records,
+    remove_sra_files,
     remove_sra_path,
 )
 from amalgkit.util import Metadata
@@ -53,6 +56,36 @@ class TestGetfastqSearchTerm:
     def test_none_additional(self):
         result = getfastq_search_term('PRJNA1', None)
         assert result == 'PRJNA1'
+
+
+class TestCountFastqRecords:
+    @staticmethod
+    def _write_fastq(path, reads):
+        with open(path, 'wt') as out:
+            for i, seq in enumerate(reads):
+                out.write('@r{}\n'.format(i))
+                out.write(seq + '\n')
+                out.write('+\n')
+                out.write('I' * len(seq) + '\n')
+
+    def test_counts_records_plain_and_gz(self, tmp_path):
+        plain = tmp_path / 'x.fastq'
+        self._write_fastq(str(plain), ['AAAA', 'CCCC', 'GGGG'])
+        gz = tmp_path / 'x.fastq.gz'
+        with open(str(plain), 'rb') as fin, gzip.open(str(gz), 'wb') as fout:
+            fout.write(fin.read())
+
+        assert count_fastq_records(str(plain)) == 3
+        assert count_fastq_records(str(gz)) == 3
+
+    def test_warns_on_truncated_fastq(self, tmp_path, capsys):
+        path = tmp_path / 'bad.fastq'
+        with open(path, 'wt') as out:
+            out.write('@r0\nAAAA\n+\nIIII\n')
+            out.write('@r1\nCCCC\n+\n')  # truncated
+
+        assert count_fastq_records(str(path)) == 1
+        assert 'not divisible by 4' in capsys.readouterr().err
 
 
 class TestGetfastqXmlRetrieval:
@@ -94,6 +127,40 @@ class TestGetfastqXmlRetrieval:
         assert root is not None
         assert len(efetch_calls) == 2
         assert [len(c) for c in efetch_calls] == [1000, 1000]
+
+    def test_merges_package_set_chunks_without_nested_container(self, monkeypatch):
+        id_list = ['ID{}'.format(i) for i in range(2000)]
+        monkeypatch.setattr('amalgkit.getfastq.Entrez.esearch', lambda **kwargs: object())
+        monkeypatch.setattr('amalgkit.getfastq.Entrez.read', lambda handle: {'IdList': id_list})
+        monkeypatch.setattr('amalgkit.getfastq.Entrez.efetch', lambda **kwargs: object())
+
+        def fake_parse(_handle):
+            root = ET.Element('EXPERIMENT_PACKAGE_SET')
+            ET.SubElement(root, 'EXPERIMENT_PACKAGE')
+            return self._DummyTree(root)
+
+        monkeypatch.setattr('amalgkit.getfastq.ET.parse', fake_parse)
+
+        root = getfastq_getxml(search_term='SRR000000', retmax=1000)
+
+        assert root.tag == 'EXPERIMENT_PACKAGE_SET'
+        assert len(root.findall('./EXPERIMENT_PACKAGE')) == 2
+        assert len(root.findall('./EXPERIMENT_PACKAGE_SET')) == 0
+
+    def test_raises_when_error_tag_present(self, monkeypatch):
+        monkeypatch.setattr('amalgkit.getfastq.Entrez.esearch', lambda **kwargs: object())
+        monkeypatch.setattr('amalgkit.getfastq.Entrez.read', lambda handle: {'IdList': ['ID1']})
+        monkeypatch.setattr('amalgkit.getfastq.Entrez.efetch', lambda **kwargs: object())
+        err_root = ET.Element('EXPERIMENT_PACKAGE')
+        err = ET.SubElement(err_root, 'Error')
+        err.text = 'SRA error'
+        monkeypatch.setattr(
+            'amalgkit.getfastq.ET.parse',
+            lambda handle: self._DummyTree(err_root)
+        )
+
+        with pytest.raises(Exception, match='<Error> found in the xml'):
+            getfastq_getxml(search_term='SRR000000', retmax=1000)
 
 
 class TestGetfastqMetadataIdListParsing:
@@ -214,6 +281,76 @@ class TestGetLayout:
         }))
         result = get_layout(Args(), m)
         assert result == 'single'
+
+
+# ---------------------------------------------------------------------------
+# concat_fastq
+# ---------------------------------------------------------------------------
+
+class TestConcatFastq:
+    def _metadata_single(self, runs):
+        return Metadata.from_DataFrame(pandas.DataFrame({
+            'run': runs,
+            'lib_layout': ['single'] * len(runs),
+            'total_spots': [1] * len(runs),
+            'spot_length': [4] * len(runs),
+            'total_bases': [4] * len(runs),
+            'scientific_name': ['Sp'] * len(runs),
+            'exclusion': ['no'] * len(runs),
+        }))
+
+    def test_single_file_uses_single_directory_scan(self, tmp_path, monkeypatch):
+        (tmp_path / 'SRR001.amalgkit.fastq.gz').write_text('ACGT\n')
+        metadata = self._metadata_single(['SRR001'])
+        args = type('Args', (), {
+            'layout': 'auto',
+            'id': 'NEWID_',
+            'id_list': None,
+            'remove_tmp': False,
+        })()
+        g = {'num_bp_per_sra': 4}
+        calls = {'num': 0}
+
+        def fake_list_run_dir_files(work_dir):
+            calls['num'] += 1
+            return set(os.listdir(work_dir))
+
+        monkeypatch.setattr('amalgkit.getfastq.list_run_dir_files', fake_list_run_dir_files)
+
+        concat_fastq(args, metadata, str(tmp_path), g)
+
+        assert calls['num'] == 1
+        assert (tmp_path / 'NEWID_SRR001.amalgkit.fastq.gz').exists()
+
+    def test_remove_tmp_reuses_prefetched_file_set_for_extension_lookup(self, tmp_path, monkeypatch):
+        (tmp_path / 'SRR001.amalgkit.fastq.gz').write_text('AAAA\n')
+        (tmp_path / 'SRR002.amalgkit.fastq.gz').write_text('CCCC\n')
+        metadata = self._metadata_single(['SRR001', 'SRR002'])
+        args = type('Args', (), {
+            'layout': 'auto',
+            'id': 'MERGED',
+            'id_list': None,
+            'remove_tmp': True,
+        })()
+        g = {'num_bp_per_sra': 4}
+        seen = []
+
+        def fake_get_newest_intermediate_file_extension(sra_stat, work_dir, files=None):
+            assert files is not None
+            seen.append((sra_stat['sra_id'], files))
+            return '.amalgkit.fastq.gz'
+
+        monkeypatch.setattr(
+            'amalgkit.getfastq.get_newest_intermediate_file_extension',
+            fake_get_newest_intermediate_file_extension,
+        )
+        monkeypatch.setattr('amalgkit.getfastq.remove_intermediate_files', lambda sra_stat, ext, work_dir: None)
+
+        concat_fastq(args, metadata, str(tmp_path), g)
+
+        assert (tmp_path / 'MERGED.amalgkit.fastq.gz').exists()
+        assert [run_id for run_id, _ in seen] == ['SRR001', 'SRR002']
+        assert seen[0][1] is seen[1][1]
 
 
 # ---------------------------------------------------------------------------
@@ -344,6 +481,7 @@ class TestRenameFastq:
         rename_fastq(sra_stat, str(tmp_path), '.fastq.gz', '.amalgkit.fastq.gz')
         assert os.path.exists(str(tmp_path / 'SRR001.amalgkit.fastq.gz'))
         assert not os.path.exists(str(tmp_path / 'SRR001.fastq.gz'))
+        assert sra_stat['current_ext'] == '.amalgkit.fastq.gz'
 
     def test_rename_paired(self, tmp_path):
         """Renames paired-end fastq files."""
@@ -353,6 +491,7 @@ class TestRenameFastq:
         rename_fastq(sra_stat, str(tmp_path), '.fastq.gz', '.amalgkit.fastq.gz')
         assert os.path.exists(str(tmp_path / 'SRR001_1.amalgkit.fastq.gz'))
         assert os.path.exists(str(tmp_path / 'SRR001_2.amalgkit.fastq.gz'))
+        assert sra_stat['current_ext'] == '.amalgkit.fastq.gz'
 
 
 # ---------------------------------------------------------------------------
@@ -445,6 +584,21 @@ class TestIsGetfastqOutputPresent:
             'getfastq_sra_dir': str(tmp_path),
         }
         assert not is_getfastq_output_present(sra_stat)
+
+    def test_uses_prefetched_file_set(self, tmp_path, monkeypatch):
+        """When files set is provided, no directory re-scan is needed."""
+        sra_stat = {
+            'sra_id': 'SRR001',
+            'layout': 'single',
+            'getfastq_sra_dir': str(tmp_path),
+        }
+        files = {'SRR001.amalgkit.fastq.gz'}
+
+        def fail_if_called(_work_dir):
+            raise AssertionError('list_run_dir_files should not be called when files are provided.')
+
+        monkeypatch.setattr('amalgkit.getfastq.list_run_dir_files', fail_if_called)
+        assert is_getfastq_output_present(sra_stat, files=files)
 
 
 # ---------------------------------------------------------------------------
@@ -719,6 +873,51 @@ class TestRunFastp:
         with pytest.raises(RuntimeError, match='Unexpected fastp stderr format'):
             run_fastp(sra_stat=sra_stat, args=Args(), output_dir=str(tmp_path), metadata=metadata)
 
+    def test_uses_cached_extension_without_redetection(self, tmp_path, monkeypatch):
+        metadata = self._build_metadata()
+        sra_stat = {'sra_id': 'SRR001', 'layout': 'single', 'current_ext': '.fastq.gz'}
+        captured = {}
+
+        class Args:
+            threads = 1
+            min_read_length = 25
+            fastp_option = ''
+            fastp_print = False
+            remove_tmp = False
+            fastp_exe = 'fastp-custom'
+
+        def fail_if_called(*_args, **_kwargs):
+            raise AssertionError('get_newest_intermediate_file_extension should not be called with cached current_ext.')
+
+        monkeypatch.setattr(
+            'amalgkit.getfastq.get_newest_intermediate_file_extension',
+            fail_if_called,
+        )
+
+        stderr_txt = '\n'.join([
+            ' before filtering:',
+            'total reads: 10',
+            'total bases: 100',
+            ' after filtering:',
+            'total reads: 8',
+            'total bases: 80',
+            'Duplication rate: 20.0%',
+            'Insert size peak (evaluated by paired-end reads): 150',
+        ]).encode('utf8')
+
+        def fake_run(cmd, stdout=None, stderr=None):
+            captured['cmd'] = cmd
+            return subprocess.CompletedProcess(cmd, 0, stdout=b'', stderr=stderr_txt)
+
+        monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
+
+        run_fastp(sra_stat=sra_stat, args=Args(), output_dir=str(tmp_path), metadata=metadata)
+
+        assert '--in1' in captured['cmd']
+        in1_arg = captured['cmd'][captured['cmd'].index('--in1') + 1]
+        assert in1_arg.endswith('SRR001.fastq.gz')
+        assert sra_stat['current_ext'] == '.fastp.fastq.gz'
+
 
 class TestIdenticalPairedReads:
     @staticmethod
@@ -830,6 +1029,47 @@ class TestSraRecovery:
             dump_print = False
             fasterq_dump_exe = 'fasterq-dump'
         return Args()
+
+    def test_remove_sra_files_deletes_matching_sra_files(self, tmp_path):
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001'],
+            'scientific_name': ['Sp1'],
+            'exclusion': ['no'],
+        }))
+        sra_dir = tmp_path / 'getfastq' / 'SRR001'
+        sra_dir.mkdir(parents=True)
+        (sra_dir / 'SRR001.sra').write_text('a')
+        (sra_dir / 'SRR001.sra.vdbcache').write_text('b')
+        (sra_dir / 'other.txt').write_text('keep')
+
+        remove_sra_files(metadata, str(tmp_path))
+
+        assert not (sra_dir / 'SRR001.sra').exists()
+        assert not (sra_dir / 'SRR001.sra.vdbcache').exists()
+        assert (sra_dir / 'other.txt').exists()
+
+    def test_remove_sra_files_ignores_non_directory_entries(self, tmp_path):
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001'],
+            'scientific_name': ['Sp1'],
+            'exclusion': ['no'],
+        }))
+        getfastq_root = tmp_path / 'getfastq'
+        getfastq_root.mkdir(parents=True)
+        (getfastq_root / 'SRR001').write_text('not a directory')
+
+        remove_sra_files(metadata, str(tmp_path))
+
+        assert (getfastq_root / 'SRR001').exists()
+
+    def test_remove_sra_files_handles_missing_getfastq_root(self, tmp_path):
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001'],
+            'scientific_name': ['Sp1'],
+            'exclusion': ['no'],
+        }))
+
+        remove_sra_files(metadata, str(tmp_path))
 
     def test_remove_sra_path_file_and_directory(self, tmp_path):
         file_path = tmp_path / 'SRR001.sra'
@@ -983,6 +1223,35 @@ class TestSraRecovery:
         assert metadata.df.loc[0, 'num_written'] == 6667
         assert metadata.df.loc[0, 'num_dumped'] == 6667
         assert metadata.df.loc[0, 'num_rejected'] == 0
+
+    def test_run_fasterq_dump_skips_trim_for_full_range(self, tmp_path, monkeypatch):
+        sra_id = 'SRR001'
+        metadata = self._metadata_for_extraction(sra_id)
+        sra_stat = {
+            'sra_id': sra_id,
+            'getfastq_sra_dir': str(tmp_path),
+            'spot_length': 100,
+            'layout': 'paired',
+            'total_spot': 10,
+        }
+        args = self._args_for_fasterq_dump()
+
+        def fake_run(cmd, stdout=None, stderr=None):
+            return subprocess.CompletedProcess(cmd, 0, stdout=b'', stderr=b'')
+
+        def fail_trim(*_args, **_kwargs):
+            raise AssertionError('trim_fasterq_output_files should be skipped for full-range extraction.')
+
+        monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
+        monkeypatch.setattr('amalgkit.getfastq.trim_fasterq_output_files', fail_trim)
+        monkeypatch.setattr('amalgkit.getfastq.compress_fasterq_output_files', lambda *args, **kwargs: None)
+        monkeypatch.setattr('amalgkit.getfastq.estimate_num_written_spots_from_fastq', lambda _s: 10)
+        monkeypatch.setattr('amalgkit.getfastq.detect_layout_from_file', lambda x: x)
+        monkeypatch.setattr('amalgkit.getfastq.remove_unpaired_files', lambda x: None)
+
+        metadata, _ = run_fasterq_dump(sra_stat, args, metadata, start=1, end=10)
+
+        assert metadata.df.loc[0, 'num_written'] == 10
 
 
 class TestDownloadSraUrlSchemes:

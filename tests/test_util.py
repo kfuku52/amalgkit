@@ -21,6 +21,7 @@ from amalgkit.util import (
     get_mapping_rate,
     get_getfastq_run_dir,
     generate_multisp_busco_table,
+    cleanup_tmp_amalgkit_files,
 )
 
 
@@ -333,6 +334,38 @@ class TestMaximizeBioprojSampling:
         # Should have samples from multiple bioprojects
         assert len(sampled['bioproject'].unique()) > 1
 
+    def test_marks_all_eligible_when_eligible_le_target(self):
+        data = {
+            'scientific_name': ['Sp1'] * 8,
+            'sample_group': ['brain'] * 8,
+            'bioproject': ['PRJ1'] * 4 + ['PRJ2'] * 4,
+            'biosample': [f'S{i}' for i in range(8)],
+            'run': [f'R{i}' for i in range(8)],
+            'exclusion': ['no', 'no', 'excluded', 'excluded', 'excluded', 'excluded', 'excluded', 'excluded'],
+            'is_sampled': ['no'] * 8,
+        }
+        df = pandas.DataFrame(data)
+        m = Metadata()
+        result = m._maximize_bioproject_sampling(df, target_n=5)
+        sampled = result.loc[(result['is_sampled'] == 'yes') & (result['exclusion'] == 'no')]
+        assert len(sampled) == 2
+
+    def test_respects_existing_selected_rows(self):
+        data = {
+            'scientific_name': ['Sp1'] * 6,
+            'sample_group': ['brain'] * 6,
+            'bioproject': ['PRJ1', 'PRJ1', 'PRJ2', 'PRJ2', 'PRJ3', 'PRJ3'],
+            'biosample': [f'S{i}' for i in range(6)],
+            'run': [f'R{i}' for i in range(6)],
+            'exclusion': ['no'] * 6,
+            'is_sampled': ['yes', 'yes', 'no', 'no', 'no', 'no'],
+        }
+        df = pandas.DataFrame(data)
+        m = Metadata()
+        result = m._maximize_bioproject_sampling(df, target_n=3)
+        sampled = result.loc[(result['is_sampled'] == 'yes') & (result['exclusion'] == 'no')]
+        assert len(sampled) == 3
+
 
 # ---------------------------------------------------------------------------
 # Utility functions
@@ -356,6 +389,21 @@ class TestReadConfigFile:
         result = read_config_file('single.config', str(tmp_path))
         assert isinstance(result, pandas.Series)
         assert len(result) == 3
+
+
+class TestCleanupTmpAmalgkitFiles:
+    def test_removes_matching_files_and_directories(self, tmp_path):
+        (tmp_path / 'tmp.amalgkit.file1').write_text('x')
+        tmp_dir = tmp_path / 'tmp.amalgkit.dir1'
+        tmp_dir.mkdir()
+        (tmp_dir / 'inner.txt').write_text('y')
+        (tmp_path / 'keep.txt').write_text('z')
+
+        cleanup_tmp_amalgkit_files(work_dir=str(tmp_path))
+
+        assert not (tmp_path / 'tmp.amalgkit.file1').exists()
+        assert not (tmp_path / 'tmp.amalgkit.dir1').exists()
+        assert (tmp_path / 'keep.txt').exists()
 
 
 class TestGetSraStat:
@@ -383,6 +431,30 @@ class TestGetSraStat:
         m.df.loc[m.df['run'] == 'SRR001', 'layout_amalgkit'] = 'single'
         stat = get_sra_stat('SRR001', m)
         assert stat['layout'] == 'single'
+
+    def test_duplicate_run_raises(self):
+        m = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001', 'SRR001'],
+            'lib_layout': ['single', 'single'],
+            'total_spots': [10, 10],
+            'spot_length': [100, 100],
+            'total_bases': [1000, 1000],
+            'exclusion': ['no', 'no'],
+        }))
+        with pytest.raises(AssertionError, match='multiple metadata rows'):
+            get_sra_stat('SRR001', m)
+
+    def test_missing_run_raises(self):
+        m = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001'],
+            'lib_layout': ['single'],
+            'total_spots': [10],
+            'spot_length': [100],
+            'total_bases': [1000],
+            'exclusion': ['no'],
+        }))
+        with pytest.raises(AssertionError, match='SRA ID not found'):
+            get_sra_stat('SRR999', m)
 
 
 class TestCheckOrthologParameterCompatibility:
@@ -435,6 +507,27 @@ class TestOrthogroup2Genecount:
         assert result.loc[1, 'Species_B'] == 0  # '-' -> empty -> 0
         assert result.loc[2, 'Species_A'] == 0  # empty
         assert result.loc[2, 'Species_B'] == 1  # gene7
+
+    def test_handles_blank_hyphen_and_multi_comma_values(self, tmp_path):
+        ortho_file = tmp_path / 'orthogroups.tsv'
+        ortho_file.write_text(
+            'busco_id\tSpecies_A\tSpecies_B\n'
+            'OG1000\t-\tgene1\n'
+            'OG1001\t\tgene2,gene3,gene4\n'
+            'OG1002\tgene5,gene6\t-\n'
+        )
+        out_file = tmp_path / 'genecount.tsv'
+        orthogroup2genecount(
+            str(ortho_file), str(out_file),
+            spp=['Species_A', 'Species_B']
+        )
+        result = pandas.read_csv(str(out_file), sep='\t')
+        assert result.loc[0, 'Species_A'] == 0
+        assert result.loc[0, 'Species_B'] == 1
+        assert result.loc[1, 'Species_A'] == 0
+        assert result.loc[1, 'Species_B'] == 3
+        assert result.loc[2, 'Species_A'] == 2
+        assert result.loc[2, 'Species_B'] == 0
 
 
 # ---------------------------------------------------------------------------

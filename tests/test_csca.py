@@ -40,6 +40,12 @@ class TestGetSppFromDir:
         result = get_spp_from_dir(str(tmp_path))
         assert sorted(result) == ['Species_A', 'Species_B']
 
+    def test_ignores_non_directory_entries(self, tmp_path):
+        (tmp_path / 'Species_A').mkdir()
+        (tmp_path / 'metadata.tsv').write_text('data')
+        result = get_spp_from_dir(str(tmp_path))
+        assert result == ['Species_A']
+
 
 # ---------------------------------------------------------------------------
 # generate_csca_input_symlinks (creates symlinks from curate to csca)
@@ -84,3 +90,18 @@ class TestGenerateCscaInputSymlinks:
         # Old file should be gone
         assert not os.path.exists(str(dir_csca_input / 'old_file.txt'))
         assert os.path.islink(str(dir_csca_input / 'Homo_sapiens_tpm.tsv'))
+
+    def test_ignores_non_tsv_and_subdirectories(self, tmp_path):
+        dir_curate = tmp_path / 'curate'
+        sp_tables = dir_curate / 'Homo_sapiens' / 'tables'
+        sp_tables.mkdir(parents=True)
+        (sp_tables / 'Homo_sapiens_tpm.tsv').write_text('data')
+        (sp_tables / 'notes.txt').write_text('ignore')
+        (sp_tables / 'nested').mkdir()
+        dir_csca_input = str(tmp_path / 'csca_input')
+
+        generate_csca_input_symlinks(dir_csca_input, str(dir_curate), ['Homo_sapiens'])
+
+        assert os.path.islink(os.path.join(dir_csca_input, 'Homo_sapiens_tpm.tsv'))
+        assert not os.path.exists(os.path.join(dir_csca_input, 'notes.txt'))
+        assert not os.path.exists(os.path.join(dir_csca_input, 'nested'))

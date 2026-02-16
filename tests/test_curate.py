@@ -124,6 +124,7 @@ class TestCurateMain:
         args.clip_negative = True
         args.maintain_zero = True
         args.skip_curation = False
+        args.species_jobs = 1
         return args
 
     def test_creates_nested_out_dir_and_completion_flags(self, tmp_path, monkeypatch):
@@ -171,3 +172,35 @@ class TestCurateMain:
         assert e.value.code == 1
         assert not (out_dir / 'curate' / 'Species_A' / 'curate_completion_flag.txt').exists()
         assert (out_dir / 'curate' / 'Species_B' / 'curate_completion_flag.txt').exists()
+
+    def test_parallel_species_jobs_creates_completion_flags(self, tmp_path, monkeypatch):
+        out_dir = tmp_path / 'nested' / 'output'
+        args = self._args(out_dir)
+        args.species_jobs = 2
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'scientific_name': ['Species A', 'Species B'],
+            'run': ['R1', 'R2'],
+            'sample_group': ['g1', 'g2'],
+            'exclusion': ['no', 'no'],
+        }))
+
+        monkeypatch.setattr('amalgkit.curate.check_rscript', lambda: None)
+        monkeypatch.setattr('amalgkit.curate.load_metadata', lambda *_args, **_kwargs: metadata)
+
+        def fake_run_curate(args, metadata, sp, input_dir):
+            os.makedirs(os.path.join(args.out_dir, 'curate', sp), exist_ok=True)
+            return 0
+
+        monkeypatch.setattr('amalgkit.curate.run_curate_r_script', fake_run_curate)
+        curate_main(args)
+
+        assert (out_dir / 'curate' / 'Species_A' / 'curate_completion_flag.txt').exists()
+        assert (out_dir / 'curate' / 'Species_B' / 'curate_completion_flag.txt').exists()
+
+    def test_rejects_nonpositive_species_jobs(self, tmp_path, monkeypatch):
+        out_dir = tmp_path / 'nested' / 'output'
+        args = self._args(out_dir)
+        args.species_jobs = 0
+        monkeypatch.setattr('amalgkit.curate.check_rscript', lambda: None)
+        with pytest.raises(ValueError, match='--species_jobs must be > 0'):
+            curate_main(args)

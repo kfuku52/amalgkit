@@ -15,6 +15,13 @@ from amalgkit.util import *
 from urllib.error import HTTPError
 
 def fetch_sra_xml(search_term, retmax=1000):
+    def merge_xml_chunk(root, chunk):
+        # Merge package-set chunks directly to avoid nested container nodes.
+        if (chunk.tag == root.tag) and (len(chunk) > 0):
+            root.extend(list(chunk))
+        else:
+            root.append(chunk)
+
     try:
         sra_handle = Entrez.esearch(db="sra", term=search_term, retmax=10000000)
     except HTTPError as e:
@@ -56,15 +63,16 @@ def fetch_sra_xml(search_term, retmax=1000):
         if root is None:
             root = chunk
         else:
-            root.append(chunk)
+            merge_xml_chunk(root, chunk)
     elapsed_time = int(time.time() - start_time)
     print('{}: SRA XML retrieval ended.'.format(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
     print('SRA XML retrieval time: {:,.1f} sec'.format(elapsed_time), flush=True)
-    xml_string = ET.tostring(root, encoding='unicode')
-    for line in xml_string.split('\n'):
-        if '<Error>' in line:
-            print(line)
-            raise Exception(',Error. found in the xml.')
+    error_node = root.find('.//Error')
+    if error_node is not None:
+        error_text = ''.join(error_node.itertext()).strip()
+        if error_text != '':
+            print(error_text)
+        raise Exception(',Error. found in the xml.')
     return root
 
 def metadata_main(args):

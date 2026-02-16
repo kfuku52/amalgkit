@@ -147,13 +147,16 @@ pp_out.add_argument('--out_dir', metavar='PATH', default='./', type=str, require
 pp_batch = argparse.ArgumentParser(add_help=False)
 pp_batch.add_argument('--batch', metavar='INT', default=None, type=int, required=False, action='store',
                  help='default=%(default)s: One-based index of metadata table (--metadata). '
-                      'If set, process only one SRA record. This function is intended for array job processing.')
+                      'If set, process only one SRA record. This function is intended for array job processing. '
+                      'If multiple batch jobs run at the same time, total CPU demand scales with the number of concurrent batch jobs.')
 pp_redo = argparse.ArgumentParser(add_help=False)
 pp_redo.add_argument('--redo', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
                  help='default=%(default)s: Redo the analysis even if previous output files are detected.')
 pp_threads = argparse.ArgumentParser(add_help=False)
 pp_threads.add_argument('--threads', metavar='INT', default=1, type=int, required=False, action='store',
-                 help='default=%(default)s: Number of threads.')
+                 help='default=%(default)s: Threads per worker process, not a global total. '
+                      'Approximate peak cores per command process = --threads x command-level workers '
+                      '(e.g., --jobs or --species_jobs).')
 pp_sg = argparse.ArgumentParser(add_help=False)
 pp_sg.add_argument('--sample_group', metavar='tissueA,tissueB,tissueC,...', default=None, type=str, required=False, action='store',
                  help='default=%(default)s: "Comma separated list of sample groups. '
@@ -286,11 +289,22 @@ pqu.add_argument('--build_index', metavar='yes|no', default='no', type=strtobool
                  help='default=%(default)s: Allows AMALGKIT to build kallisto index from reference fasta files. '
                       'Will only do this for a species if an index file is not already present. One fasta file per species should be put in --fasta_dir. '
                       'AMALGKIT will read the species from the metadata, try to find the fasta file (.fa or .fasta) and build the index for further use.')
+pqu.add_argument('--jobs', metavar='INT', default=1, type=int, required=False, action='store',
+                 help='default=%(default)s: Number of SRA runs to process in parallel during quant. '
+                      'Each run uses --threads for kallisto. Approximate peak cores per `amalgkit quant` process '
+                      '= --jobs x --threads. If multiple external --batch jobs run at once, multiply again by concurrent batch jobs.')
+pqu.add_argument('--index_lock_poll', metavar='INT', default=5, type=int, required=False, action='store',
+                 help='default=%(default)s: Poll interval in seconds while waiting for another batch process to finish building a species index.')
+pqu.add_argument('--index_lock_timeout', metavar='INT', default=3600, type=int, required=False, action='store',
+                 help='default=%(default)s: Maximum wait time in seconds for index build lock release before aborting.')
 pqu.set_defaults(handler=command_quant)
 
 # Sub parser: merge
 pmg_help = 'Generating transcript abundance tables. See `amalgkit merge -h`'
 pmg = subparsers.add_parser('merge', help=pmg_help, parents=[pp_out, pp_meta])
+pmg.add_argument('--species_jobs', metavar='INT', default=1, type=int, required=False, action='store',
+                 help='default=%(default)s: Number of species to process in parallel while generating merged tables. '
+                      '`amalgkit merge` does not use --threads directly; approximate concurrent merge workers = --species_jobs.')
 pmg.set_defaults(handler=command_merge)
 
 # Sub parser: busco
@@ -313,6 +327,10 @@ pbu.add_argument('--compleasm_exe', metavar='PATH', default='compleasm', type=st
                  help='default=%(default)s: PATH to compleasm executable.')
 pbu.add_argument('--tool_args', metavar='STR', default=None, type=str, required=False, action='store',
                  help='Additional arguments passed to the selected tool.')
+pbu.add_argument('--species_jobs', metavar='INT', default=1, type=int, required=False, action='store',
+                 help='default=%(default)s: Number of species to process in parallel. '
+                      'Each BUSCO/compleasm process uses --threads. Approximate peak cores per `amalgkit busco` process '
+                      '= --species_jobs x --threads.')
 pbu.set_defaults(handler=command_busco)
 
 # Sub parser: cstmm
@@ -385,6 +403,10 @@ pcu.add_argument('--maintain_zero', metavar='yes|no', default='yes', type=strtob
 pcu.add_argument('--skip_curation', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
                  help='default=%(default)s: stops curate before mapping-rate based sample removal step. Outputs only '
                       'uncorrected + transformed (see --norm) count-table and the corresponding mean count-table.')
+pcu.add_argument('--species_jobs', metavar='INT', default=1, type=int, required=False, action='store',
+                 help='default=%(default)s: Number of species to process in parallel during curate. '
+                      'Ignored when --batch is used to target a single species. `amalgkit curate` does not use --threads directly; '
+                      'approximate concurrent curate workers = --species_jobs.')
 pcu.set_defaults(handler=command_curate)
 
 # Sub parser: sanity

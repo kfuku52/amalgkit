@@ -106,6 +106,37 @@ class TestCheckQuantOutput:
         avail, unavail = check_quant_output(Args(), sra_ids, str(output_dir))
         assert 'SRR001' in unavail
 
+    def test_missing_run_info_marks_unavailable(self, tmp_path):
+        """Missing run_info.json should mark SRA as unavailable."""
+        class Args:
+            out_dir = str(tmp_path)
+            metadata = 'metadata.tsv'
+        quant_dir = tmp_path / 'quant'
+        sra_dir = quant_dir / 'SRR001'
+        sra_dir.mkdir(parents=True)
+        (sra_dir / 'SRR001_abundance.tsv').write_text('data')
+        output_dir = tmp_path / 'sanity'
+        output_dir.mkdir()
+        sra_ids = pandas.Series(['SRR001'])
+        avail, unavail = check_quant_output(Args(), sra_ids, str(output_dir))
+        assert avail == []
+        assert unavail == ['SRR001']
+
+    def test_sra_entry_that_is_not_directory_is_unavailable(self, tmp_path):
+        """If quant/SRRxxx is a file, treat output as unavailable without crashing."""
+        class Args:
+            out_dir = str(tmp_path)
+            metadata = 'metadata.tsv'
+        quant_dir = tmp_path / 'quant'
+        quant_dir.mkdir()
+        (quant_dir / 'SRR001').write_text('not a directory')
+        output_dir = tmp_path / 'sanity'
+        output_dir.mkdir()
+        sra_ids = pandas.Series(['SRR001'])
+        avail, unavail = check_quant_output(Args(), sra_ids, str(output_dir))
+        assert avail == []
+        assert unavail == ['SRR001']
+
     def test_no_quant_directory(self, tmp_path):
         """No quant directory at all."""
         class Args:
@@ -150,6 +181,22 @@ class TestCheckGetfastqOutputs:
             metadata = 'metadata.tsv'
 
         (tmp_path / 'getfastq' / 'SRR001').mkdir(parents=True)
+        output_dir = tmp_path / 'sanity'
+        output_dir.mkdir()
+        sra_ids = pandas.Series(['SRR001'])
+        avail, unavail = check_getfastq_outputs(Args(), sra_ids, sample_metadata, str(output_dir))
+        assert avail == []
+        assert unavail == ['SRR001']
+
+    def test_sra_entry_that_is_not_directory_is_unavailable(self, tmp_path, sample_metadata):
+        class Args:
+            out_dir = str(tmp_path)
+            getfastq_dir = None
+            metadata = 'metadata.tsv'
+
+        getfastq_root = tmp_path / 'getfastq'
+        getfastq_root.mkdir(parents=True)
+        (getfastq_root / 'SRR001').write_text('not a directory')
         output_dir = tmp_path / 'sanity'
         output_dir.mkdir()
         sra_ids = pandas.Series(['SRR001'])
@@ -207,3 +254,20 @@ class TestCheckQuantIndex:
         avail, unavail = check_quant_index(
             Args(), np.array(['Danio rerio']), str(output_dir))
         assert 'Danio rerio' in unavail
+
+    def test_prefix_match_with_suffix_filename(self, tmp_path):
+        """Prefix search should detect index files with extra suffixes."""
+        class Args:
+            out_dir = str(tmp_path)
+            index_dir = None
+            metadata = 'metadata.tsv'
+        index_dir = tmp_path / 'index'
+        index_dir.mkdir()
+        (index_dir / 'Homo_sapiens_k31.idx').write_text('')
+        (index_dir / 'Homo_sapiens_k63.idx').write_text('')
+        output_dir = tmp_path / 'sanity'
+        output_dir.mkdir()
+        avail, unavail = check_quant_index(
+            Args(), np.array(['Homo sapiens']), str(output_dir))
+        assert 'Homo sapiens' in avail
+        assert unavail == []

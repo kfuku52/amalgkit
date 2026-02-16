@@ -1,6 +1,5 @@
 import pandas
 
-import glob
 import subprocess
 import os
 import re
@@ -9,31 +8,28 @@ import sys
 from amalgkit.util import *
 
 def get_count_files(dir_count):
-    sciname_dirs = os.listdir(dir_count)
+    sciname_dirs = sorted(os.listdir(dir_count))
     count_files = list()
     for sciname_dir in sciname_dirs:
         sciname_path = os.path.join(dir_count, sciname_dir)
         if not os.path.isdir(sciname_path):
             continue
-        files = os.listdir(sciname_path)
-        for file in files:
-            sciname_file = os.path.join(sciname_path, file)
-            if not os.path.isfile(sciname_file):
-                continue
-            if not file.endswith('est_counts.tsv'):
-                continue
-            count_files.append(sciname_file)
-        sciname_count_files = [ f for f in count_files if '/'+sciname_dir+'/' in f ]
+        sciname_count_files = []
+        with os.scandir(sciname_path) as entries:
+            for entry in entries:
+                if (not entry.is_file()) or (not entry.name.endswith('est_counts.tsv')):
+                    continue
+                sciname_count_files.append(entry.path)
         num_sciname_count_file = len(sciname_count_files)
         if (num_sciname_count_file==0):
             sys.stderr.write('No est_counts.tsv file found in: {}\n'.format(sciname_path))
         elif (num_sciname_count_file==1):
-            continue # good to go
+            count_files.append(sciname_count_files[0])
         elif (num_sciname_count_file>=2):
             raise Exception('Multiple est_counts.tsv files found in: {}\n'.format(sciname_path))
     if (len(count_files)==0):
         raise Exception('No est_counts.tsv file was detected.')
-    return count_files
+    return sorted(count_files)
 
 def filepath2spp(file_paths):
     spp = [ os.path.basename(cf) for cf in file_paths]
@@ -78,5 +74,4 @@ def cstmm_main(args):
     print('')
     print('Starting R script: {}'.format(' '.join(r_command)), flush=True)
     subprocess.check_call(r_command)
-    for f in glob.glob("tmp.amalgkit.*"):
-        os.remove(f)
+    cleanup_tmp_amalgkit_files(work_dir='.')

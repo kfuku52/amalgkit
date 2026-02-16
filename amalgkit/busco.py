@@ -1,10 +1,10 @@
-import glob
 import os
 import re
 import shlex
 import shutil
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pandas
 
@@ -20,6 +20,9 @@ REQUIRED_COLUMNS = [
     'orthodb_url',
     'description',
 ]
+
+
+FASTA_SUFFIXES = ('.fa', '.fasta', '.fa.gz', '.fasta.gz')
 
 
 def normalize_busco_columns(df):
@@ -69,21 +72,22 @@ def normalize_busco_table(src_path, dest_path):
 
 
 def find_full_table(output_dir):
-    patterns = [
-        '**/full_table*.tsv',
-        '**/full_table*.tsv.gz',
-        '**/*full_table*.tsv',
-        '**/*full_table*.tsv.gz',
-    ]
-    matches = []
-    for pattern in patterns:
-        matches.extend(glob.glob(os.path.join(output_dir, pattern), recursive=True))
-    matches = sorted(set(matches))
-    if not matches:
+    found = None
+    for root, _, files in os.walk(output_dir):
+        for filename in files:
+            if ('full_table' not in filename):
+                continue
+            if not (filename.endswith('.tsv') or filename.endswith('.tsv.gz')):
+                continue
+            path = os.path.join(root, filename)
+            if found is None:
+                found = path
+                continue
+            if path != found:
+                raise ValueError('Multiple BUSCO full_table files detected: {}, {}'.format(found, path))
+    if found is None:
         raise FileNotFoundError('No full_table.tsv found under: {}'.format(output_dir))
-    if len(matches) > 1:
-        raise ValueError('Multiple BUSCO full_table files detected: {}'.format(', '.join(matches)))
-    return matches[0]
+    return found
 
 
 def resolve_fasta_dir(args):
@@ -92,11 +96,27 @@ def resolve_fasta_dir(args):
     return os.path.realpath(args.fasta_dir)
 
 
-def resolve_species_fasta(sci_name, fasta_dir):
+def list_fasta_filenames(fasta_dir):
+    files = []
+    with os.scandir(fasta_dir) as entries:
+        for entry in entries:
+            if entry.is_file():
+                files.append(entry.name)
+    return files
+
+
+def resolve_species_fasta(sci_name, fasta_dir, fasta_filenames=None):
     sci_name = sci_name.replace(' ', '_')
+    if fasta_filenames is None:
+        fasta_filenames = list_fasta_filenames(fasta_dir)
     fasta_files = []
-    for ext in ['*.fa', '*.fasta', '*.fa.gz', '*.fasta.gz']:
-        fasta_files.extend(glob.glob(os.path.join(fasta_dir, sci_name + ext)))
+    for filename in fasta_filenames:
+        if not filename.startswith(sci_name):
+            continue
+        if not filename.endswith(FASTA_SUFFIXES):
+            continue
+        fasta_files.append(os.path.join(fasta_dir, filename))
+    fasta_files = sorted(set(fasta_files))
     if len(fasta_files) > 1:
         raise ValueError('Found multiple reference fasta files for {}: {}'.format(sci_name, ', '.join(fasta_files)))
     if len(fasta_files) == 0:
@@ -182,15 +202,34 @@ def collect_species(args, metadata):
     if not os.path.exists(fasta_dir):
         raise FileNotFoundError('FASTA directory not found: {}'.format(fasta_dir))
     species = metadata.df.loc[:, 'scientific_name'].dropna().unique().tolist()
+    fasta_filenames = list_fasta_filenames(fasta_dir)
     fasta_map = {}
     for sp in species:
-        fasta_map[sp] = resolve_species_fasta(sp, fasta_dir)
+        fasta_map[sp] = resolve_species_fasta(sp, fasta_dir, fasta_filenames=fasta_filenames)
     return species, fasta_map
+
+
+def process_species_busco(sp, fasta_path, busco_dir, tool, args, extra_args):
+    print('Processing species: {}'.format(sp), flush=True)
+    if tool == 'busco':
+        output_root = busco_dir
+        ensure_clean_dir(os.path.join(output_root, sp.replace(' ', '_')), args.redo)
+        tool_out_dir = run_busco(fasta_path, sp, output_root, args, extra_args)
+    else:
+        tool_out_dir = run_compleasm(fasta_path, sp, busco_dir, args, extra_args)
+    full_table = find_full_table(tool_out_dir)
+    out_table = os.path.join(busco_dir, sp.replace(' ', '_') + '_busco.tsv')
+    normalize_busco_table(full_table, out_table)
+    print('BUSCO table written: {}'.format(out_table), flush=True)
+    return out_table
 
 
 def busco_main(args):
     if not args.lineage:
         raise ValueError('--lineage is required.')
+    species_jobs = int(getattr(args, 'species_jobs', 1))
+    if species_jobs <= 0:
+        raise ValueError('--species_jobs must be > 0.')
     tool = select_tool(args)
     extra_args = shlex.split(args.tool_args) if args.tool_args else []
     if args.fasta is not None:
@@ -200,16 +239,40 @@ def busco_main(args):
     species, fasta_map = collect_species(args, metadata)
     busco_dir = os.path.join(os.path.realpath(args.out_dir), 'busco')
     os.makedirs(busco_dir, exist_ok=True)
-    for sp in species:
-        print('Processing species: {}'.format(sp), flush=True)
-        fasta_path = fasta_map[sp]
-        if tool == 'busco':
-            output_root = busco_dir
-            ensure_clean_dir(os.path.join(output_root, sp.replace(' ', '_')), args.redo)
-            tool_out_dir = run_busco(fasta_path, sp, output_root, args, extra_args)
-        else:
-            tool_out_dir = run_compleasm(fasta_path, sp, busco_dir, args, extra_args)
-        full_table = find_full_table(tool_out_dir)
-        out_table = os.path.join(busco_dir, sp.replace(' ', '_') + '_busco.tsv')
-        normalize_busco_table(full_table, out_table)
-        print('BUSCO table written: {}'.format(out_table), flush=True)
+    if (species_jobs == 1) or (len(species) <= 1):
+        for sp in species:
+            process_species_busco(
+                sp=sp,
+                fasta_path=fasta_map[sp],
+                busco_dir=busco_dir,
+                tool=tool,
+                args=args,
+                extra_args=extra_args,
+            )
+        return
+
+    max_workers = min(species_jobs, len(species))
+    print('Running BUSCO for {:,} species with {:,} parallel jobs.'.format(len(species), max_workers), flush=True)
+    failures = []
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(
+                process_species_busco,
+                sp,
+                fasta_map[sp],
+                busco_dir,
+                tool,
+                args,
+                extra_args,
+            ): sp
+            for sp in species
+        }
+        for future in as_completed(futures):
+            sp = futures[future]
+            try:
+                future.result()
+            except Exception as exc:
+                failures.append((sp, exc))
+    if failures:
+        details = '; '.join(['{}: {}'.format(sp, err) for sp, err in failures])
+        raise RuntimeError('BUSCO failed for {}/{} species. {}'.format(len(failures), len(species), details))

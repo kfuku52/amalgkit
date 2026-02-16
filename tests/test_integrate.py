@@ -111,3 +111,17 @@ class TestIntegrateGetFastqStats:
 
         with pytest.raises(ValueError, match='Malformed FASTQ'):
             get_fastq_stats(args)
+
+    def test_parallel_scan_with_threads(self, tmp_path):
+        fastq_dir = tmp_path / 'fq'
+        out_dir = tmp_path / 'out'
+        fastq_dir.mkdir()
+        out_dir.mkdir()
+        self._write_one_read_fastq(str(fastq_dir / 'runA.fastq'))
+        self._write_one_read_fastq(str(fastq_dir / 'runB.fastq'))
+        args = SimpleNamespace(fastq_dir=str(fastq_dir), accurate_size=True, out_dir=str(out_dir), threads=2)
+
+        df = get_fastq_stats(args)
+
+        assert set(df['run'].tolist()) == {'runA', 'runB'}
+        assert set(df['lib_layout'].tolist()) == {'single'}

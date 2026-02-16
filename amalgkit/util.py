@@ -5,13 +5,14 @@ import xml.etree.ElementTree as ET
 import datetime
 import ete4
 
-import glob
 import inspect
 import os
 import re
+import shutil
 import subprocess
 import sys
 import warnings
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 def strtobool(val):
     val = val.lower()
@@ -92,23 +93,25 @@ class Metadata:
                 return ""
             return str(value)
 
-        def get_first_external_id(entry, namespace):
-            matches = entry.findall(".//EXTERNAL_ID[@namespace='{}']".format(namespace))
-            if len(matches) == 0:
-                return ""
-            text = matches[0].text
-            if text is None:
-                return ""
-            return str(text)
+        def get_external_id_map(entry):
+            external_ids = {}
+            for element in entry.findall(".//EXTERNAL_ID"):
+                namespace = element.attrib.get('namespace')
+                if (namespace is None) or (namespace in external_ids):
+                    continue
+                text = element.text
+                external_ids[namespace] = '' if text is None else str(text)
+            return external_ids
 
-        df_list = list()
+        row_list = list()
         counter = 0
         metadata = Metadata()
         for entry in root.iter(tag="EXPERIMENT_PACKAGE"):
             if counter % 1000 == 0:
                 now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                 print('{}: Converting {:,}th sample from XML to DataFrame'.format(now, counter), flush=True)
-            bioproject = get_first_external_id(entry, 'BioProject')
+            external_ids = get_external_id_map(entry)
+            bioproject = external_ids.get('BioProject', '')
             if bioproject == "":
                 labels = entry.findall('.//LABEL')
                 for label in labels:
@@ -116,18 +119,18 @@ class Metadata:
                     if (text is not None) and text.startswith("PRJ"):
                         bioproject = text
                         break
-            is_single = len(entry.findall('.//LIBRARY_LAYOUT/SINGLE'))
-            is_paired = len(entry.findall('.//LIBRARY_LAYOUT/PAIRED'))
+            is_single = entry.find('.//LIBRARY_LAYOUT/SINGLE') is not None
+            is_paired = entry.find('.//LIBRARY_LAYOUT/PAIRED') is not None
             if is_single:
                 library_layout = "single"
             elif is_paired:
                 library_layout = "paired"
             else:
                 library_layout = ""
-            row_df = pandas.DataFrame([{
+            row = {
                 "bioproject": bioproject,
                 "scientific_name": get_first_text(entry, './SAMPLE/SAMPLE_NAME/SCIENTIFIC_NAME'),
-                "biosample": get_first_external_id(entry, 'BioSample'),
+                "biosample": external_ids.get('BioSample', ''),
                 "experiment": get_first_text(entry, './EXPERIMENT/IDENTIFIERS/PRIMARY_ID'),
                 "run": get_first_text(entry, './RUN_SET/RUN/IDENTIFIERS/PRIMARY_ID'),
                 "sra_primary": get_first_text(entry, './SUBMISSION/IDENTIFIERS/PRIMARY_ID'),
@@ -183,7 +186,7 @@ class Metadata:
                     "./RUN_SET/RUN/SRAFiles/SRAFile[@supertype='Primary ETL']/Alternatives[@org='GCP']",
                     "url",
                 ),
-            }])
+            }
             sas = entry.findall('./SAMPLE/SAMPLE_ATTRIBUTES/SAMPLE_ATTRIBUTE')
             for sa in sas:
                 tag = get_first_text(sa, './TAG')
@@ -191,19 +194,15 @@ class Metadata:
                     tag = tag.lower()
                     tag = re.sub(r" \(.*", "", tag)
                     tag = re.sub(r" ", "_", tag)
-                    if tag not in row_df.columns:
+                    if tag not in row:
                         value = get_first_text(sa, './VALUE')
                         if value != "":
-                            row_df[tag] = value
-            df_list.append(row_df)
+                            row[tag] = value
+            row_list.append(row)
             counter += 1
-        if len(df_list)==0:
+        if len(row_list)==0:
             return metadata
-        if len(df_list) <= 1000:
-            df = pandas.concat(df_list, ignore_index=True)
-        else:
-            chunked = [pandas.concat(df_list[i:i+1000], ignore_index=True) for i in range(0, len(df_list), 1000)]
-            df = pandas.concat(chunked, ignore_index=True)
+        df = pandas.DataFrame.from_records(row_list)
         now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         print('{}: Finished converting {:,} samples'.format(now, counter), flush=True)
         metadata.df = df
@@ -281,13 +280,21 @@ class Metadata:
         config = config.replace(numpy.nan, '')
         if config.shape[0]>0:
             print('{}: Marking SRAs with bad keywords'.format(datetime.datetime.now()), flush=True)
+        text_series_cache = {}
+
+        def get_text_series(col):
+            if col not in text_series_cache:
+                text_series_cache[col] = self.df.loc[:, col].astype(str)
+            return text_series_cache[col]
+
         for i in config.index:
             cols = config.iloc[i, 0].split(',')
             reason = config.iloc[i, 1]
             exclude_keyword = config.iloc[i, 2]
             num_detected = 0
             for col in cols:
-                has_bad_keyword = self.df.loc[:, col].astype(str).str.contains(exclude_keyword, regex=True, case=False).fillna(False)
+                text_col = get_text_series(col)
+                has_bad_keyword = text_col.str.contains(exclude_keyword, regex=True, case=False).fillna(False)
                 self.df.loc[has_bad_keyword, 'exclusion'] = reason
                 num_detected += has_bad_keyword.sum()
             txt = '{}: Marking {:,} SRAs with keyword "{}"'
@@ -306,6 +313,13 @@ class Metadata:
         config = config.replace(numpy.nan, '')
         if config.shape[0]>0:
             print('{}: Marking SRAs with non-control terms'.format(datetime.datetime.now()), flush=True)
+        text_series_cache = {}
+
+        def get_text_series(col):
+            if col not in text_series_cache:
+                text_series_cache[col] = self.df.loc[:, col].astype(str)
+            return text_series_cache[col]
+
         for i in config.index:
             cols = config.iloc[i, 0].split(',')
             control_term = config.iloc[i, 1]
@@ -314,15 +328,18 @@ class Metadata:
             num_control = 0
             num_treatment = 0
             for col in cols:
-                is_control = self.df.loc[:, col].astype(str).str.contains(control_term, regex=True, case=False).fillna(False)
+                text_col = get_text_series(col)
+                is_control = text_col.str.contains(control_term, regex=True, case=False).fillna(False)
                 if not any(is_control):
                     continue
-                bioprojects = self.df.loc[is_control, 'bioproject'].unique()
-                for bioproject in bioprojects:
-                    is_bioproject = (self.df.loc[:, 'bioproject'] == bioproject)
-                    self.df.loc[(is_bioproject & -is_control), 'exclusion'] = 'non_control'
-                    num_control += (is_bioproject & is_control).sum()
-                    num_treatment += (is_bioproject & -is_control).sum()
+                control_bioprojects = self.df.loc[is_control, 'bioproject'].unique()
+                if len(control_bioprojects) == 0:
+                    continue
+                is_control_bioproject = self.df.loc[:, 'bioproject'].isin(control_bioprojects)
+                is_treatment = is_control_bioproject & (~is_control)
+                self.df.loc[is_treatment, 'exclusion'] = 'non_control'
+                num_control += int((is_control_bioproject & is_control).sum())
+                num_treatment += int(is_treatment.sum())
             txt = '{}: Applying control term "{}" to "{}": Detected control and treatment SRAs: {:,} and {:,}'
             print(txt.format(datetime.datetime.now(), control_term, ','.join(cols), num_control, num_treatment), flush=True)
 
@@ -346,24 +363,41 @@ class Metadata:
             self.df.loc[redundant_bool, 'exclusion'] = 'redundant_biosample'
 
     def _maximize_bioproject_sampling(self, df, target_n=10):
-        while len(df.loc[(df.loc[:, 'is_sampled'] == 'yes') & (df.loc[:, 'exclusion'] == 'no'), :]) < target_n:
-            if len(df) <= target_n:
-                df.loc[(df.loc[:, 'exclusion'] == 'no'), 'is_sampled'] = 'yes'
-                break
-            else:
-                df_unselected = df.loc[(df.loc[:, 'is_sampled'] == 'no') & (df.loc[:, 'exclusion'] == 'no'), :]
-                bioprojects = df_unselected.loc[:, 'bioproject'].unique()
-                if len(bioprojects) == 0:
+        is_eligible = (df.loc[:, 'exclusion'] == 'no')
+        if int(is_eligible.sum()) <= target_n:
+            df.loc[is_eligible, 'is_sampled'] = 'yes'
+            return df
+
+        is_selected = (df.loc[:, 'is_sampled'] == 'yes') & is_eligible
+        selected_n = int(is_selected.sum())
+        if selected_n >= target_n:
+            return df
+
+        is_unselected_eligible = (df.loc[:, 'is_sampled'] == 'no') & is_eligible
+        if not bool(is_unselected_eligible.any()):
+            return df
+
+        grouped = df.loc[is_unselected_eligible, :].groupby('bioproject', sort=False).groups
+        index_pools = {}
+        for bioproject, indices in grouped.items():
+            shuffled = list(numpy.random.permutation(indices.to_numpy()))
+            if len(shuffled) > 0:
+                index_pools[bioproject] = shuffled
+
+        while (selected_n < target_n) and (len(index_pools) > 0):
+            bioproject_order = numpy.random.permutation(list(index_pools.keys()))
+            for bioproject in bioproject_order:
+                if selected_n >= target_n:
                     break
-                remaining_n = target_n - (df.loc[:, 'is_sampled'] == 'yes').sum()
-                select_n = min([len(bioprojects), remaining_n])
-                selected_bioprojects = numpy.random.choice(bioprojects, size=select_n, replace=False)
-                selected_index = []
-                for bioproject in selected_bioprojects:
-                    is_bp = (df_unselected.loc[:, 'bioproject'] == bioproject)
-                    index = numpy.random.choice(df_unselected.index[is_bp], size=1, replace=False)
-                    selected_index.append(int(index.item()))
-                df.loc[selected_index, 'is_sampled'] = 'yes'
+                pool = index_pools.get(bioproject, [])
+                if len(pool) == 0:
+                    continue
+                selected_index = pool.pop()
+                df.at[selected_index, 'is_sampled'] = 'yes'
+                selected_n += 1
+            exhausted = [bp for bp, pool in index_pools.items() if len(pool) == 0]
+            for bp in exhausted:
+                del index_pools[bp]
         return df
 
     def label_sampled_data(self, max_sample=10):
@@ -378,33 +412,19 @@ class Metadata:
         is_empty = (self.df['sample_group'] == '')
         self.df.loc[is_empty,'exclusion'] = 'no_tissue_label'
         self.df.loc[(self.df.loc[:, 'exclusion'] == 'no'), 'is_qualified'] = 'yes'
-        df_list = list()
-        species = self.df.loc[:, 'scientific_name'].unique()
-        for sp in species:
-            sp_table = self.df.loc[(self.df.loc[:, 'scientific_name'] == sp), :]
-            sample_groups = sp_table.loc[:, 'sample_group'].unique()
-            for sample_group in sample_groups:
-                sp_sample_group = sp_table.loc[(sp_table.loc[:, 'sample_group'] == sample_group), :]
-                if sp_sample_group.shape[0] == 0:
-                    continue
-                sp_sample_group = self._maximize_bioproject_sampling(df=sp_sample_group, target_n=max_sample)
-                df_list.append(sp_sample_group)
-        if len(df_list) <= 100:
-            self.df = pandas.concat(df_list, ignore_index=True)
-        else:
-            chunked = [pandas.concat(df_list[i:i+100], ignore_index=True) for i in range(0, len(df_list), 100)]
-            self.df = pandas.concat(chunked, ignore_index=True)
+        df_list = []
+        grouped = self.df.groupby(['scientific_name', 'sample_group'], sort=False, dropna=False)
+        for (_, _), sp_sample_group in grouped:
+            sp_sample_group = self._maximize_bioproject_sampling(df=sp_sample_group, target_n=max_sample)
+            df_list.append(sp_sample_group)
+        self.df = pandas.concat(df_list, ignore_index=True)
         self.reorder(omit_misc=False)
         pandas.set_option('mode.chained_assignment', 'warn')
 
     def remove_specialchars(self):
         for col, dtype in zip(self.df.dtypes.index, self.df.dtypes.values):
             if any([key in str(dtype) for key in ['str', 'object']]):
-                self.df.loc[:, col] = self.df[col].replace(r'\r', '', regex=True)
-                self.df.loc[:, col] = self.df[col].replace(r'\n', '', regex=True)
-                self.df.loc[:, col] = self.df[col].replace(r'\'', '', regex=True)
-                self.df.loc[:, col] = self.df[col].replace(r'\"', '', regex=True)
-                self.df.loc[:, col] = self.df[col].replace(r'\|', '', regex=True)
+                self.df.loc[:, col] = self.df[col].replace(r"[\r\n'\"|]", '', regex=True)
 
     def pivot(self, n_sp_cutoff=0, qualified_only=True, sampled_only=False):
         df = self.df
@@ -479,48 +499,100 @@ def load_metadata(args, dir_subcommand='metadata'):
         metadata.df = metadata.df.loc[[args.batch-1,],:]
         return metadata
 
+def _build_run_index_cache(metadata):
+    run_to_idx = dict()
+    duplicate_runs = set()
+    for idx, run_id in zip(metadata.df.index, metadata.df['run'].values):
+        if run_id in run_to_idx:
+            duplicate_runs.add(run_id)
+        else:
+            run_to_idx[run_id] = idx
+    metadata._run_to_idx = run_to_idx
+    metadata._run_duplicate_ids = duplicate_runs
+    metadata._run_cache_df_id = id(metadata.df)
+    metadata._run_cache_len = len(metadata.df)
+    return run_to_idx, duplicate_runs
+
+def get_metadata_row_index_by_run(metadata, sra_id):
+    run_to_idx = getattr(metadata, '_run_to_idx', None)
+    duplicate_runs = getattr(metadata, '_run_duplicate_ids', None)
+    cache_df_id = getattr(metadata, '_run_cache_df_id', None)
+    cache_len = getattr(metadata, '_run_cache_len', None)
+    is_cache_valid = (
+        isinstance(run_to_idx, dict)
+        and isinstance(duplicate_runs, set)
+        and (cache_df_id == id(metadata.df))
+        and (cache_len == len(metadata.df))
+    )
+    if not is_cache_valid:
+        run_to_idx, duplicate_runs = _build_run_index_cache(metadata)
+    idx = run_to_idx.get(sra_id, None)
+    if (idx is None) or (idx not in metadata.df.index) or (metadata.df.at[idx, 'run'] != sra_id):
+        run_to_idx, duplicate_runs = _build_run_index_cache(metadata)
+    if sra_id in duplicate_runs:
+        raise AssertionError('There are multiple metadata rows with the same SRA ID: ' + sra_id)
+    idx = run_to_idx.get(sra_id, None)
+    if idx is None:
+        raise AssertionError('SRA ID not found in metadata: ' + sra_id)
+    return idx
+
 def get_sra_stat(sra_id, metadata, num_bp_per_sra=None):
     sra_stat = dict()
     sra_stat['sra_id'] = sra_id
-    is_sra = (metadata.df.loc[:,'run']==sra_id)
-    assert is_sra.sum()==1, 'There are multiple metadata rows with the same SRA ID: '+sra_id
-    layout = metadata.df.loc[is_sra,'lib_layout'].values[0]
+    idx = get_metadata_row_index_by_run(metadata, sra_id)
+    sra_stat['metadata_idx'] = idx
+    layout = metadata.df.at[idx, 'lib_layout']
     if 'layout_amalgkit' in metadata.df.columns:
-        layout_amalgkit = metadata.df.loc[is_sra,'layout_amalgkit'].values[0]
+        layout_amalgkit = metadata.df.at[idx, 'layout_amalgkit']
         if layout_amalgkit in ['single', 'paired']:
             layout = layout_amalgkit
     sra_stat['layout'] = layout
-    sra_stat['total_spot'] = int(metadata.df.loc[is_sra,'total_spots'].values[0])
-    original_spot_len = metadata.df.loc[is_sra,'spot_length'].values[0]
+    sra_stat['total_spot'] = int(metadata.df.at[idx, 'total_spots'])
+    original_spot_len = metadata.df.at[idx, 'spot_length']
     if (numpy.isnan(original_spot_len) | (original_spot_len==0)):
-        inferred_spot_len = int(metadata.df.loc[is_sra,'total_bases'].values[0]) / int(sra_stat['total_spot'])
+        inferred_spot_len = int(metadata.df.at[idx, 'total_bases']) / int(sra_stat['total_spot'])
         sra_stat['spot_length'] = int(inferred_spot_len)
         txt = 'spot_length cannot be obtained directly from metadata. Using total_bases/total_spots instead: {:,}'
         print(txt.format(sra_stat['spot_length']))
     else:
         sra_stat['spot_length'] = int(original_spot_len)
+    if 'nominal_length' in metadata.df.columns:
+        nominal_length_value = metadata.df.at[idx, 'nominal_length']
+    else:
+        nominal_length_value = numpy.nan
+    sra_stat['nominal_length'] = pandas.to_numeric(nominal_length_value, errors='coerce')
     if num_bp_per_sra is not None:
         sra_stat['num_read_per_sra'] = int(num_bp_per_sra/sra_stat['spot_length'])
     return sra_stat
 
-def get_newest_intermediate_file_extension(sra_stat, work_dir):
+def get_newest_intermediate_file_extension(sra_stat, work_dir, files=None):
     ext_out = 'no_extension_found'
     # Order is important in this list. More downstream should come first.
     extensions = ['.amalgkit.fastq.gz','.rename.fastq.gz','.fastp.fastq.gz','.fastq.gz']
     if 'getfastq_sra_dir' not in sra_stat:
         sra_stat['getfastq_sra_dir'] = work_dir
-    sra_stat = detect_layout_from_file(sra_stat)
+    if files is None:
+        try:
+            files = set(os.listdir(work_dir))
+        except FileNotFoundError:
+            files = set()
+    else:
+        files = set(files)
+    sra_stat = detect_layout_from_file(sra_stat, files=files)
     if sra_stat['layout']=='single':
         subext = ''
     elif sra_stat['layout']=='paired':
         subext = '_1'
-    files = os.listdir(work_dir)
     for ext in extensions:
-        if any([ f==sra_stat['sra_id']+subext+ext for f in files ]):
+        if (sra_stat['sra_id'] + subext + ext) in files:
             ext_out = ext
             break
     if ext_out == 'no_extension_found':
-        safe_delete_files = glob.glob(os.path.join(work_dir, sra_stat['sra_id']+"*.safely_removed"))
+        safe_delete_files = sorted([
+            os.path.join(work_dir, f)
+            for f in files
+            if f.startswith(sra_stat['sra_id']) and f.endswith('.safely_removed')
+        ])
         if len(safe_delete_files):
             txt = 'getfastq safely_removed flag was detected. `amalgkit quant` has been completed in this sample: {}\n'
             sys.stdout.write(txt.format(work_dir))
@@ -529,28 +601,37 @@ def get_newest_intermediate_file_extension(sra_stat, work_dir):
             return '.safely_removed'
     return ext_out
 
-def is_there_unpaired_file(sra_stat, extensions):
+def is_there_unpaired_file(sra_stat, extensions, files=None):
+    if files is None:
+        try:
+            files = set(os.listdir(sra_stat['getfastq_sra_dir']))
+        except FileNotFoundError:
+            files = set()
     is_unpaired_file = False
     for ext in extensions:
-        single_fastq_file = os.path.join(sra_stat['getfastq_sra_dir'], sra_stat['sra_id'] + ext)
-        if os.path.exists(single_fastq_file):
+        if (sra_stat['sra_id'] + ext) in files:
             is_unpaired_file = True
             break
     return is_unpaired_file
 
-def detect_layout_from_file(sra_stat):
+def detect_layout_from_file(sra_stat, files=None):
     # Order is important in this list. More downstream should come first.
     extensions = ['.amalgkit.fastq.gz.safely_removed','.amalgkit.fastq.gz','.rename.fastq.gz','.fastp.fastq.gz','.fastq.gz']
+    if files is None:
+        try:
+            files = set(os.listdir(sra_stat['getfastq_sra_dir']))
+        except FileNotFoundError:
+            files = set()
     is_paired_end = False
     for ext in extensions:
         paired_fastq_files = [
-            os.path.join(sra_stat['getfastq_sra_dir'], sra_stat['sra_id'] + '_1'+ext),
-            os.path.join(sra_stat['getfastq_sra_dir'], sra_stat['sra_id'] + '_2'+ext),
+            sra_stat['sra_id'] + '_1'+ext,
+            sra_stat['sra_id'] + '_2'+ext,
         ]
-        if all([os.path.exists(f) for f in paired_fastq_files]):
+        if all([f in files for f in paired_fastq_files]):
             is_paired_end = True
             break
-    is_unpaired_file = is_there_unpaired_file(sra_stat, extensions)
+    is_unpaired_file = is_there_unpaired_file(sra_stat, extensions, files=files)
     if (not is_paired_end) & is_unpaired_file:
         is_single_end = True
     else:
@@ -581,18 +662,46 @@ def get_mapping_rate(metadata, quant_dir):
     if os.path.exists(quant_dir):
         print('quant directory found: {}'.format(quant_dir))
         metadata.df.loc[:, 'mapping_rate'] = numpy.nan
-        sra_ids = metadata.df.loc[:, 'run'].values
+        sra_ids = set(metadata.df.loc[:, 'run'].values)
         sra_dirs = [d for d in os.listdir(quant_dir) if d in sra_ids]
         print('Number of quant sub-directories that matched to metadata: {:,}'.format(len(sra_dirs)))
-        for sra_id in sra_dirs:
+
+        def load_mapping_rate(sra_id):
             run_info_path = os.path.join(quant_dir, sra_id, sra_id + '_run_info.json')
             if not os.path.exists(run_info_path):
-                sys.stderr.write('run_info.json not found. Skipping {}.\n'.format(sra_id))
+                return sra_id, None, 'missing'
+            try:
+                with open(run_info_path) as f:
+                    run_info = json.load(f)
+            except Exception as e:
+                return sra_id, None, 'Failed to read run_info.json for {}: {}'.format(sra_id, e)
+            if 'p_pseudoaligned' not in run_info:
+                return sra_id, None, 'p_pseudoaligned missing in run_info.json for {}.'.format(sra_id)
+            return sra_id, run_info['p_pseudoaligned'], None
+
+        results = []
+        if len(sra_dirs) <= 1:
+            for sra_id in sra_dirs:
+                results.append(load_mapping_rate(sra_id))
+        else:
+            max_workers = min(8, len(sra_dirs))
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = {
+                    executor.submit(load_mapping_rate, sra_id): sra_id
+                    for sra_id in sra_dirs
+                }
+                for future in as_completed(futures):
+                    results.append(future.result())
+
+        for sra_id, mapping_rate, error in results:
+            if mapping_rate is None:
+                if error == 'missing':
+                    sys.stderr.write('run_info.json not found. Skipping {}.\n'.format(sra_id))
+                else:
+                    sys.stderr.write('{}\n'.format(error))
                 continue
-            is_sra = (metadata.df.loc[:, 'run'] == sra_id)
-            with open(run_info_path) as f:
-                run_info = json.load(f)
-            metadata.df.loc[is_sra, 'mapping_rate'] = run_info['p_pseudoaligned']
+            idx = get_metadata_row_index_by_run(metadata, sra_id)
+            metadata.df.at[idx, 'mapping_rate'] = mapping_rate
     else:
         txt = 'quant directory not found. Mapping rate cutoff will not be applied: {}\n'
         sys.stderr.write(txt.format(quant_dir))
@@ -610,14 +719,12 @@ def orthogroup2genecount(file_orthogroup, file_genecount, spp):
     df = pandas.read_csv(file_orthogroup, sep='\t', header=0, low_memory=False)
     orthogroup_df = pandas.DataFrame({'orthogroup_id': df['busco_id'].to_numpy()})
     is_spp = df.columns.isin(spp)
-    df = df.loc[:,is_spp]
-    df[df.isnull()] = ''
-    df[df=='-'] = ''
-    gc = pandas.DataFrame(0, index=df.index, columns=df.columns)
-    no_comma = (df != '') & (~df.apply(lambda x: x.str.contains(',')))
-    gc[no_comma] = 1
-    has_comma = df.apply(lambda x: x.str.contains(','))
-    gc[has_comma] = df[has_comma].apply(lambda x: x.str.count(',') + 1)
+    df = df.loc[:,is_spp].fillna('').replace('-', '').astype(str)
+    values = df.to_numpy(dtype=str)
+    non_empty = (values != '')
+    comma_counts = numpy.char.count(values, ',').astype(int)
+    gc_values = non_empty.astype(int) + (comma_counts * non_empty)
+    gc = pandas.DataFrame(gc_values, index=df.index, columns=df.columns)
     gc = pandas.concat([orthogroup_df, gc], axis=1)
     col_order = ['orthogroup_id'] + [col for col in gc.columns if col != 'orthogroup_id']
     gc = gc[col_order]
@@ -632,40 +739,103 @@ def check_ortholog_parameter_compatibility(args):
 def generate_multisp_busco_table(dir_busco, outfile):
     print('Generating multi-species BUSCO table.', flush=True)
     col_names = ['busco_id', 'status', 'sequence', 'score', 'length', 'orthodb_url', 'description']
+    usecols = ['busco_id', 'sequence', 'orthodb_url', 'description']
     species_infiles = [f for f in os.listdir(path=dir_busco) if f.endswith('.tsv')]
     species_infiles = sorted(species_infiles)
     print('BUSCO full tables for {} species were detected at: {}'.format(len(species_infiles), dir_busco), flush=True)
-    for species_infile in species_infiles:
+    if len(species_infiles) == 0:
+        raise Exception('No BUSCO full table file (.tsv) was detected.')
+
+    busco_id_seen = set()
+    busco_id_order = []
+    busco_meta = dict()
+    species_series = dict()
+    species_order = []
+    species_name_suffix_pattern = re.compile(r'\.tsv(?:\.gz)?$', re.IGNORECASE)
+    species_name_cleanup_pattern = re.compile(r'(_busco|_full_table.*)$', re.IGNORECASE)
+    species_name_match_pattern = re.compile(r'^([^_]+_[^_]+)')
+
+    def parse_species_table(species_infile):
         path_to_table = os.path.join(dir_busco, species_infile)
         if not os.path.exists(path_to_table):
             warnings.warn('full_table.tsv does not exist. Skipping: {}'.format(species_infile))
-            continue
-        tmp_table = pandas.read_table(path_to_table, sep='\t', header=None, comment='#', names=col_names)
+            return None
+        tmp_table = pandas.read_table(
+            path_to_table,
+            sep='\t',
+            header=None,
+            comment='#',
+            names=col_names,
+            usecols=usecols,
+        )
         tmp_table.loc[:, 'sequence'] = tmp_table.loc[:, 'sequence'].str.replace(r':[-\.0-9]*$', '', regex=True)
         for col in ['sequence', 'orthodb_url', 'description']:
             tmp_table[col] = tmp_table[col].fillna('').astype(str)
             tmp_table.loc[(tmp_table[col]==''), col] = '-'
-        if species_infile == species_infiles[0]:
-            merged_table = tmp_table.loc[:, ['busco_id', 'orthodb_url', 'description']]
-            merged_table = merged_table.drop_duplicates(keep='first', inplace=False, ignore_index=True)
-        else:
-            is_mt_missing = (merged_table.loc[:, 'orthodb_url'] == '-')
-            if is_mt_missing.sum() > 0:
-                tmp_table2 = tmp_table.loc[:, ['busco_id', 'orthodb_url', 'description']]
-                tmp_table2 = tmp_table2.drop_duplicates(keep='first', inplace=False, ignore_index=True)
-                merged_table.loc[is_mt_missing, 'orthodb_url'] = tmp_table2.loc[is_mt_missing, 'orthodb_url']
-                merged_table.loc[is_mt_missing, 'description'] = tmp_table2.loc[is_mt_missing, 'description']
-        tmp_table = tmp_table.loc[:, ['busco_id', 'sequence']].groupby(['busco_id'])['sequence'].apply(
-            lambda x: ','.join(x))
-        tmp_table = tmp_table.reset_index()
+
+        meta_rows = tmp_table.loc[:, ['busco_id', 'orthodb_url', 'description']].drop_duplicates(
+            subset=['busco_id'],
+            keep='first',
+            inplace=False,
+        )
+
+        grouped = tmp_table.loc[:, ['busco_id', 'sequence']].groupby('busco_id', sort=False)['sequence'].agg(','.join)
         species_colname = species_infile
-        species_colname = re.sub(r'\.tsv(?:\.gz)?$', '', species_colname, flags=re.IGNORECASE)
-        species_colname = re.sub(r'(_busco|_full_table.*)$', '', species_colname, flags=re.IGNORECASE)
-        matched = re.match(r'^([^_]+_[^_]+)', species_colname)
+        species_colname = species_name_suffix_pattern.sub('', species_colname)
+        species_colname = species_name_cleanup_pattern.sub('', species_colname)
+        matched = species_name_match_pattern.match(species_colname)
         if matched is not None:
             species_colname = matched.group(1)
-        tmp_table = tmp_table.rename(columns={'sequence': species_colname})
-        merged_table = merged_table.merge(tmp_table, on='busco_id', how='outer')
+        return species_colname, meta_rows, grouped
+
+    parsed_results = [None] * len(species_infiles)
+    if len(species_infiles) <= 1:
+        for i, species_infile in enumerate(species_infiles):
+            parsed_results[i] = parse_species_table(species_infile)
+    else:
+        max_workers = min(8, len(species_infiles))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(parse_species_table, species_infile): i
+                for i, species_infile in enumerate(species_infiles)
+            }
+            for future in as_completed(futures):
+                parsed_results[futures[future]] = future.result()
+
+    for parsed in parsed_results:
+        if parsed is None:
+            continue
+        species_colname, meta_rows, grouped = parsed
+        busco_ids = meta_rows['busco_id'].to_numpy()
+        urls = meta_rows['orthodb_url'].to_numpy()
+        descriptions = meta_rows['description'].to_numpy()
+        for busco_id in busco_ids:
+            if busco_id not in busco_id_seen:
+                busco_id_seen.add(busco_id)
+                busco_id_order.append(busco_id)
+        for busco_id, orthodb_url, description in zip(busco_ids, urls, descriptions):
+            if busco_id not in busco_meta:
+                busco_meta[busco_id] = {
+                    'orthodb_url': orthodb_url,
+                    'description': description,
+                }
+            else:
+                if (busco_meta[busco_id]['orthodb_url'] == '-') and (orthodb_url != '-'):
+                    busco_meta[busco_id]['orthodb_url'] = orthodb_url
+                if (busco_meta[busco_id]['description'] == '-') and (description != '-'):
+                    busco_meta[busco_id]['description'] = description
+        species_order.append(species_colname)
+        species_series[species_colname] = grouped
+
+    merged_table = pandas.DataFrame({'busco_id': busco_id_order})
+    merged_table['orthodb_url'] = merged_table['busco_id'].map(
+        lambda bid: busco_meta.get(bid, {}).get('orthodb_url', '-')
+    )
+    merged_table['description'] = merged_table['busco_id'].map(
+        lambda bid: busco_meta.get(bid, {}).get('description', '-')
+    )
+    for species_colname in species_order:
+        merged_table[species_colname] = merged_table['busco_id'].map(species_series[species_colname])
     merged_table.to_csv(outfile, sep='\t', index=None, doublequote=False)
 
 def check_config_dir(dir_path, mode):
@@ -686,6 +856,20 @@ def check_config_dir(dir_path, mode):
     if (missing_count>0):
         txt = 'Please refer to the AMALGKIT Wiki for more info: https://github.com/kfuku52/amalgkit/wiki/amalgkit-metadata\n'
         sys.stderr.write(txt)
+
+def cleanup_tmp_amalgkit_files(work_dir='.'):
+    try:
+        with os.scandir(work_dir) as entries:
+            for entry in entries:
+                if not entry.name.startswith('tmp.amalgkit.'):
+                    continue
+                path = entry.path
+                if entry.is_dir(follow_symlinks=False):
+                    shutil.rmtree(path)
+                else:
+                    os.remove(path)
+    except FileNotFoundError:
+        return
 
 def get_getfastq_run_dir(args, sra_id):
     amalgkit_out_dir = os.path.realpath(args.out_dir)

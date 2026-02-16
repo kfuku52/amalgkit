@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import sys
 import warnings
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from amalgkit.util import *
 
@@ -75,6 +76,9 @@ def run_curate_r_script(args, metadata, sp, input_dir):
     return curate_r_exit_code
 
 def curate_main(args):
+    species_jobs = int(getattr(args, 'species_jobs', 1))
+    if species_jobs <= 0:
+        raise ValueError('--species_jobs must be > 0.')
     check_rscript()
     if args.input_dir=='inferred':
         dir_merge = os.path.realpath(os.path.join(args.out_dir, 'merge'))
@@ -101,6 +105,7 @@ def curate_main(args):
     curate_dir = os.path.join(args.out_dir, 'curate')
     os.makedirs(curate_dir, exist_ok=True)
     failed_species = list()
+    pending_species = list()
     print('Number of species in the selected metadata table ("exclusion"=="no"): {}'.format(len(spp)), flush=True)
     for sp in spp:
         sp = sp.replace(" ", "_")
@@ -112,14 +117,42 @@ def curate_main(args):
             else:
                 print('Skipping. Output file detected: {}'.format(sp), flush=True)
                 continue
-        print('Starting: {}'.format(sp), flush=True)
-        exit_status = run_curate_r_script(args, metadata, sp, input_dir)
-        if exit_status == 0:
-            with open(file_curate_completion_flag, 'w') as f:
-                f.write('amalgkit curate completed at {}\n'.format(datetime.datetime.now()))
-        else:
-            failed_species.append(sp)
-            sys.stderr.write('amalgkit curate failed for species: {}\n'.format(sp))
+        pending_species.append(sp)
+
+    if (species_jobs == 1) or (len(pending_species) <= 1):
+        for sp in pending_species:
+            file_curate_completion_flag = os.path.join(curate_dir, sp, 'curate_completion_flag.txt')
+            print('Starting: {}'.format(sp), flush=True)
+            exit_status = run_curate_r_script(args, metadata, sp, input_dir)
+            if exit_status == 0:
+                with open(file_curate_completion_flag, 'w') as f:
+                    f.write('amalgkit curate completed at {}\n'.format(datetime.datetime.now()))
+            else:
+                failed_species.append(sp)
+                sys.stderr.write('amalgkit curate failed for species: {}\n'.format(sp))
+    else:
+        max_workers = min(species_jobs, len(pending_species))
+        print('Running curate for {:,} species with {:,} parallel jobs.'.format(len(pending_species), max_workers), flush=True)
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(run_curate_r_script, args, metadata, sp, input_dir): sp
+                for sp in pending_species
+            }
+            for future in as_completed(futures):
+                sp = futures[future]
+                file_curate_completion_flag = os.path.join(curate_dir, sp, 'curate_completion_flag.txt')
+                try:
+                    exit_status = future.result()
+                except Exception as exc:
+                    failed_species.append(sp)
+                    sys.stderr.write('amalgkit curate failed for species: {} ({})\n'.format(sp, exc))
+                    continue
+                if exit_status == 0:
+                    with open(file_curate_completion_flag, 'w') as f:
+                        f.write('amalgkit curate completed at {}\n'.format(datetime.datetime.now()))
+                else:
+                    failed_species.append(sp)
+                    sys.stderr.write('amalgkit curate failed for species: {}\n'.format(sp))
     if len(failed_species) > 0:
         txt = 'amalgkit curate failed for {}/{} species: {}\n'
         sys.stderr.write(txt.format(len(failed_species), len(spp), ', '.join(failed_species)))
