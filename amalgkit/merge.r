@@ -237,6 +237,6 @@ save_frequency_plot(
 
 cat(sprintf('Number of SRA samples for exclusion potting: %s\n', formatC(nrow(df), format = 'd', big.mark = ',')))
 out_path = file.path(dir_merge, 'merge_exclusion.pdf')
-save_exclusion_plot(df = df, out_path = out_path, font_size = font_size)
+save_exclusion_plot(df = df, out_path = out_path, font_size = font_size, y_label = "Sample count")
 
 cat('merge.r completed!\n')

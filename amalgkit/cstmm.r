@@ -379,6 +379,6 @@ save_mean_expression_boxplot(df_nonzero, cnf_out2, uncorrected, corrected, font_
 
 cat(sprintf('Number of SRA samples for exclusion potting: %s\n', formatC(nrow(df_metadata), format = 'd', big.mark = ',')))
 out_path = file.path(dir_cstmm, 'cstmm_exclusion.pdf')
-save_exclusion_plot(df = df_metadata, out_path = out_path, font_size = 8)
+save_exclusion_plot(df = df_metadata, out_path = out_path, font_size = 8, y_label = "Sample count")
 
 cat('cstmm.r completed!\n')

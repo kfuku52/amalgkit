@@ -77,6 +77,7 @@ def csca_main(args):
                  r_util_path,
                  dir_csca,
                  args.batch_effect_alg,
+                 args.missing_strategy,
                  ]
     print(f"Rscript command: {' '.join(call_list)}")
     subprocess.call(call_list)
