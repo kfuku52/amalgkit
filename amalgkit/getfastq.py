@@ -21,11 +21,13 @@ from urllib.error import HTTPError
 IDENTICAL_PAIRED_RATIO_THRESHOLD = 0.99
 IDENTICAL_PAIRED_CHECKED_READS = 2000
 
-def get_or_detect_intermediate_extension(sra_stat, work_dir):
+def get_or_detect_intermediate_extension(sra_stat, work_dir, files=None, file_state=None):
     cached_ext = sra_stat.get('current_ext', None)
     if cached_ext is not None:
         return cached_ext
-    detected_ext = get_newest_intermediate_file_extension(sra_stat, work_dir=work_dir)
+    if isinstance(file_state, RunFileState):
+        files = file_state.files
+    detected_ext = get_newest_intermediate_file_extension(sra_stat, work_dir=work_dir, files=files)
     sra_stat['current_ext'] = detected_ext
     return detected_ext
 
@@ -41,6 +43,34 @@ def list_run_dir_files(work_dir):
         return set(os.listdir(work_dir))
     except FileNotFoundError:
         return set()
+
+class RunFileState:
+    def __init__(self, work_dir, files=None):
+        self.work_dir = work_dir
+        if files is None:
+            self.files = list_run_dir_files(work_dir)
+        else:
+            self.files = set(files)
+
+    def has(self, filename):
+        return filename in self.files
+
+    def path(self, filename):
+        return os.path.join(self.work_dir, filename)
+
+    def add(self, filename):
+        self.files.add(filename)
+
+    def discard(self, filename):
+        self.files.discard(filename)
+
+    def to_set(self):
+        return set(self.files)
+
+def _resolve_run_file_state(work_dir, files=None, file_state=None):
+    if isinstance(file_state, RunFileState):
+        return file_state
+    return RunFileState(work_dir=work_dir, files=files)
 
 def getfastq_search_term(ncbi_id, additional_search_term=None):
     # https://www.ncbi.nlm.nih.gov/books/NBK49540/
@@ -396,14 +426,15 @@ def count_fastq_records(path_fastq):
         sys.stderr.write(txt.format(path_fastq))
     return int(num_lines / 4)
 
-def estimate_num_written_spots_from_fastq(sra_stat):
+def estimate_num_written_spots_from_fastq(sra_stat, files=None, file_state=None):
     work_dir = sra_stat['getfastq_sra_dir']
     sra_id = sra_stat['sra_id']
+    run_file_state = _resolve_run_file_state(work_dir=work_dir, files=files, file_state=file_state)
     def detect_fastq_path(prefix):
         for ext in ['.fastq.gz', '.fastq']:
-            path = os.path.join(work_dir, prefix + ext)
-            if os.path.exists(path):
-                return path
+            filename = prefix + ext
+            if run_file_state.has(filename):
+                return run_file_state.path(filename)
         return None
     single_path = detect_fastq_path(sra_id)
     pair1_path = detect_fastq_path(sra_id + '_1')
@@ -444,23 +475,52 @@ def trim_fastq_by_spot_range(path_fastq, start, end):
     os.replace(tmp_path, path_fastq)
     return kept
 
-def trim_fasterq_output_files(sra_stat, start, end):
+def trim_fasterq_output_files(sra_stat, start, end, files=None, file_state=None):
     work_dir = sra_stat['getfastq_sra_dir']
     sra_id = sra_stat['sra_id']
+    run_file_state = _resolve_run_file_state(work_dir=work_dir, files=files, file_state=file_state)
+    kept_counts = {'': 0, '_1': 0, '_2': 0}
     for suffix in ['', '_1', '_2']:
-        path_fastq = os.path.join(work_dir, sra_id + suffix + '.fastq')
-        trim_fastq_by_spot_range(path_fastq=path_fastq, start=start, end=end)
+        filename = sra_id + suffix + '.fastq'
+        if not run_file_state.has(filename):
+            continue
+        path_fastq = run_file_state.path(filename)
+        kept_counts[suffix] = trim_fastq_by_spot_range(path_fastq=path_fastq, start=start, end=end)
+    return kept_counts
 
-def compress_fasterq_output_files(sra_stat, args):
+def calculate_written_spots_from_trim_counts(trimmed_counts):
+    if not isinstance(trimmed_counts, dict):
+        return None
+    try:
+        num_single = int(trimmed_counts.get('', 0))
+        num_pair1 = int(trimmed_counts.get('_1', 0))
+        num_pair2 = int(trimmed_counts.get('_2', 0))
+    except (TypeError, ValueError):
+        return None
+    return max(num_pair1, num_pair2) + num_single
+
+def parse_fasterq_dump_written_spots(stdout_txt, stderr_txt):
+    combined = '\n'.join([stdout_txt or '', stderr_txt or ''])
+    matched = re.findall(r'^\s*spots\s+written\s*:\s*([0-9][0-9,]*)\s*$', combined, flags=re.IGNORECASE | re.MULTILINE)
+    if len(matched) == 0:
+        return None
+    return int(matched[-1].replace(',', ''))
+
+def compress_fasterq_output_files(sra_stat, args, files=None, file_state=None, return_file_state=False):
     work_dir = sra_stat['getfastq_sra_dir']
     sra_id = sra_stat['sra_id']
-    files = list()
+    run_file_state = _resolve_run_file_state(work_dir=work_dir, files=files, file_state=file_state)
+    fastq_paths = list()
+    fastq_filenames = list()
     for suffix in ['', '_1', '_2']:
-        path_fastq = os.path.join(work_dir, sra_id + suffix + '.fastq')
-        if os.path.exists(path_fastq):
-            files.append(path_fastq)
-    if len(files) == 0:
-        return
+        filename = sra_id + suffix + '.fastq'
+        if run_file_state.has(filename):
+            fastq_paths.append(run_file_state.path(filename))
+            fastq_filenames.append(filename)
+    if len(fastq_paths) == 0:
+        if return_file_state:
+            return run_file_state
+        return run_file_state.to_set()
     pigz_exe = shutil.which('pigz')
     def compress_fastq_with_python(path_fastq):
         path_fastq_gz = path_fastq + '.gz'
@@ -468,7 +528,7 @@ def compress_fasterq_output_files(sra_stat, args):
             shutil.copyfileobj(f_in, f_out)
         os.remove(path_fastq)
     if (pigz_exe is not None) and (args.threads > 1):
-        command = [pigz_exe, '-p', str(args.threads)] + files
+        command = [pigz_exe, '-p', str(args.threads)] + fastq_paths
         print('Command:', ' '.join(command))
         out = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         if should_print_getfastq_command_output(args):
@@ -480,11 +540,17 @@ def compress_fasterq_output_files(sra_stat, args):
             raise Exception('Compression failed.')
     else:
         print('Using Python gzip fallback for compression.')
-        for path_fastq in files:
+        for path_fastq in fastq_paths:
             print('Compressing: {} -> {}'.format(path_fastq, path_fastq + '.gz'))
             compress_fastq_with_python(path_fastq)
+    for filename in fastq_filenames:
+        run_file_state.discard(filename)
+        run_file_state.add(filename + '.gz')
+    if return_file_state:
+        return run_file_state
+    return run_file_state.to_set()
 
-def run_fasterq_dump(sra_stat, args, metadata, start, end):
+def run_fasterq_dump(sra_stat, args, metadata, start, end, return_files=False, return_file_state=False):
     path_downloaded_sra = os.path.join(sra_stat['getfastq_sra_dir'], sra_stat['sra_id'] + '.sra')
     fasterq_dump_exe = getattr(args, 'fasterq_dump_exe', 'fasterq-dump')
     fasterq_dump_command = [
@@ -520,13 +586,33 @@ def run_fasterq_dump(sra_stat, args, metadata, start, end):
             sys.exit(1)
     total_spot = sra_stat.get('total_spot', None)
     is_full_range = (start <= 1) and (total_spot is not None) and (end >= int(total_spot))
+    run_file_state = RunFileState(work_dir=sra_stat['getfastq_sra_dir'])
+    written_spots = None
     if is_full_range:
         print('Requested full spot range. Skipping FASTQ trimming.')
+        written_spots = parse_fasterq_dump_written_spots(
+            stdout_txt=fqd_out.stdout.decode('utf8', errors='replace'),
+            stderr_txt=fqd_out.stderr.decode('utf8', errors='replace'),
+        )
+        if written_spots is not None:
+            print('Using fasterq-dump reported spot count: {:,}'.format(written_spots))
     else:
-        trim_fasterq_output_files(sra_stat=sra_stat, start=start, end=end)
-    compress_fasterq_output_files(sra_stat=sra_stat, args=args)
+        trim_counts = trim_fasterq_output_files(sra_stat=sra_stat, start=start, end=end, file_state=run_file_state)
+        written_spots = calculate_written_spots_from_trim_counts(trim_counts)
+    updated_file_state = compress_fasterq_output_files(
+        sra_stat=sra_stat,
+        args=args,
+        file_state=run_file_state,
+        return_file_state=True,
+    )
+    if isinstance(updated_file_state, RunFileState):
+        run_file_state = updated_file_state
+    else:
+        run_file_state = RunFileState(work_dir=sra_stat['getfastq_sra_dir'])
     set_current_intermediate_extension(sra_stat, '.fastq.gz')
-    nw = [estimate_num_written_spots_from_fastq(sra_stat), ]
+    if written_spots is None:
+        written_spots = estimate_num_written_spots_from_fastq(sra_stat, file_state=run_file_state)
+    nw = [written_spots, ]
     nd = [sum(nw), ]
     nr = [0, ]
     ind_sra = sra_stat.get('metadata_idx', get_metadata_row_index_by_run(metadata, sra_stat['sra_id']))
@@ -536,20 +622,36 @@ def run_fasterq_dump(sra_stat, args, metadata, start, end):
     metadata.df.at[ind_sra,'bp_dumped'] += sum(nd) * sra_stat['spot_length']
     metadata.df.at[ind_sra,'bp_rejected'] += sum(nr) * sra_stat['spot_length']
     metadata.df.at[ind_sra,'bp_written'] += sum(nw) * sra_stat['spot_length']
-    sra_stat = detect_layout_from_file(sra_stat)
-    remove_unpaired_files(sra_stat)
+    sra_stat = detect_layout_from_file(sra_stat, files=run_file_state.files)
+    updated_file_state = remove_unpaired_files(sra_stat, file_state=run_file_state, return_file_state=True)
+    if isinstance(updated_file_state, RunFileState):
+        run_file_state = updated_file_state
     metadata.df.at[ind_sra,'layout_amalgkit'] = sra_stat['layout']
+    if return_file_state:
+        return metadata, sra_stat, run_file_state
+    if return_files:
+        return metadata, sra_stat, run_file_state.to_set()
     return metadata,sra_stat
 
-def remove_unpaired_files(sra_stat):
+def remove_unpaired_files(sra_stat, files=None, file_state=None, return_file_state=False):
+    run_file_state = _resolve_run_file_state(
+        work_dir=sra_stat['getfastq_sra_dir'],
+        files=files,
+        file_state=file_state,
+    )
     if (sra_stat['layout']=='paired'):
         # Order is important in this list. More downstream should come first.
         extensions = ['.amalgkit.fastq.gz', '.rename.fastq.gz', '.fastp.fastq.gz', '.fastq.gz']
         for ext in extensions:
-            single_fastq_file = os.path.join(sra_stat['getfastq_sra_dir'], sra_stat['sra_id'] + ext)
-            if os.path.exists(single_fastq_file):
+            single_filename = sra_stat['sra_id'] + ext
+            if run_file_state.has(single_filename):
+                single_fastq_file = run_file_state.path(single_filename)
                 print('Removing 3rd fastq file: {}'.format(single_fastq_file), flush=True)
                 os.remove(single_fastq_file)
+                run_file_state.discard(single_filename)
+    if return_file_state:
+        return run_file_state
+    return run_file_state.to_set()
 
 def get_identical_paired_ratio(read1_path, read2_path, num_checked_reads=IDENTICAL_PAIRED_CHECKED_READS):
     num_identical = 0
@@ -571,18 +673,41 @@ def get_identical_paired_ratio(read1_path, read2_path, num_checked_reads=IDENTIC
     identical_ratio = num_identical / num_checked if num_checked else 0
     return identical_ratio, num_checked, read_length
 
-def maybe_treat_paired_as_single(sra_stat, metadata, work_dir,
-                                 threshold=IDENTICAL_PAIRED_RATIO_THRESHOLD,
-                                 num_checked_reads=IDENTICAL_PAIRED_CHECKED_READS):
+def maybe_treat_paired_as_single(
+    sra_stat,
+    metadata,
+    work_dir,
+    threshold=IDENTICAL_PAIRED_RATIO_THRESHOLD,
+    num_checked_reads=IDENTICAL_PAIRED_CHECKED_READS,
+    files=None,
+    file_state=None,
+    return_files=False,
+    return_file_state=False,
+):
+    run_file_state = _resolve_run_file_state(work_dir=work_dir, files=files, file_state=file_state)
     if sra_stat['layout'] != 'paired':
+        if return_file_state:
+            return metadata, sra_stat, run_file_state
+        if return_files:
+            return metadata, sra_stat, run_file_state.to_set()
         return metadata, sra_stat
-    inext = get_or_detect_intermediate_extension(sra_stat, work_dir=work_dir)
+    inext = get_or_detect_intermediate_extension(sra_stat, work_dir=work_dir, file_state=run_file_state)
     if inext == 'no_extension_found':
+        if return_file_state:
+            return metadata, sra_stat, run_file_state
+        if return_files:
+            return metadata, sra_stat, run_file_state.to_set()
         return metadata, sra_stat
-    read1_path = os.path.join(work_dir, sra_stat['sra_id'] + '_1' + inext)
-    read2_path = os.path.join(work_dir, sra_stat['sra_id'] + '_2' + inext)
-    if not (os.path.exists(read1_path) and os.path.exists(read2_path)):
+    read1_name = sra_stat['sra_id'] + '_1' + inext
+    read2_name = sra_stat['sra_id'] + '_2' + inext
+    if (not run_file_state.has(read1_name)) or (not run_file_state.has(read2_name)):
+        if return_file_state:
+            return metadata, sra_stat, run_file_state
+        if return_files:
+            return metadata, sra_stat, run_file_state.to_set()
         return metadata, sra_stat
+    read1_path = run_file_state.path(read1_name)
+    read2_path = run_file_state.path(read2_name)
     identical_ratio, num_checked, read_length = get_identical_paired_ratio(
         read1_path=read1_path,
         read2_path=read2_path,
@@ -592,11 +717,16 @@ def maybe_treat_paired_as_single(sra_stat, metadata, work_dir,
         txt = 'Read1 and Read2 are nearly identical ({:.2%} of {:,} pairs): {}. '
         txt += 'Treating as single-end reads and removing redundant read2 file.\n'
         sys.stderr.write(txt.format(identical_ratio, num_checked, sra_stat['sra_id']))
-        single_path = os.path.join(work_dir, sra_stat['sra_id'] + inext)
-        if os.path.exists(single_path):
+        single_name = sra_stat['sra_id'] + inext
+        single_path = run_file_state.path(single_name)
+        if run_file_state.has(single_name):
             os.remove(single_path)
+            run_file_state.discard(single_name)
         os.rename(read1_path, single_path)
         os.remove(read2_path)
+        run_file_state.discard(read1_name)
+        run_file_state.discard(read2_name)
+        run_file_state.add(single_name)
         sra_stat['layout'] = 'single'
         ind_sra = sra_stat.get('metadata_idx', get_metadata_row_index_by_run(metadata, sra_stat['sra_id']))
         if 'layout_amalgkit' in metadata.df.columns:
@@ -607,6 +737,10 @@ def maybe_treat_paired_as_single(sra_stat, metadata, work_dir,
             if 'spot_length_amalgkit' in metadata.df.columns:
                 metadata.df.at[ind_sra, 'spot_length_amalgkit'] = read_length
         set_current_intermediate_extension(sra_stat, inext)
+    if return_file_state:
+        return metadata, sra_stat, run_file_state
+    if return_files:
+        return metadata, sra_stat, run_file_state.to_set()
     return metadata, sra_stat
 
 def parse_fastp_metrics(stderr_txt):
@@ -685,8 +819,20 @@ def write_fastp_stats(sra_stat, metadata, output_dir):
     out_path = os.path.join(output_dir, 'fastp_stats.tsv')
     out_df.to_csv(out_path, sep='\t', index=False)
 
-def run_fastp(sra_stat, args, output_dir, metadata):
-    inext = get_or_detect_intermediate_extension(sra_stat, work_dir=output_dir)
+def run_fastp(
+    sra_stat,
+    args,
+    output_dir,
+    metadata,
+    files=None,
+    file_state=None,
+    return_files=False,
+    return_file_state=False,
+):
+    run_file_state = None
+    if (files is not None) or isinstance(file_state, RunFileState):
+        run_file_state = _resolve_run_file_state(work_dir=output_dir, files=files, file_state=file_state)
+    inext = get_or_detect_intermediate_extension(sra_stat, work_dir=output_dir, file_state=run_file_state)
     outext = '.fastp.fastq.gz'
     if args.threads > 16:
         print('Too many threads for fastp (--threads {}). Only 16 threads will be used.'.format(args.threads))
@@ -702,12 +848,18 @@ def run_fastp(sra_stat, args, output_dir, metadata):
     else:
         fastp_option_args = []
     fp_command = [fastp_exe, '--thread', str(fastp_thread), '--length_required', str(args.min_read_length)] + fastp_option_args
+    input_names = list()
+    output_names = list()
     if sra_stat['layout'] == 'single':
         infile = os.path.join(output_dir, sra_stat['sra_id'])
+        input_names = [sra_stat['sra_id'] + inext]
+        output_names = [sra_stat['sra_id'] + outext]
         fp_command = fp_command + ['--in1', infile + inext, '--out1', infile + outext]
     elif sra_stat['layout'] == 'paired':
         infile1 = os.path.join(output_dir, sra_stat['sra_id'] + '_1')
         infile2 = os.path.join(output_dir, sra_stat['sra_id'] + '_2')
+        input_names = [sra_stat['sra_id'] + '_1' + inext, sra_stat['sra_id'] + '_2' + inext]
+        output_names = [sra_stat['sra_id'] + '_1' + outext, sra_stat['sra_id'] + '_2' + outext]
         fp_command = fp_command + ['--in1', infile1 + inext, '--out1', infile1 + outext, '--in2', infile2 + inext,
                                    '--out2', infile2 + outext]
     fp_command = [fc for fc in fp_command if fc != '']
@@ -726,8 +878,14 @@ def run_fastp(sra_stat, args, output_dir, metadata):
                 fp_out.stderr.decode('utf8', errors='replace'),
             )
         )
+    if run_file_state is not None:
+        for output_name in output_names:
+            run_file_state.add(output_name)
     if args.remove_tmp:
         remove_intermediate_files(sra_stat, ext=inext, work_dir=output_dir)
+        if run_file_state is not None:
+            for input_name in input_names:
+                run_file_state.discard(input_name)
     fp_stderr = fp_out.stderr.decode('utf8')
     num_in, num_out, bp_in, bp_out = parse_fastp_summary_counts(fp_stderr)
     ind_sra = sra_stat.get('metadata_idx', get_metadata_row_index_by_run(metadata, sra_stat['sra_id']))
@@ -740,10 +898,17 @@ def run_fastp(sra_stat, args, output_dir, metadata):
     metadata.df.at[ind_sra,'bp_fastp_out'] += sum(bp_out)
     write_fastp_stats(sra_stat, metadata, output_dir)
     set_current_intermediate_extension(sra_stat, outext)
+    if return_file_state:
+        return metadata, run_file_state
+    if return_files:
+        if run_file_state is None:
+            return metadata, None
+        return metadata, run_file_state.to_set()
     return metadata
 
-def rename_reads(sra_stat, args, output_dir):
-    inext = get_or_detect_intermediate_extension(sra_stat, work_dir=output_dir)
+def rename_reads(sra_stat, args, output_dir, files=None, file_state=None, return_file_state=False):
+    run_file_state = _resolve_run_file_state(work_dir=output_dir, files=files, file_state=file_state)
+    inext = get_or_detect_intermediate_extension(sra_stat, work_dir=output_dir, file_state=run_file_state)
     outext = '.rename.fastq.gz'
     def open_fastq(path, mode):
         if path.endswith('.gz'):
@@ -769,15 +934,16 @@ def rename_reads(sra_stat, args, output_dir):
 
     if sra_stat['layout'] == 'single':
         inbase = os.path.join(output_dir, sra_stat['sra_id'])
-        if os.path.exists(inbase + inext):
+        if run_file_state.has(sra_stat['sra_id'] + inext):
             infile = inbase + inext
             outfile = inbase + outext
             print('Rewriting read headers for Trinity format: {} -> {}'.format(infile, outfile))
             rewrite_headers(infile=infile, outfile=outfile, suffix='/1')
+            run_file_state.add(sra_stat['sra_id'] + outext)
     elif sra_stat['layout'] == 'paired':
         inbase1 = os.path.join(output_dir, sra_stat['sra_id'] + '_1')
         inbase2 = os.path.join(output_dir, sra_stat['sra_id'] + '_2')
-        if os.path.exists(inbase1 + inext):
+        if run_file_state.has(sra_stat['sra_id'] + '_1' + inext):
             infile1 = inbase1 + inext
             infile2 = inbase2 + inext
             outfile1 = inbase1 + outext
@@ -786,9 +952,19 @@ def rename_reads(sra_stat, args, output_dir):
             rewrite_headers(infile=infile1, outfile=outfile1, suffix='/1')
             print('Rewriting read headers for Trinity format: {} -> {}'.format(infile2, outfile2))
             rewrite_headers(infile=infile2, outfile=outfile2, suffix='/2')
+            run_file_state.add(sra_stat['sra_id'] + '_1' + outext)
+            run_file_state.add(sra_stat['sra_id'] + '_2' + outext)
     if args.remove_tmp:
         remove_intermediate_files(sra_stat, ext=inext, work_dir=output_dir)
+        if sra_stat['layout'] == 'single':
+            run_file_state.discard(sra_stat['sra_id'] + inext)
+        elif sra_stat['layout'] == 'paired':
+            run_file_state.discard(sra_stat['sra_id'] + '_1' + inext)
+            run_file_state.discard(sra_stat['sra_id'] + '_2' + inext)
     set_current_intermediate_extension(sra_stat, outext)
+    if return_file_state:
+        return run_file_state
+    return run_file_state.to_set()
 
 def rename_fastq(sra_stat, output_dir, inext, outext):
     if sra_stat['layout'] == 'single':
@@ -986,11 +1162,20 @@ def initialize_columns(metadata, g):
 def sequence_extraction(args, sra_stat, metadata, g, start, end):
     sra_id = sra_stat['sra_id']
     ind_sra = sra_stat.get('metadata_idx', get_metadata_row_index_by_run(metadata, sra_id))
-    metadata,sra_stat = run_fasterq_dump(sra_stat, args, metadata, start, end)
-    metadata, sra_stat = maybe_treat_paired_as_single(
+    metadata, sra_stat, run_file_state = run_fasterq_dump(
+        sra_stat,
+        args,
+        metadata,
+        start,
+        end,
+        return_file_state=True,
+    )
+    metadata, sra_stat, run_file_state = maybe_treat_paired_as_single(
         sra_stat=sra_stat,
         metadata=metadata,
         work_dir=sra_stat['getfastq_sra_dir'],
+        file_state=run_file_state,
+        return_file_state=True,
     )
     bp_discarded = metadata.df.at[ind_sra,'bp_dumped'] - metadata.df.at[ind_sra,'bp_written']
     metadata.df.at[ind_sra,'bp_discarded'] += bp_discarded
@@ -999,11 +1184,24 @@ def sequence_extraction(args, sra_stat, metadata, g, start, end):
     if no_read_written:
         return metadata
     if args.fastp:
-        metadata = run_fastp(sra_stat, args, sra_stat['getfastq_sra_dir'], metadata)
+        metadata, run_file_state = run_fastp(
+            sra_stat,
+            args,
+            sra_stat['getfastq_sra_dir'],
+            metadata,
+            file_state=run_file_state,
+            return_file_state=True,
+        )
         bp_discarded = metadata.df.at[ind_sra,'bp_dumped'] - metadata.df.at[ind_sra,'bp_fastp_out']
         metadata.df.at[ind_sra,'bp_discarded'] += bp_discarded
     if args.read_name == 'trinity':
-        rename_reads(sra_stat, args, sra_stat['getfastq_sra_dir'])
+        run_file_state = rename_reads(
+            sra_stat,
+            args,
+            sra_stat['getfastq_sra_dir'],
+            file_state=run_file_state,
+            return_file_state=True,
+        )
     inext = get_or_detect_intermediate_extension(sra_stat, work_dir=sra_stat['getfastq_sra_dir'])
     outext = '.amalgkit.fastq.gz'
     rename_fastq(sra_stat, sra_stat['getfastq_sra_dir'], inext, outext)
@@ -1146,7 +1344,53 @@ def initialize_global_params(args, metadata):
     print('Target size per SRA: {:,} bp'.format(g['num_bp_per_sra']))
     return g
 
+def process_getfastq_run(args, row_index, sra_id, run_row_df, g):
+    print('')
+    print('Processing SRA ID: {}'.format(sra_id))
+    run_metadata = Metadata.from_DataFrame(run_row_df.copy())
+    sra_stat = get_sra_stat(sra_id, run_metadata, g['num_bp_per_sra'])
+    sra_stat['getfastq_sra_dir'] = get_getfastq_run_dir(args, sra_id)
+    run_dir_files = list_run_dir_files(sra_stat['getfastq_sra_dir'])
+    is_output_present = is_getfastq_output_present(sra_stat, files=run_dir_files)
+    if is_output_present and (not args.redo):
+        txt = 'Output file(s) detected. Skipping {}. Set "--redo yes" for reanalysis.'
+        print(txt.format(sra_id), flush=True)
+        return {
+            'row_index': row_index,
+            'sra_id': sra_id,
+            'row': run_metadata.df.iloc[0].copy(),
+            'flag_any_output_file_present': True,
+            'flag_private_file': False,
+            'getfastq_sra_dir': sra_stat['getfastq_sra_dir'],
+        }
+    remove_old_intermediate_files(sra_id=sra_id, work_dir=sra_stat['getfastq_sra_dir'], files=run_dir_files)
+    print('Library layout:', sra_stat['layout'])
+    print('Number of reads:', "{:,}".format(sra_stat['total_spot']))
+    print('Single/Paired read length:', sra_stat['spot_length'], 'bp')
+    print('Total bases:', "{:,}".format(int(run_metadata.df.at[0, 'total_bases'])), 'bp')
+    flag_private_file = False
+    if 'private_file' in run_metadata.df.columns:
+        if run_metadata.df.at[0, 'private_file'] == 'yes':
+            print('Processing {} as private data. --max_bp is disabled.'.format(sra_id), flush=True)
+            flag_private_file = True
+            sequence_extraction_private(run_metadata, sra_stat, args)
+    if not flag_private_file:
+        print('Processing {} as publicly available data from SRA.'.format(sra_id), flush=True)
+        download_sra(run_metadata, sra_stat, args, sra_stat['getfastq_sra_dir'], overwrite=False)
+        run_metadata = sequence_extraction_1st_round(args, sra_stat, run_metadata, g)
+    return {
+        'row_index': row_index,
+        'sra_id': sra_id,
+        'row': run_metadata.df.iloc[0].copy(),
+        'flag_any_output_file_present': bool(is_output_present),
+        'flag_private_file': bool(flag_private_file),
+        'getfastq_sra_dir': sra_stat['getfastq_sra_dir'],
+    }
+
 def getfastq_main(args):
+    jobs = int(getattr(args, 'jobs', 1))
+    if jobs <= 0:
+        raise ValueError('--jobs must be > 0.')
     check_getfastq_dependency(args)
     metadata = getfastq_metadata(args)
     metadata = remove_experiment_without_run(metadata)
@@ -1156,34 +1400,51 @@ def getfastq_main(args):
     flag_private_file = False
     flag_any_output_file_present = False
     run_rows = list(zip(metadata.df.index.tolist(), metadata.df['run'].tolist()))
+    run_results_by_id = dict()
+    last_getfastq_sra_dir = None
     # 1st round sequence extraction
+    if (jobs == 1) or (len(run_rows) <= 1):
+        for i, sra_id in run_rows:
+            run_results_by_id[sra_id] = process_getfastq_run(
+                args=args,
+                row_index=i,
+                sra_id=sra_id,
+                run_row_df=metadata.df.loc[[i], :],
+                g=g,
+            )
+    else:
+        max_workers = min(jobs, len(run_rows))
+        print('Running getfastq for {:,} SRA runs with {:,} parallel jobs.'.format(len(run_rows), max_workers), flush=True)
+        failures = []
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(
+                    process_getfastq_run,
+                    args,
+                    i,
+                    sra_id,
+                    metadata.df.loc[[i], :].copy(),
+                    g,
+                ): sra_id
+                for i, sra_id in run_rows
+            }
+            for future in as_completed(futures):
+                sra_id = futures[future]
+                try:
+                    run_results_by_id[sra_id] = future.result()
+                except Exception as exc:
+                    failures.append((sra_id, exc))
+        if failures:
+            details = '; '.join(['{}: {}'.format(sra_id, err) for sra_id, err in failures])
+            raise RuntimeError('getfastq failed for {}/{} SRA runs. {}'.format(len(failures), len(run_rows), details))
     for i, sra_id in run_rows:
-        print('')
-        print('Processing SRA ID: {}'.format(sra_id))
-        sra_stat = get_sra_stat(sra_id, metadata, g['num_bp_per_sra'])
-        sra_stat['getfastq_sra_dir'] = get_getfastq_run_dir(args, sra_id)
-        run_dir_files = list_run_dir_files(sra_stat['getfastq_sra_dir'])
-        if (is_getfastq_output_present(sra_stat, files=run_dir_files)):
-            flag_any_output_file_present =True
-            if not args.redo:
-                txt = 'Output file(s) detected. Skipping {}. Set "--redo yes" for reanalysis.'
-                print(txt.format(sra_id), flush=True)
-                continue
-        remove_old_intermediate_files(sra_id=sra_id, work_dir=sra_stat['getfastq_sra_dir'], files=run_dir_files)
-        print('Library layout:', sra_stat['layout'])
-        print('Number of reads:', "{:,}".format(sra_stat['total_spot']))
-        print('Single/Paired read length:', sra_stat['spot_length'], 'bp')
-        print('Total bases:', "{:,}".format(int(metadata.df.at[i, 'total_bases'])), 'bp')
-        flag_private_file = False
-        if 'private_file' in metadata.df.columns:
-            if metadata.df.at[i,'private_file']=='yes':
-                print('Processing {} as private data. --max_bp is disabled.'.format(sra_id), flush=True)
-                flag_private_file = True
-                sequence_extraction_private(metadata, sra_stat, args)
-        if not flag_private_file:
-            print('Processing {} as publicly available data from SRA.'.format(sra_id), flush=True)
-            download_sra(metadata, sra_stat, args, sra_stat['getfastq_sra_dir'], overwrite=False)
-            metadata = sequence_extraction_1st_round(args, sra_stat, metadata, g)
+        run_result = run_results_by_id[sra_id]
+        row_series = run_result['row']
+        common_cols = [col for col in metadata.df.columns if col in row_series.index]
+        metadata.df.loc[i, common_cols] = row_series.loc[common_cols].to_numpy()
+        flag_any_output_file_present |= run_result['flag_any_output_file_present']
+        flag_private_file = run_result['flag_private_file']
+        last_getfastq_sra_dir = run_result['getfastq_sra_dir']
     # 2nd round sequence extraction
     if (not flag_private_file) & (not flag_any_output_file_present):
         g['rate_obtained_1st'] = metadata.df.loc[:,'bp_amalgkit'].sum() / g['max_bp']
@@ -1204,7 +1465,10 @@ def getfastq_main(args):
     if args.remove_sra:
         remove_sra_files(metadata=metadata, amalgkit_out_dir=args.out_dir)
     else:
-        print('SRA files not removed: {}'.format(sra_stat['getfastq_sra_dir']))
+        if last_getfastq_sra_dir is not None:
+            print('SRA files not removed: {}'.format(last_getfastq_sra_dir))
+        else:
+            print('SRA files not removed.')
     if (not flag_any_output_file_present):
         print('')
         print('\n--- getfastq final report ---')

@@ -4,7 +4,12 @@ import pytest
 import os
 from types import SimpleNamespace
 
-from amalgkit.merge import merge_fastp_stats_into_metadata, merge_species_quant_tables, merge_main
+from amalgkit.merge import (
+    merge_fastp_stats_into_metadata,
+    merge_species_quant_tables,
+    merge_main,
+    scan_quant_abundance_paths,
+)
 from amalgkit.util import Metadata
 
 
@@ -120,6 +125,22 @@ def test_merge_species_quant_tables_single_pass_reads(tmp_path, monkeypatch):
     assert list(eff.columns) == ['target_id', 'SRR001', 'SRR002']
 
 
+def test_scan_quant_abundance_paths_filters_target_runs(tmp_path):
+    quant_dir = tmp_path / 'quant'
+    (quant_dir / 'SRR001').mkdir(parents=True)
+    (quant_dir / 'SRR002').mkdir(parents=True)
+    (quant_dir / 'OTHER').mkdir(parents=True)
+    (quant_dir / 'SRR001' / 'SRR001_abundance.tsv').write_text('target_id\teff_length\test_counts\ttpm\n')
+    (quant_dir / 'SRR002' / 'SRR002_abundance.tsv').write_text('target_id\teff_length\test_counts\ttpm\n')
+    (quant_dir / 'OTHER' / 'OTHER_abundance.tsv').write_text('target_id\teff_length\test_counts\ttpm\n')
+
+    detected = scan_quant_abundance_paths(str(quant_dir), target_runs={'SRR001', 'SRR002'})
+
+    assert set(detected.keys()) == {'SRR001', 'SRR002'}
+    assert detected['SRR001'].endswith('SRR001_abundance.tsv')
+    assert detected['SRR002'].endswith('SRR002_abundance.tsv')
+
+
 def test_merge_main_rejects_nonpositive_species_jobs(tmp_path):
     args = SimpleNamespace(out_dir=str(tmp_path), species_jobs=0, metadata='inferred')
     with pytest.raises(ValueError, match='--species_jobs must be > 0'):
@@ -137,7 +158,7 @@ def test_merge_main_parallel_species_jobs(tmp_path, monkeypatch):
     args = SimpleNamespace(out_dir=str(out_dir), species_jobs=2, metadata='inferred')
     processed = []
 
-    def fake_merge_species(sp, _metadata, _quant_dir, _merge_dir):
+    def fake_merge_species(sp, _metadata, _quant_dir, _merge_dir, _run_abundance_paths=None):
         processed.append(sp)
         return 1
 

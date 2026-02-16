@@ -45,6 +45,24 @@ def _scan_target_run_dirs(root_path, target_runs):
         pass
     return run_files_map, non_dir_runs
 
+def _should_log_per_run(args, num_runs):
+    if bool(getattr(args, 'quiet', False)):
+        return False
+    verbose_runs = int(getattr(args, 'verbose_runs', 20))
+    if verbose_runs < 0:
+        return True
+    return num_runs <= verbose_runs
+
+def _print_run_log_mode(args, num_runs):
+    if _should_log_per_run(args, num_runs):
+        return
+    verbose_runs = int(getattr(args, 'verbose_runs', 20))
+    print('Per-run logs suppressed for {:,} runs (--verbose_runs={}, --quiet={}).'.format(
+        num_runs,
+        verbose_runs,
+        bool(getattr(args, 'quiet', False)),
+    ))
+
 
 def parse_metadata(args, metadata):
     print("Checking essential entries from metadata file.")
@@ -85,28 +103,34 @@ def check_getfastq_outputs(args, sra_ids, metadata, output_dir):
     if os.path.exists(getfastq_path):
         print("amalgkit getfastq output folder detected. Checking presence of output files.")
         target_runs = set(sra_ids)
+        verbose_run_logs = _should_log_per_run(args, len(target_runs))
+        _print_run_log_mode(args, len(target_runs))
         run_files_map, non_dir_runs = _scan_target_run_dirs(getfastq_path, target_runs)
         for sra_id in sra_ids:
-            print("\n")
-            print("Looking for {}".format(sra_id))
+            if verbose_run_logs:
+                print("\n")
+                print("Looking for {}".format(sra_id))
             sra_path = os.path.join(getfastq_path, sra_id)
             run_files = run_files_map.get(sra_id)
             if (run_files is None) or (sra_id in non_dir_runs):
-                print("Could not find getfastq output for: ", sra_id, "\n")
-                print("Suggested command for rerun: getfastq -e email@adress.com --id ", sra_id, " -w ", args.out_dir, "--redo yes --gcp yes --aws yes --ncbi yes")
+                if verbose_run_logs:
+                    print("Could not find getfastq output for: ", sra_id, "\n")
+                    print("Suggested command for rerun: getfastq -e email@adress.com --id ", sra_id, " -w ", args.out_dir, "--redo yes --gcp yes --aws yes --ncbi yes")
                 data_unavailable.append(sra_id)
                 continue
             sra_stat = get_sra_stat(sra_id, metadata)
             try:
                 ext = get_newest_intermediate_file_extension(sra_stat, sra_path, files=run_files)
             except FileNotFoundError:
-                print("could not find any fastq files for ", sra_id,
-                      "Please make sure amalgkit getfastq ran properly")
+                if verbose_run_logs:
+                    print("could not find any fastq files for ", sra_id,
+                          "Please make sure amalgkit getfastq ran properly")
                 data_unavailable.append(sra_id)
                 continue
             if ext == 'no_extension_found':
-                print("could not find any fastq files for ", sra_id,
-                      "Please make sure amalgkit getfastq ran properly")
+                if verbose_run_logs:
+                    print("could not find any fastq files for ", sra_id,
+                          "Please make sure amalgkit getfastq ran properly")
                 data_unavailable.append(sra_id)
                 continue
 
@@ -115,7 +139,7 @@ def check_getfastq_outputs(args, sra_ids, metadata, output_dir):
                 for f in run_files
                 if f.startswith(sra_id) and f.endswith(ext)
             ])
-            if ext != '.safely_removed':
+            if verbose_run_logs and (ext != '.safely_removed'):
                 print("Found:", files)
             data_available.append(sra_id)
 
@@ -207,31 +231,37 @@ def check_quant_output(args, sra_ids, output_dir):
     if os.path.exists(quant_path):
         print("amalgkit quant output folder detected. Checking presence of output files.")
         target_runs = set(sra_ids)
+        verbose_run_logs = _should_log_per_run(args, len(target_runs))
+        _print_run_log_mode(args, len(target_runs))
         quant_run_files_map, non_dir_runs = _scan_target_run_dirs(quant_path, target_runs)
         for sra_id in sra_ids:
-            print("\n")
-            print("Looking for {}".format(sra_id))
+            if verbose_run_logs:
+                print("\n")
+                print("Looking for {}".format(sra_id))
             sra_path = os.path.join(quant_path, sra_id)
             quant_run_files = quant_run_files_map.get(sra_id)
             if (quant_run_files is None) or (sra_id in non_dir_runs):
-                print("Could not find output folder ", sra_path, " for ", sra_id)
+                if verbose_run_logs:
+                    print("Could not find output folder ", sra_path, " for ", sra_id)
                 data_unavailable.append(sra_id)
                 continue
 
-            print("Found output folder ", sra_path, " for ", sra_id)
-            print("Checking for output files.")
+            if verbose_run_logs:
+                print("Found output folder ", sra_path, " for ", sra_id)
+                print("Checking for output files.")
             abundance_file = sra_id + "_abundance.tsv"
             run_info_file = sra_id + "_run_info.json"
             has_abundance = abundance_file in quant_run_files
             has_run_info = run_info_file in quant_run_files
             if has_abundance and has_run_info:
-                print("All quant output files present for", sra_id, "!")
+                if verbose_run_logs:
+                    print("All quant output files present for", sra_id, "!")
                 data_available.append(sra_id)
                 continue
 
-            if not has_abundance:
+            if verbose_run_logs and (not has_abundance):
                 print(os.path.join(sra_path, abundance_file), " is missing! Please check if quant ran correctly")
-            if not has_run_info:
+            if verbose_run_logs and (not has_run_info):
                 print(os.path.join(sra_path, run_info_file), " is missing! Please check if quant ran correctly")
             data_unavailable.append(sra_id)
     else:

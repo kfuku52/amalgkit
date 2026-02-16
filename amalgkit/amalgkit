@@ -268,6 +268,11 @@ pge.add_argument('--tol', metavar='FLOAT', default=1, type=float, required=False
                  help='default=%(default)s: Acceptable percentage loss of reads relative to --max_bp. If the 1st-round sequence '
                       'generation could not produce enough reads, the 2nd-round sequence generation is activated to '
                       'compensate the loss.')
+pge.add_argument('--jobs', metavar='INT', default=1, type=int, required=False, action='store',
+                 help='default=%(default)s: Number of SRA runs to process in parallel during getfastq. '
+                      'Each run uses --threads for sequence extraction/trimming/compression. '
+                      'Approximate peak cores per `amalgkit getfastq` process = --jobs x --threads. '
+                      'If multiple external --batch jobs run at once, multiply again by concurrent batch jobs.')
 pge.set_defaults(handler=command_getfastq)
 
 # Sub parser: quant
@@ -432,6 +437,11 @@ psa.add_argument('--quant_dir', metavar='PATH', default=None, type=str, required
 psa.add_argument('--getfastq_dir', metavar='PATH', default=None, type=str, required=False, action='store',
                  help='default=%(default)s: PATH to index directory. Only required if getfastq directory is not '
                       'out_dir/getfastq/')
+psa.add_argument('--quiet', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
+                 help='default=%(default)s: Suppress per-run status lines and print only summary results.')
+psa.add_argument('--verbose_runs', metavar='INT', default=20, type=int, required=False, action='store',
+                 help='default=%(default)s: Maximum number of runs for per-run logging in sanity checks. '
+                      'Set a negative value to always print per-run logs.')
 psa.set_defaults(handler=command_sanity)
 
 # Sub parser: integrate

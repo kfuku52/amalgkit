@@ -150,6 +150,24 @@ class TestCheckQuantOutput:
         # unavail is empty because the code only populates it when quant_path exists
         assert unavail == []
 
+    def test_suppresses_per_run_logs_when_verbose_runs_exceeded(self, tmp_path, capsys):
+        class Args:
+            out_dir = str(tmp_path)
+            metadata = 'metadata.tsv'
+            quiet = False
+            verbose_runs = 1
+        quant_dir = tmp_path / 'quant'
+        quant_dir.mkdir()
+        output_dir = tmp_path / 'sanity'
+        output_dir.mkdir()
+        sra_ids = pandas.Series(['SRR001', 'SRR002'])
+
+        check_quant_output(Args(), sra_ids, str(output_dir))
+
+        stdout = capsys.readouterr().out
+        assert 'Per-run logs suppressed for 2 runs' in stdout
+        assert 'Looking for SRR001' not in stdout
+
 
 # ---------------------------------------------------------------------------
 # check_getfastq_outputs (filesystem checks)
@@ -203,6 +221,28 @@ class TestCheckGetfastqOutputs:
         avail, unavail = check_getfastq_outputs(Args(), sra_ids, sample_metadata, str(output_dir))
         assert avail == []
         assert unavail == ['SRR001']
+
+    def test_suppresses_per_run_logs_when_quiet(self, tmp_path, sample_metadata, capsys):
+        class Args:
+            out_dir = str(tmp_path)
+            getfastq_dir = None
+            metadata = 'metadata.tsv'
+            quiet = True
+            verbose_runs = 99
+
+        getfastq_dir = tmp_path / 'getfastq'
+        getfastq_dir.mkdir()
+        (getfastq_dir / 'SRR001').mkdir()
+        (getfastq_dir / 'SRR002').mkdir()
+        output_dir = tmp_path / 'sanity'
+        output_dir.mkdir()
+        sra_ids = pandas.Series(['SRR001', 'SRR002'])
+
+        check_getfastq_outputs(Args(), sra_ids, sample_metadata, str(output_dir))
+
+        stdout = capsys.readouterr().out
+        assert 'Per-run logs suppressed for 2 runs' in stdout
+        assert 'Looking for SRR001' not in stdout
 
 
 # ---------------------------------------------------------------------------

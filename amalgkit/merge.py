@@ -8,6 +8,28 @@ from amalgkit.util import *
 
 FASTP_STATS_COLUMNS = ['fastp_duplication_rate', 'fastp_insert_size_peak']
 
+
+def scan_quant_abundance_paths(quant_dir, target_runs=None):
+    detected_paths = {}
+    if target_runs is None:
+        target_runs = None
+    else:
+        target_runs = set(target_runs)
+    try:
+        with os.scandir(quant_dir) as quant_entries:
+            for entry in quant_entries:
+                if not entry.is_dir():
+                    continue
+                run_id = entry.name
+                if (target_runs is not None) and (run_id not in target_runs):
+                    continue
+                abundance_path = os.path.join(entry.path, run_id + '_abundance.tsv')
+                if os.path.exists(abundance_path):
+                    detected_paths[run_id] = abundance_path
+    except FileNotFoundError:
+        return {}
+    return detected_paths
+
 def _read_fastp_stats_file(sra_id, fastp_stats_path):
     try:
         df_fastp = pandas.read_csv(fastp_stats_path, sep='\t', header=0)
@@ -67,7 +89,7 @@ def merge_fastp_stats_into_metadata(metadata, out_dir):
     return metadata
 
 
-def merge_species_quant_tables(sp, metadata, quant_dir, merge_dir):
+def merge_species_quant_tables(sp, metadata, quant_dir, merge_dir, run_abundance_paths=None):
     print('processing: {}'.format(sp), flush=True)
     sp_filled = sp.replace(' ', '_')
     merge_species_dir = os.path.join(os.path.join(merge_dir, sp_filled))
@@ -79,17 +101,10 @@ def merge_species_quant_tables(sp, metadata, quant_dir, merge_dir):
     if len(sra_ids)==0:
         warnings.warn('No SRA Run ID found. Skipping: {}'.format(sp))
         return 0
-    detected_paths = {}
-    try:
-        with os.scandir(quant_dir) as quant_entries:
-            for entry in quant_entries:
-                if (not entry.is_dir()) or (entry.name not in sra_id_set):
-                    continue
-                abundance_path = os.path.join(entry.path, entry.name + '_abundance.tsv')
-                if os.path.exists(abundance_path):
-                    detected_paths[entry.name] = abundance_path
-    except FileNotFoundError:
-        detected_paths = {}
+    if isinstance(run_abundance_paths, dict):
+        detected_paths = run_abundance_paths
+    else:
+        detected_paths = scan_quant_abundance_paths(quant_dir=quant_dir, target_runs=sra_id_set)
 
     quant_out_paths = []
     detected_sra_ids = []
@@ -143,6 +158,11 @@ def merge_main(args):
     if not os.path.exists(merge_dir):
         os.makedirs(os.path.join(merge_dir))
     metadata = load_metadata(args)
+    run_abundance_paths = scan_quant_abundance_paths(
+        quant_dir=quant_dir,
+        target_runs=set(metadata.df.loc[:, 'run'].values),
+    )
+    print('Detected {:,} quant abundance files across all runs.'.format(len(run_abundance_paths)), flush=True)
     spp = metadata.df.loc[:,'scientific_name'].dropna().unique()
     if (species_jobs == 1) or (len(spp) <= 1):
         for sp in spp:
@@ -151,6 +171,7 @@ def merge_main(args):
                 metadata=metadata,
                 quant_dir=quant_dir,
                 merge_dir=merge_dir,
+                run_abundance_paths=run_abundance_paths,
             )
     else:
         max_workers = min(species_jobs, len(spp))
@@ -164,6 +185,7 @@ def merge_main(args):
                     metadata,
                     quant_dir,
                     merge_dir,
+                    run_abundance_paths,
                 ): sp
                 for sp in spp
             }
