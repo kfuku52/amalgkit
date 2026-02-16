@@ -1148,6 +1148,9 @@ class TestSraRecovery:
             min_read_length = 25
             dump_print = False
             fasterq_dump_exe = 'fasterq-dump'
+            fasterq_size_check = True
+            fasterq_disk_limit = None
+            fasterq_disk_limit_tmp = None
         return Args()
 
     def test_remove_sra_files_deletes_matching_sra_files(self, tmp_path):
@@ -1444,6 +1447,42 @@ class TestSraRecovery:
         assert metadata.df.loc[0, 'num_written'] == 7
         assert metadata.df.loc[0, 'num_dumped'] == 7
         assert metadata.df.loc[0, 'num_rejected'] == 0
+
+    def test_run_fasterq_dump_passes_size_check_and_disk_limits(self, tmp_path, monkeypatch):
+        sra_id = 'SRR001'
+        metadata = self._metadata_for_extraction(sra_id)
+        sra_stat = {
+            'sra_id': sra_id,
+            'getfastq_sra_dir': str(tmp_path),
+            'spot_length': 100,
+            'layout': 'single',
+        }
+        args = self._args_for_fasterq_dump()
+        args.fasterq_size_check = False
+        args.fasterq_disk_limit = '10G'
+        args.fasterq_disk_limit_tmp = '20G'
+        observed = {'cmd': None}
+
+        def fake_run(cmd, stdout=None, stderr=None):
+            observed['cmd'] = cmd
+            return subprocess.CompletedProcess(cmd, 0, stdout=b'', stderr=b'')
+
+        monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
+        monkeypatch.setattr('amalgkit.getfastq.trim_fasterq_output_files', lambda *args, **kwargs: None)
+        monkeypatch.setattr('amalgkit.getfastq.compress_fasterq_output_files', lambda *args, **kwargs: None)
+        monkeypatch.setattr('amalgkit.getfastq.estimate_num_written_spots_from_fastq', lambda *args, **kwargs: 1)
+        monkeypatch.setattr('amalgkit.getfastq.detect_layout_from_file', lambda *args, **kwargs: args[0])
+        monkeypatch.setattr('amalgkit.getfastq.remove_unpaired_files', lambda *args, **kwargs: None)
+
+        run_fasterq_dump(sra_stat, args, metadata, start=1, end=1)
+
+        cmd = observed['cmd']
+        assert '--size-check' in cmd
+        assert cmd[cmd.index('--size-check') + 1] == 'off'
+        assert '--disk-limit' in cmd
+        assert cmd[cmd.index('--disk-limit') + 1] == '10G'
+        assert '--disk-limit-tmp' in cmd
+        assert cmd[cmd.index('--disk-limit-tmp') + 1] == '20G'
 
     def test_sequence_extraction_reuses_run_files_without_rescan_when_fastp_disabled(self, tmp_path, monkeypatch):
         sra_id = 'SRR001'

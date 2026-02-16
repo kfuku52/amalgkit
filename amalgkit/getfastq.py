@@ -553,16 +553,36 @@ def compress_fasterq_output_files(sra_stat, args, files=None, file_state=None, r
 def run_fasterq_dump(sra_stat, args, metadata, start, end, return_files=False, return_file_state=False):
     path_downloaded_sra = os.path.join(sra_stat['getfastq_sra_dir'], sra_stat['sra_id'] + '.sra')
     fasterq_dump_exe = getattr(args, 'fasterq_dump_exe', 'fasterq-dump')
+    raw_size_check = getattr(args, 'fasterq_size_check', True)
+    if isinstance(raw_size_check, str):
+        normalized_size_check = raw_size_check.strip().lower()
+        if normalized_size_check in {'on', 'off', 'only'}:
+            size_check = normalized_size_check
+        elif normalized_size_check in {'yes', 'y', 'true', '1'}:
+            size_check = 'on'
+        elif normalized_size_check in {'no', 'n', 'false', '0'}:
+            size_check = 'off'
+        else:
+            size_check = 'on'
+    else:
+        size_check = 'on' if bool(raw_size_check) else 'off'
+    disk_limit = getattr(args, 'fasterq_disk_limit', None)
+    disk_limit_tmp = getattr(args, 'fasterq_disk_limit_tmp', None)
     fasterq_dump_command = [
         fasterq_dump_exe,
         '--split-3',
         '--skip-technical',
         '--min-read-len', str(args.min_read_length),
+        '--size-check', str(size_check),
         '-e', str(max(1, args.threads)),
         '-O', sra_stat['getfastq_sra_dir'],
         '-t', sra_stat['getfastq_sra_dir'],
-        path_downloaded_sra,
     ]
+    if disk_limit:
+        fasterq_dump_command.extend(['--disk-limit', str(disk_limit)])
+    if disk_limit_tmp:
+        fasterq_dump_command.extend(['--disk-limit-tmp', str(disk_limit_tmp)])
+    fasterq_dump_command.append(path_downloaded_sra)
     print('Total sampled bases:', "{:,}".format(sra_stat['spot_length'] * (end - start + 1)), 'bp')
 
     def run_fasterq_dump_command(prefix='Command'):

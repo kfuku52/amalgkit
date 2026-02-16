@@ -226,6 +226,15 @@ pge.add_argument('--fasterq_dump_exe', '--fasterq-dump_exe', '--fasterq-dump-exe
                  dest='fasterq_dump_exe', metavar='PATH', default='fasterq-dump', type=str,
                  required=False, action='store',
                  help='default=%(default)s: PATH to fasterq-dump executable for public SRA extraction.')
+pge.add_argument('--fasterq_size_check', metavar='yes|no', default='yes', type=strtobool, required=False, action='store',
+                 help='default=%(default)s: Toggle fasterq-dump pre-run disk-size checks. '
+                      '"yes" forwards --size-check on, "no" forwards --size-check off.')
+pge.add_argument('--fasterq_disk_limit', metavar='STR', default=None, type=str, required=False, action='store',
+                 help='default=%(default)s: Optional value forwarded to fasterq-dump --disk-limit '
+                      '(for example, "200G").')
+pge.add_argument('--fasterq_disk_limit_tmp', metavar='STR', default=None, type=str, required=False, action='store',
+                 help='default=%(default)s: Optional value forwarded to fasterq-dump --disk-limit-tmp '
+                      '(for example, "200G").')
 pge.add_argument('--prefetch_exe', dest='obsolete_prefetch_exe', metavar='PATH', default=None, type=str,
                  required=False, action='store', help=argparse.SUPPRESS)
 pge.add_argument('--fastp', metavar='yes|no', default='yes', type=strtobool, required=False, action='store',
@@ -364,6 +373,13 @@ pca.add_argument('--dir_busco', metavar='PATH', default=None, type=str, required
 pca.add_argument('--batch_effect_alg', metavar='(no|sva|ruvseq|combatseq)', choices=['no', 'sva', 'ruvseq', 'combatseq'],
                  default='sva', type=str, required=False, action='store',
                  help='default=%(default)s: Batch-effect removal algorithm used in `amalgkit curate`.')
+pca.add_argument('--missing_strategy', metavar='em_pca|nipals|row_mean',
+                 choices=['em_pca', 'nipals', 'row_mean'],
+                 default='em_pca', type=str, required=False, action='store',
+                 help='default=%(default)s: Missing-value handling strategy before csca dimensionality reduction. '
+                      '`em_pca` uses a dependency-free iterative low-rank reconstruction (EM/PPCA-style). '
+                      '`nipals` uses a dependency-free NIPALS-style low-rank iterative reconstruction. '
+                      '`row_mean` uses per-gene mean fill as a fast fallback.')
 pca.set_defaults(handler=command_csca)
 
 # Sub parser: curate
