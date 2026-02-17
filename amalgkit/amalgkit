@@ -1,14 +1,190 @@
 #! /usr/bin/env python
 
 import argparse
+import os
+import re
+import shutil
 import sys
 import time
 
+SCRIPT_DIR = os.path.realpath(os.path.dirname(__file__))
+SCRIPT_PARENT_DIR = os.path.realpath(os.path.dirname(SCRIPT_DIR))
+
+def sanitize_sys_path():
+    cleaned = []
+    for path_entry in sys.path:
+        real_entry = os.path.realpath(path_entry if path_entry != '' else os.getcwd())
+        if real_entry == SCRIPT_DIR:
+            continue
+        cleaned.append(path_entry)
+    sys.path[:] = cleaned
+    if SCRIPT_PARENT_DIR not in [os.path.realpath(p if p != '' else os.getcwd()) for p in sys.path]:
+        sys.path.insert(0, SCRIPT_PARENT_DIR)
+
+sanitize_sys_path()
+
 from amalgkit.__init__ import __version__
+
+DEPENDENCY_SPECS = [
+    ('numpy', 'numpy'),
+    ('pandas', 'pandas'),
+    ('biopython', 'Bio'),
+    ('ete4', 'ete4'),
+]
+
+EXTERNAL_TOOL_SPECS = [
+    ('cat', 'cat', [['--version']]),
+    ('pigz', 'pigz', [['--version']]),
+    ('R', 'R', [['--version']]),
+    ('Rscript', 'Rscript', [['--version']]),
+    ('kallisto', 'kallisto', [['version'], ['-h']]),
+    ('fasterq-dump', 'fasterq-dump', [['--version'], ['-h']]),
+    ('fastp', 'fastp', [['--version'], ['-h']]),
+    ('busco', 'busco', [['--version'], ['-h']]),
+    ('compleasm', 'compleasm', [['--version'], ['-h']]),
+]
+
+R_PACKAGE_SPECS = ['ggplot2', 'edgeR', 'Rtsne', 'RUVSeq', 'sva']
+
+def resolve_dependency_version(package_name, module_name):
+    _ = module_name  # keep signature stable for call sites
+    normalized_target = re.sub(r'[-_.]+', '-', package_name).lower()
+    for base_path in sys.path:
+        if base_path == '':
+            base_path = os.getcwd()
+        if (not base_path) or (not os.path.isdir(base_path)):
+            continue
+        try:
+            entries = os.listdir(base_path)
+        except OSError:
+            continue
+        for entry in entries:
+            if not entry.endswith('.dist-info'):
+                continue
+            metadata_path = os.path.join(base_path, entry, 'METADATA')
+            if not os.path.isfile(metadata_path):
+                continue
+            dist_name = None
+            dist_version = None
+            try:
+                with open(metadata_path, 'rt', encoding='utf-8', errors='replace') as handle:
+                    for line in handle:
+                        if (dist_name is None) and line.startswith('Name: '):
+                            dist_name = line[len('Name: '):].strip()
+                        elif (dist_version is None) and line.startswith('Version: '):
+                            dist_version = line[len('Version: '):].strip()
+                        if (dist_name is not None) and (dist_version is not None):
+                            break
+            except OSError:
+                continue
+            if dist_name is None:
+                continue
+            normalized_name = re.sub(r'[-_.]+', '-', dist_name).lower()
+            if normalized_name == normalized_target:
+                if dist_version:
+                    return dist_version
+                return 'UNKNOWN (distribution metadata missing Version)'
+    return 'MISSING'
+
+def describe_os():
+    if hasattr(os, 'uname'):
+        uname = os.uname()
+        return '{} {} {} {}'.format(uname.sysname, uname.release, uname.version, uname.machine)
+    return sys.platform
+
+def first_nonempty_line(text):
+    if text is None:
+        return ''
+    for line in text.splitlines():
+        line = line.strip()
+        if line != '':
+            return line
+    return ''
+
+def run_command_capture(command):
+    import subprocess
+    try:
+        out = subprocess.run(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=5,
+        )
+        return out.returncode, out.stdout, out.stderr, None
+    except Exception as exc:
+        return None, '', '', exc
+
+def resolve_external_tool_status(executable_name, version_commands):
+    tool_path = shutil.which(executable_name)
+    if tool_path is None:
+        return 'MISSING'
+    for version_args in version_commands:
+        returncode, stdout_txt, stderr_txt, exc = run_command_capture([tool_path] + version_args)
+        if exc is not None:
+            continue
+        candidate = first_nonempty_line(stdout_txt)
+        if candidate == '':
+            candidate = first_nonempty_line(stderr_txt)
+        if candidate != '':
+            if returncode == 0:
+                return '{} ({})'.format(candidate, tool_path)
+            lowered = candidate.lower()
+            if 'version' in lowered:
+                return '{} ({})'.format(candidate, tool_path)
+    return 'FOUND ({}; version unavailable)'.format(tool_path)
+
+def resolve_r_package_versions(packages):
+    versions = {pkg: 'UNKNOWN' for pkg in packages}
+    rscript_path = shutil.which('Rscript')
+    if rscript_path is None:
+        return {pkg: 'MISSING (Rscript not found)' for pkg in packages}
+    expr = (
+        'pkgs <- c({}); '
+        'for (pkg in pkgs) {{ '
+        'if (requireNamespace(pkg, quietly=TRUE)) {{ '
+        'cat(pkg, "\\t", as.character(utils::packageVersion(pkg)), "\\n", sep=""); '
+        '}} else {{ '
+        'cat(pkg, "\\tMISSING\\n", sep=""); '
+        '}} '
+        '}}'
+    ).format(','.join(['"{}"'.format(pkg) for pkg in packages]))
+    returncode, stdout_txt, stderr_txt, exc = run_command_capture([rscript_path, '-e', expr])
+    if exc is not None:
+        return {pkg: 'UNKNOWN ({})'.format(exc.__class__.__name__) for pkg in packages}
+    for line in stdout_txt.splitlines():
+        line = line.strip()
+        if '\t' not in line:
+            continue
+        pkg_name, pkg_version = line.split('\t', 1)
+        pkg_name = pkg_name.strip()
+        pkg_version = pkg_version.strip()
+        if pkg_name in versions:
+            versions[pkg_name] = pkg_version if pkg_version != '' else 'UNKNOWN'
+    if returncode != 0:
+        error_line = first_nonempty_line(stderr_txt)
+        fallback = 'ERROR (exit code {})'.format(returncode)
+        if error_line != '':
+            fallback = '{}: {}'.format(fallback, error_line)
+        for pkg in packages:
+            if versions[pkg] == 'UNKNOWN':
+                versions[pkg] = fallback
+    return versions
 
 print('AMALGKIT version: {}'.format(__version__))
 print('AMALGKIT command: {}'.format(' '.join(sys.argv)))
 print('AMALGKIT bug report: https://github.com/kfuku52/amalgkit/issues')
+print('AMALGKIT os: {} (os.name={})'.format(describe_os(), os.name))
+print('AMALGKIT python: {}'.format(sys.version.split()[0]))
+for package_name, module_name in DEPENDENCY_SPECS:
+    version = resolve_dependency_version(package_name=package_name, module_name=module_name)
+    print('AMALGKIT dependency {}: {}'.format(package_name, version))
+for tool_label, tool_exe, version_commands in EXTERNAL_TOOL_SPECS:
+    status = resolve_external_tool_status(executable_name=tool_exe, version_commands=version_commands)
+    print('AMALGKIT tool {}: {}'.format(tool_label, status))
+r_package_versions = resolve_r_package_versions(R_PACKAGE_SPECS)
+for r_package in R_PACKAGE_SPECS:
+    print('AMALGKIT R package {}: {}'.format(r_package, r_package_versions.get(r_package, 'UNKNOWN')))
 
 def strtobool(val):
     val = val.lower()
