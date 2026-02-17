@@ -157,6 +157,11 @@ pp_threads.add_argument('--threads', metavar='INT', default=1, type=int, require
                  help='default=%(default)s: Threads per worker process, not a global total. '
                       'Approximate peak cores per command process = --threads x command-level workers '
                       '(e.g., --jobs or --species_jobs).')
+pp_cpu_budget = argparse.ArgumentParser(add_help=False)
+pp_cpu_budget.add_argument('--cpu_budget', metavar='INT', default=0, type=int, required=False, action='store',
+                 help='default=%(default)s: CPU core budget cap per amalgkit process. '
+                      '0 means auto-detect using os.cpu_count(). '
+                      'Commands automatically downscale --threads and/or worker counts (--jobs/--species_jobs) to stay within this budget.')
 pp_sg = argparse.ArgumentParser(add_help=False)
 pp_sg.add_argument('--sample_group', metavar='tissueA,tissueB,tissueC,...', default=None, type=str, required=False, action='store',
                  help='default=%(default)s: "Comma separated list of sample groups. '
@@ -200,7 +205,7 @@ pse.set_defaults(handler=command_select)
 
 # Sub parser: getfastq
 pge_help = 'Retrieving fastq files. See `amalgkit getfastq -h`'
-pge = subparsers.add_parser('getfastq', help=pge_help, parents=[pp_out, pp_meta, pp_threads, pp_redo, pp_batch])
+pge = subparsers.add_parser('getfastq', help=pge_help, parents=[pp_out, pp_meta, pp_threads, pp_cpu_budget, pp_redo, pp_batch])
 pge.add_argument('--entrez_email', metavar='aaa@bbb.com', default='', type=str, required=False, action='store',
                  help='default=%(default)s: Your email address. See https://www.ncbi.nlm.nih.gov/books/NBK25497/')
 pge.add_argument('--id', metavar='XXXXX0000', default=None, type=str, required=False, action='store',
@@ -281,12 +286,13 @@ pge.add_argument('--jobs', metavar='INT', default=1, type=int, required=False, a
                  help='default=%(default)s: Number of SRA runs to process in parallel during getfastq. '
                       'Each run uses --threads for sequence extraction/trimming/compression. '
                       'Approximate peak cores per `amalgkit getfastq` process = --jobs x --threads. '
-                      'If multiple external --batch jobs run at once, multiply again by concurrent batch jobs.')
+                      'If multiple external --batch jobs run at once, multiply again by concurrent batch jobs. '
+                      'Downscaled automatically if needed to satisfy --cpu_budget.')
 pge.set_defaults(handler=command_getfastq)
 
 # Sub parser: quant
 pqu_help = 'Estimating transcript abundance with kallisto. See `amalgkit quant -h`'
-pqu = subparsers.add_parser('quant', help=pqu_help, parents=[pp_out, pp_meta, pp_threads, pp_redo, pp_batch])
+pqu = subparsers.add_parser('quant', help=pqu_help, parents=[pp_out, pp_meta, pp_threads, pp_cpu_budget, pp_redo, pp_batch])
 
 pqu.add_argument('--index_dir', metavar='PATH', default=None, type=str, required=False, action='store',
                  help='default=%(default)s: PATH to index directory. Only required if index directory is not '
@@ -306,7 +312,8 @@ pqu.add_argument('--build_index', metavar='yes|no', default='no', type=strtobool
 pqu.add_argument('--jobs', metavar='INT', default=1, type=int, required=False, action='store',
                  help='default=%(default)s: Number of SRA runs to process in parallel during quant. '
                       'Each run uses --threads for kallisto. Approximate peak cores per `amalgkit quant` process '
-                      '= --jobs x --threads. If multiple external --batch jobs run at once, multiply again by concurrent batch jobs.')
+                      '= --jobs x --threads. If multiple external --batch jobs run at once, multiply again by concurrent batch jobs. '
+                      'Downscaled automatically if needed to satisfy --cpu_budget.')
 pqu.add_argument('--index_lock_poll', metavar='INT', default=5, type=int, required=False, action='store',
                  help='default=%(default)s: Poll interval in seconds while waiting for another batch process to finish building a species index.')
 pqu.add_argument('--index_lock_timeout', metavar='INT', default=3600, type=int, required=False, action='store',
@@ -315,15 +322,16 @@ pqu.set_defaults(handler=command_quant)
 
 # Sub parser: merge
 pmg_help = 'Generating transcript abundance tables. See `amalgkit merge -h`'
-pmg = subparsers.add_parser('merge', help=pmg_help, parents=[pp_out, pp_meta])
+pmg = subparsers.add_parser('merge', help=pmg_help, parents=[pp_out, pp_meta, pp_cpu_budget])
 pmg.add_argument('--species_jobs', metavar='INT', default=1, type=int, required=False, action='store',
                  help='default=%(default)s: Number of species to process in parallel while generating merged tables. '
-                      '`amalgkit merge` does not use --threads directly; approximate concurrent merge workers = --species_jobs.')
+                      '`amalgkit merge` does not use --threads directly; approximate concurrent merge workers = --species_jobs. '
+                      'Downscaled automatically if needed to satisfy --cpu_budget.')
 pmg.set_defaults(handler=command_merge)
 
 # Sub parser: busco
 pbu_help = 'Generating BUSCO tables for amalgkit cstmm/csca. See `amalgkit busco -h`'
-pbu = subparsers.add_parser('busco', help=pbu_help, parents=[pp_out, pp_meta, pp_threads, pp_redo])
+pbu = subparsers.add_parser('busco', help=pbu_help, parents=[pp_out, pp_meta, pp_threads, pp_cpu_budget, pp_redo])
 pbu.add_argument('--tool', metavar='auto|busco|compleasm', default='auto', type=str, required=False, action='store',
                  choices=['auto', 'busco', 'compleasm'],
                  help='default=%(default)s: Tool for BUSCO table generation.')
@@ -344,7 +352,7 @@ pbu.add_argument('--tool_args', metavar='STR', default=None, type=str, required=
 pbu.add_argument('--species_jobs', metavar='INT', default=1, type=int, required=False, action='store',
                  help='default=%(default)s: Number of species to process in parallel. '
                       'Each BUSCO/compleasm process uses --threads. Approximate peak cores per `amalgkit busco` process '
-                      '= --species_jobs x --threads.')
+                      '= --species_jobs x --threads. Downscaled automatically if needed to satisfy --cpu_budget.')
 pbu.set_defaults(handler=command_busco)
 
 # Sub parser: cstmm
@@ -384,7 +392,7 @@ pca.set_defaults(handler=command_csca)
 
 # Sub parser: curate
 pcu_help = 'Automatic removal of outlier samples and SVA-based unwanted biases. See `amalgkit curate -h`'
-pcu = subparsers.add_parser('curate', help=pcu_help, parents=[pp_out, pp_meta, pp_batch, pp_sg, pp_sgc, pp_redo])
+pcu = subparsers.add_parser('curate', help=pcu_help, parents=[pp_out, pp_meta, pp_batch, pp_cpu_budget, pp_sg, pp_sgc, pp_redo])
 pcu.add_argument('--input_dir', metavar='PATH', default='inferred', type=str, required=False, action='store',
                  help='default=%(default)s: PATH to `amalgkit merge` or `amalgkit cstmm` output folder. '
                       '"inferred" = out_dir/cstmm if exist, else out_dir/merge.')
@@ -427,7 +435,8 @@ pcu.add_argument('--skip_curation', metavar='yes|no', default='no', type=strtobo
 pcu.add_argument('--species_jobs', metavar='INT', default=1, type=int, required=False, action='store',
                  help='default=%(default)s: Number of species to process in parallel during curate. '
                       'Ignored when --batch is used to target a single species. `amalgkit curate` does not use --threads directly; '
-                      'approximate concurrent curate workers = --species_jobs.')
+                      'approximate concurrent curate workers = --species_jobs. '
+                      'Downscaled automatically if needed to satisfy --cpu_budget.')
 pcu.set_defaults(handler=command_curate)
 
 # Sub parser: sanity

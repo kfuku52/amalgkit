@@ -210,3 +210,57 @@ def test_busco_main_parallel_species_jobs(tmp_path, monkeypatch):
     assert set(processed) == {'Species A', 'Species B'}
     assert (out_dir / 'busco' / 'Species_A_busco.tsv').exists()
     assert (out_dir / 'busco' / 'Species_B_busco.tsv').exists()
+
+
+def test_busco_main_cpu_budget_caps_species_jobs_to_serial(tmp_path, monkeypatch):
+    out_dir = tmp_path / 'out'
+    fasta_dir = out_dir / 'fasta'
+    out_dir.mkdir()
+    fasta_dir.mkdir(parents=True)
+    (fasta_dir / 'Species_A.fa').write_text('>a\nAAAA\n')
+    (fasta_dir / 'Species_B.fa').write_text('>b\nCCCC\n')
+
+    metadata = Metadata.from_DataFrame(pandas.DataFrame({
+        'scientific_name': ['Species A', 'Species B'],
+        'run': ['R1', 'R2'],
+        'exclusion': ['no', 'no'],
+    }))
+    args = SimpleNamespace(
+        lineage='eukaryota_odb12',
+        species_jobs=4,
+        cpu_budget=1,
+        threads=2,
+        tool='auto',
+        tool_args=None,
+        fasta=None,
+        out_dir=str(out_dir),
+        metadata='inferred',
+        fasta_dir='inferred',
+        redo=False,
+        busco_exe='busco',
+        compleasm_exe='compleasm',
+    )
+    processed = []
+
+    def fake_run_busco(fasta_path, sci_name, output_root, _args, _extra):
+        processed.append(sci_name)
+        out_species = os.path.join(output_root, sci_name.replace(' ', '_'))
+        os.makedirs(out_species, exist_ok=True)
+        table = os.path.join(out_species, 'full_table.tsv')
+        with open(table, 'w') as f:
+            f.write('Busco id\tStatus\tSequence\tScore\tLength\tOrthoDB url\tDescription\n')
+            f.write('BUSCO1\tComplete\tseq1\t100\t200\turl\tdesc\n')
+        return out_species
+
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError('run_tasks_with_optional_threads should not be used when --cpu_budget caps species_jobs to 1.')
+
+    monkeypatch.setattr('amalgkit.busco.load_metadata', lambda _args: metadata)
+    monkeypatch.setattr('amalgkit.busco.select_tool', lambda _args: 'busco')
+    monkeypatch.setattr('amalgkit.busco.run_busco', fake_run_busco)
+    monkeypatch.setattr('amalgkit.busco.run_tasks_with_optional_threads', fail_if_called)
+
+    busco_main(args)
+
+    assert set(processed) == {'Species A', 'Species B'}
+    assert args.threads == 1

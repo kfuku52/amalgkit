@@ -38,6 +38,7 @@ from amalgkit.getfastq import (
     sequence_extraction,
     estimate_num_written_spots_from_fastq,
     compress_fasterq_output_files,
+    normalize_fasterq_size_check,
     download_sra,
     run_fasterq_dump,
     getfastq_main,
@@ -60,6 +61,22 @@ class TestGetfastqSearchTerm:
     def test_none_additional(self):
         result = getfastq_search_term('PRJNA1', None)
         assert result == 'PRJNA1'
+
+class TestNormalizeFasterqSizeCheck:
+    @pytest.mark.parametrize('raw, expected', [
+        ('on', 'on'),
+        ('off', 'off'),
+        ('only', 'only'),
+        (' yes ', 'on'),
+        ('NO', 'off'),
+        ('unexpected', 'on'),
+        (True, 'on'),
+        (False, 'off'),
+        (1, 'on'),
+        (0, 'off'),
+    ])
+    def test_normalize(self, raw, expected):
+        assert normalize_fasterq_size_check(raw) == expected
 
 
 class TestCountFastqRecords:
@@ -355,6 +372,38 @@ class TestConcatFastq:
         assert (tmp_path / 'MERGED.amalgkit.fastq.gz').exists()
         assert [run_id for run_id, _ in seen] == ['SRR001', 'SRR002']
         assert seen[0][1] is seen[1][1]
+
+    def test_concat_uses_system_cat_when_available(self, tmp_path, monkeypatch):
+        (tmp_path / 'SRR001.amalgkit.fastq.gz').write_bytes(b'AAAA\n')
+        (tmp_path / 'SRR002.amalgkit.fastq.gz').write_bytes(b'CCCC\n')
+        metadata = self._metadata_single(['SRR001', 'SRR002'])
+        args = type('Args', (), {
+            'layout': 'auto',
+            'id': 'MERGED',
+            'id_list': None,
+            'remove_tmp': False,
+        })()
+        g = {'num_bp_per_sra': 4}
+        captured = {}
+
+        monkeypatch.setattr('amalgkit.getfastq.shutil.which', lambda name: '/bin/cat' if name == 'cat' else None)
+
+        def fake_run(cmd, stdout=None, stderr=None):
+            captured['cmd'] = cmd
+            stdout.write(b'AAAA\nCCCC\n')
+            return subprocess.CompletedProcess(cmd, 0, stdout=b'', stderr=b'')
+
+        def fail_if_called(*_args, **_kwargs):
+            raise AssertionError('append_file_binary should not be used when system cat succeeds.')
+
+        monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
+        monkeypatch.setattr('amalgkit.getfastq.append_file_binary', fail_if_called)
+
+        concat_fastq(args, metadata, str(tmp_path), g)
+
+        assert captured['cmd'][0] == '/bin/cat'
+        assert (tmp_path / 'MERGED.amalgkit.fastq.gz').exists()
+        assert (tmp_path / 'MERGED.amalgkit.fastq.gz').read_bytes() == b'AAAA\nCCCC\n'
 
 
 # ---------------------------------------------------------------------------
@@ -1826,6 +1875,122 @@ class TestGetfastqMainJobs:
         getfastq_main(args)
 
         assert set(processed) == {'SRR001', 'SRR002'}
+
+    def test_cpu_budget_caps_jobs_to_serial(self, tmp_path, monkeypatch):
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001', 'SRR002'],
+            'lib_layout': ['single', 'single'],
+            'total_spots': [10, 10],
+            'total_bases': [1000, 1000],
+            'spot_length': [100, 100],
+            'scientific_name': ['sp1', 'sp1'],
+            'exclusion': ['no', 'no'],
+        }))
+        args = SimpleNamespace(
+            jobs=4,
+            threads=4,
+            cpu_budget=4,
+            redo=False,
+            out_dir=str(tmp_path),
+            remove_sra=False,
+            tol=1,
+            fastp=False,
+            read_name='default',
+        )
+        processed = []
+
+        def fake_process_getfastq_run(args, row_index, sra_id, run_row_df, g):
+            processed.append(sra_id)
+            return {
+                'row_index': row_index,
+                'sra_id': sra_id,
+                'row': run_row_df.iloc[0].copy(),
+                'flag_any_output_file_present': True,
+                'flag_private_file': False,
+                'getfastq_sra_dir': os.path.join(args.out_dir, 'getfastq', sra_id),
+            }
+
+        def fail_if_called(*_args, **_kwargs):
+            raise AssertionError('run_tasks_with_optional_threads should not be used when --cpu_budget caps jobs to 1.')
+
+        monkeypatch.setattr('amalgkit.getfastq.check_getfastq_dependency', lambda _args: None)
+        monkeypatch.setattr('amalgkit.getfastq.getfastq_metadata', lambda _args: metadata)
+        monkeypatch.setattr('amalgkit.getfastq.remove_experiment_without_run', lambda m: m)
+        monkeypatch.setattr('amalgkit.getfastq.check_metadata_validity', lambda m: m)
+        monkeypatch.setattr(
+            'amalgkit.getfastq.initialize_global_params',
+            lambda _args, _metadata: {
+                'start_time': 0.0,
+                'max_bp': 2000,
+                'num_sra': 2,
+                'num_bp_per_sra': 1000,
+                'total_sra_bp': 2000,
+            },
+        )
+        monkeypatch.setattr('amalgkit.getfastq.initialize_columns', lambda m, _g: m)
+        monkeypatch.setattr('amalgkit.getfastq.process_getfastq_run', fake_process_getfastq_run)
+        monkeypatch.setattr('amalgkit.getfastq.run_tasks_with_optional_threads', fail_if_called)
+
+        getfastq_main(args)
+
+        assert set(processed) == {'SRR001', 'SRR002'}
+        assert args.threads == 4
+
+    def test_private_file_in_any_run_skips_second_round(self, tmp_path, monkeypatch):
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001', 'SRR002'],
+            'lib_layout': ['single', 'single'],
+            'total_spots': [10, 10],
+            'total_bases': [1000, 1000],
+            'spot_length': [100, 100],
+            'scientific_name': ['sp1', 'sp1'],
+            'exclusion': ['no', 'no'],
+            'bp_amalgkit': [500, 500],
+        }))
+        args = SimpleNamespace(
+            jobs=2,
+            redo=False,
+            out_dir=str(tmp_path),
+            remove_sra=False,
+            tol=1,
+            fastp=False,
+            read_name='default',
+        )
+
+        def fake_process_getfastq_run(args, row_index, sra_id, run_row_df, g):
+            return {
+                'row_index': row_index,
+                'sra_id': sra_id,
+                'row': run_row_df.iloc[0].copy(),
+                'flag_any_output_file_present': False,
+                'flag_private_file': (sra_id == 'SRR001'),
+                'getfastq_sra_dir': os.path.join(args.out_dir, 'getfastq', sra_id),
+            }
+
+        monkeypatch.setattr('amalgkit.getfastq.check_getfastq_dependency', lambda _args: None)
+        monkeypatch.setattr('amalgkit.getfastq.getfastq_metadata', lambda _args: metadata)
+        monkeypatch.setattr('amalgkit.getfastq.remove_experiment_without_run', lambda m: m)
+        monkeypatch.setattr('amalgkit.getfastq.check_metadata_validity', lambda m: m)
+        monkeypatch.setattr(
+            'amalgkit.getfastq.initialize_global_params',
+            lambda _args, _metadata: {
+                'start_time': 0.0,
+                'max_bp': 2000,
+                'num_sra': 2,
+                'num_bp_per_sra': 1000,
+                'total_sra_bp': 2000,
+            },
+        )
+        monkeypatch.setattr('amalgkit.getfastq.initialize_columns', lambda m, _g: m)
+        monkeypatch.setattr('amalgkit.getfastq.process_getfastq_run', fake_process_getfastq_run)
+        monkeypatch.setattr('amalgkit.getfastq.print_read_stats', lambda *_args, **_kwargs: None)
+
+        def fail_if_called(*_args, **_kwargs):
+            raise AssertionError('Second-round extraction should be skipped when any run is private.')
+
+        monkeypatch.setattr('amalgkit.getfastq.is_2nd_round_needed', fail_if_called)
+
+        getfastq_main(args)
 
 
 class TestGetfastqDependencyChecks:

@@ -4,11 +4,14 @@ import shlex
 import shutil
 import subprocess
 import sys
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pandas
 
-from amalgkit.util import load_metadata
+from amalgkit.util import (
+    load_metadata,
+    run_tasks_with_optional_threads,
+    resolve_thread_worker_allocation,
+)
 
 
 REQUIRED_COLUMNS = [
@@ -224,21 +227,13 @@ def process_species_busco(sp, fasta_path, busco_dir, tool, args, extra_args):
     return out_table
 
 
-def busco_main(args):
-    if not args.lineage:
-        raise ValueError('--lineage is required.')
-    species_jobs = int(getattr(args, 'species_jobs', 1))
-    if species_jobs <= 0:
-        raise ValueError('--species_jobs must be > 0.')
-    tool = select_tool(args)
-    extra_args = shlex.split(args.tool_args) if args.tool_args else []
+def load_metadata_if_needed_for_busco(args):
     if args.fasta is not None:
-        metadata = None
-    else:
-        metadata = load_metadata(args)
-    species, fasta_map = collect_species(args, metadata)
-    busco_dir = os.path.join(os.path.realpath(args.out_dir), 'busco')
-    os.makedirs(busco_dir, exist_ok=True)
+        return None
+    return load_metadata(args)
+
+
+def run_busco_species_jobs(species, fasta_map, busco_dir, tool, args, extra_args, species_jobs):
     if (species_jobs == 1) or (len(species) <= 1):
         for sp in species:
             process_species_busco(
@@ -253,26 +248,46 @@ def busco_main(args):
 
     max_workers = min(species_jobs, len(species))
     print('Running BUSCO for {:,} species with {:,} parallel jobs.'.format(len(species), max_workers), flush=True)
-    failures = []
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {
-            executor.submit(
-                process_species_busco,
-                sp,
-                fasta_map[sp],
-                busco_dir,
-                tool,
-                args,
-                extra_args,
-            ): sp
-            for sp in species
-        }
-        for future in as_completed(futures):
-            sp = futures[future]
-            try:
-                future.result()
-            except Exception as exc:
-                failures.append((sp, exc))
+    _, failures = run_tasks_with_optional_threads(
+        task_items=species,
+        task_fn=lambda sp: process_species_busco(
+            sp=sp,
+            fasta_path=fasta_map[sp],
+            busco_dir=busco_dir,
+            tool=tool,
+            args=args,
+            extra_args=extra_args,
+        ),
+        max_workers=max_workers,
+    )
     if failures:
         details = '; '.join(['{}: {}'.format(sp, err) for sp, err in failures])
         raise RuntimeError('BUSCO failed for {}/{} species. {}'.format(len(failures), len(species), details))
+
+
+def busco_main(args):
+    if not args.lineage:
+        raise ValueError('--lineage is required.')
+    threads, species_jobs, _ = resolve_thread_worker_allocation(
+        requested_threads=getattr(args, 'threads', 1),
+        requested_workers=getattr(args, 'species_jobs', 1),
+        cpu_budget=getattr(args, 'cpu_budget', 0),
+        worker_option_name='species_jobs',
+        context='busco:',
+    )
+    args.threads = threads
+    tool = select_tool(args)
+    extra_args = shlex.split(args.tool_args) if args.tool_args else []
+    metadata = load_metadata_if_needed_for_busco(args)
+    species, fasta_map = collect_species(args, metadata)
+    busco_dir = os.path.join(os.path.realpath(args.out_dir), 'busco')
+    os.makedirs(busco_dir, exist_ok=True)
+    run_busco_species_jobs(
+        species=species,
+        fasta_map=fasta_map,
+        busco_dir=busco_dir,
+        tool=tool,
+        args=args,
+        extra_args=extra_args,
+        species_jobs=species_jobs,
+    )

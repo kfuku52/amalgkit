@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sys
 import warnings
+from bisect import bisect_left
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 def strtobool(val):
@@ -22,6 +23,136 @@ def strtobool(val):
         return False
     else:
         raise ValueError(f"invalid truth value {val!r}")
+
+def run_tasks_with_optional_threads(task_items, task_fn, max_workers=1):
+    tasks = list(task_items)
+    results = dict()
+    failures = list()
+    if len(tasks) == 0:
+        return results, failures
+    if (max_workers is None) or (max_workers <= 1) or (len(tasks) <= 1):
+        for task in tasks:
+            try:
+                results[task] = task_fn(task)
+            except Exception as exc:
+                failures.append((task, exc))
+        return results, failures
+    worker_count = min(int(max_workers), len(tasks))
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        futures = {
+            executor.submit(task_fn, task): task
+            for task in tasks
+        }
+        for future in as_completed(futures):
+            task = futures[future]
+            try:
+                results[task] = future.result()
+            except Exception as exc:
+                failures.append((task, exc))
+    return results, failures
+
+def validate_positive_int_option(value, option_name):
+    int_value = int(value)
+    if int_value <= 0:
+        raise ValueError('--{} must be > 0.'.format(option_name))
+    return int_value
+
+
+def resolve_cpu_budget(cpu_budget):
+    if cpu_budget is None:
+        cpu_budget = 0
+    cpu_budget = int(cpu_budget)
+    if cpu_budget < 0:
+        raise ValueError('--cpu_budget must be >= 0.')
+    if cpu_budget == 0:
+        detected = os.cpu_count()
+        if (detected is None) or (detected <= 0):
+            return 1
+        return int(detected)
+    return cpu_budget
+
+
+def resolve_thread_worker_allocation(requested_threads, requested_workers, cpu_budget=0, worker_option_name='jobs', context=''):
+    threads = validate_positive_int_option(requested_threads, 'threads')
+    workers = validate_positive_int_option(requested_workers, worker_option_name)
+    budget = resolve_cpu_budget(cpu_budget)
+    effective_threads = min(threads, budget)
+    if effective_threads < threads:
+        print(
+            '{} reducing --threads from {} to {} to fit --cpu_budget {}.'.format(
+                context if context else 'CPU budget:',
+                threads,
+                effective_threads,
+                budget,
+            ),
+            flush=True,
+        )
+    max_workers = max(1, budget // effective_threads)
+    effective_workers = min(workers, max_workers)
+    if effective_workers < workers:
+        print(
+            '{} reducing --{} from {} to {} to fit --cpu_budget {} with --threads {}.'.format(
+                context if context else 'CPU budget:',
+                worker_option_name,
+                workers,
+                effective_workers,
+                budget,
+                effective_threads,
+            ),
+            flush=True,
+        )
+    print(
+        '{} effective parallelism: {} x {} = {} core(s) max.'.format(
+            context if context else 'CPU budget:',
+            effective_workers,
+            effective_threads,
+            effective_workers * effective_threads,
+        ),
+        flush=True,
+    )
+    return effective_threads, effective_workers, budget
+
+
+def resolve_worker_allocation(requested_workers, cpu_budget=0, worker_option_name='jobs', context=''):
+    workers = validate_positive_int_option(requested_workers, worker_option_name)
+    budget = resolve_cpu_budget(cpu_budget)
+    effective_workers = min(workers, budget)
+    if effective_workers < workers:
+        print(
+            '{} reducing --{} from {} to {} to fit --cpu_budget {}.'.format(
+                context if context else 'CPU budget:',
+                worker_option_name,
+                workers,
+                effective_workers,
+                budget,
+            ),
+            flush=True,
+        )
+    print(
+        '{} effective parallel workers: {} (cpu budget {}).'.format(
+            context if context else 'CPU budget:',
+            effective_workers,
+            budget,
+        ),
+        flush=True,
+    )
+    return effective_workers, budget
+
+
+def find_prefixed_entries(entries, prefix):
+    if isinstance(entries, (list, tuple)):
+        left = bisect_left(entries, prefix)
+        right = bisect_left(entries, prefix + '\uffff')
+        matched = []
+        for i in range(left, right):
+            entry = entries[i]
+            if entry.startswith(prefix):
+                matched.append(entry)
+        return matched
+    return sorted([
+        entry for entry in entries
+        if entry.startswith(prefix)
+    ])
 
 class Metadata:
     column_names = ['scientific_name', 'tissue', 'sample_group', 'genotype', 'sex', 'age',
@@ -239,14 +370,32 @@ class Metadata:
         taxid2sciname = ncbi.get_taxid_translator(self.df['taxid'].dropna().unique().tolist())
         self.df['scientific_name'] = self.df['taxid'].map(taxid2sciname).fillna(self.df['scientific_name_original'])
 
-    def group_attributes(self, dir_config):
+    def _load_tab_config(self, dir_config, config_filename):
         try:
-            config = pandas.read_csv(os.path.join(dir_config, 'group_attribute.config'),
-                                     parse_dates=False, quotechar='"', sep='\t',
-                                     header=None, index_col=None, skip_blank_lines=True, comment='#')
-        except:
+            config = pandas.read_csv(
+                os.path.join(dir_config, config_filename),
+                parse_dates=False,
+                quotechar='"',
+                sep='\t',
+                header=None,
+                index_col=None,
+                skip_blank_lines=True,
+                comment='#',
+            )
+        except Exception:
             config = pandas.DataFrame()
-        config = config.replace(numpy.nan, '')
+        return config.replace(numpy.nan, '')
+
+    def _build_text_series_getter(self):
+        text_series_cache = {}
+        def get_text_series(col):
+            if col not in text_series_cache:
+                text_series_cache[col] = self.df.loc[:, col].astype(str)
+            return text_series_cache[col]
+        return get_text_series
+
+    def group_attributes(self, dir_config):
+        config = self._load_tab_config(dir_config=dir_config, config_filename='group_attribute.config')
         for i in config.index:
             aggregate_to = config.iloc[i, 0]
             aggregate_from = config.iloc[i, 1]
@@ -271,21 +420,10 @@ class Metadata:
         self.reorder(omit_misc=False)
 
     def mark_exclude_keywords(self, dir_config):
-        try:
-            config = pandas.read_csv(os.path.join(dir_config, 'exclude_keyword.config'),
-                                     parse_dates=False, quotechar='"', sep='\t',
-                                     header=None, index_col=None, skip_blank_lines=True, comment='#')
-        except:
-            config = pandas.DataFrame()
-        config = config.replace(numpy.nan, '')
+        config = self._load_tab_config(dir_config=dir_config, config_filename='exclude_keyword.config')
         if config.shape[0]>0:
             print('{}: Marking SRAs with bad keywords'.format(datetime.datetime.now()), flush=True)
-        text_series_cache = {}
-
-        def get_text_series(col):
-            if col not in text_series_cache:
-                text_series_cache[col] = self.df.loc[:, col].astype(str)
-            return text_series_cache[col]
+        get_text_series = self._build_text_series_getter()
 
         for i in config.index:
             cols = config.iloc[i, 0].split(',')
@@ -304,21 +442,10 @@ class Metadata:
         self.df.loc[~((self.df.loc[:, 'cell'].isnull()) | (self.df.loc[:, 'cell'] == '')), 'exclusion'] = 'cell_culture'
 
     def mark_treatment_terms(self, dir_config):
-        try:
-            config = pandas.read_csv(os.path.join(dir_config, 'control_term.config'),
-                                     parse_dates=False, quotechar='"', sep='\t',
-                                     header=None, index_col=None, skip_blank_lines=True, comment='#')
-        except:
-            config = pandas.DataFrame()
-        config = config.replace(numpy.nan, '')
+        config = self._load_tab_config(dir_config=dir_config, config_filename='control_term.config')
         if config.shape[0]>0:
             print('{}: Marking SRAs with non-control terms'.format(datetime.datetime.now()), flush=True)
-        text_series_cache = {}
-
-        def get_text_series(col):
-            if col not in text_series_cache:
-                text_series_cache[col] = self.df.loc[:, col].astype(str)
-            return text_series_cache[col]
+        get_text_series = self._build_text_series_getter()
 
         for i in config.index:
             cols = config.iloc[i, 0].split(',')
@@ -679,19 +806,19 @@ def get_mapping_rate(metadata, quant_dir):
                 return sra_id, None, 'p_pseudoaligned missing in run_info.json for {}.'.format(sra_id)
             return sra_id, run_info['p_pseudoaligned'], None
 
-        results = []
-        if len(sra_dirs) <= 1:
-            for sra_id in sra_dirs:
-                results.append(load_mapping_rate(sra_id))
-        else:
-            max_workers = min(8, len(sra_dirs))
-            with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                futures = {
-                    executor.submit(load_mapping_rate, sra_id): sra_id
-                    for sra_id in sra_dirs
-                }
-                for future in as_completed(futures):
-                    results.append(future.result())
+        max_workers = min(8, len(sra_dirs))
+        results_by_sra, failures = run_tasks_with_optional_threads(
+            task_items=sra_dirs,
+            task_fn=load_mapping_rate,
+            max_workers=max_workers,
+        )
+        for sra_id, exc in failures:
+            results_by_sra[sra_id] = (
+                sra_id,
+                None,
+                'Failed to read run_info.json for {}: {}'.format(sra_id, exc),
+            )
+        results = [results_by_sra[sra_id] for sra_id in sra_dirs if sra_id in results_by_sra]
 
         for sra_id, mapping_rate, error in results:
             if mapping_rate is None:
@@ -736,10 +863,78 @@ def check_ortholog_parameter_compatibility(args):
     if (args.orthogroup_table is not None)&(args.dir_busco is not None):
         raise Exception('Only one of --orthogroup_table and --dir_busco should be specified.')
 
+BUSCO_TABLE_COLUMNS = ['busco_id', 'status', 'sequence', 'score', 'length', 'orthodb_url', 'description']
+BUSCO_TABLE_USE_COLUMNS = ['busco_id', 'sequence', 'orthodb_url', 'description']
+BUSCO_SPECIES_SUFFIX_PATTERN = re.compile(r'\.tsv(?:\.gz)?$', re.IGNORECASE)
+BUSCO_SPECIES_CLEANUP_PATTERN = re.compile(r'(_busco|_full_table.*)$', re.IGNORECASE)
+BUSCO_SPECIES_MATCH_PATTERN = re.compile(r'^([^_]+_[^_]+)')
+
+
+def parse_busco_species_name(species_infile):
+    species_colname = BUSCO_SPECIES_SUFFIX_PATTERN.sub('', species_infile)
+    species_colname = BUSCO_SPECIES_CLEANUP_PATTERN.sub('', species_colname)
+    matched = BUSCO_SPECIES_MATCH_PATTERN.match(species_colname)
+    if matched is not None:
+        species_colname = matched.group(1)
+    return species_colname
+
+
+def read_busco_species_table(path_to_table):
+    tmp_table = pandas.read_table(
+        path_to_table,
+        sep='\t',
+        header=None,
+        comment='#',
+        names=BUSCO_TABLE_COLUMNS,
+        usecols=BUSCO_TABLE_USE_COLUMNS,
+    )
+    tmp_table.loc[:, 'sequence'] = tmp_table.loc[:, 'sequence'].str.replace(r':[-\.0-9]*$', '', regex=True)
+    for col in ['sequence', 'orthodb_url', 'description']:
+        tmp_table[col] = tmp_table[col].fillna('').astype(str)
+        tmp_table.loc[(tmp_table[col] == ''), col] = '-'
+    return tmp_table
+
+
+def parse_busco_species_table(dir_busco, species_infile):
+    path_to_table = os.path.join(dir_busco, species_infile)
+    if not os.path.exists(path_to_table):
+        warnings.warn('full_table.tsv does not exist. Skipping: {}'.format(species_infile))
+        return None
+    tmp_table = read_busco_species_table(path_to_table)
+    meta_rows = tmp_table.loc[:, ['busco_id', 'orthodb_url', 'description']].drop_duplicates(
+        subset=['busco_id'],
+        keep='first',
+        inplace=False,
+    )
+    grouped = tmp_table.loc[:, ['busco_id', 'sequence']].groupby('busco_id', sort=False)['sequence'].agg(','.join)
+    species_colname = parse_busco_species_name(species_infile)
+    return species_colname, meta_rows, grouped
+
+
+def append_unique_busco_ids(busco_id_seen, busco_id_order, busco_ids):
+    for busco_id in busco_ids:
+        if busco_id in busco_id_seen:
+            continue
+        busco_id_seen.add(busco_id)
+        busco_id_order.append(busco_id)
+
+
+def update_busco_meta(busco_meta, busco_ids, urls, descriptions):
+    for busco_id, orthodb_url, description in zip(busco_ids, urls, descriptions):
+        if busco_id not in busco_meta:
+            busco_meta[busco_id] = {
+                'orthodb_url': orthodb_url,
+                'description': description,
+            }
+            continue
+        if (busco_meta[busco_id]['orthodb_url'] == '-') and (orthodb_url != '-'):
+            busco_meta[busco_id]['orthodb_url'] = orthodb_url
+        if (busco_meta[busco_id]['description'] == '-') and (description != '-'):
+            busco_meta[busco_id]['description'] = description
+
+
 def generate_multisp_busco_table(dir_busco, outfile):
     print('Generating multi-species BUSCO table.', flush=True)
-    col_names = ['busco_id', 'status', 'sequence', 'score', 'length', 'orthodb_url', 'description']
-    usecols = ['busco_id', 'sequence', 'orthodb_url', 'description']
     species_infiles = [f for f in os.listdir(path=dir_busco) if f.endswith('.tsv')]
     species_infiles = sorted(species_infiles)
     print('BUSCO full tables for {} species were detected at: {}'.format(len(species_infiles), dir_busco), flush=True)
@@ -751,56 +946,17 @@ def generate_multisp_busco_table(dir_busco, outfile):
     busco_meta = dict()
     species_series = dict()
     species_order = []
-    species_name_suffix_pattern = re.compile(r'\.tsv(?:\.gz)?$', re.IGNORECASE)
-    species_name_cleanup_pattern = re.compile(r'(_busco|_full_table.*)$', re.IGNORECASE)
-    species_name_match_pattern = re.compile(r'^([^_]+_[^_]+)')
 
-    def parse_species_table(species_infile):
-        path_to_table = os.path.join(dir_busco, species_infile)
-        if not os.path.exists(path_to_table):
-            warnings.warn('full_table.tsv does not exist. Skipping: {}'.format(species_infile))
-            return None
-        tmp_table = pandas.read_table(
-            path_to_table,
-            sep='\t',
-            header=None,
-            comment='#',
-            names=col_names,
-            usecols=usecols,
-        )
-        tmp_table.loc[:, 'sequence'] = tmp_table.loc[:, 'sequence'].str.replace(r':[-\.0-9]*$', '', regex=True)
-        for col in ['sequence', 'orthodb_url', 'description']:
-            tmp_table[col] = tmp_table[col].fillna('').astype(str)
-            tmp_table.loc[(tmp_table[col]==''), col] = '-'
-
-        meta_rows = tmp_table.loc[:, ['busco_id', 'orthodb_url', 'description']].drop_duplicates(
-            subset=['busco_id'],
-            keep='first',
-            inplace=False,
-        )
-
-        grouped = tmp_table.loc[:, ['busco_id', 'sequence']].groupby('busco_id', sort=False)['sequence'].agg(','.join)
-        species_colname = species_infile
-        species_colname = species_name_suffix_pattern.sub('', species_colname)
-        species_colname = species_name_cleanup_pattern.sub('', species_colname)
-        matched = species_name_match_pattern.match(species_colname)
-        if matched is not None:
-            species_colname = matched.group(1)
-        return species_colname, meta_rows, grouped
-
-    parsed_results = [None] * len(species_infiles)
-    if len(species_infiles) <= 1:
-        for i, species_infile in enumerate(species_infiles):
-            parsed_results[i] = parse_species_table(species_infile)
-    else:
-        max_workers = min(8, len(species_infiles))
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {
-                executor.submit(parse_species_table, species_infile): i
-                for i, species_infile in enumerate(species_infiles)
-            }
-            for future in as_completed(futures):
-                parsed_results[futures[future]] = future.result()
+    max_workers = min(8, len(species_infiles))
+    parsed_by_file, parse_failures = run_tasks_with_optional_threads(
+        task_items=species_infiles,
+        task_fn=lambda species_infile: parse_busco_species_table(dir_busco, species_infile),
+        max_workers=max_workers,
+    )
+    for species_infile, exc in parse_failures:
+        warnings.warn('Failed to parse BUSCO table {}: {}'.format(species_infile, exc))
+        parsed_by_file[species_infile] = None
+    parsed_results = [parsed_by_file.get(species_infile) for species_infile in species_infiles]
 
     for parsed in parsed_results:
         if parsed is None:
@@ -809,21 +965,8 @@ def generate_multisp_busco_table(dir_busco, outfile):
         busco_ids = meta_rows['busco_id'].to_numpy()
         urls = meta_rows['orthodb_url'].to_numpy()
         descriptions = meta_rows['description'].to_numpy()
-        for busco_id in busco_ids:
-            if busco_id not in busco_id_seen:
-                busco_id_seen.add(busco_id)
-                busco_id_order.append(busco_id)
-        for busco_id, orthodb_url, description in zip(busco_ids, urls, descriptions):
-            if busco_id not in busco_meta:
-                busco_meta[busco_id] = {
-                    'orthodb_url': orthodb_url,
-                    'description': description,
-                }
-            else:
-                if (busco_meta[busco_id]['orthodb_url'] == '-') and (orthodb_url != '-'):
-                    busco_meta[busco_id]['orthodb_url'] = orthodb_url
-                if (busco_meta[busco_id]['description'] == '-') and (description != '-'):
-                    busco_meta[busco_id]['description'] = description
+        append_unique_busco_ids(busco_id_seen, busco_id_order, busco_ids)
+        update_busco_meta(busco_meta, busco_ids, urls, descriptions)
         species_order.append(species_colname)
         species_series[species_colname] = grouped
 
@@ -839,13 +982,17 @@ def generate_multisp_busco_table(dir_busco, outfile):
     merged_table.to_csv(outfile, sep='\t', index=None, doublequote=False)
 
 def check_config_dir(dir_path, mode):
-    files = os.listdir(dir_path)
-    if mode=='select':
-        asserted_files = [
+    files = set(os.listdir(dir_path))
+    mode_to_files = {
+        'select': [
             'group_attribute.config',
             'exclude_keyword.config',
             'control_term.config',
-        ]
+        ],
+    }
+    asserted_files = mode_to_files.get(mode)
+    if asserted_files is None:
+        raise ValueError('Unsupported config check mode: {}'.format(mode))
     missing_count = 0
     for af in asserted_files:
         if af in files:
@@ -874,6 +1021,5 @@ def cleanup_tmp_amalgkit_files(work_dir='.'):
 def get_getfastq_run_dir(args, sra_id):
     amalgkit_out_dir = os.path.realpath(args.out_dir)
     run_output_dir = os.path.join(amalgkit_out_dir, 'getfastq', sra_id)
-    if not os.path.exists(run_output_dir):
-        os.makedirs(run_output_dir)
+    os.makedirs(run_output_dir, exist_ok=True)
     return run_output_dir

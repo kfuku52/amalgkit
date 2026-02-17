@@ -432,6 +432,47 @@ class TestQuantEdgeCases:
 
         assert set(dispatched) == {('SRR001', 'Species A'), ('SRR002', 'Species B')}
 
+    def test_quant_main_cpu_budget_caps_jobs_to_serial(self, tmp_path, monkeypatch):
+        args = SimpleNamespace(
+            out_dir=str(tmp_path),
+            jobs=4,
+            threads=4,
+            cpu_budget=4,
+            redo=False,
+            metadata='inferred',
+            index_dir=None,
+            build_index=False,
+            fasta_dir='inferred',
+            clean_fastq=False,
+            index_lock_poll=1,
+            index_lock_timeout=10,
+        )
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001', 'SRR002'],
+            'scientific_name': ['Species A', 'Species B'],
+            'exclusion': ['no', 'no'],
+            'nominal_length': [200, 200],
+        }))
+        dispatched = []
+
+        monkeypatch.setattr('amalgkit.quant.check_kallisto_dependency', lambda: None)
+        monkeypatch.setattr('amalgkit.quant.load_metadata', lambda _args: metadata)
+        monkeypatch.setattr('amalgkit.quant.pre_resolve_species_indices', lambda _args, _tasks: {})
+        monkeypatch.setattr(
+            'amalgkit.quant.run_quant_for_sra',
+            lambda _args, _metadata, sra_id, sci_name: dispatched.append((sra_id, sci_name)),
+        )
+
+        def fail_if_called(*_args, **_kwargs):
+            raise AssertionError('run_tasks_with_optional_threads should not be used when --cpu_budget caps jobs to 1.')
+
+        monkeypatch.setattr('amalgkit.quant.run_tasks_with_optional_threads', fail_if_called)
+
+        quant_main(args)
+
+        assert set(dispatched) == {('SRR001', 'Species A'), ('SRR002', 'Species B')}
+        assert args.threads == 4
+
     def test_quant_main_pre_resolves_index_once_per_species(self, tmp_path, monkeypatch):
         args = SimpleNamespace(
             out_dir=str(tmp_path),

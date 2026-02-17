@@ -22,6 +22,12 @@ from amalgkit.util import (
     get_getfastq_run_dir,
     generate_multisp_busco_table,
     cleanup_tmp_amalgkit_files,
+    run_tasks_with_optional_threads,
+    validate_positive_int_option,
+    resolve_cpu_budget,
+    resolve_thread_worker_allocation,
+    resolve_worker_allocation,
+    find_prefixed_entries,
 )
 
 
@@ -41,6 +47,110 @@ class TestStrtobool:
     def test_invalid_value(self):
         with pytest.raises(ValueError):
             strtobool("maybe")
+
+class TestRunTasksWithOptionalThreads:
+    def test_empty_tasks(self):
+        results, failures = run_tasks_with_optional_threads([], lambda x: x, max_workers=4)
+        assert results == {}
+        assert failures == []
+
+    def test_serial_collects_successes_and_failures(self):
+        def worker(x):
+            if x == 2:
+                raise RuntimeError('boom')
+            return x * 10
+
+        results, failures = run_tasks_with_optional_threads([1, 2, 3], worker, max_workers=1)
+
+        assert results == {1: 10, 3: 30}
+        assert len(failures) == 1
+        assert failures[0][0] == 2
+        assert isinstance(failures[0][1], RuntimeError)
+
+    def test_parallel_collects_successes_and_failures(self):
+        def worker(x):
+            if x == 3:
+                raise ValueError('bad')
+            return x + 1
+
+        results, failures = run_tasks_with_optional_threads([1, 2, 3, 4], worker, max_workers=3)
+
+        assert results == {1: 2, 2: 3, 4: 5}
+        assert len(failures) == 1
+        assert failures[0][0] == 3
+        assert isinstance(failures[0][1], ValueError)
+
+class TestValidatePositiveIntOption:
+    def test_accepts_positive(self):
+        assert validate_positive_int_option(3, 'jobs') == 3
+        assert validate_positive_int_option('2', 'species_jobs') == 2
+
+    def test_rejects_nonpositive(self):
+        with pytest.raises(ValueError, match='--jobs must be > 0'):
+            validate_positive_int_option(0, 'jobs')
+
+
+class TestCpuBudgetHelpers:
+    def test_resolve_cpu_budget_auto_uses_os_cpu_count(self, monkeypatch):
+        monkeypatch.setattr('amalgkit.util.os.cpu_count', lambda: 12)
+        assert resolve_cpu_budget(0) == 12
+
+    def test_resolve_cpu_budget_auto_fallbacks_to_one(self, monkeypatch):
+        monkeypatch.setattr('amalgkit.util.os.cpu_count', lambda: None)
+        assert resolve_cpu_budget(0) == 1
+
+    def test_resolve_cpu_budget_rejects_negative(self):
+        with pytest.raises(ValueError, match='--cpu_budget must be >= 0'):
+            resolve_cpu_budget(-1)
+
+    def test_resolve_thread_worker_allocation_caps_workers(self):
+        threads, workers, budget = resolve_thread_worker_allocation(
+            requested_threads=4,
+            requested_workers=4,
+            cpu_budget=8,
+            worker_option_name='jobs',
+        )
+        assert threads == 4
+        assert workers == 2
+        assert budget == 8
+
+    def test_resolve_thread_worker_allocation_caps_threads(self):
+        threads, workers, budget = resolve_thread_worker_allocation(
+            requested_threads=16,
+            requested_workers=2,
+            cpu_budget=8,
+            worker_option_name='jobs',
+        )
+        assert threads == 8
+        assert workers == 1
+        assert budget == 8
+
+    def test_resolve_worker_allocation_caps_workers(self):
+        workers, budget = resolve_worker_allocation(
+            requested_workers=10,
+            cpu_budget=3,
+            worker_option_name='species_jobs',
+        )
+        assert workers == 3
+        assert budget == 3
+        with pytest.raises(ValueError, match='--species_jobs must be > 0'):
+            validate_positive_int_option(-1, 'species_jobs')
+
+class TestFindPrefixedEntries:
+    def test_sorted_list_entries(self):
+        entries = ['Homo_sapiens.fa', 'Homo_sapiens.idx', 'Mus_musculus.fa']
+        out = find_prefixed_entries(entries, 'Homo_sapiens')
+        assert out == ['Homo_sapiens.fa', 'Homo_sapiens.idx']
+
+    def test_set_entries_returns_sorted_output(self):
+        entries = {'Homo_sapiens_b.idx', 'Mus_musculus.idx', 'Homo_sapiens_a.idx'}
+        out = find_prefixed_entries(entries, 'Homo_sapiens')
+        assert out == ['Homo_sapiens_a.idx', 'Homo_sapiens_b.idx']
+
+    def test_no_match(self):
+        entries = ['Arabidopsis_thaliana.fa']
+        out = find_prefixed_entries(entries, 'Homo_sapiens')
+        assert out == []
 
 
 # ---------------------------------------------------------------------------
@@ -746,6 +856,10 @@ class TestCheckConfigDir:
         ga.write_text('tissue\tsource_name\n')
         # Should not raise an exception
         check_config_dir(str(tmp_path), mode='select')
+
+    def test_invalid_mode_raises(self, tmp_path):
+        with pytest.raises(ValueError, match='Unsupported config check mode'):
+            check_config_dir(str(tmp_path), mode='unknown')
 
 
 # ---------------------------------------------------------------------------

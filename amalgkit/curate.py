@@ -5,7 +5,6 @@ import shutil
 import subprocess
 import sys
 import warnings
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from amalgkit.util import *
 
@@ -24,6 +23,21 @@ def get_sample_group(args, metadata):
     print('Tissues to be included: {}'.format(', '.join(sample_group)))
     sample_group = '|'.join(sample_group)
     return sample_group
+
+def get_curate_completion_flag_path(curate_dir, sp):
+    return os.path.join(curate_dir, sp, 'curate_completion_flag.txt')
+
+def write_curate_completion_flag(curate_dir, sp):
+    file_curate_completion_flag = get_curate_completion_flag_path(curate_dir, sp)
+    with open(file_curate_completion_flag, 'w') as f:
+        f.write('amalgkit curate completed at {}\n'.format(datetime.datetime.now()))
+
+def register_curate_exit_status(curate_dir, sp, exit_status, failed_species):
+    if exit_status == 0:
+        write_curate_completion_flag(curate_dir=curate_dir, sp=sp)
+    else:
+        failed_species.add(sp)
+        sys.stderr.write('amalgkit curate failed for species: {}\n'.format(sp))
 
 def run_curate_r_script(args, metadata, sp, input_dir):
     dist_method = args.dist_method
@@ -51,7 +65,7 @@ def run_curate_r_script(args, metadata, sp, input_dir):
         print('Skipping {}'.format(sp), flush=True)
         return 1
     print("Starting Rscript to obtain curated {} values.".format(args.norm), flush=True)
-    curate_r_exit_code = subprocess.call([
+    curate_r_result = subprocess.run([
             'Rscript',
             r_script_path,
             count_file,
@@ -72,88 +86,113 @@ def run_curate_r_script(args, metadata, sp, input_dir):
             str(int(args.maintain_zero)),
             os.path.realpath(r_util_path),
             str(int(args.skip_curation))
-         ])
-    return curate_r_exit_code
+         ], check=False)
+    return curate_r_result.returncode
 
-def curate_main(args):
-    species_jobs = int(getattr(args, 'species_jobs', 1))
-    if species_jobs <= 0:
-        raise ValueError('--species_jobs must be > 0.')
-    check_rscript()
-    if args.input_dir=='inferred':
-        dir_merge = os.path.realpath(os.path.join(args.out_dir, 'merge'))
-        dir_cstmm = os.path.realpath(os.path.join(args.out_dir, 'cstmm'))
-        if os.path.exists(dir_cstmm):
-            print('Subdirectory for amalgkit cstmm will be used as input: {}'.format(dir_cstmm))
-            metadata = load_metadata(args, dir_subcommand='cstmm')
-            input_dir = dir_cstmm
-        else:
-            print('Subdirectory for amalgkit merge will be used as input: {}'.format(dir_merge))
-            metadata = load_metadata(args, dir_subcommand='merge')
-            input_dir = dir_merge
-    else:
+def resolve_curate_input(args):
+    if args.input_dir != 'inferred':
         print('Input_directory: {}'.format(args.input_dir))
         metadata = load_metadata(args, dir_subcommand=os.path.basename(args.input_dir))
-        input_dir = args.input_dir
-    if ('tpm' in args.norm) & ('cstmm' in input_dir):
+        return metadata, args.input_dir
+
+    dir_merge = os.path.realpath(os.path.join(args.out_dir, 'merge'))
+    dir_cstmm = os.path.realpath(os.path.join(args.out_dir, 'cstmm'))
+    if os.path.exists(dir_cstmm):
+        print('Subdirectory for amalgkit cstmm will be used as input: {}'.format(dir_cstmm))
+        metadata = load_metadata(args, dir_subcommand='cstmm')
+        return metadata, dir_cstmm
+    print('Subdirectory for amalgkit merge will be used as input: {}'.format(dir_merge))
+    metadata = load_metadata(args, dir_subcommand='merge')
+    return metadata, dir_merge
+
+
+def list_selected_species(metadata):
+    is_selected = (metadata.df['exclusion'] == 'no')
+    selected_species = metadata.df.loc[is_selected, 'scientific_name'].drop_duplicates().values
+    return [species.replace(' ', '_') for species in selected_species]
+
+
+def collect_pending_species_for_curate(args, curate_dir, selected_species):
+    pending_species = []
+    for species in selected_species:
+        flag_path = get_curate_completion_flag_path(curate_dir=curate_dir, sp=species)
+        if not os.path.exists(flag_path):
+            pending_species.append(species)
+            continue
+        if args.redo:
+            print('Output file detected. Will be overwritten: {}'.format(species), flush=True)
+            shutil.rmtree(os.path.join(curate_dir, species))
+            pending_species.append(species)
+            continue
+        print('Skipping. Output file detected: {}'.format(species), flush=True)
+    return pending_species
+
+
+def run_curate_species_jobs(args, metadata, input_dir, curate_dir, pending_species, failed_species, species_jobs):
+    if (species_jobs == 1) or (len(pending_species) <= 1):
+        for species in pending_species:
+            print('Starting: {}'.format(species), flush=True)
+            exit_status = run_curate_r_script(args, metadata, species, input_dir)
+            register_curate_exit_status(
+                curate_dir=curate_dir,
+                sp=species,
+                exit_status=exit_status,
+                failed_species=failed_species,
+            )
+        return
+
+    max_workers = min(species_jobs, len(pending_species))
+    print('Running curate for {:,} species with {:,} parallel jobs.'.format(len(pending_species), max_workers), flush=True)
+    exit_status_by_species, failures = run_tasks_with_optional_threads(
+        task_items=pending_species,
+        task_fn=lambda species: run_curate_r_script(args, metadata, species, input_dir),
+        max_workers=max_workers,
+    )
+    for species, exc in failures:
+        failed_species.add(species)
+        sys.stderr.write('amalgkit curate failed for species: {} ({})\n'.format(species, exc))
+    for species, exit_status in exit_status_by_species.items():
+        register_curate_exit_status(
+            curate_dir=curate_dir,
+            sp=species,
+            exit_status=exit_status,
+            failed_species=failed_species,
+        )
+
+
+def curate_main(args):
+    species_jobs, _ = resolve_worker_allocation(
+        requested_workers=getattr(args, 'species_jobs', 1),
+        cpu_budget=getattr(args, 'cpu_budget', 0),
+        worker_option_name='species_jobs',
+        context='curate:',
+    )
+    check_rscript()
+    metadata, input_dir = resolve_curate_input(args)
+    if ('tpm' in args.norm) and ('cstmm' in input_dir):
             txt = ("TPM and TMM are incompatible. "
                    "If input data are CSTMM-normalized, "
                    "please switch --norm to any of the 'fpkm' normalization methods instead.")
             sys.stderr.write(txt)
-    is_selected = (metadata.df['exclusion']=='no')
-    spp = metadata.df.loc[is_selected, 'scientific_name'].drop_duplicates().values
+    selected_species = list_selected_species(metadata)
     curate_dir = os.path.join(args.out_dir, 'curate')
     os.makedirs(curate_dir, exist_ok=True)
-    failed_species = list()
-    pending_species = list()
-    print('Number of species in the selected metadata table ("exclusion"=="no"): {}'.format(len(spp)), flush=True)
-    for sp in spp:
-        sp = sp.replace(" ", "_")
-        file_curate_completion_flag = os.path.join(curate_dir, sp, 'curate_completion_flag.txt')
-        if os.path.exists(file_curate_completion_flag):
-            if args.redo:
-                print('Output file detected. Will be overwritten: {}'.format(sp), flush=True)
-                shutil.rmtree(os.path.join(curate_dir, sp))
-            else:
-                print('Skipping. Output file detected: {}'.format(sp), flush=True)
-                continue
-        pending_species.append(sp)
-
-    if (species_jobs == 1) or (len(pending_species) <= 1):
-        for sp in pending_species:
-            file_curate_completion_flag = os.path.join(curate_dir, sp, 'curate_completion_flag.txt')
-            print('Starting: {}'.format(sp), flush=True)
-            exit_status = run_curate_r_script(args, metadata, sp, input_dir)
-            if exit_status == 0:
-                with open(file_curate_completion_flag, 'w') as f:
-                    f.write('amalgkit curate completed at {}\n'.format(datetime.datetime.now()))
-            else:
-                failed_species.append(sp)
-                sys.stderr.write('amalgkit curate failed for species: {}\n'.format(sp))
-    else:
-        max_workers = min(species_jobs, len(pending_species))
-        print('Running curate for {:,} species with {:,} parallel jobs.'.format(len(pending_species), max_workers), flush=True)
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {
-                executor.submit(run_curate_r_script, args, metadata, sp, input_dir): sp
-                for sp in pending_species
-            }
-            for future in as_completed(futures):
-                sp = futures[future]
-                file_curate_completion_flag = os.path.join(curate_dir, sp, 'curate_completion_flag.txt')
-                try:
-                    exit_status = future.result()
-                except Exception as exc:
-                    failed_species.append(sp)
-                    sys.stderr.write('amalgkit curate failed for species: {} ({})\n'.format(sp, exc))
-                    continue
-                if exit_status == 0:
-                    with open(file_curate_completion_flag, 'w') as f:
-                        f.write('amalgkit curate completed at {}\n'.format(datetime.datetime.now()))
-                else:
-                    failed_species.append(sp)
-                    sys.stderr.write('amalgkit curate failed for species: {}\n'.format(sp))
+    failed_species = set()
+    print(
+        'Number of species in the selected metadata table ("exclusion"=="no"): {}'.format(len(selected_species)),
+        flush=True,
+    )
+    pending_species = collect_pending_species_for_curate(args, curate_dir, selected_species)
+    run_curate_species_jobs(
+        args=args,
+        metadata=metadata,
+        input_dir=input_dir,
+        curate_dir=curate_dir,
+        pending_species=pending_species,
+        failed_species=failed_species,
+        species_jobs=species_jobs,
+    )
     if len(failed_species) > 0:
         txt = 'amalgkit curate failed for {}/{} species: {}\n'
-        sys.stderr.write(txt.format(len(failed_species), len(spp), ', '.join(failed_species)))
+        sys.stderr.write(txt.format(len(failed_species), len(selected_species), ', '.join(sorted(failed_species))))
         sys.exit(1)

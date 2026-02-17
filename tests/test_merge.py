@@ -158,12 +158,42 @@ def test_merge_main_parallel_species_jobs(tmp_path, monkeypatch):
     args = SimpleNamespace(out_dir=str(out_dir), species_jobs=2, metadata='inferred')
     processed = []
 
-    def fake_merge_species(sp, _metadata, _quant_dir, _merge_dir, _run_abundance_paths=None):
+    def fake_merge_species(sp, metadata=None, quant_dir=None, merge_dir=None, run_abundance_paths=None):
         processed.append(sp)
         return 1
 
     monkeypatch.setattr('amalgkit.merge.load_metadata', lambda _args: metadata)
     monkeypatch.setattr('amalgkit.merge.merge_species_quant_tables', fake_merge_species)
+    monkeypatch.setattr('amalgkit.merge.merge_fastp_stats_into_metadata', lambda m, _d: m)
+    monkeypatch.setattr('amalgkit.merge.write_updated_metadata', lambda _m, _p, _a: None)
+    monkeypatch.setattr('amalgkit.merge.subprocess.check_call', lambda _cmd: 0)
+
+    merge_main(args)
+
+    assert set(processed) == {'Species A', 'Species B'}
+
+
+def test_merge_main_cpu_budget_caps_species_jobs_to_serial(tmp_path, monkeypatch):
+    out_dir = tmp_path / 'out'
+    out_dir.mkdir()
+    metadata = Metadata.from_DataFrame(pandas.DataFrame({
+        'run': ['R1', 'R2'],
+        'scientific_name': ['Species A', 'Species B'],
+        'exclusion': ['no', 'no'],
+    }))
+    args = SimpleNamespace(out_dir=str(out_dir), species_jobs=4, cpu_budget=1, metadata='inferred')
+    processed = []
+
+    def fake_merge_species(sp, metadata=None, quant_dir=None, merge_dir=None, run_abundance_paths=None):
+        processed.append(sp)
+        return 1
+
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError('run_tasks_with_optional_threads should not be used when --cpu_budget caps species_jobs to 1.')
+
+    monkeypatch.setattr('amalgkit.merge.load_metadata', lambda _args: metadata)
+    monkeypatch.setattr('amalgkit.merge.merge_species_quant_tables', fake_merge_species)
+    monkeypatch.setattr('amalgkit.merge.run_tasks_with_optional_threads', fail_if_called)
     monkeypatch.setattr('amalgkit.merge.merge_fastp_stats_into_metadata', lambda m, _d: m)
     monkeypatch.setattr('amalgkit.merge.write_updated_metadata', lambda _m, _p, _a: None)
     monkeypatch.setattr('amalgkit.merge.subprocess.check_call', lambda _cmd: 0)

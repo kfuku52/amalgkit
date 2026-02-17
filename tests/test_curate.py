@@ -87,11 +87,15 @@ class TestRunCurateRScript:
         (input_dir / 'SpA' / 'SpA_eff_length.tsv').write_text('target_id\tR1\nG1\t100\n')
         captured = {}
 
-        def fake_call(cmd):
-            captured['cmd'] = cmd
-            return 0
+        class FakeCompleted:
+            returncode = 0
 
-        monkeypatch.setattr('amalgkit.curate.subprocess.call', fake_call)
+        def fake_run(cmd, check):
+            captured['cmd'] = cmd
+            captured['check'] = check
+            return FakeCompleted()
+
+        monkeypatch.setattr('amalgkit.curate.subprocess.run', fake_run)
         code = run_curate_r_script(
             args=args,
             metadata=metadata,
@@ -99,6 +103,7 @@ class TestRunCurateRScript:
             input_dir=str(input_dir),
         )
         assert code == 0
+        assert captured['check'] is False
         assert captured['cmd'][13] == expected_flag
 
 
@@ -196,6 +201,37 @@ class TestCurateMain:
 
         assert (out_dir / 'curate' / 'Species_A' / 'curate_completion_flag.txt').exists()
         assert (out_dir / 'curate' / 'Species_B' / 'curate_completion_flag.txt').exists()
+
+    def test_cpu_budget_caps_species_jobs_to_serial(self, tmp_path, monkeypatch):
+        out_dir = tmp_path / 'nested' / 'output'
+        args = self._args(out_dir)
+        args.species_jobs = 4
+        args.cpu_budget = 1
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'scientific_name': ['Species A', 'Species B'],
+            'run': ['R1', 'R2'],
+            'sample_group': ['g1', 'g2'],
+            'exclusion': ['no', 'no'],
+        }))
+        processed = []
+
+        monkeypatch.setattr('amalgkit.curate.check_rscript', lambda: None)
+        monkeypatch.setattr('amalgkit.curate.load_metadata', lambda *_args, **_kwargs: metadata)
+
+        def fake_run_curate(args, metadata, sp, input_dir):
+            processed.append(sp)
+            os.makedirs(os.path.join(args.out_dir, 'curate', sp), exist_ok=True)
+            return 0
+
+        def fail_if_called(*_args, **_kwargs):
+            raise AssertionError('run_tasks_with_optional_threads should not be used when --cpu_budget caps species_jobs to 1.')
+
+        monkeypatch.setattr('amalgkit.curate.run_curate_r_script', fake_run_curate)
+        monkeypatch.setattr('amalgkit.curate.run_tasks_with_optional_threads', fail_if_called)
+
+        curate_main(args)
+
+        assert set(processed) == {'Species_A', 'Species_B'}
 
     def test_rejects_nonpositive_species_jobs(self, tmp_path, monkeypatch):
         out_dir = tmp_path / 'nested' / 'output'
