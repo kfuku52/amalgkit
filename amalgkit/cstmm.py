@@ -1,50 +1,47 @@
-import pandas
-
 import subprocess
 import os
-import re
 import sys
 
 from amalgkit.util import *
 
+def resolve_species_count_file(sciname_path):
+    sciname_count_files = []
+    with os.scandir(sciname_path) as entries:
+        for entry in entries:
+            if (not entry.is_file()) or (not entry.name.endswith('est_counts.tsv')):
+                continue
+            sciname_count_files.append(entry.path)
+    num_sciname_count_file = len(sciname_count_files)
+    if num_sciname_count_file == 0:
+        sys.stderr.write('No est_counts.tsv file found in: {}\n'.format(sciname_path))
+        return None
+    if num_sciname_count_file == 1:
+        return sciname_count_files[0]
+    raise Exception('Multiple est_counts.tsv files found in: {}\n'.format(sciname_path))
+
+
 def get_count_files(dir_count):
-    sciname_dirs = sorted(os.listdir(dir_count))
-    count_files = list()
-    for sciname_dir in sciname_dirs:
-        sciname_path = os.path.join(dir_count, sciname_dir)
-        if not os.path.isdir(sciname_path):
-            continue
-        sciname_count_files = []
-        with os.scandir(sciname_path) as entries:
-            for entry in entries:
-                if (not entry.is_file()) or (not entry.name.endswith('est_counts.tsv')):
-                    continue
-                sciname_count_files.append(entry.path)
-        num_sciname_count_file = len(sciname_count_files)
-        if (num_sciname_count_file==0):
-            sys.stderr.write('No est_counts.tsv file found in: {}\n'.format(sciname_path))
-        elif (num_sciname_count_file==1):
-            count_files.append(sciname_count_files[0])
-        elif (num_sciname_count_file>=2):
-            raise Exception('Multiple est_counts.tsv files found in: {}\n'.format(sciname_path))
-    if (len(count_files)==0):
+    count_files = []
+    with os.scandir(dir_count) as species_entries:
+        for species_entry in sorted(species_entries, key=lambda e: e.name):
+            if not species_entry.is_dir():
+                continue
+            count_file = resolve_species_count_file(species_entry.path)
+            if count_file is not None:
+                count_files.append(count_file)
+    if len(count_files) == 0:
         raise Exception('No est_counts.tsv file was detected.')
     return sorted(count_files)
 
 def filepath2spp(file_paths):
-    spp = [ os.path.basename(cf) for cf in file_paths]
-    spp = [ re.sub('_', 'PLACEHOLDER', sp, count=1) for sp in spp ]
-    spp = [ re.sub('_.*', '', sp) for sp in spp ]
-    spp = [ re.sub('PLACEHOLDER', '_', sp) for sp in spp ]
-    return spp
+    return [os.path.basename(path).split('_est_counts.tsv', 1)[0] for path in file_paths]
 
 def cstmm_main(args):
     check_rscript()
     check_ortholog_parameter_compatibility(args)
     dir_out = os.path.realpath(args.out_dir)
     dir_cstmm = os.path.join(dir_out, 'cstmm')
-    if not os.path.exists(dir_cstmm):
-        os.makedirs(dir_cstmm)
+    os.makedirs(dir_cstmm, exist_ok=True)
     if args.dir_count=='inferred':
         dir_count = os.path.join(dir_out, 'merge')
     else:
@@ -55,7 +52,7 @@ def cstmm_main(args):
     elif args.orthogroup_table is not None:
         file_orthogroup_table = os.path.realpath(args.orthogroup_table)
     count_files = get_count_files(dir_count)
-    if (len(count_files)==1):
+    if len(count_files) == 1:
         txt = 'Only one species was detected. Standard TMM normalization will be applied.'
         print(txt, flush=True)
         mode_tmm = 'single_species'

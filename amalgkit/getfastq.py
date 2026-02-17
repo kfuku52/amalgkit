@@ -20,6 +20,9 @@ from urllib.error import HTTPError
 
 IDENTICAL_PAIRED_RATIO_THRESHOLD = 0.99
 IDENTICAL_PAIRED_CHECKED_READS = 2000
+ID_LIST_METADATA_MAX_WORKERS = 4
+ID_LIST_VERBOSE_LIMIT = 20
+FASTQ_RECORD_COUNT_CHUNK_BYTES = 16 * 1024 * 1024
 
 def get_or_detect_intermediate_extension(sra_stat, work_dir, files=None, file_state=None):
     cached_ext = sra_stat.get('current_ext', None)
@@ -34,7 +37,7 @@ def get_or_detect_intermediate_extension(sra_stat, work_dir, files=None, file_st
 def set_current_intermediate_extension(sra_stat, ext):
     sra_stat['current_ext'] = ext
 
-def append_file_binary(src_path, dst_path, chunk_size=1024 * 1024):
+def append_file_binary(src_path, dst_path, chunk_size=8 * 1024 * 1024):
     with open(src_path, 'rb') as src_handle, open(dst_path, 'ab') as dst_handle:
         shutil.copyfileobj(src_handle, dst_handle, length=chunk_size)
 
@@ -80,7 +83,77 @@ def getfastq_search_term(ncbi_id, additional_search_term=None):
         search_term = ncbi_id + ' AND ' + additional_search_term
     return search_term
 
-def getfastq_getxml(search_term, retmax=1000):
+def _read_sra_id_list(path_id_list):
+    with open(path_id_list) as fin:
+        return [
+            line.strip()
+            for line in fin
+            if (line.strip() != '') and (not line.lstrip().startswith('#'))
+        ]
+
+def _fetch_single_sra_metadata_frame(args, sra_id, log_details=True):
+    search_term = getfastq_search_term(sra_id, args.entrez_additional_search_term)
+    if log_details:
+        print('Entrez search term:', search_term)
+        xml_root = getfastq_getxml(search_term)
+    else:
+        xml_root = getfastq_getxml(search_term, verbose=False)
+    metadata_dict_tmp = Metadata.from_xml(xml_root)
+    if metadata_dict_tmp.df.shape[0] == 0:
+        if log_details:
+            print('No associated SRA. Skipping {}'.format(sra_id))
+        return None
+    if log_details:
+        print('Filtering SRA entry with --layout:', args.layout)
+    layout = get_layout(args, metadata_dict_tmp)
+    metadata_dict_tmp.df = metadata_dict_tmp.df.loc[(metadata_dict_tmp.df['lib_layout'] == layout), :]
+    if args.sci_name is not None:
+        if log_details:
+            print('Filtering SRA entry with --sci_name:', args.sci_name)
+        metadata_dict_tmp.df = metadata_dict_tmp.df.loc[(metadata_dict_tmp.df['scientific_name'] == args.sci_name), :]
+    return metadata_dict_tmp.df
+
+def _fetch_id_list_metadata_frames(args, sra_id_list):
+    if len(sra_id_list) == 0:
+        return []
+    unique_sra_ids = list(dict.fromkeys(sra_id_list))
+    requested_jobs = validate_positive_int_option(getattr(args, 'jobs', 1), 'jobs')
+    max_workers = min(ID_LIST_METADATA_MAX_WORKERS, requested_jobs, len(unique_sra_ids))
+    log_details = len(unique_sra_ids) <= ID_LIST_VERBOSE_LIMIT
+    if max_workers > 1:
+        print(
+            'Fetching SRA metadata for {:,} unique IDs ({:,} requested) with {:,} worker(s) (cap {}).'.format(
+                len(unique_sra_ids),
+                len(sra_id_list),
+                max_workers,
+                ID_LIST_METADATA_MAX_WORKERS,
+            ),
+            flush=True,
+        )
+    if not log_details:
+        print(
+            'Per-ID metadata retrieval logs suppressed for {:,} IDs (limit {}).'.format(
+                len(unique_sra_ids),
+                ID_LIST_VERBOSE_LIMIT,
+            ),
+            flush=True,
+        )
+    frames_by_sra, failures = run_tasks_with_optional_threads(
+        task_items=unique_sra_ids,
+        task_fn=lambda sra_id: _fetch_single_sra_metadata_frame(args, sra_id, log_details=log_details),
+        max_workers=max_workers,
+    )
+    for sra_id, exc in failures:
+        print('Failed to retrieve metadata for {}. Skipping. {}'.format(sra_id, exc), flush=True)
+    metadata_frames = []
+    for sra_id in sra_id_list:
+        metadata_frame = frames_by_sra.get(sra_id)
+        if metadata_frame is None:
+            continue
+        metadata_frames.append(metadata_frame)
+    return metadata_frames
+
+def getfastq_getxml(search_term, retmax=1000, verbose=True):
     def merge_xml_chunk(root, chunk):
         # Merge package-set chunks directly to avoid nested container nodes.
         if (chunk.tag == root.tag) and (len(chunk) > 0):
@@ -97,13 +170,15 @@ def getfastq_getxml(search_term, retmax=1000):
     sra_record = Entrez.read(sra_handle)
     record_ids = sra_record["IdList"]
     num_record = len(record_ids)
-    print('Number of SRA records:', num_record)
+    if verbose:
+        print('Number of SRA records:', num_record)
     if num_record == 0:
         return ET.Element('EXPERIMENT_PACKAGE_SET')
     root = None
     for start in range(0, num_record, retmax):
         end = min(start + retmax, num_record)
-        print('processing SRA records:', start, '-', end - 1, flush=True)
+        if verbose:
+            print('processing SRA records:', start, '-', end - 1, flush=True)
         try:
             handle = Entrez.efetch(db="sra", id=record_ids[start:end], rettype="full", retmode="xml", retmax=retmax)
         except HTTPError as e:
@@ -264,16 +339,9 @@ def concat_fastq(args, metadata, output_dir, g):
 def remove_sra_files(metadata, amalgkit_out_dir):
     print('Starting SRA file removal.', flush=True)
     getfastq_root = os.path.join(os.path.realpath(amalgkit_out_dir), 'getfastq')
-    try:
-        root_entries = set(os.listdir(getfastq_root))
-    except (FileNotFoundError, NotADirectoryError):
-        root_entries = set()
     for sra_id in metadata.df['run']:
         sra_dir = os.path.join(getfastq_root, sra_id)
         sra_pattern = os.path.join(sra_dir, sra_id + '.sra*')
-        if sra_id not in root_entries:
-            print('SRA file not found. Pattern searched: {}'.format(sra_pattern))
-            continue
         path_downloaded_sras = []
         try:
             with os.scandir(sra_dir) as entries:
@@ -494,14 +562,14 @@ def count_fastq_records(path_fastq):
     open_func = gzip.open if path_fastq.endswith('.gz') else open
     with open_func(path_fastq, 'rb') as f:
         while True:
-            chunk = f.read(1024 * 1024)
+            chunk = f.read(FASTQ_RECORD_COUNT_CHUNK_BYTES)
             if not chunk:
                 break
             num_lines += chunk.count(b'\n')
     if (num_lines % 4) != 0:
         txt = 'FASTQ line count is not divisible by 4 and may be truncated: {}\n'
         sys.stderr.write(txt.format(path_fastq))
-    return int(num_lines / 4)
+    return num_lines // 4
 
 def estimate_num_written_spots_from_fastq(sra_stat, files=None, file_state=None):
     work_dir = sra_stat['getfastq_sra_dir']
@@ -529,25 +597,22 @@ def trim_fastq_by_spot_range(path_fastq, start, end):
     tmp_path = path_fastq + '.trimtmp'
     kept = 0
     spot_index = 0
-    with open(path_fastq, 'rt') as fin, open(tmp_path, 'wt') as fout:
+    with open(path_fastq, 'rb') as fin, open(tmp_path, 'wb') as fout:
         while True:
             line1 = fin.readline()
-            if line1 == '':
+            if line1 == b'':
                 break
             line2 = fin.readline()
             line3 = fin.readline()
             line4 = fin.readline()
-            if any([line == '' for line in [line2, line3, line4]]):
+            if (line2 == b'') or (line3 == b'') or (line4 == b''):
                 raise Exception('Malformed FASTQ (record truncated): {}'.format(path_fastq))
             spot_index += 1
             if spot_index < start:
                 continue
             if spot_index > end:
                 break
-            fout.write(line1)
-            fout.write(line2)
-            fout.write(line3)
-            fout.write(line4)
+            fout.writelines((line1, line2, line3, line4))
             kept += 1
     os.replace(tmp_path, path_fastq)
     return kept
@@ -1282,36 +1347,16 @@ def getfastq_metadata(args):
     if args.id_list is not None:
         print('--id_list is specified. Downloading SRA metadata from Entrez.')
         Entrez.email = args.entrez_email
-        with open(args.id_list) as fin:
-            sra_id_list = [
-                line.strip()
-                for line in fin
-                if (line.strip() != '') and (not line.lstrip().startswith('#'))
-            ]
-        metadata_frames = []
-        for sra_id in sra_id_list:
-            search_term = getfastq_search_term(sra_id, args.entrez_additional_search_term)
-            print('Entrez search term:', search_term)
-            xml_root = getfastq_getxml(search_term)
-            metadata_dict_tmp = Metadata.from_xml(xml_root)
-            if metadata_dict_tmp.df.shape[0]==0:
-                print('No associated SRA. Skipping {}'.format(sra_id))
-                continue
-            print('Filtering SRA entry with --layout:', args.layout)
-            layout = get_layout(args, metadata_dict_tmp)
-            metadata_dict_tmp.df = metadata_dict_tmp.df.loc[(metadata_dict_tmp.df['lib_layout'] == layout), :]
-            if args.sci_name is not None:
-                print('Filtering SRA entry with --sci_name:', args.sci_name)
-                metadata_dict_tmp.df = metadata_dict_tmp.df.loc[(metadata_dict_tmp.df['scientific_name'] == args.sci_name), :]
-            metadata_frames.append(metadata_dict_tmp.df)
+        sra_id_list = _read_sra_id_list(args.id_list)
+        metadata_frames = _fetch_id_list_metadata_frames(args, sra_id_list)
         if len(metadata_frames)==0:
             print('No associated SRA is found with --id_list. Exiting.')
             sys.exit(1)
         metadata = Metadata.from_DataFrame(pandas.concat(metadata_frames, ignore_index=True))
     if (args.id is None)&(args.id_list is None):
         metadata = load_metadata(args)
-    metadata.df['total_bases'] = metadata.df.loc[:,'total_bases'].replace('', numpy.nan).astype(float)
-    metadata.df['spot_length'] = metadata.df.loc[:, 'spot_length'].replace('', numpy.nan).astype(float)
+    metadata.df['total_bases'] = pandas.to_numeric(metadata.df['total_bases'], errors='coerce')
+    metadata.df['spot_length'] = pandas.to_numeric(metadata.df['spot_length'], errors='coerce')
     return metadata
 
 def is_getfastq_output_present(sra_stat, files=None):
@@ -1560,7 +1605,7 @@ def initialize_global_params(args, metadata):
 def process_getfastq_run(args, row_index, sra_id, run_row_df, g):
     print('')
     print('Processing SRA ID: {}'.format(sra_id))
-    run_metadata = Metadata.from_DataFrame(run_row_df.copy())
+    run_metadata = Metadata.from_DataFrame(run_row_df)
     sra_stat = get_sra_stat(sra_id, run_metadata, g['num_bp_per_sra'])
     sra_stat['getfastq_sra_dir'] = get_getfastq_run_dir(args, sra_id)
     run_dir_files = list_run_dir_files(sra_stat['getfastq_sra_dir'])
@@ -1609,7 +1654,7 @@ def run_first_round_getfastq(args, metadata, run_rows, g, jobs):
                 args=args,
                 row_index=row_index,
                 sra_id=sra_id,
-                run_row_df=metadata.df.loc[[row_index], :],
+                run_row_df=metadata.df.loc[[row_index], :].copy(),
                 g=g,
             )
         return run_results_by_id
@@ -1639,10 +1684,13 @@ def apply_first_round_getfastq_results(metadata, run_rows, run_results_by_id):
     flag_private_file = False
     flag_any_output_file_present = False
     last_getfastq_sra_dir = None
+    if len(run_rows) == 0:
+        return metadata, flag_private_file, flag_any_output_file_present, last_getfastq_sra_dir
+    first_row_series = run_results_by_id[run_rows[0][1]]['row']
+    common_cols = [col for col in metadata.df.columns if col in first_row_series.index]
     for row_index, sra_id in run_rows:
         run_result = run_results_by_id[sra_id]
         row_series = run_result['row']
-        common_cols = [col for col in metadata.df.columns if col in row_series.index]
         metadata.df.loc[row_index, common_cols] = row_series.loc[common_cols].to_numpy()
         flag_any_output_file_present |= run_result['flag_any_output_file_present']
         flag_private_file |= run_result['flag_private_file']
@@ -1693,6 +1741,7 @@ def getfastq_main(args):
         context='getfastq:',
     )
     args.threads = threads
+    args.jobs = jobs
     check_getfastq_dependency(args)
     metadata = getfastq_metadata(args)
     metadata = remove_experiment_without_run(metadata)

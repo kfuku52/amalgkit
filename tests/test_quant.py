@@ -143,6 +143,28 @@ class TestGetfastqPrefetch:
         assert out['SRR001'] == {'SRR001.fastq.gz'}
         assert out['SRR002'] == {'SRR002.fastq.gz'}
 
+    def test_prefetch_getfastq_run_files_avoids_root_directory_scan(self, tmp_path, monkeypatch):
+        out_dir = tmp_path / 'out'
+        getfastq_root = out_dir / 'getfastq'
+        (getfastq_root / 'SRR001').mkdir(parents=True)
+        (getfastq_root / 'SRR001' / 'SRR001.fastq.gz').write_text('x')
+        args = SimpleNamespace(out_dir=str(out_dir))
+        tasks = [('SRR001', 'Species A')]
+
+        real_scandir = os.scandir
+        root_realpath = os.path.realpath(str(getfastq_root))
+
+        def fail_on_root_scan(path):
+            if os.path.realpath(path) == root_realpath:
+                raise AssertionError('Root getfastq directory should not be scanned.')
+            return real_scandir(path)
+
+        monkeypatch.setattr('amalgkit.quant.os.scandir', fail_on_root_scan)
+
+        out = prefetch_getfastq_run_files(args, tasks)
+
+        assert out == {'SRR001': {'SRR001.fastq.gz'}}
+
     def test_run_quant_uses_prefetched_getfastq_files(self, tmp_path, monkeypatch):
         out_dir = tmp_path / 'out'
         out_dir.mkdir()
@@ -541,3 +563,31 @@ class TestQuantEdgeCases:
         assert getattr(args, '_prefetched_fasta_dir') == os.path.realpath(str(fasta_dir))
         assert getattr(args, '_prefetched_index_entries') == {'Species_A.idx'}
         assert getattr(args, '_prefetched_index_dir') == os.path.realpath(str(index_dir))
+
+    def test_pre_resolve_species_indices_uses_parallel_jobs(self, tmp_path, monkeypatch):
+        out_dir = tmp_path / 'out'
+        index_dir = out_dir / 'index'
+        out_dir.mkdir()
+        index_dir.mkdir(parents=True)
+        args = SimpleNamespace(
+            out_dir=str(out_dir),
+            build_index=False,
+            fasta_dir='inferred',
+            index_dir=None,
+            jobs=4,
+        )
+        tasks = [('SRR001', 'Species A'), ('SRR002', 'Species B')]
+        seen = {'max_workers': None}
+
+        def fake_run_tasks(task_items, task_fn, max_workers):
+            items = list(task_items)
+            seen['max_workers'] = max_workers
+            return {item: task_fn(item) for item in items}, []
+
+        monkeypatch.setattr('amalgkit.quant.run_tasks_with_optional_threads', fake_run_tasks)
+        monkeypatch.setattr('amalgkit.quant.get_index', lambda _args, sci_name: sci_name + '.idx')
+
+        out = pre_resolve_species_indices(args, tasks)
+
+        assert seen['max_workers'] == 2
+        assert out == {'Species_A': 'Species_A.idx', 'Species_B': 'Species_B.idx'}

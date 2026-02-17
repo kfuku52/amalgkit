@@ -233,6 +233,139 @@ class TestGetfastqMetadataIdListParsing:
         assert called_terms == ['SRR100', 'SRR200']
         assert set(metadata.df['run'].tolist()) == {'SRR100', 'SRR200'}
 
+    def test_parallel_id_list_fetch_uses_capped_workers(self, tmp_path, monkeypatch):
+        id_list_path = tmp_path / 'ids.txt'
+        id_list_path.write_text('\n'.join(['SRR100', 'SRR200', 'SRR300']))
+
+        called_terms = []
+        captured = {}
+
+        def fake_getxml(search_term, retmax=1000):
+            called_terms.append(search_term)
+            root = ET.Element('ROOT')
+            root.set('sid', search_term.split(' AND ')[0])
+            return root
+
+        def fake_from_xml(xml_root):
+            sid = xml_root.get('sid')
+            return Metadata.from_DataFrame(pandas.DataFrame({
+                'run': [sid],
+                'lib_layout': ['single'],
+                'scientific_name': ['Testus species'],
+                'total_bases': ['100'],
+                'spot_length': ['50'],
+                'exclusion': ['no'],
+            }))
+
+        def fake_run_tasks(task_items, task_fn, max_workers=1):
+            captured['max_workers'] = max_workers
+            results = {}
+            failures = []
+            for item in task_items:
+                results[item] = task_fn(item)
+            return results, failures
+
+        class Args:
+            id = None
+            id_list = str(id_list_path)
+            entrez_email = 'test@example.org'
+            entrez_additional_search_term = None
+            layout = 'single'
+            sci_name = None
+            metadata = 'unused'
+            out_dir = str(tmp_path)
+            jobs = 8
+
+        monkeypatch.setattr('amalgkit.getfastq.getfastq_getxml', fake_getxml)
+        monkeypatch.setattr('amalgkit.getfastq.Metadata.from_xml', fake_from_xml)
+        monkeypatch.setattr('amalgkit.getfastq.run_tasks_with_optional_threads', fake_run_tasks)
+
+        metadata = getfastq_metadata(Args())
+
+        assert captured['max_workers'] == 3
+        assert called_terms == ['SRR100', 'SRR200', 'SRR300']
+        assert metadata.df['run'].tolist() == ['SRR100', 'SRR200', 'SRR300']
+
+    def test_id_list_keeps_duplicate_ids_in_output_order(self, tmp_path, monkeypatch):
+        id_list_path = tmp_path / 'ids.txt'
+        id_list_path.write_text('\n'.join(['SRR100', 'SRR100', 'SRR200']))
+
+        def fake_getxml(search_term, retmax=1000):
+            root = ET.Element('ROOT')
+            root.set('sid', search_term.split(' AND ')[0])
+            return root
+
+        def fake_from_xml(xml_root):
+            sid = xml_root.get('sid')
+            return Metadata.from_DataFrame(pandas.DataFrame({
+                'run': [sid],
+                'lib_layout': ['single'],
+                'scientific_name': ['Testus species'],
+                'total_bases': ['100'],
+                'spot_length': ['50'],
+                'exclusion': ['no'],
+            }))
+
+        class Args:
+            id = None
+            id_list = str(id_list_path)
+            entrez_email = 'test@example.org'
+            entrez_additional_search_term = None
+            layout = 'single'
+            sci_name = None
+            metadata = 'unused'
+            out_dir = str(tmp_path)
+            jobs = 4
+
+        monkeypatch.setattr('amalgkit.getfastq.getfastq_getxml', fake_getxml)
+        monkeypatch.setattr('amalgkit.getfastq.Metadata.from_xml', fake_from_xml)
+
+        metadata = getfastq_metadata(Args())
+
+        assert metadata.df['run'].tolist() == ['SRR100', 'SRR100', 'SRR200']
+
+    def test_id_list_deduplicates_entrez_fetches(self, tmp_path, monkeypatch):
+        id_list_path = tmp_path / 'ids.txt'
+        id_list_path.write_text('\n'.join(['SRR100', 'SRR100', 'SRR200']))
+        called_terms = []
+
+        def fake_getxml(search_term, retmax=1000):
+            called_terms.append(search_term)
+            root = ET.Element('ROOT')
+            root.set('sid', search_term.split(' AND ')[0])
+            return root
+
+        def fake_from_xml(xml_root):
+            sid = xml_root.get('sid')
+            return Metadata.from_DataFrame(pandas.DataFrame({
+                'run': [sid],
+                'lib_layout': ['single'],
+                'scientific_name': ['Testus species'],
+                'total_bases': ['100'],
+                'spot_length': ['50'],
+                'exclusion': ['no'],
+            }))
+
+        class Args:
+            id = None
+            id_list = str(id_list_path)
+            entrez_email = 'test@example.org'
+            entrez_additional_search_term = None
+            layout = 'single'
+            sci_name = None
+            metadata = 'unused'
+            out_dir = str(tmp_path)
+            jobs = 4
+
+        monkeypatch.setattr('amalgkit.getfastq.getfastq_getxml', fake_getxml)
+        monkeypatch.setattr('amalgkit.getfastq.Metadata.from_xml', fake_from_xml)
+
+        metadata = getfastq_metadata(Args())
+
+        assert set(called_terms) == {'SRR100', 'SRR200'}
+        assert len(called_terms) == 2
+        assert metadata.df['run'].tolist() == ['SRR100', 'SRR100', 'SRR200']
+
 
 class TestGetRange:
     def test_total_within_max(self):
@@ -1219,6 +1352,24 @@ class TestSraRecovery:
         assert not (sra_dir / 'SRR001.sra').exists()
         assert not (sra_dir / 'SRR001.sra.vdbcache').exists()
         assert (sra_dir / 'other.txt').exists()
+
+    def test_remove_sra_files_avoids_root_listdir_scan(self, tmp_path, monkeypatch):
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001'],
+            'scientific_name': ['Sp1'],
+            'exclusion': ['no'],
+        }))
+        sra_dir = tmp_path / 'getfastq' / 'SRR001'
+        sra_dir.mkdir(parents=True)
+        (sra_dir / 'SRR001.sra').write_text('a')
+
+        def fail_if_listdir_called(_path):
+            raise AssertionError('remove_sra_files should not call os.listdir on getfastq root.')
+
+        monkeypatch.setattr('amalgkit.getfastq.os.listdir', fail_if_listdir_called)
+        remove_sra_files(metadata, str(tmp_path))
+
+        assert not (sra_dir / 'SRR001.sra').exists()
 
     def test_remove_sra_files_ignores_non_directory_entries(self, tmp_path):
         metadata = Metadata.from_DataFrame(pandas.DataFrame({

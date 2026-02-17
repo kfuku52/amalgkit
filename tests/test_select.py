@@ -1,7 +1,13 @@
 import os
 import pandas
 
-from amalgkit.select import write_select_outputs
+from types import SimpleNamespace
+
+from amalgkit.select import (
+    write_select_outputs,
+    resolve_select_config_dir,
+    filter_metadata_by_sample_group,
+)
 from amalgkit.util import Metadata
 
 
@@ -40,3 +46,33 @@ class TestWriteSelectOutputs:
         with open(path_original) as f:
             content = f.read()
         assert 'marker_content' in content
+
+
+class TestSelectHelpers:
+    def test_resolve_select_config_dir_inferred(self):
+        args = SimpleNamespace(out_dir='/tmp/out', config_dir='inferred')
+        assert resolve_select_config_dir(args) == '/tmp/out/config'
+
+    def test_resolve_select_config_dir_explicit(self):
+        args = SimpleNamespace(out_dir='/tmp/out', config_dir='/tmp/custom')
+        assert resolve_select_config_dir(args) == '/tmp/custom'
+
+    def test_filter_metadata_by_sample_group(self):
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001', 'SRR002', 'SRR003'],
+            'sample_group': ['brain', 'liver', 'brain'],
+            'scientific_name': ['sp1', 'sp1', 'sp2'],
+            'exclusion': ['no', 'no', 'no'],
+        }))
+        out = filter_metadata_by_sample_group(metadata, 'brain')
+        assert set(out.df['run']) == {'SRR001', 'SRR003'}
+
+    def test_filter_metadata_by_sample_group_none_keeps_all(self):
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001', 'SRR002'],
+            'sample_group': ['brain', 'liver'],
+            'scientific_name': ['sp1', 'sp1'],
+            'exclusion': ['no', 'no'],
+        }))
+        out = filter_metadata_by_sample_group(metadata, None)
+        assert out.df.shape[0] == 2

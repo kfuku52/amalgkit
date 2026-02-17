@@ -12,7 +12,7 @@ setup(
     name                    = 'amalgkit',
     version                 = version,
     description             = 'Tools for transcriptome amalgamation',
-    license                 = "BSD 3-clause License",
+    license                 = "MIT License",
     author                  = "Kenji Fukushima, Matthias Freund",
     author_email            = 'kfuku52@gmail.com, matthias_freund@outlook.com',
     url                     = 'https://github.com/kfuku52/amalgkit.git',

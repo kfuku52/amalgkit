@@ -1,5 +1,3 @@
-from bisect import bisect_left
-
 import numpy as np
 from amalgkit.util import *
 
@@ -11,17 +9,6 @@ def list_duplicates(seq):
     seen_twice = set(x for x in seq if x in seen or seen_add(x))
     # turn the set into a list (as requested)
     return list(seen_twice)
-
-
-def _find_prefixed_entries(sorted_entries, prefix):
-    left = bisect_left(sorted_entries, prefix)
-    right = bisect_left(sorted_entries, prefix + '\uffff')
-    matched = []
-    for i in range(left, right):
-        entry = sorted_entries[i]
-        if entry.startswith(prefix):
-            matched.append(entry)
-    return matched
 
 
 def _scan_target_run_dirs(root_path, target_runs):
@@ -45,6 +32,15 @@ def _scan_target_run_dirs(root_path, target_runs):
         pass
     return run_files_map, non_dir_runs
 
+def _normalize_species_prefix(species):
+    return species.replace(" ", "_").replace(".", "")
+
+def _get_species_fallback_prefix(species):
+    parts = species.split(" ")
+    if len(parts) <= 2:
+        return None
+    return _normalize_species_prefix(parts[0] + " " + parts[1])
+
 def _should_log_per_run(args, num_runs):
     if bool(getattr(args, 'quiet', False)):
         return False
@@ -62,6 +58,71 @@ def _print_run_log_mode(args, num_runs):
         verbose_runs,
         bool(getattr(args, 'quiet', False)),
     ))
+
+def _write_unavailable_items(output_dir, filename, item_ids, label):
+    if not item_ids:
+        return
+    outpath = os.path.join(output_dir, filename)
+    print("writing {} to: {}".format(label, outpath))
+    with open(outpath, "w") as f:
+        for item_id in item_ids:
+            f.write(item_id + "\n")
+
+def _prepare_run_output_scan(args, root_path, sra_ids, found_msg, missing_msg):
+    if not os.path.exists(root_path):
+        print(missing_msg)
+        return None, None, None
+    if not os.path.isdir(root_path):
+        print(missing_msg)
+        print('Path exists but is not a directory: {}'.format(root_path))
+        return None, None, None
+    print(found_msg)
+    target_runs = set(sra_ids)
+    verbose_run_logs = _should_log_per_run(args, len(target_runs))
+    _print_run_log_mode(args, len(target_runs))
+    run_files_map, non_dir_runs = _scan_target_run_dirs(root_path, target_runs)
+    return verbose_run_logs, run_files_map, non_dir_runs
+
+
+def _print_getfastq_missing_output_message(args, sra_id):
+    print("Could not find getfastq output for: ", sra_id, "\n")
+    print(
+        "Suggested command for rerun: getfastq -e email@adress.com --id ",
+        sra_id,
+        " -w ",
+        args.out_dir,
+        "--redo yes --gcp yes --aws yes --ncbi yes",
+    )
+
+
+def _check_single_getfastq_run(args, sra_id, metadata, getfastq_path, run_files_map, non_dir_runs, verbose_run_logs):
+    sra_path = os.path.join(getfastq_path, sra_id)
+    run_files = run_files_map.get(sra_id)
+    if (run_files is None) or (sra_id in non_dir_runs):
+        if verbose_run_logs:
+            _print_getfastq_missing_output_message(args, sra_id)
+        return False
+
+    sra_stat = get_sra_stat(sra_id, metadata)
+    try:
+        ext = get_newest_intermediate_file_extension(sra_stat, sra_path, files=run_files)
+    except FileNotFoundError:
+        if verbose_run_logs:
+            print("could not find any fastq files for ", sra_id, "Please make sure amalgkit getfastq ran properly")
+        return False
+    if ext == 'no_extension_found':
+        if verbose_run_logs:
+            print("could not find any fastq files for ", sra_id, "Please make sure amalgkit getfastq ran properly")
+        return False
+
+    if verbose_run_logs and (ext != '.safely_removed'):
+        files = sorted([
+            os.path.join(sra_path, f)
+            for f in run_files
+            if f.startswith(sra_id) and f.endswith(ext)
+        ])
+        print("Found:", files)
+    return True
 
 
 def parse_metadata(args, metadata):
@@ -100,63 +161,105 @@ def check_getfastq_outputs(args, sra_ids, metadata, output_dir):
         getfastq_path = os.path.join(args.out_dir, "getfastq")
     data_available = []
     data_unavailable = []
-    if os.path.exists(getfastq_path):
-        print("amalgkit getfastq output folder detected. Checking presence of output files.")
-        target_runs = set(sra_ids)
-        verbose_run_logs = _should_log_per_run(args, len(target_runs))
-        _print_run_log_mode(args, len(target_runs))
-        run_files_map, non_dir_runs = _scan_target_run_dirs(getfastq_path, target_runs)
+    verbose_run_logs, run_files_map, non_dir_runs = _prepare_run_output_scan(
+        args=args,
+        root_path=getfastq_path,
+        sra_ids=sra_ids,
+        found_msg="amalgkit getfastq output folder detected. Checking presence of output files.",
+        missing_msg="Could not find getfastq output folder {}. Have you run getfastq yet?".format(getfastq_path),
+    )
+    if verbose_run_logs is not None:
         for sra_id in sra_ids:
             if verbose_run_logs:
                 print("\n")
                 print("Looking for {}".format(sra_id))
-            sra_path = os.path.join(getfastq_path, sra_id)
-            run_files = run_files_map.get(sra_id)
-            if (run_files is None) or (sra_id in non_dir_runs):
-                if verbose_run_logs:
-                    print("Could not find getfastq output for: ", sra_id, "\n")
-                    print("Suggested command for rerun: getfastq -e email@adress.com --id ", sra_id, " -w ", args.out_dir, "--redo yes --gcp yes --aws yes --ncbi yes")
+            is_available = _check_single_getfastq_run(
+                args=args,
+                sra_id=sra_id,
+                metadata=metadata,
+                getfastq_path=getfastq_path,
+                run_files_map=run_files_map,
+                non_dir_runs=non_dir_runs,
+                verbose_run_logs=verbose_run_logs,
+            )
+            if is_available:
+                data_available.append(sra_id)
+            else:
                 data_unavailable.append(sra_id)
-                continue
-            sra_stat = get_sra_stat(sra_id, metadata)
-            try:
-                ext = get_newest_intermediate_file_extension(sra_stat, sra_path, files=run_files)
-            except FileNotFoundError:
-                if verbose_run_logs:
-                    print("could not find any fastq files for ", sra_id,
-                          "Please make sure amalgkit getfastq ran properly")
-                data_unavailable.append(sra_id)
-                continue
-            if ext == 'no_extension_found':
-                if verbose_run_logs:
-                    print("could not find any fastq files for ", sra_id,
-                          "Please make sure amalgkit getfastq ran properly")
-                data_unavailable.append(sra_id)
-                continue
-
-            files = sorted([
-                os.path.join(sra_path, f)
-                for f in run_files
-                if f.startswith(sra_id) and f.endswith(ext)
-            ])
-            if verbose_run_logs and (ext != '.safely_removed'):
-                print("Found:", files)
-            data_available.append(sra_id)
 
     else:
-        print("Could not find getfastq output folder ", getfastq_path, ". Have you run getfastq yet?")
-        data_unavailable = metadata.df['run'].tolist()
+        data_unavailable = list(sra_ids)
 
     if data_unavailable:
-        print("writing SRA IDs without getfastq output to: ", os.path.join(output_dir, "SRA_IDs_without_fastq.txt"))
-        with open(os.path.join(output_dir, "SRA_IDs_without_fastq.txt"), "w") as f:
-            for sra_id in data_unavailable:
-                f.write(sra_id + "\n")
+        _write_unavailable_items(
+            output_dir=output_dir,
+            filename="SRA_IDs_without_fastq.txt",
+            item_ids=data_unavailable,
+            label="SRA IDs without getfastq output",
+        )
     else:
         txt = "The getfastq output files for all SRA IDs in --metadata ({}) were found."
         print(txt.format(args.metadata))
 
     return data_available, data_unavailable
+
+def _find_index_files(index_entries, index_dir_path, prefix):
+    matched = find_prefixed_entries(index_entries, prefix)
+    return [os.path.join(index_dir_path, entry) for entry in matched]
+
+def _resolve_species_index_files(species, index_entries, index_dir_path):
+    sci_name = _normalize_species_prefix(species)
+    index_path = os.path.join(index_dir_path, sci_name + "*")
+    print("\n")
+    print("Looking for index file {} for species {}".format(index_path, species))
+    index_files = _find_index_files(index_entries, index_dir_path, sci_name)
+    if index_files:
+        print("Found ", index_files, "!")
+        return index_files
+
+    print("could not find anything in", index_path)
+    # Deprecate subspecies or variants and look again
+    # I.e. if Gorilla_gorilla_gorilla.idx was not found, we look for Gorilla_gorilla.idx instead.
+    fallback_prefix = _get_species_fallback_prefix(species)
+    if fallback_prefix is None:
+        print("Could not find any index files for ", species)
+        return []
+    print("Ignoring subspecies.")
+    index_path = os.path.join(index_dir_path, fallback_prefix + "*")
+    print("Looking for {}".format(index_path))
+    index_files = _find_index_files(index_entries, index_dir_path, fallback_prefix)
+    if index_files:
+        print("Found ", index_files, "!")
+        return index_files
+    print("Could not find any index files for ", species)
+    return []
+
+
+def _check_single_quant_run(sra_id, quant_path, quant_run_files_map, non_dir_runs, verbose_run_logs):
+    sra_path = os.path.join(quant_path, sra_id)
+    quant_run_files = quant_run_files_map.get(sra_id)
+    if (quant_run_files is None) or (sra_id in non_dir_runs):
+        if verbose_run_logs:
+            print("Could not find output folder ", sra_path, " for ", sra_id)
+        return False
+
+    if verbose_run_logs:
+        print("Found output folder ", sra_path, " for ", sra_id)
+        print("Checking for output files.")
+    abundance_file = sra_id + "_abundance.tsv"
+    run_info_file = sra_id + "_run_info.json"
+    has_abundance = abundance_file in quant_run_files
+    has_run_info = run_info_file in quant_run_files
+    if has_abundance and has_run_info:
+        if verbose_run_logs:
+            print("All quant output files present for", sra_id, "!")
+        return True
+
+    if verbose_run_logs and (not has_abundance):
+        print(os.path.join(sra_path, abundance_file), " is missing! Please check if quant ran correctly")
+    if verbose_run_logs and (not has_run_info):
+        print(os.path.join(sra_path, run_info_file), " is missing! Please check if quant ran correctly")
+    return False
 
 
 def check_quant_index(args, uni_species, output_dir):
@@ -167,53 +270,32 @@ def check_quant_index(args, uni_species, output_dir):
     index_unavailable = []
     index_available = []
     if os.path.exists(index_dir_path):
+        if not os.path.isdir(index_dir_path):
+            print("Could not find index directory ", index_dir_path, " . Did you provide the correct Path?")
+            print('Path exists but is not a directory: {}'.format(index_dir_path))
+            return index_available, index_unavailable
         index_entries = sorted(os.listdir(index_dir_path))
-
-        def find_index_files(prefix):
-            matched = _find_prefixed_entries(index_entries, prefix)
-            return [os.path.join(index_dir_path, entry) for entry in matched]
-
         for species in uni_species:
-            sci_name = species.replace(" ", "_")
-            sci_name = sci_name.replace(".", "")
-            index_path = os.path.join(index_dir_path, sci_name + "*")
-            print("\n")
-            print("Looking for index file {} for species {}".format(index_path, species))
-            index_files = find_index_files(sci_name)
-            if not index_files:
-                print("could not find anything in", index_path)
-                sci_name = species.split(" ")
-                # Deprecate subspecies or variants and look again
-                # I.e. if Gorilla_gorilla_gorilla.idx was not found, we look for Gorilla_gorilla.idx instead.
-                if len(sci_name) > 2:
-                    sci_name = sci_name[0] + "_" + sci_name[1]
-                    print("Ignoring subspecies.")
-                    index_path = os.path.join(index_dir_path, sci_name + "*")
-                    print("Looking for {}".format(index_path))
-                    index_files = find_index_files(sci_name)
-                    if index_files:
-                        print("Found ", index_files, "!")
-                        index_available.append(species)
-                    else:
-                        print("Could not find any index files for ", species)
-                        index_unavailable.append(species)
-                else:
-                    print("Could not find any index files for ", species)
-                    index_unavailable.append(species)
-
-            else:
-                print("Found ", index_files, "!")
+            index_files = _resolve_species_index_files(
+                species=species,
+                index_entries=index_entries,
+                index_dir_path=index_dir_path,
+            )
+            if index_files:
                 index_available.append(species)
-
+            else:
+                index_unavailable.append(species)
             if len(index_files) > 1:
                 print("Multiple possible index files detected for ", species, ": ", index_files,
                       ". You may have to resolve ambiguity")
 
         if index_unavailable:
-            print("writing species without index to: ", os.path.join(output_dir, "species_without_index.txt"))
-            with open(os.path.join(output_dir, "species_without_index.txt"), "w") as f:
-                for species in index_unavailable:
-                    f.write(species + "\n")
+            _write_unavailable_items(
+                output_dir=output_dir,
+                filename="species_without_index.txt",
+                item_ids=index_unavailable,
+                label="species without index",
+            )
         else:
             print("index found for all species in --metadata ({})".format(args.metadata))
     else:
@@ -224,54 +306,44 @@ def check_quant_index(args, uni_species, output_dir):
 
 def check_quant_output(args, sra_ids, output_dir):
     print("checking for quant outputs: ")
-    quant_path = os.path.join(args.out_dir, "quant")
+    quant_path = getattr(args, 'quant_dir', None)
+    if quant_path is None:
+        quant_path = os.path.join(args.out_dir, "quant")
     data_available = []
     data_unavailable = []
-
-    if os.path.exists(quant_path):
-        print("amalgkit quant output folder detected. Checking presence of output files.")
-        target_runs = set(sra_ids)
-        verbose_run_logs = _should_log_per_run(args, len(target_runs))
-        _print_run_log_mode(args, len(target_runs))
-        quant_run_files_map, non_dir_runs = _scan_target_run_dirs(quant_path, target_runs)
+    verbose_run_logs, quant_run_files_map, non_dir_runs = _prepare_run_output_scan(
+        args=args,
+        root_path=quant_path,
+        sra_ids=sra_ids,
+        found_msg="amalgkit quant output folder detected. Checking presence of output files.",
+        missing_msg="Could not find quant output folder {}. Have you run quant yet?".format(quant_path),
+    )
+    if verbose_run_logs is not None:
         for sra_id in sra_ids:
             if verbose_run_logs:
                 print("\n")
                 print("Looking for {}".format(sra_id))
-            sra_path = os.path.join(quant_path, sra_id)
-            quant_run_files = quant_run_files_map.get(sra_id)
-            if (quant_run_files is None) or (sra_id in non_dir_runs):
-                if verbose_run_logs:
-                    print("Could not find output folder ", sra_path, " for ", sra_id)
-                data_unavailable.append(sra_id)
-                continue
-
-            if verbose_run_logs:
-                print("Found output folder ", sra_path, " for ", sra_id)
-                print("Checking for output files.")
-            abundance_file = sra_id + "_abundance.tsv"
-            run_info_file = sra_id + "_run_info.json"
-            has_abundance = abundance_file in quant_run_files
-            has_run_info = run_info_file in quant_run_files
-            if has_abundance and has_run_info:
-                if verbose_run_logs:
-                    print("All quant output files present for", sra_id, "!")
+            is_available = _check_single_quant_run(
+                sra_id=sra_id,
+                quant_path=quant_path,
+                quant_run_files_map=quant_run_files_map,
+                non_dir_runs=non_dir_runs,
+                verbose_run_logs=verbose_run_logs,
+            )
+            if is_available:
                 data_available.append(sra_id)
-                continue
-
-            if verbose_run_logs and (not has_abundance):
-                print(os.path.join(sra_path, abundance_file), " is missing! Please check if quant ran correctly")
-            if verbose_run_logs and (not has_run_info):
-                print(os.path.join(sra_path, run_info_file), " is missing! Please check if quant ran correctly")
-            data_unavailable.append(sra_id)
+            else:
+                data_unavailable.append(sra_id)
     else:
-        print("Could not find quant output folder ", quant_path, ". Have you run quant yet?")
+        data_unavailable = list(sra_ids)
 
     if data_unavailable:
-        print("writing SRA IDs without quant output to: ", os.path.join(output_dir, "SRA_IDs_without_quant.txt"))
-        with open(os.path.join(output_dir, "SRA_IDs_without_quant.txt"), "w") as f:
-            for sra_id in data_unavailable:
-                f.write(sra_id + "\n")
+        _write_unavailable_items(
+            output_dir=output_dir,
+            filename="SRA_IDs_without_quant.txt",
+            item_ids=data_unavailable,
+            label="SRA IDs without quant output",
+        )
     else:
         print("Quant outputs found for all SRA IDs in --metadata ({})".format(args.metadata))
 
@@ -281,8 +353,7 @@ def check_quant_output(args, sra_ids, output_dir):
 def sanity_main(args):
     metadata = load_metadata(args)
     output_dir = os.path.join(args.out_dir, 'sanity')
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
+    os.makedirs(output_dir, exist_ok=True)
     uni_species, sra_ids = parse_metadata(args, metadata)
     if args.getfastq or args.all:
         check_getfastq_outputs(args, sra_ids, metadata, output_dir)

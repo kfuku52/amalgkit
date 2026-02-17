@@ -147,8 +147,41 @@ class TestCheckQuantOutput:
         sra_ids = pandas.Series(['SRR001'])
         avail, unavail = check_quant_output(Args(), sra_ids, str(output_dir))
         assert avail == []
-        # unavail is empty because the code only populates it when quant_path exists
+        assert unavail == ['SRR001']
+
+    def test_respects_quant_dir_argument(self, tmp_path):
+        """Custom --quant_dir should be used instead of out_dir/quant."""
+        class Args:
+            out_dir = str(tmp_path / 'out')
+            quant_dir = str(tmp_path / 'custom_quant')
+            metadata = 'metadata.tsv'
+
+        custom_quant_dir = tmp_path / 'custom_quant'
+        sra_dir = custom_quant_dir / 'SRR001'
+        sra_dir.mkdir(parents=True)
+        (sra_dir / 'SRR001_abundance.tsv').write_text('data')
+        (sra_dir / 'SRR001_run_info.json').write_text('{}')
+
+        output_dir = tmp_path / 'sanity'
+        output_dir.mkdir()
+        sra_ids = pandas.Series(['SRR001'])
+        avail, unavail = check_quant_output(Args(), sra_ids, str(output_dir))
+        assert avail == ['SRR001']
         assert unavail == []
+
+    def test_quant_dir_file_path_marks_runs_unavailable(self, tmp_path):
+        """If --quant_dir points to a file, mark all runs unavailable without crashing."""
+        class Args:
+            out_dir = str(tmp_path / 'out')
+            quant_dir = str(tmp_path / 'quant_path')
+            metadata = 'metadata.tsv'
+        (tmp_path / 'quant_path').write_text('not a directory')
+        output_dir = tmp_path / 'sanity'
+        output_dir.mkdir()
+        sra_ids = pandas.Series(['SRR001'])
+        avail, unavail = check_quant_output(Args(), sra_ids, str(output_dir))
+        assert avail == []
+        assert unavail == ['SRR001']
 
     def test_suppresses_per_run_logs_when_verbose_runs_exceeded(self, tmp_path, capsys):
         class Args:
@@ -215,6 +248,20 @@ class TestCheckGetfastqOutputs:
         getfastq_root = tmp_path / 'getfastq'
         getfastq_root.mkdir(parents=True)
         (getfastq_root / 'SRR001').write_text('not a directory')
+        output_dir = tmp_path / 'sanity'
+        output_dir.mkdir()
+        sra_ids = pandas.Series(['SRR001'])
+        avail, unavail = check_getfastq_outputs(Args(), sra_ids, sample_metadata, str(output_dir))
+        assert avail == []
+        assert unavail == ['SRR001']
+
+    def test_getfastq_dir_file_path_marks_runs_unavailable(self, tmp_path, sample_metadata):
+        class Args:
+            out_dir = str(tmp_path)
+            getfastq_dir = str(tmp_path / 'getfastq_path')
+            metadata = 'metadata.tsv'
+
+        (tmp_path / 'getfastq_path').write_text('not a directory')
         output_dir = tmp_path / 'sanity'
         output_dir.mkdir()
         sra_ids = pandas.Series(['SRR001'])
@@ -310,4 +357,18 @@ class TestCheckQuantIndex:
         avail, unavail = check_quant_index(
             Args(), np.array(['Homo sapiens']), str(output_dir))
         assert 'Homo sapiens' in avail
+        assert unavail == []
+
+    def test_index_dir_file_path_does_not_crash(self, tmp_path):
+        """If --index_dir points to a file, check should not crash."""
+        class Args:
+            out_dir = str(tmp_path)
+            index_dir = str(tmp_path / 'index_path')
+            metadata = 'metadata.tsv'
+        (tmp_path / 'index_path').write_text('not a directory')
+        output_dir = tmp_path / 'sanity'
+        output_dir.mkdir()
+        avail, unavail = check_quant_index(
+            Args(), np.array(['Homo sapiens']), str(output_dir))
+        assert avail == []
         assert unavail == []

@@ -112,6 +112,31 @@ class TestIntegrateGetFastqStats:
         with pytest.raises(ValueError, match='Malformed FASTQ'):
             get_fastq_stats(args)
 
+    def test_quick_mode_does_not_use_full_line_counter(self, tmp_path, monkeypatch):
+        fastq_dir = tmp_path / 'fq'
+        out_dir = tmp_path / 'out'
+        fastq_dir.mkdir()
+        out_dir.mkdir()
+
+        plain = fastq_dir / 'delta_1.fastq'
+        _write_fastq(str(plain), ['AAAA', 'CCCC', 'GGGG', 'TTTT'])
+        gz = fastq_dir / 'delta_1.fastq.gz'
+        with open(str(plain), 'rb') as fin, gzip.open(str(gz), 'wb') as fout:
+            fout.write(fin.read())
+        plain.unlink()
+
+        monkeypatch.setattr(
+            'amalgkit.integrate.estimate_total_spots_from_line_count',
+            lambda _path: (_ for _ in ()).throw(AssertionError('full line counter should not be used in quick mode')),
+        )
+        args = SimpleNamespace(fastq_dir=str(fastq_dir), accurate_size=False, out_dir=str(out_dir))
+
+        df = get_fastq_stats(args)
+
+        assert df.shape[0] == 1
+        assert df.loc[0, 'run'] == 'delta'
+        assert int(df.loc[0, 'total_spots']) > 0
+
     def test_parallel_scan_with_threads(self, tmp_path):
         fastq_dir = tmp_path / 'fq'
         out_dir = tmp_path / 'out'

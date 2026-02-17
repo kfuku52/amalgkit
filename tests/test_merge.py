@@ -35,6 +35,34 @@ class TestMergeFastpStatsIntoMetadata:
         assert numpy.isnan(metadata.df.loc[1, 'fastp_duplication_rate'])
         assert numpy.isnan(metadata.df.loc[1, 'fastp_insert_size_peak'])
 
+    def test_avoids_getfastq_root_scandir(self, tmp_path, monkeypatch):
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001'],
+            'scientific_name': ['sp1'],
+            'exclusion': ['no'],
+        }))
+        srr001_dir = tmp_path / 'getfastq' / 'SRR001'
+        srr001_dir.mkdir(parents=True)
+        pandas.DataFrame([{
+            'run': 'SRR001',
+            'fastp_duplication_rate': 10.0,
+            'fastp_insert_size_peak': 111.0,
+        }]).to_csv(srr001_dir / 'fastp_stats.tsv', sep='\t', index=False)
+        getfastq_root = os.path.realpath(str(tmp_path / 'getfastq'))
+        real_scandir = os.scandir
+
+        def fail_on_root_scandir(path):
+            if os.path.realpath(path) == getfastq_root:
+                raise AssertionError('merge_fastp_stats_into_metadata should not scan getfastq root.')
+            return real_scandir(path)
+
+        monkeypatch.setattr('amalgkit.merge.os.scandir', fail_on_root_scandir)
+
+        metadata = merge_fastp_stats_into_metadata(metadata, str(tmp_path))
+
+        assert metadata.df.loc[0, 'fastp_duplication_rate'] == 10.0
+        assert metadata.df.loc[0, 'fastp_insert_size_peak'] == 111.0
+
     def test_adds_columns_when_getfastq_dir_missing(self, tmp_path):
         metadata = Metadata.from_DataFrame(pandas.DataFrame({
             'run': ['SRR001'],

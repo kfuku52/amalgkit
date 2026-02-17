@@ -511,20 +511,24 @@ class Metadata:
             if len(shuffled) > 0:
                 index_pools[bioproject] = shuffled
 
-        while (selected_n < target_n) and (len(index_pools) > 0):
-            bioproject_order = numpy.random.permutation(list(index_pools.keys()))
+        active_bioprojects = list(index_pools.keys())
+        while (selected_n < target_n) and (len(active_bioprojects) > 0):
+            exhausted = set()
+            bioproject_order = numpy.random.permutation(active_bioprojects)
             for bioproject in bioproject_order:
                 if selected_n >= target_n:
                     break
-                pool = index_pools.get(bioproject, [])
+                pool = index_pools[bioproject]
                 if len(pool) == 0:
+                    exhausted.add(bioproject)
                     continue
                 selected_index = pool.pop()
                 df.at[selected_index, 'is_sampled'] = 'yes'
                 selected_n += 1
-            exhausted = [bp for bp, pool in index_pools.items() if len(pool) == 0]
-            for bp in exhausted:
-                del index_pools[bp]
+                if len(pool) == 0:
+                    exhausted.add(bioproject)
+            if len(exhausted) > 0:
+                active_bioprojects = [bp for bp in active_bioprojects if bp not in exhausted]
         return df
 
     def label_sampled_data(self, max_sample=10):
@@ -539,12 +543,13 @@ class Metadata:
         is_empty = (self.df['sample_group'] == '')
         self.df.loc[is_empty,'exclusion'] = 'no_tissue_label'
         self.df.loc[(self.df.loc[:, 'exclusion'] == 'no'), 'is_qualified'] = 'yes'
-        df_list = []
         grouped = self.df.groupby(['scientific_name', 'sample_group'], sort=False, dropna=False)
         for (_, _), sp_sample_group in grouped:
-            sp_sample_group = self._maximize_bioproject_sampling(df=sp_sample_group, target_n=max_sample)
-            df_list.append(sp_sample_group)
-        self.df = pandas.concat(df_list, ignore_index=True)
+            sampled_group = self._maximize_bioproject_sampling(
+                df=sp_sample_group.copy(),
+                target_n=max_sample,
+            )
+            self.df.loc[sampled_group.index, 'is_sampled'] = sampled_group['is_sampled'].to_numpy()
         self.reorder(omit_misc=False)
         pandas.set_option('mode.chained_assignment', 'warn')
 
@@ -787,10 +792,20 @@ def write_updated_metadata(metadata, outpath, args):
 
 def get_mapping_rate(metadata, quant_dir):
     if os.path.exists(quant_dir):
+        if not os.path.isdir(quant_dir):
+            txt = 'quant directory not found. Mapping rate cutoff will not be applied: {}\n'
+            sys.stderr.write(txt.format(quant_dir))
+            sys.stderr.write('Path exists but is not a directory: {}\n'.format(quant_dir))
+            return metadata
         print('quant directory found: {}'.format(quant_dir))
         metadata.df.loc[:, 'mapping_rate'] = numpy.nan
-        sra_ids = set(metadata.df.loc[:, 'run'].values)
-        sra_dirs = [d for d in os.listdir(quant_dir) if d in sra_ids]
+        sra_dirs = []
+        for sra_id in dict.fromkeys(metadata.df.loc[:, 'run'].tolist()):
+            if pandas.isna(sra_id):
+                continue
+            sra_id = str(sra_id)
+            if os.path.isdir(os.path.join(quant_dir, sra_id)):
+                sra_dirs.append(sra_id)
         print('Number of quant sub-directories that matched to metadata: {:,}'.format(len(sra_dirs)))
 
         def load_mapping_rate(sra_id):

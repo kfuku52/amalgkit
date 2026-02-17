@@ -28,13 +28,10 @@ def scan_quant_abundance_paths(quant_dir, target_runs=None):
 
 def _find_fastp_stats_candidates(getfastq_dir, run_ids):
     candidates = []
-    with os.scandir(getfastq_dir) as entries:
-        for entry in entries:
-            if (not entry.is_dir()) or (entry.name not in run_ids):
-                continue
-            fastp_stats_path = os.path.join(entry.path, 'fastp_stats.tsv')
-            if os.path.exists(fastp_stats_path):
-                candidates.append((entry.name, fastp_stats_path))
+    for run_id in run_ids:
+        fastp_stats_path = os.path.join(getfastq_dir, run_id, 'fastp_stats.tsv')
+        if os.path.exists(fastp_stats_path):
+            candidates.append((run_id, fastp_stats_path))
     return candidates
 
 def _read_fastp_stats_file(sra_id, fastp_stats_path):

@@ -14,20 +14,54 @@ from amalgkit.util import *
 
 from urllib.error import HTTPError
 
-def fetch_sra_xml(search_term, retmax=1000):
-    def merge_xml_chunk(root, chunk):
-        # Merge package-set chunks directly to avoid nested container nodes.
-        if (chunk.tag == root.tag) and (len(chunk) > 0):
-            root.extend(list(chunk))
-        else:
-            root.append(chunk)
+def merge_xml_chunk(root, chunk):
+    # Merge package-set chunks directly to avoid nested container nodes.
+    if (chunk.tag == root.tag) and (len(chunk) > 0):
+        root.extend(list(chunk))
+    else:
+        root.append(chunk)
 
+
+def esearch_sra_with_retry(search_term):
     try:
         sra_handle = Entrez.esearch(db="sra", term=search_term, retmax=10000000)
     except HTTPError as e:
         print(e, '- Trying Entrez.esearch() again...')
         sra_handle = Entrez.esearch(db="sra", term=search_term, retmax=10000000)
-    sra_record = Entrez.read(sra_handle)
+    return Entrez.read(sra_handle)
+
+
+def fetch_sra_xml_chunk(record_ids, start, end, retmax, max_retry=10):
+    for _ in range(max_retry):
+        try:
+            handle = Entrez.efetch(db="sra", id=record_ids[start:end], rettype="full", retmode="xml", retmax=retmax)
+        except HTTPError as e:
+            sleep_second = 60
+            print('{} - Trying Entrez.efetch() again after {:,} seconds...'.format(e, sleep_second), flush=True)
+            time.sleep(sleep_second)
+            continue
+        try:
+            return ET.parse(handle).getroot()
+        except Exception:
+            print('XML may be truncated. Retrying...', flush=True)
+            continue
+    raise RuntimeError('Failed to parse Entrez XML chunk after {} retries (records {}-{}).'.format(
+        max_retry, start, end - 1
+    ))
+
+
+def raise_if_xml_has_error(root):
+    error_node = root.find('.//Error')
+    if error_node is None:
+        return
+    error_text = ''.join(error_node.itertext()).strip()
+    if error_text != '':
+        print(error_text)
+    raise Exception(',Error. found in the xml.')
+
+
+def fetch_sra_xml(search_term, retmax=1000):
+    sra_record = esearch_sra_with_retry(search_term)
     record_ids = sra_record["IdList"]
     num_record = len(record_ids)
     print('Number of SRA records: {:,}'.format(num_record))
@@ -36,30 +70,11 @@ def fetch_sra_xml(search_term, retmax=1000):
     start_time = time.time()
     print('{}: SRA XML retrieval started.'.format(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
     root = None
-    max_retry = 10
     for start in range(0, num_record, retmax):
         end = min(start + retmax, num_record)
         now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         print('{}: Retrieving SRA XML: {:,}-{:,} of {:,} records'.format(now, start, end - 1, num_record), flush=True)
-        chunk = None
-        for j in range(max_retry):
-            try:
-                handle = Entrez.efetch(db="sra", id=record_ids[start:end], rettype="full", retmode="xml", retmax=retmax)
-            except HTTPError as e:
-                sleep_second = 60
-                print('{} - Trying Entrez.efetch() again after {:,} seconds...'.format(e, sleep_second), flush=True)
-                time.sleep(sleep_second)
-                continue
-            try:
-                chunk = ET.parse(handle).getroot()
-            except:
-                print('XML may be truncated. Retrying...', flush=True)
-                continue
-            break
-        if chunk is None:
-            raise RuntimeError('Failed to parse Entrez XML chunk after {} retries (records {}-{}).'.format(
-                max_retry, start, end - 1
-            ))
+        chunk = fetch_sra_xml_chunk(record_ids, start, end, retmax, max_retry=10)
         if root is None:
             root = chunk
         else:
@@ -67,12 +82,7 @@ def fetch_sra_xml(search_term, retmax=1000):
     elapsed_time = int(time.time() - start_time)
     print('{}: SRA XML retrieval ended.'.format(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
     print('SRA XML retrieval time: {:,.1f} sec'.format(elapsed_time), flush=True)
-    error_node = root.find('.//Error')
-    if error_node is not None:
-        error_text = ''.join(error_node.itertext()).strip()
-        if error_text != '':
-            print(error_text)
-        raise Exception(',Error. found in the xml.')
+    raise_if_xml_has_error(root)
     return root
 
 def metadata_main(args):
@@ -83,12 +93,12 @@ def metadata_main(args):
         if args.redo:
             os.remove(metadata_outfile_path)
         else:
-            print('Exiting. --redo is specified and the output file already exists at: {}'.format(metadata_outfile_path))
+            print('Exiting. Output file already exists (set --redo yes to overwrite): {}'.format(metadata_outfile_path))
             sys.exit(0)
     for path_dir in [args.out_dir, metadata_dir]:
         if not os.path.exists(path_dir):
             print('Creating directory: {}'.format(path_dir))
-            os.mkdir(path_dir)
+        os.makedirs(path_dir, exist_ok=True)
     search_term = args.search_string
     print('Entrez search term:', search_term)
     root = fetch_sra_xml(search_term=search_term)

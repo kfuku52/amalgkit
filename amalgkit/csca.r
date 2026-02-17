@@ -1270,7 +1270,7 @@ save_averaged_dimensionality_reduction_summary = function(averaged_orthologs, df
                 par(mar = c(4, 4, 0.1, 1)); draw_multisp_tsne(tc = tc, df_label = df_label)
                 par(mar = c(4, 4, 0.1, 1)); draw_multisp_mds(tc = tc, df_label = df_label, tc_dist_dist = tc_dist_dist)
             })
-            par(mar = c(0, 0, 0, 0)); draw_multisp_legend(df_label)
+            par(mar = c(0, 0, 0, 0)); draw_multisp_legend(df_color_averaged)
         }
     )
 }
@@ -1325,7 +1325,11 @@ calculate_correlation_within_group = function(unaveraged_orthologs, averaged_ort
     metadata_keys = paste(df_metadata[['scientific_name']], df_metadata[['run']], sep = '|||')
     metadata_rows_by_key = split(seq_len(nrow(df_metadata)), metadata_keys)
     metadata_first_row = vapply(metadata_rows_by_key, function(idx) idx[[1]], integer(1))
-    metadata_sample_group_by_key = as.character(df_metadata[['sample_group']][metadata_first_row])
+    metadata_sample_group_by_key = setNames(
+        trimws(as.character(df_metadata[['sample_group']][metadata_first_row])),
+        names(metadata_first_row)
+    )
+    metadata_sample_group_by_key[metadata_sample_group_by_key == ''] = NA_character_
     sample_index_cache = list()
 
     build_sample_index = function(sample_ids) {

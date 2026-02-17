@@ -46,6 +46,52 @@ def list_datasets():
         print(f'    Species: {", ".join(info["species"])}')
 
 
+def validate_dataset_name(name):
+    if name in DATASETS:
+        return
+    available = ', '.join(DATASETS.keys())
+    sys.stderr.write(f'Error: Unknown dataset "{name}". Available: {available}\n')
+    sys.exit(1)
+
+
+def resolve_dataset_source_dir(name):
+    dataset_src = os.path.join(get_dataset_dir(), name)
+    if os.path.isdir(dataset_src):
+        return dataset_src
+    sys.stderr.write(f'Error: Dataset directory not found: {dataset_src}\n')
+    sys.exit(1)
+
+
+def build_extracted_dirs(out_dir):
+    out_dir = os.path.realpath(out_dir)
+    extracted_dirs = {
+        'fasta': os.path.join(out_dir, 'fasta'),
+        'busco': os.path.join(out_dir, 'busco'),
+        'config': os.path.join(out_dir, 'config'),
+    }
+    for path_dir in extracted_dirs.values():
+        os.makedirs(path_dir, exist_ok=True)
+    return extracted_dirs
+
+
+def copy_dataset_files(dataset, dataset_src, extracted_dirs, overwrite=False):
+    for file_type, files in dataset['files'].items():
+        dest_dir = extracted_dirs.get(file_type)
+        if dest_dir is None:
+            continue
+        for filename in files:
+            src = os.path.join(dataset_src, filename)
+            dst = os.path.join(dest_dir, filename)
+            if os.path.exists(dst) and not overwrite:
+                print(f'  Skipping (exists): {dst}')
+                continue
+            if not os.path.exists(src):
+                sys.stderr.write(f'Warning: Source file not found: {src}\n')
+                continue
+            shutil.copy2(src, dst)
+            print(f'  Copied: {filename} -> {dest_dir}/')
+
+
 def extract_dataset(name, out_dir, overwrite=False):
     """
     Extract a bundled dataset to the specified output directory.
@@ -64,61 +110,12 @@ def extract_dataset(name, out_dir, overwrite=False):
     dict
         Paths to extracted directories: {'fasta': ..., 'busco': ..., 'config': ...}
     """
-    if name not in DATASETS:
-        available = ', '.join(DATASETS.keys())
-        sys.stderr.write(f'Error: Unknown dataset "{name}". Available: {available}\n')
-        sys.exit(1)
-
+    validate_dataset_name(name)
     dataset = DATASETS[name]
-    dataset_src = os.path.join(get_dataset_dir(), name)
-
-    if not os.path.isdir(dataset_src):
-        sys.stderr.write(f'Error: Dataset directory not found: {dataset_src}\n')
-        sys.exit(1)
-
-    # Create output directories
-    out_dir = os.path.realpath(out_dir)
-    fasta_dir = os.path.join(out_dir, 'fasta')
-    busco_dir = os.path.join(out_dir, 'busco')
-    config_dir = os.path.join(out_dir, 'config')
-
-    for d in [fasta_dir, busco_dir, config_dir]:
-        os.makedirs(d, exist_ok=True)
-
-    # Copy files
-    copied = {'fasta': [], 'busco': [], 'config': []}
-
-    for file_type, files in dataset['files'].items():
-        if file_type == 'fasta':
-            dest_dir = fasta_dir
-        elif file_type == 'busco':
-            dest_dir = busco_dir
-        elif file_type == 'config':
-            dest_dir = config_dir
-        else:
-            continue
-
-        for filename in files:
-            src = os.path.join(dataset_src, filename)
-            dst = os.path.join(dest_dir, filename)
-
-            if os.path.exists(dst) and not overwrite:
-                print(f'  Skipping (exists): {dst}')
-                continue
-
-            if not os.path.exists(src):
-                sys.stderr.write(f'Warning: Source file not found: {src}\n')
-                continue
-
-            shutil.copy2(src, dst)
-            copied[file_type].append(dst)
-            print(f'  Copied: {filename} -> {dest_dir}/')
-
-    return {
-        'fasta': fasta_dir,
-        'busco': busco_dir,
-        'config': config_dir,
-    }
+    dataset_src = resolve_dataset_source_dir(name)
+    extracted_dirs = build_extracted_dirs(out_dir)
+    copy_dataset_files(dataset, dataset_src, extracted_dirs, overwrite=overwrite)
+    return extracted_dirs
 
 
 def dataset_main(args):

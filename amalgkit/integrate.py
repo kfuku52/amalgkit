@@ -4,18 +4,30 @@ import gzip
 import os
 import re
 import warnings
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from amalgkit.sanity import check_getfastq_outputs
 from amalgkit.util import *
 
 FASTQ_EXTENSIONS = ('.fastq.gz', '.fq.gz', '.fastq', '.fq')
 FASTQ_MATE_SUFFIX_PATTERN = re.compile(r'^(.*)_([12])$')
+QUICK_MODE_SAMPLE_READS = 1000
+QUICK_MODE_PAIRED_COUNT_TOLERANCE_FRACTION = 0.05
+QUICK_MODE_PAIRED_COUNT_TOLERANCE_MIN_READS = 10
+FASTQ_LINECOUNT_CHUNK_SIZE = 16 * 1024 * 1024
+PRIVATE_FASTQ_METADATA_COLUMNS = [
+    'scientific_name', 'sample_group', 'run', 'read1_path', 'read2_path', 'is_sampled',
+    'is_qualified', 'exclusion', 'lib_layout', 'spot_length', 'total_spots', 'total_bases', 'size', 'private_file',
+]
 
 def open_fastq_text(path_fastq):
     if path_fastq.endswith(('.fq.gz', '.fastq.gz')):
         return gzip.open(path_fastq, 'rt')
     return open(path_fastq, 'rt')
+
+def open_fastq_binary(path_fastq):
+    if path_fastq.endswith(('.fq.gz', '.fastq.gz')):
+        return gzip.open(path_fastq, 'rb')
+    return open(path_fastq, 'rb')
 
 def parse_fastq_basename(basename):
     for ext in FASTQ_EXTENSIONS:
@@ -54,10 +66,9 @@ def write_fastq_head(path_fastq, path_out, max_lines=4000):
 
 def count_fastq_lines(path_fastq):
     num_lines = 0
-    open_func = gzip.open if path_fastq.endswith(('.fq.gz', '.fastq.gz')) else open
-    with open_func(path_fastq, 'rb') as f:
+    with open_fastq_binary(path_fastq) as f:
         while True:
-            chunk = f.read(1024 * 1024)
+            chunk = f.read(FASTQ_LINECOUNT_CHUNK_SIZE)
             if not chunk:
                 break
             num_lines += chunk.count(b'\n')
@@ -69,44 +80,86 @@ def estimate_total_spots_from_line_count(path_fastq):
         raise ValueError('Malformed FASTQ (line count not divisible by 4): {}'.format(path_fastq))
     return int(total_lines / 4)
 
-def scan_fastq_reads(path_fastq, max_reads=None):
+def _sequence_line_length(line_bytes):
+    seq_len = len(line_bytes)
+    if seq_len == 0:
+        return 0
+    if line_bytes.endswith(b'\n'):
+        seq_len -= 1
+        if (seq_len > 0) and line_bytes.endswith(b'\r\n'):
+            seq_len -= 1
+    return seq_len
+
+def sample_fastq_reads(path_fastq, max_reads=None):
     num_reads = 0
     total_bases = 0
-    with open_fastq_text(path_fastq) as f:
+    total_record_chars = 0
+    with open_fastq_binary(path_fastq) as f:
         while True:
             line1 = f.readline()
-            if line1 == '':
+            if line1 == b'':
                 break
             line2 = f.readline()
             line3 = f.readline()
             line4 = f.readline()
-            if any([line == '' for line in [line2, line3, line4]]):
+            if (line2 == b'') or (line3 == b'') or (line4 == b''):
                 raise ValueError('Malformed FASTQ (record truncated): {}'.format(path_fastq))
             num_reads += 1
-            total_bases += len(line2.strip())
+            total_bases += _sequence_line_length(line2)
+            total_record_chars += (len(line1) + len(line2) + len(line3) + len(line4))
             if (max_reads is not None) and (num_reads >= max_reads):
                 break
     avg_len = int(total_bases / num_reads) if num_reads > 0 else 0
+    return num_reads, avg_len, total_record_chars
+
+def scan_fastq_reads(path_fastq, max_reads=None):
+    num_reads, avg_len, _ = sample_fastq_reads(path_fastq, max_reads=max_reads)
     return num_reads, avg_len
+
+def get_gzip_isize(path_fastq):
+    with open(path_fastq, 'rb') as f:
+        f.seek(-4, os.SEEK_END)
+        isize_bytes = f.read(4)
+    if len(isize_bytes) != 4:
+        raise ValueError('Malformed gzip file (missing ISIZE footer): {}'.format(path_fastq))
+    return int.from_bytes(isize_bytes, byteorder='little', signed=False)
+
+def estimate_total_spots_from_gzip_sample(path_fastq, sampled_reads, sampled_record_chars):
+    if sampled_reads <= 0:
+        raise ValueError('No sampled reads available to estimate total spots: {}'.format(path_fastq))
+    if sampled_record_chars <= 0:
+        raise ValueError('No sampled record size available to estimate total spots: {}'.format(path_fastq))
+    avg_record_chars = sampled_record_chars / sampled_reads
+    uncompressed_size = get_gzip_isize(path_fastq)
+    if uncompressed_size <= 0:
+        raise ValueError('gzip ISIZE footer is not positive. Re-run with --accurate_size yes: {}'.format(path_fastq))
+    estimated_reads = int(round(uncompressed_size / avg_record_chars))
+    return max(1, estimated_reads)
+
+def is_approximately_equal_count(count_a, count_b, tolerance_fraction, tolerance_min):
+    diff = abs(int(count_a) - int(count_b))
+    max_count = max(int(count_a), int(count_b))
+    tolerance = max(int(tolerance_min), int(round(max_count * float(tolerance_fraction))))
+    return diff <= tolerance
 
 def scan_fastq_stats(path_fastq, max_reads_for_average=None):
     total_reads = 0
     sampled_reads = 0
     sampled_bases = 0
-    with open_fastq_text(path_fastq) as f:
+    with open_fastq_binary(path_fastq) as f:
         while True:
             line1 = f.readline()
-            if line1 == '':
+            if line1 == b'':
                 break
             line2 = f.readline()
             line3 = f.readline()
             line4 = f.readline()
-            if any([line == '' for line in [line2, line3, line4]]):
+            if (line2 == b'') or (line3 == b'') or (line4 == b''):
                 raise ValueError('Malformed FASTQ (record truncated): {}'.format(path_fastq))
             total_reads += 1
             if (max_reads_for_average is None) or (sampled_reads < max_reads_for_average):
                 sampled_reads += 1
-                sampled_bases += len(line2.strip())
+                sampled_bases += _sequence_line_length(line2)
     average_length = int(sampled_bases / sampled_reads) if sampled_reads > 0 else 0
     return total_reads, average_length, sampled_reads
 
@@ -145,24 +198,58 @@ def scan_run_fastq_stats(run_spec, accurate_size):
         warnings.warn("{} is not a fastq file. Skipping.".format(read1_path))
         return None
 
+    quick_gzip_mode = (not accurate_size) and (not is_decompressed)
     if accurate_size or is_decompressed:
         print('--accurate_size set to yes. Running accurate sequence scan with Python FASTQ parser.')
         total_spots, avg_len, _ = scan_fastq_stats(path_fastq=read1_path, max_reads_for_average=None)
     else:
-        print('--accurate_size set to no. Running quick sequence scan (first 1,000 reads) with Python FASTQ parser.')
-        sampled_reads, avg_len = scan_fastq_reads(path_fastq=read1_path, max_reads=1000)
+        print('--accurate_size set to no. Running quick sequence scan (first 1,000 reads + gzip size estimate).')
+        sampled_reads, avg_len, sampled_record_chars = sample_fastq_reads(
+            path_fastq=read1_path,
+            max_reads=QUICK_MODE_SAMPLE_READS,
+        )
         if sampled_reads == 0:
             raise Exception('No reads detected in FASTQ file: {}'.format(read1_path))
-        total_spots = estimate_total_spots_from_line_count(read1_path)
+        total_spots = estimate_total_spots_from_gzip_sample(
+            path_fastq=read1_path,
+            sampled_reads=sampled_reads,
+            sampled_record_chars=sampled_record_chars,
+        )
 
     if lib_layout == 'paired':
-        read2_spots = estimate_total_spots_from_line_count(read2_path)
-        if read2_spots != total_spots:
-            raise ValueError(
-                'Mismatched paired-end read counts for {}: read1 has {} reads, read2 has {} reads.'.format(
-                    run_id, total_spots, read2_spots
-                )
+        if quick_gzip_mode:
+            sampled_reads_read2, _, sampled_record_chars_read2 = sample_fastq_reads(
+                path_fastq=read2_path,
+                max_reads=QUICK_MODE_SAMPLE_READS,
             )
+            if sampled_reads_read2 == 0:
+                raise Exception('No reads detected in FASTQ file: {}'.format(read2_path))
+            read2_spots = estimate_total_spots_from_gzip_sample(
+                path_fastq=read2_path,
+                sampled_reads=sampled_reads_read2,
+                sampled_record_chars=sampled_record_chars_read2,
+            )
+            if not is_approximately_equal_count(
+                total_spots,
+                read2_spots,
+                tolerance_fraction=QUICK_MODE_PAIRED_COUNT_TOLERANCE_FRACTION,
+                tolerance_min=QUICK_MODE_PAIRED_COUNT_TOLERANCE_MIN_READS,
+            ):
+                raise ValueError(
+                    'Estimated paired-end read counts for {} differ (read1={}, read2={}). '
+                    'Re-run with --accurate_size yes for exact validation.'.format(
+                        run_id, total_spots, read2_spots
+                    )
+                )
+            total_spots = min(total_spots, read2_spots)
+        else:
+            read2_spots = estimate_total_spots_from_line_count(read2_path)
+            if read2_spots != total_spots:
+                raise ValueError(
+                    'Mismatched paired-end read counts for {}: read1 has {} reads, read2 has {} reads.'.format(
+                        run_id, total_spots, read2_spots
+                    )
+                )
 
     total_bases = total_spots * int(avg_len)
     if lib_layout == 'paired':
@@ -179,16 +266,7 @@ def scan_run_fastq_stats(run_spec, accurate_size):
     }
 
 
-def get_fastq_stats(args):
-    print("Starting integration of fastq-file metadata...")
-    if not os.path.exists(args.fastq_dir):
-        raise ValueError("PATH to fastq directory does not exist: {}".format(args.fastq_dir))
-    grouped_files = scan_fastq_directory(args.fastq_dir)
-    if len(grouped_files) == 0:
-        txt = 'No detected fastq files (extensions: {}) in: {}'.format(', '.join(FASTQ_EXTENSIONS), args.fastq_dir)
-        raise ValueError(txt)
-    column_names = ['scientific_name', 'sample_group', 'run', 'read1_path','read2_path', 'is_sampled',
-                    'is_qualified','exclusion', 'lib_layout', 'spot_length', 'total_spots', 'total_bases', 'size', 'private_file']
+def build_run_specs(grouped_files):
     run_specs = []
     for run_id in sorted(grouped_files.keys()):
         fastq_records = grouped_files[run_id]
@@ -200,31 +278,39 @@ def get_fastq_stats(args):
             'read1_path': read1_path,
             'read2_path': read2_path,
         })
+    return run_specs
 
-    jobs = int(getattr(args, 'threads', 1))
-    if jobs <= 0:
-        raise ValueError('--threads must be > 0.')
 
-    stats_by_run = {}
+def scan_all_run_fastq_stats(run_specs, accurate_size, threads=1):
+    jobs = validate_positive_int_option(threads, 'threads')
     if (jobs == 1) or (len(run_specs) <= 1):
+        stats_by_run = {}
         for run_spec in run_specs:
-            stats = scan_run_fastq_stats(run_spec, args.accurate_size)
+            stats = scan_run_fastq_stats(run_spec, accurate_size)
             if stats is not None:
                 stats_by_run[run_spec['run']] = stats
-    else:
-        max_workers = min(jobs, len(run_specs))
-        print('Scanning FASTQ stats for {:,} runs with {:,} parallel worker(s).'.format(len(run_specs), max_workers), flush=True)
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {
-                executor.submit(scan_run_fastq_stats, run_spec, args.accurate_size): run_spec['run']
-                for run_spec in run_specs
-            }
-            for future in as_completed(futures):
-                run_id = futures[future]
-                stats = future.result()
-                if stats is not None:
-                    stats_by_run[run_id] = stats
+        return stats_by_run
 
+    max_workers = min(jobs, len(run_specs))
+    print('Scanning FASTQ stats for {:,} runs with {:,} parallel worker(s).'.format(len(run_specs), max_workers), flush=True)
+    run_spec_indices = list(range(len(run_specs)))
+    stats_by_spec_idx, failures = run_tasks_with_optional_threads(
+        task_items=run_spec_indices,
+        task_fn=lambda idx: scan_run_fastq_stats(run_specs[idx], accurate_size),
+        max_workers=max_workers,
+    )
+    if failures:
+        details = '; '.join(['{}: {}'.format(run_specs[idx]['run'], exc) for idx, exc in failures])
+        raise RuntimeError('FASTQ stats scan failed for {}/{} runs. {}'.format(len(failures), len(run_specs), details))
+
+    stats_by_run = {}
+    for idx, stats in stats_by_spec_idx.items():
+        if stats is not None:
+            stats_by_run[run_specs[idx]['run']] = stats
+    return stats_by_run
+
+
+def build_private_fastq_metadata_rows(run_specs, stats_by_run):
     rows = []
     for run_spec in run_specs:
         run_id = run_spec['run']
@@ -247,9 +333,26 @@ def get_fastq_stats(args):
             'size': stats['size'],
             'private_file': 'yes',
         })
-    tmp_metadata = pd.DataFrame.from_records(rows, columns=column_names)
-    if not os.path.exists(os.path.join(args.out_dir, 'metadata')):
-        os.makedirs(os.path.join(args.out_dir, 'metadata'))
+    return rows
+
+
+def get_fastq_stats(args):
+    print("Starting integration of fastq-file metadata...")
+    if not os.path.exists(args.fastq_dir):
+        raise ValueError("PATH to fastq directory does not exist: {}".format(args.fastq_dir))
+    grouped_files = scan_fastq_directory(args.fastq_dir)
+    if len(grouped_files) == 0:
+        txt = 'No detected fastq files (extensions: {}) in: {}'.format(', '.join(FASTQ_EXTENSIONS), args.fastq_dir)
+        raise ValueError(txt)
+    run_specs = build_run_specs(grouped_files)
+    stats_by_run = scan_all_run_fastq_stats(
+        run_specs=run_specs,
+        accurate_size=args.accurate_size,
+        threads=getattr(args, 'threads', 1),
+    )
+    rows = build_private_fastq_metadata_rows(run_specs, stats_by_run)
+    tmp_metadata = pd.DataFrame.from_records(rows, columns=PRIVATE_FASTQ_METADATA_COLUMNS)
+    os.makedirs(os.path.join(args.out_dir, 'metadata'), exist_ok=True)
     tmp_metadata = tmp_metadata.sort_values(by='run', axis=0, ascending=True).reset_index(drop=True)
     tmp_metadata.to_csv(os.path.join(args.out_dir, 'metadata_private_fastq.tsv'), sep='\t', index=False)
     return tmp_metadata

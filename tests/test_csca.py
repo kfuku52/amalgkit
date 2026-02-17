@@ -1,6 +1,10 @@
 import os
+import pytest
+import pandas
+from types import SimpleNamespace
 
-from amalgkit.csca import get_spp_from_dir, generate_csca_input_symlinks
+from amalgkit.csca import get_spp_from_dir, generate_csca_input_symlinks, get_sample_group_string
+from amalgkit.util import Metadata
 
 
 # ---------------------------------------------------------------------------
@@ -105,3 +109,49 @@ class TestGenerateCscaInputSymlinks:
         assert os.path.islink(os.path.join(dir_csca_input, 'Homo_sapiens_tpm.tsv'))
         assert not os.path.exists(os.path.join(dir_csca_input, 'notes.txt'))
         assert not os.path.exists(os.path.join(dir_csca_input, 'nested'))
+
+
+class TestGetSampleGroupString:
+    def test_uses_cli_sample_group(self):
+        args = SimpleNamespace(sample_group='leaf,root')
+        assert get_sample_group_string(args) == 'leaf|root'
+
+    def test_cli_sample_group_supports_pipe_and_hyphen(self):
+        args = SimpleNamespace(sample_group='non-treated | treated')
+        assert get_sample_group_string(args) == 'non-treated|treated'
+
+    def test_reads_sample_group_from_metadata(self, monkeypatch):
+        args = SimpleNamespace(sample_group=None)
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['R1', 'R2'],
+            'sample_group': ['treated', 'control'],
+            'exclusion': ['no', 'no'],
+        }))
+        monkeypatch.setattr('amalgkit.csca.load_metadata', lambda _args: metadata)
+        out = get_sample_group_string(args)
+        assert set(out.split('|')) == {'treated', 'control'}
+
+    def test_metadata_sample_groups_drop_blank_and_deduplicate(self, monkeypatch):
+        args = SimpleNamespace(sample_group=None)
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['R1', 'R2', 'R3', 'R4'],
+            'sample_group': [' treated ', '', 'treated', 'control'],
+            'exclusion': ['no', 'no', 'no', 'no'],
+        }))
+        monkeypatch.setattr('amalgkit.csca.load_metadata', lambda _args: metadata)
+        assert get_sample_group_string(args) == 'treated|control'
+
+    def test_metadata_sample_groups_drop_nan(self, monkeypatch):
+        args = SimpleNamespace(sample_group=None)
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['R1', 'R2', 'R3'],
+            'sample_group': ['treated', float('nan'), 'control'],
+            'exclusion': ['no', 'no', 'no'],
+        }))
+        monkeypatch.setattr('amalgkit.csca.load_metadata', lambda _args: metadata)
+        assert get_sample_group_string(args) == 'treated|control'
+
+    def test_raises_when_no_sample_group_selected(self):
+        args = SimpleNamespace(sample_group='')
+        with pytest.raises(ValueError, match='No sample_group was selected'):
+            get_sample_group_string(args)

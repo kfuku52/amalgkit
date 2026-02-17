@@ -473,31 +473,55 @@ def pre_resolve_species_indices(args, tasks):
         path_dir=index_dir,
     )
     print('Resolving kallisto index for {:,} species.'.format(len(species_list)), flush=True)
+    requested_jobs = getattr(args, 'jobs', 1)
+    if requested_jobs is None:
+        requested_jobs = 1
+    try:
+        max_workers = min(max(1, int(requested_jobs)), len(species_list))
+    except (TypeError, ValueError):
+        max_workers = 1
+
+    if max_workers <= 1:
+        resolved = dict()
+        for sci_name in species_list:
+            print('Pre-resolving index for species: {}'.format(sci_name), flush=True)
+            resolved[sci_name] = get_index(args, sci_name)
+        return resolved
+
+    print('Pre-resolving indices with {:,} parallel jobs.'.format(max_workers), flush=True)
+    resolved_by_species, failures = run_tasks_with_optional_threads(
+        task_items=species_list,
+        task_fn=lambda sci_name: get_index(args, sci_name),
+        max_workers=max_workers,
+    )
+    if failures:
+        details = '; '.join(['{}: {}'.format(sci_name, err) for sci_name, err in failures])
+        raise RuntimeError(
+            'Failed to pre-resolve index for {}/{} species. {}'.format(
+                len(failures),
+                len(species_list),
+                details,
+            )
+        )
     resolved = dict()
     for sci_name in species_list:
-        print('Pre-resolving index for species: {}'.format(sci_name), flush=True)
-        resolved[sci_name] = get_index(args, sci_name)
+        resolved[sci_name] = resolved_by_species[sci_name]
     return resolved
 
 
 def prefetch_getfastq_run_files(args, tasks):
-    run_ids = set([sra_id for sra_id, _ in tasks])
+    run_ids = sorted(set([sra_id for sra_id, _ in tasks]))
     if len(run_ids) == 0:
         return {}
     getfastq_root = os.path.join(args.out_dir, 'getfastq')
     prefetched = {}
-    try:
-        with os.scandir(getfastq_root) as entries:
-            for entry in entries:
-                if (not entry.is_dir()) or (entry.name not in run_ids):
-                    continue
-                try:
-                    with os.scandir(entry.path) as run_entries:
-                        prefetched[entry.name] = {run_entry.name for run_entry in run_entries}
-                except (FileNotFoundError, NotADirectoryError):
-                    continue
-    except FileNotFoundError:
-        return {}
+    for run_id in run_ids:
+        run_dir = os.path.join(getfastq_root, run_id)
+        try:
+            with os.scandir(run_dir) as run_entries:
+                prefetched[run_id] = {run_entry.name for run_entry in run_entries}
+        except (FileNotFoundError, NotADirectoryError):
+            continue
     return prefetched
 
 
@@ -510,6 +534,7 @@ def quant_main(args):
         context='quant:',
     )
     args.threads = threads
+    args.jobs = jobs
     check_kallisto_dependency()
     metadata = load_metadata(args)
     tasks = list(zip(metadata.df['run'].tolist(), metadata.df['scientific_name'].tolist()))

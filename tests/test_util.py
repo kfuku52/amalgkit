@@ -1093,6 +1093,36 @@ class TestGetMappingRate:
         m = get_mapping_rate(sample_metadata, str(quant_dir))
         assert m.df.loc[m.df['run'] == 'SRR001', 'mapping_rate'].values[0] == 85.5
 
+    def test_avoids_quant_root_listdir_scan(self, tmp_path, sample_metadata, monkeypatch):
+        quant_dir = tmp_path / 'quant'
+        sra_dir = quant_dir / 'SRR001'
+        sra_dir.mkdir(parents=True)
+        (sra_dir / 'SRR001_run_info.json').write_text(json.dumps({'p_pseudoaligned': 75.0}))
+
+        def fail_if_listdir_called(_path):
+            raise AssertionError('get_mapping_rate should not scan quant root with os.listdir.')
+
+        monkeypatch.setattr('amalgkit.util.os.listdir', fail_if_listdir_called)
+
+        m = get_mapping_rate(sample_metadata, str(quant_dir))
+
+        assert m.df.loc[m.df['run'] == 'SRR001', 'mapping_rate'].values[0] == 75.0
+
+    def test_skips_nan_run_ids_when_scanning_quant_subdirs(self, tmp_path):
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001', numpy.nan],
+            'scientific_name': ['sp1', 'sp1'],
+            'exclusion': ['no', 'no'],
+        }))
+        quant_dir = tmp_path / 'quant'
+        sra_dir = quant_dir / 'SRR001'
+        sra_dir.mkdir(parents=True)
+        (sra_dir / 'SRR001_run_info.json').write_text(json.dumps({'p_pseudoaligned': 66.6}))
+
+        m = get_mapping_rate(metadata, str(quant_dir))
+
+        assert m.df.loc[m.df['run'] == 'SRR001', 'mapping_rate'].values[0] == 66.6
+
     def test_missing_quant_dir(self, sample_metadata, tmp_path):
         """Missing quant directory does not raise."""
         m = get_mapping_rate(sample_metadata, str(tmp_path / 'nonexistent'))
@@ -1106,6 +1136,13 @@ class TestGetMappingRate:
         # No run_info.json
         m = get_mapping_rate(sample_metadata, str(quant_dir))
         assert numpy.isnan(m.df.loc[m.df['run'] == 'SRR001', 'mapping_rate'].values[0])
+
+    def test_quant_path_is_file_does_not_crash(self, tmp_path, sample_metadata):
+        """quant path that exists as a file should be treated as missing directory."""
+        quant_file = tmp_path / 'quant'
+        quant_file.write_text('not a directory')
+        m = get_mapping_rate(sample_metadata, str(quant_file))
+        assert isinstance(m, Metadata)
 
 
 # ---------------------------------------------------------------------------
