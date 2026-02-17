@@ -1,3 +1,260 @@
+PLOT_FONT_SIZE_PT = 8
+PLOT_FONT_FAMILY = 'Helvetica'
+
+resolve_plot_font_size = function(font_size = PLOT_FONT_SIZE_PT) {
+    PLOT_FONT_SIZE_PT
+}
+
+resolve_plot_font_family = function(font_family = PLOT_FONT_FAMILY) {
+    PLOT_FONT_FAMILY
+}
+
+compute_dense_label_pt = function(num_labels, base_pt = PLOT_FONT_SIZE_PT, min_pt = 4, soft_limit = 20) {
+    num_labels = suppressWarnings(as.numeric(num_labels))
+    if (!is.finite(num_labels) || is.na(num_labels) || (num_labels <= 0)) {
+        return(base_pt)
+    }
+    if (num_labels <= soft_limit) {
+        return(base_pt)
+    }
+    shrink = soft_limit / num_labels
+    max(min_pt, base_pt * shrink)
+}
+
+rainbow_hcl = function(n, c = 100, l = 65, start = 0, end = 360, alpha = NULL) {
+    if (n <= 0) {
+        return(character(0))
+    }
+    hues = seq(start, end, length.out = n + 1)[1:n]
+    grDevices::hcl(h = hues, c = c, l = l, alpha = alpha, fixup = TRUE)
+}
+
+brewer.pal = function(n, name) {
+    dark2 = c("#1B9E77", "#D95F02", "#7570B3", "#E7298A", "#66A61E", "#E6AB02", "#A6761D", "#666666")
+    paired = c("#A6CEE3", "#1F78B4", "#B2DF8A", "#33A02C", "#FB9A99", "#E31A1C",
+               "#FDBF6F", "#FF7F00", "#CAB2D6", "#6A3D9A", "#FFFF99", "#B15928")
+    palette_values = switch(
+        name,
+        "Dark2" = dark2,
+        "Paired" = paired,
+        stop(paste0("Unsupported palette name: ", name))
+    )
+    if (n <= 0) {
+        stop("n must be positive")
+    }
+    if (n > length(palette_values)) {
+        warning(sprintf("Requested %d colors for %s; truncating to %d.", n, name, length(palette_values)))
+        n = length(palette_values)
+    }
+    palette_values[seq_len(n)]
+}
+
+calc_sample_distance = function(tc, method = 'pearson', na_fill = 1, epsilon = 0, cor_mat = NULL) {
+    num_samples = ncol(tc)
+    if (num_samples <= 1) {
+        return(as.dist(matrix(0, nrow = num_samples, ncol = num_samples)))
+    }
+    if (method %in% c('pearson', 'spearman', 'kendall')) {
+        if (is.null(cor_mat)) {
+            cor_mat = suppressWarnings(cor(tc, method = method, use = 'pairwise.complete.obs'))
+        }
+        dist_mat = 1 - cor_mat
+    } else {
+        dist_mat = as.matrix(stats::dist(t(tc), method = method))
+    }
+    dist_mat[!is.finite(dist_mat)] = na_fill
+    dist_mat = (dist_mat + t(dist_mat)) / 2
+    dist_mat = dist_mat + epsilon
+    diag(dist_mat) = 0
+    as.dist(dist_mat)
+}
+
+apply_leaf_label_colors = function(dend, label_colors) {
+    idx = 0
+    dendrapply(dend, function(node) {
+        if (is.leaf(node)) {
+            idx <<- idx + 1
+            if (idx <= length(label_colors)) {
+                node_par = attr(node, "nodePar")
+                if (is.null(node_par)) {
+                    node_par = list()
+                }
+                node_par[['lab.col']] = label_colors[[idx]]
+                attr(node, "nodePar") = node_par
+            }
+        }
+        node
+    })
+}
+
+apply_leaf_edge_colors = function(dend, edge_colors) {
+    idx = 0
+    dendrapply(dend, function(node) {
+        if (is.leaf(node)) {
+            idx <<- idx + 1
+            if (idx <= length(edge_colors)) {
+                edge_par = attr(node, "edgePar")
+                if (is.null(edge_par)) {
+                    edge_par = list()
+                }
+                edge_par[['col']] = edge_colors[[idx]]
+                attr(node, "edgePar") = edge_par
+            }
+        }
+        node
+    })
+}
+
+set_edge_lwd = function(dend, lwd = 1) {
+    dendrapply(dend, function(node) {
+        edge_par = attr(node, "edgePar")
+        if (is.null(edge_par)) {
+            edge_par = list()
+        }
+        edge_par[['lwd']] = lwd
+        attr(node, "edgePar") = edge_par
+        node
+    })
+}
+
+color_children2parent = function(node) {
+    if (length(node) != 2) {
+        return(node)
+    }
+    if (!is.null(attributes(node[[1]])) && !is.null(attributes(node[[1]])$edgePar)) {
+        child1_color = attributes(node[[1]])$edgePar[['col']]
+    } else {
+        child1_color = NULL
+    }
+    if (!is.null(attributes(node[[2]])) && !is.null(attributes(node[[2]])$edgePar)) {
+        child2_color = attributes(node[[2]])$edgePar[['col']]
+    } else {
+        child2_color = NULL
+    }
+    if (is.null(child1_color) | is.null(child2_color)) {
+        return(node)
+    }
+    if (is.na(child1_color) | is.na(child2_color)) {
+        return(node)
+    }
+    if (child1_color == child2_color) {
+        attributes(node)$edgePar[['col']] = child1_color
+    }
+    return(node)
+}
+
+map_color = function(redundant_variables, c) {
+    uniq_var = unique(redundant_variables)
+    uniq_col = rainbow_hcl(length(uniq_var), c = c)
+    match_idx = match(redundant_variables, uniq_var)
+    return(unname(uniq_col[match_idx]))
+}
+
+sort_averaged_tc = function(tc) {
+    if (ncol(tc) <= 1) {
+        return(tc)
+    }
+    split_colnames = strsplit(colnames(tc), "_", fixed = TRUE)
+    genus_names = vapply(split_colnames, function(x) {
+        if (length(x) >= 1) x[1] else ''
+    }, character(1))
+    specific_names = vapply(split_colnames, function(x) {
+        if (length(x) >= 2) x[2] else ''
+    }, character(1))
+    sample_group_names = vapply(split_colnames, function(x) {
+        if (length(x) <= 2) {
+            ''
+        } else {
+            paste0(x[3:length(x)], collapse = '_')
+        }
+    }, character(1))
+    colname_order = order(sample_group_names, genus_names, specific_names)
+    tc = tc[, colname_order, drop = FALSE]
+    return(tc)
+}
+
+draw_ggplot_in_current_plot_panel = function(g) {
+    plot.new()
+    fig = par('fig')
+    plt = par('plt')
+    panel_left = fig[1] + (fig[2] - fig[1]) * plt[1]
+    panel_right = fig[1] + (fig[2] - fig[1]) * plt[2]
+    panel_bottom = fig[3] + (fig[4] - fig[3]) * plt[3]
+    panel_top = fig[3] + (fig[4] - fig[3]) * plt[4]
+    vp = grid::viewport(
+        x = (panel_left + panel_right) / 2,
+        y = (panel_bottom + panel_top) / 2,
+        width = panel_right - panel_left,
+        height = panel_top - panel_bottom,
+        just = c('center', 'center')
+    )
+    print(g, vp = vp, newpage = FALSE)
+}
+
+open_pdf_with_defaults = function(file, width, height, font_size = PLOT_FONT_SIZE_PT, font_family = PLOT_FONT_FAMILY) {
+    font_size = resolve_plot_font_size(font_size)
+    font_family = resolve_plot_font_family(font_family)
+    grDevices::pdf(file = file, width = width, height = height, family = font_family, pointsize = font_size)
+    par(family = font_family, ps = font_size, cex = 1, cex.axis = 1, cex.lab = 1, cex.main = 1)
+    invisible(list(font_size = font_size, font_family = font_family))
+}
+
+with_pdf_defaults = function(file, width, height, plot_fn,
+                              font_size = PLOT_FONT_SIZE_PT, font_family = PLOT_FONT_FAMILY) {
+    if (!is.function(plot_fn)) {
+        stop('plot_fn must be a function.')
+    }
+    cfg = open_pdf_with_defaults(
+        file = file,
+        width = width,
+        height = height,
+        font_size = font_size,
+        font_family = font_family
+    )
+    on.exit(grDevices::dev.off(), add = TRUE)
+    plot_fn(cfg[['font_size']], cfg[['font_family']])
+    invisible(cfg)
+}
+
+build_standard_ggplot_theme = function(font_size = PLOT_FONT_SIZE_PT, font_family = PLOT_FONT_FAMILY,
+                                        x_angle = NULL, x_hjust = NULL, x_vjust = 0.5,
+                                        legend_position = NULL, legend_title_blank = FALSE) {
+    font_size = resolve_plot_font_size(font_size)
+    font_family = resolve_plot_font_family(font_family)
+    if (is.null(x_hjust)) {
+        x_hjust = ifelse(is.null(x_angle) || (x_angle == 0), 0.5, 1.0)
+    }
+    theme_list = list(
+        axis.text = ggplot2::element_text(size = font_size, family = font_family, color = 'black'),
+        axis.title = ggplot2::element_text(size = font_size, family = font_family, color = 'black'),
+        panel.grid.major.x = ggplot2::element_blank(),
+        panel.grid.minor.y = ggplot2::element_blank(),
+        panel.grid.minor.x = ggplot2::element_blank(),
+        legend.text = ggplot2::element_text(size = font_size, family = font_family, color = 'black'),
+        rect = ggplot2::element_rect(fill = "transparent"),
+        plot.margin = grid::unit(rep(0.1, 4), "cm")
+    )
+    if (!is.null(x_angle)) {
+        theme_list[['axis.text.x']] = ggplot2::element_text(
+            size = font_size,
+            family = font_family,
+            angle = x_angle,
+            hjust = x_hjust,
+            vjust = x_vjust,
+            color = 'black'
+        )
+    }
+    if (legend_title_blank) {
+        theme_list[['legend.title']] = ggplot2::element_blank()
+    } else {
+        theme_list[['legend.title']] = ggplot2::element_text(size = font_size, family = font_family, color = 'black')
+    }
+    if (!is.null(legend_position)) {
+        theme_list[['legend.position']] = legend_position
+    }
+    do.call(ggplot2::theme, theme_list)
+}
+
 get_singlecopy_bool_index = function(df_gc, spp_filled, percent_singlecopy_threshold = 50) {
 
     is_ge_singlecopy_threshold = function(x, num_sp, percent_singlecopy_threshold) {
@@ -262,6 +519,8 @@ format_genus_species_label = function(x) {
 }
 
 save_exclusion_plot = function(df, out_path, font_size, y_label = "Count") {
+    font_size = resolve_plot_font_size(font_size)
+    font_family = resolve_plot_font_family()
     data_summary = aggregate(cbind(count = exclusion) ~ scientific_name + exclusion, df, length)
     data_summary[['total']] = ave(data_summary[['count']], data_summary[['scientific_name']], FUN = sum)
     data_summary[['proportion']] = data_summary[['count']] / data_summary[['total']]
@@ -269,20 +528,13 @@ save_exclusion_plot = function(df, out_path, font_size, y_label = "Count") {
     g = g + geom_bar(stat = "identity")
     g = g + scale_x_discrete(labels = format_genus_species_label)
     g = g + labs(x = "", y = y_label, fill = "exclusion")
-    g = g + theme_bw(base_size = font_size, base_family = 'Helvetica')
-    g = g + theme(
-        axis.text = element_text(size = font_size, color = 'black'),
-        axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
-        axis.title = element_text(size = font_size, color = 'black'),
-        #panel.grid.major.y=element_blank(),
-        panel.grid.major.x = element_blank(),
-        panel.grid.minor.y = element_blank(),
-        panel.grid.minor.x = element_blank(),
-        legend.title = element_blank(),
-        legend.text = element_text(size = font_size, color = 'black'),
-        legend.position = 'bottom',
-        rect = element_rect(fill = "transparent"),
-        plot.margin = unit(rep(0.1, 4), "cm")
+    g = g + theme_bw(base_size = font_size, base_family = font_family)
+    g = g + build_standard_ggplot_theme(
+        font_size = font_size,
+        font_family = font_family,
+        x_angle = 90,
+        legend_position = 'bottom',
+        legend_title_blank = TRUE
     )
     num_spp = length(unique(df[['scientific_name']]))
     plot_width = max(3.6, 0.11 * num_spp)

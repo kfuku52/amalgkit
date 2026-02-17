@@ -24,6 +24,8 @@ if (mode == "debug") {
     r_util_path = args[6]
 }
 source(r_util_path)
+font_size = resolve_plot_font_size(8)
+font_family = resolve_plot_font_family('Helvetica')
 
 get_spp_filled = function(dir_count, df_gc = NA) {
     sciname_dirs = list.dirs(dir_count, full.names = FALSE, recursive = FALSE)
@@ -166,26 +168,21 @@ append_tmm_stats_to_metadata = function(df_metadata, cnf_out2) {
 }
 
 plot_norm_factor_histogram = function(df_metadata, font_size = 8) {
+    font_size = resolve_plot_font_size(font_size)
+    font_family = resolve_plot_font_family('Helvetica')
     tmp = df_metadata[(!is.na(df_metadata[['tmm_normalization_factor']])),]
     x_limit = max(abs(log2(tmp[['tmm_normalization_factor']])), na.rm = TRUE)
     for (fill_by in c('scientific_name', 'sample_group')) {
         g = ggplot2::ggplot(tmp) +
             geom_histogram(aes(x = log2(tmm_normalization_factor), fill = !!rlang::sym(fill_by)), position = "stack", alpha = 0.7, bins = 40) +
-            theme_bw(base_size = font_size, base_family = 'Helvetica') +
+            theme_bw(base_size = font_size, base_family = font_family) +
             xlim(c(-x_limit, x_limit)) +
             labs(x = 'log2(TMM normalization factor)', y = 'Count') +
             guides(fill = guide_legend(ncol = 1)) +
-            theme(
-                axis.text = element_text(size = font_size, color = 'black'),
-                axis.title = element_text(size = font_size, color = 'black'),
-                #panel.grid.major.y=element_blank(),
-                panel.grid.major.x = element_blank(),
-                panel.grid.minor.y = element_blank(),
-                panel.grid.minor.x = element_blank(),
-                legend.title = element_blank(),
-                legend.text = element_text(size = font_size, color = 'black'),
-                rect = element_rect(fill = "transparent"),
-                plot.margin = unit(rep(0.1, 4), "cm")
+            build_standard_ggplot_theme(
+                font_size = font_size,
+                font_family = font_family,
+                legend_title_blank = TRUE
             )
         out_path = file.path(dir_cstmm, paste0('cstmm_normalization_factor_histogram.', fill_by, '.pdf'))
         ggsave(out_path, plot = g, width = 4.8, height = 2.4, units = 'in')
@@ -193,28 +190,19 @@ plot_norm_factor_histogram = function(df_metadata, font_size = 8) {
 }
 
 plot_norm_factor_scatter = function(df_metadata, font_size = 8) {
+    font_size = resolve_plot_font_size(font_size)
+    font_family = resolve_plot_font_family('Helvetica')
     tmp = df_metadata[(!is.na(df_metadata[['tmm_normalization_factor']])),]
     x_limit = max(abs(log2(tmp[['tmm_normalization_factor']])), na.rm = TRUE)
     g = ggplot2::ggplot(tmp, aes(x = log10(tmm_library_size), y = log2(tmm_normalization_factor), fill = scientific_name, color = sample_group)) +
         geom_point(shape = 21, alpha = 0.7) +
         scale_fill_hue(l = 65) +
         scale_color_hue(l = 45) +
-        theme_bw(base_size = font_size, base_family = 'Helvetica') +
+        theme_bw(base_size = font_size, base_family = font_family) +
         ylim(c(-x_limit, x_limit)) +
         labs(x = 'log10(Library size)', y = 'log2(TMM normalization factor)') +
         guides(fill = guide_legend(ncol = 1), color = guide_legend(ncol = 1)) +
-        theme(
-            axis.text = element_text(size = font_size, color = 'black'),
-            axis.title = element_text(size = font_size, color = 'black'),
-            #panel.grid.major.y=element_blank(),
-            panel.grid.major.x = element_blank(),
-            panel.grid.minor.y = element_blank(),
-            panel.grid.minor.x = element_blank(),
-            legend.title = element_text(size = font_size, color = 'black'),
-            legend.text = element_text(size = font_size, color = 'black'),
-            rect = element_rect(fill = "transparent"),
-            plot.margin = unit(rep(0.1, 4), "cm")
-        )
+        build_standard_ggplot_theme(font_size = font_size, font_family = font_family)
     ggsave(file.path(dir_cstmm, 'cstmm_normalization_factor_scatter.pdf'), plot = g, width = 4.8, height = 2.0, units = 'in')
 }
 
@@ -233,6 +221,8 @@ get_library_sizes = function(df_nonzero, uncorrected) {
 }
 
 save_mean_expression_boxplot = function(df_nonzero, cnf_out2, uncorrected, corrected, font_size = 8) {
+    font_size = resolve_plot_font_size(font_size)
+    font_family = resolve_plot_font_family('Helvetica')
     df_nonzero_tmm = df_nonzero
     for (col in colnames(df_nonzero_tmm)) {
         tmm_normalization_factor = cnf_out2[[2]][col, 'norm.factors']
@@ -275,27 +265,24 @@ save_mean_expression_boxplot = function(df_nonzero, cnf_out2, uncorrected, corre
     for (i in 1:length(ps)) {
         ps[[i]] = ps[[i]] +
             ylim(0, 1000) +
-            theme_bw(base_size = font_size, base_family = 'Helvetica') +
-            theme(
-                axis.text = element_text(size = font_size, color = 'black'),
-                axis.title = element_text(size = font_size, color = 'black'),
-                legend.text = element_text(size = font_size, color = 'black'),
-                legend.title = element_text(size = font_size, color = 'black'),
-                panel.grid.major.x = element_blank(),
-                panel.grid.minor.y = element_blank(),
-                panel.grid.minor.x = element_blank(),
-                rect = element_rect(fill = "transparent"),
-                plot.margin = unit(rep(0.1, 4), "cm"),
-            )
+            theme_bw(base_size = font_size, base_family = font_family) +
+            build_standard_ggplot_theme(font_size = font_size, font_family = font_family)
     }
 
     filename = file.path(dir_cstmm, 'cstmm_mean_expression_boxplot.pdf')
-    grDevices::pdf(file = filename, height = 3.6, width = 3.6, family = 'Helvetica', pointsize = font_size)
-    grid::grid.newpage()
-    grid::pushViewport(grid::viewport(layout = grid::grid.layout(nrow = 1, ncol = 2)))
-    print(ps[[1]], vp = grid::viewport(layout.pos.row = 1, layout.pos.col = 1))
-    print(ps[[2]], vp = grid::viewport(layout.pos.row = 1, layout.pos.col = 2))
-    grDevices::dev.off()
+    with_pdf_defaults(
+        file = filename,
+        width = 3.6,
+        height = 3.6,
+        font_size = font_size,
+        font_family = font_family,
+        plot_fn = function(local_font_size, local_font_family) {
+            grid::grid.newpage()
+            grid::pushViewport(grid::viewport(layout = grid::grid.layout(nrow = 1, ncol = 2)))
+            print(ps[[1]], vp = grid::viewport(layout.pos.row = 1, layout.pos.col = 1))
+            print(ps[[2]], vp = grid::viewport(layout.pos.row = 1, layout.pos.col = 2))
+        }
+    )
 }
 
 save_corrected_output_files = function(uncorrected) {
@@ -372,13 +359,13 @@ df_metadata = df_metadata[, !startsWith(colnames(df_metadata), 'Unnamed')]
 out_path = file.path(dir_cstmm, 'metadata.tsv')
 write.table(df_metadata, out_path, row.names = FALSE, sep = '\t', quote = FALSE)
 print_excluded_run_summary(df_metadata)
-plot_norm_factor_histogram(df_metadata = df_metadata)
-plot_norm_factor_scatter(df_metadata = df_metadata)
+plot_norm_factor_histogram(df_metadata = df_metadata, font_size = font_size)
+plot_norm_factor_scatter(df_metadata = df_metadata, font_size = font_size)
 corrected = save_corrected_output_files(uncorrected)
-save_mean_expression_boxplot(df_nonzero, cnf_out2, uncorrected, corrected, font_size = 8)
+save_mean_expression_boxplot(df_nonzero, cnf_out2, uncorrected, corrected, font_size = font_size)
 
 cat(sprintf('Number of SRA samples for exclusion potting: %s\n', formatC(nrow(df_metadata), format = 'd', big.mark = ',')))
 out_path = file.path(dir_cstmm, 'cstmm_exclusion.pdf')
-save_exclusion_plot(df = df_metadata, out_path = out_path, font_size = 8, y_label = "Sample count")
+save_exclusion_plot(df = df_metadata, out_path = out_path, font_size = font_size, y_label = "Sample count")
 
 cat('cstmm.r completed!\n')
