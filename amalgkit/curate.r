@@ -1,106 +1,10 @@
 #!/usr/bin/env Rscript
 
-rainbow_hcl = function(n, c = 100, l = 65, start = 0, end = 360, alpha = NULL) {
-    if (n <= 0) {
-        return(character(0))
-    }
-    hues = seq(start, end, length.out = n + 1)[1:n]
-    grDevices::hcl(h = hues, c = c, l = l, alpha = alpha, fixup = TRUE)
-}
-
-brewer.pal = function(n, name) {
-    dark2 = c("#1B9E77", "#D95F02", "#7570B3", "#E7298A", "#66A61E", "#E6AB02", "#A6761D", "#666666")
-    paired = c("#A6CEE3", "#1F78B4", "#B2DF8A", "#33A02C", "#FB9A99", "#E31A1C",
-               "#FDBF6F", "#FF7F00", "#CAB2D6", "#6A3D9A", "#FFFF99", "#B15928")
-    palette_values = switch(
-        name,
-        "Dark2" = dark2,
-        "Paired" = paired,
-        stop(paste0("Unsupported palette name: ", name))
-    )
-    if (n <= 0) {
-        stop("n must be positive")
-    }
-    if (n > length(palette_values)) {
-        warning(sprintf("Requested %d colors for %s; truncating to %d.", n, name, length(palette_values)))
-        n = length(palette_values)
-    }
-    palette_values[seq_len(n)]
-}
-
 detected_cores = tryCatch(parallel::detectCores(), error = function(e) NA_integer_)
 if (is.na(detected_cores) && (is.null(getOption("cores")) || is.na(getOption("cores")))) {
     options(cores = 1L)
 }
 suppressWarnings(suppressPackageStartupMessages(library(Rtsne, quietly = TRUE)))
-
-calc_sample_distance = function(tc, method = 'pearson', na_fill = 1, epsilon = 0, cor_mat = NULL) {
-    num_samples = ncol(tc)
-    if (num_samples <= 1) {
-        return(as.dist(matrix(0, nrow = num_samples, ncol = num_samples)))
-    }
-    if (method %in% c('pearson', 'spearman', 'kendall')) {
-        if (is.null(cor_mat)) {
-            cor_mat = suppressWarnings(cor(tc, method = method, use = 'pairwise.complete.obs'))
-        }
-        dist_mat = 1 - cor_mat
-    } else {
-        dist_mat = as.matrix(stats::dist(t(tc), method = method))
-    }
-    dist_mat[!is.finite(dist_mat)] = na_fill
-    dist_mat = (dist_mat + t(dist_mat)) / 2
-    dist_mat = dist_mat + epsilon
-    diag(dist_mat) = 0
-    as.dist(dist_mat)
-}
-
-apply_leaf_label_colors = function(dend, label_colors) {
-    idx = 0
-    dendrapply(dend, function(node) {
-        if (is.leaf(node)) {
-            idx <<- idx + 1
-            if (idx <= length(label_colors)) {
-                node_par = attr(node, "nodePar")
-                if (is.null(node_par)) {
-                    node_par = list()
-                }
-                node_par[['lab.col']] = label_colors[[idx]]
-                attr(node, "nodePar") = node_par
-            }
-        }
-        node
-    })
-}
-
-apply_leaf_edge_colors = function(dend, edge_colors) {
-    idx = 0
-    dendrapply(dend, function(node) {
-        if (is.leaf(node)) {
-            idx <<- idx + 1
-            if (idx <= length(edge_colors)) {
-                edge_par = attr(node, "edgePar")
-                if (is.null(edge_par)) {
-                    edge_par = list()
-                }
-                edge_par[['col']] = edge_colors[[idx]]
-                attr(node, "edgePar") = edge_par
-            }
-        }
-        node
-    })
-}
-
-set_edge_lwd = function(dend, lwd = 1) {
-    dendrapply(dend, function(node) {
-        edge_par = attr(node, "edgePar")
-        if (is.null(edge_par)) {
-            edge_par = list()
-        }
-        edge_par[['lwd']] = lwd
-        attr(node, "edgePar") = edge_par
-        node
-    })
-}
 
 debug_mode = ifelse(length(commandArgs(trailingOnly = TRUE)) == 1, "debug", "batch")
 log_prefix = "transcriptome_curation.r:"
@@ -167,6 +71,13 @@ cat('r_util_path:', r_util_path, "\n")
 cat('skip_curation_flag:', skip_curation_flag, "\n")
 
 source(r_util_path)
+
+CURATE_FONT_SIZE_PT = 8
+CURATE_FONT_FAMILY = 'Helvetica'
+
+resolve_curate_fontsize = function(fontsize = CURATE_FONT_SIZE_PT) {
+    return(CURATE_FONT_SIZE_PT)
+}
 
 if (batch_effect_alg == "ruvseq") {
     suppressWarnings(suppressPackageStartupMessages(library(RUVSeq, quietly = TRUE)))
@@ -255,21 +166,6 @@ sort_tc_and_metadata = function(tc, sra, sort_columns = c("sample_group", "scien
     sra_intersection = sra[(sra[['run']] %in% colnames(tc)), 'run']
     tc = tc[, sra_intersection, drop = FALSE]
     return(list(tc = tc, sra = sra))
-}
-
-sort_averaged_tc = function(tc) {
-    split_colnames = strsplit(colnames(tc), "_")
-    genus_names = c()
-    specific_names = c()
-    sample_group_names = c()
-    for (i in 1:length(split_colnames)) {
-        genus_names = c(genus_names, split_colnames[[i]][1])
-        specific_names = c(specific_names, split_colnames[[i]][2])
-        sample_group_names = c(sample_group_names, split_colnames[[i]][3])
-    }
-    colname_order = order(sample_group_names, genus_names, specific_names)
-    tc = tc[, colname_order, drop = FALSE]
-    return(tc)
 }
 
 cleanY = function(y, mod, svs) {
@@ -677,36 +573,6 @@ batch_effect_subtraction = function(tc, sra, batch_effect_alg, transform_method,
     return(list(tc = tc, sva = sva1))
 }
 
-map_color = function(redundant_variables, c) {
-    uniq_var = unique(redundant_variables)
-    uniq_col = rainbow_hcl(length(uniq_var), c = c)
-    df_unique = data.frame(var = uniq_var, col = uniq_col, stringsAsFactors = FALSE)
-    df_redundant = data.frame(var = redundant_variables, order = seq(1, length(redundant_variables)),
-                              stringsAsFactors = FALSE)
-    df_redundant = merge(df_redundant, df_unique, by = "var", all.x = TRUE, stringsAsFactors = FALSE)
-    df_redundant = df_redundant[order(df_redundant[['order']]),]
-    return(df_redundant[['col']])
-}
-
-# Draw a ggplot object inside the current base-graphics panel (layout/par region).
-draw_ggplot_in_current_plot_panel = function(g) {
-    plot.new()
-    fig = par('fig')
-    plt = par('plt')
-    panel_left = fig[1] + (fig[2] - fig[1]) * plt[1]
-    panel_right = fig[1] + (fig[2] - fig[1]) * plt[2]
-    panel_bottom = fig[3] + (fig[4] - fig[3]) * plt[3]
-    panel_top = fig[3] + (fig[4] - fig[3]) * plt[4]
-    vp = grid::viewport(
-        x = (panel_left + panel_right) / 2,
-        y = (panel_bottom + panel_top) / 2,
-        width = panel_right - panel_left,
-        height = panel_top - panel_bottom,
-        just = c('center', 'center')
-    )
-    print(g, vp = vp, newpage = FALSE)
-}
-
 compute_dense_label_pt = function(num_labels, base_pt = 8, min_pt = 4, soft_limit = 20) {
     if (is.na(num_labels) || (num_labels <= 0)) {
         return(base_pt)
@@ -761,6 +627,7 @@ prepare_sample_correlation_heatmap_data = function(sra, tc_dist_matrix) {
 }
 
 draw_heatmap_base = function(sra, tc_dist_matrix, legend = TRUE, fontsize = 8) {
+    fontsize = resolve_curate_fontsize(fontsize)
     out = prepare_sample_correlation_heatmap_data(sra = sra, tc_dist_matrix = tc_dist_matrix)
     if (is.null(out)) {
         plot(c(0, 1), c(0, 1), type = 'n', ann = FALSE, bty = 'n', xaxt = 'n', yaxt = 'n')
@@ -888,9 +755,10 @@ draw_heatmap_base = function(sra, tc_dist_matrix, legend = TRUE, fontsize = 8) {
 }
 
 build_numeric_heatmap_ggplot = function(mat, breaks, colors, fontsize = 8, legend_title = '') {
+    fontsize = resolve_curate_fontsize(fontsize)
     mat = as.matrix(mat)
     if ((nrow(mat) == 0) || (ncol(mat) == 0)) {
-        return(ggplot2::ggplot() + ggplot2::theme_void(base_size = fontsize, base_family = 'Helvetica'))
+        return(ggplot2::ggplot() + ggplot2::theme_void(base_size = fontsize, base_family = CURATE_FONT_FAMILY))
     }
     df_heat = as.data.frame(as.table(mat), stringsAsFactors = FALSE)
     colnames(df_heat) = c('row_name', 'col_name', 'value')
@@ -908,9 +776,9 @@ build_numeric_heatmap_ggplot = function(mat, breaks, colors, fontsize = 8, legen
             na.value = 'gray80',
             name = legend_title
         ) +
-        ggplot2::theme_bw(base_size = fontsize, base_family = 'Helvetica') +
+        ggplot2::theme_bw(base_size = fontsize, base_family = CURATE_FONT_FAMILY) +
         ggplot2::theme(
-            text = ggplot2::element_text(size = fontsize, family = 'Helvetica', color = 'black'),
+            text = ggplot2::element_text(size = fontsize, family = CURATE_FONT_FAMILY, color = 'black'),
             axis.title = ggplot2::element_blank(),
             axis.text.x = ggplot2::element_text(angle = 90, hjust = 1, vjust = 0.5),
             panel.grid = ggplot2::element_blank()
@@ -919,6 +787,7 @@ build_numeric_heatmap_ggplot = function(mat, breaks, colors, fontsize = 8, legen
 }
 
 draw_heatmap = function(sra, tc_dist_matrix, legend = TRUE, show_colorbar = legend, fontsize = 8) {
+    fontsize = resolve_curate_fontsize(fontsize)
     g = build_heatmap_ggplot(
         sra = sra,
         tc_dist_matrix = tc_dist_matrix,
@@ -932,10 +801,11 @@ draw_heatmap = function(sra, tc_dist_matrix, legend = TRUE, show_colorbar = lege
 # ggplot2 heatmap for sample-correlation with row/column annotations.
 # This keeps the same information content: correlation tiles + bioproject/sample_group strips on top and left.
 build_heatmap_ggplot = function(sra, tc_dist_matrix, legend = TRUE, show_colorbar = legend, fontsize = 8) {
+    fontsize = resolve_curate_fontsize(fontsize)
     run_order = colnames(tc_dist_matrix)
     run_order = run_order[run_order %in% sra[['run']]]
     if (length(run_order) == 0) {
-        g = ggplot2::ggplot() + ggplot2::theme_void(base_size = fontsize, base_family = 'Helvetica')
+        g = ggplot2::ggplot() + ggplot2::theme_void(base_size = fontsize, base_family = CURATE_FONT_FAMILY)
         return(g)
     }
     sra = sra[match(run_order, sra[['run']]), , drop = FALSE]
@@ -953,7 +823,7 @@ build_heatmap_ggplot = function(sra, tc_dist_matrix, legend = TRUE, show_colorba
     colnames(tc_dist_matrix) = short_names
     n = ncol(tc_dist_matrix)
     if (n == 0) {
-        g = ggplot2::ggplot() + ggplot2::theme_void(base_size = fontsize, base_family = 'Helvetica')
+        g = ggplot2::ggplot() + ggplot2::theme_void(base_size = fontsize, base_family = CURATE_FONT_FAMILY)
         return(g)
     }
     sample_label_pt = compute_dense_label_pt(num_labels = n, base_pt = fontsize, min_pt = 4, soft_limit = 20)
@@ -1108,9 +978,9 @@ build_heatmap_ggplot = function(sra, tc_dist_matrix, legend = TRUE, show_colorba
             ylim = c(0.5, top_bp_y + 0.5),
             clip = 'on'
         ) +
-        ggplot2::theme_bw(base_size = fontsize, base_family = 'Helvetica') +
+        ggplot2::theme_bw(base_size = fontsize, base_family = CURATE_FONT_FAMILY) +
         ggplot2::theme(
-            text = ggplot2::element_text(size = fontsize, family = 'Helvetica', color = 'black'),
+            text = ggplot2::element_text(size = fontsize, family = CURATE_FONT_FAMILY, color = 'black'),
             panel.grid = ggplot2::element_blank(),
             axis.title = ggplot2::element_blank(),
             axis.text.x = ggplot2::element_text(size = sample_label_pt, color = 'black', angle = 90, hjust = 0, vjust = 0.5),
@@ -1134,6 +1004,7 @@ build_heatmap_ggplot = function(sra, tc_dist_matrix, legend = TRUE, show_colorba
 }
 
 draw_heatmap_ggplot = function(sra, tc_dist_matrix, legend = TRUE, show_colorbar = legend, fontsize = 8) {
+    fontsize = resolve_curate_fontsize(fontsize)
     g = build_heatmap_ggplot(
         sra = sra,
         tc_dist_matrix = tc_dist_matrix,
@@ -1147,6 +1018,7 @@ draw_heatmap_ggplot = function(sra, tc_dist_matrix, legend = TRUE, show_colorbar
 
 save_heatmap_ggplot = function(sra, tc_dist_matrix, out_path, legend = TRUE, fontsize = 8, width = 3.6, height = 3.6,
                                legend_extra_width = 2.0, show_colorbar = legend) {
+    fontsize = resolve_curate_fontsize(fontsize)
     g = build_heatmap_ggplot(
         sra = sra,
         tc_dist_matrix = tc_dist_matrix,
@@ -1159,20 +1031,8 @@ save_heatmap_ggplot = function(sra, tc_dist_matrix, out_path, legend = TRUE, fon
     invisible(g)
 }
 
-color_children2parent = function(node) {
-    if (length(node) == 2) {
-        child1_color = attributes(node[[1]])[['edgePar']][["col"]]
-        child2_color = attributes(node[[2]])[['edgePar']][["col"]]
-        if ((!is.null(child1_color)) & (!is.null(child2_color))) {
-            if ((!is.na(child1_color)) & (!is.na(child2_color)) & identical(child1_color, child2_color)) {
-                attributes(node)[['edgePar']][["col"]] = child1_color
-            }
-        }
-    }
-    return(node)
-}
-
 draw_dendrogram = function(sra, tc_dist_dist, fontsize = 8) {
+    fontsize = resolve_curate_fontsize(fontsize)
     dend = as.dendrogram(hclust(tc_dist_dist))
     dend_colors = sra[order.dendrogram(dend), 'sample_group_color']
     dend = apply_leaf_label_colors(dend, dend_colors)
@@ -1201,6 +1061,7 @@ draw_dendrogram = function(sra, tc_dist_dist, fontsize = 8) {
 }
 
 draw_dendrogram_ggplot = function(sra, tc_dist_dist, fontsize = 8) {
+    fontsize = resolve_curate_fontsize(fontsize)
 
     cg_col = unique(sra[, c('sample_group', 'sample_group_color')])
     bp_col = unique(sra[, c('bioproject', 'bp_color')])
@@ -1220,11 +1081,11 @@ draw_dendrogram_ggplot = function(sra, tc_dist_dist, fontsize = 8) {
     ggplot() +
         geom_segment(data = dendr$segments, aes(x = x, y = y, xend = xend, yend = yend), size = .8, show.legend = FALSE) +
         geom_segment(data = merge(dendr$segments[dendr$segments$yend == 0,], dendr$labels[, c('label', 'sample_group', 'x')], by = 'x'), aes(x = x, y = y, xend = xend, yend = yend, color = sample_group), size = .8, show.legend = FALSE) +
-        geom_text(data = dendr$labels, aes(x, y - .008, label = label, hjust = 0, angle = 270, color = sample_group), family = 'Helvetica', size = fontsize / ggplot2::.pt, show.legend = FALSE) +
+        geom_text(data = dendr$labels, aes(x, y - .008, label = label, hjust = 0, angle = 270, color = sample_group), family = CURATE_FONT_FAMILY, size = fontsize / ggplot2::.pt, show.legend = FALSE) +
         scale_y_continuous(expand = c(.2, .1)) +
         geom_point(data = dendr$labels, aes(x, y, color = bioproject), size = 3, show.legend = FALSE) +
         geom_point(data = dendr$labels, aes(x, y, color = sample_group), size = 2, show.legend = FALSE) +
-        theme(text = element_text(size = fontsize, family = 'Helvetica'),
+        theme(text = element_text(size = fontsize, family = CURATE_FONT_FAMILY),
               axis.line.x = element_blank(),
               axis.ticks.x = element_blank(),
               axis.text.x = element_blank(),
@@ -1239,6 +1100,7 @@ draw_dendrogram_ggplot = function(sra, tc_dist_dist, fontsize = 8) {
 }
 
 draw_dendrogram_pvclust = function(sra, tc, nboot, pvclust_file, fontsize = 8) {
+    fontsize = resolve_curate_fontsize(fontsize)
     cat("draw_dendrogram_pvclust(): bootstrap support is deprecated. Using hclust without bootstrap.\n")
     dend = as.dendrogram(hclust(calc_sample_distance(tc, method = 'pearson'), method = "average"))
     dend_colors = sra[order.dendrogram(dend), 'sample_group_color']
@@ -1267,6 +1129,7 @@ draw_dendrogram_pvclust = function(sra, tc, nboot, pvclust_file, fontsize = 8) {
 }
 
 draw_pca = function(sra, tc_dist_matrix, fontsize = 8) {
+    fontsize = resolve_curate_fontsize(fontsize)
     pca = prcomp(tc_dist_matrix)
     xlabel = paste0("PC 1 (", round(summary(pca)[['importance']][2, 1] * 100, digits = 1), "%)")
     ylabel = paste0("PC 2 (", round(summary(pca)[['importance']][2, 2] * 100, digits = 1), "%)")
@@ -1287,6 +1150,7 @@ draw_pca = function(sra, tc_dist_matrix, fontsize = 8) {
 }
 
 draw_mds = function(sra, tc_dist_dist, fontsize = 8) {
+    fontsize = resolve_curate_fontsize(fontsize)
     mds_points = tryCatch({
         as.matrix(stats::cmdscale(tc_dist_dist, k = 2))
     }, error = function(a) {
@@ -1312,6 +1176,7 @@ draw_mds = function(sra, tc_dist_dist, fontsize = 8) {
 }
 
 draw_tsne = function(sra, tc, fontsize = 8) {
+    fontsize = resolve_curate_fontsize(fontsize)
     perplexity = min(30, floor(nrow(sra) / 4), na.rm = TRUE)
     try_out = tryCatch({
         Rtsne(
@@ -1354,6 +1219,7 @@ draw_tsne = function(sra, tc, fontsize = 8) {
 }
 
 draw_sva_summary = function(sva_out, tc, sra, fontsize) {
+    fontsize = resolve_curate_fontsize(fontsize)
     if ((is.null(sva_out)) | (class(sva_out) == "try-error")) {
         plot(c(0, 1), c(0, 1), ann = F, bty = "n", type = "n", xaxt = "n", yaxt = "n")
         df = NA
@@ -1416,6 +1282,7 @@ draw_sva_summary = function(sva_out, tc, sra, fontsize) {
 }
 
 draw_boxplot = function(sra, tc_dist_matrix, fontsize = 8) {
+    fontsize = resolve_curate_fontsize(fontsize)
     is_same_bp = outer(sra[['bioproject']], sra[['bioproject']], function(x, y) {
         x == y
     })
@@ -1543,6 +1410,7 @@ save_correlation = function(tc, sra, dist_method, round, precomputed_tc_dist_mat
 
 
 draw_tau_histogram = function(tc, sra, selected_sample_groups, fontsize = 8, transform_method, tc_sample_group = NULL) {
+    fontsize = resolve_curate_fontsize(fontsize)
     if (is.null(tc_sample_group)) {
         tc_sample_group = sample_group_mean(tc, sra, selected_sample_groups)[['tc_ave']]
     }
@@ -1552,10 +1420,11 @@ draw_tau_histogram = function(tc, sra, selected_sample_groups, fontsize = 8, tra
     num_noexp = sum(is.na(df_tau[['tau']]))
     num_all = nrow(df_tau)
     text_noexp = paste0("Excluded due to\nno expression:\n", num_noexp, "/", num_all, " genes")
-    text(0, max(hist_out[['counts']], na.rm = TRUE) * 0.85, text_noexp, pos = 4)
+    text(0, max(hist_out[['counts']], na.rm = TRUE) * 0.85, text_noexp, pos = 4, cex = 1)
 }
 
 draw_exp_level_histogram = function(tc, sra, selected_sample_groups, fontsize = 8, transform_method, tc_sample_group = NULL) {
+    fontsize = resolve_curate_fontsize(fontsize)
     if (is.null(tc_sample_group)) {
         tc_sample_group = sample_group_mean(tc, sra, selected_sample_groups)[['tc_ave']]
     }
@@ -1568,6 +1437,7 @@ draw_exp_level_histogram = function(tc, sra, selected_sample_groups, fontsize = 
 }
 
 draw_legend = function(sra, new = TRUE, pos = "center", fontsize = 8, nlabel.in.col) {
+    fontsize = resolve_curate_fontsize(fontsize)
     if (new) {
         plot.new()
     }
@@ -1585,10 +1455,11 @@ draw_legend = function(sra, new = TRUE, pos = "center", fontsize = 8, nlabel.in.
                                                                                                         1, 1, 0), length(bp_color_unique)))
     legend_font = c(2, rep(1, length(sample_group_color_unique)), 1, 2, rep(1, length(bp_color_unique)))
     legend(pos, legend = legend_text, pch = 21, lwd = 1, lty = 0, col = legend_color, pt.bg = legend_bg,
-           text.font = legend_font, ncol = ncol, bty = "n")
+           text.font = legend_font, cex = 1, pt.cex = 1, ncol = ncol, bty = "n")
 }
 
 save_plot = function(tc, sra, sva_out, dist_method, file, selected_sample_groups, sample_group_colors, fontsize = 8, transform_method, batch_effect_alg) {
+    fontsize = resolve_curate_fontsize(fontsize)
     if (ncol(tc) <= 1) {
         cat('1 or fewer samples are available. Skipping the plot.\n')
         return(invisible(NULL))
@@ -1600,18 +1471,7 @@ save_plot = function(tc, sra, sva_out, dist_method, file, selected_sample_groups
     out = sort_tc_and_metadata(tc, sra)
     tc = out[["tc"]]
     sra = out[["sra"]]
-    pdf(file.path(dir_pdf, paste0(file, ".pdf")), height = 8, width = 7.2, family = 'Helvetica', pointsize = fontsize)
-    par(family = 'Helvetica', cex = 1, cex.axis = 1, cex.lab = 1, cex.main = 1)
-    layout_matrix = matrix(c(2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1,
-                             2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 1, 1,
-                             1, 1, 1, 1, 1, 3, 3, 3, 4, 4, 4, 5, 5, 5, 6, 6, 6, 3, 3, 3, 4, 4, 4, 5, 5, 5, 6, 6, 6, 3, 3,
-                             3, 4, 4, 4, 5, 5, 5, 6, 6, 6, 7, 7, 7, 8, 8, 8, 9, 9, 9, 9, 9, 9, 7, 7, 7, 8, 8, 8, 9, 9, 9,
-                             9, 9, 9, 7, 7, 7, 8, 8, 8, 9, 9, 9, 9, 9, 9, 7, 7, 7, 8, 8, 8, 9, 9, 9, 9, 9, 9, 10, 10, 10,
-                             10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10), 14, 12,
-                           byrow = TRUE)
-    layout(layout_matrix)
     colnames(tc) <- sra$run
-    ##
     tc_dist_matrix = cor(tc, method = dist_method)
     if (dist_method %in% c('pearson', 'spearman', 'kendall')) {
         tc_dist_dist = calc_sample_distance(
@@ -1625,34 +1485,49 @@ save_plot = function(tc, sra, sva_out, dist_method, file, selected_sample_groups
         tc_dist_dist = calc_sample_distance(tc, method = dist_method, na_fill = 1, epsilon = 1e-09)
     }
     tc_dist_matrix[is.na(tc_dist_matrix)] = 0
-    par(mar = c(6, 6, 1, 0))
-    draw_dendrogram(sra, tc_dist_dist, fontsize)
-    par(mar = c(0, 0, 0, 0))
-    draw_heatmap(sra, tc_dist_matrix, legend = FALSE, show_colorbar = TRUE)
-    # draw_dendrogram_pvclust(sra, tc, nboot=0, pvclust_file=NULL, cex.xlab=0.6)
-    par(mar = c(4, 4, 0.1, 1))
-    draw_pca(sra, tc_dist_matrix, fontsize)
-    par(mar = c(4, 4, 0.1, 1))
-    draw_mds(sra, tc_dist_dist, fontsize)
-    par(mar = c(4, 4, 0.1, 1))
-    draw_tsne(sra, tc, fontsize)
-    par(mar = c(4, 5, 0.1, 1))
-    draw_boxplot(sra, tc_dist_matrix, fontsize)
-    tc_sample_group = sample_group_mean(tc, sra, selected_sample_groups)[['tc_ave']]
-    par(mar = c(4, 4, 1, 1))
-    draw_exp_level_histogram(tc, sra, selected_sample_groups, fontsize, transform_method, tc_sample_group = tc_sample_group)
-    par(mar = c(4, 4, 1, 1))
-    draw_tau_histogram(tc, sra, selected_sample_groups, fontsize, transform_method, tc_sample_group = tc_sample_group)
-    par(mar = rep(0.1, 4))
-    if (batch_effect_alg == 'sva') {
-        df_r2 = draw_sva_summary(sva_out, tc, sra, fontsize)
-        if (!all(is.na(df_r2))) {
-            write.table(df_r2, file.path(dir_tsv, paste0(file, ".r2.tsv")), sep = "\t", row.names = FALSE)
+    with_pdf_defaults(
+        file = file.path(dir_pdf, paste0(file, ".pdf")),
+        width = 7.2,
+        height = 8,
+        font_size = fontsize,
+        font_family = CURATE_FONT_FAMILY,
+        plot_fn = function(local_font_size, local_font_family) {
+            layout_matrix = matrix(c(2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1,
+                                     2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 1, 1,
+                                     1, 1, 1, 1, 1, 3, 3, 3, 4, 4, 4, 5, 5, 5, 6, 6, 6, 3, 3, 3, 4, 4, 4, 5, 5, 5, 6, 6, 6, 3, 3,
+                                     3, 4, 4, 4, 5, 5, 5, 6, 6, 6, 7, 7, 7, 8, 8, 8, 9, 9, 9, 9, 9, 9, 7, 7, 7, 8, 8, 8, 9, 9, 9,
+                                     9, 9, 9, 7, 7, 7, 8, 8, 8, 9, 9, 9, 9, 9, 9, 7, 7, 7, 8, 8, 8, 9, 9, 9, 9, 9, 9, 10, 10, 10,
+                                     10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10), 14, 12,
+                                   byrow = TRUE)
+            layout(layout_matrix)
+            par(mar = c(6, 6, 1, 0))
+            draw_dendrogram(sra, tc_dist_dist, local_font_size)
+            par(mar = c(0, 0, 0, 0))
+            draw_heatmap(sra, tc_dist_matrix, legend = FALSE, show_colorbar = TRUE, fontsize = local_font_size)
+            par(mar = c(4, 4, 0.1, 1))
+            draw_pca(sra, tc_dist_matrix, local_font_size)
+            par(mar = c(4, 4, 0.1, 1))
+            draw_mds(sra, tc_dist_dist, local_font_size)
+            par(mar = c(4, 4, 0.1, 1))
+            draw_tsne(sra, tc, local_font_size)
+            par(mar = c(4, 5, 0.1, 1))
+            draw_boxplot(sra, tc_dist_matrix, local_font_size)
+            tc_sample_group = sample_group_mean(tc, sra, selected_sample_groups)[['tc_ave']]
+            par(mar = c(4, 4, 1, 1))
+            draw_exp_level_histogram(tc, sra, selected_sample_groups, local_font_size, transform_method, tc_sample_group = tc_sample_group)
+            par(mar = c(4, 4, 1, 1))
+            draw_tau_histogram(tc, sra, selected_sample_groups, local_font_size, transform_method, tc_sample_group = tc_sample_group)
+            par(mar = rep(0.1, 4))
+            if (batch_effect_alg == 'sva') {
+                df_r2 = draw_sva_summary(sva_out, tc, sra, local_font_size)
+                if (!all(is.na(df_r2))) {
+                    write.table(df_r2, file.path(dir_tsv, paste0(file, ".r2.tsv")), sep = "\t", row.names = FALSE)
+                }
+            }
+            par(mar = rep(0.1, 4))
+            draw_legend(sra, new = TRUE, pos = "center", fontsize = local_font_size, nlabel.in.col = 8)
         }
-    }
-    par(mar = rep(0.1, 4))
-    draw_legend(sra, new = TRUE, pos = "center", fontsize = fontsize, nlabel.in.col = 8)
-    graphics.off()
+    )
     return(invisible(tc_dist_matrix))
 }
 
@@ -1861,7 +1736,7 @@ write_curation_summaries = function(round_summary, sra, scientific_name, batch_e
 ################################################# START OF SVA CORRECTION ########################################################
 
 
-fontsize = 8
+fontsize = CURATE_FONT_SIZE_PT
 
 tc = read.table(est_counts_path, sep = "\t", stringsAsFactors = FALSE, header = TRUE, quote = "", fill = FALSE, row.names = 1, check.names = FALSE)
 tc_eff_length = read.table(eff_length_path, sep = "\t", stringsAsFactors = FALSE, header = TRUE, quote = "", fill = FALSE, row.names = 1, check.names = FALSE)
