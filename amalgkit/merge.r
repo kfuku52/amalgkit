@@ -124,6 +124,147 @@ save_frequency_plot = function(df, value_col, out_path, x_label, font_size = 8, 
     ggsave(out_path, plot = g, width = 3.6, height = 3.6, units = 'in')
 }
 
+read_est_count_summary = function(file_path) {
+    dat = tryCatch(
+        read.table(file_path, sep = '\t', header = TRUE, quote = '', comment.char = '', check.names = FALSE),
+        error = function(e) {
+            warning(sprintf('Failed to read est_counts file. Skipping %s: %s', file_path, e$message))
+            return(NULL)
+        }
+    )
+    if (is.null(dat)) {
+        return(NULL)
+    }
+    sample_cols = colnames(dat)
+    if ('target_id' %in% sample_cols) {
+        sample_cols = sample_cols[sample_cols != 'target_id']
+    }
+    if (length(sample_cols) == 0) {
+        warning(sprintf('No sample columns found in est_counts file. Skipping %s', file_path))
+        return(NULL)
+    }
+    dat_numeric = dat[, sample_cols, drop = FALSE]
+    for (col in sample_cols) {
+        dat_numeric[[col]] = suppressWarnings(as.numeric(dat_numeric[[col]]))
+    }
+    mean_before = vapply(dat_numeric, function(x) mean(x, na.rm = TRUE), numeric(1))
+    lib_size = vapply(dat_numeric, function(x) sum(x, na.rm = TRUE), numeric(1))
+    summary_df = data.frame(
+        run = sample_cols,
+        mean_before = as.numeric(mean_before),
+        lib_size = as.numeric(lib_size),
+        stringsAsFactors = FALSE
+    )
+    return(summary_df)
+}
+
+collect_est_count_summaries = function(dir_merge) {
+    est_count_files = sort(list.files(
+        path = dir_merge,
+        pattern = '_est_counts\\.tsv$',
+        recursive = TRUE,
+        full.names = TRUE
+    ))
+    if (length(est_count_files) == 0) {
+        return(data.frame(run = character(0), mean_before = numeric(0), lib_size = numeric(0), stringsAsFactors = FALSE))
+    }
+    summaries = vector('list', length(est_count_files))
+    keep_index = 0
+    for (file_path in est_count_files) {
+        tmp = read_est_count_summary(file_path)
+        if (is.null(tmp) || (nrow(tmp) == 0)) {
+            next
+        }
+        keep_index = keep_index + 1
+        summaries[[keep_index]] = tmp
+    }
+    if (keep_index == 0) {
+        return(data.frame(run = character(0), mean_before = numeric(0), lib_size = numeric(0), stringsAsFactors = FALSE))
+    }
+    out = do.call(rbind, summaries[seq_len(keep_index)])
+    is_duplicated = duplicated(out[['run']])
+    if (any(is_duplicated)) {
+        duplicated_runs = sort(unique(out[['run']][is_duplicated]))
+        warning(sprintf('Detected duplicated run IDs across est_counts tables; keeping first entries: %s',
+                        paste(duplicated_runs, collapse = ', ')))
+        out = out[!is_duplicated, , drop = FALSE]
+    }
+    return(out)
+}
+
+save_mean_expression_boxplot = function(df, dir_merge, font_size = 8) {
+    font_size = resolve_plot_font_size(font_size)
+    font_family = resolve_plot_font_family('Helvetica')
+    summary_df = collect_est_count_summaries(dir_merge = dir_merge)
+    if (nrow(summary_df) == 0) {
+        cat('No est_counts tables were found for mean expression plotting. Skipping merge_mean_expression_boxplot.pdf\n')
+        return(NULL)
+    }
+    if ('run' %in% colnames(df)) {
+        metadata_cols = intersect(c('run', 'exclusion'), colnames(df))
+        metadata_df = unique(df[, metadata_cols, drop = FALSE])
+        summary_df = merge(summary_df, metadata_df, by = 'run', sort = FALSE, all.x = TRUE, all.y = FALSE)
+    } else {
+        summary_df[['exclusion']] = NA_character_
+    }
+    if ('exclusion' %in% colnames(summary_df)) {
+        is_non_excluded = is.na(summary_df[['exclusion']]) | (summary_df[['exclusion']] == 'no')
+        summary_df = summary_df[is_non_excluded, , drop = FALSE]
+    }
+    cat(sprintf('Number of SRA samples for mean_expression plotting: %s\n',
+                formatC(nrow(summary_df), format = 'd', big.mark = ',')))
+    if (nrow(summary_df) == 0) {
+        cat('No non-excluded samples available for mean expression plotting. Skipping merge_mean_expression_boxplot.pdf\n')
+        return(NULL)
+    }
+    valid_libsize = summary_df[['lib_size']]
+    valid_libsize = valid_libsize[is.finite(valid_libsize) & (valid_libsize > 0)]
+    if (length(valid_libsize) == 0) {
+        scale_factor = rep(1.0, nrow(summary_df))
+    } else {
+        ref_libsize = stats::median(valid_libsize)
+        if (!is.finite(ref_libsize) || (ref_libsize <= 0)) {
+            ref_libsize = 1.0
+        }
+        scale_factor = summary_df[['lib_size']] / ref_libsize
+        bad_scale = (!is.finite(scale_factor)) | (scale_factor <= 0)
+        scale_factor[bad_scale] = 1.0
+    }
+    mean_before = as.numeric(summary_df[['mean_before']])
+    mean_after = mean_before / scale_factor
+    var_before = round(var(mean_before, na.rm = TRUE), digits = 1)
+    var_after = round(var(mean_after, na.rm = TRUE), digits = 1)
+    cat('Among-sample variance of mean all-gene raw counts before and after library-size normalization:',
+        var_before, 'and', var_after, '\n')
+    values = c(mean_before, mean_after)
+    labels = c(
+        rep('Raw\ncounts', length(mean_before)),
+        rep('Library-size\ncorrected\ncounts', length(mean_after))
+    )
+    plot_df = data.frame(labels = labels, values = values, stringsAsFactors = FALSE)
+    finite_values = plot_df[['values']]
+    finite_values = finite_values[is.finite(finite_values)]
+    finite_values = finite_values[finite_values >= 0]
+    if (length(finite_values) == 0) {
+        ymax = 1
+    } else {
+        ymax = max(finite_values)
+        if ((!is.finite(ymax)) || (ymax <= 0)) {
+            ymax = 1
+        } else {
+            ymax = ymax * 1.05
+        }
+    }
+    g = ggplot(plot_df, aes(x = labels, y = values)) +
+        geom_boxplot(outlier.shape = NA) +
+        coord_cartesian(ylim = c(0, ymax)) +
+        theme_bw(base_size = font_size, base_family = font_family) +
+        labs(x = '', y = 'Mean count of all genes') +
+        build_standard_ggplot_theme(font_size = font_size, font_family = font_family)
+    out_path = file.path(dir_merge, 'merge_mean_expression_boxplot.pdf')
+    ggsave(out_path, plot = g, width = 2.6, height = 3.6, units = 'in')
+}
+
 insert_axis_breaks = function(values) {
     values = values[is.finite(values)]
     if (length(values) == 0) {
@@ -234,6 +375,12 @@ num_spp = length(unique(df[['scientific_name']]))
 plot_width = max(3.6, 0.11 * num_spp)
 out_path = file.path(dir_merge, 'merge_library_layout.pdf')
 ggsave(out_path, plot = g, width = plot_width, height = 3.6, units = 'in')
+
+save_mean_expression_boxplot(
+    df = df,
+    dir_merge = dir_merge,
+    font_size = font_size
+)
 
 save_frequency_plot(
     df = df,

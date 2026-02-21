@@ -10,6 +10,7 @@ from amalgkit.busco import (
     resolve_species_fasta,
     collect_species,
     select_tool,
+    run_busco,
     busco_main,
 )
 from amalgkit.util import Metadata
@@ -141,6 +142,39 @@ def test_select_tool_auto_falls_back_to_busco(monkeypatch):
 
     monkeypatch.setattr('shutil.which', fake_which)
     assert select_tool(args) == 'busco'
+
+
+def test_run_busco_places_downloads_under_out_dir(tmp_path, monkeypatch):
+    out_dir = tmp_path / 'out'
+    busco_root = out_dir / 'busco'
+    out_dir.mkdir()
+    busco_root.mkdir()
+    args = SimpleNamespace(
+        busco_exe='busco',
+        lineage='eukaryota_odb12',
+        threads=4,
+        redo=False,
+        out_dir=str(out_dir),
+    )
+    captured = {}
+
+    def fake_run_command(cmd):
+        captured['cmd'] = cmd
+
+    monkeypatch.setattr('amalgkit.busco.run_command', fake_run_command)
+    output_dir = run_busco(
+        fasta_path='/tmp/input.fa',
+        sci_name='Species A',
+        output_root=str(busco_root),
+        args=args,
+        extra_args=[],
+    )
+
+    assert output_dir == os.path.join(str(busco_root), 'Species_A')
+    assert '--download_path' in captured['cmd']
+    idx = captured['cmd'].index('--download_path')
+    assert captured['cmd'][idx + 1] == os.path.join(str(out_dir), 'busco_downloads')
+    assert (out_dir / 'busco_downloads').exists()
 
 
 def test_busco_main_rejects_nonpositive_species_jobs(tmp_path):

@@ -163,6 +163,8 @@ def run_command(cmd):
 
 def run_busco(fasta_path, sci_name, output_root, args, extra_args):
     out_name = sci_name.replace(' ', '_')
+    download_path = os.path.join(os.path.realpath(args.out_dir), 'busco_downloads')
+    os.makedirs(download_path, exist_ok=True)
     cmd = [
         args.busco_exe,
         '-i', fasta_path,
@@ -170,6 +172,7 @@ def run_busco(fasta_path, sci_name, output_root, args, extra_args):
         '-l', args.lineage,
         '-m', 'transcriptome',
         '--out_path', output_root,
+        '--download_path', download_path,
         '--cpu', str(args.threads),
     ]
     if args.redo:

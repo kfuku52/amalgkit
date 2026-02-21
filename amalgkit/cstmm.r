@@ -254,6 +254,20 @@ save_mean_expression_boxplot = function(df_nonzero, cnf_out2, uncorrected, corre
     sra_labels = c(rep('Raw\ncounts', length(mean_sra_before)), rep('TMM-\ncorrected\ncounts', length(mean_sra_after)))
     sra_df = data.frame(labels = sra_labels, values = sra_values)
 
+    combined_values = c(values, sra_values)
+    finite_values = combined_values[is.finite(combined_values)]
+    finite_values = finite_values[finite_values >= 0]
+    if (length(finite_values) == 0) {
+        ymax = 1
+    } else {
+        ymax = max(finite_values)
+        if ((!is.finite(ymax)) || (ymax <= 0)) {
+            ymax = 1
+        } else {
+            ymax = ymax * 1.05
+        }
+    }
+
     ps = list()
     ps[[1]] = ggplot(df, aes(x = labels, y = values)) +
         geom_boxplot(outlier.shape = NA) +
@@ -264,7 +278,7 @@ save_mean_expression_boxplot = function(df_nonzero, cnf_out2, uncorrected, corre
 
     for (i in 1:length(ps)) {
         ps[[i]] = ps[[i]] +
-            ylim(0, 1000) +
+            coord_cartesian(ylim = c(0, ymax)) +
             theme_bw(base_size = font_size, base_family = font_family) +
             build_standard_ggplot_theme(font_size = font_size, font_family = font_family)
     }
