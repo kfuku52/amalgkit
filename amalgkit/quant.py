@@ -11,15 +11,36 @@ INDEX_BUILD_LOCK_TIMEOUT_SECONDS = 3600
 
 INDEX_FASTA_SUFFIXES = ('.fa', '.fasta', '.fa.gz', '.fasta.gz')
 
+def purge_existing_quant_outputs(sra_id, output_dir):
+    stale_names = [
+        sra_id + '_abundance.tsv',
+        sra_id + '_run_info.json',
+        sra_id + '_abundance.h5',
+        'abundance.tsv',
+        'run_info.json',
+        'abundance.h5',
+    ]
+    for stale_name in stale_names:
+        stale_path = os.path.join(output_dir, stale_name)
+        if not os.path.exists(stale_path):
+            continue
+        if not os.path.isfile(stale_path):
+            raise IsADirectoryError('Quant output path exists but is not a file: {}'.format(stale_path))
+        os.remove(stale_path)
+
 def quant_output_exists(sra_id, output_dir):
-    out_path = os.path.join(output_dir, sra_id + '_abundance.tsv')
-    is_output_present = os.path.exists(out_path)
-    if is_output_present:
-        print('Output file detected: {}'.format(out_path))
+    abundance_path = os.path.join(output_dir, sra_id + '_abundance.tsv')
+    run_info_path = os.path.join(output_dir, sra_id + '_run_info.json')
+    has_abundance = os.path.isfile(abundance_path)
+    has_run_info = os.path.isfile(run_info_path)
+    if has_abundance and has_run_info:
+        print('Output files detected: {}, {}'.format(abundance_path, run_info_path))
         return True
-    else:
-        print('Output file was not detected: {}'.format(out_path))
-        return False
+    if not has_abundance:
+        print('Output file was not detected: {}'.format(abundance_path))
+    if not has_run_info:
+        print('Output file was not detected: {}'.format(run_info_path))
+    return False
 
 def resolve_nominal_length_for_kallisto(metadata, sra_id, sra_stat):
     nominal_length = sra_stat.get('nominal_length', numpy.nan)
@@ -66,12 +87,23 @@ def build_kallisto_quant_command(args, in_files, lib_layout, output_dir, index, 
 
 
 def rename_kallisto_outputs(output_dir, sra_id):
-    try:
-        os.rename(os.path.join(output_dir, "run_info.json"), os.path.join(output_dir, sra_id + "_run_info.json"))
-        os.rename(os.path.join(output_dir, "abundance.tsv"), os.path.join(output_dir, sra_id + "_abundance.tsv"))
-        os.rename(os.path.join(output_dir, "abundance.h5"), os.path.join(output_dir, sra_id + "_abundance.h5"))
-    except FileNotFoundError:
-        pass
+    output_specs = [
+        ('run_info.json', sra_id + '_run_info.json', True),
+        ('abundance.tsv', sra_id + '_abundance.tsv', True),
+        ('abundance.h5', sra_id + '_abundance.h5', False),
+    ]
+    for src_name, dst_name, is_required in output_specs:
+        src_path = os.path.join(output_dir, src_name)
+        dst_path = os.path.join(output_dir, dst_name)
+        if not os.path.exists(src_path):
+            if is_required:
+                raise FileNotFoundError('kallisto output file was not generated: {}'.format(src_path))
+            continue
+        if not os.path.isfile(src_path):
+            raise IsADirectoryError('kallisto output path exists but is not a file: {}'.format(src_path))
+        if os.path.exists(dst_path) and (not os.path.isfile(dst_path)):
+            raise IsADirectoryError('kallisto renamed output path exists but is not a file: {}'.format(dst_path))
+        os.replace(src_path, dst_path)
 
 
 def call_kallisto(args, in_files, metadata, sra_stat, output_dir, index):
@@ -102,14 +134,19 @@ def call_kallisto(args, in_files, metadata, sra_stat, output_dir, index):
 
     print('Command: {}'.format(' '.join(kallisto_cmd)))
     kallisto_out = subprocess.run(kallisto_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    stdout_txt = kallisto_out.stdout.decode('utf8', errors='replace')
+    stderr_txt = kallisto_out.stderr.decode('utf8', errors='replace')
     print('kallisto quant stdout:')
-    print(kallisto_out.stdout.decode('utf8'))
+    print(stdout_txt)
     print('kallisto quant stderr:')
-    print(kallisto_out.stderr.decode('utf8'))
+    print(stderr_txt)
     if kallisto_out.returncode != 0:
         sys.stderr.write("kallisto did not finish safely.\n")
-        if 'Zero reads pseudoaligned' in kallisto_out.stderr.decode('utf8'):
+        if 'Zero reads pseudoaligned' in stderr_txt:
             sys.stderr.write('No reads are mapped to the reference. This sample will be removed by `amalgkit curate`.')
+        raise RuntimeError(
+            'kallisto quant failed with exit code {} for {}.'.format(kallisto_out.returncode, sra_id)
+        )
 
     # move output to results with unique name
     rename_kallisto_outputs(output_dir=output_dir, sra_id=sra_id)
@@ -119,9 +156,11 @@ def call_kallisto(args, in_files, metadata, sra_stat, output_dir, index):
 
 def check_kallisto_dependency():
     try:
-        subprocess.run(['kallisto', '-h'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    except FileNotFoundError:
-        raise Exception("kallisto is not installed.")
+        probe = subprocess.run(['kallisto', '-h'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    except FileNotFoundError as exc:
+        raise FileNotFoundError('kallisto executable not found: kallisto') from exc
+    if probe.returncode != 0:
+        raise RuntimeError('kallisto dependency probe failed with exit code {}: kallisto -h'.format(probe.returncode))
 
 
 def list_getfastq_run_files(output_dir):
@@ -130,7 +169,12 @@ def list_getfastq_run_files(output_dir):
 
 def list_dir_entries(path_dir):
     try:
-        return set(os.listdir(path_dir))
+        with os.scandir(path_dir) as entries:
+            return {
+                entry.name
+                for entry in entries
+                if entry.is_file()
+            }
     except FileNotFoundError:
         return set()
 
@@ -138,16 +182,23 @@ def list_dir_entries(path_dir):
 def find_species_index_files(index_dir, sci_name, entries=None):
     if entries is None:
         entries = list_dir_entries(index_dir)
-    matched = find_prefixed_entries(entries, sci_name)
-    return [os.path.join(index_dir, entry) for entry in matched]
+    matched = find_species_prefixed_entries(entries, sci_name)
+    return [
+        os.path.join(index_dir, entry)
+        for entry in matched
+        if os.path.isfile(os.path.join(index_dir, entry))
+    ]
 
 
 def find_species_fasta_files(path_fasta_dir, sci_name, entries=None):
+    if os.path.exists(path_fasta_dir) and (not os.path.isdir(path_fasta_dir)):
+        raise NotADirectoryError('Fasta path exists but is not a directory: {}'.format(path_fasta_dir))
     if entries is None:
         entries = list_dir_entries(path_fasta_dir)
     matched = [
-        entry for entry in find_prefixed_entries(entries, sci_name)
-        if entry.endswith(INDEX_FASTA_SUFFIXES)
+        entry for entry in find_species_prefixed_entries(entries, sci_name)
+        if entry.lower().endswith(INDEX_FASTA_SUFFIXES)
+        and os.path.isfile(os.path.join(path_fasta_dir, entry))
     ]
     return [os.path.join(path_fasta_dir, entry) for entry in matched]
 
@@ -157,8 +208,8 @@ def check_layout_mismatch(sra_stat, output_dir, files=None):
         files = list_getfastq_run_files(output_dir)
     if sra_stat['layout'] == 'paired':
         fastq_files = [
-            f for f in files
-            if f.startswith(sra_stat['sra_id']) and ('.fastq' in f)
+            f for f in find_run_prefixed_entries(files, sra_stat['sra_id'])
+            if '.fastq' in f
         ]
         if len(fastq_files) == 1:
             sys.stderr.write('Single-end fastq was detected even though layout = {}\n'.format(sra_stat['layout']))
@@ -185,8 +236,8 @@ def resolve_input_fastq_files(sra_stat, output_dir_getfastq, ext, files=None):
             return [os.path.join(output_dir_getfastq, single)]
 
     matched = sorted([
-        f for f in files
-        if f.startswith(sra_id) and f.endswith(ext)
+        f for f in find_run_prefixed_entries(files, sra_id)
+        if f.endswith(ext)
     ])
     return [os.path.join(output_dir_getfastq, f) for f in matched]
 
@@ -194,7 +245,11 @@ def resolve_input_fastq_files(sra_stat, output_dir_getfastq, ext, files=None):
 def run_quant(args, metadata, sra_id, index):
     # make results directory, if not already there
     output_dir = os.path.join(args.out_dir, 'quant', sra_id)
+    if os.path.exists(output_dir) and (not os.path.isdir(output_dir)):
+        raise NotADirectoryError('Quant run output path exists but is not a directory: {}'.format(output_dir))
     os.makedirs(output_dir, exist_ok=True)
+    if args.redo:
+        purge_existing_quant_outputs(sra_id=sra_id, output_dir=output_dir)
     is_quant_output_available = quant_output_exists(sra_id, output_dir)
     if is_quant_output_available:
         if args.redo:
@@ -203,6 +258,10 @@ def run_quant(args, metadata, sra_id, index):
             print('Continued. The output will not be overwritten. If you want to overwrite the results, set "--redo yes".')
             return
     output_dir_getfastq = os.path.join(args.out_dir, 'getfastq', sra_id)
+    if os.path.exists(output_dir_getfastq) and (not os.path.isdir(output_dir_getfastq)):
+        raise NotADirectoryError(
+            'getfastq run path exists but is not a directory: {}'.format(output_dir_getfastq)
+        )
     sra_stat = get_sra_stat(sra_id, metadata, num_bp_per_sra=None)
     prefetched_run_files_map = getattr(args, '_prefetched_getfastq_run_files', None)
     if isinstance(prefetched_run_files_map, dict):
@@ -228,7 +287,8 @@ def run_quant(args, metadata, sra_id, index):
         # Refresh once in case files changed after initial snapshot.
         run_files = list_getfastq_run_files(output_dir_getfastq)
         in_files = resolve_input_fastq_files(sra_stat, output_dir_getfastq, ext, files=run_files)
-    assert in_files, '{}: Fastq file not found. Check {}'.format(sra_id, output_dir)
+    if not in_files:
+        raise FileNotFoundError('{}: Fastq file not found. Check {}'.format(sra_id, output_dir_getfastq))
     print('Input fastq detected:', ', '.join(in_files))
     call_kallisto(args, in_files, metadata, sra_stat, output_dir, index)
     if (args.clean_fastq and quant_output_exists(sra_id, output_dir)):
@@ -259,9 +319,18 @@ def _resolve_index_dir(args):
         os.makedirs(index_dir, exist_ok=True)
     if not os.path.exists(index_dir):
         raise FileNotFoundError("Could not find index folder at: {}".format(index_dir))
+    if not os.path.isdir(index_dir):
+        raise NotADirectoryError("Index path exists but is not a directory: {}".format(index_dir))
     return index_dir
 
+def _assert_lock_path_is_regular_file(lock_path):
+    if not os.path.lexists(lock_path):
+        return
+    if os.path.islink(lock_path) or (not os.path.isfile(lock_path)):
+        raise IsADirectoryError('Index lock path exists but is not a file: {}'.format(lock_path))
+
 def _acquire_index_lock(lock_path):
+    _assert_lock_path_is_regular_file(lock_path)
     try:
         fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
     except FileExistsError:
@@ -271,11 +340,13 @@ def _acquire_index_lock(lock_path):
     return True
 
 def _wait_for_existing_builder(index_path, lock_path, sci_name, lock_poll_seconds, lock_timeout_seconds):
-    if not os.path.exists(lock_path):
+    _assert_lock_path_is_regular_file(lock_path)
+    if not os.path.lexists(lock_path):
         return False
     print('Another process is building index for {}. Waiting for lock release: {}'.format(sci_name, lock_path), flush=True)
     wait_start = time.time()
-    while os.path.exists(lock_path):
+    while os.path.lexists(lock_path):
+        _assert_lock_path_is_regular_file(lock_path)
         elapsed = time.time() - wait_start
         if elapsed > lock_timeout_seconds:
             txt = 'Timed out after {:,} sec while waiting for index lock: {}\n'
@@ -287,15 +358,46 @@ def _wait_for_existing_builder(index_path, lock_path, sci_name, lock_poll_second
         return True
     return False
 
+def _normalize_species_identifier(text):
+    normalized = str(text).strip()
+    if normalized == '':
+        return ''
+    normalized = re.sub(r'\s+', '_', normalized)
+    normalized = re.sub(r'_+', '_', normalized)
+    return normalized
+
 def _find_single_index_file(index_dir, sci_name, entries=None):
-    index_files = find_species_index_files(index_dir=index_dir, sci_name=sci_name, entries=entries)
-    if len(index_files) > 1:
-        raise ValueError(
-            "Found multiple index files for species. Please make sure there is only one index file for this species.")
-    if len(index_files) == 1:
-        index_file = index_files[0]
-        print("Kallisto index file found: {}".format(index_file), flush=True)
-        return index_file
+    candidates = []
+    raw = str(sci_name).strip()
+    normalized = _normalize_species_identifier(raw)
+    for prefix in [raw, normalized]:
+        if (prefix != '') and (prefix not in candidates):
+            candidates.append(prefix)
+        prefix_no_dot = prefix.replace('.', '')
+        if (prefix_no_dot != '') and (prefix_no_dot != prefix) and (prefix_no_dot not in candidates):
+            candidates.append(prefix_no_dot)
+    normalized_parts = [part for part in normalized.split('_') if part != '']
+    if len(normalized_parts) > 2:
+        fallback = '_'.join(normalized_parts[:2])
+        if fallback not in candidates:
+            candidates.append(fallback)
+        fallback_no_dot = fallback.replace('.', '')
+        if (fallback_no_dot != fallback) and (fallback_no_dot not in candidates):
+            candidates.append(fallback_no_dot)
+    for prefix in candidates:
+        index_files = find_species_index_files(index_dir=index_dir, sci_name=prefix, entries=entries)
+        if len(index_files) > 1:
+            raise ValueError(
+                "Found multiple index files for species. Please make sure there is only one index file for this species.")
+        if len(index_files) == 1:
+            index_file = index_files[0]
+            if prefix != sci_name:
+                print(
+                    "Kallisto index fallback prefix '{}' was used for species '{}'.".format(prefix, sci_name),
+                    flush=True,
+                )
+            print("Kallisto index file found: {}".format(index_file), flush=True)
+            return index_file
     return None
 
 def _resolve_prefetched_index_entries(args, index_dir):
@@ -353,13 +455,15 @@ def _build_kallisto_index(index_path, fasta_file, sci_name):
     kallisto_build_cmd = ["kallisto", "index", "-i", index_path, fasta_file]
     print('Command: {}'.format(' '.join(kallisto_build_cmd)), flush=True)
     index_out = subprocess.run(kallisto_build_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    stdout_txt = index_out.stdout.decode('utf8', errors='replace')
+    stderr_txt = index_out.stderr.decode('utf8', errors='replace')
     print('kallisto index stdout:')
-    print(index_out.stdout.decode('utf8'))
+    print(stdout_txt)
     print('kallisto index stderr:')
-    print(index_out.stderr.decode('utf8'))
+    print(stderr_txt)
     if index_out.returncode != 0:
         raise RuntimeError("kallisto index failed for {}.".format(sci_name))
-    if not os.path.exists(index_path):
+    if not os.path.isfile(index_path):
         raise RuntimeError("Index file was not generated: {}".format(index_path))
 
 def _store_prefetched_entries(args, attr_prefix, entries, path_dir):
@@ -423,7 +527,8 @@ def get_index(args, sci_name):
             print("Kallisto index file found: {}".format(index_path), flush=True)
             return index_path
         finally:
-            if os.path.exists(lock_path):
+            if os.path.lexists(lock_path):
+                _assert_lock_path_is_regular_file(lock_path)
                 os.remove(lock_path)
 
 
@@ -431,7 +536,7 @@ def run_quant_for_sra(args, metadata, sra_id, sci_name):
     print('')
     print('Species: {}'.format(sci_name))
     print('SRA Run ID: {}'.format(sra_id))
-    sci_name = sci_name.replace(" ", "_")
+    sci_name = _normalize_species_identifier(sci_name)
     index_cache = getattr(args, '_resolved_index_cache', None)
     if isinstance(index_cache, dict) and (sci_name in index_cache):
         index = index_cache[sci_name]
@@ -443,7 +548,7 @@ def run_quant_for_sra(args, metadata, sra_id, sci_name):
 
 def pre_resolve_species_indices(args, tasks):
     # Resolve one index per species once to avoid redundant index lookups across SRA runs.
-    species_list = sorted(set([sci_name.replace(' ', '_') for _, sci_name in tasks]))
+    species_list = sorted(set([_normalize_species_identifier(sci_name) for _, sci_name in tasks]))
     if len(species_list) == 0:
         return {}
     prefetched_fasta_entries = None
@@ -453,6 +558,8 @@ def pre_resolve_species_indices(args, tasks):
             path_fasta_dir = os.path.join(args.out_dir, 'fasta')
         else:
             path_fasta_dir = args.fasta_dir
+        if os.path.exists(path_fasta_dir) and (not os.path.isdir(path_fasta_dir)):
+            raise NotADirectoryError('Fasta path exists but is not a directory: {}'.format(path_fasta_dir))
         prefetched_fasta_entries = list_dir_entries(path_fasta_dir)
         prefetched_fasta_dir = path_fasta_dir
     _store_prefetched_entries(
@@ -465,6 +572,10 @@ def pre_resolve_species_indices(args, tasks):
         index_dir = args.index_dir
     else:
         index_dir = os.path.join(args.out_dir, 'index')
+    if os.path.exists(index_dir) and (not os.path.isdir(index_dir)):
+        raise NotADirectoryError('Index path exists but is not a directory: {}'.format(index_dir))
+    if (not os.path.exists(index_dir)) and args.build_index:
+        os.makedirs(index_dir, exist_ok=True)
     prefetched_index_entries = list_dir_entries(index_dir)
     _store_prefetched_entries(
         args=args,
@@ -473,9 +584,9 @@ def pre_resolve_species_indices(args, tasks):
         path_dir=index_dir,
     )
     print('Resolving kallisto index for {:,} species.'.format(len(species_list)), flush=True)
-    requested_jobs = getattr(args, 'jobs', 1)
-    if requested_jobs is None:
-        requested_jobs = 1
+    requested_jobs = getattr(args, 'internal_jobs', 'auto')
+    if is_auto_parallel_option(requested_jobs):
+        requested_jobs = resolve_detected_cpu_count()
     try:
         max_workers = min(max(1, int(requested_jobs)), len(species_list))
     except (TypeError, ValueError):
@@ -519,25 +630,75 @@ def prefetch_getfastq_run_files(args, tasks):
         run_dir = os.path.join(getfastq_root, run_id)
         try:
             with os.scandir(run_dir) as run_entries:
-                prefetched[run_id] = {run_entry.name for run_entry in run_entries}
+                prefetched[run_id] = {
+                    run_entry.name
+                    for run_entry in run_entries
+                    if run_entry.is_file()
+                }
         except (FileNotFoundError, NotADirectoryError):
             continue
     return prefetched
 
 
+def build_quant_tasks(metadata):
+    required_columns = ['run', 'scientific_name']
+    missing_columns = [col for col in required_columns if col not in metadata.df.columns]
+    if len(missing_columns) > 0:
+        raise ValueError('Missing required metadata column(s) for quant: {}'.format(', '.join(missing_columns)))
+    runs = metadata.df['run'].fillna('').astype(str).str.strip()
+    species = metadata.df['scientific_name'].fillna('').astype(str).str.strip()
+    metadata.df['run'] = runs
+    metadata.df['scientific_name'] = species
+    missing_species_runs = []
+    missing_run_count = 0
+    duplicate_runs = []
+    seen_runs = set()
+    tasks = []
+    for run_id, sci_name in zip(runs.tolist(), species.tolist()):
+        if run_id == '':
+            missing_run_count += 1
+            continue
+        if sci_name == '':
+            missing_species_runs.append(run_id)
+            continue
+        if run_id in seen_runs:
+            duplicate_runs.append(run_id)
+            continue
+        seen_runs.add(run_id)
+        tasks.append((run_id, sci_name))
+    if missing_run_count > 0:
+        raise ValueError('Missing run ID in metadata for {:,} row(s).'.format(missing_run_count))
+    if len(missing_species_runs) > 0:
+        raise ValueError('Missing scientific_name in metadata for run(s): {}'.format(', '.join(missing_species_runs)))
+    if len(duplicate_runs) > 0:
+        duplicate_runs = list(dict.fromkeys(duplicate_runs))
+        raise ValueError('Duplicate run ID in metadata for run(s): {}'.format(', '.join(duplicate_runs)))
+    if len(tasks) == 0:
+        raise ValueError('No valid run/scientific_name entries were found in metadata.')
+    return tasks
+
+
 def quant_main(args):
     threads, jobs, _ = resolve_thread_worker_allocation(
-        requested_threads=getattr(args, 'threads', 1),
-        requested_workers=getattr(args, 'jobs', 1),
-        cpu_budget=getattr(args, 'cpu_budget', 0),
-        worker_option_name='jobs',
+        requested_threads=getattr(args, 'threads', 'auto'),
+        requested_workers=getattr(args, 'internal_jobs', 'auto'),
+        internal_cpu_budget=getattr(args, 'internal_cpu_budget', 'auto'),
+        worker_option_name='internal_jobs',
         context='quant:',
+        disable_workers=(getattr(args, 'batch', None) is not None),
     )
     args.threads = threads
-    args.jobs = jobs
+    args.internal_jobs = jobs
+    out_dir = os.path.realpath(args.out_dir)
+    if os.path.exists(out_dir) and (not os.path.isdir(out_dir)):
+        raise NotADirectoryError('Output path exists but is not a directory: {}'.format(out_dir))
+    quant_dir = os.path.join(out_dir, 'quant')
+    if os.path.exists(quant_dir) and (not os.path.isdir(quant_dir)):
+        raise NotADirectoryError('Quant path exists but is not a directory: {}'.format(quant_dir))
+    args.out_dir = out_dir
     check_kallisto_dependency()
     metadata = load_metadata(args)
-    tasks = list(zip(metadata.df['run'].tolist(), metadata.df['scientific_name'].tolist()))
+    tasks = build_quant_tasks(metadata)
     setattr(args, '_prefetched_getfastq_run_files', prefetch_getfastq_run_files(args, tasks))
     setattr(args, '_resolved_index_cache', pre_resolve_species_indices(args, tasks))
     if (jobs == 1) or (len(tasks) <= 1):

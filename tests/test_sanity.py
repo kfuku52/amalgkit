@@ -2,8 +2,9 @@ import os
 import pytest
 import pandas
 import numpy as np
+from types import SimpleNamespace
 
-from amalgkit.sanity import list_duplicates, parse_metadata, check_quant_output, check_quant_index, check_getfastq_outputs
+from amalgkit.sanity import list_duplicates, parse_metadata, check_quant_output, check_quant_index, check_getfastq_outputs, sanity_main
 from amalgkit.util import Metadata
 
 
@@ -47,6 +48,63 @@ class TestParseMetadata:
         class Args:
             metadata = 'metadata.tsv'
         with pytest.raises(ValueError):
+            parse_metadata(Args(), m)
+
+    def test_raises_on_missing_run_ids(self):
+        data = {
+            'scientific_name': ['Sp1', 'Sp1', 'Sp1'],
+            'run': ['SRR001', np.nan, '  '],
+            'exclusion': ['no', 'no', 'no'],
+        }
+        m = Metadata.from_DataFrame(pandas.DataFrame(data))
+
+        class Args:
+            metadata = 'metadata.tsv'
+
+        with pytest.raises(ValueError, match='without Run ID'):
+            parse_metadata(Args(), m)
+
+    def test_ignores_blank_scientific_names(self):
+        data = {
+            'scientific_name': ['Sp1', '', np.nan],
+            'run': ['SRR001', 'SRR002', 'SRR003'],
+            'exclusion': ['no', 'no', 'no'],
+        }
+        m = Metadata.from_DataFrame(pandas.DataFrame(data))
+
+        class Args:
+            metadata = 'metadata.tsv'
+
+        uni_species, sra_ids = parse_metadata(Args(), m)
+        assert uni_species.tolist() == ['Sp1']
+        assert sra_ids.tolist() == ['SRR001', 'SRR002', 'SRR003']
+
+    def test_raises_when_scientific_name_column_missing(self):
+        data = {
+            'run': ['SRR001'],
+            'exclusion': ['no'],
+        }
+        m = Metadata.from_DataFrame(pandas.DataFrame(data))
+        m.df = m.df.drop(columns=['scientific_name'])
+
+        class Args:
+            metadata = 'metadata.tsv'
+
+        with pytest.raises(ValueError, match='Missing required metadata column\\(s\\): scientific_name'):
+            parse_metadata(Args(), m)
+
+    def test_raises_when_run_column_missing(self):
+        data = {
+            'scientific_name': ['Sp1'],
+            'exclusion': ['no'],
+        }
+        m = Metadata.from_DataFrame(pandas.DataFrame(data))
+        m.df = m.df.drop(columns=['run'])
+
+        class Args:
+            metadata = 'metadata.tsv'
+
+        with pytest.raises(ValueError, match='Missing required metadata column\\(s\\): run'):
             parse_metadata(Args(), m)
 
 
@@ -115,6 +173,22 @@ class TestCheckQuantOutput:
         sra_dir = quant_dir / 'SRR001'
         sra_dir.mkdir(parents=True)
         (sra_dir / 'SRR001_abundance.tsv').write_text('data')
+        output_dir = tmp_path / 'sanity'
+        output_dir.mkdir()
+        sra_ids = pandas.Series(['SRR001'])
+        avail, unavail = check_quant_output(Args(), sra_ids, str(output_dir))
+        assert avail == []
+        assert unavail == ['SRR001']
+
+    def test_directory_named_quant_output_file_is_ignored(self, tmp_path):
+        class Args:
+            out_dir = str(tmp_path)
+            metadata = 'metadata.tsv'
+        quant_dir = tmp_path / 'quant'
+        sra_dir = quant_dir / 'SRR001'
+        sra_dir.mkdir(parents=True)
+        (sra_dir / 'SRR001_abundance.tsv').mkdir()
+        (sra_dir / 'SRR001_run_info.json').mkdir()
         output_dir = tmp_path / 'sanity'
         output_dir.mkdir()
         sra_ids = pandas.Series(['SRR001'])
@@ -201,6 +275,35 @@ class TestCheckQuantOutput:
         assert 'Per-run logs suppressed for 2 runs' in stdout
         assert 'Looking for SRR001' not in stdout
 
+    def test_ignores_missing_run_ids(self, tmp_path):
+        class Args:
+            out_dir = str(tmp_path)
+            metadata = 'metadata.tsv'
+
+        output_dir = tmp_path / 'sanity'
+        output_dir.mkdir()
+        sra_ids = pandas.Series(['SRR001', np.nan, '  '])
+
+        avail, unavail = check_quant_output(Args(), sra_ids, str(output_dir))
+
+        assert avail == []
+        assert unavail == ['SRR001']
+
+    def test_creates_missing_output_dir_for_unavailable_report(self, tmp_path):
+        class Args:
+            out_dir = str(tmp_path)
+            metadata = 'metadata.tsv'
+
+        sra_ids = pandas.Series(['SRR001'])
+        output_dir = tmp_path / 'sanity'
+
+        avail, unavail = check_quant_output(Args(), sra_ids, str(output_dir))
+
+        assert avail == []
+        assert unavail == ['SRR001']
+        assert output_dir.exists()
+        assert (output_dir / 'SRA_IDs_without_quant.txt').exists()
+
 
 # ---------------------------------------------------------------------------
 # check_getfastq_outputs (filesystem checks)
@@ -232,6 +335,23 @@ class TestCheckGetfastqOutputs:
             metadata = 'metadata.tsv'
 
         (tmp_path / 'getfastq' / 'SRR001').mkdir(parents=True)
+        output_dir = tmp_path / 'sanity'
+        output_dir.mkdir()
+        sra_ids = pandas.Series(['SRR001'])
+        avail, unavail = check_getfastq_outputs(Args(), sra_ids, sample_metadata, str(output_dir))
+        assert avail == []
+        assert unavail == ['SRR001']
+
+    def test_directory_named_fastq_file_is_ignored(self, tmp_path, sample_metadata):
+        class Args:
+            out_dir = str(tmp_path)
+            getfastq_dir = None
+            metadata = 'metadata.tsv'
+
+        sra_dir = tmp_path / 'getfastq' / 'SRR001'
+        sra_dir.mkdir(parents=True)
+        (sra_dir / 'SRR001_1.fastq.gz').mkdir()
+        (sra_dir / 'SRR001_2.fastq.gz').mkdir()
         output_dir = tmp_path / 'sanity'
         output_dir.mkdir()
         sra_ids = pandas.Series(['SRR001'])
@@ -291,6 +411,92 @@ class TestCheckGetfastqOutputs:
         assert 'Per-run logs suppressed for 2 runs' in stdout
         assert 'Looking for SRR001' not in stdout
 
+    def test_ignores_missing_run_ids(self, tmp_path, sample_metadata):
+        class Args:
+            out_dir = str(tmp_path)
+            getfastq_dir = None
+            metadata = 'metadata.tsv'
+
+        output_dir = tmp_path / 'sanity'
+        output_dir.mkdir()
+        sra_ids = pandas.Series(['SRR001', np.nan, ''])
+
+        avail, unavail = check_getfastq_outputs(Args(), sra_ids, sample_metadata, str(output_dir))
+
+        assert avail == []
+        assert unavail == ['SRR001']
+
+    def test_handles_metadata_run_whitespace_without_crashing(self, tmp_path):
+        class Args:
+            out_dir = str(tmp_path)
+            getfastq_dir = None
+            metadata = 'metadata.tsv'
+            quiet = True
+            verbose_runs = 0
+
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'scientific_name': ['sp1'],
+            'run': [' SRR001 '],
+            'lib_layout': ['single'],
+            'total_spots': [1],
+            'spot_length': [100],
+            'total_bases': [100],
+            'exclusion': ['no'],
+        }))
+        getfastq_dir = tmp_path / 'getfastq' / 'SRR001'
+        getfastq_dir.mkdir(parents=True)
+        output_dir = tmp_path / 'sanity'
+        output_dir.mkdir()
+
+        avail, unavail = check_getfastq_outputs(Args(), metadata.df['run'], metadata, str(output_dir))
+
+        assert avail == []
+        assert unavail == ['SRR001']
+
+    def test_metadata_run_whitespace_detects_existing_output(self, tmp_path):
+        class Args:
+            out_dir = str(tmp_path)
+            getfastq_dir = None
+            metadata = 'metadata.tsv'
+            quiet = True
+            verbose_runs = 0
+
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'scientific_name': ['sp1'],
+            'run': [' SRR001 '],
+            'lib_layout': ['single'],
+            'total_spots': [1],
+            'spot_length': [100],
+            'total_bases': [100],
+            'exclusion': ['no'],
+        }))
+        getfastq_dir = tmp_path / 'getfastq' / 'SRR001'
+        getfastq_dir.mkdir(parents=True)
+        (getfastq_dir / 'SRR001.fastq.gz').write_text('data')
+        output_dir = tmp_path / 'sanity'
+        output_dir.mkdir()
+
+        avail, unavail = check_getfastq_outputs(Args(), metadata.df['run'], metadata, str(output_dir))
+
+        assert avail == ['SRR001']
+        assert unavail == []
+
+    def test_creates_missing_output_dir_for_getfastq_unavailable_report(self, tmp_path, sample_metadata):
+        class Args:
+            out_dir = str(tmp_path)
+            getfastq_dir = None
+            metadata = 'metadata.tsv'
+
+        sra_ids = pandas.Series(['SRR001'])
+        output_dir = tmp_path / 'sanity'
+
+        avail, unavail = check_getfastq_outputs(Args(), sra_ids, sample_metadata, str(output_dir))
+
+        assert avail == []
+        assert unavail == ['SRR001']
+        assert output_dir.exists()
+        assert (output_dir / 'SRA_IDs_without_fastq.txt').exists()
+
 
 # ---------------------------------------------------------------------------
 # check_quant_index (issue #72: subspecies fallback)
@@ -342,8 +548,23 @@ class TestCheckQuantIndex:
             Args(), np.array(['Danio rerio']), str(output_dir))
         assert 'Danio rerio' in unavail
 
-    def test_prefix_match_with_suffix_filename(self, tmp_path):
-        """Prefix search should detect index files with extra suffixes."""
+    def test_index_directory_named_idx_is_ignored(self, tmp_path):
+        class Args:
+            out_dir = str(tmp_path)
+            index_dir = None
+            metadata = 'metadata.tsv'
+        index_dir = tmp_path / 'index'
+        index_dir.mkdir()
+        (index_dir / 'Homo_sapiens.idx').mkdir()
+        output_dir = tmp_path / 'sanity'
+        output_dir.mkdir()
+        avail, unavail = check_quant_index(
+            Args(), np.array(['Homo sapiens']), str(output_dir))
+        assert avail == []
+        assert unavail == ['Homo sapiens']
+
+    def test_marks_species_unavailable_when_multiple_index_files_match_prefix(self, tmp_path):
+        """Ambiguous prefix matches should be treated as unavailable."""
         class Args:
             out_dir = str(tmp_path)
             index_dir = None
@@ -356,8 +577,23 @@ class TestCheckQuantIndex:
         output_dir.mkdir()
         avail, unavail = check_quant_index(
             Args(), np.array(['Homo sapiens']), str(output_dir))
-        assert 'Homo sapiens' in avail
-        assert unavail == []
+        assert avail == []
+        assert unavail == ['Homo sapiens']
+
+    def test_does_not_match_similar_species_prefix(self, tmp_path):
+        class Args:
+            out_dir = str(tmp_path)
+            index_dir = None
+            metadata = 'metadata.tsv'
+        index_dir = tmp_path / 'index'
+        index_dir.mkdir()
+        (index_dir / 'Homo_sapiens2.idx').write_text('')
+        output_dir = tmp_path / 'sanity'
+        output_dir.mkdir()
+        avail, unavail = check_quant_index(
+            Args(), np.array(['Homo sapiens']), str(output_dir))
+        assert avail == []
+        assert unavail == ['Homo sapiens']
 
     def test_index_dir_file_path_does_not_crash(self, tmp_path):
         """If --index_dir points to a file, check should not crash."""
@@ -371,4 +607,92 @@ class TestCheckQuantIndex:
         avail, unavail = check_quant_index(
             Args(), np.array(['Homo sapiens']), str(output_dir))
         assert avail == []
+        assert unavail == ['Homo sapiens']
+
+    def test_missing_index_dir_marks_all_species_unavailable(self, tmp_path):
+        class Args:
+            out_dir = str(tmp_path)
+            index_dir = None
+            metadata = 'metadata.tsv'
+        output_dir = tmp_path / 'sanity'
+        output_dir.mkdir()
+        avail, unavail = check_quant_index(
+            Args(), np.array(['Homo sapiens', 'Mus musculus']), str(output_dir))
+        assert avail == []
+        assert unavail == ['Homo sapiens', 'Mus musculus']
+        report = output_dir / 'species_without_index.txt'
+        assert report.exists()
+
+    def test_species_with_dot_matches_quant_style_index_name(self, tmp_path):
+        class Args:
+            out_dir = str(tmp_path)
+            index_dir = None
+            metadata = 'metadata.tsv'
+        index_dir = tmp_path / 'index'
+        index_dir.mkdir()
+        (index_dir / 'Candidatus_sp._X.idx').write_text('')
+        output_dir = tmp_path / 'sanity'
+        output_dir.mkdir()
+
+        avail, unavail = check_quant_index(
+            Args(), np.array(['Candidatus sp. X']), str(output_dir))
+
+        assert avail == ['Candidatus sp. X']
         assert unavail == []
+
+    def test_species_with_redundant_spaces_uses_normalized_fallback_prefix(self, tmp_path):
+        class Args:
+            out_dir = str(tmp_path)
+            index_dir = None
+            metadata = 'metadata.tsv'
+        index_dir = tmp_path / 'index'
+        index_dir.mkdir()
+        (index_dir / 'Canis_lupus.idx').write_text('')
+        output_dir = tmp_path / 'sanity'
+        output_dir.mkdir()
+
+        avail, unavail = check_quant_index(
+            Args(), np.array(['Canis   lupus familiaris']), str(output_dir))
+
+        assert avail == ['Canis   lupus familiaris']
+        assert unavail == []
+
+
+class TestSanityMain:
+    def test_rejects_out_dir_file_path(self, tmp_path):
+        out_path = tmp_path / 'out_path'
+        out_path.write_text('not a directory')
+
+        class Args:
+            out_dir = str(out_path)
+            metadata = 'metadata.tsv'
+            all = False
+            getfastq = False
+            index = False
+            quant = False
+
+        with pytest.raises(NotADirectoryError, match='Output path exists but is not a directory'):
+            sanity_main(Args())
+
+    def test_rejects_sanity_output_file_path(self, tmp_path, monkeypatch):
+        out_dir = tmp_path / 'out'
+        out_dir.mkdir()
+        (out_dir / 'sanity').write_text('not a directory')
+        args = SimpleNamespace(
+            out_dir=str(out_dir),
+            metadata='metadata.tsv',
+            all=False,
+            getfastq=False,
+            index=False,
+            quant=False,
+        )
+
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'scientific_name': ['Sp1'],
+            'run': ['SRR001'],
+            'exclusion': ['no'],
+        }))
+        monkeypatch.setattr('amalgkit.sanity.load_metadata', lambda _args: metadata)
+
+        with pytest.raises(NotADirectoryError, match='Sanity output path exists but is not a directory'):
+            sanity_main(args)

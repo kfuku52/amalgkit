@@ -65,6 +65,40 @@ class TestDatasetExtract:
 
         assert existing_fasta.read_text() == 'FA'
 
+    def test_extract_dataset_rejects_output_path_that_is_file(self, tmp_path, monkeypatch):
+        _prepare_fake_dataset(tmp_path, monkeypatch)
+        out_file = tmp_path / 'out_file'
+        out_file.write_text('x')
+
+        with pytest.raises(NotADirectoryError, match='not a directory'):
+            extract_dataset(name='toy', out_dir=str(out_file), overwrite=False)
+
+    def test_extract_dataset_rejects_destination_entry_that_is_directory(self, tmp_path, monkeypatch):
+        _prepare_fake_dataset(tmp_path, monkeypatch)
+        out_dir = tmp_path / 'out'
+        bad_dst = out_dir / 'fasta' / 'toy.fa.gz'
+        bad_dst.mkdir(parents=True)
+
+        with pytest.raises(NotADirectoryError, match='not a file'):
+            extract_dataset(name='toy', out_dir=str(out_dir), overwrite=False)
+
+    def test_extract_dataset_raises_when_source_file_missing(self, tmp_path, monkeypatch):
+        _prepare_fake_dataset(tmp_path, monkeypatch)
+        dataset_module.DATASETS['toy']['files']['config'].append('missing.config')
+        out_dir = tmp_path / 'out'
+
+        with pytest.raises(FileNotFoundError, match='Dataset source file\\(s\\) not found'):
+            extract_dataset(name='toy', out_dir=str(out_dir), overwrite=False)
+
+    def test_extract_dataset_raises_when_source_entry_is_directory(self, tmp_path, monkeypatch):
+        source_dir = _prepare_fake_dataset(tmp_path, monkeypatch)
+        (source_dir / 'not_a_file').mkdir()
+        dataset_module.DATASETS['toy']['files']['config'].append('not_a_file')
+        out_dir = tmp_path / 'out'
+
+        with pytest.raises(FileNotFoundError, match='Dataset source file\\(s\\) not found'):
+            extract_dataset(name='toy', out_dir=str(out_dir), overwrite=False)
+
 
 class TestDatasetValidation:
     def test_validate_dataset_name_unknown_exits(self):

@@ -1,4 +1,5 @@
 import numpy as np
+import re
 from amalgkit.util import *
 
 
@@ -25,7 +26,11 @@ def _scan_target_run_dirs(root_path, target_runs):
                     continue
                 try:
                     with os.scandir(entry.path) as run_entries:
-                        run_files_map[run_id] = {run_entry.name for run_entry in run_entries}
+                        run_files_map[run_id] = {
+                            run_entry.name
+                            for run_entry in run_entries
+                            if run_entry.is_file()
+                        }
                 except (FileNotFoundError, NotADirectoryError):
                     pass
     except FileNotFoundError:
@@ -33,13 +38,28 @@ def _scan_target_run_dirs(root_path, target_runs):
     return run_files_map, non_dir_runs
 
 def _normalize_species_prefix(species):
-    return species.replace(" ", "_").replace(".", "")
+    normalized = re.sub(r'\s+', '_', str(species).strip())
+    normalized = re.sub(r'_+', '_', normalized)
+    return normalized
+
+
+def _get_species_prefix_candidates(species_or_prefix):
+    prefix = str(species_or_prefix).strip()
+    if prefix == '':
+        return []
+    normalized = _normalize_species_prefix(prefix)
+    candidates = [normalized]
+    no_dot = normalized.replace(".", "")
+    if no_dot != normalized:
+        candidates.append(no_dot)
+    # Preserve order while de-duplicating.
+    return list(dict.fromkeys(candidates))
 
 def _get_species_fallback_prefix(species):
-    parts = species.split(" ")
+    parts = str(species).strip().split()
     if len(parts) <= 2:
         return None
-    return _normalize_species_prefix(parts[0] + " " + parts[1])
+    return _normalize_species_prefix(' '.join(parts[0:2]))
 
 def _should_log_per_run(args, num_runs):
     if bool(getattr(args, 'quiet', False)):
@@ -62,11 +82,43 @@ def _print_run_log_mode(args, num_runs):
 def _write_unavailable_items(output_dir, filename, item_ids, label):
     if not item_ids:
         return
+    if os.path.exists(output_dir) and (not os.path.isdir(output_dir)):
+        raise NotADirectoryError('Sanity output path exists but is not a directory: {}'.format(output_dir))
+    os.makedirs(output_dir, exist_ok=True)
     outpath = os.path.join(output_dir, filename)
     print("writing {} to: {}".format(label, outpath))
     with open(outpath, "w") as f:
         for item_id in item_ids:
             f.write(item_id + "\n")
+
+
+def _normalize_sra_ids(sra_ids):
+    normalized = []
+    seen = set()
+    num_dropped = 0
+    for sra_id in list(sra_ids):
+        if sra_id is None or pandas.isna(sra_id):
+            num_dropped += 1
+            continue
+        normalized_id = str(sra_id).strip()
+        if normalized_id == '':
+            num_dropped += 1
+            continue
+        if normalized_id in seen:
+            continue
+        seen.add(normalized_id)
+        normalized.append(normalized_id)
+    return normalized, num_dropped
+
+def _normalize_metadata_run_column(metadata):
+    if 'run' not in metadata.df.columns:
+        return
+    metadata.df.loc[:, 'run'] = (
+        metadata.df.loc[:, 'run']
+        .fillna('')
+        .astype(str)
+        .str.strip()
+    )
 
 def _prepare_run_output_scan(args, root_path, sra_ids, found_msg, missing_msg):
     if not os.path.exists(root_path):
@@ -103,7 +155,12 @@ def _check_single_getfastq_run(args, sra_id, metadata, getfastq_path, run_files_
             _print_getfastq_missing_output_message(args, sra_id)
         return False
 
-    sra_stat = get_sra_stat(sra_id, metadata)
+    try:
+        sra_stat = get_sra_stat(sra_id, metadata)
+    except AssertionError as exc:
+        if verbose_run_logs:
+            print('Skipping {} due to metadata inconsistency: {}'.format(sra_id, exc))
+        return False
     try:
         ext = get_newest_intermediate_file_extension(sra_stat, sra_path, files=run_files)
     except FileNotFoundError:
@@ -118,8 +175,8 @@ def _check_single_getfastq_run(args, sra_id, metadata, getfastq_path, run_files_
     if verbose_run_logs and (ext != '.safely_removed'):
         files = sorted([
             os.path.join(sra_path, f)
-            for f in run_files
-            if f.startswith(sra_id) and f.endswith(ext)
+            for f in find_run_prefixed_entries(run_files, sra_id)
+            if f.endswith(ext)
         ])
         print("Found:", files)
     return True
@@ -127,8 +184,15 @@ def _check_single_getfastq_run(args, sra_id, metadata, getfastq_path, run_files_
 
 def parse_metadata(args, metadata):
     print("Checking essential entries from metadata file.")
-    species = metadata.df.loc[:, 'scientific_name']
-    uni_species = np.unique(species)
+    required_columns = ['scientific_name', 'run']
+    missing_columns = [col for col in required_columns if col not in metadata.df.columns]
+    if len(missing_columns) > 0:
+        raise ValueError(
+            'Missing required metadata column(s): {}'.format(', '.join(missing_columns))
+        )
+    species = metadata.df.loc[:, 'scientific_name'].fillna('').astype(str).str.strip()
+    species = species.loc[species != '']
+    uni_species = np.unique(species.to_numpy(dtype=str))
     if len(uni_species):
         print(len(uni_species), " species detected:")
         print(uni_species)
@@ -136,14 +200,23 @@ def parse_metadata(args, metadata):
         txt = "{} species detected. Please check if --metadata ({}) has a 'scientific_name' column."
         raise ValueError(txt.format(len(uni_species), args.metadata))
 
-    sra_ids = metadata.df.loc[:, 'run']
-    uni_sra_ids = np.unique(sra_ids)
+    sra_ids = metadata.df.loc[:, 'run'].fillna('').astype(str).str.strip()
+    is_missing_run = (sra_ids == '')
+    if is_missing_run.any():
+        raise ValueError(
+            'Found {} metadata entr{} without Run ID in --metadata ({}).'.format(
+                int(is_missing_run.sum()),
+                'y' if int(is_missing_run.sum()) == 1 else 'ies',
+                args.metadata,
+            )
+        )
+    uni_sra_ids = np.unique(sra_ids.to_numpy(dtype=str))
     if len(sra_ids):
         print(len(uni_sra_ids), " SRA runs detected:")
         print(uni_sra_ids)
         # check for duplicate runs
         if len(sra_ids) > len(uni_sra_ids):
-            dupes = list_duplicates(sra_ids)
+            dupes = list_duplicates(sra_ids.tolist())
             raise ValueError(
                 "Duplicate SRA IDs detected, where IDs should be unique. Please check these entries: {}".format(dupes)
             )
@@ -155,6 +228,15 @@ def parse_metadata(args, metadata):
 
 def check_getfastq_outputs(args, sra_ids, metadata, output_dir):
     print("checking for getfastq outputs: ")
+    _normalize_metadata_run_column(metadata)
+    sra_ids, num_dropped = _normalize_sra_ids(sra_ids)
+    if num_dropped > 0:
+        print('Ignored {:,} metadata run entr{} with missing Run ID.'.format(
+            num_dropped,
+            'y' if num_dropped == 1 else 'ies',
+        ))
+    if len(sra_ids) == 0:
+        raise ValueError('No valid Run IDs were found while checking getfastq outputs.')
     if args.getfastq_dir:
         getfastq_path = args.getfastq_dir
     else:
@@ -204,18 +286,24 @@ def check_getfastq_outputs(args, sra_ids, metadata, output_dir):
     return data_available, data_unavailable
 
 def _find_index_files(index_entries, index_dir_path, prefix):
-    matched = find_prefixed_entries(index_entries, prefix)
-    return [os.path.join(index_dir_path, entry) for entry in matched]
+    matched = find_species_prefixed_entries(index_entries, prefix, entries_sorted=True)
+    return [
+        os.path.join(index_dir_path, entry)
+        for entry in matched
+        if os.path.isfile(os.path.join(index_dir_path, entry))
+    ]
 
 def _resolve_species_index_files(species, index_entries, index_dir_path):
-    sci_name = _normalize_species_prefix(species)
+    candidates = _get_species_prefix_candidates(species)
+    sci_name = candidates[0]
     index_path = os.path.join(index_dir_path, sci_name + "*")
     print("\n")
     print("Looking for index file {} for species {}".format(index_path, species))
-    index_files = _find_index_files(index_entries, index_dir_path, sci_name)
-    if index_files:
-        print("Found ", index_files, "!")
-        return index_files
+    for candidate in candidates:
+        index_files = _find_index_files(index_entries, index_dir_path, candidate)
+        if index_files:
+            print("Found ", index_files, "!")
+            return index_files
 
     print("could not find anything in", index_path)
     # Deprecate subspecies or variants and look again
@@ -225,12 +313,14 @@ def _resolve_species_index_files(species, index_entries, index_dir_path):
         print("Could not find any index files for ", species)
         return []
     print("Ignoring subspecies.")
-    index_path = os.path.join(index_dir_path, fallback_prefix + "*")
+    fallback_candidates = _get_species_prefix_candidates(fallback_prefix)
+    index_path = os.path.join(index_dir_path, fallback_candidates[0] + "*")
     print("Looking for {}".format(index_path))
-    index_files = _find_index_files(index_entries, index_dir_path, fallback_prefix)
-    if index_files:
-        print("Found ", index_files, "!")
-        return index_files
+    for candidate in fallback_candidates:
+        index_files = _find_index_files(index_entries, index_dir_path, candidate)
+        if index_files:
+            print("Found ", index_files, "!")
+            return index_files
     print("Could not find any index files for ", species)
     return []
 
@@ -273,6 +363,13 @@ def check_quant_index(args, uni_species, output_dir):
         if not os.path.isdir(index_dir_path):
             print("Could not find index directory ", index_dir_path, " . Did you provide the correct Path?")
             print('Path exists but is not a directory: {}'.format(index_dir_path))
+            index_unavailable = list(uni_species)
+            _write_unavailable_items(
+                output_dir=output_dir,
+                filename="species_without_index.txt",
+                item_ids=index_unavailable,
+                label="species without index",
+            )
             return index_available, index_unavailable
         index_entries = sorted(os.listdir(index_dir_path))
         for species in uni_species:
@@ -281,13 +378,19 @@ def check_quant_index(args, uni_species, output_dir):
                 index_entries=index_entries,
                 index_dir_path=index_dir_path,
             )
-            if index_files:
+            if len(index_files) == 1:
                 index_available.append(species)
+            elif len(index_files) > 1:
+                print(
+                    "Multiple possible index files detected for ",
+                    species,
+                    ": ",
+                    index_files,
+                    ". Please keep only one index file per species.",
+                )
+                index_unavailable.append(species)
             else:
                 index_unavailable.append(species)
-            if len(index_files) > 1:
-                print("Multiple possible index files detected for ", species, ": ", index_files,
-                      ". You may have to resolve ambiguity")
 
         if index_unavailable:
             _write_unavailable_items(
@@ -300,12 +403,27 @@ def check_quant_index(args, uni_species, output_dir):
             print("index found for all species in --metadata ({})".format(args.metadata))
     else:
         print("Could not find index directory ", index_dir_path, " . Did you provide the correct Path?")
+        index_unavailable = list(uni_species)
+        _write_unavailable_items(
+            output_dir=output_dir,
+            filename="species_without_index.txt",
+            item_ids=index_unavailable,
+            label="species without index",
+        )
 
     return index_available, index_unavailable
 
 
 def check_quant_output(args, sra_ids, output_dir):
     print("checking for quant outputs: ")
+    sra_ids, num_dropped = _normalize_sra_ids(sra_ids)
+    if num_dropped > 0:
+        print('Ignored {:,} metadata run entr{} with missing Run ID.'.format(
+            num_dropped,
+            'y' if num_dropped == 1 else 'ies',
+        ))
+    if len(sra_ids) == 0:
+        raise ValueError('No valid Run IDs were found while checking quant outputs.')
     quant_path = getattr(args, 'quant_dir', None)
     if quant_path is None:
         quant_path = os.path.join(args.out_dir, "quant")
@@ -351,8 +469,13 @@ def check_quant_output(args, sra_ids, output_dir):
 
 
 def sanity_main(args):
+    out_dir = os.path.realpath(args.out_dir)
+    if os.path.exists(out_dir) and (not os.path.isdir(out_dir)):
+        raise NotADirectoryError('Output path exists but is not a directory: {}'.format(out_dir))
     metadata = load_metadata(args)
-    output_dir = os.path.join(args.out_dir, 'sanity')
+    output_dir = os.path.join(out_dir, 'sanity')
+    if os.path.exists(output_dir) and (not os.path.isdir(output_dir)):
+        raise NotADirectoryError('Sanity output path exists but is not a directory: {}'.format(output_dir))
     os.makedirs(output_dir, exist_ok=True)
     uni_species, sra_ids = parse_metadata(args, metadata)
     if args.getfastq or args.all:

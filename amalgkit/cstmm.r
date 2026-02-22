@@ -27,20 +27,40 @@ source(r_util_path)
 font_size = resolve_plot_font_size(8)
 font_family = resolve_plot_font_family('Helvetica')
 
+normalize_exclusion_values = function(exclusion_values) {
+    normalized = as.character(exclusion_values)
+    normalized[is.na(exclusion_values)] = NA_character_
+    normalized = trimws(normalized)
+    normalized = tolower(normalized)
+    return(normalized)
+}
+
+list_matching_files = function(path_dir, pattern) {
+    items = list.files(path = path_dir, pattern = pattern, full.names = FALSE)
+    if (length(items) == 0) {
+        return(items)
+    }
+    item_paths = file.path(path_dir, items)
+    is_file = file.exists(item_paths) & (!dir.exists(item_paths))
+    return(items[is_file])
+}
+
 get_spp_filled = function(dir_count, df_gc = NA) {
     sciname_dirs = list.dirs(dir_count, full.names = FALSE, recursive = FALSE)
     spp_filled = c()
     for (sciname_dir in sciname_dirs) {
-        count_files = list.files(path = file.path(dir_count, sciname_dir), pattern = ".*est_counts\\.tsv")
+        count_files = list_matching_files(
+            path_dir = file.path(dir_count, sciname_dir),
+            pattern = ".*est_counts\\.tsv$"
+        )
         if (length(count_files) == 1) {
-            spp_filled = c(spp_filled, count_files)
+            # Use species directory names directly so species labels remain stable
+            # even when they contain additional underscores.
+            spp_filled = c(spp_filled, sciname_dir)
         } else {
             warning(paste0('Multiple or no est_counts files were detected for ', sciname_dir, ': ', paste(count_files, collapse = ', ')))
         }
     }
-    spp_filled = sub('_', '|', spp_filled)
-    spp_filled = sub('_.*', '', spp_filled)
-    spp_filled = sub('\\|', '_', spp_filled)
     if ('data.frame' %in% class(df_gc)) {
         is_missing_in_genecount = (!spp_filled %in% colnames(df_gc))
         if (sum(is_missing_in_genecount)) {
@@ -50,12 +70,15 @@ get_spp_filled = function(dir_count, df_gc = NA) {
         }
         spp_filled = spp_filled[!is_missing_in_genecount]
     }
+    if (length(spp_filled) == 0) {
+        stop(paste0('No species with valid *est_counts.tsv files were found under: ', dir_count))
+    }
     return(spp_filled)
 }
 
 read_est_counts = function(dir_count, sp) {
     sciname_path = file.path(dir_count, sp)
-    infile = list.files(path = sciname_path, pattern = ".*est_counts\\.tsv")
+    infile = list_matching_files(path_dir = sciname_path, pattern = ".*est_counts\\.tsv$")
     if (length(infile) > 1) {
         stop(paste0("Multiple *count.tsv files found: ", sp, "\n"))
     } else if (length(infile) == 0) {
@@ -105,7 +128,9 @@ get_df_exp_single_copy_ortholog = function(file_genecount, file_orthogroup_table
         }
         df_sog = merge(df_sog, uncorrected[[sp]], by.x = sp, by.y = "row.names", all.x = TRUE, all.y = FALSE, sort = FALSE)
     }
-    df_sog = df_sog[, -(1:length(spp_filled))]
+    if (length(spp_filled) > 0) {
+        df_sog = df_sog[, -seq_len(length(spp_filled)), drop = FALSE]
+    }
     rownames(df_sog) = rownames(df_singleog)
     return(df_sog)
 }
@@ -128,42 +153,94 @@ get_df_nonzero = function(df_sog, imputation = TRUE) {
 
 create_eff_length_symlink = function(dir_count, dir_cstmm, sp) {
     path_sp = file.path(dir_count, sp)
-    eff_length_files = list.files(path = path_sp, pattern = ".*eff_length\\.tsv")
+    eff_length_files = list_matching_files(path_dir = path_sp, pattern = ".*eff_length\\.tsv$")
     if (length(eff_length_files) == 1) {
         path_target = file.path(path_sp, eff_length_files[1])
         path_link = file.path(dir_cstmm, sp, eff_length_files[1])
         cat('Copying file from', path_target, 'to', path_link, '\n')
         file.copy(from = path_target, to = path_link, overwrite = TRUE)
     } else {
-        warning(paste0('No eff_length.tsv file found: ', path_sp))
+        warning(paste0('Multiple or no eff_length.tsv files found: ', path_sp))
     }
 }
 
 append_tmm_stats_to_metadata = function(df_metadata, cnf_out2) {
-
-    my_fun = function(x) {
-        split_sample_name = strsplit(x, '_')[[1]]
-        run_name = paste(split_sample_name[3:length(split_sample_name)], collapse = '_')
-        return(run_name)
-    }
-
     df_nf = cnf_out2[[2]]
-    df_nf[['sample']] = rownames(df_nf)
-    df_nf[['scientific_name']] = df_nf[['sample']]
-    df_nf[['scientific_name']] = sub('_', 'PLACEHOLDER', df_nf[['scientific_name']])
-    df_nf[['scientific_name']] = sub('_.*', '', df_nf[['scientific_name']])
-    df_nf[['scientific_name']] = sub('PLACEHOLDER', ' ', df_nf[['scientific_name']])
-    df_nf[['run']] = sapply(df_nf[['sample']], function(x) { my_fun(x) })
+    required_cols = c('scientific_name', 'run', 'exclusion')
+    missing_cols = setdiff(required_cols, colnames(df_metadata))
+    if (length(missing_cols) > 0) {
+        stop(paste0('Required metadata columns are missing for cstmm: ', paste(missing_cols, collapse = ', ')))
+    }
+    if (is.null(rownames(df_nf))) {
+        stop('cstmm normalization output does not include sample row names.')
+    }
+    df_nf[['sample']] = as.character(rownames(df_nf))
+    if ('scientific_name' %in% colnames(df_metadata)) {
+        df_metadata[['scientific_name']] = trimws(as.character(df_metadata[['scientific_name']]))
+    }
+    if ('run' %in% colnames(df_metadata)) {
+        df_metadata[['run']] = trimws(as.character(df_metadata[['run']]))
+    }
+    metadata_species_prefixes = trimws(as.character(df_metadata[['scientific_name']]))
+    metadata_species_prefixes = gsub('\\s+', '_', metadata_species_prefixes)
+    metadata_species_prefixes = gsub('_+', '_', metadata_species_prefixes)
+    metadata_species_prefixes = metadata_species_prefixes[metadata_species_prefixes != '']
+    metadata_species_prefixes = unique(metadata_species_prefixes)
+    if (length(metadata_species_prefixes) > 0) {
+        metadata_species_prefixes = metadata_species_prefixes[order(nchar(metadata_species_prefixes), decreasing = TRUE)]
+    }
+    parsed_species = rep(NA_character_, nrow(df_nf))
+    parsed_runs = rep(NA_character_, nrow(df_nf))
+    for (i in seq_len(nrow(df_nf))) {
+        sample_id = df_nf[['sample']][[i]]
+        matched_prefix = NA_character_
+        if (length(metadata_species_prefixes) > 0) {
+            for (species_prefix in metadata_species_prefixes) {
+                if (startsWith(sample_id, paste0(species_prefix, '_'))) {
+                    matched_prefix = species_prefix
+                    break
+                }
+            }
+        }
+        if (!is.na(matched_prefix)) {
+            parsed_species[[i]] = gsub('_', ' ', matched_prefix)
+            parsed_runs[[i]] = substring(sample_id, nchar(matched_prefix) + 2)
+        } else {
+            # Backward-compatible fallback for legacy assumptions (Genus_species_run).
+            parsed_species[[i]] = sub('_', ' ', sub('^([^_]+_[^_]+)_.*$', '\\1', sample_id))
+            parsed_runs[[i]] = sub('^[^_]+_[^_]+_', '', sample_id)
+        }
+    }
+    df_nf[['scientific_name']] = trimws(parsed_species)
+    df_nf[['run']] = trimws(parsed_runs)
+    df_nf[['sample_key']] = paste(df_nf[['scientific_name']], df_nf[['run']], sep = '|||')
+    duplicated_sample_key = duplicated(df_nf[['sample_key']])
+    if (any(duplicated_sample_key)) {
+        duplicated_samples = sort(unique(df_nf[['sample']][duplicated_sample_key]))
+        warning(paste0('Duplicated cstmm sample identifiers were detected; keeping first entries: ',
+                       paste(duplicated_samples, collapse = ', ')))
+        df_nf = df_nf[!duplicated_sample_key, , drop = FALSE]
+    }
     df_nf = df_nf[, c('scientific_name', 'run', 'lib.size', 'norm.factors')]
     colnames(df_nf) = c('scientific_name', 'run', 'tmm_library_size', 'tmm_normalization_factor')
+    df_nf_keys = paste(df_nf[['scientific_name']], df_nf[['run']], sep = '|||')
     out_cols = c(colnames(df_metadata), colnames(df_nf)[3:ncol(df_nf)])
     df_metadata = merge(df_metadata, df_nf, by = c('scientific_name', 'run'), sort = FALSE, all.x = TRUE, all.y = FALSE)
     df_metadata = df_metadata[, out_cols]
-    filled_mapping_rate = df_metadata[['mapping_rate']]
-    filled_mapping_rate[is.na(filled_mapping_rate)] = -999
-    df_metadata[((filled_mapping_rate == 0) & (df_metadata[['exclusion']] == 'no')), 'exclusion'] = 'no_mapping'
-    df_metadata[((!df_metadata[['run']] %in% df_nf[['run']]) & (df_metadata[['exclusion']] == 'no')), 'exclusion'] = 'no_cstmm_output'
-    df_metadata[(is.na(df_metadata[['tmm_normalization_factor']]) & (df_metadata[['exclusion']] == 'no')), 'exclusion'] = 'cstmm_failed'
+    exclusion_norm = normalize_exclusion_values(df_metadata[['exclusion']])
+    is_retained = (!is.na(exclusion_norm)) & (exclusion_norm == 'no')
+    if ('mapping_rate' %in% colnames(df_metadata)) {
+        filled_mapping_rate = df_metadata[['mapping_rate']]
+        filled_mapping_rate[is.na(filled_mapping_rate)] = -999
+        df_metadata[((filled_mapping_rate == 0) & is_retained), 'exclusion'] = 'no_mapping'
+    }
+    exclusion_norm = normalize_exclusion_values(df_metadata[['exclusion']])
+    is_retained = (!is.na(exclusion_norm)) & (exclusion_norm == 'no')
+    metadata_keys = paste(df_metadata[['scientific_name']], df_metadata[['run']], sep = '|||')
+    df_metadata[((!metadata_keys %in% df_nf_keys) & is_retained), 'exclusion'] = 'no_cstmm_output'
+    exclusion_norm = normalize_exclusion_values(df_metadata[['exclusion']])
+    is_retained = (!is.na(exclusion_norm)) & (exclusion_norm == 'no')
+    df_metadata[(is.na(df_metadata[['tmm_normalization_factor']]) & is_retained), 'exclusion'] = 'cstmm_failed'
     return(df_metadata)
 }
 
@@ -171,7 +248,20 @@ plot_norm_factor_histogram = function(df_metadata, font_size = 8) {
     font_size = resolve_plot_font_size(font_size)
     font_family = resolve_plot_font_family('Helvetica')
     tmp = df_metadata[(!is.na(df_metadata[['tmm_normalization_factor']])),]
-    x_limit = max(abs(log2(tmp[['tmm_normalization_factor']])), na.rm = TRUE)
+    if (nrow(tmp) == 0) {
+        cat('No valid TMM normalization factors are available. Skipping normalization-factor histograms.\n')
+        return(NULL)
+    }
+    x_values = log2(tmp[['tmm_normalization_factor']])
+    x_values = x_values[is.finite(x_values)]
+    if (length(x_values) == 0) {
+        cat('No finite TMM normalization factors are available. Skipping normalization-factor histograms.\n')
+        return(NULL)
+    }
+    x_limit = max(abs(x_values), na.rm = TRUE)
+    if ((!is.finite(x_limit)) || (x_limit <= 0)) {
+        x_limit = 1
+    }
     for (fill_by in c('scientific_name', 'sample_group')) {
         g = ggplot2::ggplot(tmp) +
             geom_histogram(aes(x = log2(tmm_normalization_factor), fill = !!rlang::sym(fill_by)), position = "stack", alpha = 0.7, bins = 40) +
@@ -193,7 +283,20 @@ plot_norm_factor_scatter = function(df_metadata, font_size = 8) {
     font_size = resolve_plot_font_size(font_size)
     font_family = resolve_plot_font_family('Helvetica')
     tmp = df_metadata[(!is.na(df_metadata[['tmm_normalization_factor']])),]
-    x_limit = max(abs(log2(tmp[['tmm_normalization_factor']])), na.rm = TRUE)
+    if (nrow(tmp) == 0) {
+        cat('No valid TMM normalization factors are available. Skipping normalization-factor scatter plot.\n')
+        return(NULL)
+    }
+    x_values = log2(tmp[['tmm_normalization_factor']])
+    x_values = x_values[is.finite(x_values)]
+    if (length(x_values) == 0) {
+        cat('No finite TMM normalization factors are available. Skipping normalization-factor scatter plot.\n')
+        return(NULL)
+    }
+    x_limit = max(abs(x_values), na.rm = TRUE)
+    if ((!is.finite(x_limit)) || (x_limit <= 0)) {
+        x_limit = 1
+    }
     g = ggplot2::ggplot(tmp, aes(x = log10(tmm_library_size), y = log2(tmm_normalization_factor), fill = scientific_name, color = sample_group)) +
         geom_point(shape = 21, alpha = 0.7) +
         scale_fill_hue(l = 65) +
@@ -239,7 +342,7 @@ save_mean_expression_boxplot = function(df_nonzero, cnf_out2, uncorrected, corre
     mean_sra_after = c()
     for (sp in names(corrected)) {
         mean_sra_before = c(mean_sra_before, apply(uncorrected[[sp]], 2, function(x) { mean(x, na.rm = TRUE) }))
-        mean_sra_after = c(mean_sra_before, apply(corrected[[sp]], 2, function(x) { mean(x, na.rm = TRUE) }))
+        mean_sra_after = c(mean_sra_after, apply(corrected[[sp]], 2, function(x) { mean(x, na.rm = TRUE) }))
     }
     var_sra_before = round(var(mean_sra_before), digits = 1)
     var_sra_after = round(var(mean_sra_after), digits = 1)
@@ -276,7 +379,7 @@ save_mean_expression_boxplot = function(df_nonzero, cnf_out2, uncorrected, corre
         geom_boxplot(outlier.shape = NA) +
         ylab('Mean count of all genes')
 
-    for (i in 1:length(ps)) {
+    for (i in seq_along(ps)) {
         ps[[i]] = ps[[i]] +
             coord_cartesian(ylim = c(0, ymax)) +
             theme_bw(base_size = font_size, base_family = font_family) +
@@ -303,15 +406,16 @@ save_corrected_output_files = function(uncorrected) {
     corrected = list()
     for (sp in names(uncorrected)) {
         dat = uncorrected[[sp]]
-        df_nf_sp = cnf_out2[[2]][startsWith(rownames(cnf_out2[[2]]), sp),]
-        for (i in 1:length(df_nf_sp[, 1])) {
+        sample_prefix = paste0(sp, '_')
+        df_nf_sp = cnf_out2[[2]][startsWith(rownames(cnf_out2[[2]]), sample_prefix), , drop = FALSE]
+        for (i in seq_len(nrow(df_nf_sp))) {
             SRR = as.character(row.names(df_nf_sp[i,]))
             tmm_normalization_factor = as.double(df_nf_sp[i, "norm.factors"])
             dat[, SRR] = dat[, SRR] / tmm_normalization_factor # manually apply TMM normalization factors
         }
         dat_out = cbind(target_id = rownames(dat), dat)
         rownames(dat_out) = NULL
-        colnames(dat_out) = sub(paste0(sp, '_'), '', colnames(dat_out))
+        colnames(dat_out) = sub(paste0('^', sp, '_'), '', colnames(dat_out))
         dir_cstmm_sp = file.path(dir_cstmm, sp)
         if (!file.exists(dir_cstmm_sp)) {
             dir.create(dir_cstmm_sp)
@@ -327,16 +431,19 @@ save_corrected_output_files = function(uncorrected) {
 }
 
 print_excluded_run_summary = function(df_metadata) {
-    exclusion_reasons = sort(unique(df_metadata[['exclusion']]))
+    exclusion_values = as.character(df_metadata[['exclusion']])
+    exclusion_values[is.na(exclusion_values)] = ''
+    exclusion_values = trimws(exclusion_values)
+    exclusion_values[exclusion_values == ''] = 'NA'
+    exclusion_values_norm = tolower(exclusion_values)
+    num_retained = sum(exclusion_values_norm == 'no')
+    exclusion_reasons = sort(unique(exclusion_values[exclusion_values_norm != 'no']))
     for (reason in exclusion_reasons) {
-        num_run = sum(df_metadata[['exclusion']] == reason)
-        if (reason == 'no') {
-            txt_final = paste0('Number of retained runs (exclusion = "no"): ', num_run, '\n')
-        } else {
-            txt = paste0('Number of excluded runs (exclusion = "', reason, '"): ', num_run, '\n')
-            cat(txt)
-        }
+        num_run = sum(exclusion_values == reason)
+        txt = paste0('Number of excluded runs (exclusion = "', reason, '"): ', num_run, '\n')
+        cat(txt)
     }
+    txt_final = paste0('Number of retained runs (exclusion = "no"): ', num_retained, '\n')
     cat(txt_final)
 }
 
@@ -360,7 +467,7 @@ cnf_out1 = edgeR::calcNormFactors(cnf_in, method = 'TMM', refColumn = NULL)
 x = cnf_out1[[2]][['norm.factors']]
 cat('Round 1: Median TMM normalization factor =', median(x), '\n')
 median_value = sort(x)[ceiling(length(x) / 2)]
-median_index = (1:length(x))[x == median_value]
+median_index = seq_len(length(x))[x == median_value]
 
 cat('Round 2: Performing TMM normalization for output.\n')
 cnf_out2 = edgeR::calcNormFactors(cnf_in, method = 'TMM', refColumn = median_index)

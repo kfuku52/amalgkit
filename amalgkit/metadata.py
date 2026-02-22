@@ -12,20 +12,33 @@ import warnings
 
 from amalgkit.util import *
 
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 
 def merge_xml_chunk(root, chunk):
     # Merge package-set chunks directly to avoid nested container nodes.
-    if (chunk.tag == root.tag) and (len(chunk) > 0):
+    if (chunk.tag == root.tag) and root.tag.endswith('_SET'):
         root.extend(list(chunk))
-    else:
+        return root
+    if root.tag.endswith('_SET'):
         root.append(chunk)
+        return root
+    # If roots are non-container records, wrap them to preserve all entries.
+    container_tag = root.tag + '_SET'
+    wrapped = ET.Element(container_tag)
+    wrapped.append(root)
+    if (chunk.tag == root.tag) and (not chunk.tag.endswith('_SET')):
+        wrapped.append(chunk)
+    elif chunk.tag == container_tag:
+        wrapped.extend(list(chunk))
+    else:
+        wrapped.append(chunk)
+    return wrapped
 
 
 def esearch_sra_with_retry(search_term):
     try:
         sra_handle = Entrez.esearch(db="sra", term=search_term, retmax=10000000)
-    except HTTPError as e:
+    except (HTTPError, URLError) as e:
         print(e, '- Trying Entrez.esearch() again...')
         sra_handle = Entrez.esearch(db="sra", term=search_term, retmax=10000000)
     return Entrez.read(sra_handle)
@@ -35,14 +48,14 @@ def fetch_sra_xml_chunk(record_ids, start, end, retmax, max_retry=10):
     for _ in range(max_retry):
         try:
             handle = Entrez.efetch(db="sra", id=record_ids[start:end], rettype="full", retmode="xml", retmax=retmax)
-        except HTTPError as e:
+        except (HTTPError, URLError) as e:
             sleep_second = 60
             print('{} - Trying Entrez.efetch() again after {:,} seconds...'.format(e, sleep_second), flush=True)
             time.sleep(sleep_second)
             continue
         try:
             return ET.parse(handle).getroot()
-        except Exception:
+        except ET.ParseError:
             print('XML may be truncated. Retrying...', flush=True)
             continue
     raise RuntimeError('Failed to parse Entrez XML chunk after {} retries (records {}-{}).'.format(
@@ -57,7 +70,7 @@ def raise_if_xml_has_error(root):
     error_text = ''.join(error_node.itertext()).strip()
     if error_text != '':
         print(error_text)
-    raise Exception(',Error. found in the xml.')
+    raise RuntimeError('Error found in Entrez XML response.')
 
 
 def fetch_sra_xml(search_term, retmax=1000):
@@ -78,7 +91,7 @@ def fetch_sra_xml(search_term, retmax=1000):
         if root is None:
             root = chunk
         else:
-            merge_xml_chunk(root, chunk)
+            root = merge_xml_chunk(root, chunk)
     elapsed_time = int(time.time() - start_time)
     print('{}: SRA XML retrieval ended.'.format(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
     print('SRA XML retrieval time: {:,.1f} sec'.format(elapsed_time), flush=True)
@@ -90,16 +103,28 @@ def metadata_main(args):
     metadata_dir = os.path.join(args.out_dir, 'metadata')
     metadata_outfile_path = os.path.join(metadata_dir, "metadata.tsv")
     if os.path.exists(metadata_outfile_path):
+        if not os.path.isfile(metadata_outfile_path):
+            raise NotADirectoryError(
+                'Output path exists but is not a file: {}'.format(metadata_outfile_path)
+            )
         if args.redo:
             os.remove(metadata_outfile_path)
         else:
             print('Exiting. Output file already exists (set --redo yes to overwrite): {}'.format(metadata_outfile_path))
             sys.exit(0)
     for path_dir in [args.out_dir, metadata_dir]:
+        if os.path.exists(path_dir) and (not os.path.isdir(path_dir)):
+            raise NotADirectoryError('Output path exists but is not a directory: {}'.format(path_dir))
         if not os.path.exists(path_dir):
             print('Creating directory: {}'.format(path_dir))
         os.makedirs(path_dir, exist_ok=True)
-    search_term = args.search_string
+    search_term_raw = getattr(args, 'search_string', '')
+    if search_term_raw is None:
+        search_term = ''
+    else:
+        search_term = str(search_term_raw).strip()
+    if search_term == '':
+        raise ValueError('--search_string is required.')
     print('Entrez search term:', search_term)
     root = fetch_sra_xml(search_term=search_term)
     metadata = Metadata.from_xml(xml_root=root)
@@ -113,5 +138,5 @@ def metadata_main(args):
     metadata.reorder(omit_misc=False)
     metadata.df.to_csv(metadata_outfile_path, sep="\t", index=False)
     if metadata.df.shape[0]==0:
-        txt = 'No entry was found/survived in the metadata processing. Please reconsider the --search_term specification.\n'
+        txt = 'No entry was found/survived in the metadata processing. Please reconsider the --search_string specification.\n'
         sys.stderr.write(txt)

@@ -18,10 +18,24 @@ source(r_util_path)
 font_size = resolve_plot_font_size(8)
 font_family = resolve_plot_font_family('Helvetica')
 
+normalize_exclusion_values = function(exclusion_values) {
+    normalized = as.character(exclusion_values)
+    normalized[is.na(exclusion_values)] = NA_character_
+    normalized = trimws(normalized)
+    normalized = tolower(normalized)
+    return(normalized)
+}
+
+is_non_excluded_flag = function(exclusion_values) {
+    normalized = normalize_exclusion_values(exclusion_values)
+    return((!is.na(normalized)) & (normalized == 'no'))
+}
+
 df = read.table(file_metadata, sep = '\t', header = TRUE, quote = '', comment.char = '', check.names = FALSE)
-is_excluded = (!df[['exclusion']] == 'no')
+is_non_excluded = is_non_excluded_flag(df[['exclusion']])
+is_excluded = !is_non_excluded
 is_mapping_rate_available = (!is.na(df[['mapping_rate']]))
-cat(sprintf('Number of non-excluded SRA samples: %s\n', formatC(sum(!is_excluded), format = 'd', big.mark = ',')))
+cat(sprintf('Number of non-excluded SRA samples: %s\n', formatC(sum(is_non_excluded), format = 'd', big.mark = ',')))
 cat(sprintf('Number of excluded SRA samples: %s\n', formatC(sum(is_excluded), format = 'd', big.mark = ',')))
 cat(sprintf('Number of SRA samples with available mapping rates: %s\n', formatC(sum(is_mapping_rate_available), format = 'd', big.mark = ',')))
 if ('fastp_duplication_rate' %in% colnames(df)) {
@@ -72,9 +86,9 @@ save_frequency_plot = function(df, value_col, out_path, x_label, font_size = 8, 
         cat(sprintf('%s column not found. Skipping plot generation.\n', value_col))
         return(NULL)
     }
-    is_excluded = (!df[['exclusion']] == 'no')
+    is_non_excluded = is_non_excluded_flag(df[['exclusion']])
     is_available = (!is.na(df[[value_col]]))
-    df2 = df[((!is_excluded) & (is_available)),]
+    df2 = df[(is_non_excluded & is_available), , drop = FALSE]
     cat(sprintf('Number of SRA samples for %s plotting: %s\n', value_col, formatC(nrow(df2), format = 'd', big.mark = ',')))
     if (nrow(df2) == 0) {
         cat(sprintf('No data available for %s. Skipping plot generation.\n', value_col))
@@ -149,7 +163,10 @@ read_est_count_summary = function(file_path) {
     }
     mean_before = vapply(dat_numeric, function(x) mean(x, na.rm = TRUE), numeric(1))
     lib_size = vapply(dat_numeric, function(x) sum(x, na.rm = TRUE), numeric(1))
+    species_tag = basename(dirname(file_path))
+    species_name = gsub('_', ' ', species_tag)
     summary_df = data.frame(
+        scientific_name = rep(species_name, length(sample_cols)),
         run = sample_cols,
         mean_before = as.numeric(mean_before),
         lib_size = as.numeric(lib_size),
@@ -166,7 +183,13 @@ collect_est_count_summaries = function(dir_merge) {
         full.names = TRUE
     ))
     if (length(est_count_files) == 0) {
-        return(data.frame(run = character(0), mean_before = numeric(0), lib_size = numeric(0), stringsAsFactors = FALSE))
+        return(data.frame(
+            scientific_name = character(0),
+            run = character(0),
+            mean_before = numeric(0),
+            lib_size = numeric(0),
+            stringsAsFactors = FALSE
+        ))
     }
     summaries = vector('list', length(est_count_files))
     keep_index = 0
@@ -179,14 +202,21 @@ collect_est_count_summaries = function(dir_merge) {
         summaries[[keep_index]] = tmp
     }
     if (keep_index == 0) {
-        return(data.frame(run = character(0), mean_before = numeric(0), lib_size = numeric(0), stringsAsFactors = FALSE))
+        return(data.frame(
+            scientific_name = character(0),
+            run = character(0),
+            mean_before = numeric(0),
+            lib_size = numeric(0),
+            stringsAsFactors = FALSE
+        ))
     }
     out = do.call(rbind, summaries[seq_len(keep_index)])
-    is_duplicated = duplicated(out[['run']])
+    row_key = paste(out[['scientific_name']], out[['run']], sep = '|||')
+    is_duplicated = duplicated(row_key)
     if (any(is_duplicated)) {
-        duplicated_runs = sort(unique(out[['run']][is_duplicated]))
-        warning(sprintf('Detected duplicated run IDs across est_counts tables; keeping first entries: %s',
-                        paste(duplicated_runs, collapse = ', ')))
+        duplicated_keys = sort(unique(row_key[is_duplicated]))
+        warning(sprintf('Detected duplicated species/run rows across est_counts tables; keeping first entries: %s',
+                        paste(duplicated_keys, collapse = ', ')))
         out = out[!is_duplicated, , drop = FALSE]
     }
     return(out)
@@ -200,7 +230,18 @@ save_mean_expression_boxplot = function(df, dir_merge, font_size = 8) {
         cat('No est_counts tables were found for mean expression plotting. Skipping merge_mean_expression_boxplot.pdf\n')
         return(NULL)
     }
-    if ('run' %in% colnames(df)) {
+    if (all(c('scientific_name', 'run') %in% colnames(df))) {
+        metadata_cols = intersect(c('scientific_name', 'run', 'exclusion'), colnames(df))
+        metadata_df = unique(df[, metadata_cols, drop = FALSE])
+        summary_df = merge(
+            summary_df,
+            metadata_df,
+            by = c('scientific_name', 'run'),
+            sort = FALSE,
+            all.x = TRUE,
+            all.y = FALSE
+        )
+    } else if ('run' %in% colnames(df)) {
         metadata_cols = intersect(c('run', 'exclusion'), colnames(df))
         metadata_df = unique(df[, metadata_cols, drop = FALSE])
         summary_df = merge(summary_df, metadata_df, by = 'run', sort = FALSE, all.x = TRUE, all.y = FALSE)
@@ -208,7 +249,13 @@ save_mean_expression_boxplot = function(df, dir_merge, font_size = 8) {
         summary_df[['exclusion']] = NA_character_
     }
     if ('exclusion' %in% colnames(summary_df)) {
-        is_non_excluded = is.na(summary_df[['exclusion']]) | (summary_df[['exclusion']] == 'no')
+        has_metadata_match = !is.na(summary_df[['exclusion']])
+        if (sum(has_metadata_match) == 0) {
+            cat('No est_counts runs matched metadata rows. Skipping merge_mean_expression_boxplot.pdf\n')
+            return(NULL)
+        }
+        exclusion_norm = normalize_exclusion_values(summary_df[['exclusion']])
+        is_non_excluded = has_metadata_match & (!is.na(exclusion_norm)) & (exclusion_norm == 'no')
         summary_df = summary_df[is_non_excluded, , drop = FALSE]
     }
     cat(sprintf('Number of SRA samples for mean_expression plotting: %s\n',
@@ -297,7 +344,7 @@ insert_axis_breaks = function(values) {
     return(ticks)
 }
 
-df2 = df[((!is_excluded) & (is_mapping_rate_available)),]
+df2 = df[(is_non_excluded & is_mapping_rate_available), , drop = FALSE]
 cat(sprintf('Number of SRA samples for mapping_rate potting: %s\n', formatC(nrow(df2), format = 'd', big.mark = ',')))
 g = ggplot(data = df2)
 g = g + geom_boxplot(aes(x = scientific_name, y = mapping_rate), outlier.size = 0.3)
@@ -316,7 +363,7 @@ plot_width = max(3.6, 0.11 * num_spp)
 out_path = file.path(dir_merge, 'merge_mapping_rate.pdf')
 ggsave(out_path, plot = g, width = plot_width, height = 3.6, units = 'in')
 
-df2 = df[((!is_excluded)),]
+df2 = df[is_non_excluded, , drop = FALSE]
 cat(sprintf('Number of SRA samples for total_spots potting: %s\n', formatC(nrow(df2), format = 'd', big.mark = ',')))
 g = ggplot(data = df2)
 g = g + geom_boxplot(aes(x = scientific_name, y = total_spots), outlier.size = 0.3)
@@ -335,7 +382,7 @@ plot_width = max(3.6, 0.11 * num_spp)
 out_path = file.path(dir_merge, 'merge_total_spots.pdf')
 ggsave(out_path, plot = g, width = plot_width, height = 3.6, units = 'in')
 
-df2 = df[((!is_excluded)),]
+df2 = df[is_non_excluded, , drop = FALSE]
 cat(sprintf('Number of SRA samples for total_bases potting: %s\n', formatC(nrow(df2), format = 'd', big.mark = ',')))
 g = ggplot(data = df2)
 g = g + geom_boxplot(aes(x = scientific_name, y = total_bases), outlier.size = 0.3)
@@ -354,27 +401,34 @@ plot_width = max(3.6, 0.11 * num_spp)
 out_path = file.path(dir_merge, 'merge_total_bases.pdf')
 ggsave(out_path, plot = g, width = plot_width, height = 3.6, units = 'in')
 
-df2 = df[((!is_excluded)),]
+df2 = df[is_non_excluded, , drop = FALSE]
 cat(sprintf('Number of SRA samples for lib_layout potting: %s\n', formatC(nrow(df2), format = 'd', big.mark = ',')))
-data_summary = aggregate(cbind(count = lib_layout) ~ scientific_name + lib_layout, df2, length)
-data_summary[['total']] = ave(data_summary[['count']], data_summary[['scientific_name']], FUN = sum)
-data_summary[['proportion']] = data_summary[['count']] / data_summary[['total']]
-g = ggplot(data_summary, aes(x = scientific_name, y = count, fill = lib_layout))
-g = g + geom_bar(stat = "identity")
-g = g + scale_x_discrete(labels = format_genus_species_label)
-g = g + labs(x = "", y = "Count", fill = "Library layout")
-g = g + theme_bw(base_size = font_size, base_family = font_family)
-g = g + build_standard_ggplot_theme(
-    font_size = font_size,
-    font_family = font_family,
-    x_angle = 90,
-    legend_position = 'bottom',
-    legend_title_blank = TRUE
-)
-num_spp = length(unique(df[['scientific_name']]))
-plot_width = max(3.6, 0.11 * num_spp)
-out_path = file.path(dir_merge, 'merge_library_layout.pdf')
-ggsave(out_path, plot = g, width = plot_width, height = 3.6, units = 'in')
+has_scientific_name = !is.na(df2[['scientific_name']]) & (trimws(as.character(df2[['scientific_name']])) != '')
+has_lib_layout = !is.na(df2[['lib_layout']]) & (trimws(as.character(df2[['lib_layout']])) != '')
+df2_layout = df2[(has_scientific_name & has_lib_layout), , drop = FALSE]
+if (nrow(df2_layout) == 0) {
+    cat('No non-excluded samples with scientific_name/lib_layout values. Skipping merge_library_layout.pdf\n')
+} else {
+    data_summary = aggregate(cbind(count = lib_layout) ~ scientific_name + lib_layout, df2_layout, length)
+    data_summary[['total']] = ave(data_summary[['count']], data_summary[['scientific_name']], FUN = sum)
+    data_summary[['proportion']] = data_summary[['count']] / data_summary[['total']]
+    g = ggplot(data_summary, aes(x = scientific_name, y = count, fill = lib_layout))
+    g = g + geom_bar(stat = "identity")
+    g = g + scale_x_discrete(labels = format_genus_species_label)
+    g = g + labs(x = "", y = "Count", fill = "Library layout")
+    g = g + theme_bw(base_size = font_size, base_family = font_family)
+    g = g + build_standard_ggplot_theme(
+        font_size = font_size,
+        font_family = font_family,
+        x_angle = 90,
+        legend_position = 'bottom',
+        legend_title_blank = TRUE
+    )
+    num_spp = length(unique(df[['scientific_name']]))
+    plot_width = max(3.6, 0.11 * num_spp)
+    out_path = file.path(dir_merge, 'merge_library_layout.pdf')
+    ggsave(out_path, plot = g, width = plot_width, height = 3.6, units = 'in')
+}
 
 save_mean_expression_boxplot(
     df = df,
@@ -395,7 +449,7 @@ save_frequency_plot(
 )
 
 if ('fastp_insert_size_peak' %in% colnames(df)) {
-    insert_df = df[((!is_excluded) & (!is.na(df[['fastp_insert_size_peak']]))),]
+    insert_df = df[(is_non_excluded & (!is.na(df[['fastp_insert_size_peak']]))), , drop = FALSE]
     insert_breaks = if (nrow(insert_df) > 0) insert_axis_breaks(insert_df[['fastp_insert_size_peak']]) else NULL
     insert_limits = if (is.null(insert_breaks)) NULL else c(min(insert_breaks), max(insert_breaks))
 } else {

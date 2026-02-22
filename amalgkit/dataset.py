@@ -64,6 +64,8 @@ def resolve_dataset_source_dir(name):
 
 def build_extracted_dirs(out_dir):
     out_dir = os.path.realpath(out_dir)
+    if os.path.exists(out_dir) and (not os.path.isdir(out_dir)):
+        raise NotADirectoryError('Output path exists but is not a directory: {}'.format(out_dir))
     extracted_dirs = {
         'fasta': os.path.join(out_dir, 'fasta'),
         'busco': os.path.join(out_dir, 'busco'),
@@ -74,6 +76,19 @@ def build_extracted_dirs(out_dir):
     return extracted_dirs
 
 
+def validate_dataset_source_files(dataset, dataset_src):
+    missing_sources = []
+    for file_type, files in dataset['files'].items():
+        for filename in files:
+            src = os.path.join(dataset_src, filename)
+            if not os.path.isfile(src):
+                missing_sources.append(src)
+    if missing_sources:
+        raise FileNotFoundError(
+            'Dataset source file(s) not found: {}'.format(', '.join(missing_sources))
+        )
+
+
 def copy_dataset_files(dataset, dataset_src, extracted_dirs, overwrite=False):
     for file_type, files in dataset['files'].items():
         dest_dir = extracted_dirs.get(file_type)
@@ -82,11 +97,12 @@ def copy_dataset_files(dataset, dataset_src, extracted_dirs, overwrite=False):
         for filename in files:
             src = os.path.join(dataset_src, filename)
             dst = os.path.join(dest_dir, filename)
+            if os.path.exists(dst) and (not os.path.isfile(dst)):
+                raise NotADirectoryError(
+                    'Destination path exists but is not a file: {}'.format(dst)
+                )
             if os.path.exists(dst) and not overwrite:
                 print(f'  Skipping (exists): {dst}')
-                continue
-            if not os.path.exists(src):
-                sys.stderr.write(f'Warning: Source file not found: {src}\n')
                 continue
             shutil.copy2(src, dst)
             print(f'  Copied: {filename} -> {dest_dir}/')
@@ -113,6 +129,7 @@ def extract_dataset(name, out_dir, overwrite=False):
     validate_dataset_name(name)
     dataset = DATASETS[name]
     dataset_src = resolve_dataset_source_dir(name)
+    validate_dataset_source_files(dataset, dataset_src)
     extracted_dirs = build_extracted_dirs(out_dir)
     copy_dataset_files(dataset, dataset_src, extracted_dirs, overwrite=overwrite)
     return extracted_dirs

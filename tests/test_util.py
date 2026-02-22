@@ -1,13 +1,16 @@
 import json
 import os
 import warnings
+import warnings
 import pytest
 import pandas
 import numpy
 import xml.etree.ElementTree as ET
+from types import SimpleNamespace
 
 from amalgkit.util import (
     strtobool,
+    parse_bool_flags,
     Metadata,
     read_config_file,
     get_sra_stat,
@@ -22,12 +25,15 @@ from amalgkit.util import (
     get_getfastq_run_dir,
     generate_multisp_busco_table,
     cleanup_tmp_amalgkit_files,
+    check_rscript,
     run_tasks_with_optional_threads,
     validate_positive_int_option,
     resolve_cpu_budget,
     resolve_thread_worker_allocation,
     resolve_worker_allocation,
     find_prefixed_entries,
+    find_species_prefixed_entries,
+    find_run_prefixed_entries,
 )
 
 
@@ -47,6 +53,21 @@ class TestStrtobool:
     def test_invalid_value(self):
         with pytest.raises(ValueError):
             strtobool("maybe")
+
+
+class TestParseBoolFlags:
+    def test_fills_missing_values_with_default(self):
+        result = parse_bool_flags(['yes', None, ''], column_name='is_sampled', default='no')
+        assert result.tolist() == [True, False, False]
+
+    def test_raises_for_invalid_values(self):
+        with pytest.raises(ValueError, match='invalid boolean flag'):
+            parse_bool_flags(['yes', 'maybe'], column_name='is_sampled', default='no')
+
+    def test_accepts_generator_input(self):
+        values = (v for v in ['yes', 'no', None])
+        result = parse_bool_flags(values, column_name='is_sampled', default='no')
+        assert result.tolist() == [True, False, False]
 
 class TestRunTasksWithOptionalThreads:
     def test_empty_tasks(self):
@@ -80,14 +101,42 @@ class TestRunTasksWithOptionalThreads:
         assert failures[0][0] == 3
         assert isinstance(failures[0][1], ValueError)
 
+    def test_parallel_converts_system_exit_to_failure(self):
+        def worker(x):
+            if x == 2:
+                raise SystemExit(2)
+            return x
+
+        results, failures = run_tasks_with_optional_threads([1, 2], worker, max_workers=2)
+
+        assert results == {1: 1}
+        assert len(failures) == 1
+        assert failures[0][0] == 2
+        assert isinstance(failures[0][1], RuntimeError)
+        assert 'Task requested exit with code 2.' in str(failures[0][1])
+
+    def test_accepts_string_max_workers(self):
+        results, failures = run_tasks_with_optional_threads([1, 2], lambda x: x * 2, max_workers='2')
+        assert results == {1: 2, 2: 4}
+        assert failures == []
+
+    def test_auto_max_workers_falls_back_to_serial(self):
+        results, failures = run_tasks_with_optional_threads([1, 2], lambda x: x + 1, max_workers='auto')
+        assert results == {1: 2, 2: 3}
+        assert failures == []
+
+    def test_invalid_max_workers_raises_clear_error(self):
+        with pytest.raises(ValueError, match='max_workers must be an integer'):
+            run_tasks_with_optional_threads([1], lambda x: x, max_workers='two')
+
 class TestValidatePositiveIntOption:
     def test_accepts_positive(self):
-        assert validate_positive_int_option(3, 'jobs') == 3
-        assert validate_positive_int_option('2', 'species_jobs') == 2
+        assert validate_positive_int_option(3, 'internal_jobs') == 3
+        assert validate_positive_int_option('2', 'internal_jobs') == 2
 
     def test_rejects_nonpositive(self):
-        with pytest.raises(ValueError, match='--jobs must be > 0'):
-            validate_positive_int_option(0, 'jobs')
+        with pytest.raises(ValueError, match='--internal_jobs must be > 0'):
+            validate_positive_int_option(0, 'internal_jobs')
 
 
 class TestCpuBudgetHelpers:
@@ -100,41 +149,52 @@ class TestCpuBudgetHelpers:
         assert resolve_cpu_budget(0) == 1
 
     def test_resolve_cpu_budget_rejects_negative(self):
-        with pytest.raises(ValueError, match='--cpu_budget must be >= 0'):
+        with pytest.raises(ValueError, match='--internal_cpu_budget must be >= 0'):
             resolve_cpu_budget(-1)
 
     def test_resolve_thread_worker_allocation_caps_workers(self):
         threads, workers, budget = resolve_thread_worker_allocation(
             requested_threads=4,
             requested_workers=4,
-            cpu_budget=8,
-            worker_option_name='jobs',
+            internal_cpu_budget=8,
+            worker_option_name='internal_jobs',
         )
-        assert threads == 4
-        assert workers == 2
-        assert budget == 8
+        assert threads == 1
+        assert workers == 4
+        assert budget == 4
 
     def test_resolve_thread_worker_allocation_caps_threads(self):
         threads, workers, budget = resolve_thread_worker_allocation(
             requested_threads=16,
             requested_workers=2,
-            cpu_budget=8,
-            worker_option_name='jobs',
+            internal_cpu_budget=8,
+            worker_option_name='internal_jobs',
         )
-        assert threads == 8
-        assert workers == 1
+        assert threads == 4
+        assert workers == 2
+        assert budget == 8
+
+    def test_resolve_thread_worker_allocation_respects_total_core_budget(self):
+        threads, workers, budget = resolve_thread_worker_allocation(
+            requested_threads=8,
+            requested_workers='auto',
+            internal_cpu_budget=64,
+            worker_option_name='internal_jobs',
+        )
+        assert threads == 1
+        assert workers == 8
         assert budget == 8
 
     def test_resolve_worker_allocation_caps_workers(self):
         workers, budget = resolve_worker_allocation(
             requested_workers=10,
-            cpu_budget=3,
-            worker_option_name='species_jobs',
+            internal_cpu_budget=3,
+            worker_option_name='internal_jobs',
         )
         assert workers == 3
         assert budget == 3
-        with pytest.raises(ValueError, match='--species_jobs must be > 0'):
-            validate_positive_int_option(-1, 'species_jobs')
+        with pytest.raises(ValueError, match='--internal_jobs must be > 0'):
+            validate_positive_int_option(-1, 'internal_jobs')
 
 class TestFindPrefixedEntries:
     def test_sorted_list_entries(self):
@@ -151,6 +211,30 @@ class TestFindPrefixedEntries:
         entries = ['Arabidopsis_thaliana.fa']
         out = find_prefixed_entries(entries, 'Homo_sapiens')
         assert out == []
+
+    def test_unsorted_list_entries(self):
+        entries = ['Aardvark.fa', 'Homo_sapiens.fa', 'Mus_musculus.fa', 'Homo_sapiens.idx']
+        out = find_prefixed_entries(entries, 'Homo_sapiens')
+        assert out == ['Homo_sapiens.fa', 'Homo_sapiens.idx']
+
+
+class TestFindSpeciesPrefixedEntries:
+    def test_rejects_similar_species_prefix(self):
+        entries = ['Homo_sapiens.fa', 'Homo_sapiens2.fa', 'Homo_sapiens_k31.idx']
+        out = find_species_prefixed_entries(entries, 'Homo_sapiens')
+        assert out == ['Homo_sapiens.fa', 'Homo_sapiens_k31.idx']
+
+
+class TestFindRunPrefixedEntries:
+    def test_rejects_similar_run_prefix(self):
+        entries = ['SRR001.fastq.gz', 'SRR0010.fastq.gz', 'SRR001_1.fastq.gz']
+        out = find_run_prefixed_entries(entries, 'SRR001')
+        assert out == ['SRR001.fastq.gz', 'SRR001_1.fastq.gz']
+
+    def test_rejects_hyphen_suffix_variants(self):
+        entries = ['SRR001.fastq.gz', 'SRR001-legacy.fastq.gz', 'SRR001_1.fastq.gz']
+        out = find_run_prefixed_entries(entries, 'SRR001')
+        assert out == ['SRR001.fastq.gz', 'SRR001_1.fastq.gz']
 
 
 # ---------------------------------------------------------------------------
@@ -203,6 +287,18 @@ class TestMetadataFromDataFrame:
         df['exclusion'] = ''
         m = Metadata.from_DataFrame(df)
         assert (m.df['exclusion'] == 'no').all()
+
+    def test_exclusion_nan_filled(self, sample_metadata_df):
+        df = sample_metadata_df.copy()
+        df['exclusion'] = [numpy.nan] * len(df)
+        m = Metadata.from_DataFrame(df)
+        assert (m.df['exclusion'] == 'no').all()
+
+    def test_does_not_mutate_input_dataframe(self, sample_metadata_df):
+        df = sample_metadata_df.copy()
+        df['exclusion'] = ''
+        _ = Metadata.from_DataFrame(df)
+        assert (df['exclusion'] == '').all()
 
 
 class TestMetadataFromXml:
@@ -320,6 +416,50 @@ class TestMetadataMarkExcludeKeywords:
         m.mark_exclude_keywords(tmp_config_dir)
         assert m.df.loc[2, 'exclusion'] == 'cell_culture'
 
+    def test_strips_config_column_tokens(self, sample_metadata, tmp_path):
+        (tmp_path / 'exclude_keyword.config').write_text('sample_description, tissue\tdisease\tcancer\n')
+        m = sample_metadata
+        m.df.loc[0, 'tissue'] = 'cancer tissue'
+        m.mark_exclude_keywords(str(tmp_path))
+        assert m.df.loc[0, 'exclusion'] == 'disease'
+
+    def test_raises_for_unknown_config_column(self, sample_metadata, tmp_path):
+        (tmp_path / 'exclude_keyword.config').write_text('unknown_column\tdisease\tcancer\n')
+        m = sample_metadata
+        with pytest.raises(ValueError, match='exclude_keyword.config were not found in metadata'):
+            m.mark_exclude_keywords(str(tmp_path))
+
+    def test_raises_for_invalid_keyword_regex(self, sample_metadata, tmp_path):
+        (tmp_path / 'exclude_keyword.config').write_text('sample_description\tdisease\t[invalid\n')
+        m = sample_metadata
+        with pytest.raises(ValueError, match='Invalid regex pattern in exclude_keyword.config row 1'):
+            m.mark_exclude_keywords(str(tmp_path))
+
+    def test_ignores_empty_keyword_row_without_mass_exclusion(self, sample_metadata, tmp_path):
+        (tmp_path / 'exclude_keyword.config').write_text('sample_description\tdisease\t\n')
+        m = sample_metadata
+        m.mark_exclude_keywords(str(tmp_path))
+        assert (m.df['exclusion'] == 'no').all()
+
+    def test_ignores_empty_reason_row_without_mass_exclusion(self, sample_metadata, tmp_path):
+        (tmp_path / 'exclude_keyword.config').write_text('sample_description\t\tcancer\n')
+        m = sample_metadata
+        m.df.loc[0, 'sample_description'] = 'cancer tissue sample'
+        m.mark_exclude_keywords(str(tmp_path))
+        assert (m.df['exclusion'] == 'no').all()
+
+    def test_raises_when_exclude_keyword_config_path_is_directory(self, sample_metadata, tmp_path):
+        (tmp_path / 'exclude_keyword.config').mkdir()
+        m = sample_metadata
+        with pytest.raises(IsADirectoryError, match='Config path exists but is not a file'):
+            m.mark_exclude_keywords(str(tmp_path))
+
+    def test_raises_for_malformed_config_with_too_few_columns(self, sample_metadata, tmp_path):
+        (tmp_path / 'exclude_keyword.config').write_text('sample_description_only\n')
+        m = sample_metadata
+        with pytest.raises(ValueError, match='exclude_keyword.config must contain at least 3'):
+            m.mark_exclude_keywords(str(tmp_path))
+
 
 class TestMetadataMarkTreatmentTerms:
     def test_marks_non_control(self, tmp_config_dir):
@@ -339,6 +479,60 @@ class TestMetadataMarkTreatmentTerms:
         assert m.df.loc[m.df['run'] == 'R2', 'exclusion'].values[0] == 'no'
         assert m.df.loc[m.df['run'] == 'R3', 'exclusion'].values[0] == 'non_control'
         assert m.df.loc[m.df['run'] == 'R4', 'exclusion'].values[0] == 'non_control'
+
+    def test_raises_for_malformed_config_with_too_few_columns(self, sample_metadata, tmp_path):
+        (tmp_path / 'control_term.config').write_text('treatment_only\n')
+        m = sample_metadata
+        with pytest.raises(ValueError, match='control_term.config must contain at least 2'):
+            m.mark_treatment_terms(str(tmp_path))
+
+    def test_strips_control_term_config_column_tokens(self, tmp_path):
+        (tmp_path / 'control_term.config').write_text('treatment, source_name\twild.type\n')
+        data = {
+            'scientific_name': ['Sp1', 'Sp1', 'Sp1'],
+            'sample_group': ['leaf', 'leaf', 'leaf'],
+            'treatment': ['drought', 'heat', 'drought'],
+            'source_name': ['wild type', '', ''],
+            'bioproject': ['PRJ1', 'PRJ1', 'PRJ2'],
+            'biosample': ['S1', 'S2', 'S3'],
+            'run': ['R1', 'R2', 'R3'],
+            'exclusion': ['no', 'no', 'no'],
+        }
+        m = Metadata.from_DataFrame(pandas.DataFrame(data))
+        m.mark_treatment_terms(str(tmp_path))
+        assert m.df.loc[m.df['run'] == 'R1', 'exclusion'].values[0] == 'no'
+        assert m.df.loc[m.df['run'] == 'R2', 'exclusion'].values[0] == 'non_control'
+        assert m.df.loc[m.df['run'] == 'R3', 'exclusion'].values[0] == 'no'
+
+    def test_raises_for_unknown_control_term_config_column(self, tmp_path):
+        (tmp_path / 'control_term.config').write_text('unknown_column\twild.type\n')
+        data = {
+            'scientific_name': ['Sp1'],
+            'sample_group': ['leaf'],
+            'treatment': ['wild type'],
+            'bioproject': ['PRJ1'],
+            'biosample': ['S1'],
+            'run': ['R1'],
+            'exclusion': ['no'],
+        }
+        m = Metadata.from_DataFrame(pandas.DataFrame(data))
+        with pytest.raises(ValueError, match='control_term.config were not found in metadata'):
+            m.mark_treatment_terms(str(tmp_path))
+
+    def test_raises_for_invalid_control_term_regex(self, tmp_path):
+        (tmp_path / 'control_term.config').write_text('treatment\t[invalid\n')
+        data = {
+            'scientific_name': ['Sp1'],
+            'sample_group': ['leaf'],
+            'treatment': ['wild type'],
+            'bioproject': ['PRJ1'],
+            'biosample': ['S1'],
+            'run': ['R1'],
+            'exclusion': ['no'],
+        }
+        m = Metadata.from_DataFrame(pandas.DataFrame(data))
+        with pytest.raises(ValueError, match='Invalid regex pattern in control_term.config row 1'):
+            m.mark_treatment_terms(str(tmp_path))
 
 
 class TestMetadataMarkRedundantBiosample:
@@ -423,6 +617,20 @@ class TestMetadataLabelSampledData:
         ]
         assert len(sampled) == 5
 
+    def test_normalizes_exclusion_before_qualification(self):
+        data = {
+            'scientific_name': ['Sp1', 'Sp1'],
+            'sample_group': ['brain', 'brain'],
+            'bioproject': ['PRJ1', 'PRJ2'],
+            'biosample': ['S1', 'S2'],
+            'run': ['R1', 'R2'],
+            'exclusion': [' NO ', 'No'],
+        }
+        m = Metadata.from_DataFrame(pandas.DataFrame(data))
+        m.label_sampled_data(max_sample=10)
+        assert (m.df['is_qualified'] == 'yes').all()
+        assert set(m.df['exclusion'].tolist()) == {'no'}
+
 
 class TestMaximizeBioprojSampling:
     def test_sampling_across_bioprojects(self):
@@ -476,6 +684,35 @@ class TestMaximizeBioprojSampling:
         sampled = result.loc[(result['is_sampled'] == 'yes') & (result['exclusion'] == 'no')]
         assert len(sampled) == 3
 
+    def test_handles_case_and_whitespace_in_exclusion_flags(self):
+        data = {
+            'scientific_name': ['Sp1'] * 4,
+            'sample_group': ['brain'] * 4,
+            'bioproject': ['PRJ1', 'PRJ1', 'PRJ2', 'PRJ2'],
+            'biosample': [f'S{i}' for i in range(4)],
+            'run': [f'R{i}' for i in range(4)],
+            'exclusion': [' NO ', 'No', 'excluded', ' low_nspots '],
+            'is_sampled': ['no'] * 4,
+        }
+        df = pandas.DataFrame(data)
+        m = Metadata()
+        result = m._maximize_bioproject_sampling(df, target_n=10)
+        sampled = result.loc[result['is_sampled'] == 'yes', 'run'].tolist()
+        assert sampled == ['R0', 'R1']
+
+    def test_raises_when_exclusion_column_is_missing(self):
+        df = pandas.DataFrame({
+            'scientific_name': ['Sp1'],
+            'sample_group': ['brain'],
+            'bioproject': ['PRJ1'],
+            'biosample': ['S1'],
+            'run': ['R1'],
+            'is_sampled': ['no'],
+        })
+        m = Metadata()
+        with pytest.raises(ValueError, match='exclusion'):
+            m._maximize_bioproject_sampling(df, target_n=1)
+
 
 # ---------------------------------------------------------------------------
 # Utility functions
@@ -500,6 +737,17 @@ class TestReadConfigFile:
         assert isinstance(result, pandas.Series)
         assert len(result) == 3
 
+    def test_malformed_config_raises_parser_error(self, tmp_path):
+        config = tmp_path / 'bad.config'
+        config.write_text('"unterminated\nvalue2\n')
+        with pytest.raises(pandas.errors.ParserError):
+            read_config_file('bad.config', str(tmp_path))
+
+    def test_raises_when_config_path_is_directory(self, tmp_path):
+        (tmp_path / 'dir.config').mkdir()
+        with pytest.raises(IsADirectoryError, match='Config path exists but is not a file'):
+            read_config_file('dir.config', str(tmp_path))
+
 
 class TestCleanupTmpAmalgkitFiles:
     def test_removes_matching_files_and_directories(self, tmp_path):
@@ -514,6 +762,54 @@ class TestCleanupTmpAmalgkitFiles:
         assert not (tmp_path / 'tmp.amalgkit.file1').exists()
         assert not (tmp_path / 'tmp.amalgkit.dir1').exists()
         assert (tmp_path / 'keep.txt').exists()
+
+    def test_ignores_file_not_found_during_cleanup(self, tmp_path, monkeypatch):
+        disappearing = tmp_path / 'tmp.amalgkit.disappearing'
+        disappearing.write_text('x')
+        stable = tmp_path / 'tmp.amalgkit.stable'
+        stable.write_text('y')
+        real_remove = os.remove
+
+        def flaky_remove(path):
+            if os.path.realpath(path) == os.path.realpath(str(disappearing)):
+                if os.path.exists(path):
+                    real_remove(path)
+                raise FileNotFoundError(path)
+            return real_remove(path)
+
+        monkeypatch.setattr('amalgkit.util.os.remove', flaky_remove)
+
+        cleanup_tmp_amalgkit_files(work_dir=str(tmp_path))
+
+        assert not disappearing.exists()
+        assert not stable.exists()
+
+
+class TestCheckRscript:
+    def test_exits_when_rscript_missing(self, monkeypatch):
+        monkeypatch.setattr(
+            'amalgkit.util.subprocess.run',
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(FileNotFoundError('Rscript')),
+        )
+        with pytest.raises(SystemExit) as exc:
+            check_rscript()
+        assert exc.value.code == 1
+
+    def test_exits_when_rscript_probe_returns_nonzero(self, monkeypatch):
+        monkeypatch.setattr(
+            'amalgkit.util.subprocess.run',
+            lambda *_args, **_kwargs: SimpleNamespace(returncode=127, stdout=b'', stderr=b''),
+        )
+        with pytest.raises(SystemExit) as exc:
+            check_rscript()
+        assert exc.value.code == 1
+
+    def test_passes_when_rscript_probe_returns_zero(self, monkeypatch):
+        monkeypatch.setattr(
+            'amalgkit.util.subprocess.run',
+            lambda *_args, **_kwargs: SimpleNamespace(returncode=0, stdout=b'', stderr=b''),
+        )
+        check_rscript()
 
 
 class TestGetSraStat:
@@ -542,6 +838,24 @@ class TestGetSraStat:
         stat = get_sra_stat('SRR001', m)
         assert stat['layout'] == 'single'
 
+    def test_normalizes_layout_case_and_whitespace(self, sample_metadata):
+        m = sample_metadata
+        m.df.loc[m.df['run'] == 'SRR001', 'lib_layout'] = '  PAIRED  '
+        stat = get_sra_stat('SRR001', m)
+        assert stat['layout'] == 'paired'
+
+    def test_raises_when_layout_is_invalid(self):
+        m = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001'],
+            'lib_layout': ['unknown'],
+            'total_spots': [10],
+            'spot_length': [100],
+            'total_bases': [1000],
+            'exclusion': ['no'],
+        }))
+        with pytest.raises(ValueError, match='Unsupported lib_layout'):
+            get_sra_stat('SRR001', m)
+
     def test_duplicate_run_raises(self):
         m = Metadata.from_DataFrame(pandas.DataFrame({
             'run': ['SRR001', 'SRR001'],
@@ -566,20 +880,69 @@ class TestGetSraStat:
         with pytest.raises(AssertionError, match='SRA ID not found'):
             get_sra_stat('SRR999', m)
 
+    def test_requires_run_column(self):
+        m = Metadata.from_DataFrame(pandas.DataFrame({
+            'lib_layout': ['single'],
+            'total_spots': [10],
+            'spot_length': [100],
+            'total_bases': [1000],
+            'exclusion': ['no'],
+        }))
+        m.df = m.df.drop(columns=['run'])
+        with pytest.raises(ValueError, match='Missing required metadata column\\(s\\) for get_sra_stat: run'):
+            get_sra_stat('SRR001', m)
+
+    def test_requires_lib_layout_column(self):
+        m = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001'],
+            'total_spots': [10],
+            'spot_length': [100],
+            'total_bases': [1000],
+            'exclusion': ['no'],
+        }))
+        m.df = m.df.drop(columns=['lib_layout'])
+
+        with pytest.raises(ValueError, match='Missing required metadata column\\(s\\) for get_sra_stat: lib_layout'):
+            get_sra_stat('SRR001', m)
+
+    def test_raises_when_total_spots_is_zero(self):
+        m = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001'],
+            'lib_layout': ['single'],
+            'total_spots': [0],
+            'spot_length': [100],
+            'total_bases': [1000],
+            'exclusion': ['no'],
+        }))
+        with pytest.raises(ValueError, match='total_spots must be > 0'):
+            get_sra_stat('SRR001', m)
+
+    def test_raises_when_spot_length_cannot_be_inferred(self):
+        m = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001'],
+            'lib_layout': ['single'],
+            'total_spots': [10],
+            'spot_length': [0],
+            'total_bases': [0],
+            'exclusion': ['no'],
+        }))
+        with pytest.raises(ValueError, match='spot_length cannot be inferred'):
+            get_sra_stat('SRR001', m)
+
 
 class TestCheckOrthologParameterCompatibility:
     def test_both_none_raises(self):
         class Args:
             orthogroup_table = None
             dir_busco = None
-        with pytest.raises(Exception, match="One of"):
+        with pytest.raises(ValueError, match="One of"):
             check_ortholog_parameter_compatibility(Args())
 
     def test_both_set_raises(self):
         class Args:
             orthogroup_table = 'table.tsv'
             dir_busco = '/path/to/busco'
-        with pytest.raises(Exception, match="Only one"):
+        with pytest.raises(ValueError, match="Only one"):
             check_ortholog_parameter_compatibility(Args())
 
     def test_only_orthogroup_ok(self):
@@ -593,6 +956,13 @@ class TestCheckOrthologParameterCompatibility:
             orthogroup_table = None
             dir_busco = '/path/to/busco'
         check_ortholog_parameter_compatibility(Args())  # should not raise
+
+    def test_blank_orthogroup_table_is_treated_as_none(self):
+        class Args:
+            orthogroup_table = '   '
+            dir_busco = None
+        with pytest.raises(ValueError, match='One of'):
+            check_ortholog_parameter_compatibility(Args())
 
 
 class TestOrthogroup2Genecount:
@@ -638,6 +1008,36 @@ class TestOrthogroup2Genecount:
         assert result.loc[1, 'Species_B'] == 3
         assert result.loc[2, 'Species_A'] == 2
         assert result.loc[2, 'Species_B'] == 0
+
+    def test_raises_when_busco_id_column_missing(self, tmp_path):
+        ortho_file = tmp_path / 'orthogroups.tsv'
+        ortho_file.write_text(
+            'orthogroup\tSpecies_A\n'
+            'OG0001\tgene1\n'
+        )
+        out_file = tmp_path / 'genecount.tsv'
+
+        with pytest.raises(ValueError, match='Column \"busco_id\" is required'):
+            orthogroup2genecount(
+                str(ortho_file),
+                str(out_file),
+                spp=['Species_A'],
+            )
+
+    def test_raises_when_species_column_missing(self, tmp_path):
+        ortho_file = tmp_path / 'orthogroups.tsv'
+        ortho_file.write_text(
+            'busco_id\tSpecies_A\n'
+            'OG0001\tgene1\n'
+        )
+        out_file = tmp_path / 'genecount.tsv'
+
+        with pytest.raises(ValueError, match='Species column\\(s\\) not found in orthogroup table'):
+            orthogroup2genecount(
+                str(ortho_file),
+                str(out_file),
+                spp=['Species_A', 'Species_B'],
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -705,6 +1105,17 @@ class TestMetadataGroupAttributes:
         future_warnings = [w for w in captured if issubclass(w.category, FutureWarning)]
         assert len(future_warnings) == 0
 
+    def test_raises_for_malformed_config_with_too_few_columns(self, tmp_path):
+        ga = tmp_path / 'group_attribute.config'
+        ga.write_text('tissue_only\n')
+        m = Metadata.from_DataFrame(pandas.DataFrame({
+            'scientific_name': ['Sp1'],
+            'run': ['R1'],
+            'exclusion': ['no'],
+        }))
+        with pytest.raises(ValueError, match='group_attribute.config must contain at least 2'):
+            m.group_attributes(str(tmp_path))
+
 
 # ---------------------------------------------------------------------------
 # mark_missing_rank
@@ -730,6 +1141,11 @@ class TestMetadataMarkMissingRank:
         m = sample_metadata
         m.mark_missing_rank('none')
         assert (m.df['exclusion'] == 'no').all()
+
+    def test_raises_when_required_rank_column_missing(self, sample_metadata):
+        m = sample_metadata
+        with pytest.raises(ValueError, match='Column \"taxid_species\" is required'):
+            m.mark_missing_rank('species')
 
 
 # ---------------------------------------------------------------------------
@@ -771,6 +1187,48 @@ class TestMetadataLabelSampledDataEdgeCases:
             m.label_sampled_data(max_sample=10)
         future_warnings = [w for w in captured if issubclass(w.category, FutureWarning)]
         assert len(future_warnings) == 0
+
+    def test_preserves_chained_assignment_option(self):
+        data = {
+            'scientific_name': ['Sp1', 'Sp1'],
+            'sample_group': ['brain', 'brain'],
+            'bioproject': ['PRJ1', 'PRJ2'],
+            'biosample': ['S1', 'S2'],
+            'run': ['R1', 'R2'],
+            'exclusion': ['no', 'no'],
+        }
+        m = Metadata.from_DataFrame(pandas.DataFrame(data))
+        previous_mode = pandas.get_option('mode.chained_assignment')
+        pandas.set_option('mode.chained_assignment', 'raise')
+        try:
+            m.label_sampled_data(max_sample=10)
+            assert pandas.get_option('mode.chained_assignment') == 'raise'
+        finally:
+            pandas.set_option('mode.chained_assignment', previous_mode)
+
+    def test_restores_chained_assignment_option_after_error(self, monkeypatch):
+        data = {
+            'scientific_name': ['Sp1', 'Sp1'],
+            'sample_group': ['brain', 'brain'],
+            'bioproject': ['PRJ1', 'PRJ2'],
+            'biosample': ['S1', 'S2'],
+            'run': ['R1', 'R2'],
+            'exclusion': ['no', 'no'],
+        }
+        m = Metadata.from_DataFrame(pandas.DataFrame(data))
+        previous_mode = pandas.get_option('mode.chained_assignment')
+        pandas.set_option('mode.chained_assignment', 'raise')
+        monkeypatch.setattr(
+            m,
+            '_maximize_bioproject_sampling',
+            lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError('forced failure')),
+        )
+        try:
+            with pytest.raises(RuntimeError, match='forced failure'):
+                m.label_sampled_data(max_sample=10)
+            assert pandas.get_option('mode.chained_assignment') == 'raise'
+        finally:
+            pandas.set_option('mode.chained_assignment', previous_mode)
 
 
 # ---------------------------------------------------------------------------
@@ -860,6 +1318,24 @@ class TestCheckConfigDir:
     def test_invalid_mode_raises(self, tmp_path):
         with pytest.raises(ValueError, match='Unsupported config check mode'):
             check_config_dir(str(tmp_path), mode='unknown')
+
+    def test_missing_config_dir_raises(self, tmp_path):
+        missing_dir = tmp_path / 'missing'
+        with pytest.raises(FileNotFoundError, match='Config directory not found'):
+            check_config_dir(str(missing_dir), mode='select')
+
+    def test_config_dir_file_path_raises(self, tmp_path):
+        file_path = tmp_path / 'config_path'
+        file_path.write_text('not a directory')
+        with pytest.raises(NotADirectoryError, match='not a directory'):
+            check_config_dir(str(file_path), mode='select')
+
+    def test_config_entry_directory_is_treated_as_missing(self, tmp_path, capsys):
+        (tmp_path / 'group_attribute.config').write_text('tissue\tsource_name\n')
+        (tmp_path / 'exclude_keyword.config').mkdir()
+        check_config_dir(str(tmp_path), mode='select')
+        captured = capsys.readouterr()
+        assert 'Config entry exists but is not a file: exclude_keyword.config' in captured.err
 
 
 # ---------------------------------------------------------------------------
@@ -965,6 +1441,156 @@ class TestLoadMetadata:
         assert isinstance(m, Metadata)
         assert m.df.shape[0] == 5
 
+    def test_raises_when_metadata_file_missing(self, tmp_path):
+        class Args:
+            metadata = str(tmp_path / 'missing.tsv')
+            out_dir = str(tmp_path)
+        with pytest.raises(FileNotFoundError, match='Metadata file not found'):
+            load_metadata(Args())
+
+    def test_raises_when_metadata_path_is_directory(self, tmp_path):
+        metadata_dir = tmp_path / 'metadata_path'
+        metadata_dir.mkdir()
+
+        class Args:
+            metadata = str(metadata_dir)
+            out_dir = str(tmp_path)
+
+        with pytest.raises(IsADirectoryError, match='Metadata path exists but is not a file'):
+            load_metadata(Args())
+
+    def test_batch_mode_treats_missing_is_sampled_as_no(self, tmp_path):
+        path = tmp_path / 'metadata.tsv'
+        pandas.DataFrame({
+            'run': ['R1', 'R2'],
+            'scientific_name': ['Sp1', 'Sp1'],
+            'is_sampled': ['yes', None],
+            'exclusion': ['no', 'no'],
+        }).to_csv(str(path), sep='\t', index=False)
+
+        class Args:
+            metadata = str(path)
+            out_dir = str(tmp_path)
+            batch = 1
+
+        m = load_metadata(Args())
+        assert m.df.shape[0] == 1
+        assert m.df.iloc[0]['run'] == 'R1'
+
+    def test_batch_mode_raises_for_invalid_is_sampled_value(self, tmp_path):
+        path = tmp_path / 'metadata.tsv'
+        pandas.DataFrame({
+            'run': ['R1', 'R2'],
+            'scientific_name': ['Sp1', 'Sp1'],
+            'is_sampled': ['yes', 'maybe'],
+            'exclusion': ['no', 'no'],
+        }).to_csv(str(path), sep='\t', index=False)
+
+        class Args:
+            metadata = str(path)
+            out_dir = str(tmp_path)
+            batch = 1
+
+        with pytest.raises(ValueError, match='is_sampled'):
+            load_metadata(Args())
+
+    def test_batch_mode_rejects_nonpositive_batch(self, tmp_path):
+        path = tmp_path / 'metadata.tsv'
+        pandas.DataFrame({
+            'run': ['R1'],
+            'scientific_name': ['Sp1'],
+            'is_sampled': ['yes'],
+            'exclusion': ['no'],
+        }).to_csv(str(path), sep='\t', index=False)
+
+        class Args:
+            metadata = str(path)
+            out_dir = str(tmp_path)
+            batch = 0
+
+        with pytest.raises(ValueError, match='--batch must be >= 1'):
+            load_metadata(Args())
+
+    def test_batch_mode_exits_nonzero_when_no_sampled_rows(self, tmp_path):
+        path = tmp_path / 'metadata.tsv'
+        pandas.DataFrame({
+            'run': ['R1', 'R2'],
+            'scientific_name': ['Sp1', 'Sp1'],
+            'is_sampled': ['no', 'no'],
+            'exclusion': ['no', 'no'],
+        }).to_csv(str(path), sep='\t', index=False)
+
+        class Args:
+            metadata = str(path)
+            out_dir = str(tmp_path)
+            batch = 1
+
+        with pytest.raises(SystemExit) as exc:
+            load_metadata(Args())
+        assert exc.value.code == 1
+
+    def test_batch_mode_handles_missing_caller_module(self, tmp_path, monkeypatch):
+        path = tmp_path / 'metadata.tsv'
+        pandas.DataFrame({
+            'run': ['R1', 'R2'],
+            'scientific_name': ['Sp1', 'Sp1'],
+            'is_sampled': ['yes', 'no'],
+            'exclusion': ['no', 'no'],
+        }).to_csv(str(path), sep='\t', index=False)
+
+        class Args:
+            metadata = str(path)
+            out_dir = str(tmp_path)
+            batch = 1
+
+        monkeypatch.setattr('amalgkit.util.inspect.getmodule', lambda *_args, **_kwargs: None)
+        m = load_metadata(Args())
+        assert m.df.shape[0] == 1
+        assert m.df.iloc[0]['run'] == 'R1'
+
+    def test_curate_batch_ignores_missing_species_names(self, tmp_path, monkeypatch):
+        path = tmp_path / 'metadata.tsv'
+        pandas.DataFrame({
+            'run': ['R1', 'R2', 'R3'],
+            'scientific_name': ['Sp2', '', 'Sp1'],
+            'is_sampled': ['yes', 'yes', 'yes'],
+            'exclusion': ['no', 'no', 'no'],
+        }).to_csv(str(path), sep='\t', index=False)
+
+        class Args:
+            metadata = str(path)
+            out_dir = str(tmp_path)
+            batch = 1
+
+        monkeypatch.setattr(
+            'amalgkit.util.inspect.getmodule',
+            lambda *_args, **_kwargs: type('DummyModule', (), {'__name__': 'amalgkit.curate'})(),
+        )
+        m = load_metadata(Args())
+        assert m.df.shape[0] == 1
+        assert m.df.iloc[0]['scientific_name'] == 'Sp1'
+
+    def test_curate_batch_raises_when_no_valid_species(self, tmp_path, monkeypatch):
+        path = tmp_path / 'metadata.tsv'
+        pandas.DataFrame({
+            'run': ['R1', 'R2'],
+            'scientific_name': ['', None],
+            'is_sampled': ['yes', 'yes'],
+            'exclusion': ['no', 'no'],
+        }).to_csv(str(path), sep='\t', index=False)
+
+        class Args:
+            metadata = str(path)
+            out_dir = str(tmp_path)
+            batch = 1
+
+        monkeypatch.setattr(
+            'amalgkit.util.inspect.getmodule',
+            lambda *_args, **_kwargs: type('DummyModule', (), {'__name__': 'amalgkit.curate'})(),
+        )
+        with pytest.raises(ValueError, match='No valid scientific_name'):
+            load_metadata(Args())
+
 
 # ---------------------------------------------------------------------------
 # detect_layout_from_file (corrects layout based on actual files)
@@ -1064,8 +1690,29 @@ class TestGetNewestIntermediateFileExtension:
             'getfastq_sra_dir': str(tmp_path),
         }
         (tmp_path / 'SRR001_1.amalgkit.fastq.gz.safely_removed').write_text('')
+        (tmp_path / 'SRR001_2.amalgkit.fastq.gz.safely_removed').write_text('')
         ext = get_newest_intermediate_file_extension(sra_stat, str(tmp_path))
         assert ext == '.safely_removed'
+
+    def test_safely_removed_ignores_similar_run_prefix(self, tmp_path):
+        sra_stat = {
+            'sra_id': 'SRR001',
+            'layout': 'paired',
+            'getfastq_sra_dir': str(tmp_path),
+        }
+        (tmp_path / 'SRR0010_1.amalgkit.fastq.gz.safely_removed').write_text('')
+        ext = get_newest_intermediate_file_extension(sra_stat, str(tmp_path))
+        assert ext == 'no_extension_found'
+
+    def test_safely_removed_requires_both_mates_for_paired_layout(self, tmp_path):
+        sra_stat = {
+            'sra_id': 'SRR001',
+            'layout': 'paired',
+            'getfastq_sra_dir': str(tmp_path),
+        }
+        (tmp_path / 'SRR001_1.amalgkit.fastq.gz.safely_removed').write_text('')
+        ext = get_newest_intermediate_file_extension(sra_stat, str(tmp_path))
+        assert ext == 'no_extension_found'
 
     def test_no_extension_found(self, tmp_path):
         """No matching files -> 'no_extension_found'."""
@@ -1074,6 +1721,16 @@ class TestGetNewestIntermediateFileExtension:
             'layout': 'single',
             'getfastq_sra_dir': str(tmp_path),
         }
+        ext = get_newest_intermediate_file_extension(sra_stat, str(tmp_path))
+        assert ext == 'no_extension_found'
+
+    def test_ignores_directory_named_as_fastq_file(self, tmp_path):
+        sra_stat = {
+            'sra_id': 'SRR001',
+            'layout': 'single',
+            'getfastq_sra_dir': str(tmp_path),
+        }
+        (tmp_path / 'SRR001.fastq.gz').mkdir()
         ext = get_newest_intermediate_file_extension(sra_stat, str(tmp_path))
         assert ext == 'no_extension_found'
 
@@ -1144,6 +1801,82 @@ class TestGetMappingRate:
         m = get_mapping_rate(sample_metadata, str(quant_file))
         assert isinstance(m, Metadata)
 
+    def test_raises_when_run_column_missing(self, tmp_path):
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'scientific_name': ['sp1'],
+            'exclusion': ['no'],
+        }))
+        metadata.df = metadata.df.drop(columns=['run'])
+
+        with pytest.raises(ValueError, match='Column \"run\" is required in metadata to compute mapping_rate'):
+            get_mapping_rate(metadata, str(tmp_path / 'quant'))
+
+    def test_duplicate_run_ids_are_all_updated(self, tmp_path):
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001', 'SRR001'],
+            'scientific_name': ['sp1', 'sp1'],
+            'exclusion': ['no', 'no'],
+        }))
+        quant_dir = tmp_path / 'quant'
+        sra_dir = quant_dir / 'SRR001'
+        sra_dir.mkdir(parents=True)
+        (sra_dir / 'SRR001_run_info.json').write_text(json.dumps({'p_pseudoaligned': 42.0}))
+
+        m = get_mapping_rate(metadata, str(quant_dir))
+
+        assert m.df['mapping_rate'].tolist() == [42.0, 42.0]
+
+    def test_metadata_run_whitespace_is_trimmed_for_matching(self, tmp_path):
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': [' SRR001 '],
+            'scientific_name': ['sp1'],
+            'exclusion': ['no'],
+        }))
+        quant_dir = tmp_path / 'quant'
+        sra_dir = quant_dir / 'SRR001'
+        sra_dir.mkdir(parents=True)
+        (sra_dir / 'SRR001_run_info.json').write_text(json.dumps({'p_pseudoaligned': 33.3}))
+
+        m = get_mapping_rate(metadata, str(quant_dir))
+
+        assert m.df.loc[0, 'mapping_rate'] == 33.3
+
+    def test_invalid_pseudoaligned_value_is_skipped(self, tmp_path, sample_metadata):
+        quant_dir = tmp_path / 'quant'
+        sra_dir = quant_dir / 'SRR001'
+        sra_dir.mkdir(parents=True)
+        (sra_dir / 'SRR001_run_info.json').write_text(json.dumps({'p_pseudoaligned': 'not-a-number'}))
+
+        m = get_mapping_rate(sample_metadata, str(quant_dir))
+
+        assert numpy.isnan(m.df.loc[m.df['run'] == 'SRR001', 'mapping_rate'].values[0])
+
+    def test_numeric_string_pseudoaligned_value_is_parsed(self, tmp_path, sample_metadata):
+        quant_dir = tmp_path / 'quant'
+        sra_dir = quant_dir / 'SRR001'
+        sra_dir.mkdir(parents=True)
+        (sra_dir / 'SRR001_run_info.json').write_text(json.dumps({'p_pseudoaligned': '12.5'}))
+
+        m = get_mapping_rate(sample_metadata, str(quant_dir))
+
+        assert m.df.loc[m.df['run'] == 'SRR001', 'mapping_rate'].values[0] == 12.5
+
+    def test_respects_max_workers_override(self, tmp_path, sample_metadata, monkeypatch):
+        quant_dir = tmp_path / 'quant'
+        for sra_id, value in [('SRR001', 12.5), ('SRR002', 33.3)]:
+            sra_dir = quant_dir / sra_id
+            sra_dir.mkdir(parents=True)
+            (sra_dir / f'{sra_id}_run_info.json').write_text(json.dumps({'p_pseudoaligned': value}))
+        observed = {}
+
+        def fake_run_tasks(task_items, task_fn, max_workers):
+            observed['max_workers'] = max_workers
+            return {}, []
+
+        monkeypatch.setattr('amalgkit.util.run_tasks_with_optional_threads', fake_run_tasks)
+        get_mapping_rate(sample_metadata, str(quant_dir), max_workers=1)
+        assert observed['max_workers'] == 1
+
 
 # ---------------------------------------------------------------------------
 # get_getfastq_run_dir (creates SRA-specific output directory)
@@ -1167,12 +1900,54 @@ class TestGetGetfastqRunDir:
         result = get_getfastq_run_dir(Args(), 'SRR001')
         assert os.path.isdir(result)
 
+    def test_rejects_out_dir_file_path(self, tmp_path):
+        out_file = tmp_path / 'out_file'
+        out_file.write_text('not a directory')
+
+        class Args:
+            out_dir = str(out_file)
+
+        with pytest.raises(NotADirectoryError, match='Output path exists but is not a directory'):
+            get_getfastq_run_dir(Args(), 'SRR001')
+
+    def test_rejects_getfastq_root_file_path(self, tmp_path):
+        (tmp_path / 'getfastq').write_text('not a directory')
+
+        class Args:
+            out_dir = str(tmp_path)
+
+        with pytest.raises(NotADirectoryError, match='getfastq path exists but is not a directory'):
+            get_getfastq_run_dir(Args(), 'SRR001')
+
 
 # ---------------------------------------------------------------------------
 # generate_multisp_busco_table (merges BUSCO full_table.tsv files)
 # ---------------------------------------------------------------------------
 
 class TestGenerateMultispBuscoTable:
+    def test_raises_when_busco_dir_missing(self, tmp_path):
+        outfile = tmp_path / 'merged.tsv'
+        missing_dir = tmp_path / 'busco_missing'
+
+        with pytest.raises(FileNotFoundError, match='BUSCO directory not found'):
+            generate_multisp_busco_table(str(missing_dir), str(outfile))
+
+    def test_raises_when_busco_path_is_file(self, tmp_path):
+        outfile = tmp_path / 'merged.tsv'
+        busco_file = tmp_path / 'busco.tsv'
+        busco_file.write_text('not a directory')
+
+        with pytest.raises(NotADirectoryError, match='BUSCO path exists but is not a directory'):
+            generate_multisp_busco_table(str(busco_file), str(outfile))
+
+    def test_raises_when_no_busco_table_files_detected(self, tmp_path):
+        outfile = tmp_path / 'merged.tsv'
+        busco_dir = tmp_path / 'busco'
+        busco_dir.mkdir()
+
+        with pytest.raises(FileNotFoundError, match='No BUSCO full table file'):
+            generate_multisp_busco_table(str(busco_dir), str(outfile))
+
     def test_merges_two_species(self, tmp_path):
         """Merges BUSCO tables from two species into one output file."""
         busco_dir = tmp_path / 'busco'
@@ -1195,3 +1970,164 @@ class TestGenerateMultispBuscoTable:
         assert 'Species_A' in result.columns
         assert 'Species_B' in result.columns
         assert result.shape[0] == 2
+
+    def test_raises_when_all_busco_tables_fail_to_parse(self, tmp_path, monkeypatch):
+        busco_dir = tmp_path / 'busco'
+        busco_dir.mkdir()
+        (busco_dir / 'Species_A.tsv').write_text('x')
+        outfile = tmp_path / 'merged.tsv'
+
+        def fake_run_tasks(task_items, task_fn, max_workers):
+            return {}, [(task_items[0], RuntimeError('bad table'))]
+
+        monkeypatch.setattr('amalgkit.util.run_tasks_with_optional_threads', fake_run_tasks)
+
+        with pytest.warns(UserWarning, match='Failed to parse BUSCO table'):
+            with pytest.raises(ValueError, match='Failed to parse any BUSCO table'):
+                generate_multisp_busco_table(str(busco_dir), str(outfile))
+
+    def test_raises_on_duplicate_species_label_after_filename_parsing(self, tmp_path):
+        busco_dir = tmp_path / 'busco'
+        busco_dir.mkdir()
+        content = (
+            '# comment line\n'
+            'OG0001\tComplete\tgene1\t100\t200\thttp://odb\tgene desc\n'
+        )
+        (busco_dir / 'Homo_sapiens_strain1.tsv').write_text(content)
+        (busco_dir / 'Homo_sapiens_strain2.tsv').write_text(content)
+        outfile = tmp_path / 'merged.tsv'
+
+        with pytest.raises(ValueError, match='Duplicate species label was detected across BUSCO tables'):
+            generate_multisp_busco_table(str(busco_dir), str(outfile))
+
+    def test_ignores_uncommented_busco_header_row(self, tmp_path):
+        busco_dir = tmp_path / 'busco'
+        busco_dir.mkdir()
+        content = (
+            'Busco id\tStatus\tSequence\tScore\tLength\tOrthoDB url\tDescription\n'
+            'OG0001\tComplete\tgene1\t100\t200\thttp://odb\tgene desc\n'
+        )
+        (busco_dir / 'Species_A.tsv').write_text(content)
+        (busco_dir / 'Species_B.tsv').write_text(content)
+        outfile = tmp_path / 'merged.tsv'
+
+        generate_multisp_busco_table(str(busco_dir), str(outfile))
+
+        result = pandas.read_csv(str(outfile), sep='\t')
+        assert result['busco_id'].tolist() == ['OG0001']
+
+    def test_accepts_gzipped_tsv_inputs(self, tmp_path):
+        import gzip
+        busco_dir = tmp_path / 'busco'
+        busco_dir.mkdir()
+        content = (
+            '# comment line\n'
+            'OG0001\tComplete\tgene1\t100\t200\thttp://odb\tgene desc\n'
+        )
+        with gzip.open(busco_dir / 'Species_A.tsv.gz', 'wt') as f:
+            f.write(content)
+        outfile = tmp_path / 'merged.tsv'
+
+        generate_multisp_busco_table(str(busco_dir), str(outfile))
+
+        result = pandas.read_csv(str(outfile), sep='\t')
+        assert 'Species_A' in result.columns
+        assert result.shape[0] == 1
+
+    def test_ignores_directory_named_like_busco_table(self, tmp_path):
+        busco_dir = tmp_path / 'busco'
+        busco_dir.mkdir()
+        content = (
+            '# comment line\n'
+            'OG0001\tComplete\tgene1\t100\t200\thttp://odb\tgene desc\n'
+        )
+        (busco_dir / 'Species_A.tsv').write_text(content)
+        (busco_dir / 'Species_B.tsv').mkdir()
+        outfile = tmp_path / 'merged.tsv'
+
+        with warnings.catch_warnings(record=True) as records:
+            warnings.simplefilter('always')
+            generate_multisp_busco_table(str(busco_dir), str(outfile))
+
+        assert len(records) == 0
+        result = pandas.read_csv(str(outfile), sep='\t')
+        assert 'Species_A' in result.columns
+        assert 'Species_B' not in result.columns
+
+
+class TestMetadataTaxidValidation:
+    def test_add_standard_rank_taxids_requires_nullable_int64_taxid(self, monkeypatch):
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001'],
+            'scientific_name': ['Homo sapiens'],
+            'exclusion': ['no'],
+            'taxid': ['9606'],
+        }))
+
+        def fail_if_called():
+            raise AssertionError('NCBITaxa should not be initialized for invalid taxid dtype.')
+
+        monkeypatch.setattr('amalgkit.util.ete4.NCBITaxa', fail_if_called)
+
+        with pytest.raises(TypeError, match='taxid column must be Int64 dtype'):
+            metadata.add_standard_rank_taxids()
+
+    def test_resolve_scientific_names_requires_nullable_int64_taxid(self, monkeypatch):
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001'],
+            'scientific_name': ['H. sapiens'],
+            'exclusion': ['no'],
+            'taxid': ['9606'],
+        }))
+
+        def fail_if_called():
+            raise AssertionError('NCBITaxa should not be initialized for invalid taxid dtype.')
+
+        monkeypatch.setattr('amalgkit.util.ete4.NCBITaxa', fail_if_called)
+
+        with pytest.raises(TypeError, match='taxid column must be Int64 dtype'):
+            metadata.resolve_scientific_names()
+
+    def test_add_standard_rank_taxids_does_not_swallow_keyboard_interrupt(self, monkeypatch):
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001'],
+            'scientific_name': ['Homo sapiens'],
+            'exclusion': ['no'],
+            'taxid': [9606],
+        }))
+        metadata.df['taxid'] = metadata.df['taxid'].astype('Int64')
+
+        class InterruptingNcbi:
+            def get_lineage(self, _taxid):
+                raise KeyboardInterrupt()
+
+            def get_rank(self, _lineage):
+                return {}
+
+        monkeypatch.setattr('amalgkit.util.ete4.NCBITaxa', lambda: InterruptingNcbi())
+
+        with pytest.raises(KeyboardInterrupt):
+            metadata.add_standard_rank_taxids()
+
+    def test_add_standard_rank_taxids_warns_on_lineage_lookup_error(self, monkeypatch):
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001'],
+            'scientific_name': ['Homo sapiens'],
+            'exclusion': ['no'],
+            'taxid': [9606],
+        }))
+        metadata.df['taxid'] = metadata.df['taxid'].astype('Int64')
+
+        class FailingNcbi:
+            def get_lineage(self, _taxid):
+                raise RuntimeError('boom')
+
+            def get_rank(self, _lineage):
+                return {}
+
+        monkeypatch.setattr('amalgkit.util.ete4.NCBITaxa', lambda: FailingNcbi())
+
+        with pytest.warns(UserWarning, match='Failed to resolve NCBI lineage'):
+            metadata.add_standard_rank_taxids()
+        assert 'taxid_species' in metadata.df.columns
+        assert metadata.df['taxid_species'].isna().all()

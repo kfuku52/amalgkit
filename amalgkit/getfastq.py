@@ -16,7 +16,7 @@ import sys
 import time
 import urllib.parse
 import urllib.request
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 
 IDENTICAL_PAIRED_RATIO_THRESHOLD = 0.99
 IDENTICAL_PAIRED_CHECKED_READS = 2000
@@ -43,7 +43,12 @@ def append_file_binary(src_path, dst_path, chunk_size=8 * 1024 * 1024):
 
 def list_run_dir_files(work_dir):
     try:
-        return set(os.listdir(work_dir))
+        with os.scandir(work_dir) as entries:
+            return {
+                entry.name
+                for entry in entries
+                if entry.is_file()
+            }
     except FileNotFoundError:
         return set()
 
@@ -106,19 +111,30 @@ def _fetch_single_sra_metadata_frame(args, sra_id, log_details=True):
     if log_details:
         print('Filtering SRA entry with --layout:', args.layout)
     layout = get_layout(args, metadata_dict_tmp)
-    metadata_dict_tmp.df = metadata_dict_tmp.df.loc[(metadata_dict_tmp.df['lib_layout'] == layout), :]
+    layout_series = metadata_dict_tmp.df['lib_layout'].fillna('').astype(str).str.strip().str.lower()
+    metadata_dict_tmp.df = metadata_dict_tmp.df.loc[(layout_series == layout), :]
     if args.sci_name is not None:
         if log_details:
             print('Filtering SRA entry with --sci_name:', args.sci_name)
-        metadata_dict_tmp.df = metadata_dict_tmp.df.loc[(metadata_dict_tmp.df['scientific_name'] == args.sci_name), :]
+        sci_series = metadata_dict_tmp.df['scientific_name'].fillna('').astype(str).str.strip()
+        metadata_dict_tmp.df = metadata_dict_tmp.df.loc[(sci_series == str(args.sci_name).strip()), :]
     return metadata_dict_tmp.df
 
 def _fetch_id_list_metadata_frames(args, sra_id_list):
     if len(sra_id_list) == 0:
         return []
     unique_sra_ids = list(dict.fromkeys(sra_id_list))
-    requested_jobs = validate_positive_int_option(getattr(args, 'jobs', 1), 'jobs')
-    max_workers = min(ID_LIST_METADATA_MAX_WORKERS, requested_jobs, len(unique_sra_ids))
+    requested_workers = getattr(args, 'internal_jobs', 'auto')
+    requested_threads = getattr(args, 'threads', 'auto')
+    internal_cpu_budget = getattr(args, 'internal_cpu_budget', 'auto')
+    effective_workers, _ = resolve_worker_allocation(
+        requested_workers=requested_workers,
+        requested_threads=requested_threads,
+        internal_cpu_budget=internal_cpu_budget,
+        worker_option_name='internal_jobs',
+        context='getfastq metadata fetch:',
+    )
+    max_workers = min(ID_LIST_METADATA_MAX_WORKERS, effective_workers, len(unique_sra_ids))
     log_details = len(unique_sra_ids) <= ID_LIST_VERBOSE_LIMIT
     if max_workers > 1:
         print(
@@ -156,15 +172,56 @@ def _fetch_id_list_metadata_frames(args, sra_id_list):
 def getfastq_getxml(search_term, retmax=1000, verbose=True):
     def merge_xml_chunk(root, chunk):
         # Merge package-set chunks directly to avoid nested container nodes.
-        if (chunk.tag == root.tag) and (len(chunk) > 0):
+        if (chunk.tag == root.tag) and root.tag.endswith('_SET'):
             root.extend(list(chunk))
-        else:
+            return root
+        if root.tag.endswith('_SET'):
             root.append(chunk)
+            return root
+        # If roots are non-container records, wrap them to preserve all entries.
+        container_tag = root.tag + '_SET'
+        wrapped = ET.Element(container_tag)
+        wrapped.append(root)
+        if (chunk.tag == root.tag) and (not chunk.tag.endswith('_SET')):
+            wrapped.append(chunk)
+        elif chunk.tag == container_tag:
+            wrapped.extend(list(chunk))
+        else:
+            wrapped.append(chunk)
+        return wrapped
+
+    def fetch_xml_chunk(record_ids, start, end, retmax, max_retry=10):
+        for _ in range(max_retry):
+            try:
+                handle = Entrez.efetch(
+                    db="sra",
+                    id=record_ids[start:end],
+                    rettype="full",
+                    retmode="xml",
+                    retmax=retmax,
+                )
+            except (HTTPError, URLError) as e:
+                if verbose:
+                    print(e, '- Trying Entrez.efetch() again...')
+                continue
+            try:
+                return ET.parse(handle).getroot()
+            except ET.ParseError:
+                if verbose:
+                    print('XML may be truncated. Retrying...', flush=True)
+                continue
+        raise RuntimeError(
+            'Failed to parse Entrez XML chunk after {} retries (records {}-{}).'.format(
+                max_retry,
+                start,
+                end - 1,
+            )
+        )
 
     entrez_db = 'sra'
     try:
         sra_handle = Entrez.esearch(db=entrez_db, term=search_term, retmax=10000000)
-    except HTTPError as e:
+    except (HTTPError, URLError) as e:
         print(e, '- Trying Entrez.esearch() again...')
         sra_handle = Entrez.esearch(db=entrez_db, term=search_term, retmax=10000000)
     sra_record = Entrez.read(sra_handle)
@@ -179,22 +236,17 @@ def getfastq_getxml(search_term, retmax=1000, verbose=True):
         end = min(start + retmax, num_record)
         if verbose:
             print('processing SRA records:', start, '-', end - 1, flush=True)
-        try:
-            handle = Entrez.efetch(db="sra", id=record_ids[start:end], rettype="full", retmode="xml", retmax=retmax)
-        except HTTPError as e:
-            print(e, '- Trying Entrez.efetch() again...')
-            handle = Entrez.efetch(db="sra", id=record_ids[start:end], rettype="full", retmode="xml", retmax=retmax)
-        chunk = ET.parse(handle).getroot()
+        chunk = fetch_xml_chunk(record_ids=record_ids, start=start, end=end, retmax=retmax, max_retry=10)
         if root is None:
             root = chunk
         else:
-            merge_xml_chunk(root, chunk)
+            root = merge_xml_chunk(root, chunk)
     error_node = root.find('.//Error')
     if error_node is not None:
         error_text = ''.join(error_node.itertext()).strip()
         if error_text != '':
             print(error_text)
-        raise Exception('<Error> found in the xml. Search term: ' + search_term)
+        raise RuntimeError('Error found in Entrez XML response. Search term: ' + search_term)
     return root
 
 def get_range(sra_stat, offset, total_sra_bp, max_bp):
@@ -214,18 +266,26 @@ def get_range(sra_stat, offset, total_sra_bp, max_bp):
     return start, end
 
 def detect_concat_input_files(output_files, run_ids, inext):
-    run_prefixes = tuple(run_ids)
+    expected_names = set()
+    for run_id in run_ids:
+        expected_names.add(run_id + inext)
+        expected_names.add(run_id + '_1' + inext)
+        expected_names.add(run_id + '_2' + inext)
     return sorted([
         f for f in output_files
-        if f.endswith(inext) and (f.startswith(run_prefixes) if len(run_prefixes) > 0 else False)
+        if f in expected_names
     ])
 
 
 def get_concat_output_basename(args, infile, paired=False):
     if args.id is not None:
+        id_prefix = str(args.id)
         if paired:
-            return args.id + re.sub('.*(_[1-2])', r'\g<1>', infile)
-        return args.id + infile
+            return id_prefix + re.sub('.*(_[1-2])', r'\g<1>', infile)
+        # Avoid duplicated prefixes when --id is the same run identifier.
+        if infile.startswith(id_prefix + '.') or infile.startswith(id_prefix + '_'):
+            return infile
+        return id_prefix + infile
     if args.id_list is not None:
         if paired:
             return os.path.basename(args.id_list) + re.sub('.*(_[1-2])', r'\g<1>', infile)
@@ -233,23 +293,51 @@ def get_concat_output_basename(args, infile, paired=False):
     return infile
 
 
-def maybe_rename_without_concat(layout, infiles, inext, args, output_dir):
+def _validate_rename_source_and_destination(infile_path, outfile_path):
+    if not os.path.exists(infile_path):
+        raise FileNotFoundError('Concatenation input file not found for rename shortcut: {}'.format(infile_path))
+    if not os.path.isfile(infile_path):
+        raise IsADirectoryError('Concatenation input path exists but is not a file: {}'.format(infile_path))
+    if os.path.exists(outfile_path) and (not os.path.isfile(outfile_path)):
+        raise IsADirectoryError('Concatenation output path exists but is not a file: {}'.format(outfile_path))
+
+
+def _has_single_complete_pair(infiles, inext):
+    suffix1 = '_1' + inext
+    suffix2 = '_2' + inext
+    pair1 = [infile for infile in infiles if infile.endswith(suffix1)]
+    pair2 = [infile for infile in infiles if infile.endswith(suffix2)]
+    if (len(pair1) != 1) or (len(pair2) != 1):
+        return False
+    run1 = pair1[0][:-len(suffix1)]
+    run2 = pair2[0][:-len(suffix2)]
+    return run1 == run2
+
+
+def maybe_rename_without_concat(layout, infiles, inext, args, output_dir, run_ids):
     num_inext_files = len(infiles)
-    if (layout == 'single') and (num_inext_files == 1):
+    is_single_run = len(run_ids) == 1
+    if (layout == 'single') and is_single_run and (num_inext_files == 1):
         print('Only 1', inext, 'file was detected. No concatenation will happen.', flush=True)
         infile = infiles[0]
         outfile = get_concat_output_basename(args=args, infile=infile, paired=False)
+        infile_path = os.path.join(output_dir, infile)
+        outfile_path = os.path.join(output_dir, outfile)
+        _validate_rename_source_and_destination(infile_path=infile_path, outfile_path=outfile_path)
         if infile != outfile:
             print('Replacing ID in the output file name:', infile, outfile)
-            os.rename(os.path.join(output_dir, infile), os.path.join(output_dir, outfile))
+            os.replace(infile_path, outfile_path)
         return True
-    if (layout == 'paired') and (num_inext_files == 2):
+    if (layout == 'paired') and is_single_run and (num_inext_files == 2) and _has_single_complete_pair(infiles, inext):
         print('Only 1 pair of', inext, 'files were detected. No concatenation will happen.', flush=True)
         for infile in infiles:
             outfile = get_concat_output_basename(args=args, infile=infile, paired=True)
+            infile_path = os.path.join(output_dir, infile)
+            outfile_path = os.path.join(output_dir, outfile)
+            _validate_rename_source_and_destination(infile_path=infile_path, outfile_path=outfile_path)
             if infile != outfile:
                 print('Replacing ID in the output file name:', infile, outfile)
-                os.rename(os.path.join(output_dir, infile), os.path.join(output_dir, outfile))
+                os.replace(infile_path, outfile_path)
         return True
     return False
 
@@ -286,10 +374,15 @@ def concat_fastq_files_for_subext(run_ids, subext, inext, output_dir, outfile_pa
     infiles = [run_id + subext + inext for run_id in run_ids]
     infile_paths = []
     if os.path.exists(outfile_path):
+        if not os.path.isfile(outfile_path):
+            raise IsADirectoryError('Concatenation output path exists but is not a file: {}'.format(outfile_path))
         os.remove(outfile_path)
     for infile in infiles:
         infile_path = os.path.join(output_dir, infile)
-        assert os.path.exists(infile_path), 'Dumped fastq not found: ' + infile_path
+        if os.path.exists(infile_path) and (not os.path.isfile(infile_path)):
+            raise IsADirectoryError('Concatenation input path exists but is not a file: {}'.format(infile_path))
+        if not os.path.exists(infile_path):
+            raise FileNotFoundError('Dumped fastq not found: ' + infile_path)
         print('Concatenated file:', infile_path, flush=True)
         infile_paths.append(infile_path)
     if not concatenate_files_with_system_cat(infile_paths, outfile_path):
@@ -310,10 +403,19 @@ def cleanup_concat_tmp_files(args, metadata, g, output_dir, run_ids, output_file
 def concat_fastq(args, metadata, output_dir, g):
     layout = get_layout(args, metadata)
     inext = '.amalgkit.fastq.gz'
-    run_ids = metadata.df.loc[:, 'run'].astype(str).tolist()
+    run_ids = collect_valid_run_ids(metadata.df.loc[:, 'run'].tolist(), unique=True)
+    if len(run_ids) == 0:
+        raise ValueError('No valid Run IDs were found for concatenation.')
     output_files = list_run_dir_files(output_dir)
     infiles = detect_concat_input_files(output_files=output_files, run_ids=run_ids, inext=inext)
-    if maybe_rename_without_concat(layout=layout, infiles=infiles, inext=inext, args=args, output_dir=output_dir):
+    if maybe_rename_without_concat(
+        layout=layout,
+        infiles=infiles,
+        inext=inext,
+        args=args,
+        output_dir=output_dir,
+        run_ids=run_ids,
+    ):
         return None
     print('Concatenating files with the extension:', inext)
     outext = '.amalgkit.fastq.gz'
@@ -337,16 +439,20 @@ def concat_fastq(args, metadata, output_dir, g):
     return None
 
 def remove_sra_files(metadata, amalgkit_out_dir):
+    def is_sra_artifact_name(entry_name, sra_id):
+        sra_base = sra_id + '.sra'
+        return (entry_name == sra_base) or entry_name.startswith(sra_base + '.')
+
     print('Starting SRA file removal.', flush=True)
     getfastq_root = os.path.join(os.path.realpath(amalgkit_out_dir), 'getfastq')
-    for sra_id in metadata.df['run']:
+    for sra_id in collect_valid_run_ids(metadata.df['run'].tolist(), unique=True):
         sra_dir = os.path.join(getfastq_root, sra_id)
         sra_pattern = os.path.join(sra_dir, sra_id + '.sra*')
         path_downloaded_sras = []
         try:
             with os.scandir(sra_dir) as entries:
                 for entry in entries:
-                    if (not entry.is_file()) or (not entry.name.startswith(sra_id + '.sra')):
+                    if (not entry.is_file()) or (not is_sra_artifact_name(entry.name, sra_id)):
                         continue
                     path_downloaded_sras.append(entry.path)
         except (FileNotFoundError, NotADirectoryError):
@@ -360,20 +466,36 @@ def remove_sra_files(metadata, amalgkit_out_dir):
     print('')
 
 def get_layout(args, metadata):
-    if args.layout == 'auto':
-        layouts = metadata.df['lib_layout'].unique().tolist()
-        if (len(layouts) != 1):
+    layout_arg = str(args.layout).strip().lower()
+    if layout_arg == 'auto':
+        if 'lib_layout' not in metadata.df.columns:
+            raise ValueError('Column "lib_layout" is required in metadata when --layout auto.')
+        normalized_layouts = (
+            metadata.df['lib_layout']
+            .fillna('')
+            .astype(str)
+            .str.strip()
+            .str.lower()
+        )
+        layouts = sorted(set([layout for layout in normalized_layouts.tolist() if layout in ['single', 'paired']]))
+        if len(layouts) == 0:
+            raise ValueError('No valid lib_layout value was found in metadata. Expected "single" or "paired".')
+        if len(layouts) != 1:
             print('Detected multiple layouts in the metadata:', layouts)
         layout = 'paired' if 'paired' in layouts else 'single'
     else:
-        layout = args.layout
+        if layout_arg not in ['single', 'paired']:
+            raise ValueError('--layout must be one of: auto, single, paired.')
+        layout = layout_arg
     return layout
 
 def remove_old_intermediate_files(sra_id, work_dir, files=None):
     if files is None:
         files = list_run_dir_files(work_dir)
-    files = [f for f in files if
-             (f.startswith(sra_id)) and (not f.endswith('.sra')) and (os.path.isfile(os.path.join(work_dir, f)))]
+    files = [
+        f for f in find_run_prefixed_entries(files, sra_id)
+        if (not f.endswith('.sra')) and (os.path.isfile(os.path.join(work_dir, f)))
+    ]
     for f in files:
         f_path = os.path.join(work_dir, f)
         print('Deleting old intermediate file:', f_path)
@@ -389,6 +511,8 @@ def remove_intermediate_files(sra_stat, ext, work_dir):
             file_paths.append(os.path.join(work_dir, sra_stat['sra_id'] + '_' + str(i) + ext))
     for file_path in file_paths:
         if os.path.exists(file_path):
+            if not os.path.isfile(file_path):
+                raise IsADirectoryError('Intermediate path exists but is not a file: {}'.format(file_path))
             print('Deleting intermediate file:', file_path)
             os.remove(file_path)
         else:
@@ -482,6 +606,8 @@ def download_sra_from_source(sra_id, sra_source_name, source_url_original, path_
 def download_sra(metadata, sra_stat, args, work_dir, overwrite=False):
     path_downloaded_sra = os.path.join(work_dir, sra_stat['sra_id'] + '.sra')
     if os.path.exists(path_downloaded_sra):
+        if not os.path.isfile(path_downloaded_sra):
+            raise IsADirectoryError('SRA path exists but is not a file: {}'.format(path_downloaded_sra))
         print('Previously-downloaded sra file was detected at: {}'.format(path_downloaded_sra))
         if (overwrite):
             print('Removing', path_downloaded_sra)
@@ -512,11 +638,13 @@ def download_sra(metadata, sra_stat, args, work_dir, overwrite=False):
         if not is_sra_download_completed:
             sys.stderr.write("Exhausted all sources of download.\n")
         else:
-            assert os.path.exists(path_downloaded_sra), 'SRA file download failed: ' + sra_stat['sra_id']
+            if not os.path.exists(path_downloaded_sra):
+                raise FileNotFoundError('SRA file download failed: ' + sra_stat['sra_id'])
             return
     err_txt = 'SRA file download failed for {}. Expected PATH: {}. '
     err_txt += 'Cloud URL download sources were exhausted and prefetch fallback is obsolete.'
-    assert os.path.exists(path_downloaded_sra), err_txt.format(sra_stat['sra_id'], path_downloaded_sra)
+    if not os.path.exists(path_downloaded_sra):
+        raise FileNotFoundError(err_txt.format(sra_stat['sra_id'], path_downloaded_sra))
 
 def check_getfastq_dependency(args):
     obsolete_pfd = getattr(args, 'obsolete_pfd', getattr(args, 'pfd', None))
@@ -531,12 +659,27 @@ def check_getfastq_dependency(args):
     obsolete_prefetch_exe = getattr(args, 'obsolete_prefetch_exe', getattr(args, 'prefetch_exe', None))
     if obsolete_prefetch_exe:
         sys.stderr.write('--prefetch_exe is obsolete and ignored.\n')
+
+    def probe_command(command, label):
+        try:
+            out = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        except FileNotFoundError as exc:
+            raise FileNotFoundError('{} executable not found: {}'.format(label, command[0])) from exc
+        if out.returncode != 0:
+            raise RuntimeError(
+                '{} dependency probe failed with exit code {}: {}'.format(
+                    label,
+                    out.returncode,
+                    ' '.join(command),
+                )
+            )
+        return out
+
     fasterq_dump_exe = getattr(args, 'fasterq_dump_exe', 'fasterq-dump')
-    test_fqd = subprocess.run([fasterq_dump_exe, '-h'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    assert (test_fqd.returncode == 0), "fasterq-dump PATH cannot be found: " + fasterq_dump_exe
-    if args.fastp:
-        test_fp = subprocess.run([args.fastp_exe, '--help'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        assert (test_fp.returncode == 0), "fastp PATH cannot be found: " + args.fastp_exe
+    probe_command([fasterq_dump_exe, '-h'], 'fasterq-dump')
+    if bool(getattr(args, 'fastp', False)):
+        fastp_exe = getattr(args, 'fastp_exe', 'fastp')
+        probe_command([fastp_exe, '--help'], 'fastp')
     return None
 
 def remove_sra_path(path_downloaded_sra):
@@ -606,7 +749,7 @@ def trim_fastq_by_spot_range(path_fastq, start, end):
             line3 = fin.readline()
             line4 = fin.readline()
             if (line2 == b'') or (line3 == b'') or (line4 == b''):
-                raise Exception('Malformed FASTQ (record truncated): {}'.format(path_fastq))
+                raise ValueError('Malformed FASTQ (record truncated): {}'.format(path_fastq))
             spot_index += 1
             if spot_index < start:
                 continue
@@ -675,11 +818,11 @@ def compress_fasterq_output_files(sra_stat, args, files=None, file_state=None, r
         out = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         if should_print_getfastq_command_output(args):
             print('Compression stdout:')
-            print(out.stdout.decode('utf8'))
+            print(out.stdout.decode('utf8', errors='replace'))
             print('Compression stderr:')
-            print(out.stderr.decode('utf8'))
+            print(out.stderr.decode('utf8', errors='replace'))
         if out.returncode != 0:
-            raise Exception('Compression failed.')
+            raise RuntimeError('Compression failed.')
     else:
         print('Using Python gzip fallback for compression.')
         for path_fastq in fastq_paths:
@@ -719,9 +862,9 @@ def execute_fasterq_dump_command(fasterq_dump_command, args, prefix='Command'):
     fqd_out = subprocess.run(fasterq_dump_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if should_print_getfastq_command_output(args):
         print('fasterq-dump stdout:')
-        print(fqd_out.stdout.decode('utf8'))
+        print(fqd_out.stdout.decode('utf8', errors='replace'))
         print('fasterq-dump stderr:')
-        print(fqd_out.stderr.decode('utf8'))
+        print(fqd_out.stderr.decode('utf8', errors='replace'))
     return fqd_out
 
 
@@ -738,6 +881,27 @@ def run_fasterq_dump_with_retry(fasterq_dump_command, path_downloaded_sra, metad
         sys.stderr.write("fasterq-dump did not finish safely after re-download.\n")
         sys.exit(1)
     return fqd_out
+
+
+def ensure_fasterq_output_files_exist(sra_stat):
+    sra_id = sra_stat['sra_id']
+    work_dir = sra_stat['getfastq_sra_dir']
+    candidate_paths = [
+        os.path.join(work_dir, sra_id + '.fastq'),
+        os.path.join(work_dir, sra_id + '_1.fastq'),
+        os.path.join(work_dir, sra_id + '_2.fastq'),
+    ]
+    detected = []
+    for path in candidate_paths:
+        if not os.path.exists(path):
+            continue
+        if not os.path.isfile(path):
+            raise IsADirectoryError('fasterq-dump output path exists but is not a file: {}'.format(path))
+        detected.append(path)
+    if len(detected) == 0:
+        raise FileNotFoundError(
+            'fasterq-dump did not generate FASTQ files for {} under {}'.format(sra_id, work_dir)
+        )
 
 
 def resolve_written_spots_from_fasterq_output(sra_stat, start, end, fqd_out, run_file_state):
@@ -783,6 +947,7 @@ def run_fasterq_dump(sra_stat, args, metadata, start, end, return_files=False, r
         sra_stat=sra_stat,
         args=args,
     )
+    ensure_fasterq_output_files_exist(sra_stat=sra_stat)
     run_file_state = RunFileState(work_dir=sra_stat['getfastq_sra_dir'])
     written_spots = resolve_written_spots_from_fasterq_output(
         sra_stat=sra_stat,
@@ -1110,9 +1275,9 @@ def execute_fastp_command(fp_command, fastp_print=False):
     fp_out = subprocess.run(fp_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if fastp_print:
         print('fastp stdout:')
-        print(fp_out.stdout.decode('utf8'))
+        print(fp_out.stdout.decode('utf8', errors='replace'))
         print('fastp stderr:')
-        print(fp_out.stderr.decode('utf8'))
+        print(fp_out.stderr.decode('utf8', errors='replace'))
     if fp_out.returncode != 0:
         raise RuntimeError(
             'fastp did not finish safely (exit code {}). Command: {}\n{}'.format(
@@ -1122,6 +1287,15 @@ def execute_fastp_command(fp_command, fastp_print=False):
             )
         )
     return fp_out
+
+
+def ensure_fastp_output_files(output_dir, output_names):
+    for output_name in output_names:
+        output_path = os.path.join(output_dir, output_name)
+        if not os.path.exists(output_path):
+            raise FileNotFoundError('fastp output file was not generated: {}'.format(output_path))
+        if not os.path.isfile(output_path):
+            raise IsADirectoryError('fastp output path exists but is not a file: {}'.format(output_path))
 
 
 def update_metadata_after_fastp(metadata, sra_stat, output_dir, fp_stderr):
@@ -1166,6 +1340,7 @@ def run_fastp(
     fp_command = fp_command + io_args
     fp_command = [fc for fc in fp_command if fc != '']
     fp_out = execute_fastp_command(fp_command, fastp_print=args.fastp_print)
+    ensure_fastp_output_files(output_dir=output_dir, output_names=output_names)
     if run_file_state is not None:
         for output_name in output_names:
             run_file_state.add(output_name)
@@ -1174,7 +1349,7 @@ def run_fastp(
         if run_file_state is not None:
             for input_name in input_names:
                 run_file_state.discard(input_name)
-    fp_stderr = fp_out.stderr.decode('utf8')
+    fp_stderr = fp_out.stderr.decode('utf8', errors='replace')
     metadata = update_metadata_after_fastp(metadata, sra_stat, output_dir, fp_stderr)
     set_current_intermediate_extension(sra_stat, outext)
     return finalize_run_fastp_return(
@@ -1203,7 +1378,7 @@ def rename_reads(sra_stat, args, output_dir, files=None, file_state=None, return
                 line3 = fin.readline()
                 line4 = fin.readline()
                 if any([line == '' for line in [line2, line3, line4]]):
-                    raise Exception('Malformed FASTQ (record truncated): {}'.format(infile))
+                    raise ValueError('Malformed FASTQ (record truncated): {}'.format(infile))
                 header = line1.rstrip('\n').split()[0]
                 fout.write(header + suffix + '\n')
                 fout.write(line2)
@@ -1245,14 +1420,23 @@ def rename_reads(sra_stat, args, output_dir, files=None, file_state=None, return
     return run_file_state.to_set()
 
 def rename_fastq(sra_stat, output_dir, inext, outext):
+    def rename_single_file(in_path, out_path):
+        if not os.path.exists(in_path):
+            raise FileNotFoundError('Intermediate fastq file not found for renaming: {}'.format(in_path))
+        if not os.path.isfile(in_path):
+            raise IsADirectoryError('Intermediate path exists but is not a file: {}'.format(in_path))
+        if os.path.exists(out_path) and (not os.path.isfile(out_path)):
+            raise IsADirectoryError('Renaming destination exists but is not a file: {}'.format(out_path))
+        os.replace(in_path, out_path)
+
     if sra_stat['layout'] == 'single':
         inbase = os.path.join(output_dir, sra_stat['sra_id'])
-        os.rename(inbase + inext, inbase + outext)
+        rename_single_file(inbase + inext, inbase + outext)
     elif sra_stat['layout'] == 'paired':
         inbase1 = os.path.join(output_dir, sra_stat['sra_id'] + '_1')
         inbase2 = os.path.join(output_dir, sra_stat['sra_id'] + '_2')
-        os.rename(inbase1 + inext, inbase1 + outext)
-        os.rename(inbase2 + inext, inbase2 + outext)
+        rename_single_file(inbase1 + inext, inbase1 + outext)
+        rename_single_file(inbase2 + inext, inbase2 + outext)
     set_current_intermediate_extension(sra_stat, outext)
 
 def calc_2nd_ranges(metadata):
@@ -1261,35 +1445,69 @@ def calc_2nd_ranges(metadata):
     rate_obtained = pandas.to_numeric(df.loc[:, 'rate_obtained'], errors='coerce').to_numpy(dtype=float)
     spot_lengths = pandas.to_numeric(df.loc[:, 'spot_length_amalgkit'], errors='coerce').to_numpy(dtype=float)
     total_spots = pandas.to_numeric(df.loc[:, 'total_spots'], errors='coerce').to_numpy(dtype=float)
-    start_2nds = (pandas.to_numeric(df.loc[:, 'spot_end_1st'], errors='coerce').to_numpy(dtype=float) + 1.0)
-    target_reads_base = sra_target_bp / spot_lengths
-    sra_target_reads = numpy.where(
-        numpy.isnan(rate_obtained),
+    start_2nds = pandas.to_numeric(df.loc[:, 'spot_end_1st'], errors='coerce').to_numpy(dtype=float) + 1.0
+
+    sra_target_bp = numpy.where(numpy.isfinite(sra_target_bp) & (sra_target_bp > 0), sra_target_bp, 0.0)
+    start_2nds = numpy.where(numpy.isfinite(start_2nds) & (start_2nds > 0), start_2nds, 1.0)
+    valid_spot_length = numpy.isfinite(spot_lengths) & (spot_lengths > 0)
+    safe_spot_lengths = numpy.where(valid_spot_length, spot_lengths, 1.0)
+    safe_total_spots = numpy.where(
+        numpy.isfinite(total_spots) & (total_spots >= start_2nds),
+        total_spots,
+        start_2nds,
+    )
+
+    target_reads_base = numpy.divide(
+        sra_target_bp,
+        safe_spot_lengths,
+        out=numpy.zeros_like(sra_target_bp, dtype=float),
+        where=valid_spot_length,
+    )
+    use_rate = numpy.isfinite(rate_obtained) & (rate_obtained > 0)
+    compensated_target_reads = numpy.divide(
         target_reads_base,
-        target_reads_base / rate_obtained,
-    ).astype(int) + 1
-    end_2nds = start_2nds + sra_target_reads
-    pooled_missing_bp = float(sra_target_bp.sum())
-    target_total_bp = float(sra_target_bp.sum())
-    for dummy in range(1000):
-        current_total_bp = 0.0
-        for i in range(end_2nds.shape[0]):
-            pooled_missing_read = int(pooled_missing_bp / spot_lengths[i])
-            if ((end_2nds[i] + pooled_missing_read) < total_spots[i]):
-                pooled_missing_bp = 0
-                end_2nds[i] = end_2nds[i] + pooled_missing_bp
-            elif (end_2nds[i] + pooled_missing_read > total_spots[i]):
-                pooled_missing_bp = (end_2nds[i] + pooled_missing_read - total_spots[i]) * spot_lengths[i]
-                end_2nds[i] = total_spots[i]
-            current_total_bp += end_2nds[i] * spot_lengths[i]
-        all_equal_total_spots = numpy.array_equal(end_2nds, total_spots)
-        is_enough_read = (current_total_bp >= target_total_bp)
-        if all_equal_total_spots:
-            print('Reached total spots in all SRAs.', flush=True)
-            break
-        if is_enough_read:
+        rate_obtained,
+        out=target_reads_base.copy(),
+        where=use_rate,
+    )
+    compensated_target_reads = numpy.where(
+        numpy.isfinite(compensated_target_reads) & (compensated_target_reads > 0),
+        compensated_target_reads,
+        0.0,
+    )
+    sra_target_reads = compensated_target_reads.astype(int) + 1
+    desired_end_2nds = start_2nds + sra_target_reads
+    end_2nds = numpy.minimum(desired_end_2nds, safe_total_spots)
+    overflow_reads = numpy.maximum(desired_end_2nds - safe_total_spots, 0.0)
+    pooled_missing_bp = float((overflow_reads * safe_spot_lengths).sum())
+
+    for _ in range(1000):
+        if pooled_missing_bp <= 0:
             print('Enough read numbers were assigned for the 2nd round sequence extraction.', flush=True)
             break
+        made_progress = False
+        for i in range(end_2nds.shape[0]):
+            if pooled_missing_bp <= 0:
+                break
+            if not valid_spot_length[i]:
+                continue
+            remaining_reads = int(max(0.0, safe_total_spots[i] - end_2nds[i]))
+            if remaining_reads <= 0:
+                continue
+            alloc_reads = int(pooled_missing_bp / safe_spot_lengths[i])
+            if alloc_reads <= 0:
+                # If a full read cannot be represented for this SRA's spot length, try next SRA.
+                continue
+            alloc_reads = min(alloc_reads, remaining_reads)
+            if alloc_reads <= 0:
+                continue
+            end_2nds[i] += alloc_reads
+            pooled_missing_bp -= alloc_reads * safe_spot_lengths[i]
+            made_progress = True
+        if not made_progress:
+            break
+    if pooled_missing_bp > 0:
+        print('Reached total spots in all SRAs.', flush=True)
     metadata.df.loc[:, 'spot_start_2nd'] = start_2nds.astype(int)
     metadata.df.loc[:, 'spot_end_2nd'] = end_2nds.astype(int)
     return metadata
@@ -1329,7 +1547,30 @@ def print_read_stats(args, metadata, g, sra_stat=None, individual=False):
                 print('Individual {} (bp): {}'.format(rt, txt))
     print('')
 
+
+def _apply_batch_to_entrez_metadata(metadata, args):
+    batch_value = getattr(args, 'batch', None)
+    if batch_value is None:
+        return metadata
+    batch = int(batch_value)
+    if batch <= 0:
+        raise ValueError('--batch must be >= 1.')
+    total_rows = int(metadata.df.shape[0])
+    if total_rows == 0:
+        return metadata
+    print('--batch is specified with --id/--id_list. Processing one SRA per job.', flush=True)
+    txt = 'This is {:,}th job. In total, {:,} jobs will be necessary for this metadata table.'
+    print(txt.format(batch, total_rows), flush=True)
+    if batch > total_rows:
+        sys.stderr.write('--batch {} is too large. Exiting.\n'.format(batch_value))
+        sys.exit(0)
+    metadata.df = metadata.df.reset_index(drop=True).loc[[batch - 1], :].copy()
+    return metadata
+
+
 def getfastq_metadata(args):
+    if (args.id is not None) and (args.id_list is not None):
+        raise ValueError('--id and --id_list are mutually exclusive. Specify only one.')
     if args.id is not None:
         print('--id is specified. Downloading SRA metadata from Entrez.')
         Entrez.email = args.entrez_email
@@ -1340,21 +1581,38 @@ def getfastq_metadata(args):
         metadata = Metadata.from_xml(xml_root=xml_root)
         print('Filtering SRA entry with --layout:', args.layout)
         layout = get_layout(args, metadata)
-        metadata.df = metadata.df.loc[(metadata.df['lib_layout'] == layout), :]
+        layout_series = metadata.df['lib_layout'].fillna('').astype(str).str.strip().str.lower()
+        metadata.df = metadata.df.loc[(layout_series == layout), :]
         if args.sci_name is not None:
             print('Filtering SRA entry with --sci_name:', args.sci_name)
-            metadata.df = metadata.df.loc[(metadata.df['scientific_name'] == args.sci_name), :]
+            sci_series = metadata.df['scientific_name'].fillna('').astype(str).str.strip()
+            metadata.df = metadata.df.loc[(sci_series == str(args.sci_name).strip()), :]
     if args.id_list is not None:
         print('--id_list is specified. Downloading SRA metadata from Entrez.')
         Entrez.email = args.entrez_email
-        sra_id_list = _read_sra_id_list(args.id_list)
+        id_list_path = os.path.realpath(args.id_list)
+        if not os.path.exists(id_list_path):
+            raise FileNotFoundError('SRA ID list file not found: {}'.format(id_list_path))
+        if not os.path.isfile(id_list_path):
+            raise IsADirectoryError('SRA ID list path exists but is not a file: {}'.format(id_list_path))
+        sra_id_list = _read_sra_id_list(id_list_path)
         metadata_frames = _fetch_id_list_metadata_frames(args, sra_id_list)
         if len(metadata_frames)==0:
             print('No associated SRA is found with --id_list. Exiting.')
             sys.exit(1)
         metadata = Metadata.from_DataFrame(pandas.concat(metadata_frames, ignore_index=True))
+        print('Filtering SRA entries with --layout:', args.layout)
+        layout = get_layout(args, metadata)
+        layout_series = metadata.df['lib_layout'].fillna('').astype(str).str.strip().str.lower()
+        metadata.df = metadata.df.loc[(layout_series == layout), :]
+        if args.sci_name is not None:
+            print('Filtering SRA entries with --sci_name:', args.sci_name)
+            sci_series = metadata.df['scientific_name'].fillna('').astype(str).str.strip()
+            metadata.df = metadata.df.loc[(sci_series == str(args.sci_name).strip()), :]
     if (args.id is None)&(args.id_list is None):
         metadata = load_metadata(args)
+    else:
+        metadata = _apply_batch_to_entrez_metadata(metadata, args)
     metadata.df['total_bases'] = pandas.to_numeric(metadata.df['total_bases'], errors='coerce')
     metadata.df['spot_length'] = pandas.to_numeric(metadata.df['spot_length'], errors='coerce')
     return metadata
@@ -1381,17 +1639,35 @@ def is_getfastq_output_present(sra_stat, files=None):
             print('getfastq output detected: {}'.format(out_path1))
         if is_out2:
             print('getfastq output detected: {}'.format(out_path2))
-        is_output_present *= (is_out1 | is_out2)
+        is_output_present = bool(is_output_present and (is_out1 or is_out2))
     return is_output_present
 
 def remove_experiment_without_run(metadata):
     num_all_run = metadata.df.shape[0]
-    is_missing_run = (metadata.df.loc[:, 'run'] == '')
+    run_ids = metadata.df.loc[:, 'run'].fillna('').astype(str).str.strip()
+    metadata.df['run'] = run_ids
+    is_missing_run = (run_ids == '')
     num_missing_run = is_missing_run.sum()
     if (num_missing_run > 0):
         print('There are {} out of {} Experiments without Run ID. Removing.'.format(num_missing_run, num_all_run))
         metadata.df = metadata.df.loc[~is_missing_run, :]
     return metadata
+
+
+def collect_valid_run_ids(run_values, unique=False):
+    run_ids = []
+    seen = set()
+    for run_value in run_values:
+        if pandas.isna(run_value):
+            continue
+        run_id = str(run_value).strip()
+        if run_id == '':
+            continue
+        if unique and (run_id in seen):
+            continue
+        seen.add(run_id)
+        run_ids.append(run_id)
+    return run_ids
 
 def initialize_columns(metadata, g):
     time_keys = ['time_start_1st', 'time_end_1st', 'time_start_2nd', 'time_end_2nd',]
@@ -1527,8 +1803,14 @@ def sequence_extraction_2nd_round(args, sra_stat, metadata, g):
     for subext in subexts:
         added_path = os.path.join(sra_stat['getfastq_sra_dir'], sra_id + subext + ext_1st_tmp)
         adding_path = os.path.join(sra_stat['getfastq_sra_dir'], sra_id + subext + ext_main)
-        assert os.path.exists(added_path), 'Dumped fastq not found: ' + added_path
-        assert os.path.exists(adding_path), 'Dumped fastq not found: ' + adding_path
+        if os.path.exists(added_path) and (not os.path.isfile(added_path)):
+            raise IsADirectoryError('Dumped fastq path exists but is not a file: {}'.format(added_path))
+        if os.path.exists(adding_path) and (not os.path.isfile(adding_path)):
+            raise IsADirectoryError('Dumped fastq path exists but is not a file: {}'.format(adding_path))
+        if not os.path.exists(added_path):
+            raise FileNotFoundError('Dumped fastq not found: ' + added_path)
+        if not os.path.exists(adding_path):
+            raise FileNotFoundError('Dumped fastq not found: ' + adding_path)
         append_file_binary(adding_path, added_path)
         os.remove(adding_path)
         os.rename(added_path, adding_path)
@@ -1542,15 +1824,28 @@ def sequence_extraction_2nd_round(args, sra_stat, metadata, g):
 def sequence_extraction_private(metadata, sra_stat, args):
     ind_sra = sra_stat.get('metadata_idx', get_metadata_row_index_by_run(metadata, sra_stat['sra_id']))
     for col in ['read1_path','read2_path']:
-        path_from = metadata.df.at[ind_sra, col]
+        path_from_raw = metadata.df.at[ind_sra, col]
+        if pandas.isna(path_from_raw):
+            sys.stderr.write('Private fastq file path is missing in metadata column "{}".\n'.format(col))
+            continue
+        path_from = str(path_from_raw).strip()
+        if path_from == '' or path_from.lower() == 'nan':
+            sys.stderr.write('Private fastq file path is missing in metadata column "{}".\n'.format(col))
+            continue
         path_to = os.path.join(sra_stat['getfastq_sra_dir'], os.path.basename(path_from))
         path_to = path_to.replace('.fq', '.fastq')
         if not path_to.endswith('.gz'):
             path_to = path_to+'.gz' # .gz is necessary even if the original file is not compressed.
-        if os.path.exists(path_from):
+        if os.path.isfile(path_from):
             if os.path.lexists(path_to):
+                if os.path.isdir(path_to) and (not os.path.islink(path_to)):
+                    raise IsADirectoryError(
+                        'Private output path exists but is not a file/symlink: {}'.format(path_to)
+                    )
                 os.remove(path_to)
             os.symlink(src=path_from, dst=path_to)
+        elif os.path.exists(path_from):
+            sys.stderr.write('Private fastq path exists but is not a file: {}\n'.format(path_from))
         else:
             sys.stderr.write('Private fastq file not found: {}\n'.format(path_from))
     set_current_intermediate_extension(sra_stat, '.fastq.gz')
@@ -1558,32 +1853,50 @@ def sequence_extraction_private(metadata, sra_stat, args):
         metadata = run_fastp(sra_stat, args, sra_stat['getfastq_sra_dir'], metadata)
     inext = get_or_detect_intermediate_extension(sra_stat, work_dir=sra_stat['getfastq_sra_dir'])
     if (inext=='no_extension_found')&(sra_stat['layout']=='paired'):
-        raise Exception('Paired-end file names may be invalid. They should contain _1 and _2 to indicate a pair: {}'.format(sra_stat['sra_id']))
+        raise ValueError('Paired-end file names may be invalid. They should contain _1 and _2 to indicate a pair: {}'.format(sra_stat['sra_id']))
     outext = '.amalgkit.fastq.gz'
     rename_fastq(sra_stat, sra_stat['getfastq_sra_dir'], inext, outext)
     return metadata
 
 def check_metadata_validity(metadata):
-    assert metadata.df.shape[0] > 0, 'No SRA entry found. Make sure whether --id or --id_list is compatible with --sci_name and --layout.'
-    is_total_bases_na = metadata.df.loc[:,'total_bases'].isnull()
-    is_total_bases_na |= (metadata.df.loc[:, 'total_bases']==0)
-    is_total_bases_na |= (metadata.df.loc[:, 'total_bases']=='')
-    if is_total_bases_na.any():
-        txt = 'Empty value(s) of total_bases were detected in {}. Filling a placeholder value 999,999,999,999\n'
-        sys.stderr.write(txt.format(', '.join(metadata.df.loc[is_total_bases_na, 'run'])))
-        metadata.df.loc[is_total_bases_na,'total_bases'] = 999999999999
-        metadata.df['total_bases'] = metadata.df.loc[:, 'total_bases'].astype(int)
-    is_total_spots_na = metadata.df.loc[:, 'total_spots'].isnull()
-    is_total_spots_na |=  (metadata.df.loc[:, 'total_spots']==0)
-    is_total_spots_na |=  (metadata.df.loc[:, 'total_spots']=='')
-    if is_total_spots_na.any():
-        new_values = metadata.df.loc[is_total_spots_na,'total_bases'] / metadata.df.loc[is_total_spots_na,'spot_length']
-        if is_total_spots_na.any():
-            txt = 'Empty value(s) of total_spots were detected in {}. Filling a placeholder value 999,999,999,999\n'
-            sys.stderr.write(txt.format(', '.join(metadata.df.loc[is_total_spots_na,'run'])))
-            new_values.loc[new_values.isnull()] = 999999999999 # https://github.com/kfuku52/amalgkit/issues/110
-        new_values = new_values.astype(int)
-        metadata.df.loc[is_total_spots_na, 'total_spots'] = new_values
+    required_columns = ['run', 'total_bases', 'total_spots', 'spot_length']
+    missing_columns = [col for col in required_columns if col not in metadata.df.columns]
+    if len(missing_columns) > 0:
+        raise ValueError(
+            'Missing required metadata column(s) for getfastq: {}'.format(', '.join(missing_columns))
+        )
+    if metadata.df.shape[0] == 0:
+        raise ValueError('No SRA entry found. Make sure whether --id or --id_list is compatible with --sci_name and --layout.')
+    run_ids = metadata.df.loc[:, 'run'].fillna('').astype(str).str.strip()
+    metadata.df['run'] = run_ids
+    is_missing_run = (run_ids == '')
+    if is_missing_run.any():
+        raise ValueError('Missing Run ID(s) were detected in metadata.')
+    duplicate_mask = run_ids.duplicated(keep=False)
+    if duplicate_mask.any():
+        duplicated_runs = run_ids.loc[duplicate_mask].drop_duplicates().tolist()
+        raise ValueError('Duplicate Run ID(s) were detected in metadata: {}'.format(', '.join(duplicated_runs)))
+    total_bases = pandas.to_numeric(metadata.df.loc[:, 'total_bases'], errors='coerce')
+    is_total_bases_invalid = (~numpy.isfinite(total_bases.to_numpy(dtype=float))) | (total_bases <= 0)
+    if is_total_bases_invalid.any():
+        txt = 'Invalid value(s) of total_bases were detected in {}. Filling a placeholder value 999,999,999,999\n'
+        run_ids = metadata.df.loc[is_total_bases_invalid, 'run'].astype(str).tolist()
+        sys.stderr.write(txt.format(', '.join(run_ids)))
+        total_bases.loc[is_total_bases_invalid] = 999999999999
+    metadata.df['total_bases'] = total_bases.astype(int)
+
+    total_spots = pandas.to_numeric(metadata.df.loc[:, 'total_spots'], errors='coerce')
+    is_total_spots_invalid = (~numpy.isfinite(total_spots.to_numpy(dtype=float))) | (total_spots <= 0)
+    if is_total_spots_invalid.any():
+        spot_length = pandas.to_numeric(metadata.df.loc[is_total_spots_invalid, 'spot_length'], errors='coerce')
+        new_values = metadata.df.loc[is_total_spots_invalid, 'total_bases'] / spot_length
+        txt = 'Invalid value(s) of total_spots were detected in {}. Filling a placeholder value 999,999,999,999\n'
+        run_ids = metadata.df.loc[is_total_spots_invalid, 'run'].astype(str).tolist()
+        sys.stderr.write(txt.format(', '.join(run_ids)))
+        invalid_new_values = (~numpy.isfinite(new_values.to_numpy(dtype=float))) | (new_values <= 0)
+        new_values.loc[invalid_new_values] = 999999999999  # https://github.com/kfuku52/amalgkit/issues/110
+        total_spots.loc[is_total_spots_invalid] = new_values.astype(int)
+    metadata.df['total_spots'] = total_spots.astype(int)
     for run_id, total_bases in zip(metadata.df['run'].tolist(), metadata.df['total_bases'].tolist()):
         txt = 'Individual SRA size of {}: {:,} bp'
         print(txt.format(run_id, int(total_bases)))
@@ -1592,9 +1905,26 @@ def check_metadata_validity(metadata):
 def initialize_global_params(args, metadata):
     g = dict()
     g['start_time'] = time.time()
-    g['max_bp'] = int(args.max_bp.replace(',', ''))
+    max_bp_raw = str(args.max_bp).replace(',', '').strip()
+    try:
+        g['max_bp'] = int(max_bp_raw)
+    except ValueError as exc:
+        raise ValueError('--max_bp must be a positive integer: {}'.format(args.max_bp)) from exc
+    if g['max_bp'] <= 0:
+        raise ValueError('--max_bp must be > 0.')
     g['num_sra'] = metadata.df.shape[0]
+    if g['num_sra'] <= 0:
+        raise ValueError('No SRA entries were found in metadata.')
     g['num_bp_per_sra'] = int(g['max_bp'] / g['num_sra'])
+    if g['num_bp_per_sra'] <= 0:
+        raise ValueError(
+            '--max_bp ({}) is too small for {:,} SRA runs. '
+            'Increase --max_bp to at least {:,}.'.format(
+                g['max_bp'],
+                g['num_sra'],
+                g['num_sra'],
+            )
+        )
     g['total_sra_bp'] = metadata.df.loc[:,'total_bases'].sum()
     print('Number of SRAs to be processed: {:,}'.format(g['num_sra']))
     print('Total target size (--max_bp): {:,} bp'.format(g['max_bp']))
@@ -1734,14 +2064,15 @@ def run_getfastq_postprocessing(args, metadata, last_getfastq_sra_dir, flag_any_
 
 def getfastq_main(args):
     threads, jobs, _ = resolve_thread_worker_allocation(
-        requested_threads=getattr(args, 'threads', 1),
-        requested_workers=getattr(args, 'jobs', 1),
-        cpu_budget=getattr(args, 'cpu_budget', 0),
-        worker_option_name='jobs',
+        requested_threads=getattr(args, 'threads', 'auto'),
+        requested_workers=getattr(args, 'internal_jobs', 'auto'),
+        internal_cpu_budget=getattr(args, 'internal_cpu_budget', 'auto'),
+        worker_option_name='internal_jobs',
         context='getfastq:',
+        disable_workers=(getattr(args, 'batch', None) is not None),
     )
     args.threads = threads
-    args.jobs = jobs
+    args.internal_jobs = jobs
     check_getfastq_dependency(args)
     metadata = getfastq_metadata(args)
     metadata = remove_experiment_without_run(metadata)

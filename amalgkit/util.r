@@ -521,7 +521,21 @@ format_genus_species_label = function(x) {
 save_exclusion_plot = function(df, out_path, font_size, y_label = "Count") {
     font_size = resolve_plot_font_size(font_size)
     font_family = resolve_plot_font_family()
-    data_summary = aggregate(cbind(count = exclusion) ~ scientific_name + exclusion, df, length)
+    if ((!('scientific_name' %in% colnames(df))) || (!('exclusion' %in% colnames(df)))) {
+        cat('Missing scientific_name/exclusion columns. Skipping exclusion plot:', out_path, '\n')
+        return(NULL)
+    }
+    df2 = df[, c('scientific_name', 'exclusion'), drop = FALSE]
+    df2[['scientific_name']] = trimws(as.character(df2[['scientific_name']]))
+    df2[['exclusion']] = trimws(as.character(df2[['exclusion']]))
+    is_valid = (!is.na(df2[['scientific_name']])) & (df2[['scientific_name']] != '') &
+        (!is.na(df2[['exclusion']])) & (df2[['exclusion']] != '')
+    df2 = df2[is_valid, , drop = FALSE]
+    if (nrow(df2) == 0) {
+        cat('No valid scientific_name/exclusion rows. Skipping exclusion plot:', out_path, '\n')
+        return(NULL)
+    }
+    data_summary = aggregate(cbind(count = exclusion) ~ scientific_name + exclusion, df2, length)
     data_summary[['total']] = ave(data_summary[['count']], data_summary[['scientific_name']], FUN = sum)
     data_summary[['proportion']] = data_summary[['count']] / data_summary[['total']]
     g = ggplot(data_summary, aes(x = scientific_name, y = count, fill = exclusion))
@@ -536,7 +550,7 @@ save_exclusion_plot = function(df, out_path, font_size, y_label = "Count") {
         legend_position = 'bottom',
         legend_title_blank = TRUE
     )
-    num_spp = length(unique(df[['scientific_name']]))
+    num_spp = length(unique(df2[['scientific_name']]))
     plot_width = max(3.6, 0.11 * num_spp)
     ggsave(out_path, plot = g, width = plot_width, height = 3.6, units = 'in')
 }

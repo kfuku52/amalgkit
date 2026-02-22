@@ -108,11 +108,37 @@ cat('dir_csca:', dir_csca, "\n")
 cat('batch_effect_alg:', batch_effect_alg, "\n")
 cat('missing_strategy:', missing_strategy, "\n")
 
+normalize_exclusion_values = function(exclusion_values) {
+    normalized = as.character(exclusion_values)
+    normalized[is.na(exclusion_values)] = NA_character_
+    normalized = trimws(normalized)
+    normalized = tolower(normalized)
+    return(normalized)
+}
+
+is_non_excluded_flag = function(exclusion_values) {
+    exclusion_norm = normalize_exclusion_values(exclusion_values)
+    return((!is.na(exclusion_norm)) & (exclusion_norm == 'no'))
+}
+
+normalize_csca_metadata_table = function(df_metadata) {
+    required_cols = c('run', 'scientific_name', 'sample_group', 'exclusion', 'bioproject')
+    missing_cols = required_cols[!required_cols %in% colnames(df_metadata)]
+    if (length(missing_cols) > 0) {
+        stop(paste0('Missing required metadata column(s) for csca: ', paste(missing_cols, collapse = ', ')))
+    }
+    df_metadata[['run']] = trimws(as.character(df_metadata[['run']]))
+    df_metadata[['scientific_name']] = trimws(as.character(df_metadata[['scientific_name']]))
+    df_metadata[['sample_group']] = trimws(as.character(df_metadata[['sample_group']]))
+    df_metadata[['exclusion']] = normalize_exclusion_values(df_metadata[['exclusion']])
+    return(df_metadata)
+}
+
 sort_labels = function(df_label, label_orders) {
     if ((nrow(df_label) == 0) || (length(label_orders) == 0)) {
         return(df_label[0, , drop = FALSE])
     }
-    label_key = sub(' ', '_', paste(df_label[['scientific_name']], df_label[['sample_group']], sep = '_'))
+    label_key = gsub(' ', '_', paste(df_label[['scientific_name']], df_label[['sample_group']], sep = '_'))
     row_idx_by_key = split(seq_len(nrow(df_label)), label_key)
     ordered_rows = unlist(row_idx_by_key[label_orders], use.names = FALSE)
     if (length(ordered_rows) == 0) {
@@ -671,7 +697,15 @@ draw_multisp_dendrogram = function(tc, df_label, df_metadata,
     if (!is.null(nboot) || !is.null(pvclust_file)) {
         cat('Bootstrap-based dendrogram support is deprecated. Using hclust without bootstrap.\n')
     }
-    colnames(tc) = sub("_.*", "", sub('_', ' ', colnames(tc)))
+    tc_colnames = as.character(colnames(tc))
+    label_keys = paste0(gsub(' ', '_', as.character(df_label[['scientific_name']])), '_', as.character(df_label[['sample_group']]))
+    species_by_key = setNames(as.character(df_label[['scientific_name']]), label_keys)
+    tc_species = unname(species_by_key[tc_colnames])
+    is_unresolved = is.na(tc_species) | (tc_species == '')
+    if (any(is_unresolved)) {
+        tc_species[is_unresolved] = sub("_.*", "", sub('_', ' ', tc_colnames[is_unresolved]))
+    }
+    colnames(tc) = tc_species
     if (is.null(tc_dist_dist)) {
         tc_dist_dist = calc_sample_distance(tc, method = 'pearson')
     }
@@ -809,8 +843,23 @@ draw_multisp_legend = function(df_label) {
 }
 
 prepare_metadata_table = function(dir_csca_input_table, selected_sample_groups, spp) {
-    files = list.files(dir_csca_input_table, pattern = ".*metadata.*")
-    metadata_paths = file.path(dir_csca_input_table, files)
+    selected_sample_groups = trimws(as.character(selected_sample_groups))
+    selected_sample_groups = selected_sample_groups[selected_sample_groups != '']
+    selected_sample_groups = unique(selected_sample_groups)
+    if (length(selected_sample_groups) == 0) {
+        stop('No selected sample groups were provided for csca.')
+    }
+    spp = trimws(as.character(spp))
+    spp = spp[spp != '']
+    spp = unique(spp)
+    if (length(spp) == 0) {
+        stop('No species labels were provided for csca metadata filtering.')
+    }
+    metadata_paths = list.files(dir_csca_input_table, pattern = "\\.metadata\\.tsv$", full.names = TRUE)
+    if (length(metadata_paths) > 0) {
+        is_file = file.exists(metadata_paths) & (!dir.exists(metadata_paths))
+        metadata_paths = metadata_paths[is_file]
+    }
     metadata_tables = lapply(metadata_paths, function(metadata_path) {
         read.table(metadata_path, header = TRUE, sep = '\t', quote = '', comment.char = '', check.names = FALSE)
     })
@@ -818,15 +867,16 @@ prepare_metadata_table = function(dir_csca_input_table, selected_sample_groups, 
         stop('No metadata files found in csca input table directory.')
     }
     df_metadata = do.call(rbind, metadata_tables)
-    df_metadata = df_metadata[(df_metadata[['sample_group']] %in% selected_sample_groups) & (df_metadata[['scientific_name']] %in% spp),]
     df_metadata = df_metadata[, !startsWith(colnames(df_metadata), 'Unnamed')]
+    df_metadata = normalize_csca_metadata_table(df_metadata)
+    df_metadata = df_metadata[(df_metadata[['sample_group']] %in% selected_sample_groups) & (df_metadata[['scientific_name']] %in% spp),]
     return(df_metadata)
 }
 
 get_label_orders = function(df_metadata) {
     order_cg = order(df_metadata[['sample_group']])
     label_orders = unique(paste(df_metadata[order_cg, 'scientific_name'], df_metadata[order_cg, 'sample_group'], sep = '_'))
-    label_orders = sub(' ', '_', label_orders)
+    label_orders = gsub(' ', '_', label_orders)
     return(label_orders)
 }
 
@@ -884,18 +934,32 @@ load_unaveraged_expression_tables = function(dir_csca_input_table, spp_filled, b
     unaveraged_tcs = list()
     unaveraged_tcs[['uncorrected']] = list()
     unaveraged_tcs[['corrected']] = list()
-    all_files = list.files(dir_csca_input_table, pattern = "*.tc.tsv")
-    uncorrected_files = all_files[grepl("uncorrected", all_files)]
-    corrected_files = all_files[((!grepl("uncorrected", all_files)) & (grepl(batch_effect_alg, all_files)))]
+    all_files = list.files(dir_csca_input_table, pattern = "\\.tc\\.tsv$", full.names = FALSE)
+    if (length(all_files) > 0) {
+        all_paths = file.path(dir_csca_input_table, all_files)
+        is_file = file.exists(all_paths) & (!dir.exists(all_paths))
+        all_files = all_files[is_file]
+    }
+    uncorrected_suffix = ".uncorrected.tc.tsv"
+    corrected_suffix = paste0(".", batch_effect_alg, ".tc.tsv")
+    uncorrected_files = all_files[endsWith(all_files, uncorrected_suffix)]
+    corrected_files = all_files[(!endsWith(all_files, uncorrected_suffix)) & endsWith(all_files, corrected_suffix)]
     for (sp in spp_filled) {
-        uncorrected_file = uncorrected_files[startsWith(uncorrected_files, sp)]
-        uncorrected_path = file.path(dir_csca_input_table, uncorrected_file)
-        corrected_file = corrected_files[startsWith(corrected_files, sp)]
-        corrected_path = file.path(dir_csca_input_table, corrected_file)
-        if ((length(uncorrected_path) == 0) | (length(corrected_path) == 0)) {
+        species_prefix = paste0(sp, '.')
+        uncorrected_file = uncorrected_files[startsWith(uncorrected_files, species_prefix)]
+        corrected_file = corrected_files[startsWith(corrected_files, species_prefix)]
+        if (length(uncorrected_file) > 1) {
+            stop(sprintf('Multiple uncorrected tc tables matched species %s: %s', sp, paste(uncorrected_file, collapse = ', ')))
+        }
+        if (length(corrected_file) > 1) {
+            stop(sprintf('Multiple corrected tc tables matched species %s: %s', sp, paste(corrected_file, collapse = ', ')))
+        }
+        if ((length(uncorrected_file) == 0) | (length(corrected_file) == 0)) {
             cat(paste("Skipping. `amalgkit curate` output(s) not found:", sp, "\n"), file = stderr())
             next
         }
+        uncorrected_path = file.path(dir_csca_input_table, uncorrected_file[[1]])
+        corrected_path = file.path(dir_csca_input_table, corrected_file[[1]])
         unaveraged_tcs[['uncorrected']][[sp]] = read.delim(uncorrected_path, header = TRUE, row.names = 1, sep = '\t', check.names = FALSE)
         unaveraged_tcs[['corrected']][[sp]] = read.delim(corrected_path, header = TRUE, row.names = 1, sep = '\t', check.names = FALSE)
     }
@@ -920,7 +984,7 @@ extract_ortholog_unaveraged_expression_table = function(df_singleog, unaveraged_
 }
 
 get_df_labels_averaged = function(df_metadata, label_orders, selected_sample_groups, sample_group_colors) {
-    metadata_tmp = df_metadata[(df_metadata[['exclusion']] == 'no'),]
+    metadata_tmp = df_metadata[is_non_excluded_flag(df_metadata[['exclusion']]),]
     df_label = unique(metadata_tmp[, c('scientific_name', 'sample_group')])
     metadata_key = paste(metadata_tmp[['scientific_name']], metadata_tmp[['sample_group']], sep = '|||')
     label_key = paste(df_label[['scientific_name']], df_label[['sample_group']], sep = '|||')
@@ -938,7 +1002,7 @@ get_df_labels_averaged = function(df_metadata, label_orders, selected_sample_gro
 
 get_df_labels_unaveraged = function(df_metadata, selected_sample_groups, sample_group_colors) {
     cols = c('run', 'bioproject', 'sample_group', 'scientific_name', 'sp_color', 'sample_group_color', 'bp_color')
-    metadata_tmp = df_metadata[(df_metadata[['exclusion']] == 'no'),]
+    metadata_tmp = df_metadata[is_non_excluded_flag(df_metadata[['exclusion']]),]
     df_color = add_color_to_metadata(metadata_tmp, selected_sample_groups, sample_group_colors)
     df_color = df_color[, cols]
     label_order = order(df_color[['run']])
@@ -971,9 +1035,9 @@ add_color_to_metadata = function(df, selected_sample_groups, sample_group_colors
         sp_color = rainbow_hcl(length(unique(scientific_name)), c = 100)
     }
     sample_group_unique = selected_sample_groups
-    sample_group_palette = sample_group_color[1:length(sample_group_unique)]
+    sample_group_palette = sample_group_color[seq_len(length(sample_group_unique))]
     names(sample_group_palette) = sample_group_unique
-    sp_palette = sp_color[1:length(scientific_name_unique)]
+    sp_palette = sp_color[seq_len(length(scientific_name_unique))]
     names(sp_palette) = scientific_name_unique
     is_known_sample_group = sample_group %in% sample_group_unique
     df = df[is_known_sample_group, , drop = FALSE]
@@ -985,7 +1049,7 @@ add_color_to_metadata = function(df, selected_sample_groups, sample_group_colors
         bioproject = as.character(df[['bioproject']])
         bp_unique = unique(bioproject)
         bp_color = rainbow_hcl(length(bp_unique), c = 50)
-        bp_palette = bp_color[1:length(bp_unique)]
+        bp_palette = bp_color[seq_len(length(bp_unique))]
         names(bp_palette) = bp_unique
         df[['bp_color']] = unname(bp_palette[bioproject])
     }
@@ -1048,7 +1112,7 @@ get_pca_coordinates = function(tc, df_label, by = 'species_sample_group') {
     PC5 = if ('PC5' %in% colnames(pca_x)) pca_x[, 'PC5'] else empty_pc
     tmp = data.frame(PC1, PC2, PC3, PC4, PC5)
     if (by == 'species_sample_group') {
-        df_label[by] = paste0(sub(' ', '_', df_label[['scientific_name']]), '_', df_label[['sample_group']])
+        df_label[by] = paste0(gsub(' ', '_', df_label[['scientific_name']]), '_', df_label[['sample_group']])
         tmp[by] = rownames(tmp)
     } else if (by == 'run') {
         tmp[by] = sub('.*_', '', rownames(tmp))
@@ -1324,6 +1388,14 @@ calculate_correlation_within_group = function(unaveraged_orthologs, averaged_ort
     median_fun = function(x) { median(x, na.rm = TRUE) }
     metadata_keys = paste(df_metadata[['scientific_name']], df_metadata[['run']], sep = '|||')
     metadata_rows_by_key = split(seq_len(nrow(df_metadata)), metadata_keys)
+    metadata_species_prefixes = trimws(as.character(df_metadata[['scientific_name']]))
+    metadata_species_prefixes = gsub('\\s+', '_', metadata_species_prefixes)
+    metadata_species_prefixes = gsub('_+', '_', metadata_species_prefixes)
+    metadata_species_prefixes = metadata_species_prefixes[metadata_species_prefixes != '']
+    metadata_species_prefixes = unique(metadata_species_prefixes)
+    if (length(metadata_species_prefixes) > 0) {
+        metadata_species_prefixes = metadata_species_prefixes[order(nchar(metadata_species_prefixes), decreasing = TRUE)]
+    }
     metadata_first_row = vapply(metadata_rows_by_key, function(idx) idx[[1]], integer(1))
     metadata_sample_group_by_key = setNames(
         trimws(as.character(df_metadata[['sample_group']][metadata_first_row])),
@@ -1333,8 +1405,29 @@ calculate_correlation_within_group = function(unaveraged_orthologs, averaged_ort
     sample_index_cache = list()
 
     build_sample_index = function(sample_ids) {
-        sample_species = sub('_', ' ', sub('^([^_]+_[^_]+)_.*$', '\\1', sample_ids))
-        sample_runs = sub('^[^_]+_[^_]+_', '', sample_ids)
+        sample_ids = as.character(sample_ids)
+        sample_species = rep(NA_character_, length(sample_ids))
+        sample_runs = rep(NA_character_, length(sample_ids))
+        for (i in seq_along(sample_ids)) {
+            sample_id = sample_ids[[i]]
+            matched_prefix = NA_character_
+            if (length(metadata_species_prefixes) > 0) {
+                for (species_prefix in metadata_species_prefixes) {
+                    if (startsWith(sample_id, paste0(species_prefix, '_'))) {
+                        matched_prefix = species_prefix
+                        break
+                    }
+                }
+            }
+            if (!is.na(matched_prefix)) {
+                sample_species[[i]] = gsub('_', ' ', matched_prefix)
+                sample_runs[[i]] = substring(sample_id, nchar(matched_prefix) + 2)
+            } else {
+                # Backward-compatible fallback for legacy naming assumptions.
+                sample_species[[i]] = sub('_', ' ', sub('^([^_]+_[^_]+)_.*$', '\\1', sample_id))
+                sample_runs[[i]] = sub('^[^_]+_[^_]+_', '', sample_id)
+            }
+        }
         sample_keys = paste(sample_species, sample_runs, sep = '|||')
         rows_by_sample = unname(metadata_rows_by_key[sample_keys])
         has_metadata = !vapply(rows_by_sample, is.null, logical(1))
@@ -1580,7 +1673,7 @@ save_group_cor_histogram = function(df_metadata, df_color_unaveraged, font_size 
 }
 
 extract_selected_tc_only = function(unaveraged_tcs, df_metadata) {
-    selected_runs = unique(df_metadata[(df_metadata[['exclusion']] == 'no'), 'run'])
+    selected_runs = unique(df_metadata[is_non_excluded_flag(df_metadata[['exclusion']]), 'run'])
     for (d in correction_labels) {
         scientific_names = names(unaveraged_tcs[[d]])
         for (sci_name in scientific_names) {
@@ -1596,8 +1689,8 @@ extract_selected_tc_only = function(unaveraged_tcs, df_metadata) {
 }
 
 unaveraged2averaged = function(unaveraged_tcs, df_metadata, selected_sample_groups) {
-    metadata_selected = df_metadata[(df_metadata[['exclusion']] == 'no'), c('scientific_name', 'sample_group', 'run')]
-    metadata_selected[['sci_name_ub']] = sub(' ', '_', metadata_selected[['scientific_name']])
+    metadata_selected = df_metadata[is_non_excluded_flag(df_metadata[['exclusion']]), c('scientific_name', 'sample_group', 'run')]
+    metadata_selected[['sci_name_ub']] = gsub(' ', '_', metadata_selected[['scientific_name']])
     metadata_selected[['sci_group_key']] = paste(metadata_selected[['sci_name_ub']], metadata_selected[['sample_group']], sep = '|||')
     runs_by_sci_group = split(metadata_selected[['run']], metadata_selected[['sci_group_key']])
 
@@ -1710,7 +1803,7 @@ write_pivot_table = function(df_metadata, unaveraged_tcs, selected_sample_groups
     is_selected_cg = (df_metadata[['sample_group']] %in% selected_sample_groups)
     is_loaded_run = FALSE
     for (sci_name_ub in names(unaveraged_tcs[[d]])) {
-        sci_name = sub('_', ' ', sci_name_ub)
+        sci_name = gsub('_', ' ', sci_name_ub)
         is_loaded_run_sp = ((df_metadata[['run']] %in% colnames(unaveraged_tcs[[d]][[sci_name_ub]])) & (df_metadata[['scientific_name']] == sci_name))
         is_loaded_run = (is_loaded_run | is_loaded_run_sp)
     }
@@ -1829,7 +1922,7 @@ save_delta_pcc_plot = function(directory, plot_title) {
 save_sample_number_heatmap <- function(df_metadata, font_size = 8, dpi = 300) {
     font_size = resolve_csca_font_size(font_size)
     font_family = resolve_csca_font_family('Helvetica')
-    sampled_data <- df_metadata[df_metadata$exclusion == 'no', c('scientific_name', 'sample_group')]
+    sampled_data <- df_metadata[is_non_excluded_flag(df_metadata[['exclusion']]), c('scientific_name', 'sample_group')]
     freq_table <- table(sampled_data$scientific_name, sampled_data$sample_group)
     df_sample_count <- as.data.frame(freq_table)
     names(df_sample_count) <- c('scientific_name', 'sample_group', 'Freq')
@@ -1914,7 +2007,7 @@ spp_filled = colnames(df_gc)
 
 is_singlecopy = get_singlecopy_bool_index(df_gc, spp_filled)
 df_singleog = df_og[is_singlecopy, spp_filled, drop = FALSE]
-spp = sub('_', ' ', spp_filled)
+spp = gsub('_', ' ', spp_filled)
 df_metadata = prepare_metadata_table(dir_csca_input_table, selected_sample_groups, spp)
 label_orders = get_label_orders(df_metadata)
 df_color_averaged = get_df_labels_averaged(df_metadata, label_orders, selected_sample_groups, sample_group_colors)

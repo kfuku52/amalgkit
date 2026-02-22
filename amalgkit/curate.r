@@ -75,6 +75,19 @@ source(r_util_path)
 CURATE_FONT_SIZE_PT = 8
 CURATE_FONT_FAMILY = 'Helvetica'
 
+normalize_exclusion_values = function(exclusion_values) {
+    normalized = as.character(exclusion_values)
+    normalized[is.na(exclusion_values)] = NA_character_
+    normalized = trimws(normalized)
+    normalized = tolower(normalized)
+    return(normalized)
+}
+
+is_non_excluded_flag = function(exclusion_values) {
+    exclusion_norm = normalize_exclusion_values(exclusion_values)
+    (!is.na(exclusion_norm)) & (exclusion_norm == 'no')
+}
+
 resolve_curate_fontsize = function(fontsize = CURATE_FONT_SIZE_PT) {
     return(CURATE_FONT_SIZE_PT)
 }
@@ -126,7 +139,7 @@ add_color_to_curate_metadata = function(sra, selected_sample_groups, sample_grou
     if (is_default_palette) {
         if (length(selected_sample_groups) <= 8) {
             sample_group_color = brewer.pal(8, "Dark2")
-            sample_group_color = sample_group_color[1:length(selected_sample_groups)]
+            sample_group_color = sample_group_color[seq_len(length(selected_sample_groups))]
             bp_color = rainbow_hcl(length(bioproject_u), c = 50)
             sp_color = rainbow_hcl(length(scientific_name_u), c = 100)
         } else if (length(selected_sample_groups) <= 12) {
@@ -146,9 +159,9 @@ add_color_to_curate_metadata = function(sra, selected_sample_groups, sample_grou
         bp_color = rainbow_hcl(length(bioproject_u), c = 50)
         sp_color = rainbow_hcl(length(scientific_name_u), c = 100)
     }
-    df_sample_group = data.frame(sample_group = sample_group_u, sample_group_color = sample_group_color[1:length(sample_group_u)], stringsAsFactors = FALSE)
-    df_bp = data.frame(bioproject = bioproject_u, bp_color = bp_color[1:length(bioproject_u)], stringsAsFactors = FALSE)
-    df_sp = data.frame(scientific_name = scientific_name_u, sp_color = sp_color[1:length(scientific_name_u)], stringsAsFactors = FALSE)
+    df_sample_group = data.frame(sample_group = sample_group_u, sample_group_color = sample_group_color[seq_len(length(sample_group_u))], stringsAsFactors = FALSE)
+    df_bp = data.frame(bioproject = bioproject_u, bp_color = bp_color[seq_len(length(bioproject_u))], stringsAsFactors = FALSE)
+    df_sp = data.frame(scientific_name = scientific_name_u, sp_color = sp_color[seq_len(length(scientific_name_u))], stringsAsFactors = FALSE)
     sra = merge(sra, df_bp, sort = FALSE, all.y = FALSE)
     sra = merge(sra, df_sp, sort = FALSE, all.y = FALSE)
     sra = merge(sra, df_sample_group, sort = FALSE, all.y = FALSE)
@@ -195,19 +208,20 @@ sample_group_mean = function(tc, sra, selected_sample_groups = NA, balance_bp = 
     sra_sample_group = sra[['sample_group']]
     sra_run = sra[['run']]
     sra_exclusion = sra[['exclusion']]
+    sra_is_non_excluded = is_non_excluded_flag(sra_exclusion)
     tc_colnames = colnames(tc)
     is_run_in_tc = (sra_run %in% tc_colnames)
     if (balance_bp) {
         sra_bioproject = sra[['bioproject']]
-        is_no_exclusion = (sra_exclusion == "no")
+        is_no_exclusion = sra_is_non_excluded
     }
     for (sample_group in sp_sample_groups) {
         is_sample_group = (sra_sample_group == sample_group)
-        exclusion_sample_group = sra_exclusion[is_sample_group]
+        exclusion_sample_group = sra_is_non_excluded[is_sample_group]
         run_sample_group = sra_run[is_sample_group & is_run_in_tc]
-        if (all(exclusion_sample_group != "no")) {
+        if (all(!exclusion_sample_group)) {
             warning_message = paste0('All samples of sample_group ', sample_group, ' are marked for exclusion. This sample_group will be omitted from further analysis.')
-            selected_sample_groups = selected_sample_groups[!selected_sample_groups == sample_group]
+            selected_sample_groups = selected_sample_groups[!(selected_sample_groups %in% sample_group)]
             tc_ave = tc_ave[, !names(tc_ave) %in% c(sample_group)]
             warning(warning_message)
             next
@@ -431,9 +445,9 @@ check_within_sample_group_correlation = function(tc, sra, dist_method, min_dif, 
             }else {
                 exclude_runs_tmp = c(first_bp_hit$run, first_same_sample_group_hit$run)
             }
-            exclude_runs = unique(exclude_runs_tmp)
-            # TODO This boolean vector should be all TRUE by definition. ???: exclude_run_bps_and_sample_group$run %in% exclude_runs
-            exclude_bps = exclude_run_bps_and_sample_group[exclude_run_bps_and_sample_group$run %in% exclude_runs, "bioproject"]
+            exclude_runs = unique(as.character(exclude_runs_tmp))
+            exclude_runs = exclude_runs[(!is.na(exclude_runs)) & (exclude_runs != '')]
+            exclude_bps = unique(sra2[(sra2[['run']] %in% exclude_runs), "bioproject"])
         } else {
             exclude_run_bps = sra2[(sra2[['run']] %in% exclude_runs), c("bioproject", "run", "num_other_run_same_bp_sample_group")]
             exclude_bp_counts = data.frame(table(exclude_run_bps[['bioproject']]))
@@ -1037,7 +1051,7 @@ draw_dendrogram = function(sra, tc_dist_dist, fontsize = 8) {
     dend_colors = sra[order.dendrogram(dend), 'sample_group_color']
     dend = apply_leaf_label_colors(dend, dend_colors)
     dend = apply_leaf_edge_colors(dend, dend_colors)
-    for (i in 1:ncol(tc)) {
+    for (i in seq_len(nrow(sra))) {
         dend = dendrapply(dend, color_children2parent)
     }
     dend = set_edge_lwd(dend, lwd = 1)
@@ -1106,7 +1120,7 @@ draw_dendrogram_pvclust = function(sra, tc, nboot, pvclust_file, fontsize = 8) {
     dend_colors = sra[order.dendrogram(dend), 'sample_group_color']
     dend = apply_leaf_label_colors(dend, dend_colors)
     dend = apply_leaf_edge_colors(dend, dend_colors)
-    for (i in 1:ncol(tc)) {
+    for (i in seq_len(ncol(tc))) {
         dend = dendrapply(dend, color_children2parent)
     }
     dend = set_edge_lwd(dend, lwd = 2)
@@ -1177,7 +1191,19 @@ draw_mds = function(sra, tc_dist_dist, fontsize = 8) {
 
 draw_tsne = function(sra, tc, fontsize = 8) {
     fontsize = resolve_curate_fontsize(fontsize)
-    perplexity = min(30, floor(nrow(sra) / 4), na.rm = TRUE)
+    num_samples = suppressWarnings(as.integer(min(nrow(sra), ncol(tc), na.rm = TRUE)))
+    if (!is.finite(num_samples) || is.na(num_samples) || (num_samples < 4)) {
+        cat("t-SNE skipped: at least 4 samples are required.\n")
+        plot(c(0, 1), c(0, 1), ann = FALSE, bty = "n", type = "n", xaxt = "n", yaxt = "n")
+        return(NULL)
+    }
+    max_perplexity = floor((num_samples - 1) / 3)
+    if (!is.finite(max_perplexity) || (max_perplexity < 1)) {
+        cat("t-SNE skipped: unable to determine a valid perplexity.\n")
+        plot(c(0, 1), c(0, 1), ann = FALSE, bty = "n", type = "n", xaxt = "n", yaxt = "n")
+        return(NULL)
+    }
+    perplexity = min(30, max_perplexity)
     try_out = tryCatch({
         Rtsne(
             as.matrix(t(tc)),
@@ -1260,7 +1286,7 @@ draw_sva_summary = function(sva_out, tc, sra, fontsize) {
         df = data.frame(matrix(NA, num_sv, length(cols)))
         colnames(df) = cols
         rownames(df) = paste0("SV", 1:nrow(df))
-        for (i in 1:length(cols)) {
+        for (i in seq_along(cols)) {
             for (j in 1:num_sv) {
                 if (length(unique(sra[, cols[i]])) == 1) {
                     df[j, i] = NA
@@ -1289,30 +1315,52 @@ draw_boxplot = function(sra, tc_dist_matrix, fontsize = 8) {
     is_same_sample_group = outer(sra[['sample_group']], sra[['sample_group']], function(x, y) {
         x == y
     })
+    group_bwbw = tc_dist_matrix[(!is_same_bp) & (!is_same_sample_group)]
+    group_wibw = tc_dist_matrix[(is_same_bp) & (!is_same_sample_group)]
+    group_bwwi = tc_dist_matrix[(!is_same_bp) & (is_same_sample_group)]
+    group_wiwi = tc_dist_matrix[(is_same_bp) & (is_same_sample_group)]
+    sanitize_group_values = function(x) {
+        x = as.numeric(x)
+        x[is.finite(x)]
+    }
+    group_bwbw = sanitize_group_values(group_bwbw)
+    group_wibw = sanitize_group_values(group_wibw)
+    group_bwwi = sanitize_group_values(group_bwwi)
+    group_wiwi = sanitize_group_values(group_wiwi)
+    draw_group_boxplot = function(values, at) {
+        if (length(values) > 0) {
+            boxplot(values, at = at, add = TRUE, col = "gray", yaxt = "n")
+        }
+    }
     plot(c(0.5, 4.5), c(0, 1), type = "n", xlab = "", ylab = "Pearson's correlation\ncoefficient", las = 1,
          xaxt = "n")
-    boxplot(tc_dist_matrix[(!is_same_bp) & (!is_same_sample_group)], at = 1, add = TRUE, col = "gray", yaxt = "n")
-    boxplot(tc_dist_matrix[(is_same_bp) & (!is_same_sample_group)], at = 2, add = TRUE, col = "gray", yaxt = "n")
-    boxplot(tc_dist_matrix[(!is_same_bp) & (is_same_sample_group)], at = 3, add = TRUE, col = "gray", yaxt = "n")
-    boxplot(tc_dist_matrix[(is_same_bp) & (is_same_sample_group)], at = 4, add = TRUE, col = "gray", yaxt = "n")
+    draw_group_boxplot(group_bwbw, 1)
+    draw_group_boxplot(group_wibw, 2)
+    draw_group_boxplot(group_bwwi, 3)
+    draw_group_boxplot(group_wiwi, 4)
     labels = c("bw\nbw", "bw\nwi", "wi\nbw", "wi\nwi")
     axis(side = 1, at = c(1, 2, 3, 4), labels = labels, padj = 0.5)
     axis(side = 1, at = 0.35, labels = "Sample group\nBioProject", padj = 0.5, hadj = 1, tick = FALSE)
 
     # Add mean PCC
     means <- c(
-        mean(tc_dist_matrix[(!is_same_bp) & (!is_same_sample_group)], na.rm = TRUE),
-        mean(tc_dist_matrix[(is_same_bp) & (!is_same_sample_group)], na.rm = TRUE),
-        mean(tc_dist_matrix[(!is_same_bp) & (is_same_sample_group)], na.rm = TRUE),
-        mean(tc_dist_matrix[(is_same_bp) & (is_same_sample_group)], na.rm = TRUE)
+        if (length(group_bwbw) > 0) mean(group_bwbw, na.rm = TRUE) else NA_real_,
+        if (length(group_wibw) > 0) mean(group_wibw, na.rm = TRUE) else NA_real_,
+        if (length(group_bwwi) > 0) mean(group_bwwi, na.rm = TRUE) else NA_real_,
+        if (length(group_wiwi) > 0) mean(group_wiwi, na.rm = TRUE) else NA_real_
     )
-
-    points(1:4, means, col = "red", pch = 16)
-    lines(c(1, 2), means[1:2], col = "red")
-    lines(c(3, 4), means[3:4], col = "red")
-
-    text(x = 1.5, y = max(means[1:2]) + 0.05, labels = round(abs(means[1] - means[2]), 2), col = "red", cex = 1)
-    text(x = 3.5, y = max(means[3:4]) + 0.05, labels = round(abs(means[3] - means[4]), 2), col = "red", cex = 1)
+    finite_idx = which(is.finite(means))
+    if (length(finite_idx) > 0) {
+        points(finite_idx, means[finite_idx], col = "red", pch = 16)
+    }
+    if (all(is.finite(means[1:2]))) {
+        lines(c(1, 2), means[1:2], col = "red")
+        text(x = 1.5, y = max(means[1:2]) + 0.05, labels = round(abs(means[1] - means[2]), 2), col = "red", cex = 1)
+    }
+    if (all(is.finite(means[3:4]))) {
+        lines(c(3, 4), means[3:4], col = "red")
+        text(x = 3.5, y = max(means[3:4]) + 0.05, labels = round(abs(means[3] - means[4]), 2), col = "red", cex = 1)
+    }
 
     labels = c("bw\nbw", "bw\nwi", "wi\nbw", "wi\nwi")
     axis(side = 1, at = c(1, 2, 3, 4), labels = labels, padj = 0.5)
@@ -1649,7 +1697,7 @@ get_species_metadata = function(sra_all, scientific_name, selected_sample_groups
     cat('Number of SRA runs for this species:', sum(is_sp), '\n')
     cat('Number of SRA runs for selected sample groups:', sum(is_sample_group), '\n')
     sra = sra_all[(is_sp & is_sample_group),]
-    conditions = (sra[['exclusion']] == "no") & (!sra[['run']] %in% colnames(tc))
+    conditions = is_non_excluded_flag(sra[['exclusion']]) & (!sra[['run']] %in% colnames(tc))
     if (any(conditions)) {
         cat("Failed quantification:", sra[conditions, "run"], "\n")
         sra[conditions, "exclusion"] = "failed_quantification"
@@ -1658,7 +1706,7 @@ get_species_metadata = function(sra_all, scientific_name, selected_sample_groups
 }
 
 exclude_inappropriate_sample_from_tc = function(tc, sra) {
-    is_not_excluded = (sra[['exclusion']] == 'no')
+    is_not_excluded = is_non_excluded_flag(sra[['exclusion']])
     cat('Number of non-excluded SRA runs (exclusion=="no"):', sum(is_not_excluded), '\n')
     tc = tc[, sra[is_not_excluded, 'run'], drop = FALSE]
     return(tc)
@@ -1702,11 +1750,11 @@ write_curation_summaries = function(round_summary, sra, scientific_name, batch_e
                                     dir_tsv, mapping_rate_cutoff, correlation_threshold,
                                     one_outlier_per_iteration, num_total_runs_species,
                                     num_runs_after_sample_group_filter, script_start_elapsed) {
-    species_tag = sub(" ", "_", scientific_name)
+    species_tag = gsub(" ", "_", scientific_name)
     file_round = file.path(dir_tsv, paste0(species_tag, ".", batch_effect_alg, ".curation_round_summary.tsv"))
     write.table(round_summary, file = file_round, sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
 
-    is_kept = (sra[['exclusion']] == "no")
+    is_kept = is_non_excluded_flag(sra[['exclusion']])
     kept_runs = sra[is_kept, 'run']
     excluded_runs = sra[!is_kept, 'run']
     kept_runs_txt = if (length(kept_runs) == 0) '' else paste(kept_runs, collapse = ' ')
@@ -1745,14 +1793,15 @@ sra_all = read.table(metadata_path, sep = "\t", header = TRUE, quote = "", fill 
 sra_all = standardize_metadata_all(sra_all)
 
 scientific_name = sra_all[(sra_all[['run']] %in% colnames(tc)), "scientific_name"][1]
+species_tag = gsub(" ", "_", scientific_name)
 script_start_elapsed = as.numeric(proc.time()[["elapsed"]])
 num_total_runs_species = sum(sra_all[, 'scientific_name'] == scientific_name, na.rm = TRUE)
 dir_curate = file.path(out_dir, 'curate')
-dir_pdf = file.path(dir_curate, sub(" ", "_", scientific_name), 'plots')
+dir_pdf = file.path(dir_curate, species_tag, 'plots')
 dir.create(dir_pdf, showWarnings = FALSE, recursive = TRUE)
-dir_rdata = file.path(dir_curate, sub(" ", "_", scientific_name), 'rdata')
+dir_rdata = file.path(dir_curate, species_tag, 'rdata')
 dir.create(dir_rdata, showWarnings = FALSE, recursive = TRUE)
-dir_tsv = file.path(dir_curate, sub(" ", "_", scientific_name), 'tables')
+dir_tsv = file.path(dir_curate, species_tag, 'tables')
 dir.create(dir_tsv, showWarnings = FALSE, recursive = TRUE)
 setwd(dir_curate)
 cat(log_prefix, "Working at:", getwd(), "\n")
@@ -1766,7 +1815,7 @@ tc_eff_length = exclude_inappropriate_sample_from_eff_length(tc_eff_length, tc)
 tc = apply_transformation_logic(tc, tc_eff_length, transform_method, batch_effect_alg, step = 'before_batch', sra = sra)
 tc_tmp = apply_transformation_logic(tc, tc_eff_length, transform_method, batch_effect_alg, step = 'before_batch_plot', sra = sra)
 is_input_zero = data.frame(tc_tmp == 0, check.names = FALSE)
-file_name = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".uncorrected.tc.tsv"))
+file_name = file.path(dir_tsv, paste0(species_tag, ".uncorrected.tc.tsv"))
 write_table_with_index_name(df = tc_tmp, file_path = file_name, index_name = 'target_id')
 original_sample_groups = selected_sample_groups
 out = sample_group_mean(tc_tmp, sra, selected_sample_groups)
@@ -1777,20 +1826,20 @@ if (length(selected_sample_groups) != length(original_sample_groups)) {
         sample_group_colors = sample_group_colors[match(selected_sample_groups, original_sample_groups)]
     }
 }
-file_name = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".uncorrected.sample_group.mean.tsv"))
+file_name = file.path(dir_tsv, paste0(species_tag, ".uncorrected.sample_group.mean.tsv"))
 write_table_with_index_name(df = tc_sample_group_uncorrected, file_path = file_name, index_name = 'target_id')
 
 if (skip_curation_flag == TRUE) {
     cat("No curation requested, finishing early.\n")
-    file_metadata = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".metadata.tsv"))
+    file_metadata = file.path(dir_tsv, paste0(species_tag, ".metadata.tsv"))
     write.table(sra[, colnames(sra) != 'index'], file = file_metadata, sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
-    file_corrected_tc = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".", batch_effect_alg, ".tc.tsv"))
+    file_corrected_tc = file.path(dir_tsv, paste0(species_tag, ".", batch_effect_alg, ".tc.tsv"))
     write_table_with_index_name(df = tc_tmp, file_path = file_corrected_tc, index_name = 'target_id')
-    file_corrected_mean = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".", batch_effect_alg, ".sample_group.mean.tsv"))
+    file_corrected_mean = file.path(dir_tsv, paste0(species_tag, ".", batch_effect_alg, ".sample_group.mean.tsv"))
     write_table_with_index_name(df = tc_sample_group_uncorrected, file_path = file_corrected_mean, index_name = 'target_id')
     cat("Files created: \n")
-    cat(file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".uncorrected.tc.tsv")), "\n")
-    cat(file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".uncorrected.sample_group.mean.tsv")), "\n")
+    cat(file.path(dir_tsv, paste0(species_tag, ".uncorrected.tc.tsv")), "\n")
+    cat(file.path(dir_tsv, paste0(species_tag, ".uncorrected.sample_group.mean.tsv")), "\n")
     cat(file_corrected_tc, "\n")
     cat(file_corrected_mean, "\n")
     cat(file_metadata, "\n")
@@ -1838,7 +1887,7 @@ round_summary = append_round_summary(
     runs_after = runs_after
 )
 tc_tmp = apply_transformation_logic(tc, tc_eff_length, transform_method, batch_effect_alg, step = 'before_batch_plot', sra = sra)
-tc_dist_matrix = save_plot(tc_tmp, sra, NULL, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".original"),
+tc_dist_matrix = save_plot(tc_tmp, sra, NULL, dist_method, paste0(species_tag, ".", round, ".original"),
                            selected_sample_groups, sample_group_colors, fontsize, transform_method, batch_effect_alg)
 save_correlation(tc_tmp, sra, dist_method, round, precomputed_tc_dist_matrix = tc_dist_matrix)
 out = batch_effect_subtraction(tc, sra, batch_effect_alg, transform_method, clip_negative)
@@ -1848,11 +1897,11 @@ if (batch_effect_alg == "combatseq") {
 }
 sva_out = out[["sva"]]
 if (!is.null(sva_out)) {
-    file_name = paste0(sub(" ", "_", scientific_name), ".", batch_effect_alg, ".", round, ".RData")
+    file_name = paste0(species_tag, ".", batch_effect_alg, ".", round, ".RData")
     save(sva_out, file = file.path(dir_rdata, file_name))
 }
 tc_batch_corrected_tmp = apply_transformation_logic(tc_batch_corrected, tc_eff_length, transform_method, batch_effect_alg, step = 'after_batch', sra = sra)
-save_plot(tc_batch_corrected_tmp, sra, sva_out, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".original", ".", batch_effect_alg),
+save_plot(tc_batch_corrected_tmp, sra, sva_out, dist_method, paste0(species_tag, ".", round, ".original", ".", batch_effect_alg),
           selected_sample_groups, sample_group_colors, fontsize, transform_method, batch_effect_alg)
 
 cat("Removing samples with the mapping rate smaller than", mapping_rate_cutoff, "\n")
@@ -1874,7 +1923,7 @@ round_summary = append_round_summary(
 )
 
 tc_tmp = apply_transformation_logic(tc, tc_eff_length, transform_method, batch_effect_alg, step = 'before_batch_plot', sra = sra)
-save_plot(tc_tmp, sra, NULL, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".mapping_cutoff"),
+save_plot(tc_tmp, sra, NULL, dist_method, paste0(species_tag, ".", round, ".mapping_cutoff"),
           selected_sample_groups, sample_group_colors, fontsize, transform_method, batch_effect_alg)
 out = batch_effect_subtraction(tc, sra, batch_effect_alg, transform_method, clip_negative)
 tc_batch_corrected = out[["tc"]]
@@ -1883,10 +1932,10 @@ if (batch_effect_alg == "combatseq") {
 }
 sva_out = out[["sva"]]
 if (!is.null(sva_out)) {
-    save(sva_out, file = file.path(dir_rdata, paste0(sub(" ", "_", scientific_name), ".", batch_effect_alg, ".", round, ".RData")))
+    save(sva_out, file = file.path(dir_rdata, paste0(species_tag, ".", batch_effect_alg, ".", round, ".RData")))
 }
 tc_batch_corrected_tmp = apply_transformation_logic(tc_batch_corrected, tc_eff_length, transform_method, batch_effect_alg, step = 'after_batch', sra = sra)
-tc_dist_matrix = save_plot(tc_batch_corrected_tmp, sra, sva_out, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".mapping_cutoff", ".", batch_effect_alg),
+tc_dist_matrix = save_plot(tc_batch_corrected_tmp, sra, sva_out, dist_method, paste0(species_tag, ".", round, ".mapping_cutoff", ".", batch_effect_alg),
                            selected_sample_groups, sample_group_colors, fontsize, transform_method, batch_effect_alg)
 save_correlation(tc_batch_corrected_tmp, sra, dist_method, round, precomputed_tc_dist_matrix = tc_dist_matrix)
 
@@ -1896,12 +1945,12 @@ while (end_flag == 0) {
     cat("Iteratively checking within-sample_group correlation, round:", round, "\n")
     tc_cwtc = NULL
     runs_before = colnames(tc)
-    num_run_before = sum(sra[['exclusion']] == "no")
+    num_run_before = sum(is_non_excluded_flag(sra[['exclusion']]))
     out = check_within_sample_group_correlation(tc, sra, dist_method, min_dif, selected_sample_groups, one_outlier_per_iteration, correlation_threshold)
     tc_cwtc = out[["tc"]]
     sra = out[["sra"]]
     runs_after = colnames(tc_cwtc)
-    num_run_after = sum(sra[['exclusion']] == "no")
+    num_run_after = sum(is_non_excluded_flag(sra[['exclusion']]))
     round_summary = append_round_summary(
         round_summary = round_summary,
         step = 'correlation_iter',
@@ -1920,13 +1969,13 @@ while (end_flag == 0) {
         }
         sva_out = out[["sva"]]
         if (!is.null(sva_out)) {
-            save(sva_out, file = file.path(dir_rdata, paste0(sub(" ", "_", scientific_name), ".", batch_effect_alg, ".", round, ".RData")))
+            save(sva_out, file = file.path(dir_rdata, paste0(species_tag, ".", batch_effect_alg, ".", round, ".RData")))
         }
         tc_cwtc_tmp = apply_transformation_logic(tc_cwtc, tc_eff_length, transform_method, batch_effect_alg, step = 'before_batch_plot', sra = sra)
-        save_plot(tc_cwtc_tmp, sra, NULL, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".correlation_cutoff"),
+        save_plot(tc_cwtc_tmp, sra, NULL, dist_method, paste0(species_tag, ".", round, ".correlation_cutoff"),
                   selected_sample_groups, sample_group_colors, fontsize, transform_method, batch_effect_alg)
         tc_batch_corrected_tmp = apply_transformation_logic(tc_batch_corrected, tc_eff_length, transform_method, batch_effect_alg, step = 'after_batch', sra = sra)
-        file_base = paste0(sub(" ", "_", scientific_name), ".", round, ".correlation_cutoff", ".", batch_effect_alg)
+        file_base = paste0(species_tag, ".", round, ".correlation_cutoff", ".", batch_effect_alg)
         tc_dist_matrix = save_plot(tc_batch_corrected_tmp, sra, sva_out, dist_method, file_base, selected_sample_groups, sample_group_colors, fontsize, transform_method, batch_effect_alg)
         save_correlation(tc_batch_corrected_tmp, sra, dist_method, round, precomputed_tc_dist_matrix = tc_dist_matrix)
     }
@@ -1953,18 +2002,18 @@ if (maintain_zero) {
     }
 }
 cat("Writing summary files for", scientific_name, "\n")
-file = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".metadata.tsv"))
+file = file.path(dir_tsv, paste0(species_tag, ".metadata.tsv"))
 write.table(sra[, colnames(sra) != 'index'], file = file, sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
-file = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".", batch_effect_alg, ".tc.tsv"))
+file = file.path(dir_tsv, paste0(species_tag, ".", batch_effect_alg, ".tc.tsv"))
 write_table_with_index_name(df = tc_batch_corrected, file_path = file, index_name = 'target_id')
 out = sample_group_mean(tc_batch_corrected, sra, selected_sample_groups)
 tc_sample_group = out[['tc_ave']]
-file = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".", batch_effect_alg, ".sample_group.mean.tsv"))
+file = file.path(dir_tsv, paste0(species_tag, ".", batch_effect_alg, ".sample_group.mean.tsv"))
 write_table_with_index_name(df = tc_sample_group, file_path = file, index_name = 'target_id')
-file = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".", batch_effect_alg, ".correlation_statistics.tsv"))
+file = file.path(dir_tsv, paste0(species_tag, ".", batch_effect_alg, ".correlation_statistics.tsv"))
 write.table(correlation_statistics, file = file, row.names = TRUE, sep = "\t", quote = FALSE)
 tc_tau = sample_group2tau(tc_sample_group, rich.annotation = TRUE, transform_method)
-file = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".", batch_effect_alg, ".tau.tsv"))
+file = file.path(dir_tsv, paste0(species_tag, ".", batch_effect_alg, ".tau.tsv"))
 write_table_with_index_name(df = tc_tau, file_path = file, index_name = 'target_id')
 write_curation_summaries(
     round_summary = round_summary,
