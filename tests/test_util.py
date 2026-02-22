@@ -262,6 +262,16 @@ class TestMetadataReorder:
         result = m.reorder()
         assert result is None  # returns None for empty df
 
+    def test_reorder_empty_normalizes_schema_and_drops_removed_columns(self):
+        m = Metadata()
+        m.df = pandas.DataFrame(columns=['lab', 'batch', 'misc'])
+        result = m.reorder()
+        assert result is None
+        assert 'sample_group' in m.df.columns
+        assert 'exclusion' in m.df.columns
+        for col in Metadata.removed_metadata_columns:
+            assert col not in m.df.columns
+
     def test_reorder_sets_exclusion_default(self, sample_metadata_df):
         df = sample_metadata_df.copy()
         df['exclusion'] = ''
@@ -282,6 +292,23 @@ class TestMetadataFromDataFrame:
         assert m.df.shape[0] == 5
         assert 'scientific_name' in m.df.columns
 
+    def test_drops_removed_legacy_columns(self):
+        df = pandas.DataFrame({
+            'scientific_name': ['Homo sapiens'],
+            'run': ['SRR000001'],
+            'exclusion': ['no'],
+            'lab': ['Legacy Lab'],
+            'biomaterial_provider': ['Legacy Provider'],
+            'cell': ['HeLa'],
+            'location': ['Tokyo'],
+            'antibody': ['H3K4me3'],
+            'batch': ['B1'],
+            'misc': ['legacy'],
+        })
+        m = Metadata.from_DataFrame(df)
+        for col in Metadata.removed_metadata_columns:
+            assert col not in m.df.columns
+
     def test_exclusion_filled(self, sample_metadata_df):
         df = sample_metadata_df.copy()
         df['exclusion'] = ''
@@ -299,6 +326,11 @@ class TestMetadataFromDataFrame:
         df['exclusion'] = ''
         _ = Metadata.from_DataFrame(df)
         assert (df['exclusion'] == '').all()
+
+    def test_empty_input_dataframe_gets_standard_columns(self):
+        m = Metadata.from_DataFrame(pandas.DataFrame())
+        for col in ['sample_group', 'exclusion', 'is_sampled', 'is_qualified']:
+            assert col in m.df.columns
 
 
 class TestMetadataFromXml:
@@ -343,6 +375,7 @@ class TestMetadataFromXml:
               <DESCRIPTION>A test sample</DESCRIPTION>
               <SAMPLE_ATTRIBUTES>
                 <SAMPLE_ATTRIBUTE><TAG>tissue</TAG><VALUE>brain</VALUE></SAMPLE_ATTRIBUTE>
+                <SAMPLE_ATTRIBUTE><TAG>cell</TAG><VALUE>HeLa</VALUE></SAMPLE_ATTRIBUTE>
               </SAMPLE_ATTRIBUTES>
             </SAMPLE>
             <RUN_SET>
@@ -371,6 +404,8 @@ class TestMetadataFromXml:
         assert m.df.loc[0, 'run'] == 'SRR000001'
         assert m.df.loc[0, 'lib_layout'] == 'paired'
         assert m.df.loc[0, 'bioproject'] == 'PRJNA000001'
+        for col in Metadata.removed_metadata_columns:
+            assert col not in m.df.columns
 
     def test_parse_empty_xml(self):
         xml_str = b"""<EXPERIMENT_PACKAGE_SET></EXPERIMENT_PACKAGE_SET>"""
@@ -403,18 +438,6 @@ class TestMetadataMarkExcludeKeywords:
         m = sample_metadata
         m.mark_exclude_keywords(tmp_config_dir)
         assert (m.df['exclusion'] == 'no').all()
-
-    def test_marks_antibody(self, sample_metadata, tmp_config_dir):
-        m = sample_metadata
-        m.df.loc[1, 'antibody'] = 'H3K4me3'
-        m.mark_exclude_keywords(tmp_config_dir)
-        assert m.df.loc[1, 'exclusion'] == 'immunoprecipitation'
-
-    def test_marks_cell_culture(self, sample_metadata, tmp_config_dir):
-        m = sample_metadata
-        m.df.loc[2, 'cell'] = 'HeLa'
-        m.mark_exclude_keywords(tmp_config_dir)
-        assert m.df.loc[2, 'exclusion'] == 'cell_culture'
 
     def test_strips_config_column_tokens(self, sample_metadata, tmp_path):
         (tmp_path / 'exclude_keyword.config').write_text('sample_description, tissue\tdisease\tcancer\n')
@@ -1630,6 +1653,27 @@ class TestDetectLayoutFromFile:
         result = detect_layout_from_file(sra_stat)
         assert result['layout'] == 'paired'
 
+    def test_paired_safely_removed_files_detected(self, tmp_path):
+        sra_stat = {
+            'sra_id': 'SRR001',
+            'layout': 'single',
+            'getfastq_sra_dir': str(tmp_path),
+        }
+        (tmp_path / 'SRR001_1.fastq.gz.safely_removed').write_text('')
+        (tmp_path / 'SRR001_2.fastq.gz.safely_removed').write_text('')
+        result = detect_layout_from_file(sra_stat)
+        assert result['layout'] == 'paired'
+
+    def test_single_safely_removed_file_detected(self, tmp_path):
+        sra_stat = {
+            'sra_id': 'SRR001',
+            'layout': 'paired',
+            'getfastq_sra_dir': str(tmp_path),
+        }
+        (tmp_path / 'SRR001.fastq.gz.safely_removed').write_text('')
+        result = detect_layout_from_file(sra_stat)
+        assert result['layout'] == 'single'
+
 
 # ---------------------------------------------------------------------------
 # is_there_unpaired_file
@@ -1711,6 +1755,37 @@ class TestGetNewestIntermediateFileExtension:
             'getfastq_sra_dir': str(tmp_path),
         }
         (tmp_path / 'SRR001_1.amalgkit.fastq.gz.safely_removed').write_text('')
+        ext = get_newest_intermediate_file_extension(sra_stat, str(tmp_path))
+        assert ext == 'no_extension_found'
+
+    def test_safely_removed_detected_despite_layout_mismatch_single_to_paired(self, tmp_path):
+        sra_stat = {
+            'sra_id': 'SRR001',
+            'layout': 'single',
+            'getfastq_sra_dir': str(tmp_path),
+        }
+        (tmp_path / 'SRR001_1.fastq.gz.safely_removed').write_text('')
+        (tmp_path / 'SRR001_2.fastq.gz.safely_removed').write_text('')
+        ext = get_newest_intermediate_file_extension(sra_stat, str(tmp_path))
+        assert ext == '.safely_removed'
+
+    def test_safely_removed_detected_despite_layout_mismatch_paired_to_single(self, tmp_path):
+        sra_stat = {
+            'sra_id': 'SRR001',
+            'layout': 'paired',
+            'getfastq_sra_dir': str(tmp_path),
+        }
+        (tmp_path / 'SRR001.fastq.gz.safely_removed').write_text('')
+        ext = get_newest_intermediate_file_extension(sra_stat, str(tmp_path))
+        assert ext == '.safely_removed'
+
+    def test_paired_extension_detection_requires_both_fastq_mates(self, tmp_path):
+        sra_stat = {
+            'sra_id': 'SRR001',
+            'layout': 'paired',
+            'getfastq_sra_dir': str(tmp_path),
+        }
+        (tmp_path / 'SRR001_1.fastq.gz').write_text('data')
         ext = get_newest_intermediate_file_extension(sra_stat, str(tmp_path))
         assert ext == 'no_extension_found'
 

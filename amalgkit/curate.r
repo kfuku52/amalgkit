@@ -92,6 +92,18 @@ resolve_curate_fontsize = function(fontsize = CURATE_FONT_SIZE_PT) {
     return(CURATE_FONT_SIZE_PT)
 }
 
+compute_effective_text_cex = function(target_pt = CURATE_FONT_SIZE_PT) {
+    current_ps = suppressWarnings(as.numeric(par('ps'))[[1]])
+    current_cex = suppressWarnings(as.numeric(par('cex'))[[1]])
+    target_pt = suppressWarnings(as.numeric(resolve_curate_fontsize(target_pt))[[1]])
+    if (!is.finite(current_ps) || (current_ps <= 0) ||
+        !is.finite(current_cex) || (current_cex <= 0) ||
+        !is.finite(target_pt) || (target_pt <= 0)) {
+        return(1)
+    }
+    target_pt / (current_ps * current_cex)
+}
+
 if (batch_effect_alg == "ruvseq") {
     suppressWarnings(suppressPackageStartupMessages(library(RUVSeq, quietly = TRUE)))
 } else {
@@ -1144,6 +1156,7 @@ draw_dendrogram_pvclust = function(sra, tc, nboot, pvclust_file, fontsize = 8) {
 
 draw_pca = function(sra, tc_dist_matrix, fontsize = 8) {
     fontsize = resolve_curate_fontsize(fontsize)
+    axis_text_cex = compute_effective_text_cex(target_pt = fontsize)
     pca = prcomp(tc_dist_matrix)
     xlabel = paste0("PC 1 (", round(summary(pca)[['importance']][2, 1] * 100, digits = 1), "%)")
     ylabel = paste0("PC 2 (", round(summary(pca)[['importance']][2, 2] * 100, digits = 1), "%)")
@@ -1157,7 +1170,9 @@ draw_pca = function(sra, tc_dist_matrix, fontsize = 8) {
         col = sra[['bp_color']],
         xlab = xlabel,
         ylab = ylabel,
-        las = 1
+        las = 1,
+        cex.axis = axis_text_cex,
+        cex.lab = axis_text_cex
     )
     # plot(pca$x[,1], pca$x[,2], pch=21, cex=2, lwd=2, bg=sra$sample_group_color, col=sra$bp_color, main=title,
     # xlab=xlabel, ylab=ylabel, las=1)
@@ -1165,6 +1180,7 @@ draw_pca = function(sra, tc_dist_matrix, fontsize = 8) {
 
 draw_mds = function(sra, tc_dist_dist, fontsize = 8) {
     fontsize = resolve_curate_fontsize(fontsize)
+    axis_text_cex = compute_effective_text_cex(target_pt = fontsize)
     mds_points = tryCatch({
         as.matrix(stats::cmdscale(tc_dist_dist, k = 2))
     }, error = function(a) {
@@ -1184,13 +1200,16 @@ draw_mds = function(sra, tc_dist_dist, fontsize = 8) {
             col = sra[['bp_color']],
             xlab = "MDS dimension 1",
             ylab = "MDS dimension 2",
-            las = 1
+            las = 1,
+            cex.axis = axis_text_cex,
+            cex.lab = axis_text_cex
         )
     }
 }
 
 draw_tsne = function(sra, tc, fontsize = 8) {
     fontsize = resolve_curate_fontsize(fontsize)
+    axis_text_cex = compute_effective_text_cex(target_pt = fontsize)
     num_samples = suppressWarnings(as.integer(min(nrow(sra), ncol(tc), na.rm = TRUE)))
     if (!is.finite(num_samples) || is.na(num_samples) || (num_samples < 4)) {
         cat("t-SNE skipped: at least 4 samples are required.\n")
@@ -1233,7 +1252,9 @@ draw_tsne = function(sra, tc, fontsize = 8) {
             col = sra[['bp_color']],
             xlab = "t-SNE dimension 1",
             ylab = "t-SNE dimension 2",
-            las = 1
+            las = 1,
+            cex.axis = axis_text_cex,
+            cex.lab = axis_text_cex
         )
     }, error = function(a) {
         return("t-SNE plot failed.")
@@ -1246,6 +1267,7 @@ draw_tsne = function(sra, tc, fontsize = 8) {
 
 draw_sva_summary = function(sva_out, tc, sra, fontsize) {
     fontsize = resolve_curate_fontsize(fontsize)
+    axis_text_cex = compute_effective_text_cex(target_pt = fontsize)
     if ((is.null(sva_out)) | (class(sva_out) == "try-error")) {
         plot(c(0, 1), c(0, 1), ann = F, bty = "n", type = "n", xaxt = "n", yaxt = "n")
         df = NA
@@ -1272,14 +1294,14 @@ draw_sva_summary = function(sva_out, tc, sra, fontsize) {
                 x = 0.5,
                 y = 0.58,
                 labels = "No SV detected",
-                cex = 1,
+                cex = axis_text_cex,
                 font = 2
             )
             text(
                 x = 0.5,
                 y = 0.42,
                 labels = "Adjusted R-squared not available",
-                cex = 1
+                cex = axis_text_cex
             )
             return(data.frame())
         }
@@ -1309,16 +1331,18 @@ draw_sva_summary = function(sva_out, tc, sra, fontsize) {
 
 draw_boxplot = function(sra, tc_dist_matrix, fontsize = 8) {
     fontsize = resolve_curate_fontsize(fontsize)
+    axis_text_cex = compute_effective_text_cex(target_pt = fontsize)
     is_same_bp = outer(sra[['bioproject']], sra[['bioproject']], function(x, y) {
         x == y
     })
     is_same_sample_group = outer(sra[['sample_group']], sra[['sample_group']], function(x, y) {
         x == y
     })
-    group_bwbw = tc_dist_matrix[(!is_same_bp) & (!is_same_sample_group)]
-    group_wibw = tc_dist_matrix[(is_same_bp) & (!is_same_sample_group)]
-    group_bwwi = tc_dist_matrix[(!is_same_bp) & (is_same_sample_group)]
-    group_wiwi = tc_dist_matrix[(is_same_bp) & (is_same_sample_group)]
+    pair_mask = upper.tri(tc_dist_matrix, diag = FALSE)
+    group_bwbw = tc_dist_matrix[pair_mask & (!is_same_bp) & (!is_same_sample_group)]
+    group_wibw = tc_dist_matrix[pair_mask & (is_same_bp) & (!is_same_sample_group)]
+    group_bwwi = tc_dist_matrix[pair_mask & (!is_same_bp) & (is_same_sample_group)]
+    group_wiwi = tc_dist_matrix[pair_mask & (is_same_bp) & (is_same_sample_group)]
     sanitize_group_values = function(x) {
         x = as.numeric(x)
         x[is.finite(x)]
@@ -1333,14 +1357,14 @@ draw_boxplot = function(sra, tc_dist_matrix, fontsize = 8) {
         }
     }
     plot(c(0.5, 4.5), c(0, 1), type = "n", xlab = "", ylab = "Pearson's correlation\ncoefficient", las = 1,
-         xaxt = "n")
+         xaxt = "n", cex.axis = axis_text_cex, cex.lab = axis_text_cex)
     draw_group_boxplot(group_bwbw, 1)
     draw_group_boxplot(group_wibw, 2)
     draw_group_boxplot(group_bwwi, 3)
     draw_group_boxplot(group_wiwi, 4)
     labels = c("bw\nbw", "bw\nwi", "wi\nbw", "wi\nwi")
-    axis(side = 1, at = c(1, 2, 3, 4), labels = labels, padj = 0.5)
-    axis(side = 1, at = 0.35, labels = "Sample group\nBioProject", padj = 0.5, hadj = 1, tick = FALSE)
+    axis(side = 1, at = c(1, 2, 3, 4), labels = labels, padj = 0.5, cex.axis = axis_text_cex)
+    axis(side = 1, at = 0.35, labels = "Sample group\nBioProject", padj = 0.5, hadj = 1, tick = FALSE, cex.axis = axis_text_cex)
 
     # Add mean PCC
     means <- c(
@@ -1355,26 +1379,32 @@ draw_boxplot = function(sra, tc_dist_matrix, fontsize = 8) {
     }
     if (all(is.finite(means[1:2]))) {
         lines(c(1, 2), means[1:2], col = "red")
-        text(x = 1.5, y = max(means[1:2]) + 0.05, labels = round(abs(means[1] - means[2]), 2), col = "red", cex = 1)
+        text(x = 1.5, y = max(means[1:2]) + 0.05, labels = round(abs(means[1] - means[2]), 2), col = "red", cex = axis_text_cex)
     }
     if (all(is.finite(means[3:4]))) {
         lines(c(3, 4), means[3:4], col = "red")
-        text(x = 3.5, y = max(means[3:4]) + 0.05, labels = round(abs(means[3] - means[4]), 2), col = "red", cex = 1)
+        text(x = 3.5, y = max(means[3:4]) + 0.05, labels = round(abs(means[3] - means[4]), 2), col = "red", cex = axis_text_cex)
     }
 
     labels = c("bw\nbw", "bw\nwi", "wi\nbw", "wi\nwi")
-    axis(side = 1, at = c(1, 2, 3, 4), labels = labels, padj = 0.5)
-    axis(side = 1, at = 0.35, labels = "Sample group\nBioProject", padj = 0.5, hadj = 1, tick = FALSE)
+    axis(side = 1, at = c(1, 2, 3, 4), labels = labels, padj = 0.5, cex.axis = axis_text_cex)
+    axis(side = 1, at = 0.35, labels = "Sample group\nBioProject", padj = 0.5, hadj = 1, tick = FALSE, cex.axis = axis_text_cex)
 
     # Add legend in the bottom left corner
     legend("bottomleft", legend = c("mean PCC", expression(Delta ~ "mean PCC")),
            pch = c(16, NA), col = c("red", "red"),
-           lty = c(NA, 1), bty = "n", cex = 1,
+           lty = c(NA, 1), bty = "n", cex = axis_text_cex,
            text.width = max(strwidth(c("mean PCC", expression(Delta ~ "mean PCC")))))  # Align text
 
 }
 
 save_correlation = function(tc, sra, dist_method, round, precomputed_tc_dist_matrix = NULL) {
+    stat_colnames = c(
+        "bwbw_n", "bwbw_mean", "bwbw_median", "bwbw_variance",
+        "wibw_n", "wibw_mean", "wibw_median", "wibw_variance",
+        "bwwi_n", "bwwi_mean", "bwwi_median", "bwwi_variance",
+        "wiwi_n", "wiwi_mean", "wiwi_median", "wiwi_variance"
+    )
     out = tc_metadata_intersect(tc, sra)
     tc = out[["tc"]]
     sra = out[["sra"]]
@@ -1388,14 +1418,16 @@ save_correlation = function(tc, sra, dist_method, round, precomputed_tc_dist_mat
     }
     if ((is.null(tc_dist_matrix) && (ncol(tc) <= 1)) || (!is.null(tc_dist_matrix) && (ncol(tc_dist_matrix) <= 1))) {
         cat('Not enough samples for correlation statistics. Recording NA values.\n')
-        tc_dist_stats = rep(NA_real_, 12)
+        tc_dist_stats = rep(NA_real_, length(stat_colnames))
+        n_idx = seq(1, length(stat_colnames), by = 4)
+        tc_dist_stats[n_idx] = 0
         if (!exists("correlation_statistics", envir = .GlobalEnv)) {
-            correlation_statistics <- data.frame(matrix(tc_dist_stats, ncol = 12, dimnames = list(NULL, c("bwbw_mean", "bwbw_median", "bwbw_variance", "wibw_mean", "wibw_median", "wibw_variance", "bwwi_mean", "bwwi_median", "bwwi_variance", "wiwi_mean", "wiwi_median", "wiwi_variance"))))
+            correlation_statistics <- data.frame(matrix(tc_dist_stats, ncol = length(stat_colnames), dimnames = list(NULL, stat_colnames)))
             rownames(correlation_statistics) <- paste0("round_", round)
             assign("correlation_statistics", correlation_statistics, envir = .GlobalEnv)
         } else {
             correlation_statistics <- get("correlation_statistics", envir = .GlobalEnv)
-            new_row <- data.frame(matrix(tc_dist_stats, ncol = 12, dimnames = list(NULL, c("bwbw_mean", "bwbw_median", "bwbw_variance", "wibw_mean", "wibw_median", "wibw_variance", "bwwi_mean", "bwwi_median", "bwwi_variance", "wiwi_mean", "wiwi_median", "wiwi_variance"))))
+            new_row <- data.frame(matrix(tc_dist_stats, ncol = length(stat_colnames), dimnames = list(NULL, stat_colnames)))
             rownames(new_row) <- paste0("round_", round)
             correlation_statistics <- rbind(correlation_statistics, new_row)
             assign("correlation_statistics", correlation_statistics, envir = .GlobalEnv)
@@ -1413,39 +1445,63 @@ save_correlation = function(tc, sra, dist_method, round, precomputed_tc_dist_mat
     if (is.null(tc_dist_matrix)) {
         tc_dist_matrix = cor(tc, method = dist_method)
     }
-    tc_dist_matrix[is.na(tc_dist_matrix)] = 0
 
     # bw = between; wi = within; order: Bioproject -> Sample Group; tc_dist_bwwi: between BPs, within CGs
-    tc_dist_bwbw = tc_dist_matrix[(!is_same_bp) & (!is_same_sample_group)]
-    bwbw_mea = mean(tc_dist_bwbw)
-    bwbw_med = median(tc_dist_bwbw)
-    bwbw_var = var(tc_dist_bwbw)
+    pair_mask = upper.tri(tc_dist_matrix, diag = FALSE)
+    summarize_group = function(mask) {
+        values = as.numeric(tc_dist_matrix[pair_mask & mask])
+        values = values[is.finite(values)]
+        n_values = length(values)
+        if (n_values == 0) {
+            return(c(n = 0, mean = NA_real_, median = NA_real_, variance = NA_real_))
+        }
+        c(
+            n = n_values,
+            mean = mean(values),
+            median = median(values),
+            variance = var(values)
+        )
+    }
 
-    tc_dist_wibw = tc_dist_matrix[(is_same_bp) & (!is_same_sample_group)]
-    wibw_mea = mean(tc_dist_wibw)
-    wibw_med = median(tc_dist_wibw)
-    wibw_var = var(tc_dist_wibw)
+    stats_bwbw = summarize_group((!is_same_bp) & (!is_same_sample_group))
+    bwbw_n = stats_bwbw[['n']]
+    bwbw_mea = stats_bwbw[['mean']]
+    bwbw_med = stats_bwbw[['median']]
+    bwbw_var = stats_bwbw[['variance']]
 
-    tc_dist_bwwi = tc_dist_matrix[(!is_same_bp) & (is_same_sample_group)]
-    bwwi_mea = mean(tc_dist_bwwi)
-    bwwi_med = median(tc_dist_bwwi)
-    bwwi_var = var(tc_dist_bwwi)
+    stats_wibw = summarize_group((is_same_bp) & (!is_same_sample_group))
+    wibw_n = stats_wibw[['n']]
+    wibw_mea = stats_wibw[['mean']]
+    wibw_med = stats_wibw[['median']]
+    wibw_var = stats_wibw[['variance']]
 
-    tc_dist_wiwi = tc_dist_matrix[(is_same_bp) & (is_same_sample_group)]
-    wiwi_mea = mean(tc_dist_wiwi)
-    wiwi_med = median(tc_dist_wiwi)
-    wiwi_var = var(tc_dist_wiwi)
+    stats_bwwi = summarize_group((!is_same_bp) & (is_same_sample_group))
+    bwwi_n = stats_bwwi[['n']]
+    bwwi_mea = stats_bwwi[['mean']]
+    bwwi_med = stats_bwwi[['median']]
+    bwwi_var = stats_bwwi[['variance']]
 
-    tc_dist_stats = c(bwbw_mea, bwbw_med, bwbw_var, wibw_mea, wibw_med, wibw_var, bwwi_mea, bwwi_med, bwwi_var, wiwi_mea, wiwi_med, wiwi_var)
+    stats_wiwi = summarize_group((is_same_bp) & (is_same_sample_group))
+    wiwi_n = stats_wiwi[['n']]
+    wiwi_mea = stats_wiwi[['mean']]
+    wiwi_med = stats_wiwi[['median']]
+    wiwi_var = stats_wiwi[['variance']]
+
+    tc_dist_stats = c(
+        bwbw_n, bwbw_mea, bwbw_med, bwbw_var,
+        wibw_n, wibw_mea, wibw_med, wibw_var,
+        bwwi_n, bwwi_mea, bwwi_med, bwwi_var,
+        wiwi_n, wiwi_mea, wiwi_med, wiwi_var
+    )
 
     # Check if dataframe exists in environment, if not create it
     if (!exists("correlation_statistics", envir = .GlobalEnv)) {
-        correlation_statistics <- data.frame(matrix(tc_dist_stats, ncol = 12, dimnames = list(NULL, c("bwbw_mean", "bwbw_median", "bwbw_variance", "wibw_mean", "wibw_median", "wibw_variance", "bwwi_mean", "bwwi_median", "bwwi_variance", "wiwi_mean", "wiwi_median", "wiwi_variance"))))
+        correlation_statistics <- data.frame(matrix(tc_dist_stats, ncol = length(stat_colnames), dimnames = list(NULL, stat_colnames)))
         rownames(correlation_statistics) <- paste0("round_", round)
         assign("correlation_statistics", correlation_statistics, envir = .GlobalEnv)
     } else {
         correlation_statistics <- get("correlation_statistics", envir = .GlobalEnv)
-        new_row <- data.frame(matrix(tc_dist_stats, ncol = 12, dimnames = list(NULL, c("bwbw_mean", "bwbw_median", "bwbw_variance", "wibw_mean", "wibw_median", "wibw_variance", "bwwi_mean", "bwwi_median", "bwwi_variance", "wiwi_mean", "wiwi_median", "wiwi_variance"))))
+        new_row <- data.frame(matrix(tc_dist_stats, ncol = length(stat_colnames), dimnames = list(NULL, stat_colnames)))
         rownames(new_row) <- paste0("round_", round)
         correlation_statistics <- rbind(correlation_statistics, new_row)
         assign("correlation_statistics", correlation_statistics, envir = .GlobalEnv)
@@ -1459,20 +1515,22 @@ save_correlation = function(tc, sra, dist_method, round, precomputed_tc_dist_mat
 
 draw_tau_histogram = function(tc, sra, selected_sample_groups, fontsize = 8, transform_method, tc_sample_group = NULL) {
     fontsize = resolve_curate_fontsize(fontsize)
+    axis_text_cex = compute_effective_text_cex(target_pt = fontsize)
     if (is.null(tc_sample_group)) {
         tc_sample_group = sample_group_mean(tc, sra, selected_sample_groups)[['tc_ave']]
     }
     df_tau = sample_group2tau(tc_sample_group, rich.annotation = FALSE, transform_method)
     hist_out = hist(df_tau[['tau']], breaks = seq(0, 1, 0.05), las = 1, xlab = "Tau (expression specificity)",
-                    ylab = "Gene count", main = "", col = "gray")
+                    ylab = "Gene count", main = "", col = "gray", cex.axis = axis_text_cex, cex.lab = axis_text_cex)
     num_noexp = sum(is.na(df_tau[['tau']]))
     num_all = nrow(df_tau)
     text_noexp = paste0("Excluded due to\nno expression:\n", num_noexp, "/", num_all, " genes")
-    text(0, max(hist_out[['counts']], na.rm = TRUE) * 0.85, text_noexp, pos = 4, cex = 1)
+    text(0, max(hist_out[['counts']], na.rm = TRUE) * 0.85, text_noexp, pos = 4, cex = axis_text_cex)
 }
 
 draw_exp_level_histogram = function(tc, sra, selected_sample_groups, fontsize = 8, transform_method, tc_sample_group = NULL) {
     fontsize = resolve_curate_fontsize(fontsize)
+    axis_text_cex = compute_effective_text_cex(target_pt = fontsize)
     if (is.null(tc_sample_group)) {
         tc_sample_group = sample_group_mean(tc, sra, selected_sample_groups)[['tc_ave']]
     }
@@ -1481,11 +1539,12 @@ draw_exp_level_histogram = function(tc, sra, selected_sample_groups, fontsize = 
     xmax[xmax > 15] = 15
     breaks = seq(0, 15, 1)
     hist_out = hist(xmax, breaks = breaks, las = 1, xlab = paste0("Max expression (", transform_method, ")"), ylab = "Gene count",
-                    main = "", col = "gray")
+                    main = "", col = "gray", cex.axis = axis_text_cex, cex.lab = axis_text_cex)
 }
 
 draw_legend = function(sra, new = TRUE, pos = "center", fontsize = 8, nlabel.in.col) {
     fontsize = resolve_curate_fontsize(fontsize)
+    axis_text_cex = compute_effective_text_cex(target_pt = fontsize)
     if (new) {
         plot.new()
     }
@@ -1503,7 +1562,7 @@ draw_legend = function(sra, new = TRUE, pos = "center", fontsize = 8, nlabel.in.
                                                                                                         1, 1, 0), length(bp_color_unique)))
     legend_font = c(2, rep(1, length(sample_group_color_unique)), 1, 2, rep(1, length(bp_color_unique)))
     legend(pos, legend = legend_text, pch = 21, lwd = 1, lty = 0, col = legend_color, pt.bg = legend_bg,
-           text.font = legend_font, cex = 1, pt.cex = 1, ncol = ncol, bty = "n")
+           text.font = legend_font, cex = axis_text_cex, pt.cex = 1, ncol = ncol, bty = "n")
 }
 
 save_plot = function(tc, sra, sva_out, dist_method, file, selected_sample_groups, sample_group_colors, fontsize = 8, transform_method, batch_effect_alg) {
@@ -1568,8 +1627,23 @@ save_plot = function(tc, sra, sva_out, dist_method, file, selected_sample_groups
             par(mar = rep(0.1, 4))
             if (batch_effect_alg == 'sva') {
                 df_r2 = draw_sva_summary(sva_out, tc, sra, local_font_size)
-                if (!all(is.na(df_r2))) {
-                    write.table(df_r2, file.path(dir_tsv, paste0(file, ".r2.tsv")), sep = "\t", row.names = FALSE)
+                if (is.data.frame(df_r2)) {
+                    df_r2_out = as.data.frame(df_r2, stringsAsFactors = FALSE)
+                    if (!("Surrogate variable" %in% colnames(df_r2_out))) {
+                        df_r2_out = cbind(
+                            "Surrogate variable" = rownames(df_r2_out),
+                            df_r2_out,
+                            stringsAsFactors = FALSE
+                        )
+                    }
+                    write.table(
+                        df_r2_out,
+                        file.path(dir_tsv, paste0(file, ".r2.tsv")),
+                        sep = "\t",
+                        row.names = FALSE,
+                        col.names = TRUE,
+                        quote = FALSE
+                    )
                 }
             }
             par(mar = rep(0.1, 4))

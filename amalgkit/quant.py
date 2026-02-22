@@ -156,11 +156,11 @@ def call_kallisto(args, in_files, metadata, sra_stat, output_dir, index):
 
 def check_kallisto_dependency():
     try:
-        probe = subprocess.run(['kallisto', '-h'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        probe = subprocess.run(['kallisto', 'version'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     except FileNotFoundError as exc:
         raise FileNotFoundError('kallisto executable not found: kallisto') from exc
     if probe.returncode != 0:
-        raise RuntimeError('kallisto dependency probe failed with exit code {}: kallisto -h'.format(probe.returncode))
+        raise RuntimeError('kallisto dependency probe failed with exit code {}: kallisto version'.format(probe.returncode))
 
 
 def list_getfastq_run_files(output_dir):

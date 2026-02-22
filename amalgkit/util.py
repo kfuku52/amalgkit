@@ -325,11 +325,10 @@ class Metadata:
                     'sample_title', 'sample_description', 'lib_name', 'lib_layout', 'lib_strategy', 'lib_source',
                     'lib_selection', 'instrument', 'total_spots', 'total_bases', 'size', 'nominal_length',
                     'nominal_sdev',
-                    'spot_length', 'read_index', 'read_class', 'read_type', 'base_coord', 'lab', 'center',
+                    'spot_length', 'read_index', 'read_class', 'read_type', 'base_coord', 'center',
                     'submitter_id',
-                    'pubmed_id', 'taxid', 'published_date', 'biomaterial_provider', 'cell', 'location', 'antibody',
-                    'batch',
-                    'misc', 'NCBI_Link', 'AWS_Link', 'GCP_Link', ]
+                    'pubmed_id', 'taxid', 'published_date', 'NCBI_Link', 'AWS_Link', 'GCP_Link', ]
+    removed_metadata_columns = ['lab', 'biomaterial_provider', 'cell', 'location', 'antibody', 'batch', 'misc']
     id_cols = ['bioproject', 'biosample', 'experiment', 'run', 'sra_primary', 'sra_sample', 'sra_study']
 
     def __init__(self, column_names=column_names):
@@ -337,8 +336,10 @@ class Metadata:
         self.df = pandas.DataFrame(index=[], columns=column_names)
 
     def reorder(self, omit_misc=False, column_names=column_names):
-        if (self.df.shape[0] == 0):
-            return None
+        is_empty = (self.df.shape[0] == 0)
+        legacy_columns = [col for col in self.removed_metadata_columns if col in self.df.columns]
+        if len(legacy_columns) > 0:
+            self.df = self.df.drop(columns=legacy_columns)
         self.df.loc[:, [col for col in column_names if col not in self.df.columns]] = ''
         if omit_misc:
             self.df = self.df.loc[:, column_names]
@@ -354,6 +355,8 @@ class Metadata:
             cols.insert(1, cols.pop(cols.index('sample_group')))
             self.df = self.df.loc[:, cols]
         self.df = self.df.reset_index(drop=True)
+        if is_empty:
+            return None
 
     def from_DataFrame(df):
         metadata = Metadata()
@@ -456,7 +459,6 @@ class Metadata:
                 "read_type": get_first_text(entry, './EXPERIMENT/DESIGN/SPOT_DESCRIPTOR/SPOT_DECODE_SPEC/READ_SPEC/READ_TYPE'),
                 "base_coord": get_first_text(entry, './EXPERIMENT/DESIGN/SPOT_DESCRIPTOR/SPOT_DECODE_SPEC/READ_SPEC/BASE_COORD'),
                 "instrument": get_first_text(entry, './EXPERIMENT/PLATFORM/ILLUMINA/INSTRUMENT_MODEL'),
-                "lab": get_first_attr(entry, './SUBMISSION', 'lab_name'),
                 "center": get_first_attr(entry, './SUBMISSION', 'center_name'),
                 "submitter_id": get_first_text(entry, './SUBMISSION/IDENTIFIERS/SUBMITTER_ID'),
                 "study_title": get_first_text(entry, './STUDY/DESCRIPTOR/STUDY_TITLE'),
@@ -483,6 +485,7 @@ class Metadata:
                     "url",
                 ),
             }
+            blocked_tags = set(metadata.removed_metadata_columns)
             sas = entry.findall('./SAMPLE/SAMPLE_ATTRIBUTES/SAMPLE_ATTRIBUTE')
             for sa in sas:
                 tag = get_first_text(sa, './TAG')
@@ -490,7 +493,7 @@ class Metadata:
                     tag = tag.lower()
                     tag = re.sub(r" \(.*", "", tag)
                     tag = re.sub(r" ", "_", tag)
-                    if tag not in row:
+                    if (tag not in row) and (tag not in blocked_tags):
                         value = get_first_text(sa, './VALUE')
                         if value != "":
                             row[tag] = value
@@ -652,10 +655,6 @@ class Metadata:
                 num_detected += has_bad_keyword.sum()
             txt = '{}: Marking {:,} SRAs with keyword "{}"'
             print(txt.format(datetime.datetime.now(), num_detected, exclude_keyword), flush=True)
-        self.df.loc[~((self.df.loc[:, 'antibody'].isnull()) | (
-                    self.df.loc[:, 'antibody'] == '')), 'exclusion'] = 'immunoprecipitation'
-        self.df.loc[~((self.df.loc[:, 'cell'].isnull()) | (self.df.loc[:, 'cell'] == '')), 'exclusion'] = 'cell_culture'
-
     def mark_treatment_terms(self, dir_config):
         config = self._load_tab_config(dir_config=dir_config, config_filename='control_term.config')
         if (config.shape[0] > 0) and (config.shape[1] < 2):
@@ -1011,32 +1010,29 @@ def get_newest_intermediate_file_extension(sra_stat, work_dir, files=None):
     else:
         files = set(files)
     sra_stat = detect_layout_from_file(sra_stat, files=files)
-    if sra_stat['layout']=='single':
-        subext = ''
-    elif sra_stat['layout']=='paired':
-        subext = '_1'
-    for ext in extensions:
-        if (sra_stat['sra_id'] + subext + ext) in files:
-            ext_out = ext
-            break
+    sra_id = sra_stat['sra_id']
+    if sra_stat['layout'] == 'single':
+        for ext in extensions:
+            if (sra_id + ext) in files:
+                ext_out = ext
+                break
+    elif sra_stat['layout'] == 'paired':
+        for ext in extensions:
+            pair1 = sra_id + '_1' + ext
+            pair2 = sra_id + '_2' + ext
+            if (pair1 in files) and (pair2 in files):
+                ext_out = ext
+                break
     if ext_out == 'no_extension_found':
         safe_delete_names = []
-        if sra_stat['layout'] == 'paired':
-            for ext in extensions:
-                safe_r1 = sra_stat['sra_id'] + '_1' + ext + '.safely_removed'
-                safe_r2 = sra_stat['sra_id'] + '_2' + ext + '.safely_removed'
-                if (safe_r1 in files) and (safe_r2 in files):
-                    safe_delete_names.extend([safe_r1, safe_r2])
-        elif sra_stat['layout'] == 'single':
-            for ext in extensions:
-                safe_single = sra_stat['sra_id'] + ext + '.safely_removed'
-                if safe_single in files:
-                    safe_delete_names.append(safe_single)
-        else:
-            safe_delete_names = [
-                f for f in find_run_prefixed_entries(files, sra_stat['sra_id'])
-                if f.endswith('.safely_removed')
-            ]
+        for ext in extensions:
+            safe_single = sra_id + ext + '.safely_removed'
+            safe_r1 = sra_id + '_1' + ext + '.safely_removed'
+            safe_r2 = sra_id + '_2' + ext + '.safely_removed'
+            if safe_single in files:
+                safe_delete_names.append(safe_single)
+            if (safe_r1 in files) and (safe_r2 in files):
+                safe_delete_names.extend([safe_r1, safe_r2])
         safe_delete_files = sorted([
             os.path.join(work_dir, f)
             for f in set(safe_delete_names)
@@ -1062,14 +1058,17 @@ def is_there_unpaired_file(sra_stat, extensions, files=None):
             files = set()
     is_unpaired_file = False
     for ext in extensions:
-        if (sra_stat['sra_id'] + ext) in files:
+        candidates = [sra_stat['sra_id'] + ext]
+        if not ext.endswith('.safely_removed'):
+            candidates.append(sra_stat['sra_id'] + ext + '.safely_removed')
+        if any([candidate in files for candidate in candidates]):
             is_unpaired_file = True
             break
     return is_unpaired_file
 
 def detect_layout_from_file(sra_stat, files=None):
     # Order is important in this list. More downstream should come first.
-    extensions = ['.amalgkit.fastq.gz.safely_removed','.amalgkit.fastq.gz','.rename.fastq.gz','.fastp.fastq.gz','.fastq.gz']
+    extensions = ['.amalgkit.fastq.gz','.rename.fastq.gz','.fastp.fastq.gz','.fastq.gz']
     if files is None:
         try:
             with os.scandir(sra_stat['getfastq_sra_dir']) as entries:
@@ -1082,11 +1081,12 @@ def detect_layout_from_file(sra_stat, files=None):
             files = set()
     is_paired_end = False
     for ext in extensions:
-        paired_fastq_files = [
-            sra_stat['sra_id'] + '_1'+ext,
-            sra_stat['sra_id'] + '_2'+ext,
-        ]
-        if all([f in files for f in paired_fastq_files]):
+        pair1_candidates = [sra_stat['sra_id'] + '_1' + ext]
+        pair2_candidates = [sra_stat['sra_id'] + '_2' + ext]
+        if not ext.endswith('.safely_removed'):
+            pair1_candidates.append(sra_stat['sra_id'] + '_1' + ext + '.safely_removed')
+            pair2_candidates.append(sra_stat['sra_id'] + '_2' + ext + '.safely_removed')
+        if any([f in files for f in pair1_candidates]) and any([f in files for f in pair2_candidates]):
             is_paired_end = True
             break
     is_unpaired_file = is_there_unpaired_file(sra_stat, extensions, files=files)
