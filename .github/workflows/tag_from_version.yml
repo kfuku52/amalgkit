@@ -8,6 +8,7 @@ on:
 
 jobs:
   create_tag:
+    if: ${{ false }} # Temporarily disabled on master prior to kfdevel merge
     runs-on: ubuntu-latest
 
     steps:
