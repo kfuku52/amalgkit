@@ -1,14 +1,190 @@
 #! /usr/bin/env python
 
 import argparse
+import os
+import re
+import shutil
 import sys
 import time
 
+SCRIPT_DIR = os.path.realpath(os.path.dirname(__file__))
+SCRIPT_PARENT_DIR = os.path.realpath(os.path.dirname(SCRIPT_DIR))
+
+def sanitize_sys_path():
+    cleaned = []
+    for path_entry in sys.path:
+        real_entry = os.path.realpath(path_entry if path_entry != '' else os.getcwd())
+        if real_entry == SCRIPT_DIR:
+            continue
+        cleaned.append(path_entry)
+    sys.path[:] = cleaned
+    if SCRIPT_PARENT_DIR not in [os.path.realpath(p if p != '' else os.getcwd()) for p in sys.path]:
+        sys.path.insert(0, SCRIPT_PARENT_DIR)
+
+sanitize_sys_path()
+
 from amalgkit.__init__ import __version__
+
+DEPENDENCY_SPECS = [
+    ('numpy', 'numpy'),
+    ('pandas', 'pandas'),
+    ('biopython', 'Bio'),
+    ('ete4', 'ete4'),
+]
+
+EXTERNAL_TOOL_SPECS = [
+    ('cat', 'cat', [['--version']]),
+    ('pigz', 'pigz', [['--version']]),
+    ('R', 'R', [['--version']]),
+    ('Rscript', 'Rscript', [['--version']]),
+    ('kallisto', 'kallisto', [['version'], ['-h']]),
+    ('fasterq-dump', 'fasterq-dump', [['--version'], ['-h']]),
+    ('fastp', 'fastp', [['--version'], ['-h']]),
+    ('busco', 'busco', [['--version'], ['-h']]),
+    ('compleasm', 'compleasm', [['--version'], ['-h']]),
+]
+
+R_PACKAGE_SPECS = ['ggplot2', 'edgeR', 'Rtsne', 'RUVSeq', 'sva']
+
+def resolve_dependency_version(package_name, module_name):
+    _ = module_name  # keep signature stable for call sites
+    normalized_target = re.sub(r'[-_.]+', '-', package_name).lower()
+    for base_path in sys.path:
+        if base_path == '':
+            base_path = os.getcwd()
+        if (not base_path) or (not os.path.isdir(base_path)):
+            continue
+        try:
+            entries = os.listdir(base_path)
+        except OSError:
+            continue
+        for entry in entries:
+            if not entry.endswith('.dist-info'):
+                continue
+            metadata_path = os.path.join(base_path, entry, 'METADATA')
+            if not os.path.isfile(metadata_path):
+                continue
+            dist_name = None
+            dist_version = None
+            try:
+                with open(metadata_path, 'rt', encoding='utf-8', errors='replace') as handle:
+                    for line in handle:
+                        if (dist_name is None) and line.startswith('Name: '):
+                            dist_name = line[len('Name: '):].strip()
+                        elif (dist_version is None) and line.startswith('Version: '):
+                            dist_version = line[len('Version: '):].strip()
+                        if (dist_name is not None) and (dist_version is not None):
+                            break
+            except OSError:
+                continue
+            if dist_name is None:
+                continue
+            normalized_name = re.sub(r'[-_.]+', '-', dist_name).lower()
+            if normalized_name == normalized_target:
+                if dist_version:
+                    return dist_version
+                return 'UNKNOWN (distribution metadata missing Version)'
+    return 'MISSING'
+
+def describe_os():
+    if hasattr(os, 'uname'):
+        uname = os.uname()
+        return '{} {} {} {}'.format(uname.sysname, uname.release, uname.version, uname.machine)
+    return sys.platform
+
+def first_nonempty_line(text):
+    if text is None:
+        return ''
+    for line in text.splitlines():
+        line = line.strip()
+        if line != '':
+            return line
+    return ''
+
+def run_command_capture(command):
+    import subprocess
+    try:
+        out = subprocess.run(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=5,
+        )
+        return out.returncode, out.stdout, out.stderr, None
+    except Exception as exc:
+        return None, '', '', exc
+
+def resolve_external_tool_status(executable_name, version_commands):
+    tool_path = shutil.which(executable_name)
+    if tool_path is None:
+        return 'MISSING'
+    for version_args in version_commands:
+        returncode, stdout_txt, stderr_txt, exc = run_command_capture([tool_path] + version_args)
+        if exc is not None:
+            continue
+        candidate = first_nonempty_line(stdout_txt)
+        if candidate == '':
+            candidate = first_nonempty_line(stderr_txt)
+        if candidate != '':
+            if returncode == 0:
+                return '{} ({})'.format(candidate, tool_path)
+            lowered = candidate.lower()
+            if 'version' in lowered:
+                return '{} ({})'.format(candidate, tool_path)
+    return 'FOUND ({}; version unavailable)'.format(tool_path)
+
+def resolve_r_package_versions(packages):
+    versions = {pkg: 'UNKNOWN' for pkg in packages}
+    rscript_path = shutil.which('Rscript')
+    if rscript_path is None:
+        return {pkg: 'MISSING (Rscript not found)' for pkg in packages}
+    expr = (
+        'pkgs <- c({}); '
+        'for (pkg in pkgs) {{ '
+        'if (requireNamespace(pkg, quietly=TRUE)) {{ '
+        'cat(pkg, "\\t", as.character(utils::packageVersion(pkg)), "\\n", sep=""); '
+        '}} else {{ '
+        'cat(pkg, "\\tMISSING\\n", sep=""); '
+        '}} '
+        '}}'
+    ).format(','.join(['"{}"'.format(pkg) for pkg in packages]))
+    returncode, stdout_txt, stderr_txt, exc = run_command_capture([rscript_path, '-e', expr])
+    if exc is not None:
+        return {pkg: 'UNKNOWN ({})'.format(exc.__class__.__name__) for pkg in packages}
+    for line in stdout_txt.splitlines():
+        line = line.strip()
+        if '\t' not in line:
+            continue
+        pkg_name, pkg_version = line.split('\t', 1)
+        pkg_name = pkg_name.strip()
+        pkg_version = pkg_version.strip()
+        if pkg_name in versions:
+            versions[pkg_name] = pkg_version if pkg_version != '' else 'UNKNOWN'
+    if returncode != 0:
+        error_line = first_nonempty_line(stderr_txt)
+        fallback = 'ERROR (exit code {})'.format(returncode)
+        if error_line != '':
+            fallback = '{}: {}'.format(fallback, error_line)
+        for pkg in packages:
+            if versions[pkg] == 'UNKNOWN':
+                versions[pkg] = fallback
+    return versions
 
 print('AMALGKIT version: {}'.format(__version__))
 print('AMALGKIT command: {}'.format(' '.join(sys.argv)))
 print('AMALGKIT bug report: https://github.com/kfuku52/amalgkit/issues')
+print('AMALGKIT os: {} (os.name={})'.format(describe_os(), os.name))
+print('AMALGKIT python: {}'.format(sys.version.split()[0]))
+for package_name, module_name in DEPENDENCY_SPECS:
+    version = resolve_dependency_version(package_name=package_name, module_name=module_name)
+    print('AMALGKIT dependency {}: {}'.format(package_name, version))
+for tool_label, tool_exe, version_commands in EXTERNAL_TOOL_SPECS:
+    status = resolve_external_tool_status(executable_name=tool_exe, version_commands=version_commands)
+    print('AMALGKIT tool {}: {}'.format(tool_label, status))
+r_package_versions = resolve_r_package_versions(R_PACKAGE_SPECS)
+for r_package in R_PACKAGE_SPECS:
+    print('AMALGKIT R package {}: {}'.format(r_package, r_package_versions.get(r_package, 'UNKNOWN')))
 
 def strtobool(val):
     val = val.lower()
@@ -18,6 +194,24 @@ def strtobool(val):
         return False
     else:
         raise ValueError(f"invalid truth value {val!r}")
+
+
+def int_or_auto(val):
+    if isinstance(val, str) and (val.strip().lower() == 'auto'):
+        return 'auto'
+    int_val = int(val)
+    if int_val <= 0:
+        raise ValueError('must be > 0 or "auto"')
+    return int_val
+
+
+def nonnegative_int_or_auto(val):
+    if isinstance(val, str) and (val.strip().lower() == 'auto'):
+        return 'auto'
+    int_val = int(val)
+    if int_val < 0:
+        raise ValueError('must be >= 0 or "auto"')
+    return int_val
 
 def command_metadata(args):
     sys.stdout.write('amalgkit metadata: start\n')
@@ -128,7 +322,11 @@ def command_dataset(args):
     sys.stdout.write('amalgkit dataset: end\n')
 
 def command_help(args):
-    print(parser.parse_args([args.command, '--help']))
+    topic = getattr(args, 'topic', None)
+    if topic is None:
+        parser.print_help()
+        return
+    parser.parse_args([topic, '--help'])
 
 
 # Main parser
@@ -147,13 +345,26 @@ pp_out.add_argument('--out_dir', metavar='PATH', default='./', type=str, require
 pp_batch = argparse.ArgumentParser(add_help=False)
 pp_batch.add_argument('--batch', metavar='INT', default=None, type=int, required=False, action='store',
                  help='default=%(default)s: One-based index of metadata table (--metadata). '
-                      'If set, process only one SRA record. This function is intended for array job processing.')
+                      'If set, process only one SRA record. This function is intended for array job processing. '
+                      'If multiple batch jobs run at the same time, total CPU demand scales with the number of concurrent batch jobs.')
 pp_redo = argparse.ArgumentParser(add_help=False)
 pp_redo.add_argument('--redo', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
                  help='default=%(default)s: Redo the analysis even if previous output files are detected.')
 pp_threads = argparse.ArgumentParser(add_help=False)
-pp_threads.add_argument('--threads', metavar='INT', default=1, type=int, required=False, action='store',
-                 help='default=%(default)s: Number of threads.')
+pp_threads.add_argument('--threads', metavar='INT|auto', default='auto', type=int_or_auto, required=False, action='store',
+                 help='default=%(default)s: Total CPU cores to use per amalgkit process. '
+                      'This is a global core budget (not per-worker threads). '
+                      'AMALGKIT auto-splits this budget into internal workers and per-worker threads.')
+pp_internal_jobs = argparse.ArgumentParser(add_help=False)
+pp_internal_jobs.add_argument('--internal_jobs', metavar='INT|auto', default='auto', type=int_or_auto, required=False, action='store',
+                 help='default=%(default)s: Advanced override for internal parallel workers. '
+                      'In auto mode, worker count is derived from --threads. '
+                      'When --batch is set, this is forced to 1.')
+pp_cpu_budget = argparse.ArgumentParser(add_help=False)
+pp_cpu_budget.add_argument('--internal_cpu_budget', metavar='INT|auto', default='auto', type=nonnegative_int_or_auto, required=False, action='store',
+                 help='default=%(default)s: Advanced CPU budget cap for internal auto-parallelization. '
+                      'The effective core budget is min(--threads, --internal_cpu_budget). '
+                      '"auto" uses os.cpu_count().')
 pp_sg = argparse.ArgumentParser(add_help=False)
 pp_sg.add_argument('--sample_group', metavar='tissueA,tissueB,tissueC,...', default=None, type=str, required=False, action='store',
                  help='default=%(default)s: "Comma separated list of sample groups. '
@@ -197,7 +408,7 @@ pse.set_defaults(handler=command_select)
 
 # Sub parser: getfastq
 pge_help = 'Retrieving fastq files. See `amalgkit getfastq -h`'
-pge = subparsers.add_parser('getfastq', help=pge_help, parents=[pp_out, pp_meta, pp_threads, pp_redo, pp_batch])
+pge = subparsers.add_parser('getfastq', help=pge_help, parents=[pp_out, pp_meta, pp_threads, pp_internal_jobs, pp_cpu_budget, pp_redo, pp_batch])
 pge.add_argument('--entrez_email', metavar='aaa@bbb.com', default='', type=str, required=False, action='store',
                  help='default=%(default)s: Your email address. See https://www.ncbi.nlm.nih.gov/books/NBK25497/')
 pge.add_argument('--id', metavar='XXXXX0000', default=None, type=str, required=False, action='store',
@@ -223,6 +434,15 @@ pge.add_argument('--fasterq_dump_exe', '--fasterq-dump_exe', '--fasterq-dump-exe
                  dest='fasterq_dump_exe', metavar='PATH', default='fasterq-dump', type=str,
                  required=False, action='store',
                  help='default=%(default)s: PATH to fasterq-dump executable for public SRA extraction.')
+pge.add_argument('--fasterq_size_check', metavar='yes|no', default='yes', type=strtobool, required=False, action='store',
+                 help='default=%(default)s: Toggle fasterq-dump pre-run disk-size checks. '
+                      '"yes" forwards --size-check on, "no" forwards --size-check off.')
+pge.add_argument('--fasterq_disk_limit', metavar='STR', default=None, type=str, required=False, action='store',
+                 help='default=%(default)s: Optional value forwarded to fasterq-dump --disk-limit '
+                      '(for example, "200G").')
+pge.add_argument('--fasterq_disk_limit_tmp', metavar='STR', default=None, type=str, required=False, action='store',
+                 help='default=%(default)s: Optional value forwarded to fasterq-dump --disk-limit-tmp '
+                      '(for example, "200G").')
 pge.add_argument('--prefetch_exe', dest='obsolete_prefetch_exe', metavar='PATH', default=None, type=str,
                  required=False, action='store', help=argparse.SUPPRESS)
 pge.add_argument('--fastp', metavar='yes|no', default='yes', type=strtobool, required=False, action='store',
@@ -251,6 +471,8 @@ pge.add_argument('--aws', metavar='yes|no', default='yes', type=strtobool, requi
                  help='default=%(default)s: Download SRA files from Amazon Cloud (AWS), if available.')
 pge.add_argument('--gcp', metavar='yes|no', default='yes', type=strtobool, required=False, action='store',
                  help='default=%(default)s: Download SRA files from Google Cloud (GCP), if available.')
+pge.add_argument('--gcp_project', metavar='STR', default='', type=str, required=False, action='store',
+                 help='default=%(default)s: Google Cloud project for requester-pays GCP buckets (used when GCP_Link is gs://).')
 pge.add_argument('--read_name', metavar='default|trinity', default='default', type=str, required=False, action='store',
                  choices=['default', 'trinity'],
                  help='default=%(default)s: read name formatting for downstream analysis.')
@@ -267,7 +489,7 @@ pge.set_defaults(handler=command_getfastq)
 
 # Sub parser: quant
 pqu_help = 'Estimating transcript abundance with kallisto. See `amalgkit quant -h`'
-pqu = subparsers.add_parser('quant', help=pqu_help, parents=[pp_out, pp_meta, pp_threads, pp_redo, pp_batch])
+pqu = subparsers.add_parser('quant', help=pqu_help, parents=[pp_out, pp_meta, pp_threads, pp_internal_jobs, pp_cpu_budget, pp_redo, pp_batch])
 
 pqu.add_argument('--index_dir', metavar='PATH', default=None, type=str, required=False, action='store',
                  help='default=%(default)s: PATH to index directory. Only required if index directory is not '
@@ -284,16 +506,20 @@ pqu.add_argument('--build_index', metavar='yes|no', default='no', type=strtobool
                  help='default=%(default)s: Allows AMALGKIT to build kallisto index from reference fasta files. '
                       'Will only do this for a species if an index file is not already present. One fasta file per species should be put in --fasta_dir. '
                       'AMALGKIT will read the species from the metadata, try to find the fasta file (.fa or .fasta) and build the index for further use.')
+pqu.add_argument('--index_lock_poll', metavar='INT', default=5, type=int, required=False, action='store',
+                 help='default=%(default)s: Poll interval in seconds while waiting for another batch process to finish building a species index.')
+pqu.add_argument('--index_lock_timeout', metavar='INT', default=3600, type=int, required=False, action='store',
+                 help='default=%(default)s: Maximum wait time in seconds for index build lock release before aborting.')
 pqu.set_defaults(handler=command_quant)
 
 # Sub parser: merge
 pmg_help = 'Generating transcript abundance tables. See `amalgkit merge -h`'
-pmg = subparsers.add_parser('merge', help=pmg_help, parents=[pp_out, pp_meta])
+pmg = subparsers.add_parser('merge', help=pmg_help, parents=[pp_out, pp_meta, pp_threads, pp_internal_jobs, pp_cpu_budget])
 pmg.set_defaults(handler=command_merge)
 
 # Sub parser: busco
 pbu_help = 'Generating BUSCO tables for amalgkit cstmm/csca. See `amalgkit busco -h`'
-pbu = subparsers.add_parser('busco', help=pbu_help, parents=[pp_out, pp_meta, pp_threads, pp_redo])
+pbu = subparsers.add_parser('busco', help=pbu_help, parents=[pp_out, pp_meta, pp_threads, pp_internal_jobs, pp_cpu_budget, pp_redo])
 pbu.add_argument('--tool', metavar='auto|busco|compleasm', default='auto', type=str, required=False, action='store',
                  choices=['auto', 'busco', 'compleasm'],
                  help='default=%(default)s: Tool for BUSCO table generation.')
@@ -321,7 +547,7 @@ pcs.add_argument('--orthogroup_table', metavar='PATH', default=None, type=str, r
                       'Specify `--orthogroup_table ""` for single-species TMM normalization.')
 pcs.add_argument('--dir_busco', metavar='PATH', default=None, type=str, required=False, action='store',
                  help='default=%(default)s: PATH to the directory where per-species BUSCO full tables are stored. '
-                      'File names in this directory are expected to be GENUS_SPECIES_MISC.tsv: e.g., Arabidopsis_thaliana_full_table.tsv')
+                      'File names in this directory are expected to be GENUS_SPECIES_busco.tsv: e.g., Arabidopsis_thaliana_busco.tsv')
 pcs.add_argument('--dir_count', metavar='PATH', default='inferred', type=str, required=False, action='store',
                  help='default=%(default)s: AMALGKIT subfolder PATH to per-species transcript abundance data as produced by `amalgkit merge`. '
                       '"inferred" = out_dir/merge')
@@ -331,19 +557,25 @@ pcs.set_defaults(handler=command_cstmm)
 pca_help = 'Generating plots with cross-species correlation analysis. See `amalgkit csca -h`'
 pca = subparsers.add_parser('csca', help=pca_help, parents=[pp_out, pp_meta, pp_sg, pp_sgc])
 pca.add_argument('--orthogroup_table', metavar='PATH', default=None, type=str, required=False, action='store',
-                 help='default=%(default)s: PATH to orthogroup table, which is, for example, Orthogroups.tsv and N0.tsv in OrthoFinder.'
-                      'Specify `--orthogroup_table ""` for single-species TMM normalization.')
+                 help='default=%(default)s: PATH to orthogroup table, which is, for example, Orthogroups.tsv and N0.tsv in OrthoFinder.')
 pca.add_argument('--dir_busco', metavar='PATH', default=None, type=str, required=False, action='store',
                  help='default=%(default)s: PATH to the directory where per-species BUSCO full tables are stored. '
-                      'File names in this directory are expected to be GENUS_SPECIES_MISC.tsv: e.g., Arabidopsis_thaliana_full_table.tsv')
+                      'File names in this directory are expected to be GENUS_SPECIES_busco.tsv: e.g., Arabidopsis_thaliana_busco.tsv')
 pca.add_argument('--batch_effect_alg', metavar='(no|sva|ruvseq|combatseq)', choices=['no', 'sva', 'ruvseq', 'combatseq'],
                  default='sva', type=str, required=False, action='store',
                  help='default=%(default)s: Batch-effect removal algorithm used in `amalgkit curate`.')
+pca.add_argument('--missing_strategy', metavar='em_pca|nipals|row_mean',
+                 choices=['em_pca', 'nipals', 'row_mean'],
+                 default='em_pca', type=str, required=False, action='store',
+                 help='default=%(default)s: Missing-value handling strategy before csca dimensionality reduction. '
+                      '`em_pca` uses a dependency-free iterative low-rank reconstruction (EM/PPCA-style). '
+                      '`nipals` uses a dependency-free NIPALS-style low-rank iterative reconstruction. '
+                      '`row_mean` uses per-gene mean fill as a fast fallback.')
 pca.set_defaults(handler=command_csca)
 
 # Sub parser: curate
 pcu_help = 'Automatic removal of outlier samples and SVA-based unwanted biases. See `amalgkit curate -h`'
-pcu = subparsers.add_parser('curate', help=pcu_help, parents=[pp_out, pp_meta, pp_batch, pp_sg, pp_sgc, pp_redo])
+pcu = subparsers.add_parser('curate', help=pcu_help, parents=[pp_out, pp_meta, pp_batch, pp_threads, pp_internal_jobs, pp_cpu_budget, pp_sg, pp_sgc, pp_redo])
 pcu.add_argument('--input_dir', metavar='PATH', default='inferred', type=str, required=False, action='store',
                  help='default=%(default)s: PATH to `amalgkit merge` or `amalgkit cstmm` output folder. '
                       '"inferred" = out_dir/cstmm if exist, else out_dir/merge.')
@@ -408,6 +640,11 @@ psa.add_argument('--quant_dir', metavar='PATH', default=None, type=str, required
 psa.add_argument('--getfastq_dir', metavar='PATH', default=None, type=str, required=False, action='store',
                  help='default=%(default)s: PATH to index directory. Only required if getfastq directory is not '
                       'out_dir/getfastq/')
+psa.add_argument('--quiet', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
+                 help='default=%(default)s: Suppress per-run status lines and print only summary results.')
+psa.add_argument('--verbose_runs', metavar='INT', default=20, type=int, required=False, action='store',
+                 help='default=%(default)s: Maximum number of runs for per-run logging in sanity checks. '
+                      'Set a negative value to always print per-run logs.')
 psa.set_defaults(handler=command_sanity)
 
 # Sub parser: integrate
@@ -452,6 +689,13 @@ pda.set_defaults(handler=command_dataset)
 
 # Sub parser: help
 parser_help = subparsers.add_parser('help', help='Printing help messages')
+parser_help.add_argument(
+    'topic',
+    nargs='?',
+    default=None,
+    choices=['metadata', 'select', 'getfastq', 'quant', 'merge', 'busco', 'cstmm', 'csca', 'curate', 'sanity', 'integrate', 'config', 'dataset', 'help'],
+    help='Optional command name to show detailed help for.',
+)
 parser_help.set_defaults(handler=command_help)
 
 # Handler

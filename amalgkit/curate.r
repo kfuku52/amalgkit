@@ -1,105 +1,10 @@
 #!/usr/bin/env Rscript
 
-rainbow_hcl = function(n, c = 100, l = 65, start = 0, end = 360, alpha = NULL) {
-    if (n <= 0) {
-        return(character(0))
-    }
-    hues = seq(start, end, length.out = n + 1)[1:n]
-    grDevices::hcl(h = hues, c = c, l = l, alpha = alpha, fixup = TRUE)
-}
-
-brewer.pal = function(n, name) {
-    dark2 = c("#1B9E77", "#D95F02", "#7570B3", "#E7298A", "#66A61E", "#E6AB02", "#A6761D", "#666666")
-    paired = c("#A6CEE3", "#1F78B4", "#B2DF8A", "#33A02C", "#FB9A99", "#E31A1C",
-               "#FDBF6F", "#FF7F00", "#CAB2D6", "#6A3D9A", "#FFFF99", "#B15928")
-    palette_values = switch(
-        name,
-        "Dark2" = dark2,
-        "Paired" = paired,
-        stop(paste0("Unsupported palette name: ", name))
-    )
-    if (n <= 0) {
-        stop("n must be positive")
-    }
-    if (n > length(palette_values)) {
-        warning(sprintf("Requested %d colors for %s; truncating to %d.", n, name, length(palette_values)))
-        n = length(palette_values)
-    }
-    palette_values[seq_len(n)]
-}
-
 detected_cores = tryCatch(parallel::detectCores(), error = function(e) NA_integer_)
 if (is.na(detected_cores) && (is.null(getOption("cores")) || is.na(getOption("cores")))) {
     options(cores = 1L)
 }
-suppressWarnings(suppressPackageStartupMessages(library(NMF, quietly = TRUE)))
 suppressWarnings(suppressPackageStartupMessages(library(Rtsne, quietly = TRUE)))
-
-calc_sample_distance = function(tc, method = 'pearson', na_fill = 1, epsilon = 0) {
-    num_samples = ncol(tc)
-    if (num_samples <= 1) {
-        return(as.dist(matrix(0, nrow = num_samples, ncol = num_samples)))
-    }
-    if (method %in% c('pearson', 'spearman', 'kendall')) {
-        cor_mat = suppressWarnings(cor(tc, method = method, use = 'pairwise.complete.obs'))
-        dist_mat = 1 - cor_mat
-    } else {
-        dist_mat = as.matrix(stats::dist(t(tc), method = method))
-    }
-    dist_mat[!is.finite(dist_mat)] = na_fill
-    dist_mat = (dist_mat + t(dist_mat)) / 2
-    dist_mat = dist_mat + epsilon
-    diag(dist_mat) = 0
-    as.dist(dist_mat)
-}
-
-apply_leaf_label_colors = function(dend, label_colors) {
-    idx = 0
-    dendrapply(dend, function(node) {
-        if (is.leaf(node)) {
-            idx <<- idx + 1
-            if (idx <= length(label_colors)) {
-                node_par = attr(node, "nodePar")
-                if (is.null(node_par)) {
-                    node_par = list()
-                }
-                node_par[['lab.col']] = label_colors[[idx]]
-                attr(node, "nodePar") = node_par
-            }
-        }
-        node
-    })
-}
-
-apply_leaf_edge_colors = function(dend, edge_colors) {
-    idx = 0
-    dendrapply(dend, function(node) {
-        if (is.leaf(node)) {
-            idx <<- idx + 1
-            if (idx <= length(edge_colors)) {
-                edge_par = attr(node, "edgePar")
-                if (is.null(edge_par)) {
-                    edge_par = list()
-                }
-                edge_par[['col']] = edge_colors[[idx]]
-                attr(node, "edgePar") = edge_par
-            }
-        }
-        node
-    })
-}
-
-set_edge_lwd = function(dend, lwd = 1) {
-    dendrapply(dend, function(node) {
-        edge_par = attr(node, "edgePar")
-        if (is.null(edge_par)) {
-            edge_par = list()
-        }
-        edge_par[['lwd']] = lwd
-        attr(node, "edgePar") = edge_par
-        node
-    })
-}
 
 debug_mode = ifelse(length(commandArgs(trailingOnly = TRUE)) == 1, "debug", "batch")
 log_prefix = "transcriptome_curation.r:"
@@ -167,6 +72,38 @@ cat('skip_curation_flag:', skip_curation_flag, "\n")
 
 source(r_util_path)
 
+CURATE_FONT_SIZE_PT = 8
+CURATE_FONT_FAMILY = 'Helvetica'
+
+normalize_exclusion_values = function(exclusion_values) {
+    normalized = as.character(exclusion_values)
+    normalized[is.na(exclusion_values)] = NA_character_
+    normalized = trimws(normalized)
+    normalized = tolower(normalized)
+    return(normalized)
+}
+
+is_non_excluded_flag = function(exclusion_values) {
+    exclusion_norm = normalize_exclusion_values(exclusion_values)
+    (!is.na(exclusion_norm)) & (exclusion_norm == 'no')
+}
+
+resolve_curate_fontsize = function(fontsize = CURATE_FONT_SIZE_PT) {
+    return(CURATE_FONT_SIZE_PT)
+}
+
+compute_effective_text_cex = function(target_pt = CURATE_FONT_SIZE_PT) {
+    current_ps = suppressWarnings(as.numeric(par('ps'))[[1]])
+    current_cex = suppressWarnings(as.numeric(par('cex'))[[1]])
+    target_pt = suppressWarnings(as.numeric(resolve_curate_fontsize(target_pt))[[1]])
+    if (!is.finite(current_ps) || (current_ps <= 0) ||
+        !is.finite(current_cex) || (current_cex <= 0) ||
+        !is.finite(target_pt) || (target_pt <= 0)) {
+        return(1)
+    }
+    target_pt / (current_ps * current_cex)
+}
+
 if (batch_effect_alg == "ruvseq") {
     suppressWarnings(suppressPackageStartupMessages(library(RUVSeq, quietly = TRUE)))
 } else {
@@ -214,7 +151,7 @@ add_color_to_curate_metadata = function(sra, selected_sample_groups, sample_grou
     if (is_default_palette) {
         if (length(selected_sample_groups) <= 8) {
             sample_group_color = brewer.pal(8, "Dark2")
-            sample_group_color = sample_group_color[1:length(selected_sample_groups)]
+            sample_group_color = sample_group_color[seq_len(length(selected_sample_groups))]
             bp_color = rainbow_hcl(length(bioproject_u), c = 50)
             sp_color = rainbow_hcl(length(scientific_name_u), c = 100)
         } else if (length(selected_sample_groups) <= 12) {
@@ -234,9 +171,9 @@ add_color_to_curate_metadata = function(sra, selected_sample_groups, sample_grou
         bp_color = rainbow_hcl(length(bioproject_u), c = 50)
         sp_color = rainbow_hcl(length(scientific_name_u), c = 100)
     }
-    df_sample_group = data.frame(sample_group = sample_group_u, sample_group_color = sample_group_color[1:length(sample_group_u)], stringsAsFactors = FALSE)
-    df_bp = data.frame(bioproject = bioproject_u, bp_color = bp_color[1:length(bioproject_u)], stringsAsFactors = FALSE)
-    df_sp = data.frame(scientific_name = scientific_name_u, sp_color = sp_color[1:length(scientific_name_u)], stringsAsFactors = FALSE)
+    df_sample_group = data.frame(sample_group = sample_group_u, sample_group_color = sample_group_color[seq_len(length(sample_group_u))], stringsAsFactors = FALSE)
+    df_bp = data.frame(bioproject = bioproject_u, bp_color = bp_color[seq_len(length(bioproject_u))], stringsAsFactors = FALSE)
+    df_sp = data.frame(scientific_name = scientific_name_u, sp_color = sp_color[seq_len(length(scientific_name_u))], stringsAsFactors = FALSE)
     sra = merge(sra, df_bp, sort = FALSE, all.y = FALSE)
     sra = merge(sra, df_sp, sort = FALSE, all.y = FALSE)
     sra = merge(sra, df_sample_group, sort = FALSE, all.y = FALSE)
@@ -254,21 +191,6 @@ sort_tc_and_metadata = function(tc, sra, sort_columns = c("sample_group", "scien
     sra_intersection = sra[(sra[['run']] %in% colnames(tc)), 'run']
     tc = tc[, sra_intersection, drop = FALSE]
     return(list(tc = tc, sra = sra))
-}
-
-sort_averaged_tc = function(tc) {
-    split_colnames = strsplit(colnames(tc), "_")
-    genus_names = c()
-    specific_names = c()
-    sample_group_names = c()
-    for (i in 1:length(split_colnames)) {
-        genus_names = c(genus_names, split_colnames[[i]][1])
-        specific_names = c(specific_names, split_colnames[[i]][2])
-        sample_group_names = c(sample_group_names, split_colnames[[i]][3])
-    }
-    colname_order = order(sample_group_names, genus_names, specific_names)
-    tc = tc[, colname_order, drop = FALSE]
-    return(tc)
 }
 
 cleanY = function(y, mod, svs) {
@@ -295,13 +217,23 @@ sample_group_mean = function(tc, sra, selected_sample_groups = NA, balance_bp = 
     tc_ave = data.frame(matrix(rep(NA, length(sp_sample_groups) * nrow(tc)), nrow = nrow(tc)))
     colnames(tc_ave) = sp_sample_groups
     rownames(tc_ave) = rownames(tc)
+    sra_sample_group = sra[['sample_group']]
+    sra_run = sra[['run']]
+    sra_exclusion = sra[['exclusion']]
+    sra_is_non_excluded = is_non_excluded_flag(sra_exclusion)
+    tc_colnames = colnames(tc)
+    is_run_in_tc = (sra_run %in% tc_colnames)
+    if (balance_bp) {
+        sra_bioproject = sra[['bioproject']]
+        is_no_exclusion = sra_is_non_excluded
+    }
     for (sample_group in sp_sample_groups) {
-        exclusion_sample_group = sra[(sra[['sample_group']] == sample_group), 'exclusion']
-        run_sample_group = sra[(sra[['sample_group']] == sample_group), 'run']
-        run_sample_group = run_sample_group[run_sample_group %in% colnames(tc)]
-        if (all(exclusion_sample_group != "no")) {
+        is_sample_group = (sra_sample_group == sample_group)
+        exclusion_sample_group = sra_is_non_excluded[is_sample_group]
+        run_sample_group = sra_run[is_sample_group & is_run_in_tc]
+        if (all(!exclusion_sample_group)) {
             warning_message = paste0('All samples of sample_group ', sample_group, ' are marked for exclusion. This sample_group will be omitted from further analysis.')
-            selected_sample_groups = selected_sample_groups[!selected_sample_groups == sample_group]
+            selected_sample_groups = selected_sample_groups[!(selected_sample_groups %in% sample_group)]
             tc_ave = tc_ave[, !names(tc_ave) %in% c(sample_group)]
             warning(warning_message)
             next
@@ -310,17 +242,12 @@ sample_group_mean = function(tc, sra, selected_sample_groups = NA, balance_bp = 
             exp_sample_group = tc[, run_sample_group]
         } else {
             if (balance_bp) {
-                is_run = (sra[['run']] %in% colnames(tc))
-                is_sample_group = (sra[['sample_group']] == sample_group)
-                is_no_exclusion = (sra[['exclusion']] == "no")
-                bps = unique(sra[is_run & is_sample_group & is_no_exclusion, "bioproject"])
+                bps = unique(sra_bioproject[is_run_in_tc & is_sample_group & is_no_exclusion])
                 df_tmp = data.frame(matrix(rep(NA, nrow(tc) * length(bps)), nrow = nrow(tc), ncol = length(bps)))
                 colnames(df_tmp) = bps
                 for (bp in bps) {
-                    is_bp = (sra[['bioproject']] == bp)
-                    is_sample_group = (sra[['sample_group']] == sample_group)
-                    is_no_exclusion = (sra[['exclusion']] == "no")
-                    sra_ids = sra[is_bp & is_sample_group & is_no_exclusion, "run"]
+                    is_bp = (sra_bioproject == bp)
+                    sra_ids = sra_run[is_bp & is_sample_group & is_no_exclusion]
                     tc_bp = tc[, sra_ids]
                     if (class(tc_bp) == "numeric") {
                         df_tmp[bp] = tc_bp
@@ -427,47 +354,88 @@ check_within_sample_group_correlation = function(tc, sra, dist_method, min_dif, 
         cat('Less than two sample_group categories are available after filtering. Outlier removal will be skipped.\n')
         return(list(tc = tc, sra = sra))
     }
+    # This value is invariant inside the loop: tc, sra2 columns used by sample_group_mean(), and selected_sample_groups are unchanged.
+    tc_ave_all = sample_group_mean(tc, sra2, selected_sample_groups)[['tc_ave']]
+    coef_matrix_all = cor(tc, tc_ave_all, method = dist_method)
+    if (is.null(dim(coef_matrix_all))) {
+        coef_matrix_all = matrix(coef_matrix_all, nrow = 1, ncol = 1)
+        rownames(coef_matrix_all) = colnames(tc)
+        colnames(coef_matrix_all) = colnames(tc_ave_all)
+    }
+    sra2_run = sra2[['run']]
+    sra2_sample_group = sra2[['sample_group']]
+    sra2_bioproject = sra2[['bioproject']]
+    tc_runs = colnames(tc)
+    run_to_index = setNames(seq_len(nrow(sra2)), sra2_run)
+    run_context_cache = list()
+    tc_ave_other_bp_cache = list()
+    coef_other_bp_cache = list()
     exclude_runs = c()
     for (sra_run in colnames(tc)) {
-        is_sra = (sra2[['run']] == sra_run)
-        my_sample_group = sra2[is_sra, "sample_group"]
-        my_bioproject = sra2[is_sra, "bioproject"]
-        is_not_my_bp = (sra2[['bioproject']] != my_bioproject)
-        is_my_sample_group = (sra2[['sample_group']] == my_sample_group)
-        run_other_bp = sra2[(is_not_my_bp | !is_my_sample_group), "run"]
-        run_other_bp = run_other_bp[run_other_bp %in% colnames(tc)]
-        tc_other_bp = tc[, run_other_bp]
-        num_other_run_same_bp_sample_group = length(unique(sra2[(is_not_my_bp & is_my_sample_group), "bioproject"]))
+        is_sra = run_to_index[[sra_run]]
+        my_sample_group = sra2_sample_group[[is_sra]]
+        my_bioproject = sra2_bioproject[[is_sra]]
+        run_context_key = paste0(my_sample_group, '\t', my_bioproject)
+        if (!is.null(run_context_cache[[run_context_key]])) {
+            run_other_bp = run_context_cache[[run_context_key]][['run_other_bp']]
+            num_other_run_same_bp_sample_group = run_context_cache[[run_context_key]][['num_other_run_same_bp_sample_group']]
+            num_other_bp_same_sample_group = run_context_cache[[run_context_key]][['num_other_bp_same_sample_group']]
+            run_context_runs = run_context_cache[[run_context_key]][['run_context_runs']]
+        } else {
+            is_not_my_bp = (sra2_bioproject != my_bioproject)
+            is_my_sample_group = (sra2_sample_group == my_sample_group)
+            run_other_bp = sra2_run[(is_not_my_bp | !is_my_sample_group)]
+            run_other_bp = run_other_bp[run_other_bp %in% tc_runs]
+            num_other_run_same_bp_sample_group = length(unique(sra2_bioproject[is_not_my_bp & is_my_sample_group]))
+            num_other_bp_same_sample_group = sum(is_not_my_bp & is_my_sample_group, na.rm = TRUE)
+            run_context_runs = sra2_run[(!is_not_my_bp) & is_my_sample_group]
+            run_context_runs = run_context_runs[run_context_runs %in% tc_runs]
+            run_context_cache[[run_context_key]] = list(
+                run_other_bp = run_other_bp,
+                num_other_run_same_bp_sample_group = num_other_run_same_bp_sample_group,
+                num_other_bp_same_sample_group = num_other_bp_same_sample_group,
+                run_context_runs = run_context_runs
+            )
+        }
         sra2[is_sra, "num_other_run_same_bp_sample_group"] = num_other_run_same_bp_sample_group
-        sra2_other_bp <- sra2[sra2[['run']] %in% run_other_bp,]
 
         # If one sample_group is completely sourced from the same bioproject, we can't remove the whole bioproject for tc_ave_other_bp
 
-        num_other_bp_same_sample_group = sum(sra2_other_bp[['sample_group']] == my_sample_group, na.rm = TRUE)
         if (num_other_bp_same_sample_group == 0) {
-            tc_ave_other_bp = sample_group_mean(tc, sra2, selected_sample_groups)[['tc_ave']]
+            tc_ave_other_bp = tc_ave_all
         } else {
-            tc_ave_other_bp = sample_group_mean(tc_other_bp, sra2, selected_sample_groups)[['tc_ave']]
-        }
-        tc_ave = sample_group_mean(tc, sra2, selected_sample_groups)[['tc_ave']]
-        coef = c()
-        coef_other_bp = c()
-        for (sample_group in selected_sample_groups) {
-            tmp_coef = cor(tc[, sra_run], tc_ave[, sample_group], method = dist_method)
-            if ((num_other_bp_same_sample_group == 0) & (sample_group == my_sample_group)) {
-                tmp_coef_other_bp = cor(tc[, sra_run], tc_ave[, sample_group], method = dist_method)
+            cache_key = ifelse(length(run_other_bp) == 0, '__EMPTY__', paste(run_other_bp, collapse = '|'))
+            if (!is.null(tc_ave_other_bp_cache[[cache_key]])) {
+                tc_ave_other_bp = tc_ave_other_bp_cache[[cache_key]]
             } else {
-                tmp_coef_other_bp = cor(tc[, sra_run], tc_ave_other_bp[, sample_group], method = dist_method)
+                tc_other_bp = tc[, run_other_bp]
+                tc_ave_other_bp = sample_group_mean(tc_other_bp, sra2, selected_sample_groups)[['tc_ave']]
+                tc_ave_other_bp_cache[[cache_key]] = tc_ave_other_bp
             }
-            if (sample_group == my_sample_group) {
-                tmp_coef = tmp_coef - min_dif
-                tmp_coef_other_bp = tmp_coef_other_bp - min_dif
+        }
+        coef = coef_matrix_all[sra_run, selected_sample_groups]
+        if (num_other_bp_same_sample_group == 0) {
+            coef_other_bp = coef
+        } else {
+            if (is.null(coef_other_bp_cache[[run_context_key]])) {
+                coef_other_bp_mat = cor(tc[, run_context_runs, drop = FALSE], tc_ave_other_bp, method = dist_method)
+                if (is.null(dim(coef_other_bp_mat))) {
+                    coef_other_bp_mat = matrix(coef_other_bp_mat, nrow = length(run_context_runs), ncol = ncol(tc_ave_other_bp))
+                }
+                if (is.null(rownames(coef_other_bp_mat))) {
+                    rownames(coef_other_bp_mat) = run_context_runs
+                }
+                if (is.null(colnames(coef_other_bp_mat))) {
+                    colnames(coef_other_bp_mat) = colnames(tc_ave_other_bp)
+                }
+                coef_other_bp_cache[[run_context_key]] = coef_other_bp_mat
             }
-            coef = c(coef, tmp_coef)
-            coef_other_bp = c(coef_other_bp, tmp_coef_other_bp)
+            coef_other_bp = coef_other_bp_cache[[run_context_key]][sra_run, selected_sample_groups, drop = TRUE]
         }
         names(coef) = selected_sample_groups
         names(coef_other_bp) = selected_sample_groups
+        coef[my_sample_group] = coef[my_sample_group] - min_dif
+        coef_other_bp[my_sample_group] = coef_other_bp[my_sample_group] - min_dif
         if (max(coef, na.rm = TRUE) != coef[my_sample_group]) {
             cat('Registered as a candidate for exclusion. Better correlation to other sample group(s):', sra_run, '\n')
             exclude_runs = c(exclude_runs, sra_run)
@@ -489,9 +457,9 @@ check_within_sample_group_correlation = function(tc, sra, dist_method, min_dif, 
             }else {
                 exclude_runs_tmp = c(first_bp_hit$run, first_same_sample_group_hit$run)
             }
-            exclude_runs = unique(exclude_runs_tmp)
-            # TODO This boolean vector should be all TRUE by definition. ???: exclude_run_bps_and_sample_group$run %in% exclude_runs
-            exclude_bps = exclude_run_bps_and_sample_group[exclude_run_bps_and_sample_group$run %in% exclude_runs, "bioproject"]
+            exclude_runs = unique(as.character(exclude_runs_tmp))
+            exclude_runs = exclude_runs[(!is.na(exclude_runs)) & (exclude_runs != '')]
+            exclude_bps = unique(sra2[(sra2[['run']] %in% exclude_runs), "bioproject"])
         } else {
             exclude_run_bps = sra2[(sra2[['run']] %in% exclude_runs), c("bioproject", "run", "num_other_run_same_bp_sample_group")]
             exclude_bp_counts = data.frame(table(exclude_run_bps[['bioproject']]))
@@ -631,64 +599,479 @@ batch_effect_subtraction = function(tc, sra, batch_effect_alg, transform_method,
     return(list(tc = tc, sva = sva1))
 }
 
-map_color = function(redundant_variables, c) {
-    uniq_var = unique(redundant_variables)
-    uniq_col = rainbow_hcl(length(uniq_var), c = c)
-    df_unique = data.frame(var = uniq_var, col = uniq_col, stringsAsFactors = FALSE)
-    df_redundant = data.frame(var = redundant_variables, order = seq(1, length(redundant_variables)),
-                              stringsAsFactors = FALSE)
-    df_redundant = merge(df_redundant, df_unique, by = "var", all.x = TRUE, stringsAsFactors = FALSE)
-    df_redundant = df_redundant[order(df_redundant[['order']]),]
-    return(df_redundant[['col']])
+compute_dense_label_pt = function(num_labels, base_pt = 8, min_pt = 4, soft_limit = 20) {
+    if (is.na(num_labels) || (num_labels <= 0)) {
+        return(base_pt)
+    }
+    if (num_labels <= soft_limit) {
+        return(base_pt)
+    }
+    scaled_pt = base_pt * sqrt(soft_limit / num_labels)
+    max(min_pt, min(base_pt, scaled_pt))
 }
 
-draw_heatmap = function(sra, tc_dist_matrix, legend = TRUE, fontsize = 7) {
-    bp_fac = factor(sub(";.*", "", sra[, c("bioproject")]))
-    sample_group_fac = factor(sra[, c("sample_group")])
-    ann_label = data.frame(bioproject = bp_fac, sample_group = sample_group_fac)
-    bp_col_uniq = unique(sra[order(sra[['bioproject']]), 'bp_color'])
-    sample_group_col_uniq = unique(sra[order(sra[['sample_group']]), 'sample_group_color'])
-    ann_color = list(bioproject = bp_col_uniq, sample_group = sample_group_col_uniq)
-    breaks = c(0, seq(0.3, 1, 0.01))
+shorten_run_labels = function(run_ids, max_len = 10, prefix_len = 4, suffix_len = 4) {
+    run_ids = as.character(run_ids)
+    short_ids = run_ids
+    is_long = nchar(run_ids) > max_len
+    if (any(is_long)) {
+        head_half = substr(run_ids[is_long], 1, prefix_len)
+        start_idx = pmax(1, nchar(run_ids[is_long]) - suffix_len + 1)
+        tail_half = mapply(
+            function(id, st) { substr(id, st, nchar(id)) },
+            run_ids[is_long],
+            start_idx,
+            USE.NAMES = FALSE
+        )
+        short_ids[is_long] = paste0(head_half, '..', tail_half)
+    }
+    # Avoid duplicated labels, which can break tile indexing.
+    make.unique(short_ids, sep = '.')
+}
+
+prepare_sample_correlation_heatmap_data = function(sra, tc_dist_matrix) {
+    run_order = colnames(tc_dist_matrix)
+    run_order = run_order[run_order %in% sra[['run']]]
+    if (length(run_order) == 0) {
+        return(NULL)
+    }
+    sra = sra[match(run_order, sra[['run']]), , drop = FALSE]
+    bp_primary = sub(';.*', '', as.character(sra[['bioproject']]))
+    sample_group_chr = as.character(sra[['sample_group']])
+    run_chr = as.character(sra[['run']])
+    order_idx = order(sample_group_chr, bp_primary, run_chr, na.last = TRUE)
+    run_order = run_order[order_idx]
+    sra = sra[order_idx, , drop = FALSE]
+    tc_dist_matrix = as.matrix(tc_dist_matrix[run_order, run_order, drop = FALSE])
     colnames(tc_dist_matrix) = sra[sra$run %in% colnames(tc_dist_matrix), 'run']
-    head_half = substr(colnames(tc_dist_matrix), 1, 4)
-    tail_half = substr(colnames(tc_dist_matrix), length(colnames(tc_dist_matrix)) - 3, length(colnames(tc_dist_matrix)))
-    short_names = paste0(head_half, '..', tail_half)
-    rownames(tc_dist_matrix) = ifelse(nchar(rownames(tc_dist_matrix)) <= 10, rownames(tc_dist_matrix), short_names)
-    colnames(tc_dist_matrix) = ifelse(nchar(colnames(tc_dist_matrix)) <= 10, colnames(tc_dist_matrix), short_names)
-    aheatmap(tc_dist_matrix, color = "-RdYlBu2:71", Rowv = NA, Colv = NA, revC = TRUE, legend = TRUE,
-             breaks = breaks, annCol = ann_label, annRow = ann_label, annColors = ann_color, annLegend = legend,
-             fontsize = fontsize)
+    rownames(tc_dist_matrix) = colnames(tc_dist_matrix)
+    short_names = shorten_run_labels(colnames(tc_dist_matrix), max_len = 10, prefix_len = 4, suffix_len = 4)
+    rownames(tc_dist_matrix) = short_names
+    colnames(tc_dist_matrix) = short_names
+    sra[['bioproject_primary']] = bp_primary[order_idx]
+    return(list(sra = sra, tc_dist_matrix = tc_dist_matrix))
 }
 
-color_children2parent = function(node) {
-    if (length(node) == 2) {
-        child1_color = attributes(node[[1]])[['edgePar']][["col"]]
-        child2_color = attributes(node[[2]])[['edgePar']][["col"]]
-        if ((!is.null(child1_color)) & (!is.null(child2_color))) {
-            if ((!is.na(child1_color)) & (!is.na(child2_color)) & identical(child1_color, child2_color)) {
-                attributes(node)[['edgePar']][["col"]] = child1_color
-            }
+draw_heatmap_base = function(sra, tc_dist_matrix, legend = TRUE, fontsize = 8) {
+    fontsize = resolve_curate_fontsize(fontsize)
+    out = prepare_sample_correlation_heatmap_data(sra = sra, tc_dist_matrix = tc_dist_matrix)
+    if (is.null(out)) {
+        plot(c(0, 1), c(0, 1), type = 'n', ann = FALSE, bty = 'n', xaxt = 'n', yaxt = 'n')
+        return(invisible(NULL))
+    }
+    sra = out[['sra']]
+    tc_dist_matrix = out[['tc_dist_matrix']]
+    n = ncol(tc_dist_matrix)
+    if (n == 0) {
+        plot(c(0, 1), c(0, 1), type = 'n', ann = FALSE, bty = 'n', xaxt = 'n', yaxt = 'n')
+        return(invisible(NULL))
+    }
+
+    ann_gap = 0.25
+    top_sg_y = n + 1 + ann_gap
+    top_bp_y = n + 2 + ann_gap
+    left_sg_x = 0 - ann_gap
+    left_bp_x = -1 - ann_gap
+
+    rdylbu11 = c(
+        '#A50026', '#D73027', '#F46D43', '#FDAE61', '#FEE090', '#FFFFBF',
+        '#E0F3F8', '#ABD9E9', '#74ADD1', '#4575B4', '#313695'
+    )
+    heat_breaks = c(0, seq(0.3, 1, 0.01))
+    heat_colors = grDevices::colorRampPalette(rev(rdylbu11))(length(heat_breaks) - 1)
+    value_to_color = function(x) {
+        idx = findInterval(x, heat_breaks, all.inside = TRUE)
+        heat_colors[idx]
+    }
+
+    bp_values = as.character(sra[['bioproject_primary']])
+    sample_group_values = as.character(sra[['sample_group']])
+    bp_color_values = as.character(sra[['bp_color']])
+    sample_group_color_values = as.character(sra[['sample_group_color']])
+    row_labels = rownames(tc_dist_matrix)
+    col_labels = colnames(tc_dist_matrix)
+
+    has_legend = isTRUE(legend)
+    legend_pad = ifelse(has_legend, 2.1, 0)
+    sample_label_pt = compute_dense_label_pt(num_labels = n, base_pt = fontsize, min_pt = 4, soft_limit = 20)
+    cex_txt = sample_label_pt / fontsize
+    cex_ann = 1
+    longest_row_label = if (length(row_labels) > 0) max(nchar(row_labels), na.rm = TRUE) else 0
+    row_label_pad = max(2.0, 0.22 * longest_row_label)
+    left_axis_x = left_bp_x - row_label_pad
+    row_label_x = left_axis_x + 0.12
+    plot.new()
+    plot.window(
+        xlim = c(left_axis_x, n + 0.5 + legend_pad),
+        ylim = c(0.5, top_bp_y + 1.6),
+        xaxs = 'i',
+        yaxs = 'i'
+    )
+
+    # Correlation tiles
+    for (ri in seq_len(n)) {
+        y_center = n - ri + 1
+        y_bottom = y_center - 0.49
+        y_top = y_center + 0.49
+        for (ci in seq_len(n)) {
+            x_center = ci
+            x_left = x_center - 0.49
+            x_right = x_center + 0.49
+            rect(
+                x_left, y_bottom, x_right, y_top,
+                col = value_to_color(tc_dist_matrix[ri, ci]),
+                border = NA
+            )
         }
     }
-    return(node)
+    # Thin grid lines for readability
+    for (k in seq(0.5, n + 0.5, by = 1)) {
+        segments(0.5, k, n + 0.5, k, col = 'white', lwd = 0.4)
+        segments(k, 0.5, k, n + 0.5, col = 'white', lwd = 0.4)
+    }
+
+    # Annotation strips (same size as heatmap cells)
+    for (i in seq_len(n)) {
+        yi = n - i + 1
+        rect(i - 0.49, top_sg_y - 0.49, i + 0.49, top_sg_y + 0.49, col = sample_group_color_values[i], border = NA)
+        rect(i - 0.49, top_bp_y - 0.49, i + 0.49, top_bp_y + 0.49, col = bp_color_values[i], border = NA)
+        rect(left_sg_x - 0.49, yi - 0.49, left_sg_x + 0.49, yi + 0.49, col = sample_group_color_values[i], border = NA)
+        rect(left_bp_x - 0.49, yi - 0.49, left_bp_x + 0.49, yi + 0.49, col = bp_color_values[i], border = NA)
+    }
+
+    # Labels
+    text(x = seq_len(n), y = top_bp_y + 1.10, labels = col_labels, srt = 90, adj = c(1, 0.5), cex = cex_txt, col = 'black', xpd = TRUE)
+    text(x = c(left_bp_x, left_sg_x), y = top_bp_y + 1.10, labels = c('BioProject', 'Sample group'),
+         srt = 90, adj = c(1, 0.5), cex = cex_ann, col = 'black', xpd = TRUE)
+    text(x = row_label_x, y = n:1, labels = row_labels, adj = c(0, 0.5), cex = cex_txt, col = 'black', xpd = TRUE)
+
+    # Border around heatmap body
+    rect(0.5, 0.5, n + 0.5, n + 0.5, border = 'black', lwd = 0.8)
+
+    # Optional correlation colorbar
+    if (has_legend) {
+        bar_xleft = n + 1.0
+        bar_xright = n + 1.25
+        bar_ybottom = 0.5
+        bar_ytop = n + 0.5
+        nbar = 200
+        ycuts = seq(bar_ybottom, bar_ytop, length.out = nbar + 1)
+        vcuts = seq(0, 1, length.out = nbar)
+        for (i in seq_len(nbar)) {
+            rect(bar_xleft, ycuts[i], bar_xright, ycuts[i + 1], col = value_to_color(vcuts[i]), border = NA)
+        }
+        rect(bar_xleft, bar_ybottom, bar_xright, bar_ytop, border = 'black', lwd = 0.8)
+        text(
+            bar_xright + 0.14,
+            bar_ytop + 1.25,
+            labels = "Pearson's\ncorrelation\ncoefficient",
+            adj = c(0, 1),
+            cex = cex_ann,
+            col = 'black',
+            xpd = TRUE
+        )
+        tick_vals = c(0, 0.5, 1.0)
+        tick_ys = bar_ybottom + (bar_ytop - bar_ybottom) * tick_vals
+        for (i in seq_along(tick_vals)) {
+            segments(bar_xright, tick_ys[i], bar_xright + 0.08, tick_ys[i], xpd = TRUE, col = 'black')
+            text(bar_xright + 0.10, tick_ys[i], labels = sprintf('%.1f', tick_vals[i]), adj = c(0, 0.5), cex = cex_ann, col = 'black', xpd = TRUE)
+        }
+    }
+    invisible(NULL)
 }
 
-draw_dendrogram = function(sra, tc_dist_dist, fontsize = 7) {
+build_numeric_heatmap_ggplot = function(mat, breaks, colors, fontsize = 8, legend_title = '') {
+    fontsize = resolve_curate_fontsize(fontsize)
+    mat = as.matrix(mat)
+    if ((nrow(mat) == 0) || (ncol(mat) == 0)) {
+        return(ggplot2::ggplot() + ggplot2::theme_void(base_size = fontsize, base_family = CURATE_FONT_FAMILY))
+    }
+    df_heat = as.data.frame(as.table(mat), stringsAsFactors = FALSE)
+    colnames(df_heat) = c('row_name', 'col_name', 'value')
+    row_levels = rev(rownames(mat))
+    col_levels = colnames(mat)
+    df_heat[['row_name']] = factor(df_heat[['row_name']], levels = row_levels)
+    df_heat[['col_name']] = factor(df_heat[['col_name']], levels = col_levels)
+    g = ggplot2::ggplot(df_heat, ggplot2::aes(x = col_name, y = row_name, fill = value)) +
+        ggplot2::geom_tile(width = 0.98, height = 0.98) +
+        ggplot2::scale_fill_gradientn(
+            colors = colors,
+            values = scales::rescale(breaks, from = range(breaks)),
+            limits = range(breaks),
+            oob = scales::squish,
+            na.value = 'gray80',
+            name = legend_title
+        ) +
+        ggplot2::theme_bw(base_size = fontsize, base_family = CURATE_FONT_FAMILY) +
+        ggplot2::theme(
+            text = ggplot2::element_text(size = fontsize, family = CURATE_FONT_FAMILY, color = 'black'),
+            axis.title = ggplot2::element_blank(),
+            axis.text.x = ggplot2::element_text(angle = 90, hjust = 1, vjust = 0.5),
+            panel.grid = ggplot2::element_blank()
+        )
+    return(g)
+}
+
+draw_heatmap = function(sra, tc_dist_matrix, legend = TRUE, show_colorbar = legend, fontsize = 8) {
+    fontsize = resolve_curate_fontsize(fontsize)
+    g = build_heatmap_ggplot(
+        sra = sra,
+        tc_dist_matrix = tc_dist_matrix,
+        legend = legend,
+        show_colorbar = show_colorbar,
+        fontsize = fontsize
+    )
+    draw_ggplot_in_current_plot_panel(g)
+}
+
+# ggplot2 heatmap for sample-correlation with row/column annotations.
+# This keeps the same information content: correlation tiles + bioproject/sample_group strips on top and left.
+build_heatmap_ggplot = function(sra, tc_dist_matrix, legend = TRUE, show_colorbar = legend, fontsize = 8) {
+    fontsize = resolve_curate_fontsize(fontsize)
+    run_order = colnames(tc_dist_matrix)
+    run_order = run_order[run_order %in% sra[['run']]]
+    if (length(run_order) == 0) {
+        g = ggplot2::ggplot() + ggplot2::theme_void(base_size = fontsize, base_family = CURATE_FONT_FAMILY)
+        return(g)
+    }
+    sra = sra[match(run_order, sra[['run']]), , drop = FALSE]
+    bp_primary = sub(';.*', '', as.character(sra[['bioproject']]))
+    sample_group_chr = as.character(sra[['sample_group']])
+    run_chr = as.character(sra[['run']])
+    order_idx = order(sample_group_chr, bp_primary, run_chr, na.last = TRUE)
+    run_order = run_order[order_idx]
+    sra = sra[order_idx, , drop = FALSE]
+    tc_dist_matrix = as.matrix(tc_dist_matrix[run_order, run_order, drop = FALSE])
+    colnames(tc_dist_matrix) = sra[sra$run %in% colnames(tc_dist_matrix), 'run']
+    rownames(tc_dist_matrix) = colnames(tc_dist_matrix)
+    short_names = shorten_run_labels(colnames(tc_dist_matrix), max_len = 10, prefix_len = 4, suffix_len = 4)
+    rownames(tc_dist_matrix) = short_names
+    colnames(tc_dist_matrix) = short_names
+    n = ncol(tc_dist_matrix)
+    if (n == 0) {
+        g = ggplot2::ggplot() + ggplot2::theme_void(base_size = fontsize, base_family = CURATE_FONT_FAMILY)
+        return(g)
+    }
+    sample_label_pt = compute_dense_label_pt(num_labels = n, base_pt = fontsize, min_pt = 4, soft_limit = 20)
+
+    # Heatmap matrix values
+    row_names = rownames(tc_dist_matrix)
+    col_names = colnames(tc_dist_matrix)
+    df_heat = as.data.frame(as.table(tc_dist_matrix), stringsAsFactors = FALSE)
+    colnames(df_heat) = c('row_label', 'col_label', 'value')
+    df_heat[['row_idx']] = match(df_heat[['row_label']], row_names)
+    df_heat[['col_idx']] = match(df_heat[['col_label']], col_names)
+    df_heat[['x']] = df_heat[['col_idx']]
+    df_heat[['y']] = n - df_heat[['row_idx']] + 1
+
+    # Row/column annotations (same information as the previous heatmap implementation)
+    bp_values = sub(';.*', '', as.character(sra[['bioproject']]))
+    sample_group_values = as.character(sra[['sample_group']])
+    annotation_df = data.frame(
+        run = run_order,
+        x = seq_len(n),
+        y = n - seq_len(n) + 1,
+        sample_group = sample_group_values,
+        bioproject = bp_values,
+        sample_group_color = as.character(sra[['sample_group_color']]),
+        bioproject_color = as.character(sra[['bp_color']]),
+        stringsAsFactors = FALSE
+    )
+
+    ann_gap = 0.25
+    top_sg_y = n + 1 + ann_gap
+    top_bp_y = n + 2 + ann_gap
+    left_sg_x = 0 - ann_gap
+    left_bp_x = -1 - ann_gap
+
+    ann_points = rbind(
+        data.frame(
+            x = annotation_df[['x']],
+            y = rep(top_sg_y, n),
+            legend_group = 'Sample group',
+            legend_label = annotation_df[['sample_group']],
+            color = annotation_df[['sample_group_color']],
+            stringsAsFactors = FALSE
+        ),
+        data.frame(
+            x = annotation_df[['x']],
+            y = rep(top_bp_y, n),
+            legend_group = 'BioProject',
+            legend_label = annotation_df[['bioproject']],
+            color = annotation_df[['bioproject_color']],
+            stringsAsFactors = FALSE
+        ),
+        data.frame(
+            x = rep(left_sg_x, n),
+            y = annotation_df[['y']],
+            legend_group = 'Sample group',
+            legend_label = annotation_df[['sample_group']],
+            color = annotation_df[['sample_group_color']],
+            stringsAsFactors = FALSE
+        ),
+        data.frame(
+            x = rep(left_bp_x, n),
+            y = annotation_df[['y']],
+            legend_group = 'BioProject',
+            legend_label = annotation_df[['bioproject']],
+            color = annotation_df[['bioproject_color']],
+            stringsAsFactors = FALSE
+        )
+    )
+    bp_palette_df = unique(ann_points[ann_points[['legend_group']] == 'BioProject', c('legend_label', 'color')])
+    bp_palette = bp_palette_df[['color']]
+    names(bp_palette) = bp_palette_df[['legend_label']]
+    sample_group_palette_df = unique(ann_points[ann_points[['legend_group']] == 'Sample group', c('legend_label', 'color')])
+    sample_group_palette = sample_group_palette_df[['color']]
+    names(sample_group_palette) = sample_group_palette_df[['legend_label']]
+
+    # Match the previous heatmap settings:
+    # color = "-RdYlBu2:71", breaks = c(0, seq(0.3, 1, 0.01)).
+    # Use a smooth continuous colorbar while preserving the same value mapping.
+    heat_breaks = c(0, seq(0.3, 1, 0.01))
+    rdylbu11 = c(
+        '#A50026', '#D73027', '#F46D43', '#FDAE61', '#FEE090', '#FFFFBF',
+        '#E0F3F8', '#ABD9E9', '#74ADD1', '#4575B4', '#313695'
+    )
+    heat_colors = grDevices::colorRampPalette(rev(rdylbu11))(length(heat_breaks))
+
+    g = ggplot2::ggplot() +
+        ggplot2::geom_tile(
+            data = df_heat,
+            mapping = ggplot2::aes(x = x, y = y, fill = value),
+            width = 0.98,
+            height = 0.98
+        ) +
+        ggplot2::geom_tile(
+            data = ann_points,
+            mapping = ggplot2::aes(x = x, y = y),
+            fill = ann_points[['color']],
+            width = 0.98,
+            height = 0.98,
+            show.legend = FALSE
+        ) +
+        # Keep annotation legend entries while drawing annotation strips as tiles.
+        ggplot2::geom_point(
+            data = ann_points[ann_points[['legend_group']] == 'BioProject', , drop = FALSE],
+            mapping = ggplot2::aes(x = x, y = y, color = legend_label),
+            shape = 15,
+            size = 0.01,
+            alpha = 0,
+            show.legend = legend
+        ) +
+        ggplot2::geom_point(
+            data = ann_points[ann_points[['legend_group']] == 'Sample group', , drop = FALSE],
+            mapping = ggplot2::aes(x = x, y = y, shape = legend_label),
+            size = 0.01,
+            alpha = 0,
+            show.legend = legend
+        ) +
+        ggplot2::scale_fill_gradientn(
+            colors = heat_colors,
+            values = scales::rescale(heat_breaks, from = c(0, 1)),
+            limits = c(0, 1),
+            na.value = 'gray80',
+            name = "Pearson's\ncorrelation\ncoefficient",
+            breaks = c(0, 0.5, 1.0),
+            guide = if (show_colorbar) ggplot2::guide_colorbar(order = 1, nbin = 256) else 'none'
+        ) +
+        ggplot2::scale_color_manual(
+            values = bp_palette,
+            name = "BioProject",
+            guide = ggplot2::guide_legend(order = 2, override.aes = list(shape = 15, size = fontsize * 0.6, alpha = 1, colour = unname(bp_palette)))
+        ) +
+        ggplot2::scale_shape_manual(
+            values = setNames(rep(15, length(sample_group_palette)), names(sample_group_palette)),
+            name = "Sample group",
+            guide = ggplot2::guide_legend(
+                order = 3,
+                override.aes = list(size = fontsize * 0.6, alpha = 1, colour = unname(sample_group_palette))
+            )
+        ) +
+        ggplot2::scale_x_continuous(
+            breaks = c(left_bp_x, left_sg_x, seq_len(n)),
+            labels = c('BioProject', 'Sample group', col_names),
+            expand = c(0, 0),
+            position = 'top'
+        ) +
+        ggplot2::scale_y_continuous(
+            breaks = c(seq_len(n), top_sg_y, top_bp_y),
+            labels = c(rev(row_names), 'Sample group', 'BioProject'),
+            expand = c(0, 0)
+        ) +
+        ggplot2::coord_fixed(
+            xlim = c(left_bp_x - 0.5, n + 0.5),
+            ylim = c(0.5, top_bp_y + 0.5),
+            clip = 'on'
+        ) +
+        ggplot2::theme_bw(base_size = fontsize, base_family = CURATE_FONT_FAMILY) +
+        ggplot2::theme(
+            text = ggplot2::element_text(size = fontsize, family = CURATE_FONT_FAMILY, color = 'black'),
+            panel.grid = ggplot2::element_blank(),
+            axis.title = ggplot2::element_blank(),
+            axis.text.x = ggplot2::element_text(size = sample_label_pt, color = 'black', angle = 90, hjust = 0, vjust = 0.5),
+            axis.text.y = ggplot2::element_text(size = sample_label_pt, color = 'black'),
+            legend.title = ggplot2::element_text(size = fontsize, color = 'black'),
+            legend.text = ggplot2::element_text(size = fontsize, color = 'black'),
+            legend.box = 'vertical',
+            legend.key.height = grid::unit(0.14, 'in'),
+            legend.spacing.y = grid::unit(0.04, 'in'),
+            legend.position = if (legend || show_colorbar) 'right' else 'none',
+            plot.margin = ggplot2::margin(6, 6, 6, 6, unit = 'pt')
+        )
+
+    if (!show_colorbar) {
+        g = g + ggplot2::guides(fill = 'none')
+    }
+    if (!legend) {
+        g = g + ggplot2::guides(color = 'none', shape = 'none')
+    }
+    return(g)
+}
+
+draw_heatmap_ggplot = function(sra, tc_dist_matrix, legend = TRUE, show_colorbar = legend, fontsize = 8) {
+    fontsize = resolve_curate_fontsize(fontsize)
+    g = build_heatmap_ggplot(
+        sra = sra,
+        tc_dist_matrix = tc_dist_matrix,
+        legend = legend,
+        show_colorbar = show_colorbar,
+        fontsize = fontsize
+    )
+    print(g)
+    invisible(g)
+}
+
+save_heatmap_ggplot = function(sra, tc_dist_matrix, out_path, legend = TRUE, fontsize = 8, width = 3.6, height = 3.6,
+                               legend_extra_width = 2.0, show_colorbar = legend) {
+    fontsize = resolve_curate_fontsize(fontsize)
+    g = build_heatmap_ggplot(
+        sra = sra,
+        tc_dist_matrix = tc_dist_matrix,
+        legend = legend,
+        show_colorbar = show_colorbar,
+        fontsize = fontsize
+    )
+    out_width = if (legend || show_colorbar) width + legend_extra_width else width
+    ggplot2::ggsave(filename = out_path, plot = g, width = out_width, height = height, units = 'in')
+    invisible(g)
+}
+
+draw_dendrogram = function(sra, tc_dist_dist, fontsize = 8) {
+    fontsize = resolve_curate_fontsize(fontsize)
     dend = as.dendrogram(hclust(tc_dist_dist))
     dend_colors = sra[order.dendrogram(dend), 'sample_group_color']
     dend = apply_leaf_label_colors(dend, dend_colors)
     dend = apply_leaf_edge_colors(dend, dend_colors)
-    for (i in 1:ncol(tc)) {
+    for (i in seq_len(nrow(sra))) {
         dend = dendrapply(dend, color_children2parent)
     }
     dend = set_edge_lwd(dend, lwd = 1)
-    cex.xlab = min(fontsize, max(0.2, 0.5 / log10(nrow(sra)), na.rm = TRUE), na.rm = TRUE)
-    par(cex = cex.xlab)
-    plot(dend, las = 1, axes = FALSE)
-    par(cex = 1)
-    axis(side = 2, line = 0, las = 1)
-    mtext("Distance", side = 2, line = 8.5, outer = FALSE)
+    sample_label_pt = compute_dense_label_pt(num_labels = nrow(sra), base_pt = fontsize, min_pt = 3.5, soft_limit = 18)
+    sample_label_cex = sample_label_pt / fontsize
+    plot(dend, las = 1, axes = FALSE, cex = sample_label_cex)
+    axis(side = 2, line = 0, las = 1, cex.axis = 1)
+    mtext("Distance", side = 2, line = 8.5, outer = FALSE, cex = 1)
     n = nrow(sra)
     symbols(
         1:n,
@@ -703,7 +1086,8 @@ draw_dendrogram = function(sra, tc_dist_dist, fontsize = 7) {
     )
 }
 
-draw_dendrogram_ggplot = function(sra, tc_dist_dist, fontsize = 7) {
+draw_dendrogram_ggplot = function(sra, tc_dist_dist, fontsize = 8) {
+    fontsize = resolve_curate_fontsize(fontsize)
 
     cg_col = unique(sra[, c('sample_group', 'sample_group_color')])
     bp_col = unique(sra[, c('bioproject', 'bp_color')])
@@ -723,11 +1107,12 @@ draw_dendrogram_ggplot = function(sra, tc_dist_dist, fontsize = 7) {
     ggplot() +
         geom_segment(data = dendr$segments, aes(x = x, y = y, xend = xend, yend = yend), size = .8, show.legend = FALSE) +
         geom_segment(data = merge(dendr$segments[dendr$segments$yend == 0,], dendr$labels[, c('label', 'sample_group', 'x')], by = 'x'), aes(x = x, y = y, xend = xend, yend = yend, color = sample_group), size = .8, show.legend = FALSE) +
-        geom_text(data = dendr$labels, aes(x, y - .008, label = label, hjust = 0, angle = 270, color = sample_group), size = 3, show.legend = FALSE) +
+        geom_text(data = dendr$labels, aes(x, y - .008, label = label, hjust = 0, angle = 270, color = sample_group), family = CURATE_FONT_FAMILY, size = fontsize / ggplot2::.pt, show.legend = FALSE) +
         scale_y_continuous(expand = c(.2, .1)) +
         geom_point(data = dendr$labels, aes(x, y, color = bioproject), size = 3, show.legend = FALSE) +
         geom_point(data = dendr$labels, aes(x, y, color = sample_group), size = 2, show.legend = FALSE) +
-        theme(axis.line.x = element_blank(),
+        theme(text = element_text(size = fontsize, family = CURATE_FONT_FAMILY),
+              axis.line.x = element_blank(),
               axis.ticks.x = element_blank(),
               axis.text.x = element_blank(),
               axis.title.x = element_blank(),
@@ -740,13 +1125,14 @@ draw_dendrogram_ggplot = function(sra, tc_dist_dist, fontsize = 7) {
         scale_color_manual(values = group_colors)
 }
 
-draw_dendrogram_pvclust = function(sra, tc, nboot, pvclust_file, fontsize = 7) {
+draw_dendrogram_pvclust = function(sra, tc, nboot, pvclust_file, fontsize = 8) {
+    fontsize = resolve_curate_fontsize(fontsize)
     cat("draw_dendrogram_pvclust(): bootstrap support is deprecated. Using hclust without bootstrap.\n")
     dend = as.dendrogram(hclust(calc_sample_distance(tc, method = 'pearson'), method = "average"))
     dend_colors = sra[order.dendrogram(dend), 'sample_group_color']
     dend = apply_leaf_label_colors(dend, dend_colors)
     dend = apply_leaf_edge_colors(dend, dend_colors)
-    for (i in 1:ncol(tc)) {
+    for (i in seq_len(ncol(tc))) {
         dend = dendrapply(dend, color_children2parent)
     }
     dend = set_edge_lwd(dend, lwd = 2)
@@ -768,7 +1154,9 @@ draw_dendrogram_pvclust = function(sra, tc, nboot, pvclust_file, fontsize = 7) {
     )
 }
 
-draw_pca = function(sra, tc_dist_matrix, fontsize = 7) {
+draw_pca = function(sra, tc_dist_matrix, fontsize = 8) {
+    fontsize = resolve_curate_fontsize(fontsize)
+    axis_text_cex = compute_effective_text_cex(target_pt = fontsize)
     pca = prcomp(tc_dist_matrix)
     xlabel = paste0("PC 1 (", round(summary(pca)[['importance']][2, 1] * 100, digits = 1), "%)")
     ylabel = paste0("PC 2 (", round(summary(pca)[['importance']][2, 2] * 100, digits = 1), "%)")
@@ -782,13 +1170,17 @@ draw_pca = function(sra, tc_dist_matrix, fontsize = 7) {
         col = sra[['bp_color']],
         xlab = xlabel,
         ylab = ylabel,
-        las = 1
+        las = 1,
+        cex.axis = axis_text_cex,
+        cex.lab = axis_text_cex
     )
     # plot(pca$x[,1], pca$x[,2], pch=21, cex=2, lwd=2, bg=sra$sample_group_color, col=sra$bp_color, main=title,
     # xlab=xlabel, ylab=ylabel, las=1)
 }
 
-draw_mds = function(sra, tc_dist_dist, fontsize = 7) {
+draw_mds = function(sra, tc_dist_dist, fontsize = 8) {
+    fontsize = resolve_curate_fontsize(fontsize)
+    axis_text_cex = compute_effective_text_cex(target_pt = fontsize)
     mds_points = tryCatch({
         as.matrix(stats::cmdscale(tc_dist_dist, k = 2))
     }, error = function(a) {
@@ -808,13 +1200,29 @@ draw_mds = function(sra, tc_dist_dist, fontsize = 7) {
             col = sra[['bp_color']],
             xlab = "MDS dimension 1",
             ylab = "MDS dimension 2",
-            las = 1
+            las = 1,
+            cex.axis = axis_text_cex,
+            cex.lab = axis_text_cex
         )
     }
 }
 
-draw_tsne = function(sra, tc, fontsize = 7) {
-    perplexity = min(30, floor(nrow(sra) / 4), na.rm = TRUE)
+draw_tsne = function(sra, tc, fontsize = 8) {
+    fontsize = resolve_curate_fontsize(fontsize)
+    axis_text_cex = compute_effective_text_cex(target_pt = fontsize)
+    num_samples = suppressWarnings(as.integer(min(nrow(sra), ncol(tc), na.rm = TRUE)))
+    if (!is.finite(num_samples) || is.na(num_samples) || (num_samples < 4)) {
+        cat("t-SNE skipped: at least 4 samples are required.\n")
+        plot(c(0, 1), c(0, 1), ann = FALSE, bty = "n", type = "n", xaxt = "n", yaxt = "n")
+        return(NULL)
+    }
+    max_perplexity = floor((num_samples - 1) / 3)
+    if (!is.finite(max_perplexity) || (max_perplexity < 1)) {
+        cat("t-SNE skipped: unable to determine a valid perplexity.\n")
+        plot(c(0, 1), c(0, 1), ann = FALSE, bty = "n", type = "n", xaxt = "n", yaxt = "n")
+        return(NULL)
+    }
+    perplexity = min(30, max_perplexity)
     try_out = tryCatch({
         Rtsne(
             as.matrix(t(tc)),
@@ -844,7 +1252,9 @@ draw_tsne = function(sra, tc, fontsize = 7) {
             col = sra[['bp_color']],
             xlab = "t-SNE dimension 1",
             ylab = "t-SNE dimension 2",
-            las = 1
+            las = 1,
+            cex.axis = axis_text_cex,
+            cex.lab = axis_text_cex
         )
     }, error = function(a) {
         return("t-SNE plot failed.")
@@ -856,6 +1266,8 @@ draw_tsne = function(sra, tc, fontsize = 7) {
 }
 
 draw_sva_summary = function(sva_out, tc, sra, fontsize) {
+    fontsize = resolve_curate_fontsize(fontsize)
+    axis_text_cex = compute_effective_text_cex(target_pt = fontsize)
     if ((is.null(sva_out)) | (class(sva_out) == "try-error")) {
         plot(c(0, 1), c(0, 1), ann = F, bty = "n", type = "n", xaxt = "n", yaxt = "n")
         df = NA
@@ -878,12 +1290,25 @@ draw_sva_summary = function(sva_out, tc, sra, fontsize) {
         if (num_sv == 0) {
             cat('No surrogate variables found.\n')
             plot(c(0, 1), c(0, 1), ann = FALSE, bty = "n", type = "n", xaxt = "n", yaxt = "n")
+            text(
+                x = 0.5,
+                y = 0.58,
+                labels = "No SV detected",
+                cex = axis_text_cex,
+                font = 2
+            )
+            text(
+                x = 0.5,
+                y = 0.42,
+                labels = "Adjusted R-squared not available",
+                cex = axis_text_cex
+            )
             return(data.frame())
         }
         df = data.frame(matrix(NA, num_sv, length(cols)))
         colnames(df) = cols
         rownames(df) = paste0("SV", 1:nrow(df))
-        for (i in 1:length(cols)) {
+        for (i in seq_along(cols)) {
             for (j in 1:num_sv) {
                 if (length(unique(sra[, cols[i]])) == 1) {
                     df[j, i] = NA
@@ -898,69 +1323,111 @@ draw_sva_summary = function(sva_out, tc, sra, fontsize) {
         colors = colorRampPalette(c("blue", "yellow", "red"))(length(breaks))
         df2 = t(df)
         df2[df2 < 0] = 0
-        aheatmap(df2, color = colors, Rowv = NA, Colv = NA, revC = TRUE, breaks = breaks, fontsize = fontsize)
+        g = build_numeric_heatmap_ggplot(mat = df2, breaks = breaks, colors = colors, fontsize = fontsize, legend_title = 'Adj. R-squared')
+        draw_ggplot_in_current_plot_panel(g)
     }
     return(df)
 }
 
-draw_boxplot = function(sra, tc_dist_matrix, fontsize = 7) {
+draw_boxplot = function(sra, tc_dist_matrix, fontsize = 8) {
+    fontsize = resolve_curate_fontsize(fontsize)
+    axis_text_cex = compute_effective_text_cex(target_pt = fontsize)
     is_same_bp = outer(sra[['bioproject']], sra[['bioproject']], function(x, y) {
         x == y
     })
     is_same_sample_group = outer(sra[['sample_group']], sra[['sample_group']], function(x, y) {
         x == y
     })
+    pair_mask = upper.tri(tc_dist_matrix, diag = FALSE)
+    group_bwbw = tc_dist_matrix[pair_mask & (!is_same_bp) & (!is_same_sample_group)]
+    group_wibw = tc_dist_matrix[pair_mask & (is_same_bp) & (!is_same_sample_group)]
+    group_bwwi = tc_dist_matrix[pair_mask & (!is_same_bp) & (is_same_sample_group)]
+    group_wiwi = tc_dist_matrix[pair_mask & (is_same_bp) & (is_same_sample_group)]
+    sanitize_group_values = function(x) {
+        x = as.numeric(x)
+        x[is.finite(x)]
+    }
+    group_bwbw = sanitize_group_values(group_bwbw)
+    group_wibw = sanitize_group_values(group_wibw)
+    group_bwwi = sanitize_group_values(group_bwwi)
+    group_wiwi = sanitize_group_values(group_wiwi)
+    draw_group_boxplot = function(values, at) {
+        if (length(values) > 0) {
+            boxplot(values, at = at, add = TRUE, col = "gray", yaxt = "n")
+        }
+    }
     plot(c(0.5, 4.5), c(0, 1), type = "n", xlab = "", ylab = "Pearson's correlation\ncoefficient", las = 1,
-         xaxt = "n")
-    boxplot(tc_dist_matrix[(!is_same_bp) & (!is_same_sample_group)], at = 1, add = TRUE, col = "gray", yaxt = "n")
-    boxplot(tc_dist_matrix[(is_same_bp) & (!is_same_sample_group)], at = 2, add = TRUE, col = "gray", yaxt = "n")
-    boxplot(tc_dist_matrix[(!is_same_bp) & (is_same_sample_group)], at = 3, add = TRUE, col = "gray", yaxt = "n")
-    boxplot(tc_dist_matrix[(is_same_bp) & (is_same_sample_group)], at = 4, add = TRUE, col = "gray", yaxt = "n")
+         xaxt = "n", cex.axis = axis_text_cex, cex.lab = axis_text_cex)
+    draw_group_boxplot(group_bwbw, 1)
+    draw_group_boxplot(group_wibw, 2)
+    draw_group_boxplot(group_bwwi, 3)
+    draw_group_boxplot(group_wiwi, 4)
     labels = c("bw\nbw", "bw\nwi", "wi\nbw", "wi\nwi")
-    axis(side = 1, at = c(1, 2, 3, 4), labels = labels, padj = 0.5)
-    axis(side = 1, at = 0.35, labels = "Sample group\nBioProject", padj = 0.5, hadj = 1, tick = FALSE)
+    axis(side = 1, at = c(1, 2, 3, 4), labels = labels, padj = 0.5, cex.axis = axis_text_cex)
+    axis(side = 1, at = 0.35, labels = "Sample group\nBioProject", padj = 0.5, hadj = 1, tick = FALSE, cex.axis = axis_text_cex)
 
     # Add mean PCC
     means <- c(
-        mean(tc_dist_matrix[(!is_same_bp) & (!is_same_sample_group)], na.rm = TRUE),
-        mean(tc_dist_matrix[(is_same_bp) & (!is_same_sample_group)], na.rm = TRUE),
-        mean(tc_dist_matrix[(!is_same_bp) & (is_same_sample_group)], na.rm = TRUE),
-        mean(tc_dist_matrix[(is_same_bp) & (is_same_sample_group)], na.rm = TRUE)
+        if (length(group_bwbw) > 0) mean(group_bwbw, na.rm = TRUE) else NA_real_,
+        if (length(group_wibw) > 0) mean(group_wibw, na.rm = TRUE) else NA_real_,
+        if (length(group_bwwi) > 0) mean(group_bwwi, na.rm = TRUE) else NA_real_,
+        if (length(group_wiwi) > 0) mean(group_wiwi, na.rm = TRUE) else NA_real_
     )
-
-    points(1:4, means, col = "red", pch = 16)
-    lines(c(1, 2), means[1:2], col = "red")
-    lines(c(3, 4), means[3:4], col = "red")
-
-    text(x = 1.5, y = max(means[1:2]) + 0.05, labels = round(abs(means[1] - means[2]), 2), col = "red", cex = 0.8)
-    text(x = 3.5, y = max(means[3:4]) + 0.05, labels = round(abs(means[3] - means[4]), 2), col = "red", cex = 0.8)
+    finite_idx = which(is.finite(means))
+    if (length(finite_idx) > 0) {
+        points(finite_idx, means[finite_idx], col = "red", pch = 16)
+    }
+    if (all(is.finite(means[1:2]))) {
+        lines(c(1, 2), means[1:2], col = "red")
+        text(x = 1.5, y = max(means[1:2]) + 0.05, labels = round(abs(means[1] - means[2]), 2), col = "red", cex = axis_text_cex)
+    }
+    if (all(is.finite(means[3:4]))) {
+        lines(c(3, 4), means[3:4], col = "red")
+        text(x = 3.5, y = max(means[3:4]) + 0.05, labels = round(abs(means[3] - means[4]), 2), col = "red", cex = axis_text_cex)
+    }
 
     labels = c("bw\nbw", "bw\nwi", "wi\nbw", "wi\nwi")
-    axis(side = 1, at = c(1, 2, 3, 4), labels = labels, padj = 0.5)
-    axis(side = 1, at = 0.35, labels = "Sample group\nBioProject", padj = 0.5, hadj = 1, tick = FALSE)
+    axis(side = 1, at = c(1, 2, 3, 4), labels = labels, padj = 0.5, cex.axis = axis_text_cex)
+    axis(side = 1, at = 0.35, labels = "Sample group\nBioProject", padj = 0.5, hadj = 1, tick = FALSE, cex.axis = axis_text_cex)
 
     # Add legend in the bottom left corner
     legend("bottomleft", legend = c("mean PCC", expression(Delta ~ "mean PCC")),
            pch = c(16, NA), col = c("red", "red"),
-           lty = c(NA, 1), bty = "n", cex = 0.8,
+           lty = c(NA, 1), bty = "n", cex = axis_text_cex,
            text.width = max(strwidth(c("mean PCC", expression(Delta ~ "mean PCC")))))  # Align text
 
 }
 
-save_correlation = function(tc, sra, dist_method, round) {
+save_correlation = function(tc, sra, dist_method, round, precomputed_tc_dist_matrix = NULL) {
+    stat_colnames = c(
+        "bwbw_n", "bwbw_mean", "bwbw_median", "bwbw_variance",
+        "wibw_n", "wibw_mean", "wibw_median", "wibw_variance",
+        "bwwi_n", "bwwi_mean", "bwwi_median", "bwwi_variance",
+        "wiwi_n", "wiwi_mean", "wiwi_median", "wiwi_variance"
+    )
     out = tc_metadata_intersect(tc, sra)
     tc = out[["tc"]]
     sra = out[["sra"]]
-    if (ncol(tc) <= 1) {
+    if (!is.null(precomputed_tc_dist_matrix)) {
+        run_order = colnames(precomputed_tc_dist_matrix)
+        run_order = run_order[run_order %in% sra[['run']]]
+        tc_dist_matrix = precomputed_tc_dist_matrix[run_order, run_order, drop = FALSE]
+        sra = sra[match(run_order, sra[['run']]), , drop = FALSE]
+    } else {
+        tc_dist_matrix = NULL
+    }
+    if ((is.null(tc_dist_matrix) && (ncol(tc) <= 1)) || (!is.null(tc_dist_matrix) && (ncol(tc_dist_matrix) <= 1))) {
         cat('Not enough samples for correlation statistics. Recording NA values.\n')
-        tc_dist_stats = rep(NA_real_, 12)
+        tc_dist_stats = rep(NA_real_, length(stat_colnames))
+        n_idx = seq(1, length(stat_colnames), by = 4)
+        tc_dist_stats[n_idx] = 0
         if (!exists("correlation_statistics", envir = .GlobalEnv)) {
-            correlation_statistics <- data.frame(matrix(tc_dist_stats, ncol = 12, dimnames = list(NULL, c("bwbw_mean", "bwbw_median", "bwbw_variance", "wibw_mean", "wibw_median", "wibw_variance", "bwwi_mean", "bwwi_median", "bwwi_variance", "wiwi_mean", "wiwi_median", "wiwi_variance"))))
+            correlation_statistics <- data.frame(matrix(tc_dist_stats, ncol = length(stat_colnames), dimnames = list(NULL, stat_colnames)))
             rownames(correlation_statistics) <- paste0("round_", round)
             assign("correlation_statistics", correlation_statistics, envir = .GlobalEnv)
         } else {
             correlation_statistics <- get("correlation_statistics", envir = .GlobalEnv)
-            new_row <- data.frame(matrix(tc_dist_stats, ncol = 12, dimnames = list(NULL, c("bwbw_mean", "bwbw_median", "bwbw_variance", "wibw_mean", "wibw_median", "wibw_variance", "bwwi_mean", "bwwi_median", "bwwi_variance", "wiwi_mean", "wiwi_median", "wiwi_variance"))))
+            new_row <- data.frame(matrix(tc_dist_stats, ncol = length(stat_colnames), dimnames = list(NULL, stat_colnames)))
             rownames(new_row) <- paste0("round_", round)
             correlation_statistics <- rbind(correlation_statistics, new_row)
             assign("correlation_statistics", correlation_statistics, envir = .GlobalEnv)
@@ -975,40 +1442,66 @@ save_correlation = function(tc, sra, dist_method, round) {
     })
 
 
-    tc_dist_matrix = cor(tc, method = dist_method)
-    tc_dist_matrix[is.na(tc_dist_matrix)] = 0
+    if (is.null(tc_dist_matrix)) {
+        tc_dist_matrix = cor(tc, method = dist_method)
+    }
 
     # bw = between; wi = within; order: Bioproject -> Sample Group; tc_dist_bwwi: between BPs, within CGs
-    tc_dist_bwbw = tc_dist_matrix[(!is_same_bp) & (!is_same_sample_group)]
-    bwbw_mea = mean(tc_dist_bwbw)
-    bwbw_med = median(tc_dist_bwbw)
-    bwbw_var = var(tc_dist_bwbw)
+    pair_mask = upper.tri(tc_dist_matrix, diag = FALSE)
+    summarize_group = function(mask) {
+        values = as.numeric(tc_dist_matrix[pair_mask & mask])
+        values = values[is.finite(values)]
+        n_values = length(values)
+        if (n_values == 0) {
+            return(c(n = 0, mean = NA_real_, median = NA_real_, variance = NA_real_))
+        }
+        c(
+            n = n_values,
+            mean = mean(values),
+            median = median(values),
+            variance = var(values)
+        )
+    }
 
-    tc_dist_wibw = tc_dist_matrix[(is_same_bp) & (!is_same_sample_group)]
-    wibw_mea = mean(tc_dist_wibw)
-    wibw_med = median(tc_dist_wibw)
-    wibw_var = var(tc_dist_wibw)
+    stats_bwbw = summarize_group((!is_same_bp) & (!is_same_sample_group))
+    bwbw_n = stats_bwbw[['n']]
+    bwbw_mea = stats_bwbw[['mean']]
+    bwbw_med = stats_bwbw[['median']]
+    bwbw_var = stats_bwbw[['variance']]
 
-    tc_dist_bwwi = tc_dist_matrix[(!is_same_bp) & (is_same_sample_group)]
-    bwwi_mea = mean(tc_dist_bwwi)
-    bwwi_med = median(tc_dist_bwwi)
-    bwwi_var = var(tc_dist_bwwi)
+    stats_wibw = summarize_group((is_same_bp) & (!is_same_sample_group))
+    wibw_n = stats_wibw[['n']]
+    wibw_mea = stats_wibw[['mean']]
+    wibw_med = stats_wibw[['median']]
+    wibw_var = stats_wibw[['variance']]
 
-    tc_dist_wiwi = tc_dist_matrix[(is_same_bp) & (is_same_sample_group)]
-    wiwi_mea = mean(tc_dist_wiwi)
-    wiwi_med = median(tc_dist_wiwi)
-    wiwi_var = var(tc_dist_wiwi)
+    stats_bwwi = summarize_group((!is_same_bp) & (is_same_sample_group))
+    bwwi_n = stats_bwwi[['n']]
+    bwwi_mea = stats_bwwi[['mean']]
+    bwwi_med = stats_bwwi[['median']]
+    bwwi_var = stats_bwwi[['variance']]
 
-    tc_dist_stats = c(bwbw_mea, bwbw_med, bwbw_var, wibw_mea, wibw_med, wibw_var, bwwi_mea, bwwi_med, bwwi_var, wiwi_mea, wiwi_med, wiwi_var)
+    stats_wiwi = summarize_group((is_same_bp) & (is_same_sample_group))
+    wiwi_n = stats_wiwi[['n']]
+    wiwi_mea = stats_wiwi[['mean']]
+    wiwi_med = stats_wiwi[['median']]
+    wiwi_var = stats_wiwi[['variance']]
+
+    tc_dist_stats = c(
+        bwbw_n, bwbw_mea, bwbw_med, bwbw_var,
+        wibw_n, wibw_mea, wibw_med, wibw_var,
+        bwwi_n, bwwi_mea, bwwi_med, bwwi_var,
+        wiwi_n, wiwi_mea, wiwi_med, wiwi_var
+    )
 
     # Check if dataframe exists in environment, if not create it
     if (!exists("correlation_statistics", envir = .GlobalEnv)) {
-        correlation_statistics <- data.frame(matrix(tc_dist_stats, ncol = 12, dimnames = list(NULL, c("bwbw_mean", "bwbw_median", "bwbw_variance", "wibw_mean", "wibw_median", "wibw_variance", "bwwi_mean", "bwwi_median", "bwwi_variance", "wiwi_mean", "wiwi_median", "wiwi_variance"))))
+        correlation_statistics <- data.frame(matrix(tc_dist_stats, ncol = length(stat_colnames), dimnames = list(NULL, stat_colnames)))
         rownames(correlation_statistics) <- paste0("round_", round)
         assign("correlation_statistics", correlation_statistics, envir = .GlobalEnv)
     } else {
         correlation_statistics <- get("correlation_statistics", envir = .GlobalEnv)
-        new_row <- data.frame(matrix(tc_dist_stats, ncol = 12, dimnames = list(NULL, c("bwbw_mean", "bwbw_median", "bwbw_variance", "wibw_mean", "wibw_median", "wibw_variance", "bwwi_mean", "bwwi_median", "bwwi_variance", "wiwi_mean", "wiwi_median", "wiwi_variance"))))
+        new_row <- data.frame(matrix(tc_dist_stats, ncol = length(stat_colnames), dimnames = list(NULL, stat_colnames)))
         rownames(new_row) <- paste0("round_", round)
         correlation_statistics <- rbind(correlation_statistics, new_row)
         assign("correlation_statistics", correlation_statistics, envir = .GlobalEnv)
@@ -1020,27 +1513,38 @@ save_correlation = function(tc, sra, dist_method, round) {
 }
 
 
-draw_tau_histogram = function(tc, sra, selected_sample_groups, fontsize = 7, transform_method) {
-    df_tau = sample_group2tau(sample_group_mean(tc, sra, selected_sample_groups)[['tc_ave']], rich.annotation = FALSE, transform_method)
+draw_tau_histogram = function(tc, sra, selected_sample_groups, fontsize = 8, transform_method, tc_sample_group = NULL) {
+    fontsize = resolve_curate_fontsize(fontsize)
+    axis_text_cex = compute_effective_text_cex(target_pt = fontsize)
+    if (is.null(tc_sample_group)) {
+        tc_sample_group = sample_group_mean(tc, sra, selected_sample_groups)[['tc_ave']]
+    }
+    df_tau = sample_group2tau(tc_sample_group, rich.annotation = FALSE, transform_method)
     hist_out = hist(df_tau[['tau']], breaks = seq(0, 1, 0.05), las = 1, xlab = "Tau (expression specificity)",
-                    ylab = "Gene count", main = "", col = "gray")
+                    ylab = "Gene count", main = "", col = "gray", cex.axis = axis_text_cex, cex.lab = axis_text_cex)
     num_noexp = sum(is.na(df_tau[['tau']]))
     num_all = nrow(df_tau)
     text_noexp = paste0("Excluded due to\nno expression:\n", num_noexp, "/", num_all, " genes")
-    text(0, max(hist_out[['counts']], na.rm = TRUE) * 0.85, text_noexp, pos = 4)
+    text(0, max(hist_out[['counts']], na.rm = TRUE) * 0.85, text_noexp, pos = 4, cex = axis_text_cex)
 }
 
-draw_exp_level_histogram = function(tc, sra, selected_sample_groups, fontsize = 7, transform_method) {
-    tc_sample_group = sample_group_mean(tc, sra, selected_sample_groups)[['tc_ave']]
+draw_exp_level_histogram = function(tc, sra, selected_sample_groups, fontsize = 8, transform_method, tc_sample_group = NULL) {
+    fontsize = resolve_curate_fontsize(fontsize)
+    axis_text_cex = compute_effective_text_cex(target_pt = fontsize)
+    if (is.null(tc_sample_group)) {
+        tc_sample_group = sample_group_mean(tc, sra, selected_sample_groups)[['tc_ave']]
+    }
     xmax = apply(tc_sample_group, 1, max)
     xmax[xmax < 0] = 0
     xmax[xmax > 15] = 15
     breaks = seq(0, 15, 1)
     hist_out = hist(xmax, breaks = breaks, las = 1, xlab = paste0("Max expression (", transform_method, ")"), ylab = "Gene count",
-                    main = "", col = "gray")
+                    main = "", col = "gray", cex.axis = axis_text_cex, cex.lab = axis_text_cex)
 }
 
-draw_legend = function(sra, new = TRUE, pos = "center", fontsize = 7, nlabel.in.col) {
+draw_legend = function(sra, new = TRUE, pos = "center", fontsize = 8, nlabel.in.col) {
+    fontsize = resolve_curate_fontsize(fontsize)
+    axis_text_cex = compute_effective_text_cex(target_pt = fontsize)
     if (new) {
         plot.new()
     }
@@ -1058,13 +1562,14 @@ draw_legend = function(sra, new = TRUE, pos = "center", fontsize = 7, nlabel.in.
                                                                                                         1, 1, 0), length(bp_color_unique)))
     legend_font = c(2, rep(1, length(sample_group_color_unique)), 1, 2, rep(1, length(bp_color_unique)))
     legend(pos, legend = legend_text, pch = 21, lwd = 1, lty = 0, col = legend_color, pt.bg = legend_bg,
-           text.font = legend_font, ncol = ncol, bty = "n")
+           text.font = legend_font, cex = axis_text_cex, pt.cex = 1, ncol = ncol, bty = "n")
 }
 
-save_plot = function(tc, sra, sva_out, dist_method, file, selected_sample_groups, sample_group_colors, fontsize = 7, transform_method, batch_effect_alg) {
+save_plot = function(tc, sra, sva_out, dist_method, file, selected_sample_groups, sample_group_colors, fontsize = 8, transform_method, batch_effect_alg) {
+    fontsize = resolve_curate_fontsize(fontsize)
     if (ncol(tc) <= 1) {
         cat('1 or fewer samples are available. Skipping the plot.\n')
-        return()
+        return(invisible(NULL))
     }
     out = tc_metadata_intersect(tc, sra)
     tc = out[["tc"]]
@@ -1073,47 +1578,79 @@ save_plot = function(tc, sra, sva_out, dist_method, file, selected_sample_groups
     out = sort_tc_and_metadata(tc, sra)
     tc = out[["tc"]]
     sra = out[["sra"]]
-    pdf(file.path(dir_pdf, paste0(file, ".pdf")), height = 8, width = 7.2, fonts = "Helvetica", pointsize = fontsize)
-    layout_matrix = matrix(c(2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1,
-                             2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 1, 1,
-                             1, 1, 1, 1, 1, 3, 3, 3, 4, 4, 4, 5, 5, 5, 6, 6, 6, 3, 3, 3, 4, 4, 4, 5, 5, 5, 6, 6, 6, 3, 3,
-                             3, 4, 4, 4, 5, 5, 5, 6, 6, 6, 7, 7, 7, 8, 8, 8, 9, 9, 9, 9, 9, 9, 7, 7, 7, 8, 8, 8, 9, 9, 9,
-                             9, 9, 9, 7, 7, 7, 8, 8, 8, 9, 9, 9, 9, 9, 9, 7, 7, 7, 8, 8, 8, 9, 9, 9, 9, 9, 9, 10, 10, 10,
-                             10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10), 14, 12,
-                           byrow = TRUE)
-    layout(layout_matrix)
     colnames(tc) <- sra$run
-    ##
     tc_dist_matrix = cor(tc, method = dist_method)
-    tc_dist_matrix[is.na(tc_dist_matrix)] = 0
-    tc_dist_dist = calc_sample_distance(tc, method = dist_method, na_fill = 1, epsilon = 1e-09)
-    par(mar = c(6, 6, 1, 0))
-    draw_dendrogram(sra, tc_dist_dist, fontsize)
-    par(mar = c(0, 0, 0, 0))
-    draw_heatmap(sra, tc_dist_matrix, legend = FALSE)
-    # draw_dendrogram_pvclust(sra, tc, nboot=0, pvclust_file=NULL, cex.xlab=0.6)
-    par(mar = c(4, 4, 0.1, 1))
-    draw_pca(sra, tc_dist_matrix, fontsize)
-    par(mar = c(4, 4, 0.1, 1))
-    draw_mds(sra, tc_dist_dist, fontsize)
-    par(mar = c(4, 4, 0.1, 1))
-    draw_tsne(sra, tc, fontsize)
-    par(mar = c(4, 5, 0.1, 1))
-    draw_boxplot(sra, tc_dist_matrix, fontsize)
-    par(mar = c(4, 4, 1, 1))
-    draw_exp_level_histogram(tc, sra, selected_sample_groups, fontsize, transform_method)
-    par(mar = c(4, 4, 1, 1))
-    draw_tau_histogram(tc, sra, selected_sample_groups, fontsize, transform_method)
-    par(mar = rep(0.1, 4))
-    if (batch_effect_alg == 'sva') {
-        df_r2 = draw_sva_summary(sva_out, tc, sra, fontsize)
-        if (!all(is.na(df_r2))) {
-            write.table(df_r2, file.path(dir_tsv, paste0(file, ".r2.tsv")), sep = "\t", row.names = FALSE)
-        }
+    if (dist_method %in% c('pearson', 'spearman', 'kendall')) {
+        tc_dist_dist = calc_sample_distance(
+            tc,
+            method = dist_method,
+            na_fill = 1,
+            epsilon = 1e-09,
+            cor_mat = tc_dist_matrix
+        )
+    } else {
+        tc_dist_dist = calc_sample_distance(tc, method = dist_method, na_fill = 1, epsilon = 1e-09)
     }
-    par(mar = rep(0.1, 4))
-    draw_legend(sra, new = TRUE, pos = "center", fontsize = fontsize, nlabel.in.col = 8)
-    graphics.off()
+    tc_dist_matrix[is.na(tc_dist_matrix)] = 0
+    with_pdf_defaults(
+        file = file.path(dir_pdf, paste0(file, ".pdf")),
+        width = 7.2,
+        height = 8,
+        font_size = fontsize,
+        font_family = CURATE_FONT_FAMILY,
+        plot_fn = function(local_font_size, local_font_family) {
+            layout_matrix = matrix(c(2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1,
+                                     2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 1, 1,
+                                     1, 1, 1, 1, 1, 3, 3, 3, 4, 4, 4, 5, 5, 5, 6, 6, 6, 3, 3, 3, 4, 4, 4, 5, 5, 5, 6, 6, 6, 3, 3,
+                                     3, 4, 4, 4, 5, 5, 5, 6, 6, 6, 7, 7, 7, 8, 8, 8, 9, 9, 9, 9, 9, 9, 7, 7, 7, 8, 8, 8, 9, 9, 9,
+                                     9, 9, 9, 7, 7, 7, 8, 8, 8, 9, 9, 9, 9, 9, 9, 7, 7, 7, 8, 8, 8, 9, 9, 9, 9, 9, 9, 10, 10, 10,
+                                     10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10), 14, 12,
+                                   byrow = TRUE)
+            layout(layout_matrix)
+            par(mar = c(6, 6, 1, 0))
+            draw_dendrogram(sra, tc_dist_dist, local_font_size)
+            par(mar = c(0, 0, 0, 0))
+            draw_heatmap(sra, tc_dist_matrix, legend = FALSE, show_colorbar = TRUE, fontsize = local_font_size)
+            par(mar = c(4, 4, 0.1, 1))
+            draw_pca(sra, tc_dist_matrix, local_font_size)
+            par(mar = c(4, 4, 0.1, 1))
+            draw_mds(sra, tc_dist_dist, local_font_size)
+            par(mar = c(4, 4, 0.1, 1))
+            draw_tsne(sra, tc, local_font_size)
+            par(mar = c(4, 5, 0.1, 1))
+            draw_boxplot(sra, tc_dist_matrix, local_font_size)
+            tc_sample_group = sample_group_mean(tc, sra, selected_sample_groups)[['tc_ave']]
+            par(mar = c(4, 4, 1, 1))
+            draw_exp_level_histogram(tc, sra, selected_sample_groups, local_font_size, transform_method, tc_sample_group = tc_sample_group)
+            par(mar = c(4, 4, 1, 1))
+            draw_tau_histogram(tc, sra, selected_sample_groups, local_font_size, transform_method, tc_sample_group = tc_sample_group)
+            par(mar = rep(0.1, 4))
+            if (batch_effect_alg == 'sva') {
+                df_r2 = draw_sva_summary(sva_out, tc, sra, local_font_size)
+                if (is.data.frame(df_r2)) {
+                    df_r2_out = as.data.frame(df_r2, stringsAsFactors = FALSE)
+                    if (!("Surrogate variable" %in% colnames(df_r2_out))) {
+                        df_r2_out = cbind(
+                            "Surrogate variable" = rownames(df_r2_out),
+                            df_r2_out,
+                            stringsAsFactors = FALSE
+                        )
+                    }
+                    write.table(
+                        df_r2_out,
+                        file.path(dir_tsv, paste0(file, ".r2.tsv")),
+                        sep = "\t",
+                        row.names = FALSE,
+                        col.names = TRUE,
+                        quote = FALSE
+                    )
+                }
+            }
+            par(mar = rep(0.1, 4))
+            draw_legend(sra, new = TRUE, pos = "center", fontsize = local_font_size, nlabel.in.col = 8)
+        }
+    )
+    return(invisible(tc_dist_matrix))
 }
 
 transform_raw_to_fpkm = function(counts, effective_lengths, sra) {
@@ -1234,7 +1771,7 @@ get_species_metadata = function(sra_all, scientific_name, selected_sample_groups
     cat('Number of SRA runs for this species:', sum(is_sp), '\n')
     cat('Number of SRA runs for selected sample groups:', sum(is_sample_group), '\n')
     sra = sra_all[(is_sp & is_sample_group),]
-    conditions = (sra[['exclusion']] == "no") & (!sra[['run']] %in% colnames(tc))
+    conditions = is_non_excluded_flag(sra[['exclusion']]) & (!sra[['run']] %in% colnames(tc))
     if (any(conditions)) {
         cat("Failed quantification:", sra[conditions, "run"], "\n")
         sra[conditions, "exclusion"] = "failed_quantification"
@@ -1243,7 +1780,7 @@ get_species_metadata = function(sra_all, scientific_name, selected_sample_groups
 }
 
 exclude_inappropriate_sample_from_tc = function(tc, sra) {
-    is_not_excluded = (sra[['exclusion']] == 'no')
+    is_not_excluded = is_non_excluded_flag(sra[['exclusion']])
     cat('Number of non-excluded SRA runs (exclusion=="no"):', sum(is_not_excluded), '\n')
     tc = tc[, sra[is_not_excluded, 'run'], drop = FALSE]
     return(tc)
@@ -1287,11 +1824,11 @@ write_curation_summaries = function(round_summary, sra, scientific_name, batch_e
                                     dir_tsv, mapping_rate_cutoff, correlation_threshold,
                                     one_outlier_per_iteration, num_total_runs_species,
                                     num_runs_after_sample_group_filter, script_start_elapsed) {
-    species_tag = sub(" ", "_", scientific_name)
+    species_tag = gsub(" ", "_", scientific_name)
     file_round = file.path(dir_tsv, paste0(species_tag, ".", batch_effect_alg, ".curation_round_summary.tsv"))
     write.table(round_summary, file = file_round, sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
 
-    is_kept = (sra[['exclusion']] == "no")
+    is_kept = is_non_excluded_flag(sra[['exclusion']])
     kept_runs = sra[is_kept, 'run']
     excluded_runs = sra[!is_kept, 'run']
     kept_runs_txt = if (length(kept_runs) == 0) '' else paste(kept_runs, collapse = ' ')
@@ -1321,7 +1858,7 @@ write_curation_summaries = function(round_summary, sra, scientific_name, batch_e
 ################################################# START OF SVA CORRECTION ########################################################
 
 
-fontsize = 7
+fontsize = CURATE_FONT_SIZE_PT
 
 tc = read.table(est_counts_path, sep = "\t", stringsAsFactors = FALSE, header = TRUE, quote = "", fill = FALSE, row.names = 1, check.names = FALSE)
 tc_eff_length = read.table(eff_length_path, sep = "\t", stringsAsFactors = FALSE, header = TRUE, quote = "", fill = FALSE, row.names = 1, check.names = FALSE)
@@ -1330,14 +1867,15 @@ sra_all = read.table(metadata_path, sep = "\t", header = TRUE, quote = "", fill 
 sra_all = standardize_metadata_all(sra_all)
 
 scientific_name = sra_all[(sra_all[['run']] %in% colnames(tc)), "scientific_name"][1]
+species_tag = gsub(" ", "_", scientific_name)
 script_start_elapsed = as.numeric(proc.time()[["elapsed"]])
 num_total_runs_species = sum(sra_all[, 'scientific_name'] == scientific_name, na.rm = TRUE)
 dir_curate = file.path(out_dir, 'curate')
-dir_pdf = file.path(dir_curate, sub(" ", "_", scientific_name), 'plots')
+dir_pdf = file.path(dir_curate, species_tag, 'plots')
 dir.create(dir_pdf, showWarnings = FALSE, recursive = TRUE)
-dir_rdata = file.path(dir_curate, sub(" ", "_", scientific_name), 'rdata')
+dir_rdata = file.path(dir_curate, species_tag, 'rdata')
 dir.create(dir_rdata, showWarnings = FALSE, recursive = TRUE)
-dir_tsv = file.path(dir_curate, sub(" ", "_", scientific_name), 'tables')
+dir_tsv = file.path(dir_curate, species_tag, 'tables')
 dir.create(dir_tsv, showWarnings = FALSE, recursive = TRUE)
 setwd(dir_curate)
 cat(log_prefix, "Working at:", getwd(), "\n")
@@ -1351,7 +1889,7 @@ tc_eff_length = exclude_inappropriate_sample_from_eff_length(tc_eff_length, tc)
 tc = apply_transformation_logic(tc, tc_eff_length, transform_method, batch_effect_alg, step = 'before_batch', sra = sra)
 tc_tmp = apply_transformation_logic(tc, tc_eff_length, transform_method, batch_effect_alg, step = 'before_batch_plot', sra = sra)
 is_input_zero = data.frame(tc_tmp == 0, check.names = FALSE)
-file_name = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".uncorrected.tc.tsv"))
+file_name = file.path(dir_tsv, paste0(species_tag, ".uncorrected.tc.tsv"))
 write_table_with_index_name(df = tc_tmp, file_path = file_name, index_name = 'target_id')
 original_sample_groups = selected_sample_groups
 out = sample_group_mean(tc_tmp, sra, selected_sample_groups)
@@ -1362,20 +1900,20 @@ if (length(selected_sample_groups) != length(original_sample_groups)) {
         sample_group_colors = sample_group_colors[match(selected_sample_groups, original_sample_groups)]
     }
 }
-file_name = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".uncorrected.sample_group.mean.tsv"))
+file_name = file.path(dir_tsv, paste0(species_tag, ".uncorrected.sample_group.mean.tsv"))
 write_table_with_index_name(df = tc_sample_group_uncorrected, file_path = file_name, index_name = 'target_id')
 
 if (skip_curation_flag == TRUE) {
     cat("No curation requested, finishing early.\n")
-    file_metadata = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".metadata.tsv"))
+    file_metadata = file.path(dir_tsv, paste0(species_tag, ".metadata.tsv"))
     write.table(sra[, colnames(sra) != 'index'], file = file_metadata, sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
-    file_corrected_tc = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".", batch_effect_alg, ".tc.tsv"))
+    file_corrected_tc = file.path(dir_tsv, paste0(species_tag, ".", batch_effect_alg, ".tc.tsv"))
     write_table_with_index_name(df = tc_tmp, file_path = file_corrected_tc, index_name = 'target_id')
-    file_corrected_mean = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".", batch_effect_alg, ".sample_group.mean.tsv"))
+    file_corrected_mean = file.path(dir_tsv, paste0(species_tag, ".", batch_effect_alg, ".sample_group.mean.tsv"))
     write_table_with_index_name(df = tc_sample_group_uncorrected, file_path = file_corrected_mean, index_name = 'target_id')
     cat("Files created: \n")
-    cat(file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".uncorrected.tc.tsv")), "\n")
-    cat(file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".uncorrected.sample_group.mean.tsv")), "\n")
+    cat(file.path(dir_tsv, paste0(species_tag, ".uncorrected.tc.tsv")), "\n")
+    cat(file.path(dir_tsv, paste0(species_tag, ".uncorrected.sample_group.mean.tsv")), "\n")
     cat(file_corrected_tc, "\n")
     cat(file_corrected_mean, "\n")
     cat(file_metadata, "\n")
@@ -1423,9 +1961,9 @@ round_summary = append_round_summary(
     runs_after = runs_after
 )
 tc_tmp = apply_transformation_logic(tc, tc_eff_length, transform_method, batch_effect_alg, step = 'before_batch_plot', sra = sra)
-save_plot(tc_tmp, sra, NULL, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".original"),
-          selected_sample_groups, sample_group_colors, fontsize, transform_method, batch_effect_alg)
-save_correlation(tc_tmp, sra, dist_method, round)
+tc_dist_matrix = save_plot(tc_tmp, sra, NULL, dist_method, paste0(species_tag, ".", round, ".original"),
+                           selected_sample_groups, sample_group_colors, fontsize, transform_method, batch_effect_alg)
+save_correlation(tc_tmp, sra, dist_method, round, precomputed_tc_dist_matrix = tc_dist_matrix)
 out = batch_effect_subtraction(tc, sra, batch_effect_alg, transform_method, clip_negative)
 tc_batch_corrected = out[["tc"]]
 if (batch_effect_alg == "combatseq") {
@@ -1433,11 +1971,11 @@ if (batch_effect_alg == "combatseq") {
 }
 sva_out = out[["sva"]]
 if (!is.null(sva_out)) {
-    file_name = paste0(sub(" ", "_", scientific_name), ".", batch_effect_alg, ".", round, ".RData")
+    file_name = paste0(species_tag, ".", batch_effect_alg, ".", round, ".RData")
     save(sva_out, file = file.path(dir_rdata, file_name))
 }
 tc_batch_corrected_tmp = apply_transformation_logic(tc_batch_corrected, tc_eff_length, transform_method, batch_effect_alg, step = 'after_batch', sra = sra)
-save_plot(tc_batch_corrected_tmp, sra, sva_out, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".original", ".", batch_effect_alg),
+save_plot(tc_batch_corrected_tmp, sra, sva_out, dist_method, paste0(species_tag, ".", round, ".original", ".", batch_effect_alg),
           selected_sample_groups, sample_group_colors, fontsize, transform_method, batch_effect_alg)
 
 cat("Removing samples with the mapping rate smaller than", mapping_rate_cutoff, "\n")
@@ -1459,7 +1997,7 @@ round_summary = append_round_summary(
 )
 
 tc_tmp = apply_transformation_logic(tc, tc_eff_length, transform_method, batch_effect_alg, step = 'before_batch_plot', sra = sra)
-save_plot(tc_tmp, sra, NULL, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".mapping_cutoff"),
+save_plot(tc_tmp, sra, NULL, dist_method, paste0(species_tag, ".", round, ".mapping_cutoff"),
           selected_sample_groups, sample_group_colors, fontsize, transform_method, batch_effect_alg)
 out = batch_effect_subtraction(tc, sra, batch_effect_alg, transform_method, clip_negative)
 tc_batch_corrected = out[["tc"]]
@@ -1468,12 +2006,12 @@ if (batch_effect_alg == "combatseq") {
 }
 sva_out = out[["sva"]]
 if (!is.null(sva_out)) {
-    save(sva_out, file = file.path(dir_rdata, paste0(sub(" ", "_", scientific_name), ".", batch_effect_alg, ".", round, ".RData")))
+    save(sva_out, file = file.path(dir_rdata, paste0(species_tag, ".", batch_effect_alg, ".", round, ".RData")))
 }
 tc_batch_corrected_tmp = apply_transformation_logic(tc_batch_corrected, tc_eff_length, transform_method, batch_effect_alg, step = 'after_batch', sra = sra)
-save_plot(tc_batch_corrected_tmp, sra, sva_out, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".mapping_cutoff", ".", batch_effect_alg),
-          selected_sample_groups, sample_group_colors, fontsize, transform_method, batch_effect_alg)
-save_correlation(tc_batch_corrected_tmp, sra, dist_method, round)
+tc_dist_matrix = save_plot(tc_batch_corrected_tmp, sra, sva_out, dist_method, paste0(species_tag, ".", round, ".mapping_cutoff", ".", batch_effect_alg),
+                           selected_sample_groups, sample_group_colors, fontsize, transform_method, batch_effect_alg)
+save_correlation(tc_batch_corrected_tmp, sra, dist_method, round, precomputed_tc_dist_matrix = tc_dist_matrix)
 
 round = 2
 end_flag = 0
@@ -1481,12 +2019,12 @@ while (end_flag == 0) {
     cat("Iteratively checking within-sample_group correlation, round:", round, "\n")
     tc_cwtc = NULL
     runs_before = colnames(tc)
-    num_run_before = sum(sra[['exclusion']] == "no")
+    num_run_before = sum(is_non_excluded_flag(sra[['exclusion']]))
     out = check_within_sample_group_correlation(tc, sra, dist_method, min_dif, selected_sample_groups, one_outlier_per_iteration, correlation_threshold)
     tc_cwtc = out[["tc"]]
     sra = out[["sra"]]
     runs_after = colnames(tc_cwtc)
-    num_run_after = sum(sra[['exclusion']] == "no")
+    num_run_after = sum(is_non_excluded_flag(sra[['exclusion']]))
     round_summary = append_round_summary(
         round_summary = round_summary,
         step = 'correlation_iter',
@@ -1505,15 +2043,15 @@ while (end_flag == 0) {
         }
         sva_out = out[["sva"]]
         if (!is.null(sva_out)) {
-            save(sva_out, file = file.path(dir_rdata, paste0(sub(" ", "_", scientific_name), ".", batch_effect_alg, ".", round, ".RData")))
+            save(sva_out, file = file.path(dir_rdata, paste0(species_tag, ".", batch_effect_alg, ".", round, ".RData")))
         }
         tc_cwtc_tmp = apply_transformation_logic(tc_cwtc, tc_eff_length, transform_method, batch_effect_alg, step = 'before_batch_plot', sra = sra)
-        save_plot(tc_cwtc_tmp, sra, NULL, dist_method, paste0(sub(" ", "_", scientific_name), ".", round, ".correlation_cutoff"),
+        save_plot(tc_cwtc_tmp, sra, NULL, dist_method, paste0(species_tag, ".", round, ".correlation_cutoff"),
                   selected_sample_groups, sample_group_colors, fontsize, transform_method, batch_effect_alg)
         tc_batch_corrected_tmp = apply_transformation_logic(tc_batch_corrected, tc_eff_length, transform_method, batch_effect_alg, step = 'after_batch', sra = sra)
-        file_base = paste0(sub(" ", "_", scientific_name), ".", round, ".correlation_cutoff", ".", batch_effect_alg)
-        save_plot(tc_batch_corrected_tmp, sra, sva_out, dist_method, file_base, selected_sample_groups, sample_group_colors, fontsize, transform_method, batch_effect_alg)
-        save_correlation(tc_batch_corrected_tmp, sra, dist_method, round)
+        file_base = paste0(species_tag, ".", round, ".correlation_cutoff", ".", batch_effect_alg)
+        tc_dist_matrix = save_plot(tc_batch_corrected_tmp, sra, sva_out, dist_method, file_base, selected_sample_groups, sample_group_colors, fontsize, transform_method, batch_effect_alg)
+        save_correlation(tc_batch_corrected_tmp, sra, dist_method, round, precomputed_tc_dist_matrix = tc_dist_matrix)
     }
     cat("Round:", round, ": # before =", num_run_before, ": # after =", num_run_after, "\n\n")
     if (num_run_before == num_run_after) {
@@ -1538,18 +2076,18 @@ if (maintain_zero) {
     }
 }
 cat("Writing summary files for", scientific_name, "\n")
-file = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".metadata.tsv"))
+file = file.path(dir_tsv, paste0(species_tag, ".metadata.tsv"))
 write.table(sra[, colnames(sra) != 'index'], file = file, sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
-file = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".", batch_effect_alg, ".tc.tsv"))
+file = file.path(dir_tsv, paste0(species_tag, ".", batch_effect_alg, ".tc.tsv"))
 write_table_with_index_name(df = tc_batch_corrected, file_path = file, index_name = 'target_id')
 out = sample_group_mean(tc_batch_corrected, sra, selected_sample_groups)
 tc_sample_group = out[['tc_ave']]
-file = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".", batch_effect_alg, ".sample_group.mean.tsv"))
+file = file.path(dir_tsv, paste0(species_tag, ".", batch_effect_alg, ".sample_group.mean.tsv"))
 write_table_with_index_name(df = tc_sample_group, file_path = file, index_name = 'target_id')
-file = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".", batch_effect_alg, ".correlation_statistics.tsv"))
+file = file.path(dir_tsv, paste0(species_tag, ".", batch_effect_alg, ".correlation_statistics.tsv"))
 write.table(correlation_statistics, file = file, row.names = TRUE, sep = "\t", quote = FALSE)
 tc_tau = sample_group2tau(tc_sample_group, rich.annotation = TRUE, transform_method)
-file = file.path(dir_tsv, paste0(sub(" ", "_", scientific_name), ".", batch_effect_alg, ".tau.tsv"))
+file = file.path(dir_tsv, paste0(species_tag, ".", batch_effect_alg, ".tau.tsv"))
 write_table_with_index_name(df = tc_tau, file_path = file, index_name = 'target_id')
 write_curation_summaries(
     round_summary = round_summary,

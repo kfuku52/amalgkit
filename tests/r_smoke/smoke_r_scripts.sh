@@ -38,6 +38,7 @@ run_rscript_checked \
     "$TMP_ROOT/merge/metadata.tsv" \
     "$REPO_DIR/amalgkit/util.r"
 test -f "$TMP_ROOT/merge/merge_mapping_rate.pdf"
+test -f "$TMP_ROOT/merge/merge_mean_expression_boxplot.pdf"
 
 # 2) curate.r smoke
 mkdir -p "$TMP_ROOT/curate_out"

@@ -62,10 +62,8 @@ jobs:
 
       - name: Install R dependencies
         run: |
-          Rscript -e "options(repos = c(CRAN = 'https://cloud.r-project.org')); cran_pkgs <- c('BiocManager','ggplot2','patchwork','colorspace','RColorBrewer','dendextend','amap','pvclust','Rtsne','curl','png','httr'); missing <- setdiff(cran_pkgs, rownames(installed.packages())); if (length(missing) > 0) install.packages(missing)"
-          Rscript -e "BiocManager::install(c('Biobase','pcaMethods','sva'), ask=FALSE, update=FALSE)"
-          Rscript -e "if (!requireNamespace('NMF', quietly=TRUE)) install.packages('NMF', repos='https://cloud.r-project.org', dependencies=TRUE)"
-          Rscript -e "required <- c('ggplot2','patchwork','colorspace','RColorBrewer','NMF','dendextend','amap','pvclust','Rtsne','pcaMethods','sva'); missing <- required[!vapply(required, requireNamespace, logical(1), quietly=TRUE)]; if (length(missing) > 0) stop(sprintf('Missing R packages after installation: %s', paste(missing, collapse=', ')))"
+          Rscript -e "options(repos = c(CRAN = 'https://cloud.r-project.org')); cran_pkgs <- c('ggplot2','Rtsne'); missing <- setdiff(cran_pkgs, rownames(installed.packages())); if (length(missing) > 0) install.packages(missing)"
+          Rscript -e "required <- c('ggplot2','Rtsne'); missing <- required[!vapply(required, requireNamespace, logical(1), quietly=TRUE)]; if (length(missing) > 0) stop(sprintf('Missing R packages after installation: %s', paste(missing, collapse=', ')))"
 
       - name: Run R smoke checks
         run: bash tests/r_smoke/smoke_r_scripts.sh
