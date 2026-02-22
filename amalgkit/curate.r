@@ -106,7 +106,7 @@ compute_effective_text_cex = function(target_pt = CURATE_FONT_SIZE_PT) {
 
 if (batch_effect_alg == "ruvseq") {
     suppressWarnings(suppressPackageStartupMessages(library(RUVSeq, quietly = TRUE)))
-} else {
+} else if (batch_effect_alg %in% c("sva", "combatseq")) {
     suppressWarnings(suppressPackageStartupMessages(library(sva, quietly = TRUE)))
 }
 
