@@ -6,6 +6,7 @@ import warnings
 from amalgkit.util import *
 
 FASTP_STATS_COLUMNS = ['fastp_duplication_rate', 'fastp_insert_size_peak']
+MERGE_QUANT_READ_MAX_WORKERS = 4
 
 
 def validate_metadata_columns(metadata, required_columns, context):
@@ -162,8 +163,10 @@ def collect_species_quant_outputs(sra_ids, sampled_sra_ids, detected_paths, quan
 def load_quant_tables_once(detected_sra_ids, quant_out_paths, value_columns):
     table_values = {col: [None] * len(quant_out_paths) for col in value_columns}
     target_ids = None
-    # Single-pass read: each quant file is read once and split into output arrays.
-    for file_idx, (sra_id, quant_out_path) in enumerate(zip(detected_sra_ids, quant_out_paths)):
+
+    def read_one_quant_table(file_idx):
+        sra_id = detected_sra_ids[file_idx]
+        quant_out_path = quant_out_paths[file_idx]
         usecols = ['target_id'] + value_columns
         try:
             quant_df = pandas.read_csv(
@@ -180,7 +183,38 @@ def load_quant_tables_once(detected_sra_ids, quant_out_paths, value_columns):
                     e,
                 )
             ) from e
+        row_values = {col: quant_df[col].to_numpy() for col in value_columns}
         current_target_ids = quant_df['target_id'].to_numpy()
+        return sra_id, current_target_ids, row_values
+
+    if len(quant_out_paths) <= 1:
+        results_by_idx = {}
+        for file_idx in range(len(quant_out_paths)):
+            results_by_idx[file_idx] = read_one_quant_table(file_idx)
+    else:
+        max_workers = min(MERGE_QUANT_READ_MAX_WORKERS, len(quant_out_paths))
+        print(
+            'Reading {:,} quant abundance files with {:,} parallel worker(s).'.format(
+                len(quant_out_paths),
+                max_workers,
+            ),
+            flush=True,
+        )
+        task_indices = list(range(len(quant_out_paths)))
+        results_by_idx, failures = run_tasks_with_optional_threads(
+            task_items=task_indices,
+            task_fn=read_one_quant_table,
+            max_workers=max_workers,
+        )
+        if failures:
+            details = '; '.join([
+                '{} ({}): {}'.format(detected_sra_ids[file_idx], quant_out_paths[file_idx], exc)
+                for file_idx, exc in failures
+            ])
+            raise ValueError('Failed to read one or more quant output tables. {}'.format(details))
+
+    for file_idx in range(len(quant_out_paths)):
+        sra_id, current_target_ids, row_values = results_by_idx[file_idx]
         if file_idx == 0:
             target_ids = current_target_ids
         elif (
@@ -192,9 +226,9 @@ def load_quant_tables_once(detected_sra_ids, quant_out_paths, value_columns):
                 'Mismatched target_id rows across quant files for one species. '
                 'First run: {}, current run: {} ({})'
             )
-            raise ValueError(txt.format(first_run, sra_id, quant_out_path))
+            raise ValueError(txt.format(first_run, sra_id, quant_out_paths[file_idx]))
         for col in value_columns:
-            table_values[col][file_idx] = quant_df[col].to_numpy()
+            table_values[col][file_idx] = row_values[col]
     return target_ids, table_values
 
 

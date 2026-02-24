@@ -304,6 +304,42 @@ class TestCheckQuantOutput:
         assert output_dir.exists()
         assert (output_dir / 'SRA_IDs_without_quant.txt').exists()
 
+    def test_uses_parallel_workers_when_logs_suppressed(self, tmp_path, monkeypatch):
+        class Args:
+            out_dir = str(tmp_path)
+            metadata = 'metadata.tsv'
+            quiet = True
+            verbose_runs = 0
+            threads = 2
+
+        quant_dir = tmp_path / 'quant'
+        for sra_id in ['SRR001', 'SRR002']:
+            sra_dir = quant_dir / sra_id
+            sra_dir.mkdir(parents=True)
+            (sra_dir / f'{sra_id}_abundance.tsv').write_text('data')
+            (sra_dir / f'{sra_id}_run_info.json').write_text('{}')
+        output_dir = tmp_path / 'sanity'
+        output_dir.mkdir()
+        observed = {'max_workers': None}
+
+        def fake_run_tasks(task_items, task_fn, max_workers=1):
+            observed['max_workers'] = max_workers
+            results = {}
+            failures = []
+            for task_item in task_items:
+                try:
+                    results[task_item] = task_fn(task_item)
+                except Exception as exc:
+                    failures.append((task_item, exc))
+            return results, failures
+
+        monkeypatch.setattr('amalgkit.sanity.run_tasks_with_optional_threads', fake_run_tasks)
+        avail, unavail = check_quant_output(Args(), pandas.Series(['SRR001', 'SRR002']), str(output_dir))
+
+        assert observed['max_workers'] == 2
+        assert avail == ['SRR001', 'SRR002']
+        assert unavail == []
+
 
 # ---------------------------------------------------------------------------
 # check_getfastq_outputs (filesystem checks)
@@ -496,6 +532,47 @@ class TestCheckGetfastqOutputs:
         assert unavail == ['SRR001']
         assert output_dir.exists()
         assert (output_dir / 'SRA_IDs_without_fastq.txt').exists()
+
+    def test_uses_parallel_workers_when_logs_suppressed(self, tmp_path, sample_metadata, monkeypatch):
+        class Args:
+            out_dir = str(tmp_path)
+            getfastq_dir = None
+            metadata = 'metadata.tsv'
+            quiet = True
+            verbose_runs = 0
+            threads = 2
+
+        for sra_id in ['SRR001', 'SRR002']:
+            sra_dir = tmp_path / 'getfastq' / sra_id
+            sra_dir.mkdir(parents=True)
+            (sra_dir / f'{sra_id}_1.fastq.gz').write_text('data')
+            (sra_dir / f'{sra_id}_2.fastq.gz').write_text('data')
+        output_dir = tmp_path / 'sanity'
+        output_dir.mkdir()
+        observed = {'max_workers': None}
+
+        def fake_run_tasks(task_items, task_fn, max_workers=1):
+            observed['max_workers'] = max_workers
+            results = {}
+            failures = []
+            for task_item in task_items:
+                try:
+                    results[task_item] = task_fn(task_item)
+                except Exception as exc:
+                    failures.append((task_item, exc))
+            return results, failures
+
+        monkeypatch.setattr('amalgkit.sanity.run_tasks_with_optional_threads', fake_run_tasks)
+        avail, unavail = check_getfastq_outputs(
+            Args(),
+            pandas.Series(['SRR001', 'SRR002']),
+            sample_metadata,
+            str(output_dir),
+        )
+
+        assert observed['max_workers'] == 2
+        assert avail == ['SRR001', 'SRR002']
+        assert unavail == []
 
 
 # ---------------------------------------------------------------------------

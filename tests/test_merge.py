@@ -274,6 +274,45 @@ def test_merge_species_quant_tables_single_pass_reads(tmp_path, monkeypatch):
     assert list(eff.columns) == ['target_id', 'SRR001', 'SRR002']
 
 
+def test_merge_species_quant_tables_parallel_reads(tmp_path, monkeypatch):
+    quant_dir = tmp_path / 'quant'
+    merge_dir = tmp_path / 'merge'
+    (quant_dir / 'SRR001').mkdir(parents=True)
+    (quant_dir / 'SRR002').mkdir(parents=True)
+    for run, base in [('SRR001', 1.0), ('SRR002', 10.0)]:
+        pandas.DataFrame({
+            'target_id': ['tx1', 'tx2'],
+            'eff_length': [base + 0.1, base + 0.2],
+            'est_counts': [base + 0.3, base + 0.4],
+            'tpm': [base + 0.5, base + 0.6],
+        }).to_csv(quant_dir / run / f'{run}_abundance.tsv', sep='\t', index=False)
+
+    metadata = Metadata.from_DataFrame(pandas.DataFrame({
+        'run': ['SRR001', 'SRR002'],
+        'scientific_name': ['Species A', 'Species A'],
+        'exclusion': ['no', 'no'],
+    }))
+    observed = {'max_workers': None}
+
+    def fake_run_tasks(task_items, task_fn, max_workers=1):
+        observed['max_workers'] = max_workers
+        results = {}
+        failures = []
+        for task_item in task_items:
+            try:
+                results[task_item] = task_fn(task_item)
+            except Exception as exc:
+                failures.append((task_item, exc))
+        return results, failures
+
+    monkeypatch.setattr('amalgkit.merge.run_tasks_with_optional_threads', fake_run_tasks)
+    n = merge_species_quant_tables('Species A', metadata, str(quant_dir), str(merge_dir))
+
+    assert n == 2
+    assert observed['max_workers'] == 2
+    assert (merge_dir / 'Species_A' / 'Species_A_tpm.tsv').exists()
+
+
 def test_merge_species_quant_tables_rejects_mismatched_target_ids(tmp_path):
     quant_dir = tmp_path / 'quant'
     merge_dir = tmp_path / 'merge'

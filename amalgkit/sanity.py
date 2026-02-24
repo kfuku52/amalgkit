@@ -135,6 +135,43 @@ def _prepare_run_output_scan(args, root_path, sra_ids, found_msg, missing_msg):
     run_files_map, non_dir_runs = _scan_target_run_dirs(root_path, target_runs)
     return verbose_run_logs, run_files_map, non_dir_runs
 
+def _resolve_sanity_workers(args, num_tasks, verbose_run_logs):
+    if num_tasks <= 1:
+        return 1
+    if verbose_run_logs:
+        return 1
+    requested = getattr(args, 'threads', 'auto')
+    if is_auto_parallel_option(requested):
+        worker_cap = min(8, resolve_detected_cpu_count())
+    else:
+        worker_cap = validate_positive_int_option(requested, 'threads')
+    return max(1, min(worker_cap, num_tasks))
+
+def _run_sanity_tasks(task_items, task_fn, max_workers):
+    if (max_workers <= 1) or (len(task_items) <= 1):
+        results = dict()
+        failures = list()
+        for task_item in task_items:
+            try:
+                results[task_item] = task_fn(task_item)
+            except Exception as exc:
+                failures.append((task_item, exc))
+        return results, failures
+    return run_tasks_with_optional_threads(
+        task_items=task_items,
+        task_fn=task_fn,
+        max_workers=max_workers,
+    )
+
+def _build_getfastq_sra_stat_cache(sra_ids, metadata):
+    cache = dict()
+    for sra_id in sra_ids:
+        try:
+            cache[sra_id] = get_sra_stat(sra_id, metadata)
+        except AssertionError:
+            cache[sra_id] = None
+    return cache
+
 
 def _print_getfastq_missing_output_message(args, sra_id):
     print("Could not find getfastq output for: ", sra_id, "\n")
@@ -147,7 +184,16 @@ def _print_getfastq_missing_output_message(args, sra_id):
     )
 
 
-def _check_single_getfastq_run(args, sra_id, metadata, getfastq_path, run_files_map, non_dir_runs, verbose_run_logs):
+def _check_single_getfastq_run(
+    args,
+    sra_id,
+    metadata,
+    getfastq_path,
+    run_files_map,
+    non_dir_runs,
+    verbose_run_logs,
+    sra_stat_cache=None,
+):
     sra_path = os.path.join(getfastq_path, sra_id)
     run_files = run_files_map.get(sra_id)
     if (run_files is None) or (sra_id in non_dir_runs):
@@ -155,12 +201,19 @@ def _check_single_getfastq_run(args, sra_id, metadata, getfastq_path, run_files_
             _print_getfastq_missing_output_message(args, sra_id)
         return False
 
-    try:
-        sra_stat = get_sra_stat(sra_id, metadata)
-    except AssertionError as exc:
-        if verbose_run_logs:
-            print('Skipping {} due to metadata inconsistency: {}'.format(sra_id, exc))
-        return False
+    if isinstance(sra_stat_cache, dict):
+        sra_stat = sra_stat_cache.get(sra_id, None)
+        if sra_stat is None:
+            if verbose_run_logs:
+                print('Skipping {} due to metadata inconsistency.'.format(sra_id))
+            return False
+    else:
+        try:
+            sra_stat = get_sra_stat(sra_id, metadata)
+        except AssertionError as exc:
+            if verbose_run_logs:
+                print('Skipping {} due to metadata inconsistency: {}'.format(sra_id, exc))
+            return False
     try:
         ext = get_newest_intermediate_file_extension(sra_stat, sra_path, files=run_files)
     except FileNotFoundError:
@@ -251,23 +304,56 @@ def check_getfastq_outputs(args, sra_ids, metadata, output_dir):
         missing_msg="Could not find getfastq output folder {}. Have you run getfastq yet?".format(getfastq_path),
     )
     if verbose_run_logs is not None:
-        for sra_id in sra_ids:
-            if verbose_run_logs:
+        if verbose_run_logs:
+            for sra_id in sra_ids:
                 print("\n")
                 print("Looking for {}".format(sra_id))
-            is_available = _check_single_getfastq_run(
-                args=args,
-                sra_id=sra_id,
-                metadata=metadata,
-                getfastq_path=getfastq_path,
-                run_files_map=run_files_map,
-                non_dir_runs=non_dir_runs,
-                verbose_run_logs=verbose_run_logs,
+                is_available = _check_single_getfastq_run(
+                    args=args,
+                    sra_id=sra_id,
+                    metadata=metadata,
+                    getfastq_path=getfastq_path,
+                    run_files_map=run_files_map,
+                    non_dir_runs=non_dir_runs,
+                    verbose_run_logs=verbose_run_logs,
+                )
+                if is_available:
+                    data_available.append(sra_id)
+                else:
+                    data_unavailable.append(sra_id)
+        else:
+            max_workers = _resolve_sanity_workers(args=args, num_tasks=len(sra_ids), verbose_run_logs=verbose_run_logs)
+            sra_stat_cache = _build_getfastq_sra_stat_cache(sra_ids=sra_ids, metadata=metadata)
+            if max_workers > 1:
+                print(
+                    'Checking getfastq outputs for {:,} runs with {:,} parallel worker(s).'.format(
+                        len(sra_ids),
+                        max_workers,
+                    ),
+                    flush=True,
+                )
+            results_by_sra, failures = _run_sanity_tasks(
+                task_items=sra_ids,
+                task_fn=lambda sra_id: _check_single_getfastq_run(
+                    args=args,
+                    sra_id=sra_id,
+                    metadata=metadata,
+                    getfastq_path=getfastq_path,
+                    run_files_map=run_files_map,
+                    non_dir_runs=non_dir_runs,
+                    verbose_run_logs=False,
+                    sra_stat_cache=sra_stat_cache,
+                ),
+                max_workers=max_workers,
             )
-            if is_available:
-                data_available.append(sra_id)
-            else:
-                data_unavailable.append(sra_id)
+            for sra_id, _exc in failures:
+                results_by_sra[sra_id] = False
+            for sra_id in sra_ids:
+                is_available = bool(results_by_sra.get(sra_id, False))
+                if is_available:
+                    data_available.append(sra_id)
+                else:
+                    data_unavailable.append(sra_id)
 
     else:
         data_unavailable = list(sra_ids)
@@ -437,21 +523,50 @@ def check_quant_output(args, sra_ids, output_dir):
         missing_msg="Could not find quant output folder {}. Have you run quant yet?".format(quant_path),
     )
     if verbose_run_logs is not None:
-        for sra_id in sra_ids:
-            if verbose_run_logs:
+        if verbose_run_logs:
+            for sra_id in sra_ids:
                 print("\n")
                 print("Looking for {}".format(sra_id))
-            is_available = _check_single_quant_run(
-                sra_id=sra_id,
-                quant_path=quant_path,
-                quant_run_files_map=quant_run_files_map,
-                non_dir_runs=non_dir_runs,
-                verbose_run_logs=verbose_run_logs,
+                is_available = _check_single_quant_run(
+                    sra_id=sra_id,
+                    quant_path=quant_path,
+                    quant_run_files_map=quant_run_files_map,
+                    non_dir_runs=non_dir_runs,
+                    verbose_run_logs=verbose_run_logs,
+                )
+                if is_available:
+                    data_available.append(sra_id)
+                else:
+                    data_unavailable.append(sra_id)
+        else:
+            max_workers = _resolve_sanity_workers(args=args, num_tasks=len(sra_ids), verbose_run_logs=verbose_run_logs)
+            if max_workers > 1:
+                print(
+                    'Checking quant outputs for {:,} runs with {:,} parallel worker(s).'.format(
+                        len(sra_ids),
+                        max_workers,
+                    ),
+                    flush=True,
+                )
+            results_by_sra, failures = _run_sanity_tasks(
+                task_items=sra_ids,
+                task_fn=lambda sra_id: _check_single_quant_run(
+                    sra_id=sra_id,
+                    quant_path=quant_path,
+                    quant_run_files_map=quant_run_files_map,
+                    non_dir_runs=non_dir_runs,
+                    verbose_run_logs=False,
+                ),
+                max_workers=max_workers,
             )
-            if is_available:
-                data_available.append(sra_id)
-            else:
-                data_unavailable.append(sra_id)
+            for sra_id, _exc in failures:
+                results_by_sra[sra_id] = False
+            for sra_id in sra_ids:
+                is_available = bool(results_by_sra.get(sra_id, False))
+                if is_available:
+                    data_available.append(sra_id)
+                else:
+                    data_unavailable.append(sra_id)
     else:
         data_unavailable = list(sra_ids)
 
