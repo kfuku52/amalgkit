@@ -3600,12 +3600,29 @@ class TestRenameReadsSeqkitCompression:
 
         def fake_seqkit_run(cmd, stdout=None, stderr=None):
             assert cmd[0] == 'seqkit'
-            assert cmd[1] == 'seq'
+            assert cmd[1] == 'replace'
+            assert '-p' in cmd
+            assert '-r' in cmd
             out_index = cmd.index('-o')
             out_path = cmd[out_index + 1]
-            in_path = cmd[out_index + 2]
-            with open(in_path, 'rb') as fin, gzip.open(out_path, 'wb') as fout:
-                fout.write(fin.read())
+            in_path = cmd[-1]
+            replacement = cmd[cmd.index('-r') + 1]
+            suffix = replacement[len('$1'):] if replacement.startswith('$1') else ''
+            in_open = gzip.open if str(in_path).endswith('.gz') else open
+            out_open = gzip.open if str(out_path).endswith('.gz') else open
+            with in_open(in_path, 'rt') as fin, out_open(out_path, 'wt') as fout:
+                while True:
+                    line1 = fin.readline()
+                    if line1 == '':
+                        break
+                    line2 = fin.readline()
+                    line3 = fin.readline()
+                    line4 = fin.readline()
+                    header = line1.rstrip('\n').split()[0]
+                    fout.write(header + suffix + '\n')
+                    fout.write(line2)
+                    fout.write(line3)
+                    fout.write(line4)
             return subprocess.CompletedProcess(cmd, 0, stdout=b'', stderr=b'')
 
         monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_seqkit_run)
