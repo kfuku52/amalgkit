@@ -3,6 +3,7 @@ import pandas as pd
 import gzip
 import os
 import re
+import subprocess
 import warnings
 
 from amalgkit.sanity import check_getfastq_outputs
@@ -79,6 +80,125 @@ def count_fastq_lines(path_fastq):
                 break
             num_lines += chunk.count(b'\n')
     return num_lines
+
+def resolve_seqkit_exe_for_integrate(seqkit_exe):
+    if seqkit_exe is None:
+        return 'seqkit'
+    seqkit_exe = str(seqkit_exe).strip()
+    if seqkit_exe == '':
+        return 'seqkit'
+    return seqkit_exe
+
+def resolve_seqkit_threads_for_integrate(seqkit_threads):
+    try:
+        seqkit_threads = int(seqkit_threads)
+    except (TypeError, ValueError):
+        seqkit_threads = 1
+    return max(1, seqkit_threads)
+
+def is_decompressed_fastq_path(path_fastq):
+    path_fastq_lower = str(path_fastq).lower()
+    if path_fastq_lower.endswith(('.fq', '.fastq')):
+        return True
+    if path_fastq_lower.endswith(('.fq.gz', '.fastq.gz')):
+        return False
+    return None
+
+def parse_seqkit_stats_tsv_rows(stdout_txt):
+    lines = [line.rstrip('\n') for line in stdout_txt.splitlines() if line.strip() != '']
+    if len(lines) < 2:
+        raise RuntimeError('seqkit stats output was empty.')
+    header_fields = lines[0].split('\t')
+    rows = []
+    for line in lines[1:]:
+        value_fields = line.split('\t')
+        row = {}
+        for idx, field_name in enumerate(header_fields):
+            row[field_name] = value_fields[idx] if idx < len(value_fields) else ''
+        rows.append(row)
+    if len(rows) == 0:
+        raise RuntimeError('seqkit stats output did not contain data rows.')
+    return rows
+
+def parse_seqkit_stats_row(row, path_fastq):
+    if ('num_seqs' not in row) or ('avg_len' not in row):
+        raise RuntimeError('seqkit stats output was missing required fields for {}'.format(path_fastq))
+    try:
+        num_reads = int(float(row['num_seqs']))
+        avg_len = int(round(float(row['avg_len'])))
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError('Failed to parse seqkit stats numeric fields for {}.'.format(path_fastq)) from exc
+    return num_reads, avg_len
+
+def parse_seqkit_stats_tsv_output(stdout_txt, path_fastq):
+    rows = parse_seqkit_stats_tsv_rows(stdout_txt=stdout_txt)
+    if len(rows) != 1:
+        raise RuntimeError(
+            'seqkit stats returned {} rows for single FASTQ input {}.'.format(len(rows), path_fastq)
+        )
+    return parse_seqkit_stats_row(row=rows[0], path_fastq=path_fastq)
+
+def scan_fastq_stats_with_seqkit_batch(path_fastq_paths, seqkit_exe='seqkit', seqkit_threads=1):
+    if path_fastq_paths is None:
+        return {}
+    deduplicated_paths = []
+    seen = set()
+    for path_fastq in path_fastq_paths:
+        normalized_path = os.path.abspath(path_fastq)
+        if normalized_path in seen:
+            continue
+        seen.add(normalized_path)
+        deduplicated_paths.append(path_fastq)
+    if len(deduplicated_paths) == 0:
+        return {}
+    seqkit_exe = resolve_seqkit_exe_for_integrate(seqkit_exe)
+    seqkit_threads = resolve_seqkit_threads_for_integrate(seqkit_threads)
+    command = [
+        seqkit_exe, 'stats',
+        '-T',
+        '-a',
+        '-j', str(seqkit_threads),
+    ] + list(deduplicated_paths)
+    out = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if out.returncode != 0:
+        stderr_txt = out.stderr.decode('utf8', errors='replace')
+        raise RuntimeError(
+            'seqkit stats failed (exit code {}) for {} input file(s): {}'.format(
+                out.returncode,
+                len(deduplicated_paths),
+                stderr_txt.strip(),
+            )
+        )
+    stdout_txt = out.stdout.decode('utf8', errors='replace')
+    rows = parse_seqkit_stats_tsv_rows(stdout_txt=stdout_txt)
+    stats_by_path = {}
+    fallback_idx = 0
+    fallback_paths = [os.path.abspath(path_fastq) for path_fastq in deduplicated_paths]
+    for row in rows:
+        row_path = None
+        for key in ['file', 'path', 'filename']:
+            raw_path = str(row.get(key, '')).strip()
+            if raw_path != '':
+                row_path = os.path.abspath(raw_path)
+                break
+        if row_path is None and fallback_idx < len(fallback_paths):
+            row_path = fallback_paths[fallback_idx]
+            fallback_idx += 1
+        if row_path is None:
+            continue
+        stats_by_path[row_path] = parse_seqkit_stats_row(row=row, path_fastq=row_path)
+    missing_paths = [path_fastq for path_fastq in fallback_paths if path_fastq not in stats_by_path]
+    if len(missing_paths) > 0:
+        raise RuntimeError('seqkit stats output did not include all requested FASTQ paths: {}'.format(missing_paths))
+    return stats_by_path
+
+def scan_fastq_stats_with_seqkit(path_fastq, seqkit_exe='seqkit', seqkit_threads=1):
+    stats_by_path = scan_fastq_stats_with_seqkit_batch(
+        path_fastq_paths=[path_fastq],
+        seqkit_exe=seqkit_exe,
+        seqkit_threads=seqkit_threads,
+    )
+    return stats_by_path[os.path.abspath(path_fastq)]
 
 def estimate_total_spots_from_line_count(path_fastq):
     total_lines = count_fastq_lines(path_fastq)
@@ -209,26 +329,36 @@ def resolve_run_fastq_layout(run_id, fastq_records):
     ))
 
 
-def scan_run_fastq_stats(run_spec, accurate_size):
+def scan_run_fastq_stats(run_spec, accurate_size, seqkit_exe='seqkit', seqkit_threads=1, seqkit_stats_cache=None):
     run_id = run_spec['run']
     lib_layout = run_spec['lib_layout']
     read1_path = run_spec['read1_path']
     read2_path = run_spec['read2_path']
     print("Found {} file(s) for ID {}. Lib-layout: {}".format(run_spec['num_files'], run_id, lib_layout), flush=True)
     print("Getting sequence statistics.", flush=True)
-    read1_path_lower = read1_path.lower()
-    if read1_path_lower.endswith(('.fq', '.fastq')):
-        is_decompressed = True
-    elif read1_path_lower.endswith(('.fq.gz', '.fastq.gz')):
-        is_decompressed = False
-    else:
+    is_decompressed = is_decompressed_fastq_path(read1_path)
+    if is_decompressed is None:
         warnings.warn("{} is not a fastq file. Skipping.".format(read1_path))
         return None
 
     quick_gzip_mode = (not accurate_size) and (not is_decompressed)
     if accurate_size or is_decompressed:
-        print('--accurate_size set to yes. Running accurate sequence scan with Python FASTQ parser.')
-        total_spots, avg_len_read1, _ = scan_fastq_stats(path_fastq=read1_path, max_reads_for_average=None)
+        print('--accurate_size set to yes. Running accurate sequence scan with seqkit stats.')
+        read1_stats = None
+        if isinstance(seqkit_stats_cache, dict):
+            read1_stats = seqkit_stats_cache.get(os.path.abspath(read1_path), None)
+        if read1_stats is not None:
+            total_spots, avg_len_read1 = read1_stats
+        else:
+            try:
+                total_spots, avg_len_read1 = scan_fastq_stats_with_seqkit(
+                    path_fastq=read1_path,
+                    seqkit_exe=seqkit_exe,
+                    seqkit_threads=seqkit_threads,
+                )
+            except Exception as exc:
+                warnings.warn('seqkit stats failed for {}. Falling back to Python FASTQ parser. {}'.format(read1_path, exc))
+                total_spots, avg_len_read1, _ = scan_fastq_stats(path_fastq=read1_path, max_reads_for_average=None)
     else:
         print('--accurate_size set to no. Running quick sequence scan (first 1,000 reads + gzip size estimate).')
         sampled_reads, avg_len_read1, sampled_record_chars, reached_eof_read1 = sample_fastq_reads(
@@ -281,7 +411,21 @@ def scan_run_fastq_stats(run_spec, accurate_size):
                 )
             total_spots = min(total_spots, read2_spots)
         else:
-            read2_spots, avg_len_read2, _ = scan_fastq_stats(path_fastq=read2_path, max_reads_for_average=None)
+            read2_stats = None
+            if isinstance(seqkit_stats_cache, dict):
+                read2_stats = seqkit_stats_cache.get(os.path.abspath(read2_path), None)
+            if read2_stats is not None:
+                read2_spots, avg_len_read2 = read2_stats
+            else:
+                try:
+                    read2_spots, avg_len_read2 = scan_fastq_stats_with_seqkit(
+                        path_fastq=read2_path,
+                        seqkit_exe=seqkit_exe,
+                        seqkit_threads=seqkit_threads,
+                    )
+                except Exception as exc:
+                    warnings.warn('seqkit stats failed for {}. Falling back to Python FASTQ parser. {}'.format(read2_path, exc))
+                    read2_spots, avg_len_read2, _ = scan_fastq_stats(path_fastq=read2_path, max_reads_for_average=None)
             if read2_spots <= 0:
                 raise ValueError('No reads detected in FASTQ file: {}'.format(read2_path))
             if read2_spots != total_spots:
@@ -322,26 +466,91 @@ def build_run_specs(grouped_files):
         })
     return run_specs
 
+def collect_seqkit_target_paths(run_specs, accurate_size):
+    target_paths = []
+    seen = set()
+    for run_spec in run_specs:
+        read1_path = run_spec['read1_path']
+        is_decompressed = is_decompressed_fastq_path(read1_path)
+        if is_decompressed is None:
+            continue
+        quick_gzip_mode = (not accurate_size) and (not is_decompressed)
+        if quick_gzip_mode:
+            continue
+        for path_fastq in [read1_path, run_spec['read2_path']]:
+            if path_fastq == 'unavailable':
+                continue
+            abs_path = os.path.abspath(path_fastq)
+            if abs_path in seen:
+                continue
+            seen.add(abs_path)
+            target_paths.append(path_fastq)
+    return target_paths
 
-def scan_all_run_fastq_stats(run_specs, accurate_size, threads=1):
+def build_seqkit_stats_cache_for_runs(run_specs, accurate_size, seqkit_exe='seqkit', seqkit_threads=1):
+    target_paths = collect_seqkit_target_paths(run_specs=run_specs, accurate_size=accurate_size)
+    if len(target_paths) == 0:
+        return {}
+    return scan_fastq_stats_with_seqkit_batch(
+        path_fastq_paths=target_paths,
+        seqkit_exe=seqkit_exe,
+        seqkit_threads=seqkit_threads,
+    )
+
+
+def scan_all_run_fastq_stats(run_specs, accurate_size, threads=1, seqkit_exe='seqkit'):
     if is_auto_parallel_option(threads):
         jobs = resolve_detected_cpu_count()
     else:
         jobs = validate_positive_int_option(threads, 'threads')
+    seqkit_stats_cache = {}
+    try:
+        seqkit_stats_cache = build_seqkit_stats_cache_for_runs(
+            run_specs=run_specs,
+            accurate_size=accurate_size,
+            seqkit_exe=seqkit_exe,
+            seqkit_threads=max(1, jobs),
+        )
+        if len(seqkit_stats_cache) > 0:
+            print(
+                'Collected seqkit stats cache for {:,} FASTQ file(s) with one command.'.format(
+                    len(seqkit_stats_cache)
+                ),
+                flush=True,
+            )
+    except Exception as exc:
+        warnings.warn(
+            'Batch seqkit stats scan failed. Falling back to per-run scans. {}'.format(exc)
+        )
+        seqkit_stats_cache = {}
     if (jobs == 1) or (len(run_specs) <= 1):
+        seqkit_threads = max(1, jobs)
         stats_by_run = {}
         for run_spec in run_specs:
-            stats = scan_run_fastq_stats(run_spec, accurate_size)
+            stats = scan_run_fastq_stats(
+                run_spec,
+                accurate_size,
+                seqkit_exe=seqkit_exe,
+                seqkit_threads=seqkit_threads,
+                seqkit_stats_cache=seqkit_stats_cache,
+            )
             if stats is not None:
                 stats_by_run[run_spec['run']] = stats
         return stats_by_run
 
     max_workers = min(jobs, len(run_specs))
     print('Scanning FASTQ stats for {:,} runs with {:,} parallel worker(s).'.format(len(run_specs), max_workers), flush=True)
+    seqkit_threads = 1
     run_spec_indices = list(range(len(run_specs)))
     stats_by_spec_idx, failures = run_tasks_with_optional_threads(
         task_items=run_spec_indices,
-        task_fn=lambda idx: scan_run_fastq_stats(run_specs[idx], accurate_size),
+        task_fn=lambda idx: scan_run_fastq_stats(
+            run_specs[idx],
+            accurate_size,
+            seqkit_exe=seqkit_exe,
+            seqkit_threads=seqkit_threads,
+            seqkit_stats_cache=seqkit_stats_cache,
+        ),
         max_workers=max_workers,
     )
     if failures:
@@ -404,6 +613,7 @@ def get_fastq_stats(args):
         run_specs=run_specs,
         accurate_size=args.accurate_size,
         threads=getattr(args, 'threads', 1),
+        seqkit_exe=getattr(args, 'seqkit_exe', 'seqkit'),
     )
     rows = build_private_fastq_metadata_rows(run_specs, stats_by_run)
     tmp_metadata = pd.DataFrame.from_records(rows, columns=PRIVATE_FASTQ_METADATA_COLUMNS)

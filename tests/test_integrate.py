@@ -1,4 +1,6 @@
 import gzip
+import os
+import subprocess
 from types import SimpleNamespace
 import pytest
 import pandas
@@ -11,6 +13,7 @@ from amalgkit.integrate import (
     integrate_main,
     get_gzip_isize,
     estimate_total_spots_from_gzip_sample,
+    scan_fastq_stats_with_seqkit_batch,
 )
 from amalgkit.util import Metadata
 
@@ -67,6 +70,32 @@ class TestIntegrateFastqHelpers:
                 sampled_reads=100,
                 sampled_record_chars=1000,
             )
+
+    def test_scan_fastq_stats_with_seqkit_batch_parses_multiple_rows(self, tmp_path, monkeypatch):
+        path_a = tmp_path / 'a.fastq'
+        path_b = tmp_path / 'b.fastq'
+        _write_fastq(str(path_a), ['AAAA', 'CCCC'])
+        _write_fastq(str(path_b), ['AAAAA', 'CCCCC', 'GGGGG'])
+
+        def fake_run(cmd, stdout=None, stderr=None):
+            assert cmd[0] == 'seqkit'
+            assert cmd[1] == 'stats'
+            assert '-j' in cmd
+            lines = [
+                'file\tformat\ttype\tnum_seqs\tavg_len',
+                '{}\tFASTQ\tDNA\t2\t4'.format(os.path.abspath(str(path_a))),
+                '{}\tFASTQ\tDNA\t3\t5'.format(os.path.abspath(str(path_b))),
+            ]
+            return subprocess.CompletedProcess(cmd, 0, stdout=('\n'.join(lines) + '\n').encode('utf8'), stderr=b'')
+
+        monkeypatch.setattr('amalgkit.integrate.subprocess.run', fake_run)
+        stats = scan_fastq_stats_with_seqkit_batch(
+            path_fastq_paths=[str(path_a), str(path_b)],
+            seqkit_exe='seqkit',
+            seqkit_threads=2,
+        )
+        assert stats[os.path.abspath(str(path_a))] == (2, 4)
+        assert stats[os.path.abspath(str(path_b))] == (3, 5)
 
 
 class TestIntegrateGetFastqStats:
@@ -240,6 +269,44 @@ class TestIntegrateGetFastqStats:
 
         assert set(df['run'].tolist()) == {'runA', 'runB'}
         assert set(df['lib_layout'].tolist()) == {'single'}
+
+    def test_accurate_mode_batches_seqkit_stats_into_one_call(self, tmp_path, monkeypatch):
+        fastq_dir = tmp_path / 'fq'
+        out_dir = tmp_path / 'out'
+        fastq_dir.mkdir()
+        out_dir.mkdir()
+        self._write_one_read_fastq(str(fastq_dir / 'runA.fastq'))
+        self._write_one_read_fastq(str(fastq_dir / 'runB.fastq'))
+        observed = {'calls': 0}
+
+        def fake_run(cmd, stdout=None, stderr=None):
+            observed['calls'] += 1
+            assert cmd[0] == 'seqkit'
+            assert cmd[1] == 'stats'
+            input_paths = cmd[cmd.index('-j') + 2:]
+            rows = ['file\tformat\ttype\tnum_seqs\tavg_len']
+            for path_fastq in input_paths:
+                rows.append('{}\tFASTQ\tDNA\t1\t4'.format(os.path.abspath(path_fastq)))
+            return subprocess.CompletedProcess(
+                cmd,
+                0,
+                stdout=('\n'.join(rows) + '\n').encode('utf8'),
+                stderr=b'',
+            )
+
+        monkeypatch.setattr('amalgkit.integrate.subprocess.run', fake_run)
+        args = SimpleNamespace(
+            fastq_dir=str(fastq_dir),
+            accurate_size=True,
+            out_dir=str(out_dir),
+            threads=4,
+            seqkit_exe='seqkit',
+        )
+
+        df = get_fastq_stats(args)
+
+        assert observed['calls'] == 1
+        assert set(df['run'].tolist()) == {'runA', 'runB'}
 
     def test_ignores_fastq_files_without_run_id(self, tmp_path):
         fastq_dir = tmp_path / 'fq'

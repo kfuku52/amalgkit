@@ -1147,6 +1147,51 @@ class TestConcatFastq:
         with pytest.raises(IsADirectoryError, match='Concatenation input path exists but is not a file'):
             concat_fastq(args, metadata, str(tmp_path), g)
 
+    def test_paired_concat_uses_parallel_workers_when_threads_gt_one(self, tmp_path, monkeypatch):
+        metadata = self._metadata_paired(['SRR001', 'SRR002'])
+        args = type('Args', (), {
+            'layout': 'auto',
+            'id': 'MERGED',
+            'id_list': None,
+            'remove_tmp': False,
+            'threads': 2,
+        })()
+        g = {'num_bp_per_sra': 4}
+        observed = {'max_workers': None, 'subexts': []}
+
+        def fake_concat_fastq_files_for_subext(run_ids, subext, inext, output_dir, outfile_path):
+            assert run_ids == ['SRR001', 'SRR002']
+            assert inext == '.amalgkit.fastq.gz'
+            observed['subexts'].append(subext)
+            with open(outfile_path, 'wt') as out:
+                out.write('dummy-{}\n'.format(subext))
+
+        def fake_run_tasks(task_items, task_fn, max_workers=1):
+            observed['max_workers'] = max_workers
+            results = {}
+            for item in task_items:
+                results[item] = task_fn(item)
+            return results, []
+
+        monkeypatch.setattr('amalgkit.getfastq.concat_fastq_files_for_subext', fake_concat_fastq_files_for_subext)
+        monkeypatch.setattr('amalgkit.getfastq.run_tasks_with_optional_threads', fake_run_tasks)
+        monkeypatch.setattr(
+            'amalgkit.getfastq.list_run_dir_files',
+            lambda _work_dir: {
+                'SRR001_1.amalgkit.fastq.gz',
+                'SRR001_2.amalgkit.fastq.gz',
+                'SRR002_1.amalgkit.fastq.gz',
+                'SRR002_2.amalgkit.fastq.gz',
+            },
+        )
+
+        concat_fastq(args, metadata, str(tmp_path), g)
+
+        assert observed['max_workers'] == 2
+        assert set(observed['subexts']) == {'_1', '_2'}
+        assert (tmp_path / 'MERGED_1.amalgkit.fastq.gz').exists()
+        assert (tmp_path / 'MERGED_2.amalgkit.fastq.gz').exists()
+
 
 class TestDetectConcatInputFiles:
     def test_does_not_match_prefix_only_run_ids(self):
@@ -2527,7 +2572,7 @@ class TestSraRecovery:
         assert metadata.df.loc[0, 'bp_written'] == 500
         assert metadata.df.loc[0, 'bp_dumped'] == 500
 
-    def test_run_fasterq_dump_reuses_trimmed_counts_without_recount(self, tmp_path, monkeypatch):
+    def test_run_fasterq_dump_uses_reported_spots_without_recount_for_partial_range(self, tmp_path, monkeypatch):
         sra_id = 'SRR001'
         metadata = self._metadata_for_extraction(sra_id)
         sra_stat = {
@@ -2539,13 +2584,17 @@ class TestSraRecovery:
         args = self._args_for_fasterq_dump()
 
         def fake_run(cmd, stdout=None, stderr=None):
-            return subprocess.CompletedProcess(cmd, 0, stdout=b'', stderr=b'')
+            return subprocess.CompletedProcess(
+                cmd,
+                0,
+                stdout=b'spots written      : 7\n',
+                stderr=b'',
+            )
 
         def fail_estimate(*_args, **_kwargs):
-            raise AssertionError('estimate_num_written_spots_from_fastq should not be called after trim counts are available.')
+            raise AssertionError('estimate_num_written_spots_from_fastq should not be called when spots written is reported.')
 
         monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
-        monkeypatch.setattr('amalgkit.getfastq.trim_fasterq_output_files', lambda *args, **kwargs: {'': 7, '_1': 0, '_2': 0})
         monkeypatch.setattr('amalgkit.getfastq.compress_fasterq_output_files', lambda *args, **kwargs: None)
         monkeypatch.setattr('amalgkit.getfastq.estimate_num_written_spots_from_fastq', fail_estimate)
         monkeypatch.setattr('amalgkit.getfastq.detect_layout_from_file', lambda *args, **kwargs: args[0])
@@ -2614,6 +2663,43 @@ class TestSraRecovery:
         metadata, _ = run_fasterq_dump(sra_stat, args, metadata, start=1, end=10)
 
         assert metadata.df.loc[0, 'num_written'] == 10
+
+    def test_run_fasterq_dump_skips_trim_for_partial_range(self, tmp_path, monkeypatch):
+        sra_id = 'SRR001'
+        metadata = self._metadata_for_extraction(sra_id)
+        sra_stat = {
+            'sra_id': sra_id,
+            'getfastq_sra_dir': str(tmp_path),
+            'spot_length': 100,
+            'layout': 'paired',
+            'total_spot': 20,
+        }
+        args = self._args_for_fasterq_dump()
+
+        def fake_run(cmd, stdout=None, stderr=None):
+            return subprocess.CompletedProcess(
+                cmd,
+                0,
+                stdout=b'spots written      : 7\n',
+                stderr=b'',
+            )
+
+        def fail_trim(*_args, **_kwargs):
+            raise AssertionError('trim_fasterq_output_files should not be called when fasterq-dump is spot-range limited.')
+
+        def fail_estimate(*_args, **_kwargs):
+            raise AssertionError('estimate_num_written_spots_from_fastq should not be called when spots written is reported.')
+
+        monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
+        monkeypatch.setattr('amalgkit.getfastq.trim_fasterq_output_files', fail_trim)
+        monkeypatch.setattr('amalgkit.getfastq.compress_fasterq_output_files', lambda *args, **kwargs: None)
+        monkeypatch.setattr('amalgkit.getfastq.estimate_num_written_spots_from_fastq', fail_estimate)
+        monkeypatch.setattr('amalgkit.getfastq.detect_layout_from_file', lambda *args, **kwargs: args[0])
+        monkeypatch.setattr('amalgkit.getfastq.remove_unpaired_files', lambda *args, **kwargs: None)
+
+        metadata, _ = run_fasterq_dump(sra_stat, args, metadata, start=2, end=8)
+
+        assert metadata.df.loc[0, 'num_written'] == 7
 
     def test_run_fasterq_dump_full_range_uses_reported_spots_without_recount(self, tmp_path, monkeypatch):
         sra_id = 'SRR001'
@@ -2689,6 +2775,40 @@ class TestSraRecovery:
         assert cmd[cmd.index('--disk-limit') + 1] == '10G'
         assert '--disk-limit-tmp' in cmd
         assert cmd[cmd.index('--disk-limit-tmp') + 1] == '20G'
+        assert '-N' in cmd
+        assert cmd[cmd.index('-N') + 1] == '1'
+        assert '-X' in cmd
+        assert cmd[cmd.index('-X') + 1] == '1'
+
+    def test_run_fasterq_dump_passes_requested_spot_range(self, tmp_path, monkeypatch):
+        sra_id = 'SRR001'
+        metadata = self._metadata_for_extraction(sra_id)
+        sra_stat = {
+            'sra_id': sra_id,
+            'getfastq_sra_dir': str(tmp_path),
+            'spot_length': 100,
+            'layout': 'single',
+        }
+        args = self._args_for_fasterq_dump()
+        observed = {'cmd': None}
+
+        def fake_run(cmd, stdout=None, stderr=None):
+            observed['cmd'] = cmd
+            return subprocess.CompletedProcess(cmd, 0, stdout=b'', stderr=b'')
+
+        monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
+        monkeypatch.setattr('amalgkit.getfastq.compress_fasterq_output_files', lambda *args, **kwargs: None)
+        monkeypatch.setattr('amalgkit.getfastq.estimate_num_written_spots_from_fastq', lambda *args, **kwargs: 8)
+        monkeypatch.setattr('amalgkit.getfastq.detect_layout_from_file', lambda *args, **kwargs: args[0])
+        monkeypatch.setattr('amalgkit.getfastq.remove_unpaired_files', lambda *args, **kwargs: None)
+
+        run_fasterq_dump(sra_stat, args, metadata, start=5, end=12)
+
+        cmd = observed['cmd']
+        assert '-N' in cmd
+        assert cmd[cmd.index('-N') + 1] == '5'
+        assert '-X' in cmd
+        assert cmd[cmd.index('-X') + 1] == '12'
 
     def test_sequence_extraction_reuses_run_files_without_rescan_when_fastp_disabled(self, tmp_path, monkeypatch):
         sra_id = 'SRR001'
@@ -3633,3 +3753,62 @@ class TestRenameReadsSeqkitCompression:
         with gzip.open(str(out_path), 'rt') as f:
             lines = [f.readline().rstrip('\n') for _ in range(4)]
         assert lines[0] == '@r0/1'
+
+    def test_paired_end_trinity_rename_uses_parallel_seqkit_workers(self, tmp_path, monkeypatch):
+        sra_id = 'SRR778'
+        in_path1 = tmp_path / '{}_1.fastq.gz'.format(sra_id)
+        in_path2 = tmp_path / '{}_2.fastq.gz'.format(sra_id)
+        self._write_fastq_gz(str(in_path1), [('@r0 comment1', 'ACGT')])
+        self._write_fastq_gz(str(in_path2), [('@r0 comment2', 'TGCA')])
+        sra_stat = {
+            'sra_id': sra_id,
+            'layout': 'paired',
+            'getfastq_sra_dir': str(tmp_path),
+        }
+
+        class Args:
+            threads = 2
+            remove_tmp = False
+            dump_print = False
+            seqkit_exe = 'seqkit'
+
+        observed_threads = []
+
+        def fake_seqkit_run(cmd, stdout=None, stderr=None):
+            assert cmd[0] == 'seqkit'
+            assert cmd[1] == 'replace'
+            observed_threads.append(cmd[cmd.index('-j') + 1])
+            out_index = cmd.index('-o')
+            out_path = cmd[out_index + 1]
+            in_path = cmd[-1]
+            replacement = cmd[cmd.index('-r') + 1]
+            suffix = replacement[len('$1'):] if replacement.startswith('$1') else ''
+            with gzip.open(in_path, 'rt') as fin, gzip.open(out_path, 'wt') as fout:
+                while True:
+                    line1 = fin.readline()
+                    if line1 == '':
+                        break
+                    line2 = fin.readline()
+                    line3 = fin.readline()
+                    line4 = fin.readline()
+                    header = line1.rstrip('\n').split()[0]
+                    fout.write(header + suffix + '\n')
+                    fout.write(line2)
+                    fout.write(line3)
+                    fout.write(line4)
+            return subprocess.CompletedProcess(cmd, 0, stdout=b'', stderr=b'')
+
+        monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_seqkit_run)
+
+        rename_reads(sra_stat=sra_stat, args=Args(), output_dir=str(tmp_path))
+        out_path1 = tmp_path / '{}_1.rename.fastq.gz'.format(sra_id)
+        out_path2 = tmp_path / '{}_2.rename.fastq.gz'.format(sra_id)
+        assert out_path1.exists()
+        assert out_path2.exists()
+        with gzip.open(str(out_path1), 'rt') as f:
+            first_header1 = f.readline().rstrip('\n')
+        with gzip.open(str(out_path2), 'rt') as f:
+            first_header2 = f.readline().rstrip('\n')
+        assert first_header1 == '@r0/1'
+        assert first_header2 == '@r0/2'
+        assert sorted(observed_threads) == ['1', '1']

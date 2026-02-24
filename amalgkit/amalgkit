@@ -654,6 +654,8 @@ pin_help = 'Appending local fastq info to a metadata table. See `amalgkit integr
 pin = subparsers.add_parser('integrate', help=pin_help, parents=[pp_out, pp_meta, pp_threads])
 pin.add_argument('--fastq_dir', metavar='PATH', default=None, type=str, required=False, action='store',
                  help='default=%(default)s: PATH to input directory where fastq files are stored.')
+pin.add_argument('--seqkit_exe', metavar='PATH', default='seqkit', type=str, required=False, action='store',
+                 help='default=%(default)s: PATH to seqkit executable used for FASTQ statistics scanning.')
 pin.add_argument('--getfastq_dir', metavar='PATH', default=None, type=str, required=False, action='store',
                  help='default=%(default)s: PATH to index directory. Only required if getfastq directory is not '
                       'out_dir/getfastq/')

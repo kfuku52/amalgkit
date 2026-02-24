@@ -419,15 +419,53 @@ def concat_fastq(args, metadata, output_dir, g):
         return None
     print('Concatenating files with the extension:', inext)
     outext = '.amalgkit.fastq.gz'
-    for subext in resolve_concat_subexts(layout):
-        outfile_path = build_concat_output_path(args=args, output_dir=output_dir, subext=subext, outext=outext)
-        concat_fastq_files_for_subext(
-            run_ids=run_ids,
-            subext=subext,
-            inext=inext,
-            output_dir=output_dir,
-            outfile_path=outfile_path,
+    subexts = resolve_concat_subexts(layout)
+    try:
+        requested_workers = int(getattr(args, 'threads', 1))
+    except (TypeError, ValueError):
+        requested_workers = 1
+    requested_workers = max(1, requested_workers)
+    worker_count = min(len(subexts), requested_workers)
+    if worker_count <= 1:
+        for subext in subexts:
+            outfile_path = build_concat_output_path(args=args, output_dir=output_dir, subext=subext, outext=outext)
+            concat_fastq_files_for_subext(
+                run_ids=run_ids,
+                subext=subext,
+                inext=inext,
+                output_dir=output_dir,
+                outfile_path=outfile_path,
+            )
+    else:
+        print(
+            'Concatenating {:,} read groups with {:,} parallel worker(s).'.format(
+                len(subexts),
+                worker_count,
+            ),
+            flush=True,
         )
+        def concat_single_subext(subext):
+            outfile_path = build_concat_output_path(args=args, output_dir=output_dir, subext=subext, outext=outext)
+            concat_fastq_files_for_subext(
+                run_ids=run_ids,
+                subext=subext,
+                inext=inext,
+                output_dir=output_dir,
+                outfile_path=outfile_path,
+            )
+            return subext
+        _, failures = run_tasks_with_optional_threads(
+            task_items=subexts,
+            task_fn=concat_single_subext,
+            max_workers=worker_count,
+        )
+        if failures:
+            details = '; '.join(['{}: {}'.format(subext, exc) for subext, exc in failures])
+            raise RuntimeError('Concatenation failed for {}/{} read group(s). {}'.format(
+                len(failures),
+                len(subexts),
+                details,
+            ))
     cleanup_concat_tmp_files(
         args=args,
         metadata=metadata,
@@ -718,11 +756,20 @@ def resolve_seqkit_threads(args):
         seqkit_threads = 1
     return max(1, seqkit_threads)
 
-def run_seqkit_seq_command(input_paths, output_path, args, command_label):
+def normalize_seqkit_threads(seqkit_threads):
+    try:
+        normalized_threads = int(seqkit_threads)
+    except (TypeError, ValueError):
+        normalized_threads = 1
+    return max(1, normalized_threads)
+
+def run_seqkit_seq_command(input_paths, output_path, args, command_label, seqkit_threads=None):
     if len(input_paths) == 0:
         raise ValueError('No input FASTQ path was provided for {}.'.format(command_label))
     seqkit_exe = resolve_seqkit_exe(args)
-    seqkit_threads = resolve_seqkit_threads(args)
+    if seqkit_threads is None:
+        seqkit_threads = resolve_seqkit_threads(args)
+    seqkit_threads = normalize_seqkit_threads(seqkit_threads)
     command = [seqkit_exe, 'seq', '-j', str(seqkit_threads), '-w', '0', '-o', output_path] + list(input_paths)
     print('Command:', ' '.join(command))
     out = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -735,7 +782,7 @@ def run_seqkit_seq_command(input_paths, output_path, args, command_label):
         raise RuntimeError('{} failed.'.format(command_label))
     return out
 
-def run_seqkit_replace_command(input_path, output_path, suffix, args, command_label):
+def run_seqkit_range_command(input_path, output_path, start, end, args, command_label, seqkit_threads=None):
     if not os.path.exists(input_path):
         raise FileNotFoundError('FASTQ input not found: {}'.format(input_path))
     if not os.path.isfile(input_path):
@@ -745,7 +792,41 @@ def run_seqkit_replace_command(input_path, output_path, suffix, args, command_la
     if os.path.exists(output_path):
         os.remove(output_path)
     seqkit_exe = resolve_seqkit_exe(args)
-    seqkit_threads = resolve_seqkit_threads(args)
+    if seqkit_threads is None:
+        seqkit_threads = resolve_seqkit_threads(args)
+    seqkit_threads = normalize_seqkit_threads(seqkit_threads)
+    command = [
+        seqkit_exe, 'range',
+        '-j', str(seqkit_threads),
+        '-r', '{}:{}'.format(int(start), int(end)),
+        '-w', '0',
+        '-o', output_path,
+        input_path,
+    ]
+    print('Command:', ' '.join(command))
+    out = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if should_print_getfastq_command_output(args):
+        print('{} stdout:'.format(command_label))
+        print(out.stdout.decode('utf8', errors='replace'))
+        print('{} stderr:'.format(command_label))
+        print(out.stderr.decode('utf8', errors='replace'))
+    if out.returncode != 0:
+        raise RuntimeError('{} failed.'.format(command_label))
+    return out
+
+def run_seqkit_replace_command(input_path, output_path, suffix, args, command_label, seqkit_threads=None):
+    if not os.path.exists(input_path):
+        raise FileNotFoundError('FASTQ input not found: {}'.format(input_path))
+    if not os.path.isfile(input_path):
+        raise IsADirectoryError('FASTQ input path exists but is not a file: {}'.format(input_path))
+    if os.path.exists(output_path) and (not os.path.isfile(output_path)):
+        raise IsADirectoryError('FASTQ output path exists but is not a file: {}'.format(output_path))
+    if os.path.exists(output_path):
+        os.remove(output_path)
+    seqkit_exe = resolve_seqkit_exe(args)
+    if seqkit_threads is None:
+        seqkit_threads = resolve_seqkit_threads(args)
+    seqkit_threads = normalize_seqkit_threads(seqkit_threads)
     command = [
         seqkit_exe, 'replace',
         '-j', str(seqkit_threads),
@@ -766,7 +847,13 @@ def run_seqkit_replace_command(input_path, output_path, suffix, args, command_la
         raise RuntimeError('{} failed.'.format(command_label))
     return out
 
-def compress_fastq_with_seqkit(path_fastq, path_fastq_gz, args, command_label='FASTQ compression with seqkit'):
+def compress_fastq_with_seqkit(
+    path_fastq,
+    path_fastq_gz,
+    args,
+    command_label='FASTQ compression with seqkit',
+    seqkit_threads=None,
+):
     if not os.path.exists(path_fastq):
         raise FileNotFoundError('FASTQ input not found: {}'.format(path_fastq))
     if not os.path.isfile(path_fastq):
@@ -780,6 +867,7 @@ def compress_fastq_with_seqkit(path_fastq, path_fastq_gz, args, command_label='F
         output_path=path_fastq_gz,
         args=args,
         command_label=command_label,
+        seqkit_threads=seqkit_threads,
     )
     os.remove(path_fastq)
 
@@ -815,11 +903,26 @@ def estimate_num_written_spots_from_fastq(sra_stat, files=None, file_state=None)
     num_pair2 = count_fastq_records(pair2_path) if pair2_path is not None else 0
     return max(num_pair1, num_pair2) + num_single
 
-def trim_fastq_by_spot_range(path_fastq, start, end):
+def trim_fastq_by_spot_range(path_fastq, start, end, args=None, compress_to_gz=False):
     if not os.path.exists(path_fastq):
         return 0
     start = max(1, int(start))
     end = max(0, int(end))
+    if compress_to_gz:
+        if args is None:
+            raise ValueError('args is required when compress_to_gz=True.')
+        path_fastq_gz = path_fastq + '.gz'
+        run_seqkit_range_command(
+            input_path=path_fastq,
+            output_path=path_fastq_gz,
+            start=start,
+            end=end,
+            args=args,
+            command_label='FASTQ spot-range trim/compress with seqkit',
+        )
+        kept = count_fastq_records(path_fastq_gz)
+        os.remove(path_fastq)
+        return kept
     tmp_path = path_fastq + '.trimtmp'
     kept = 0
     spot_index = 0
@@ -843,7 +946,16 @@ def trim_fastq_by_spot_range(path_fastq, start, end):
     os.replace(tmp_path, path_fastq)
     return kept
 
-def trim_fasterq_output_files(sra_stat, start, end, files=None, file_state=None):
+def trim_fasterq_output_files(
+    sra_stat,
+    start,
+    end,
+    files=None,
+    file_state=None,
+    args=None,
+    compress_to_gz=False,
+    return_file_state=False,
+):
     work_dir = sra_stat['getfastq_sra_dir']
     sra_id = sra_stat['sra_id']
     run_file_state = _resolve_run_file_state(work_dir=work_dir, files=files, file_state=file_state)
@@ -853,7 +965,18 @@ def trim_fasterq_output_files(sra_stat, start, end, files=None, file_state=None)
         if not run_file_state.has(filename):
             continue
         path_fastq = run_file_state.path(filename)
-        kept_counts[suffix] = trim_fastq_by_spot_range(path_fastq=path_fastq, start=start, end=end)
+        kept_counts[suffix] = trim_fastq_by_spot_range(
+            path_fastq=path_fastq,
+            start=start,
+            end=end,
+            args=args,
+            compress_to_gz=compress_to_gz,
+        )
+        if compress_to_gz:
+            run_file_state.discard(filename)
+            run_file_state.add(filename + '.gz')
+    if return_file_state:
+        return kept_counts, run_file_state
     return kept_counts
 
 def calculate_written_spots_from_trim_counts(trimmed_counts):
@@ -874,6 +997,12 @@ def parse_fasterq_dump_written_spots(stdout_txt, stderr_txt):
         return None
     return int(matched[-1].replace(',', ''))
 
+def is_full_requested_spot_range(sra_stat, start, end):
+    total_spot = sra_stat.get('total_spot', None)
+    if total_spot is None:
+        return False
+    return (int(start) <= 1) and (int(end) >= int(total_spot))
+
 def compress_fasterq_output_files(sra_stat, args, files=None, file_state=None, return_file_state=False):
     work_dir = sra_stat['getfastq_sra_dir']
     sra_id = sra_stat['sra_id']
@@ -889,14 +1018,53 @@ def compress_fasterq_output_files(sra_stat, args, files=None, file_state=None, r
         if return_file_state:
             return run_file_state
         return run_file_state.to_set()
-    for path_fastq in fastq_paths:
-        print('Compressing with seqkit: {} -> {}'.format(path_fastq, path_fastq + '.gz'))
-        compress_fastq_with_seqkit(
-            path_fastq=path_fastq,
-            path_fastq_gz=path_fastq + '.gz',
-            args=args,
-            command_label='FASTQ compression with seqkit',
+    total_seqkit_threads = resolve_seqkit_threads(args)
+    worker_count = min(len(fastq_paths), total_seqkit_threads)
+    worker_count = max(1, worker_count)
+    threads_per_worker = max(1, int(total_seqkit_threads / worker_count))
+    if worker_count <= 1:
+        for path_fastq in fastq_paths:
+            print('Compressing with seqkit: {} -> {}'.format(path_fastq, path_fastq + '.gz'))
+            compress_fastq_with_seqkit(
+                path_fastq=path_fastq,
+                path_fastq_gz=path_fastq + '.gz',
+                args=args,
+                command_label='FASTQ compression with seqkit',
+                seqkit_threads=threads_per_worker,
+            )
+    else:
+        print(
+            'Compressing {:,} FASTQ files with seqkit using {:,} parallel worker(s), {:,} thread(s) each.'.format(
+                len(fastq_paths),
+                worker_count,
+                threads_per_worker,
+            ),
+            flush=True,
         )
+        task_indices = list(range(len(fastq_paths)))
+        def run_single_compression(task_idx):
+            path_fastq = fastq_paths[task_idx]
+            print('Compressing with seqkit: {} -> {}'.format(path_fastq, path_fastq + '.gz'))
+            compress_fastq_with_seqkit(
+                path_fastq=path_fastq,
+                path_fastq_gz=path_fastq + '.gz',
+                args=args,
+                command_label='FASTQ compression with seqkit',
+                seqkit_threads=threads_per_worker,
+            )
+            return path_fastq
+        _, failures = run_tasks_with_optional_threads(
+            task_items=task_indices,
+            task_fn=run_single_compression,
+            max_workers=worker_count,
+        )
+        if failures:
+            details = '; '.join(['{}: {}'.format(fastq_paths[idx], exc) for idx, exc in failures])
+            raise RuntimeError('FASTQ compression with seqkit failed for {}/{} file(s). {}'.format(
+                len(failures),
+                len(fastq_paths),
+                details,
+            ))
     for filename in fastq_filenames:
         run_file_state.discard(filename)
         run_file_state.add(filename + '.gz')
@@ -904,7 +1072,15 @@ def compress_fasterq_output_files(sra_stat, args, files=None, file_state=None, r
         return run_file_state
     return run_file_state.to_set()
 
-def build_fasterq_dump_command(args, sra_stat, path_downloaded_sra, size_check):
+def normalize_requested_spot_range(start, end):
+    start = max(1, int(start))
+    end = int(end)
+    if end < start:
+        end = start
+    return start, end
+
+
+def build_fasterq_dump_command(args, sra_stat, path_downloaded_sra, size_check, start=None, end=None):
     fasterq_dump_exe = getattr(args, 'fasterq_dump_exe', 'fasterq-dump')
     command = [
         fasterq_dump_exe,
@@ -922,6 +1098,9 @@ def build_fasterq_dump_command(args, sra_stat, path_downloaded_sra, size_check):
         command.extend(['--disk-limit', str(disk_limit)])
     if disk_limit_tmp:
         command.extend(['--disk-limit-tmp', str(disk_limit_tmp)])
+    if (start is not None) and (end is not None):
+        normalized_start, normalized_end = normalize_requested_spot_range(start=start, end=end)
+        command.extend(['-N', str(normalized_start), '-X', str(normalized_end)])
     command.append(path_downloaded_sra)
     return command
 
@@ -973,20 +1152,24 @@ def ensure_fasterq_output_files_exist(sra_stat):
         )
 
 
-def resolve_written_spots_from_fasterq_output(sra_stat, start, end, fqd_out, run_file_state):
-    total_spot = sra_stat.get('total_spot', None)
-    is_full_range = (start <= 1) and (total_spot is not None) and (end >= int(total_spot))
-    if is_full_range:
-        print('Requested full spot range. Skipping FASTQ trimming.')
-        written_spots = parse_fasterq_dump_written_spots(
-            stdout_txt=fqd_out.stdout.decode('utf8', errors='replace'),
-            stderr_txt=fqd_out.stderr.decode('utf8', errors='replace'),
-        )
-        if written_spots is not None:
-            print('Using fasterq-dump reported spot count: {:,}'.format(written_spots))
-        return written_spots
-    trim_counts = trim_fasterq_output_files(sra_stat=sra_stat, start=start, end=end, file_state=run_file_state)
-    return calculate_written_spots_from_trim_counts(trim_counts)
+def resolve_written_spots_from_fasterq_output(
+    sra_stat,
+    start,
+    end,
+    fqd_out,
+    run_file_state,
+    args=None,
+    compress_trimmed_to_gz=False,
+):
+    written_spots = parse_fasterq_dump_written_spots(
+        stdout_txt=fqd_out.stdout.decode('utf8', errors='replace'),
+        stderr_txt=fqd_out.stderr.decode('utf8', errors='replace'),
+    )
+    if written_spots is not None:
+        print('Using fasterq-dump reported spot count: {:,}'.format(written_spots))
+    else:
+        print('fasterq-dump did not report written spots. Falling back to FASTQ record counting.')
+    return written_spots, run_file_state
 
 
 def update_extraction_counts(metadata, ind_sra, written_spots, spot_length):
@@ -1000,6 +1183,7 @@ def update_extraction_counts(metadata, ind_sra, written_spots, spot_length):
 
 def run_fasterq_dump(sra_stat, args, metadata, start, end, return_files=False, return_file_state=False):
     path_downloaded_sra = os.path.join(sra_stat['getfastq_sra_dir'], sra_stat['sra_id'] + '.sra')
+    start, end = normalize_requested_spot_range(start=start, end=end)
     raw_size_check = getattr(args, 'fasterq_size_check', True)
     size_check = normalize_fasterq_size_check(raw_size_check)
     fasterq_dump_command = build_fasterq_dump_command(
@@ -1007,6 +1191,8 @@ def run_fasterq_dump(sra_stat, args, metadata, start, end, return_files=False, r
         sra_stat=sra_stat,
         path_downloaded_sra=path_downloaded_sra,
         size_check=size_check,
+        start=start,
+        end=end,
     )
     print('Total sampled bases:', "{:,}".format(sra_stat['spot_length'] * (end - start + 1)), 'bp')
     fqd_out = run_fasterq_dump_with_retry(
@@ -1018,7 +1204,7 @@ def run_fasterq_dump(sra_stat, args, metadata, start, end, return_files=False, r
     )
     ensure_fasterq_output_files_exist(sra_stat=sra_stat)
     run_file_state = RunFileState(work_dir=sra_stat['getfastq_sra_dir'])
-    written_spots = resolve_written_spots_from_fasterq_output(
+    written_spots, run_file_state = resolve_written_spots_from_fasterq_output(
         sra_stat=sra_stat,
         start=start,
         end=end,
@@ -1432,22 +1618,24 @@ def rename_reads(sra_stat, args, output_dir, files=None, file_state=None, return
     run_file_state = _resolve_run_file_state(work_dir=output_dir, files=files, file_state=file_state)
     inext = get_or_detect_intermediate_extension(sra_stat, work_dir=output_dir, file_state=run_file_state)
     outext = '.rename.fastq.gz'
-    def rewrite_headers(infile, outfile, suffix):
+    def rewrite_headers(infile, outfile, suffix, seqkit_threads):
         run_seqkit_replace_command(
             input_path=infile,
             output_path=outfile,
             suffix=suffix,
             args=args,
             command_label='Trinity read-header rewrite with seqkit',
+            seqkit_threads=seqkit_threads,
         )
 
+    total_seqkit_threads = resolve_seqkit_threads(args)
     if sra_stat['layout'] == 'single':
         inbase = os.path.join(output_dir, sra_stat['sra_id'])
         if run_file_state.has(sra_stat['sra_id'] + inext):
             infile = inbase + inext
             outfile = inbase + outext
             print('Rewriting read headers for Trinity format: {} -> {}'.format(infile, outfile))
-            rewrite_headers(infile=infile, outfile=outfile, suffix='/1')
+            rewrite_headers(infile=infile, outfile=outfile, suffix='/1', seqkit_threads=total_seqkit_threads)
             run_file_state.add(sra_stat['sra_id'] + outext)
     elif sra_stat['layout'] == 'paired':
         inbase1 = os.path.join(output_dir, sra_stat['sra_id'] + '_1')
@@ -1457,10 +1645,51 @@ def rename_reads(sra_stat, args, output_dir, files=None, file_state=None, return
             infile2 = inbase2 + inext
             outfile1 = inbase1 + outext
             outfile2 = inbase2 + outext
-            print('Rewriting read headers for Trinity format: {} -> {}'.format(infile1, outfile1))
-            rewrite_headers(infile=infile1, outfile=outfile1, suffix='/1')
-            print('Rewriting read headers for Trinity format: {} -> {}'.format(infile2, outfile2))
-            rewrite_headers(infile=infile2, outfile=outfile2, suffix='/2')
+            rewrite_jobs = [
+                (infile1, outfile1, '/1'),
+                (infile2, outfile2, '/2'),
+            ]
+            worker_count = min(len(rewrite_jobs), total_seqkit_threads)
+            worker_count = max(1, worker_count)
+            threads_per_worker = max(1, int(total_seqkit_threads / worker_count))
+            if worker_count <= 1:
+                for infile, outfile, suffix in rewrite_jobs:
+                    print('Rewriting read headers for Trinity format: {} -> {}'.format(infile, outfile))
+                    rewrite_headers(
+                        infile=infile,
+                        outfile=outfile,
+                        suffix=suffix,
+                        seqkit_threads=threads_per_worker,
+                    )
+            else:
+                print(
+                    'Rewriting paired read headers with {:,} parallel worker(s), {:,} thread(s) each.'.format(
+                        worker_count,
+                        threads_per_worker,
+                    ),
+                    flush=True,
+                )
+                def rewrite_single_job(job_idx):
+                    infile, outfile, suffix = rewrite_jobs[job_idx]
+                    print('Rewriting read headers for Trinity format: {} -> {}'.format(infile, outfile))
+                    rewrite_headers(
+                        infile=infile,
+                        outfile=outfile,
+                        suffix=suffix,
+                        seqkit_threads=threads_per_worker,
+                    )
+                    return job_idx
+                _, failures = run_tasks_with_optional_threads(
+                    task_items=list(range(len(rewrite_jobs))),
+                    task_fn=rewrite_single_job,
+                    max_workers=worker_count,
+                )
+                if failures:
+                    details = '; '.join([
+                        '{}: {}'.format(rewrite_jobs[job_idx][0], exc)
+                        for job_idx, exc in failures
+                    ])
+                    raise RuntimeError('Trinity read-header rewrite with seqkit failed for paired FASTQ(s). {}'.format(details))
             run_file_state.add(sra_stat['sra_id'] + '_1' + outext)
             run_file_state.add(sra_stat['sra_id'] + '_2' + outext)
     if args.remove_tmp:
