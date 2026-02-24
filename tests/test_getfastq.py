@@ -18,6 +18,7 @@ from amalgkit.getfastq import (
     get_layout,
     detect_concat_input_files,
     concat_fastq,
+    append_file_binary,
     remove_experiment_without_run,
     check_metadata_validity,
     initialize_global_params,
@@ -35,17 +36,24 @@ from amalgkit.getfastq import (
     parse_fastp_summary_counts,
     update_fastp_metrics,
     write_fastp_stats,
+    write_getfastq_stats,
     run_fastp,
+    run_sortmerna_rrna_filter,
+    parse_sortmerna_output_counts,
+    update_metadata_after_rrna_filter,
     sequence_extraction,
     sequence_extraction_2nd_round,
     sequence_extraction_private,
     estimate_num_written_spots_from_fastq,
     compress_fasterq_output_files,
     normalize_fasterq_size_check,
+    count_fastq_records_and_bases,
+    summarize_layout_fastq_records_and_bases,
     download_sra,
     run_fasterq_dump,
     getfastq_main,
     check_getfastq_dependency,
+    resolve_sortmerna_refs,
     count_fastq_records,
     collect_valid_run_ids,
     remove_sra_files,
@@ -103,6 +111,20 @@ class TestCountFastqRecords:
         assert count_fastq_records(str(plain)) == 3
         assert count_fastq_records(str(gz)) == 3
 
+    def test_counts_records_and_bases_plain_and_gz(self, tmp_path):
+        plain = tmp_path / 'x.fastq'
+        self._write_fastq(str(plain), ['AAAA', 'CC', 'GGGGG'])
+        gz = tmp_path / 'x.fastq.gz'
+        with open(str(plain), 'rb') as fin, gzip.open(str(gz), 'wb') as fout:
+            fout.write(fin.read())
+
+        num_plain, bp_plain = count_fastq_records_and_bases(str(plain))
+        num_gz, bp_gz = count_fastq_records_and_bases(str(gz))
+        assert num_plain == 3
+        assert bp_plain == (4 + 2 + 5)
+        assert num_gz == 3
+        assert bp_gz == (4 + 2 + 5)
+
     def test_warns_on_truncated_fastq(self, tmp_path, capsys):
         path = tmp_path / 'bad.fastq'
         with open(path, 'wt') as out:
@@ -111,6 +133,279 @@ class TestCountFastqRecords:
 
         assert count_fastq_records(str(path)) == 1
         assert 'not divisible by 4' in capsys.readouterr().err
+
+
+class TestAppendFileBinary:
+    def test_appends_source_to_destination(self, tmp_path):
+        src = tmp_path / 'src.bin'
+        dst = tmp_path / 'dst.bin'
+        src.write_bytes(b'BBBB')
+        dst.write_bytes(b'AAAA')
+
+        append_file_binary(str(src), str(dst))
+
+        assert dst.read_bytes() == b'AAAABBBB'
+
+    def test_falls_back_to_copyfileobj_when_sendfile_raises(self, tmp_path, monkeypatch):
+        src = tmp_path / 'src.bin'
+        dst = tmp_path / 'dst.bin'
+        src.write_bytes(b'12345')
+        dst.write_bytes(b'abc')
+
+        if not hasattr(os, 'sendfile'):
+            append_file_binary(str(src), str(dst))
+            assert dst.read_bytes() == b'abc12345'
+            return
+
+        def fake_sendfile(*_args, **_kwargs):
+            raise OSError('x')
+
+        monkeypatch.setattr('amalgkit.getfastq.os.sendfile', fake_sendfile)
+        append_file_binary(str(src), str(dst))
+        assert dst.read_bytes() == b'abc12345'
+
+
+class TestFastqStatsWithSeqkit:
+    @staticmethod
+    def _write_fastq(path, reads):
+        with open(path, 'wt') as out:
+            for i, seq in enumerate(reads):
+                out.write('@r{}\n'.format(i))
+                out.write(seq + '\n')
+                out.write('+\n')
+                out.write('I' * len(seq) + '\n')
+
+    def test_summarize_layout_uses_seqkit_stats_when_args_provided(self, tmp_path, monkeypatch):
+        pair1 = tmp_path / 'x_1.fastq'
+        pair2 = tmp_path / 'x_2.fastq'
+        self._write_fastq(str(pair1), ['AAAA', 'CC'])
+        self._write_fastq(str(pair2), ['TT', 'GG'])
+
+        class Args:
+            threads = 2
+            dump_print = False
+            seqkit_exe = 'seqkit'
+
+        def fake_seqkit_run(cmd, stdout=None, stderr=None):
+            assert cmd[0] == 'seqkit'
+            assert cmd[1] == 'stats'
+            rows = [
+                'file\tformat\ttype\tnum_seqs\tsum_len\tavg_len',
+                '{}\tFASTQ\tDNA\t2\t6\t3'.format(os.path.abspath(str(pair1))),
+                '{}\tFASTQ\tDNA\t2\t4\t2'.format(os.path.abspath(str(pair2))),
+            ]
+            return subprocess.CompletedProcess(cmd, 0, stdout=('\n'.join(rows) + '\n').encode('utf8'), stderr=b'')
+
+        monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_seqkit_run)
+
+        num_spots, bp_total = summarize_layout_fastq_records_and_bases(
+            layout='paired',
+            pair1_path=str(pair1),
+            pair2_path=str(pair2),
+            args=Args(),
+        )
+        assert num_spots == 2
+        assert bp_total == 10
+
+    def test_summarize_layout_falls_back_to_python_parser_when_seqkit_fails(self, tmp_path, monkeypatch):
+        pair1 = tmp_path / 'x_1.fastq'
+        pair2 = tmp_path / 'x_2.fastq'
+        self._write_fastq(str(pair1), ['AAAA', 'CC'])
+        self._write_fastq(str(pair2), ['TT', 'GGG'])
+
+        class Args:
+            threads = 2
+            dump_print = False
+            seqkit_exe = 'seqkit'
+
+        monkeypatch.setattr(
+            'amalgkit.getfastq.subprocess.run',
+            lambda cmd, stdout=None, stderr=None: subprocess.CompletedProcess(cmd, 1, stdout=b'', stderr=b'failed'),
+        )
+
+        num_spots, bp_total = summarize_layout_fastq_records_and_bases(
+            layout='paired',
+            pair1_path=str(pair1),
+            pair2_path=str(pair2),
+            args=Args(),
+        )
+        assert num_spots == 2
+        assert bp_total == (4 + 2 + 2 + 3)
+
+
+class TestRrnaMetadataUpdate:
+    def test_update_metadata_uses_known_input_counts_without_rescanning_input(self, monkeypatch):
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001'],
+            'num_rrna_in': [0],
+            'num_rrna_out': [0],
+            'bp_rrna_in': [0],
+            'bp_rrna_out': [0],
+        }))
+        sra_stat = {
+            'sra_id': 'SRR001',
+            'layout': 'single',
+            'metadata_idx': 0,
+        }
+        observed = {'calls': []}
+
+        def fake_summarize(layout, single_path=None, pair1_path=None, pair2_path=None, args=None):
+            observed['calls'].append((layout, single_path, pair1_path, pair2_path))
+            return 7, 70
+
+        monkeypatch.setattr('amalgkit.getfastq.summarize_layout_fastq_records_and_bases', fake_summarize)
+        metadata = update_metadata_after_rrna_filter(
+            metadata=metadata,
+            sra_stat=sra_stat,
+            input_paths={'': '/tmp/in.fastq.gz'},
+            output_paths={'': '/tmp/out.fastq.gz'},
+            args=None,
+            known_input_counts={'num_spots': 11, 'bp_total': 110},
+        )
+        assert metadata.df.loc[0, 'num_rrna_in'] == 11
+        assert metadata.df.loc[0, 'bp_rrna_in'] == 110
+        assert metadata.df.loc[0, 'num_rrna_out'] == 7
+        assert metadata.df.loc[0, 'bp_rrna_out'] == 70
+        assert len(observed['calls']) == 1
+        assert observed['calls'][0][1] == '/tmp/out.fastq.gz'
+
+    def test_update_metadata_uses_known_input_and_output_counts_without_fastq_scan(self, monkeypatch):
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001'],
+            'num_rrna_in': [0],
+            'num_rrna_out': [0],
+            'bp_rrna_in': [0],
+            'bp_rrna_out': [0],
+        }))
+        sra_stat = {
+            'sra_id': 'SRR001',
+            'layout': 'single',
+            'metadata_idx': 0,
+        }
+
+        def fail_summarize(*_args, **_kwargs):
+            raise AssertionError('FASTQ scan should not run when known_input_counts and known_output_counts are provided.')
+
+        monkeypatch.setattr('amalgkit.getfastq.summarize_layout_fastq_records_and_bases', fail_summarize)
+        metadata = update_metadata_after_rrna_filter(
+            metadata=metadata,
+            sra_stat=sra_stat,
+            input_paths={'': '/tmp/in.fastq.gz'},
+            output_paths={'': '/tmp/out.fastq.gz'},
+            args=None,
+            known_input_counts={'num_spots': 11, 'bp_total': 110},
+            known_output_counts={'num_spots': 7, 'bp_total': 70},
+        )
+        assert metadata.df.loc[0, 'num_rrna_in'] == 11
+        assert metadata.df.loc[0, 'bp_rrna_in'] == 110
+        assert metadata.df.loc[0, 'num_rrna_out'] == 7
+        assert metadata.df.loc[0, 'bp_rrna_out'] == 70
+
+
+class TestSortmernaLogCounts:
+    def test_parse_sortmerna_output_counts_single(self):
+        stdout_txt = '\n'.join([
+            'all_reads_count= 1000 all_reads_len= 100000',
+            '[run:11] && Reads added: 1000 Num aligned reads (passing E-value): 240',
+        ])
+        out = parse_sortmerna_output_counts(
+            stdout_txt=stdout_txt,
+            stderr_txt='',
+            layout='single',
+            num_input_files=1,
+            known_input_counts=None,
+        )
+        assert out == {'num_spots': 760, 'bp_total': 76000}
+
+    def test_parse_sortmerna_output_counts_paired_uses_known_input_for_divisor_and_bp(self):
+        stdout_txt = '\n'.join([
+            'all_reads_count= 10000 all_reads_len= 1000000',
+            '[run:22] && Reads added: 10000 Num aligned reads (passing E-value): 5944',
+        ])
+        out = parse_sortmerna_output_counts(
+            stdout_txt=stdout_txt,
+            stderr_txt='',
+            layout='paired',
+            num_input_files=2,
+            known_input_counts={'num_spots': 5000, 'bp_total': 1000000},
+        )
+        assert out == {'num_spots': 2028, 'bp_total': 405600}
+
+
+class TestRunSortmernaWithLogCounts:
+    @staticmethod
+    def _write_fastq_gz(path, reads):
+        with gzip.open(path, 'wt') as out:
+            for i, seq in enumerate(reads):
+                out.write('@r{}\n'.format(i))
+                out.write(seq + '\n')
+                out.write('+\n')
+                out.write('I' * len(seq) + '\n')
+
+    def test_uses_sortmerna_log_counts_without_fastq_rescan(self, tmp_path, monkeypatch):
+        sra_id = 'SRR001'
+        in_path = tmp_path / '{}.fastp.fastq.gz'.format(sra_id)
+        self._write_fastq_gz(str(in_path), ['AAAA'])
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': [sra_id],
+            'num_rrna_in': [0],
+            'num_rrna_out': [0],
+            'bp_rrna_in': [0],
+            'bp_rrna_out': [0],
+        }))
+        sra_stat = {
+            'sra_id': sra_id,
+            'layout': 'single',
+            'metadata_idx': 0,
+            'current_ext': '.fastp.fastq.gz',
+            'getfastq_sra_dir': str(tmp_path),
+        }
+        args = SimpleNamespace(
+            rrna_filter=True,
+            threads=1,
+            sortmerna_exe='sortmerna',
+            sortmerna_option='',
+            remove_tmp=False,
+            dump_print=False,
+            seqkit_exe='seqkit',
+            out_dir=str(tmp_path),
+            download_dir='inferred',
+        )
+
+        monkeypatch.setattr('amalgkit.getfastq.resolve_sortmerna_refs', lambda _args: ['/tmp/ref.fa'])
+
+        def fake_execute_sortmerna(sortmerna_command, args):
+            other_prefix = sortmerna_command[sortmerna_command.index('--other') + 1]
+            out_path = other_prefix + '.fastq.gz'
+            os.makedirs(os.path.dirname(out_path), exist_ok=True)
+            self._write_fastq_gz(out_path, ['AAAA'])
+            stdout_txt = '\n'.join([
+                'all_reads_count= 10 all_reads_len= 1000',
+                '[run:11] && Reads added: 10 Num aligned reads (passing E-value): 3',
+            ]) + '\n'
+            return subprocess.CompletedProcess(sortmerna_command, 0, stdout=stdout_txt.encode('utf8'), stderr=b'')
+
+        def fail_summarize(*_args, **_kwargs):
+            raise AssertionError('FASTQ scan should not be called when SortMeRNA log counts are available.')
+
+        monkeypatch.setattr('amalgkit.getfastq.execute_sortmerna_command', fake_execute_sortmerna)
+        monkeypatch.setattr('amalgkit.getfastq.summarize_layout_fastq_records_and_bases', fail_summarize)
+
+        metadata, run_file_state = run_sortmerna_rrna_filter(
+            sra_stat=sra_stat,
+            args=args,
+            output_dir=str(tmp_path),
+            metadata=metadata,
+            files={'{}.fastp.fastq.gz'.format(sra_id)},
+            known_input_counts={'num_spots': 10, 'bp_total': 1000},
+            return_file_state=True,
+        )
+
+        assert metadata.df.loc[0, 'num_rrna_in'] == 10
+        assert metadata.df.loc[0, 'bp_rrna_in'] == 1000
+        assert metadata.df.loc[0, 'num_rrna_out'] == 7
+        assert metadata.df.loc[0, 'bp_rrna_out'] == 700
+        assert run_file_state.has('{}.rrna.fastq.gz'.format(sra_id))
 
 
 class TestGetfastqXmlRetrieval:
@@ -1658,8 +1953,14 @@ class TestInitializeColumns:
         assert 'layout_amalgkit' in m.df.columns
         assert 'fastp_duplication_rate' in m.df.columns
         assert 'fastp_insert_size_peak' in m.df.columns
+        assert 'num_rrna_in' in m.df.columns
+        assert 'num_rrna_out' in m.df.columns
+        assert 'bp_rrna_in' in m.df.columns
+        assert 'bp_rrna_out' in m.df.columns
+        assert 'spot_length_amalgkit' in m.df.columns
         assert m.df.loc[0, 'bp_until_target_size'] == 1000000
         assert m.df.loc[0, 'bp_dumped'] == 0
+        assert m.df.loc[0, 'spot_length_amalgkit'] == 0
         assert m.df.loc[0, 'layout_amalgkit'] == ''
         assert numpy.isnan(m.df.loc[0, 'fastp_duplication_rate'])
         assert numpy.isnan(m.df.loc[0, 'fastp_insert_size_peak'])
@@ -1749,6 +2050,20 @@ class TestCalc2ndRanges:
         assert out.df.loc[0, 'spot_start_2nd'] == 11
         assert out.df.loc[0, 'spot_end_2nd'] == 11
 
+    def test_uses_spot_length_when_spot_length_amalgkit_is_missing(self):
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'bp_until_target_size': [100.0],
+            'rate_obtained': [1.0],
+            'spot_length': [10.0],
+            'total_spots': [1000],
+            'spot_end_1st': [0],
+        }))
+
+        out = calc_2nd_ranges(metadata)
+
+        assert out.df.loc[0, 'spot_start_2nd'] == 1
+        assert out.df.loc[0, 'spot_end_2nd'] == 12
+
 
 class TestFastpMetrics:
     def test_parse_fastp_metrics_extracts_duplication_and_insert_size(self):
@@ -1833,6 +2148,40 @@ class TestFastpMetrics:
         assert out.loc[0, 'num_fastp_out'] == 900
         assert out.loc[0, 'bp_fastp_in'] == 100000
         assert out.loc[0, 'bp_fastp_out'] == 90000
+
+    def test_write_getfastq_stats_writes_tsv(self, tmp_path):
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001'],
+            'num_dumped': [10],
+            'num_rejected': [3],
+            'num_written': [7],
+            'num_fastp_in': [7],
+            'num_fastp_out': [6],
+            'num_rrna_in': [6],
+            'num_rrna_out': [5],
+            'bp_dumped': [1000],
+            'bp_rejected': [300],
+            'bp_written': [700],
+            'bp_fastp_in': [700],
+            'bp_fastp_out': [600],
+            'bp_rrna_in': [600],
+            'bp_rrna_out': [500],
+            'bp_discarded': [500],
+            'fastp_duplication_rate': [12.0],
+            'fastp_insert_size_peak': [250.0],
+        }))
+        sra_stat = {'sra_id': 'SRR001'}
+        write_getfastq_stats(sra_stat=sra_stat, metadata=metadata, output_dir=str(tmp_path))
+        out_path = tmp_path / 'getfastq_stats.tsv'
+        assert out_path.exists()
+        out = pandas.read_csv(out_path, sep='\t')
+        assert out.loc[0, 'run'] == 'SRR001'
+        assert out.loc[0, 'num_dumped'] == 10
+        assert out.loc[0, 'num_rejected'] == 3
+        assert out.loc[0, 'bp_rejected'] == 300
+        assert out.loc[0, 'bp_discarded'] == 500
+        assert out.loc[0, 'fastp_duplication_rate'] == pytest.approx(12.0)
+        assert out.loc[0, 'fastp_insert_size_peak'] == pytest.approx(250.0)
 
 
 class TestRunFastp:
@@ -2497,11 +2846,11 @@ class TestSraRecovery:
         assert redownload_calls == [True]
         assert sra_path.is_file()
         assert metadata.df.loc[0, 'num_written'] == 4
-        assert metadata.df.loc[0, 'num_dumped'] == 4
-        assert metadata.df.loc[0, 'num_rejected'] == 0
+        assert metadata.df.loc[0, 'num_dumped'] == 10
+        assert metadata.df.loc[0, 'num_rejected'] == 6
         assert metadata.df.loc[0, 'bp_written'] == 400
-        assert metadata.df.loc[0, 'bp_dumped'] == 400
-        assert metadata.df.loc[0, 'bp_rejected'] == 0
+        assert metadata.df.loc[0, 'bp_dumped'] == 1000
+        assert metadata.df.loc[0, 'bp_rejected'] == 600
         assert sra_stat_out['layout'] == 'paired'
 
     def test_run_fasterq_dump_exits_when_retry_fails(self, tmp_path, monkeypatch):
@@ -2567,10 +2916,10 @@ class TestSraRecovery:
         metadata, _ = run_fasterq_dump(sra_stat, args, metadata, start=1, end=10)
         assert run_calls['count'] == 1
         assert metadata.df.loc[0, 'num_written'] == 5
-        assert metadata.df.loc[0, 'num_dumped'] == 5
-        assert metadata.df.loc[0, 'num_rejected'] == 0
+        assert metadata.df.loc[0, 'num_dumped'] == 10
+        assert metadata.df.loc[0, 'num_rejected'] == 5
         assert metadata.df.loc[0, 'bp_written'] == 500
-        assert metadata.df.loc[0, 'bp_dumped'] == 500
+        assert metadata.df.loc[0, 'bp_dumped'] == 1000
 
     def test_run_fasterq_dump_uses_reported_spots_without_recount_for_partial_range(self, tmp_path, monkeypatch):
         sra_id = 'SRR001'
@@ -2737,8 +3086,8 @@ class TestSraRecovery:
         metadata, _ = run_fasterq_dump(sra_stat, args, metadata, start=1, end=10)
 
         assert metadata.df.loc[0, 'num_written'] == 7
-        assert metadata.df.loc[0, 'num_dumped'] == 7
-        assert metadata.df.loc[0, 'num_rejected'] == 0
+        assert metadata.df.loc[0, 'num_dumped'] == 10
+        assert metadata.df.loc[0, 'num_rejected'] == 3
 
     def test_run_fasterq_dump_passes_size_check_and_disk_limits(self, tmp_path, monkeypatch):
         sra_id = 'SRR001'
@@ -2809,6 +3158,35 @@ class TestSraRecovery:
         assert cmd[cmd.index('-N') + 1] == '5'
         assert '-X' in cmd
         assert cmd[cmd.index('-X') + 1] == '12'
+
+    def test_run_fasterq_dump_skips_spot_range_flags_for_full_range(self, tmp_path, monkeypatch):
+        sra_id = 'SRR001'
+        metadata = self._metadata_for_extraction(sra_id)
+        sra_stat = {
+            'sra_id': sra_id,
+            'getfastq_sra_dir': str(tmp_path),
+            'spot_length': 100,
+            'layout': 'single',
+            'total_spot': 10,
+        }
+        args = self._args_for_fasterq_dump()
+        observed = {'cmd': None}
+
+        def fake_run(cmd, stdout=None, stderr=None):
+            observed['cmd'] = cmd
+            return subprocess.CompletedProcess(cmd, 0, stdout=b'', stderr=b'spots written : 10')
+
+        monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
+        monkeypatch.setattr('amalgkit.getfastq.compress_fasterq_output_files', lambda *args, **kwargs: None)
+        monkeypatch.setattr('amalgkit.getfastq.estimate_num_written_spots_from_fastq', lambda *args, **kwargs: 10)
+        monkeypatch.setattr('amalgkit.getfastq.detect_layout_from_file', lambda *args, **kwargs: args[0])
+        monkeypatch.setattr('amalgkit.getfastq.remove_unpaired_files', lambda *args, **kwargs: None)
+
+        run_fasterq_dump(sra_stat, args, metadata, start=1, end=10)
+
+        cmd = observed['cmd']
+        assert '-N' not in cmd
+        assert '-X' not in cmd
 
     def test_sequence_extraction_reuses_run_files_without_rescan_when_fastp_disabled(self, tmp_path, monkeypatch):
         sra_id = 'SRR001'
@@ -3001,6 +3379,323 @@ class TestSraRecovery:
         assert metadata.df.loc[0, 'bp_fastp_out'] == 250
         assert metadata.df.loc[0, 'bp_amalgkit'] == 250
 
+    def test_sequence_extraction_uses_rrna_filtered_bp_for_target_size(self, tmp_path, monkeypatch):
+        sra_id = 'SRR001'
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': [sra_id],
+            'lib_layout': ['single'],
+            'total_spots': [10],
+            'total_bases': [1000],
+            'spot_length': [100],
+            'scientific_name': ['sp'],
+            'exclusion': ['no'],
+        }))
+        g = {'num_bp_per_sra': 1000}
+        metadata = initialize_columns(metadata, g)
+        sra_stat = {
+            'sra_id': sra_id,
+            'layout': 'single',
+            'spot_length': 100,
+            'total_spot': 10,
+            'getfastq_sra_dir': str(tmp_path),
+        }
+
+        class Args:
+            fastp = True
+            rrna_filter = True
+            read_name = 'default'
+
+        def fake_run_fasterq_dump(sra_stat, args, metadata, start, end, return_files=False, return_file_state=False):
+            idx = 0
+            metadata.df.at[idx, 'num_dumped'] += 3
+            metadata.df.at[idx, 'num_written'] += 3
+            metadata.df.at[idx, 'bp_dumped'] += 300
+            metadata.df.at[idx, 'bp_written'] += 300
+            if return_file_state:
+                from amalgkit.getfastq import RunFileState
+                return metadata, sra_stat, RunFileState(work_dir=sra_stat['getfastq_sra_dir'], files={'{}.fastq.gz'.format(sra_id)})
+            return metadata, sra_stat
+
+        def fake_maybe_treat_paired_as_single(
+            sra_stat,
+            metadata,
+            work_dir,
+            threshold=0.99,
+            num_checked_reads=2000,
+            files=None,
+            file_state=None,
+            return_files=False,
+            return_file_state=False,
+        ):
+            if return_file_state:
+                from amalgkit.getfastq import RunFileState
+                return metadata, sra_stat, RunFileState(work_dir=work_dir, files=file_state.to_set())
+            return metadata, sra_stat
+
+        def fake_run_fastp(
+            sra_stat,
+            args,
+            output_dir,
+            metadata,
+            files=None,
+            file_state=None,
+            return_files=False,
+            return_file_state=False,
+        ):
+            idx = 0
+            metadata.df.at[idx, 'bp_fastp_out'] += 250
+            if return_file_state:
+                from amalgkit.getfastq import RunFileState
+                return metadata, RunFileState(work_dir=output_dir, files={'{}.fastp.fastq.gz'.format(sra_id)})
+            return metadata
+
+        def fake_run_sortmerna_rrna_filter(
+            sra_stat,
+            args,
+            output_dir,
+            metadata,
+            files=None,
+            file_state=None,
+            known_input_counts=None,
+            return_files=False,
+            return_file_state=False,
+        ):
+            idx = 0
+            metadata.df.at[idx, 'bp_rrna_in'] += 250
+            metadata.df.at[idx, 'bp_rrna_out'] += 180
+            sra_stat['current_ext'] = '.rrna.fastq.gz'
+            if return_file_state:
+                from amalgkit.getfastq import RunFileState
+                return metadata, RunFileState(work_dir=output_dir, files={'{}.rrna.fastq.gz'.format(sra_id)})
+            return metadata
+
+        monkeypatch.setattr('amalgkit.getfastq.run_fasterq_dump', fake_run_fasterq_dump)
+        monkeypatch.setattr('amalgkit.getfastq.maybe_treat_paired_as_single', fake_maybe_treat_paired_as_single)
+        monkeypatch.setattr('amalgkit.getfastq.run_fastp', fake_run_fastp)
+        monkeypatch.setattr('amalgkit.getfastq.run_sortmerna_rrna_filter', fake_run_sortmerna_rrna_filter)
+        monkeypatch.setattr('amalgkit.getfastq.rename_fastq', lambda *args, **kwargs: None)
+
+        metadata = sequence_extraction(args=Args(), sra_stat=sra_stat, metadata=metadata, g=g, start=1, end=4)
+
+        assert metadata.df.loc[0, 'bp_fastp_out'] == 250
+        assert metadata.df.loc[0, 'bp_rrna_out'] == 180
+        assert metadata.df.loc[0, 'bp_amalgkit'] == 180
+
+    def test_sequence_extraction_passes_fastp_output_counts_to_rrna(self, tmp_path, monkeypatch):
+        sra_id = 'SRR001'
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': [sra_id],
+            'lib_layout': ['single'],
+            'total_spots': [10],
+            'total_bases': [1000],
+            'spot_length': [100],
+            'scientific_name': ['sp'],
+            'exclusion': ['no'],
+        }))
+        g = {'num_bp_per_sra': 1000}
+        metadata = initialize_columns(metadata, g)
+        sra_stat = {
+            'sra_id': sra_id,
+            'layout': 'single',
+            'spot_length': 100,
+            'total_spot': 10,
+            'getfastq_sra_dir': str(tmp_path),
+        }
+
+        class Args:
+            fastp = True
+            rrna_filter = True
+            read_name = 'default'
+
+        def fake_run_fasterq_dump(sra_stat, args, metadata, start, end, return_files=False, return_file_state=False):
+            idx = 0
+            metadata.df.at[idx, 'num_dumped'] += 3
+            metadata.df.at[idx, 'num_written'] += 3
+            metadata.df.at[idx, 'bp_dumped'] += 300
+            metadata.df.at[idx, 'bp_written'] += 300
+            if return_file_state:
+                from amalgkit.getfastq import RunFileState
+                return metadata, sra_stat, RunFileState(work_dir=sra_stat['getfastq_sra_dir'], files={'{}.fastq.gz'.format(sra_id)})
+            return metadata, sra_stat
+
+        def fake_maybe_treat_paired_as_single(
+            sra_stat,
+            metadata,
+            work_dir,
+            threshold=0.99,
+            num_checked_reads=2000,
+            files=None,
+            file_state=None,
+            return_files=False,
+            return_file_state=False,
+        ):
+            if return_file_state:
+                from amalgkit.getfastq import RunFileState
+                return metadata, sra_stat, RunFileState(work_dir=work_dir, files=file_state.to_set())
+            return metadata, sra_stat
+
+        def fake_run_fastp(
+            sra_stat,
+            args,
+            output_dir,
+            metadata,
+            files=None,
+            file_state=None,
+            return_files=False,
+            return_file_state=False,
+        ):
+            idx = 0
+            metadata.df.at[idx, 'num_fastp_out'] += 2
+            metadata.df.at[idx, 'bp_fastp_out'] += 250
+            if return_file_state:
+                from amalgkit.getfastq import RunFileState
+                return metadata, RunFileState(work_dir=output_dir, files={'{}.fastp.fastq.gz'.format(sra_id)})
+            return metadata
+
+        observed = {'known_input_counts': None}
+
+        def fake_run_sortmerna_rrna_filter(
+            sra_stat,
+            args,
+            output_dir,
+            metadata,
+            files=None,
+            file_state=None,
+            known_input_counts=None,
+            return_files=False,
+            return_file_state=False,
+        ):
+            observed['known_input_counts'] = known_input_counts
+            idx = 0
+            metadata.df.at[idx, 'num_rrna_in'] += 2
+            metadata.df.at[idx, 'num_rrna_out'] += 1
+            metadata.df.at[idx, 'bp_rrna_in'] += 250
+            metadata.df.at[idx, 'bp_rrna_out'] += 180
+            sra_stat['current_ext'] = '.rrna.fastq.gz'
+            if return_file_state:
+                from amalgkit.getfastq import RunFileState
+                return metadata, RunFileState(work_dir=output_dir, files={'{}.rrna.fastq.gz'.format(sra_id)})
+            return metadata
+
+        monkeypatch.setattr('amalgkit.getfastq.run_fasterq_dump', fake_run_fasterq_dump)
+        monkeypatch.setattr('amalgkit.getfastq.maybe_treat_paired_as_single', fake_maybe_treat_paired_as_single)
+        monkeypatch.setattr('amalgkit.getfastq.run_fastp', fake_run_fastp)
+        monkeypatch.setattr('amalgkit.getfastq.run_sortmerna_rrna_filter', fake_run_sortmerna_rrna_filter)
+        monkeypatch.setattr('amalgkit.getfastq.rename_fastq', lambda *args, **kwargs: None)
+
+        sequence_extraction(args=Args(), sra_stat=sra_stat, metadata=metadata, g=g, start=1, end=4)
+
+        assert observed['known_input_counts'] == {'num_spots': 2, 'bp_total': 250}
+
+    def test_sequence_extraction_respects_rrna_first_order_for_bp_target(self, tmp_path, monkeypatch):
+        sra_id = 'SRR001'
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': [sra_id],
+            'lib_layout': ['single'],
+            'total_spots': [10],
+            'total_bases': [1000],
+            'spot_length': [100],
+            'scientific_name': ['sp'],
+            'exclusion': ['no'],
+        }))
+        g = {'num_bp_per_sra': 1000}
+        metadata = initialize_columns(metadata, g)
+        sra_stat = {
+            'sra_id': sra_id,
+            'layout': 'single',
+            'spot_length': 100,
+            'total_spot': 10,
+            'getfastq_sra_dir': str(tmp_path),
+        }
+
+        class Args:
+            fastp = True
+            rrna_filter = True
+            filter_order = 'rrna_first'
+            read_name = 'default'
+
+        observed_order = []
+
+        def fake_run_fasterq_dump(sra_stat, args, metadata, start, end, return_files=False, return_file_state=False):
+            idx = 0
+            metadata.df.at[idx, 'num_dumped'] += 3
+            metadata.df.at[idx, 'num_written'] += 3
+            metadata.df.at[idx, 'bp_dumped'] += 300
+            metadata.df.at[idx, 'bp_written'] += 300
+            if return_file_state:
+                from amalgkit.getfastq import RunFileState
+                return metadata, sra_stat, RunFileState(work_dir=sra_stat['getfastq_sra_dir'], files={'{}.fastq.gz'.format(sra_id)})
+            return metadata, sra_stat
+
+        def fake_maybe_treat_paired_as_single(
+            sra_stat,
+            metadata,
+            work_dir,
+            threshold=0.99,
+            num_checked_reads=2000,
+            files=None,
+            file_state=None,
+            return_files=False,
+            return_file_state=False,
+        ):
+            if return_file_state:
+                from amalgkit.getfastq import RunFileState
+                return metadata, sra_stat, RunFileState(work_dir=work_dir, files=file_state.to_set())
+            return metadata, sra_stat
+
+        def fake_run_sortmerna_rrna_filter(
+            sra_stat,
+            args,
+            output_dir,
+            metadata,
+            files=None,
+            file_state=None,
+            known_input_counts=None,
+            return_files=False,
+            return_file_state=False,
+        ):
+            observed_order.append('rrna')
+            idx = 0
+            metadata.df.at[idx, 'bp_rrna_in'] += 300
+            metadata.df.at[idx, 'bp_rrna_out'] += 210
+            sra_stat['current_ext'] = '.rrna.fastq.gz'
+            if return_file_state:
+                from amalgkit.getfastq import RunFileState
+                return metadata, RunFileState(work_dir=output_dir, files={'{}.rrna.fastq.gz'.format(sra_id)})
+            return metadata
+
+        def fake_run_fastp(
+            sra_stat,
+            args,
+            output_dir,
+            metadata,
+            files=None,
+            file_state=None,
+            return_files=False,
+            return_file_state=False,
+        ):
+            observed_order.append('fastp')
+            idx = 0
+            metadata.df.at[idx, 'bp_fastp_in'] += 210
+            metadata.df.at[idx, 'bp_fastp_out'] += 180
+            if return_file_state:
+                from amalgkit.getfastq import RunFileState
+                return metadata, RunFileState(work_dir=output_dir, files={'{}.fastp.fastq.gz'.format(sra_id)})
+            return metadata
+
+        monkeypatch.setattr('amalgkit.getfastq.run_fasterq_dump', fake_run_fasterq_dump)
+        monkeypatch.setattr('amalgkit.getfastq.maybe_treat_paired_as_single', fake_maybe_treat_paired_as_single)
+        monkeypatch.setattr('amalgkit.getfastq.run_sortmerna_rrna_filter', fake_run_sortmerna_rrna_filter)
+        monkeypatch.setattr('amalgkit.getfastq.run_fastp', fake_run_fastp)
+        monkeypatch.setattr('amalgkit.getfastq.rename_fastq', lambda *args, **kwargs: None)
+
+        metadata = sequence_extraction(args=Args(), sra_stat=sra_stat, metadata=metadata, g=g, start=1, end=4)
+
+        assert observed_order == ['rrna', 'fastp']
+        assert metadata.df.loc[0, 'bp_rrna_out'] == 210
+        assert metadata.df.loc[0, 'bp_fastp_out'] == 180
+        assert metadata.df.loc[0, 'bp_amalgkit'] == 180
+
 
 class TestRunFasterqDumpOutputValidation:
     @staticmethod
@@ -3131,6 +3826,58 @@ class TestSequenceExtractionSecondRound:
 
         with pytest.raises(IsADirectoryError, match='Dumped fastq path exists but is not a file'):
             sequence_extraction_2nd_round(args=args, sra_stat=sra_stat, metadata=metadata, g=g)
+
+    def test_paired_2nd_round_merges_subexts_with_parallel_workers(self, tmp_path, monkeypatch):
+        sra_id = 'SRR001'
+        (tmp_path / '{}_1.amalgkit.fastq.gz'.format(sra_id)).write_bytes(b'FIRST1')
+        (tmp_path / '{}_2.amalgkit.fastq.gz'.format(sra_id)).write_bytes(b'FIRST2')
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': [sra_id],
+            'lib_layout': ['paired'],
+            'total_spots': [10],
+            'total_bases': [1000],
+            'spot_length': [100],
+            'scientific_name': ['sp'],
+            'exclusion': ['no'],
+            'spot_start_2nd': [2],
+            'spot_end_2nd': [5],
+            'bp_written': [100],
+        }))
+        sra_stat = {
+            'sra_id': sra_id,
+            'layout': 'paired',
+            'getfastq_sra_dir': str(tmp_path),
+        }
+        args = SimpleNamespace(threads=2)
+        g = {}
+        observed = {'max_workers': None, 'task_items': None}
+
+        def fake_sequence_extraction(*_args, **_kwargs):
+            (tmp_path / '{}_1.amalgkit.fastq.gz'.format(sra_id)).write_bytes(b'SECOND1')
+            (tmp_path / '{}_2.amalgkit.fastq.gz'.format(sra_id)).write_bytes(b'SECOND2')
+            return metadata
+
+        def fake_run_tasks(task_items, task_fn, max_workers):
+            observed['max_workers'] = max_workers
+            observed['task_items'] = list(task_items)
+            results = {}
+            failures = []
+            for task_item in task_items:
+                try:
+                    results[task_item] = task_fn(task_item)
+                except Exception as exc:
+                    failures.append((task_item, exc))
+            return results, failures
+
+        monkeypatch.setattr('amalgkit.getfastq.sequence_extraction', fake_sequence_extraction)
+        monkeypatch.setattr('amalgkit.getfastq.run_tasks_with_optional_threads', fake_run_tasks)
+
+        sequence_extraction_2nd_round(args=args, sra_stat=sra_stat, metadata=metadata, g=g)
+
+        assert observed['max_workers'] == 2
+        assert set(observed['task_items']) == {'_1', '_2'}
+        assert (tmp_path / '{}_1.amalgkit.fastq.gz'.format(sra_id)).read_bytes() == b'FIRST1SECOND1'
+        assert (tmp_path / '{}_2.amalgkit.fastq.gz'.format(sra_id)).read_bytes() == b'FIRST2SECOND2'
 
 
 class TestDownloadSraUrlSchemes:
@@ -3645,6 +4392,100 @@ class TestGetfastqDependencyChecks:
         monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
         with pytest.raises(RuntimeError, match='fastp dependency probe failed'):
             check_getfastq_dependency(Args())
+
+    def test_rrna_filter_probes_sortmerna_and_prepares_download_dir(self, tmp_path, monkeypatch):
+        download_dir = tmp_path / 'downloads'
+        args = SimpleNamespace(
+            fasterq_dump_exe='fasterq-dump',
+            fastp=False,
+            rrna_filter=True,
+            download_dir=str(download_dir),
+            sortmerna_exe='sortmerna',
+        )
+
+        called = {'cmds': []}
+
+        def fake_run(cmd, stdout=None, stderr=None):
+            called['cmds'].append(cmd)
+            return subprocess.CompletedProcess(cmd, 0, stdout=b'', stderr=b'')
+
+        monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
+        check_getfastq_dependency(args)
+        assert called['cmds'][0] == ['fasterq-dump', '-h']
+        assert called['cmds'][1] == ['seqkit', '--help']
+        assert called['cmds'][2] == ['sortmerna', '--version']
+        assert download_dir.exists()
+        assert download_dir.is_dir()
+
+    def test_rrna_filter_raises_when_download_path_is_file(self, tmp_path, monkeypatch):
+        bad_path = tmp_path / 'downloads_as_file'
+        bad_path.write_text('not a directory')
+
+        args = SimpleNamespace(
+            fasterq_dump_exe='fasterq-dump',
+            fastp=False,
+            rrna_filter=True,
+            download_dir=str(bad_path),
+            sortmerna_exe='sortmerna',
+        )
+
+        monkeypatch.setattr(
+            'amalgkit.getfastq.subprocess.run',
+            lambda cmd, stdout=None, stderr=None: subprocess.CompletedProcess(cmd, 0, stdout=b'', stderr=b''),
+        )
+        with pytest.raises(NotADirectoryError, match='SortMeRNA download path exists but is not a directory'):
+            check_getfastq_dependency(args)
+
+
+class TestSortmernaReferenceDownload:
+    def test_downloads_silva_refs_to_default_out_dir_downloads(self, tmp_path, monkeypatch):
+        out_dir = tmp_path / 'out'
+        calls = {'n': 0}
+
+        def fake_urlretrieve(_url, out_path):
+            calls['n'] += 1
+            with gzip.open(out_path, 'wt') as fout:
+                fout.write('>rRNA\nACGT\n')
+            return (out_path, None)
+
+        monkeypatch.setattr('amalgkit.getfastq.urllib.request.urlretrieve', fake_urlretrieve)
+
+        args = SimpleNamespace(
+            out_dir=str(out_dir),
+            download_dir='inferred',
+        )
+
+        refs_first = resolve_sortmerna_refs(args)
+        assert len(refs_first) == 2
+        for ref_path in refs_first:
+            assert ref_path.startswith(os.path.join(str(out_dir), 'downloads'))
+            assert os.path.exists(ref_path)
+        assert calls['n'] == 2
+
+        refs_second = resolve_sortmerna_refs(args)
+        assert refs_second == refs_first
+        assert calls['n'] == 2
+
+    def test_downloads_silva_refs_to_custom_download_dir(self, tmp_path, monkeypatch):
+        custom_dir = tmp_path / 'custom_downloads'
+
+        def fake_urlretrieve(_url, out_path):
+            with gzip.open(out_path, 'wt') as fout:
+                fout.write('>rRNA\nACGT\n')
+            return (out_path, None)
+
+        monkeypatch.setattr('amalgkit.getfastq.urllib.request.urlretrieve', fake_urlretrieve)
+
+        args = SimpleNamespace(
+            out_dir=str(tmp_path / 'out'),
+            download_dir=str(custom_dir),
+        )
+
+        refs = resolve_sortmerna_refs(args)
+        assert len(refs) == 2
+        for ref_path in refs:
+            assert ref_path.startswith(str(custom_dir))
+            assert os.path.exists(ref_path)
 
 
 class TestFasterqSeqkitCompression:

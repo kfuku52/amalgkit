@@ -365,6 +365,9 @@ pp_cpu_budget.add_argument('--internal_cpu_budget', metavar='INT|auto', default=
                  help='default=%(default)s: Advanced CPU budget cap for internal auto-parallelization. '
                       'The effective core budget is min(--threads, --internal_cpu_budget). '
                       '"auto" uses os.cpu_count().')
+pp_download = argparse.ArgumentParser(add_help=False)
+pp_download.add_argument('--download_dir', metavar='PATH', default='inferred', type=str, required=False, action='store',
+                 help='default=%(default)s: Shared download/cache directory. "inferred" = out_dir/downloads')
 pp_sg = argparse.ArgumentParser(add_help=False)
 pp_sg.add_argument('--sample_group', metavar='tissueA,tissueB,tissueC,...', default=None, type=str, required=False, action='store',
                  help='default=%(default)s: "Comma separated list of sample groups. '
@@ -408,7 +411,7 @@ pse.set_defaults(handler=command_select)
 
 # Sub parser: getfastq
 pge_help = 'Retrieving fastq files. See `amalgkit getfastq -h`'
-pge = subparsers.add_parser('getfastq', help=pge_help, parents=[pp_out, pp_meta, pp_threads, pp_internal_jobs, pp_cpu_budget, pp_redo, pp_batch])
+pge = subparsers.add_parser('getfastq', help=pge_help, parents=[pp_out, pp_meta, pp_threads, pp_internal_jobs, pp_cpu_budget, pp_redo, pp_batch, pp_download])
 pge.add_argument('--entrez_email', metavar='aaa@bbb.com', default='', type=str, required=False, action='store',
                  help='default=%(default)s: Your email address. See https://www.ncbi.nlm.nih.gov/books/NBK25497/')
 pge.add_argument('--id', metavar='XXXXX0000', default=None, type=str, required=False, action='store',
@@ -455,6 +458,18 @@ pge.add_argument('--fastp_option', metavar='STR', default='-j /dev/null -h /dev/
                  action='store',
                  help='default=%(default)s: Options to be passed to fastp. Do not include --length_required option here. '
                       'It can be specified throught --min_read_length in amalgkit. ')
+pge.add_argument('--rrna_filter', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
+                 help='default=%(default)s: Remove rRNA reads using SortMeRNA before final FASTQ output.')
+pge.add_argument('--filter_order', metavar='fastp_first|rrna_first',
+                 choices=['fastp_first', 'rrna_first'],
+                 default='fastp_first', type=str, required=False, action='store',
+                 help='default=%(default)s: Order of optional filtering when both --fastp and --rrna_filter are enabled.')
+pge.add_argument('--sortmerna_exe', metavar='PATH', default='sortmerna', type=str, required=False, action='store',
+                 help='default=%(default)s: PATH to SortMeRNA executable.')
+pge.add_argument('--sortmerna_download_dir', dest='download_dir', metavar='PATH', default=argparse.SUPPRESS, type=str,
+                 required=False, action='store', help=argparse.SUPPRESS)
+pge.add_argument('--sortmerna_option', metavar='STR', default='', type=str, required=False, action='store',
+                 help='default=%(default)s: Additional options passed to SortMeRNA.')
 pge.add_argument('--remove_sra', metavar='yes|no', default='yes', type=strtobool, required=False, action='store',
                  help='default=%(default)s: Remove downloaded SRA files after fastq extraction.')
 pge.add_argument('--remove_tmp', metavar='yes|no', default='yes', type=strtobool, required=False, action='store',
@@ -521,7 +536,7 @@ pmg.set_defaults(handler=command_merge)
 
 # Sub parser: busco
 pbu_help = 'Generating BUSCO tables for amalgkit cstmm/csca. See `amalgkit busco -h`'
-pbu = subparsers.add_parser('busco', help=pbu_help, parents=[pp_out, pp_meta, pp_threads, pp_internal_jobs, pp_cpu_budget, pp_redo])
+pbu = subparsers.add_parser('busco', help=pbu_help, parents=[pp_out, pp_meta, pp_threads, pp_internal_jobs, pp_cpu_budget, pp_redo, pp_download])
 pbu.add_argument('--tool', metavar='auto|busco|compleasm', default='auto', type=str, required=False, action='store',
                  choices=['auto', 'busco', 'compleasm'],
                  help='default=%(default)s: Tool for BUSCO table generation.')

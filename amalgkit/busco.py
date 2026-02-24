@@ -255,10 +255,19 @@ def run_command(cmd):
     if out.returncode != 0:
         raise RuntimeError('Command failed with exit code {}: {}'.format(out.returncode, ' '.join(cmd)))
 
+def resolve_download_dir(args):
+    raw_dir = getattr(args, 'download_dir', 'inferred')
+    if raw_dir is None:
+        return os.path.join(os.path.realpath(args.out_dir), 'downloads')
+    normalized = str(raw_dir).strip()
+    if normalized.lower() in ['', 'inferred']:
+        return os.path.join(os.path.realpath(args.out_dir), 'downloads')
+    return os.path.realpath(normalized)
+
 
 def run_busco(fasta_path, sci_name, output_root, args, extra_args):
     out_name = sci_name.replace(' ', '_')
-    download_path = os.path.join(os.path.realpath(args.out_dir), 'busco_downloads')
+    download_path = resolve_download_dir(args)
     if os.path.exists(download_path) and (not os.path.isdir(download_path)):
         raise NotADirectoryError(
             'BUSCO download path exists but is not a directory: {}'.format(download_path)

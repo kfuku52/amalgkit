@@ -6,6 +6,24 @@ import warnings
 from amalgkit.util import *
 
 FASTP_STATS_COLUMNS = ['fastp_duplication_rate', 'fastp_insert_size_peak']
+GETFASTQ_STAGE_COLUMNS = [
+    'num_dumped',
+    'num_rejected',
+    'num_written',
+    'num_fastp_in',
+    'num_fastp_out',
+    'num_rrna_in',
+    'num_rrna_out',
+    'bp_dumped',
+    'bp_rejected',
+    'bp_written',
+    'bp_fastp_in',
+    'bp_fastp_out',
+    'bp_rrna_in',
+    'bp_rrna_out',
+    'bp_discarded',
+]
+GETFASTQ_MERGE_COLUMNS = FASTP_STATS_COLUMNS + GETFASTQ_STAGE_COLUMNS
 MERGE_QUANT_READ_MAX_WORKERS = 4
 
 
@@ -59,6 +77,10 @@ def scan_quant_abundance_paths(quant_dir, target_runs=None):
 def _find_fastp_stats_candidates(getfastq_dir, run_ids):
     candidates = []
     for run_id in run_ids:
+        getfastq_stats_path = os.path.join(getfastq_dir, run_id, 'getfastq_stats.tsv')
+        if os.path.isfile(getfastq_stats_path):
+            candidates.append((run_id, getfastq_stats_path))
+            continue
         fastp_stats_path = os.path.join(getfastq_dir, run_id, 'fastp_stats.tsv')
         if os.path.isfile(fastp_stats_path):
             candidates.append((run_id, fastp_stats_path))
@@ -72,7 +94,7 @@ def _read_fastp_stats_file(sra_id, fastp_stats_path):
     if df_fastp.shape[0] == 0:
         return sra_id, dict(), False, None
     values = dict()
-    for col in FASTP_STATS_COLUMNS:
+    for col in GETFASTQ_MERGE_COLUMNS:
         if col in df_fastp.columns:
             values[col] = df_fastp.loc[0, col]
     return sra_id, values, True, None
@@ -83,7 +105,7 @@ def merge_fastp_stats_into_metadata(metadata, out_dir, max_workers='auto'):
         required_columns=['run'],
         context='merge fastp stats',
     )
-    for col in FASTP_STATS_COLUMNS:
+    for col in GETFASTQ_MERGE_COLUMNS:
         if col not in metadata.df.columns:
             metadata.df.loc[:, col] = numpy.nan
     getfastq_dir = os.path.realpath(os.path.join(out_dir, 'getfastq'))
@@ -131,7 +153,7 @@ def merge_fastp_stats_into_metadata(metadata, out_dir, max_workers='auto'):
         for col, value in values.items():
             metadata.df.loc[is_run, col] = value
         num_detected += 1
-    print('{:,} fastp stats files were detected and merged into metadata.'.format(num_detected), flush=True)
+    print('{:,} getfastq stats files were detected and merged into metadata.'.format(num_detected), flush=True)
     return metadata
 
 

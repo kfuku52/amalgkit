@@ -40,6 +40,37 @@ class TestMergeFastpStatsIntoMetadata:
         assert numpy.isnan(metadata.df.loc[1, 'fastp_duplication_rate'])
         assert numpy.isnan(metadata.df.loc[1, 'fastp_insert_size_peak'])
 
+    def test_merges_getfastq_stage_stats_tsv(self, tmp_path):
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001'],
+            'scientific_name': ['sp1'],
+            'exclusion': ['no'],
+        }))
+        srr001_dir = tmp_path / 'getfastq' / 'SRR001'
+        srr001_dir.mkdir(parents=True)
+        pandas.DataFrame([{
+            'run': 'SRR001',
+            'num_dumped': 10,
+            'num_rejected': 3,
+            'num_written': 7,
+            'bp_dumped': 1000,
+            'bp_rejected': 300,
+            'bp_written': 700,
+            'bp_discarded': 500,
+            'fastp_duplication_rate': 12.5,
+            'fastp_insert_size_peak': 250.0,
+        }]).to_csv(srr001_dir / 'getfastq_stats.tsv', sep='\t', index=False)
+
+        metadata = merge_fastp_stats_into_metadata(metadata, str(tmp_path))
+
+        assert metadata.df.loc[0, 'num_dumped'] == 10
+        assert metadata.df.loc[0, 'num_rejected'] == 3
+        assert metadata.df.loc[0, 'bp_dumped'] == 1000
+        assert metadata.df.loc[0, 'bp_rejected'] == 300
+        assert metadata.df.loc[0, 'bp_discarded'] == 500
+        assert metadata.df.loc[0, 'fastp_duplication_rate'] == 12.5
+        assert metadata.df.loc[0, 'fastp_insert_size_peak'] == 250.0
+
     def test_rejects_metadata_without_run_column(self, tmp_path):
         metadata = Metadata.from_DataFrame(pandas.DataFrame({
             'scientific_name': ['sp1'],
@@ -89,6 +120,8 @@ class TestMergeFastpStatsIntoMetadata:
 
         assert 'fastp_duplication_rate' in metadata.df.columns
         assert 'fastp_insert_size_peak' in metadata.df.columns
+        assert 'num_rejected' in metadata.df.columns
+        assert 'bp_rejected' in metadata.df.columns
         assert numpy.isnan(metadata.df.loc[0, 'fastp_duplication_rate'])
         assert numpy.isnan(metadata.df.loc[0, 'fastp_insert_size_peak'])
 

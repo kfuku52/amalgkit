@@ -487,8 +487,8 @@ def test_run_busco_places_downloads_under_out_dir(tmp_path, monkeypatch):
     assert output_dir == os.path.join(str(busco_root), 'Species_A')
     assert '--download_path' in captured['cmd']
     idx = captured['cmd'].index('--download_path')
-    assert captured['cmd'][idx + 1] == os.path.join(str(out_dir), 'busco_downloads')
-    assert (out_dir / 'busco_downloads').exists()
+    assert captured['cmd'][idx + 1] == os.path.join(str(out_dir), 'downloads')
+    assert (out_dir / 'downloads').exists()
 
 
 def test_run_busco_rejects_download_path_that_is_file(tmp_path):
@@ -496,7 +496,7 @@ def test_run_busco_rejects_download_path_that_is_file(tmp_path):
     busco_root = out_dir / 'busco'
     out_dir.mkdir()
     busco_root.mkdir()
-    (out_dir / 'busco_downloads').write_text('not a directory')
+    (out_dir / 'downloads').write_text('not a directory')
     args = SimpleNamespace(
         busco_exe='busco',
         lineage='eukaryota_odb12',
@@ -513,6 +513,38 @@ def test_run_busco_rejects_download_path_that_is_file(tmp_path):
             args=args,
             extra_args=[],
         )
+
+def test_run_busco_uses_custom_download_dir(tmp_path, monkeypatch):
+    out_dir = tmp_path / 'out'
+    busco_root = out_dir / 'busco'
+    custom_download_dir = tmp_path / 'shared_downloads'
+    out_dir.mkdir()
+    busco_root.mkdir()
+    args = SimpleNamespace(
+        busco_exe='busco',
+        lineage='eukaryota_odb12',
+        threads=4,
+        redo=False,
+        out_dir=str(out_dir),
+        download_dir=str(custom_download_dir),
+    )
+    captured = {}
+
+    def fake_run_command(cmd):
+        captured['cmd'] = cmd
+
+    monkeypatch.setattr('amalgkit.busco.run_command', fake_run_command)
+    _ = run_busco(
+        fasta_path='/tmp/input.fa',
+        sci_name='Species A',
+        output_root=str(busco_root),
+        args=args,
+        extra_args=[],
+    )
+
+    idx = captured['cmd'].index('--download_path')
+    assert captured['cmd'][idx + 1] == str(custom_download_dir)
+    assert custom_download_dir.exists()
 
 
 def test_busco_main_rejects_nonpositive_species_jobs(tmp_path):

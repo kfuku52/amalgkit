@@ -23,6 +23,39 @@ IDENTICAL_PAIRED_CHECKED_READS = 2000
 ID_LIST_METADATA_MAX_WORKERS = 4
 ID_LIST_VERBOSE_LIMIT = 20
 FASTQ_RECORD_COUNT_CHUNK_BYTES = 16 * 1024 * 1024
+SORTMERNA_REFERENCE_SPECS = [
+    {
+        'label': 'SILVA SSU',
+        'url': 'https://ftp.arb-silva.de/release_138.2/Exports/SILVA_138.2_SSURef_NR99_tax_silva.fasta.gz',
+        'gz_filename': 'silva_ssu.fasta.gz',
+        'fasta_filename': 'silva_ssu.fasta',
+    },
+    {
+        'label': 'SILVA LSU',
+        'url': 'https://ftp.arb-silva.de/release_138.2/Exports/SILVA_138.2_LSURef_tax_silva.fasta.gz',
+        'gz_filename': 'silva_lsu.fasta.gz',
+        'fasta_filename': 'silva_lsu.fasta',
+    },
+]
+GETFASTQ_STATS_COLUMNS = [
+    'num_dumped',
+    'num_rejected',
+    'num_written',
+    'num_fastp_in',
+    'num_fastp_out',
+    'num_rrna_in',
+    'num_rrna_out',
+    'bp_dumped',
+    'bp_rejected',
+    'bp_written',
+    'bp_fastp_in',
+    'bp_fastp_out',
+    'bp_rrna_in',
+    'bp_rrna_out',
+    'bp_discarded',
+    'fastp_duplication_rate',
+    'fastp_insert_size_peak',
+]
 
 def get_or_detect_intermediate_extension(sra_stat, work_dir, files=None, file_state=None):
     cached_ext = sra_stat.get('current_ext', None)
@@ -38,7 +71,35 @@ def set_current_intermediate_extension(sra_stat, ext):
     sra_stat['current_ext'] = ext
 
 def append_file_binary(src_path, dst_path, chunk_size=8 * 1024 * 1024):
+    if chunk_size is None:
+        chunk_size = 8 * 1024 * 1024
+    try:
+        chunk_size = int(chunk_size)
+    except (TypeError, ValueError):
+        chunk_size = 8 * 1024 * 1024
+    chunk_size = max(1, chunk_size)
+
     with open(src_path, 'rb') as src_handle, open(dst_path, 'ab') as dst_handle:
+        src_fd = src_handle.fileno()
+        dst_fd = dst_handle.fileno()
+        offset = 0
+        if hasattr(os, 'sendfile'):
+            try:
+                src_size = os.fstat(src_fd).st_size
+                while offset < src_size:
+                    sent = os.sendfile(dst_fd, src_fd, offset, src_size - offset)
+                    if sent is None:
+                        break
+                    sent = int(sent)
+                    if sent <= 0:
+                        break
+                    offset += sent
+                if offset >= src_size:
+                    return
+            except OSError:
+                pass
+        if offset > 0:
+            src_handle.seek(offset)
         shutil.copyfileobj(src_handle, dst_handle, length=chunk_size)
 
 def list_run_dir_files(work_dir):
@@ -720,6 +781,10 @@ def check_getfastq_dependency(args):
     if bool(getattr(args, 'fastp', False)):
         fastp_exe = getattr(args, 'fastp_exe', 'fastp')
         probe_command([fastp_exe, '--help'], 'fastp')
+    if is_rrna_filter_enabled(args):
+        ensure_sortmerna_download_dir_exists(resolve_sortmerna_download_dir(args))
+        sortmerna_exe = getattr(args, 'sortmerna_exe', 'sortmerna')
+        probe_command([sortmerna_exe, '--version'], 'sortmerna')
     return None
 
 def remove_sra_path(path_downloaded_sra):
@@ -847,6 +912,99 @@ def run_seqkit_replace_command(input_path, output_path, suffix, args, command_la
         raise RuntimeError('{} failed.'.format(command_label))
     return out
 
+def _parse_seqkit_stats_rows(stdout_txt):
+    lines = [line.rstrip('\n') for line in (stdout_txt or '').splitlines() if line.strip() != '']
+    if len(lines) < 2:
+        raise RuntimeError('seqkit stats output was empty.')
+    header_fields = lines[0].split('\t')
+    rows = []
+    for line in lines[1:]:
+        value_fields = line.split('\t')
+        row = {}
+        for idx, field_name in enumerate(header_fields):
+            row[field_name] = value_fields[idx] if idx < len(value_fields) else ''
+        rows.append(row)
+    if len(rows) == 0:
+        raise RuntimeError('seqkit stats output did not include data rows.')
+    return rows
+
+def _parse_seqkit_stats_numeric(row, key, path_fastq):
+    if key not in row:
+        raise RuntimeError('seqkit stats output is missing "{}" for {}'.format(key, path_fastq))
+    raw = str(row.get(key, '')).strip().replace(',', '')
+    if raw == '':
+        raise RuntimeError('seqkit stats output has an empty "{}" value for {}'.format(key, path_fastq))
+    try:
+        return int(float(raw))
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError('Failed to parse seqkit stats "{}" for {}'.format(key, path_fastq)) from exc
+
+def _parse_seqkit_stats_row_records_and_bases(row, path_fastq):
+    num_records = _parse_seqkit_stats_numeric(row=row, key='num_seqs', path_fastq=path_fastq)
+    if ('sum_len' in row) and (str(row.get('sum_len', '')).strip() not in ['', 'NA', 'nan', 'NaN']):
+        num_bases = _parse_seqkit_stats_numeric(row=row, key='sum_len', path_fastq=path_fastq)
+    else:
+        avg_len = _parse_seqkit_stats_numeric(row=row, key='avg_len', path_fastq=path_fastq)
+        num_bases = int(num_records * avg_len)
+    return num_records, num_bases
+
+def scan_fastq_records_and_bases_with_seqkit_batch(path_fastq_paths, args, seqkit_threads=None):
+    if path_fastq_paths is None:
+        return {}
+    deduplicated_paths = []
+    seen = set()
+    for path_fastq in path_fastq_paths:
+        if path_fastq is None:
+            continue
+        abs_path = os.path.abspath(path_fastq)
+        if abs_path in seen:
+            continue
+        seen.add(abs_path)
+        deduplicated_paths.append(path_fastq)
+    if len(deduplicated_paths) == 0:
+        return {}
+    seqkit_exe = resolve_seqkit_exe(args)
+    if seqkit_threads is None:
+        seqkit_threads = resolve_seqkit_threads(args)
+    seqkit_threads = normalize_seqkit_threads(seqkit_threads)
+    command = [
+        seqkit_exe, 'stats',
+        '-T',
+        '-a',
+        '-j', str(seqkit_threads),
+    ] + list(deduplicated_paths)
+    print('Command:', ' '.join(command))
+    out = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if should_print_getfastq_command_output(args):
+        print('FASTQ stats scan with seqkit stdout:')
+        print(out.stdout.decode('utf8', errors='replace'))
+        print('FASTQ stats scan with seqkit stderr:')
+        print(out.stderr.decode('utf8', errors='replace'))
+    if out.returncode != 0:
+        stderr_txt = out.stderr.decode('utf8', errors='replace')
+        raise RuntimeError('FASTQ stats scan with seqkit failed (exit code {}): {}'.format(out.returncode, stderr_txt))
+    rows = _parse_seqkit_stats_rows(out.stdout.decode('utf8', errors='replace'))
+    stats_by_path = {}
+    fallback_idx = 0
+    fallback_paths = [os.path.abspath(path_fastq) for path_fastq in deduplicated_paths]
+    for row in rows:
+        row_path = None
+        for key in ['file', 'path', 'filename']:
+            raw_path = str(row.get(key, '')).strip()
+            if raw_path != '':
+                row_path = os.path.abspath(raw_path)
+                break
+        if (row_path is None) and (fallback_idx < len(fallback_paths)):
+            row_path = fallback_paths[fallback_idx]
+            fallback_idx += 1
+        if row_path is None:
+            continue
+        stats_by_path[row_path] = _parse_seqkit_stats_row_records_and_bases(row=row, path_fastq=row_path)
+    missing_paths = [path_fastq for path_fastq in fallback_paths if path_fastq not in stats_by_path]
+    if len(missing_paths) > 0:
+        raise RuntimeError('seqkit stats output did not include all requested FASTQ files: {}'.format(missing_paths))
+    return stats_by_path
+
 def compress_fastq_with_seqkit(
     path_fastq,
     path_fastq_gz,
@@ -884,6 +1042,188 @@ def count_fastq_records(path_fastq):
         txt = 'FASTQ line count is not divisible by 4 and may be truncated: {}\n'
         sys.stderr.write(txt.format(path_fastq))
     return num_lines // 4
+
+def count_fastq_records_and_bases(path_fastq):
+    num_records = 0
+    num_bases = 0
+    open_func = gzip.open if path_fastq.endswith('.gz') else open
+    with open_func(path_fastq, 'rb') as fin:
+        while True:
+            line1 = fin.readline()
+            if line1 == b'':
+                break
+            line2 = fin.readline()
+            line3 = fin.readline()
+            line4 = fin.readline()
+            if (line2 == b'') or (line3 == b'') or (line4 == b''):
+                txt = 'FASTQ record seems truncated while counting bases: {}\n'
+                sys.stderr.write(txt.format(path_fastq))
+                break
+            num_records += 1
+            num_bases += len(line2.rstrip(b'\r\n'))
+    return num_records, num_bases
+
+def summarize_layout_fastq_records_and_bases(layout, single_path=None, pair1_path=None, pair2_path=None, args=None):
+    num_single, bp_single = (0, 0)
+    num_pair1, bp_pair1 = (0, 0)
+    num_pair2, bp_pair2 = (0, 0)
+    if args is not None:
+        try:
+            paths = [single_path, pair1_path, pair2_path]
+            stats_by_path = scan_fastq_records_and_bases_with_seqkit_batch(
+                path_fastq_paths=paths,
+                args=args,
+            )
+            if single_path is not None:
+                num_single, bp_single = stats_by_path.get(os.path.abspath(single_path), (0, 0))
+            if pair1_path is not None:
+                num_pair1, bp_pair1 = stats_by_path.get(os.path.abspath(pair1_path), (0, 0))
+            if pair2_path is not None:
+                num_pair2, bp_pair2 = stats_by_path.get(os.path.abspath(pair2_path), (0, 0))
+        except Exception as exc:
+            sys.stderr.write('seqkit stats scan failed. Falling back to Python FASTQ parser. {}\n'.format(exc))
+            if single_path is not None:
+                num_single, bp_single = count_fastq_records_and_bases(single_path)
+            if pair1_path is not None:
+                num_pair1, bp_pair1 = count_fastq_records_and_bases(pair1_path)
+            if pair2_path is not None:
+                num_pair2, bp_pair2 = count_fastq_records_and_bases(pair2_path)
+    else:
+        if single_path is not None:
+            num_single, bp_single = count_fastq_records_and_bases(single_path)
+        if pair1_path is not None:
+            num_pair1, bp_pair1 = count_fastq_records_and_bases(pair1_path)
+        if pair2_path is not None:
+            num_pair2, bp_pair2 = count_fastq_records_and_bases(pair2_path)
+    if layout == 'paired':
+        num_spots = max(num_pair1, num_pair2)
+        bp_total = bp_pair1 + bp_pair2
+    else:
+        num_spots = num_single
+        bp_total = bp_single
+    return num_spots, bp_total
+
+def is_rrna_filter_enabled(args):
+    raw = getattr(args, 'rrna_filter', False)
+    if isinstance(raw, str):
+        return bool(strtobool(raw))
+    return bool(raw)
+
+def resolve_filter_order(args):
+    raw_order = getattr(args, 'filter_order', 'fastp_first')
+    if raw_order is None:
+        return 'fastp_first'
+    order = str(raw_order).strip().lower()
+    if order == '':
+        return 'fastp_first'
+    if order in ['fastp_first', 'rrna_first']:
+        return order
+    raise ValueError('--filter_order must be "fastp_first" or "rrna_first".')
+
+def get_filter_execution_order(args):
+    fastp_enabled = bool(getattr(args, 'fastp', False))
+    rrna_enabled = is_rrna_filter_enabled(args)
+    if fastp_enabled and rrna_enabled:
+        if resolve_filter_order(args) == 'rrna_first':
+            return ['rrna', 'fastp']
+        return ['fastp', 'rrna']
+    if rrna_enabled:
+        return ['rrna']
+    if fastp_enabled:
+        return ['fastp']
+    return []
+
+def resolve_bp_amalgkit_source_column(args):
+    filter_order = get_filter_execution_order(args)
+    if len(filter_order) == 0:
+        return 'bp_written'
+    last_filter = filter_order[-1]
+    if last_filter == 'fastp':
+        return 'bp_fastp_out'
+    if last_filter == 'rrna':
+        return 'bp_rrna_out'
+    raise ValueError('Unknown filter name in execution order: {}'.format(last_filter))
+
+def parse_sortmerna_option_args(sortmerna_option):
+    if not sortmerna_option:
+        return []
+    try:
+        return shlex.split(sortmerna_option)
+    except ValueError as e:
+        raise ValueError('Invalid --sortmerna_option string: {}'.format(sortmerna_option)) from e
+
+def resolve_shared_download_dir(args):
+    out_dir = getattr(args, 'out_dir', './')
+    return os.path.join(os.path.realpath(out_dir), 'downloads')
+
+def resolve_sortmerna_download_dir(args):
+    raw_dir = getattr(args, 'download_dir', 'inferred')
+    if raw_dir is None:
+        return resolve_shared_download_dir(args)
+    normalized = str(raw_dir).strip()
+    if normalized.lower() in ['', 'inferred']:
+        return resolve_shared_download_dir(args)
+    return os.path.realpath(normalized)
+
+def ensure_sortmerna_download_dir_exists(download_dir):
+    if os.path.exists(download_dir) and (not os.path.isdir(download_dir)):
+        raise NotADirectoryError(
+            'SortMeRNA download path exists but is not a directory: {}'.format(download_dir)
+        )
+    os.makedirs(download_dir, exist_ok=True)
+    return download_dir
+
+def download_sortmerna_reference_gz(url, gz_path, label):
+    tmp_path = gz_path + '.tmp.{}'.format(time.time_ns())
+    if os.path.exists(tmp_path):
+        if os.path.isdir(tmp_path):
+            raise IsADirectoryError('Temporary SortMeRNA download path is a directory: {}'.format(tmp_path))
+        os.remove(tmp_path)
+    print('Downloading {} reference: {}'.format(label, url), flush=True)
+    try:
+        urllib.request.urlretrieve(url, tmp_path)
+    except Exception as e:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        raise RuntimeError('Failed to download {} reference: {}'.format(label, url)) from e
+    os.replace(tmp_path, gz_path)
+
+def expand_sortmerna_reference_gz(gz_path, fasta_path):
+    tmp_path = fasta_path + '.tmp.{}'.format(time.time_ns())
+    if os.path.exists(tmp_path):
+        if os.path.isdir(tmp_path):
+            raise IsADirectoryError('Temporary SortMeRNA expansion path is a directory: {}'.format(tmp_path))
+        os.remove(tmp_path)
+    with gzip.open(gz_path, 'rb') as fin, open(tmp_path, 'wb') as fout:
+        shutil.copyfileobj(fin, fout)
+    os.replace(tmp_path, fasta_path)
+
+def ensure_sortmerna_reference_files_exist(args):
+    download_dir = ensure_sortmerna_download_dir_exists(resolve_sortmerna_download_dir(args))
+    refs = []
+    for ref_spec in SORTMERNA_REFERENCE_SPECS:
+        fasta_path = os.path.join(download_dir, ref_spec['fasta_filename'])
+        gz_path = os.path.join(download_dir, ref_spec['gz_filename'])
+        if os.path.exists(fasta_path):
+            if not os.path.isfile(fasta_path):
+                raise IsADirectoryError('SortMeRNA reference path exists but is not a file: {}'.format(fasta_path))
+            refs.append(fasta_path)
+            continue
+        if os.path.exists(gz_path) and (not os.path.isfile(gz_path)):
+            raise IsADirectoryError('SortMeRNA compressed reference path is not a file: {}'.format(gz_path))
+        if not os.path.exists(gz_path):
+            download_sortmerna_reference_gz(
+                url=ref_spec['url'],
+                gz_path=gz_path,
+                label=ref_spec['label'],
+            )
+        print('Expanding SortMeRNA reference: {}'.format(gz_path), flush=True)
+        expand_sortmerna_reference_gz(gz_path=gz_path, fasta_path=fasta_path)
+        refs.append(fasta_path)
+    return refs
+
+def resolve_sortmerna_refs(args):
+    return ensure_sortmerna_reference_files_exist(args)
 
 def estimate_num_written_spots_from_fastq(sra_stat, files=None, file_state=None):
     work_dir = sra_stat['getfastq_sra_dir']
@@ -1098,7 +1438,7 @@ def build_fasterq_dump_command(args, sra_stat, path_downloaded_sra, size_check, 
         command.extend(['--disk-limit', str(disk_limit)])
     if disk_limit_tmp:
         command.extend(['--disk-limit-tmp', str(disk_limit_tmp)])
-    if (start is not None) and (end is not None):
+    if (start is not None) and (end is not None) and (not is_full_requested_spot_range(sra_stat, start, end)):
         normalized_start, normalized_end = normalize_requested_spot_range(start=start, end=end)
         command.extend(['-N', str(normalized_start), '-X', str(normalized_end)])
     command.append(path_downloaded_sra)
@@ -1172,12 +1512,22 @@ def resolve_written_spots_from_fasterq_output(
     return written_spots, run_file_state
 
 
-def update_extraction_counts(metadata, ind_sra, written_spots, spot_length):
-    metadata.df.at[ind_sra, 'num_dumped'] += written_spots
-    metadata.df.at[ind_sra, 'num_rejected'] += 0
+def calculate_requested_spots(start, end):
+    normalized_start, normalized_end = normalize_requested_spot_range(start=start, end=end)
+    return max(0, (normalized_end - normalized_start + 1))
+
+
+def update_extraction_counts(metadata, ind_sra, written_spots, dumped_spots, spot_length):
+    written_spots = max(0, int(written_spots))
+    dumped_spots = max(0, int(dumped_spots))
+    if written_spots > dumped_spots:
+        dumped_spots = written_spots
+    rejected_spots = dumped_spots - written_spots
+    metadata.df.at[ind_sra, 'num_dumped'] += dumped_spots
+    metadata.df.at[ind_sra, 'num_rejected'] += rejected_spots
     metadata.df.at[ind_sra, 'num_written'] += written_spots
-    metadata.df.at[ind_sra, 'bp_dumped'] += written_spots * spot_length
-    metadata.df.at[ind_sra, 'bp_rejected'] += 0
+    metadata.df.at[ind_sra, 'bp_dumped'] += dumped_spots * spot_length
+    metadata.df.at[ind_sra, 'bp_rejected'] += rejected_spots * spot_length
     metadata.df.at[ind_sra, 'bp_written'] += written_spots * spot_length
 
 
@@ -1225,10 +1575,12 @@ def run_fasterq_dump(sra_stat, args, metadata, start, end, return_files=False, r
     if written_spots is None:
         written_spots = estimate_num_written_spots_from_fastq(sra_stat, file_state=run_file_state)
     ind_sra = sra_stat.get('metadata_idx', get_metadata_row_index_by_run(metadata, sra_stat['sra_id']))
+    requested_spots = calculate_requested_spots(start=start, end=end)
     update_extraction_counts(
         metadata=metadata,
         ind_sra=ind_sra,
         written_spots=written_spots,
+        dumped_spots=requested_spots,
         spot_length=sra_stat['spot_length'],
     )
     sra_stat = detect_layout_from_file(sra_stat, files=run_file_state.files)
@@ -1478,6 +1830,19 @@ def write_fastp_stats(sra_stat, metadata, output_dir):
     out_df.to_csv(out_path, sep='\t', index=False)
 
 
+def write_getfastq_stats(sra_stat, metadata, output_dir):
+    ind_sra = sra_stat.get('metadata_idx', get_metadata_row_index_by_run(metadata, sra_stat['sra_id']))
+    row = {'run': sra_stat['sra_id']}
+    for col in GETFASTQ_STATS_COLUMNS:
+        if col in metadata.df.columns:
+            row[col] = metadata.df.at[ind_sra, col]
+        else:
+            row[col] = numpy.nan
+    out_df = pandas.DataFrame([row])
+    out_path = os.path.join(output_dir, 'getfastq_stats.tsv')
+    out_df.to_csv(out_path, sep='\t', index=False)
+
+
 def resolve_fastp_threads(num_threads):
     if num_threads > 16:
         print('Too many threads for fastp (--threads {}). Only 16 threads will be used.'.format(num_threads))
@@ -1614,6 +1979,497 @@ def run_fastp(
         return_file_state=return_file_state,
     )
 
+def prepare_sortmerna_workdir(work_dir):
+    os.makedirs(work_dir, exist_ok=True)
+    for sub_dir in ['kvdb', 'out']:
+        sub_path = os.path.join(work_dir, sub_dir)
+        if not os.path.exists(sub_path):
+            continue
+        if os.path.isdir(sub_path):
+            shutil.rmtree(sub_path)
+        else:
+            os.remove(sub_path)
+    os.makedirs(os.path.join(work_dir, 'out'), exist_ok=True)
+
+def build_sortmerna_command(args, sortmerna_refs, input_paths, layout, work_dir, other_prefix):
+    sortmerna_exe = getattr(args, 'sortmerna_exe', 'sortmerna')
+    command = [sortmerna_exe]
+    for sortmerna_ref in sortmerna_refs:
+        command.extend(['--ref', sortmerna_ref])
+    for input_path in input_paths:
+        command.extend(['--reads', input_path])
+    command.extend([
+        '--workdir', work_dir,
+        '--threads', str(max(1, int(getattr(args, 'threads', 1)))),
+        '--fastx',
+        '--other', other_prefix,
+    ])
+    if layout == 'paired':
+        command.extend(['--paired_in', '--out2'])
+    command.extend(parse_sortmerna_option_args(getattr(args, 'sortmerna_option', '')))
+    return command
+
+def execute_sortmerna_command(sortmerna_command, args):
+    print('Command:', ' '.join(sortmerna_command))
+    sm_out = subprocess.run(sortmerna_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if should_print_getfastq_command_output(args):
+        print('sortmerna stdout:')
+        print(sm_out.stdout.decode('utf8', errors='replace'))
+        print('sortmerna stderr:')
+        print(sm_out.stderr.decode('utf8', errors='replace'))
+    if sm_out.returncode != 0:
+        raise RuntimeError(
+            'SortMeRNA did not finish safely (exit code {}). Command: {}\n{}'.format(
+                sm_out.returncode,
+                ' '.join(sortmerna_command),
+                sm_out.stderr.decode('utf8', errors='replace'),
+            )
+        )
+    return sm_out
+
+def _parse_int_matches_from_text(pattern, text):
+    if text is None:
+        return []
+    matched_values = re.findall(pattern, text, flags=re.IGNORECASE)
+    parsed = []
+    for raw in matched_values:
+        try:
+            parsed.append(int(str(raw).replace(',', '')))
+        except (TypeError, ValueError):
+            continue
+    return parsed
+
+def infer_sortmerna_spot_divisor(layout, reads_total, num_input_files=1, known_input_counts=None):
+    if layout != 'paired':
+        return 1
+    default_divisor = max(1, int(num_input_files))
+    parsed_known_input = None
+    if known_input_counts is not None:
+        try:
+            parsed_known_input = parse_known_fastq_counts(known_input_counts)
+        except Exception:
+            parsed_known_input = None
+    if parsed_known_input is None:
+        return default_divisor
+    known_input_spots = parsed_known_input[0]
+    if known_input_spots <= 0:
+        return default_divisor
+    ratio = float(reads_total) / float(known_input_spots)
+    candidate_divisors = sorted(set([1, 2, default_divisor]))
+    best_divisor = min(candidate_divisors, key=lambda candidate: abs(ratio - float(candidate)))
+    return max(1, int(best_divisor))
+
+def parse_sortmerna_output_counts(stdout_txt, stderr_txt, layout, num_input_files=1, known_input_counts=None):
+    combined_txt = '\n'.join([stdout_txt or '', stderr_txt or ''])
+    reads_added_values = _parse_int_matches_from_text(
+        pattern=r'Reads\s+added:\s*([0-9][0-9,]*)',
+        text=combined_txt,
+    )
+    aligned_values = _parse_int_matches_from_text(
+        pattern=r'Num\s+aligned\s+reads\s*\(passing\s+E-value\)\s*:\s*([0-9][0-9,]*)',
+        text=combined_txt,
+    )
+    all_reads_count_values = _parse_int_matches_from_text(
+        pattern=r'all_reads_count\s*=\s*([0-9][0-9,]*)',
+        text=combined_txt,
+    )
+    total_reads_mapped_values = _parse_int_matches_from_text(
+        pattern=r'total_reads_mapped\s*=\s*([0-9][0-9,]*)',
+        text=combined_txt,
+    )
+    all_reads_len_values = _parse_int_matches_from_text(
+        pattern=r'all_reads_len\s*=\s*([0-9][0-9,]*)',
+        text=combined_txt,
+    )
+    reads_total = max(reads_added_values) if len(reads_added_values) > 0 else None
+    if reads_total is None:
+        reads_total = max(all_reads_count_values) if len(all_reads_count_values) > 0 else None
+    mapped_total = max(aligned_values) if len(aligned_values) > 0 else None
+    if mapped_total is None:
+        mapped_total = max(total_reads_mapped_values) if len(total_reads_mapped_values) > 0 else None
+    if (reads_total is None) or (mapped_total is None):
+        return None
+    reads_non_rrna_total = max(0, int(reads_total) - int(mapped_total))
+    divisor = infer_sortmerna_spot_divisor(
+        layout=layout,
+        reads_total=reads_total,
+        num_input_files=num_input_files,
+        known_input_counts=known_input_counts,
+    )
+    num_out_spots = int(round(float(reads_non_rrna_total) / float(divisor)))
+    num_out_spots = max(0, num_out_spots)
+    bp_out = None
+    parsed_known_input = None
+    if known_input_counts is not None:
+        try:
+            parsed_known_input = parse_known_fastq_counts(known_input_counts)
+        except Exception:
+            parsed_known_input = None
+    if (parsed_known_input is not None) and (parsed_known_input[0] > 0):
+        bp_per_spot = float(parsed_known_input[1]) / float(parsed_known_input[0])
+        bp_out = int(round(float(num_out_spots) * bp_per_spot))
+    elif (len(all_reads_len_values) > 0) and (reads_total > 0):
+        all_reads_len_total = max(all_reads_len_values)
+        bp_per_spot = (float(all_reads_len_total) * float(divisor)) / float(reads_total)
+        bp_out = int(round(float(num_out_spots) * bp_per_spot))
+    if bp_out is None:
+        return {'num_spots': num_out_spots}
+    return {
+        'num_spots': num_out_spots,
+        'bp_total': max(0, int(bp_out)),
+    }
+
+def collect_sortmerna_other_fastq_candidates(other_prefix):
+    out_dir = os.path.dirname(other_prefix)
+    out_basename = os.path.basename(other_prefix)
+    if not os.path.isdir(out_dir):
+        return []
+    candidates = []
+    valid_exts = ('.fastq', '.fq', '.fastq.gz', '.fq.gz')
+    with os.scandir(out_dir) as entries:
+        for entry in entries:
+            if (not entry.is_file()) or (not entry.name.startswith(out_basename)):
+                continue
+            if not entry.name.lower().endswith(valid_exts):
+                continue
+            candidates.append(entry.path)
+    return sorted(candidates)
+
+def resolve_sortmerna_single_output_path(other_prefix, candidates):
+    valid_exts = ('.fastq.gz', '.fq.gz', '.fastq', '.fq')
+    for ext in valid_exts:
+        preferred = other_prefix + ext
+        if preferred in candidates:
+            return preferred
+    if len(candidates) == 1:
+        return candidates[0]
+    return None
+
+def resolve_sortmerna_paired_output_paths(other_prefix, candidates):
+    valid_exts = ('.fastq.gz', '.fq.gz', '.fastq', '.fq')
+    pair_suffixes = [
+        ('_fwd', '_rev'),
+        ('-fwd', '-rev'),
+        ('.fwd', '.rev'),
+        ('_paired_fwd', '_paired_rev'),
+        ('-paired-fwd', '-paired-rev'),
+        ('_R1', '_R2'),
+        ('_r1', '_r2'),
+        ('_1', '_2'),
+        ('.1', '.2'),
+        ('-1', '-2'),
+    ]
+    candidate_set = set(candidates)
+    for suffix1, suffix2 in pair_suffixes:
+        for ext in valid_exts:
+            path1 = other_prefix + suffix1 + ext
+            path2 = other_prefix + suffix2 + ext
+            if (path1 in candidate_set) and (path2 in candidate_set):
+                return path1, path2
+    fwd_tokens = ['fwd', 'forward', '_r1', '.r1', '-r1', '_1.', '.1.', '-1.']
+    rev_tokens = ['rev', 'reverse', '_r2', '.r2', '-r2', '_2.', '.2.', '-2.']
+    fwd_candidates = []
+    rev_candidates = []
+    for candidate in candidates:
+        lower_name = os.path.basename(candidate).lower()
+        if any([token in lower_name for token in fwd_tokens]):
+            fwd_candidates.append(candidate)
+            continue
+        if any([token in lower_name for token in rev_tokens]):
+            rev_candidates.append(candidate)
+            continue
+    if (len(fwd_candidates) == 1) and (len(rev_candidates) == 1):
+        return fwd_candidates[0], rev_candidates[0]
+    return None, None
+
+def create_empty_fastq_gz(path_fastq_gz):
+    if os.path.exists(path_fastq_gz):
+        if not os.path.isfile(path_fastq_gz):
+            raise IsADirectoryError('Output path exists but is not a file: {}'.format(path_fastq_gz))
+        os.remove(path_fastq_gz)
+    with gzip.open(path_fastq_gz, 'wb'):
+        pass
+
+def materialize_sortmerna_output(source_path, dest_path, args, seqkit_threads=None):
+    if source_path is None:
+        create_empty_fastq_gz(dest_path)
+        return
+    if not os.path.exists(source_path):
+        raise FileNotFoundError('SortMeRNA output file not found: {}'.format(source_path))
+    if not os.path.isfile(source_path):
+        raise IsADirectoryError('SortMeRNA output path exists but is not a file: {}'.format(source_path))
+    if os.path.exists(dest_path):
+        if not os.path.isfile(dest_path):
+            raise IsADirectoryError('SortMeRNA destination path exists but is not a file: {}'.format(dest_path))
+        os.remove(dest_path)
+    if source_path.endswith('.gz'):
+        shutil.move(source_path, dest_path)
+    else:
+        compress_fastq_with_seqkit(
+            path_fastq=source_path,
+            path_fastq_gz=dest_path,
+            args=args,
+            command_label='SortMeRNA output compression with seqkit',
+            seqkit_threads=seqkit_threads,
+        )
+
+def parse_known_fastq_counts(known_counts):
+    if known_counts is None:
+        return None
+    if isinstance(known_counts, dict):
+        num_value = known_counts.get('num_spots', known_counts.get('num_records', None))
+        bp_value = known_counts.get('bp_total', known_counts.get('num_bases', known_counts.get('bp', None)))
+    elif isinstance(known_counts, (tuple, list)) and (len(known_counts) >= 2):
+        num_value = known_counts[0]
+        bp_value = known_counts[1]
+    else:
+        raise ValueError('known_input_counts must be a dict or a 2-item tuple/list.')
+    if (num_value is None) or (bp_value is None):
+        raise ValueError('known_input_counts must include read-count and base-count values.')
+    try:
+        num_spots = max(0, int(num_value))
+        bp_total = max(0, int(bp_value))
+    except (TypeError, ValueError) as exc:
+        raise ValueError('known_input_counts values must be integer-like.') from exc
+    return num_spots, bp_total
+
+def update_metadata_after_rrna_filter(
+    metadata,
+    sra_stat,
+    input_paths,
+    output_paths,
+    args=None,
+    known_input_counts=None,
+    known_output_counts=None,
+):
+    ind_sra = sra_stat.get('metadata_idx', get_metadata_row_index_by_run(metadata, sra_stat['sra_id']))
+    layout = sra_stat['layout']
+    parsed_known_counts = None
+    if known_input_counts is not None:
+        try:
+            parsed_known_counts = parse_known_fastq_counts(known_input_counts)
+        except Exception as exc:
+            sys.stderr.write(
+                'Invalid known_input_counts for rRNA metadata update. Falling back to FASTQ scan. {}\n'.format(exc)
+            )
+    if parsed_known_counts is not None:
+        num_in, bp_in = parsed_known_counts
+    else:
+        num_in, bp_in = summarize_layout_fastq_records_and_bases(
+            layout=layout,
+            single_path=input_paths.get(''),
+            pair1_path=input_paths.get('_1'),
+            pair2_path=input_paths.get('_2'),
+            args=args,
+        )
+    parsed_known_output = None
+    if known_output_counts is not None:
+        try:
+            parsed_known_output = parse_known_fastq_counts(known_output_counts)
+        except Exception as exc:
+            sys.stderr.write(
+                'Invalid known_output_counts for rRNA metadata update. Falling back to FASTQ scan. {}\n'.format(exc)
+            )
+    if parsed_known_output is not None:
+        num_out, bp_out = parsed_known_output
+    else:
+        num_out, bp_out = summarize_layout_fastq_records_and_bases(
+            layout=layout,
+            single_path=output_paths.get(''),
+            pair1_path=output_paths.get('_1'),
+            pair2_path=output_paths.get('_2'),
+            args=args,
+        )
+    metadata.df.at[ind_sra, 'num_rrna_in'] += num_in
+    metadata.df.at[ind_sra, 'num_rrna_out'] += num_out
+    metadata.df.at[ind_sra, 'bp_rrna_in'] += bp_in
+    metadata.df.at[ind_sra, 'bp_rrna_out'] += bp_out
+    return metadata
+
+def run_sortmerna_rrna_filter(
+    sra_stat,
+    args,
+    output_dir,
+    metadata,
+    files=None,
+    file_state=None,
+    known_input_counts=None,
+    return_files=False,
+    return_file_state=False,
+):
+    if not is_rrna_filter_enabled(args):
+        run_file_state = _resolve_run_file_state(work_dir=output_dir, files=files, file_state=file_state)
+        return finalize_run_fastp_return(
+            metadata=metadata,
+            run_file_state=run_file_state,
+            return_files=return_files,
+            return_file_state=return_file_state,
+        )
+    run_file_state = _resolve_run_file_state(work_dir=output_dir, files=files, file_state=file_state)
+    inext = get_or_detect_intermediate_extension(sra_stat, work_dir=output_dir, file_state=run_file_state)
+    sra_id = sra_stat['sra_id']
+    layout = sra_stat['layout']
+    if layout == 'single':
+        input_names = [sra_id + inext]
+        output_name_by_suffix = {'': sra_id + '.rrna.fastq.gz'}
+    elif layout == 'paired':
+        input_names = [sra_id + '_1' + inext, sra_id + '_2' + inext]
+        output_name_by_suffix = {
+            '_1': sra_id + '_1.rrna.fastq.gz',
+            '_2': sra_id + '_2.rrna.fastq.gz',
+        }
+    else:
+        raise ValueError('Unsupported library layout for SortMeRNA filtering: {}'.format(layout))
+    input_paths = {}
+    for input_name in input_names:
+        if not run_file_state.has(input_name):
+            raise FileNotFoundError('SortMeRNA input file not found: {}'.format(run_file_state.path(input_name)))
+        input_paths[input_name] = run_file_state.path(input_name)
+    sortmerna_refs = resolve_sortmerna_refs(args)
+    sortmerna_work_dir = os.path.join(output_dir, 'sortmerna_work')
+    prepare_sortmerna_workdir(sortmerna_work_dir)
+    other_prefix = os.path.join(sortmerna_work_dir, 'out', 'non_rrna')
+    sortmerna_command = build_sortmerna_command(
+        args=args,
+        sortmerna_refs=sortmerna_refs,
+        input_paths=[input_paths[input_name] for input_name in input_names],
+        layout=layout,
+        work_dir=sortmerna_work_dir,
+        other_prefix=other_prefix,
+    )
+    sm_out = execute_sortmerna_command(sortmerna_command=sortmerna_command, args=args)
+    sm_stdout_txt = sm_out.stdout.decode('utf8', errors='replace')
+    sm_stderr_txt = sm_out.stderr.decode('utf8', errors='replace')
+    known_output_counts = parse_sortmerna_output_counts(
+        stdout_txt=sm_stdout_txt,
+        stderr_txt=sm_stderr_txt,
+        layout=layout,
+        num_input_files=len(input_names),
+        known_input_counts=known_input_counts,
+    )
+    if isinstance(known_output_counts, dict):
+        if ('num_spots' in known_output_counts) and ('bp_total' in known_output_counts):
+            print(
+                'Using SortMeRNA log-derived output counts: {:,} reads, {:,} bp.'.format(
+                    int(known_output_counts['num_spots']),
+                    int(known_output_counts['bp_total']),
+                ),
+                flush=True,
+            )
+        elif 'num_spots' in known_output_counts:
+            print(
+                'Using SortMeRNA log-derived output read count: {:,} reads.'.format(
+                    int(known_output_counts['num_spots'])
+                ),
+                flush=True,
+            )
+    candidates = collect_sortmerna_other_fastq_candidates(other_prefix=other_prefix)
+    output_paths = {}
+    if layout == 'single':
+        source_path = resolve_sortmerna_single_output_path(other_prefix=other_prefix, candidates=candidates)
+        if (source_path is None) and (len(candidates) > 0):
+            txt = 'Could not resolve non-rRNA output file from SortMeRNA. Candidates: {}'
+            raise FileNotFoundError(txt.format(', '.join(candidates)))
+        output_name = output_name_by_suffix['']
+        output_path = os.path.join(output_dir, output_name)
+        materialize_sortmerna_output(
+            source_path=source_path,
+            dest_path=output_path,
+            args=args,
+            seqkit_threads=resolve_seqkit_threads(args),
+        )
+        run_file_state.add(output_name)
+        output_paths[''] = output_path
+    else:
+        source_path1, source_path2 = resolve_sortmerna_paired_output_paths(
+            other_prefix=other_prefix,
+            candidates=candidates,
+        )
+        if (source_path1 is None) and (source_path2 is None) and (len(candidates) > 0):
+            txt = 'Could not resolve paired non-rRNA output files from SortMeRNA. Candidates: {}'
+            raise FileNotFoundError(txt.format(', '.join(candidates)))
+        if (source_path1 is None) != (source_path2 is None):
+            txt = 'Could not resolve paired non-rRNA output files from SortMeRNA. Candidates: {}'
+            raise FileNotFoundError(txt.format(', '.join(candidates)))
+        output_name1 = output_name_by_suffix['_1']
+        output_name2 = output_name_by_suffix['_2']
+        output_path1 = os.path.join(output_dir, output_name1)
+        output_path2 = os.path.join(output_dir, output_name2)
+        total_seqkit_threads = resolve_seqkit_threads(args)
+        materialize_jobs = [
+            (source_path1, output_path1, output_name1, '_1'),
+            (source_path2, output_path2, output_name2, '_2'),
+        ]
+        worker_count = min(len(materialize_jobs), total_seqkit_threads)
+        worker_count = max(1, worker_count)
+        threads_per_worker = max(1, int(total_seqkit_threads / worker_count))
+        if worker_count <= 1:
+            for source_path, output_path, _output_name, _suffix in materialize_jobs:
+                materialize_sortmerna_output(
+                    source_path=source_path,
+                    dest_path=output_path,
+                    args=args,
+                    seqkit_threads=threads_per_worker,
+                )
+        else:
+            print(
+                'Materializing SortMeRNA paired outputs with {:,} parallel worker(s), {:,} thread(s) each.'.format(
+                    worker_count,
+                    threads_per_worker,
+                ),
+                flush=True,
+            )
+            def materialize_single_job(job_idx):
+                source_path, output_path, _output_name, _suffix = materialize_jobs[job_idx]
+                materialize_sortmerna_output(
+                    source_path=source_path,
+                    dest_path=output_path,
+                    args=args,
+                    seqkit_threads=threads_per_worker,
+                )
+                return job_idx
+            _, failures = run_tasks_with_optional_threads(
+                task_items=list(range(len(materialize_jobs))),
+                task_fn=materialize_single_job,
+                max_workers=worker_count,
+            )
+            if failures:
+                details = '; '.join([
+                    '{}: {}'.format(materialize_jobs[job_idx][3], exc)
+                    for job_idx, exc in failures
+                ])
+                raise RuntimeError('SortMeRNA output materialization failed for paired FASTQ files. {}'.format(details))
+        run_file_state.add(output_name1)
+        run_file_state.add(output_name2)
+        output_paths['_1'] = output_path1
+        output_paths['_2'] = output_path2
+    input_paths_by_suffix = {}
+    if layout == 'single':
+        input_paths_by_suffix[''] = input_paths[sra_id + inext]
+    else:
+        input_paths_by_suffix['_1'] = input_paths[sra_id + '_1' + inext]
+        input_paths_by_suffix['_2'] = input_paths[sra_id + '_2' + inext]
+    metadata = update_metadata_after_rrna_filter(
+        metadata=metadata,
+        sra_stat=sra_stat,
+        input_paths=input_paths_by_suffix,
+        output_paths=output_paths,
+        args=args,
+        known_input_counts=known_input_counts,
+        known_output_counts=known_output_counts,
+    )
+    if bool(getattr(args, 'remove_tmp', False)):
+        remove_intermediate_files(sra_stat, ext=inext, work_dir=output_dir)
+        for input_name in input_names:
+            run_file_state.discard(input_name)
+    set_current_intermediate_extension(sra_stat, '.rrna.fastq.gz')
+    return finalize_run_fastp_return(
+        metadata=metadata,
+        run_file_state=run_file_state,
+        return_files=return_files,
+        return_file_state=return_file_state,
+    )
+
 def rename_reads(sra_stat, args, output_dir, files=None, file_state=None, return_file_state=False):
     run_file_state = _resolve_run_file_state(work_dir=output_dir, files=files, file_state=file_state)
     inext = get_or_detect_intermediate_extension(sra_stat, work_dir=output_dir, file_state=run_file_state)
@@ -1728,7 +2584,13 @@ def calc_2nd_ranges(metadata):
     df = metadata.df
     sra_target_bp = pandas.to_numeric(df.loc[:, 'bp_until_target_size'], errors='coerce').to_numpy(dtype=float)
     rate_obtained = pandas.to_numeric(df.loc[:, 'rate_obtained'], errors='coerce').to_numpy(dtype=float)
-    spot_lengths = pandas.to_numeric(df.loc[:, 'spot_length_amalgkit'], errors='coerce').to_numpy(dtype=float)
+    if 'spot_length_amalgkit' in df.columns:
+        spot_length_series = df.loc[:, 'spot_length_amalgkit']
+    elif 'spot_length' in df.columns:
+        spot_length_series = df.loc[:, 'spot_length']
+    else:
+        spot_length_series = pandas.Series(numpy.nan, index=df.index)
+    spot_lengths = pandas.to_numeric(spot_length_series, errors='coerce').to_numpy(dtype=float)
     total_spots = pandas.to_numeric(df.loc[:, 'total_spots'], errors='coerce').to_numpy(dtype=float)
     start_2nds = pandas.to_numeric(df.loc[:, 'spot_end_1st'], errors='coerce').to_numpy(dtype=float) + 1.0
 
@@ -1803,6 +2665,7 @@ def is_2nd_round_needed(rate_obtained_1st, tol):
     return rate_obtained_1st < required_rate
 
 def print_read_stats(args, metadata, g, sra_stat=None, individual=False):
+    rrna_filter = is_rrna_filter_enabled(args)
     if sra_stat is None:
         df = metadata.df
         print('Target size (--max_bp): {:,} bp'.format(g['max_bp']))
@@ -1815,6 +2678,9 @@ def print_read_stats(args, metadata, g, sra_stat=None, individual=False):
     if args.fastp:
         print('Sum of fastp input reads: {:,} bp'.format(df['bp_fastp_in'].sum()))
         print('Sum of fastp output reads: {:,} bp'.format(df['bp_fastp_out'].sum()))
+    if rrna_filter:
+        print('Sum of SortMeRNA input reads: {:,} bp'.format(df['bp_rrna_in'].sum()))
+        print('Sum of SortMeRNA non-rRNA reads: {:,} bp'.format(df['bp_rrna_out'].sum()))
     if individual:
         print('Individual SRA IDs:', ' '.join(df['run'].values))
         read_types = list()
@@ -1825,6 +2691,9 @@ def print_read_stats(args, metadata, g, sra_stat=None, individual=False):
         if args.fastp:
             read_types = read_types + ['fastp input reads', 'fastp output reads']
             keys = keys + ['bp_fastp_in', 'bp_fastp_out']
+        if rrna_filter:
+            read_types = read_types + ['SortMeRNA input reads', 'SortMeRNA non-rRNA reads']
+            keys = keys + ['bp_rrna_in', 'bp_rrna_out']
         if len(read_types) > 0:
             for rt, key in zip(read_types, keys):
                 values = ['{:,}'.format(s) for s in df[key].values]
@@ -1957,10 +2826,12 @@ def collect_valid_run_ids(run_values, unique=False):
 def initialize_columns(metadata, g):
     time_keys = ['time_start_1st', 'time_end_1st', 'time_start_2nd', 'time_end_2nd',]
     spot_keys = ['spot_start_1st', 'spot_end_1st', 'spot_start_2nd', 'spot_end_2nd',]
-    keys = (['num_dumped', 'num_rejected', 'num_written', 'num_fastp_in', 'num_fastp_out','bp_amalgkit',
-            'bp_dumped', 'bp_rejected', 'bp_written', 'bp_fastp_in', 'bp_fastp_out', 'bp_discarded',
-            'bp_still_available', 'bp_specified_for_extraction','rate_obtained','layout_amalgkit',
-            'fastp_duplication_rate', 'fastp_insert_size_peak',]
+    keys = (['num_dumped', 'num_rejected', 'num_written', 'num_fastp_in', 'num_fastp_out',
+             'num_rrna_in', 'num_rrna_out', 'bp_amalgkit',
+             'bp_dumped', 'bp_rejected', 'bp_written', 'bp_fastp_in', 'bp_fastp_out',
+             'bp_rrna_in', 'bp_rrna_out', 'bp_discarded', 'spot_length_amalgkit',
+             'bp_still_available', 'bp_specified_for_extraction','rate_obtained','layout_amalgkit',
+             'fastp_duplication_rate', 'fastp_insert_size_peak',]
             + time_keys + spot_keys)
     for key in keys:
         if key=='layout_amalgkit':
@@ -1981,6 +2852,9 @@ def initialize_columns(metadata, g):
 def sequence_extraction(args, sra_stat, metadata, g, start, end):
     sra_id = sra_stat['sra_id']
     ind_sra = sra_stat.get('metadata_idx', get_metadata_row_index_by_run(metadata, sra_id))
+    prev_num_written = metadata.df.at[ind_sra, 'num_written']
+    prev_bp_dumped = metadata.df.at[ind_sra, 'bp_dumped']
+    prev_bp_written = metadata.df.at[ind_sra, 'bp_written']
     metadata, sra_stat, run_file_state = run_fasterq_dump(
         sra_stat,
         args,
@@ -1996,23 +2870,69 @@ def sequence_extraction(args, sra_stat, metadata, g, start, end):
         file_state=run_file_state,
         return_file_state=True,
     )
-    bp_discarded = metadata.df.at[ind_sra,'bp_dumped'] - metadata.df.at[ind_sra,'bp_written']
-    metadata.df.at[ind_sra,'bp_discarded'] += bp_discarded
+    delta_num_written = metadata.df.at[ind_sra, 'num_written'] - prev_num_written
+    delta_bp_dumped = metadata.df.at[ind_sra, 'bp_dumped'] - prev_bp_dumped
+    delta_bp_written = metadata.df.at[ind_sra, 'bp_written'] - prev_bp_written
+    latest_stage_counts = {
+        'num_spots': max(0, int(delta_num_written)),
+        'bp_total': max(0, int(delta_bp_written)),
+    }
+    latest_stage_source = 'fasterq'
+    metadata.df.at[ind_sra, 'bp_discarded'] += max(0, delta_bp_dumped - delta_bp_written)
     metadata.df.at[ind_sra,'layout_amalgkit'] = sra_stat['layout']
     no_read_written = (metadata.df.at[ind_sra, 'num_written'] == 0)
     if no_read_written:
+        write_getfastq_stats(sra_stat=sra_stat, metadata=metadata, output_dir=sra_stat['getfastq_sra_dir'])
         return metadata
-    if args.fastp:
-        metadata, run_file_state = run_fastp(
-            sra_stat,
-            args,
-            sra_stat['getfastq_sra_dir'],
-            metadata,
-            file_state=run_file_state,
-            return_file_state=True,
-        )
-        bp_discarded = metadata.df.at[ind_sra,'bp_dumped'] - metadata.df.at[ind_sra,'bp_fastp_out']
-        metadata.df.at[ind_sra,'bp_discarded'] += bp_discarded
+    filter_order = get_filter_execution_order(args)
+    for filter_name in filter_order:
+        if filter_name == 'fastp':
+            prev_num_fastp_out = metadata.df.at[ind_sra, 'num_fastp_out']
+            prev_bp_fastp_in = metadata.df.at[ind_sra, 'bp_fastp_in']
+            prev_bp_fastp_out = metadata.df.at[ind_sra, 'bp_fastp_out']
+            metadata, run_file_state = run_fastp(
+                sra_stat,
+                args,
+                sra_stat['getfastq_sra_dir'],
+                metadata,
+                file_state=run_file_state,
+                return_file_state=True,
+            )
+            delta_num_out = metadata.df.at[ind_sra, 'num_fastp_out'] - prev_num_fastp_out
+            delta_in = metadata.df.at[ind_sra, 'bp_fastp_in'] - prev_bp_fastp_in
+            delta_out = metadata.df.at[ind_sra, 'bp_fastp_out'] - prev_bp_fastp_out
+            metadata.df.at[ind_sra, 'bp_discarded'] += max(0, delta_in - delta_out)
+            latest_stage_counts = {
+                'num_spots': max(0, int(delta_num_out)),
+                'bp_total': max(0, int(delta_out)),
+            }
+            latest_stage_source = 'fastp'
+            continue
+        if filter_name == 'rrna':
+            prev_rrna_in = metadata.df.at[ind_sra, 'bp_rrna_in']
+            prev_rrna_out = metadata.df.at[ind_sra, 'bp_rrna_out']
+            prev_num_rrna_out = metadata.df.at[ind_sra, 'num_rrna_out']
+            rrna_known_input_counts = latest_stage_counts if (latest_stage_source == 'fastp') else None
+            metadata, run_file_state = run_sortmerna_rrna_filter(
+                sra_stat=sra_stat,
+                args=args,
+                output_dir=sra_stat['getfastq_sra_dir'],
+                metadata=metadata,
+                file_state=run_file_state,
+                known_input_counts=rrna_known_input_counts,
+                return_file_state=True,
+            )
+            delta_num_out = metadata.df.at[ind_sra, 'num_rrna_out'] - prev_num_rrna_out
+            delta_in = metadata.df.at[ind_sra, 'bp_rrna_in'] - prev_rrna_in
+            delta_out = metadata.df.at[ind_sra, 'bp_rrna_out'] - prev_rrna_out
+            metadata.df.at[ind_sra, 'bp_discarded'] += max(0, delta_in - delta_out)
+            latest_stage_counts = {
+                'num_spots': max(0, int(delta_num_out)),
+                'bp_total': max(0, int(delta_out)),
+            }
+            latest_stage_source = 'rrna'
+            continue
+        raise ValueError('Unsupported filter name in execution order: {}'.format(filter_name))
     if args.read_name == 'trinity':
         run_file_state = rename_reads(
             sra_stat,
@@ -2027,12 +2947,11 @@ def sequence_extraction(args, sra_stat, metadata, g, start, end):
     metadata.df.at[ind_sra,'bp_still_available'] = sra_stat['spot_length'] * (sra_stat['total_spot'] - end)
     bp_specified_for_extraction = sra_stat['spot_length'] * (end - start)
     metadata.df.at[ind_sra, 'bp_specified_for_extraction'] += bp_specified_for_extraction
-    if args.fastp:
-        metadata.df.at[ind_sra, 'bp_amalgkit'] = metadata.df.at[ind_sra,'bp_fastp_out']
-    else:
-        metadata.df.at[ind_sra, 'bp_amalgkit'] = metadata.df.at[ind_sra,'bp_written']
+    bp_source_col = resolve_bp_amalgkit_source_column(args)
+    metadata.df.at[ind_sra, 'bp_amalgkit'] = metadata.df.at[ind_sra, bp_source_col]
     metadata.df.at[ind_sra, 'rate_obtained'] = metadata.df.at[ind_sra, 'bp_amalgkit'] / g['num_bp_per_sra']
     metadata.df.at[ind_sra, 'bp_until_target_size'] -= metadata.df.at[ind_sra, 'bp_amalgkit']
+    write_getfastq_stats(sra_stat=sra_stat, metadata=metadata, output_dir=sra_stat['getfastq_sra_dir'])
     return metadata
 
 def sequence_extraction_1st_round(args, sra_stat, metadata, g):
@@ -2085,7 +3004,14 @@ def sequence_extraction_2nd_round(args, sra_stat, metadata, g):
         subexts = ['']
     elif (layout == 'paired'):
         subexts = ['_1', '_2']
-    for subext in subexts:
+    try:
+        requested_workers = int(getattr(args, 'threads', 1))
+    except (TypeError, ValueError):
+        requested_workers = 1
+    requested_workers = max(1, requested_workers)
+    worker_count = min(len(subexts), requested_workers)
+
+    def merge_single_subext(subext):
         added_path = os.path.join(sra_stat['getfastq_sra_dir'], sra_id + subext + ext_1st_tmp)
         adding_path = os.path.join(sra_stat['getfastq_sra_dir'], sra_id + subext + ext_main)
         if os.path.exists(added_path) and (not os.path.isfile(added_path)):
@@ -2099,6 +3025,27 @@ def sequence_extraction_2nd_round(args, sra_stat, metadata, g):
         append_file_binary(adding_path, added_path)
         os.remove(adding_path)
         os.rename(added_path, adding_path)
+        return subext
+
+    if worker_count <= 1:
+        for subext in subexts:
+            merge_single_subext(subext)
+    else:
+        print(
+            'Merging 2nd-round FASTQ chunks for {} using {:,} parallel worker(s).'.format(
+                sra_id,
+                worker_count,
+            ),
+            flush=True,
+        )
+        _, failures = run_tasks_with_optional_threads(
+            task_items=subexts,
+            task_fn=merge_single_subext,
+            max_workers=worker_count,
+        )
+        if failures:
+            details = '; '.join(['{}: {}'.format(subext, exc) for subext, exc in failures])
+            raise RuntimeError('2nd-round FASTQ merge failed for {}. {}'.format(sra_id, details))
     metadata.df.at[ind_sra, 'time_end_2nd'] = time.time()
     elapsed_time = metadata.df.at[ind_sra, 'time_end_2nd'] - metadata.df.at[ind_sra, 'time_start_2nd']
     txt = 'Time elapsed for 2nd-round sequence extraction: {}, {:,} sec'
@@ -2134,13 +3081,39 @@ def sequence_extraction_private(metadata, sra_stat, args):
         else:
             sys.stderr.write('Private fastq file not found: {}\n'.format(path_from))
     set_current_intermediate_extension(sra_stat, '.fastq.gz')
-    if args.fastp:
-        metadata = run_fastp(sra_stat, args, sra_stat['getfastq_sra_dir'], metadata)
+    latest_stage_counts = None
+    latest_stage_source = None
+    for filter_name in get_filter_execution_order(args):
+        if filter_name == 'fastp':
+            prev_num_fastp_out = metadata.df.at[ind_sra, 'num_fastp_out']
+            prev_bp_fastp_out = metadata.df.at[ind_sra, 'bp_fastp_out']
+            metadata = run_fastp(sra_stat, args, sra_stat['getfastq_sra_dir'], metadata)
+            delta_num_out = metadata.df.at[ind_sra, 'num_fastp_out'] - prev_num_fastp_out
+            delta_bp_out = metadata.df.at[ind_sra, 'bp_fastp_out'] - prev_bp_fastp_out
+            latest_stage_counts = {
+                'num_spots': max(0, int(delta_num_out)),
+                'bp_total': max(0, int(delta_bp_out)),
+            }
+            latest_stage_source = 'fastp'
+            continue
+        if filter_name == 'rrna':
+            rrna_known_input_counts = latest_stage_counts if (latest_stage_source == 'fastp') else None
+            metadata = run_sortmerna_rrna_filter(
+                sra_stat=sra_stat,
+                args=args,
+                output_dir=sra_stat['getfastq_sra_dir'],
+                metadata=metadata,
+                known_input_counts=rrna_known_input_counts,
+            )
+            latest_stage_source = 'rrna'
+            continue
+        raise ValueError('Unsupported filter name in execution order: {}'.format(filter_name))
     inext = get_or_detect_intermediate_extension(sra_stat, work_dir=sra_stat['getfastq_sra_dir'])
     if (inext=='no_extension_found')&(sra_stat['layout']=='paired'):
         raise ValueError('Paired-end file names may be invalid. They should contain _1 and _2 to indicate a pair: {}'.format(sra_stat['sra_id']))
     outext = '.amalgkit.fastq.gz'
     rename_fastq(sra_stat, sra_stat['getfastq_sra_dir'], inext, outext)
+    write_getfastq_stats(sra_stat=sra_stat, metadata=metadata, output_dir=sra_stat['getfastq_sra_dir'])
     return metadata
 
 def check_metadata_validity(metadata):
