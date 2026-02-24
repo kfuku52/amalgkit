@@ -662,6 +662,47 @@ def resolve_sra_download_sources(metadata, sra_stat, args):
             sra_sources['NCBI'] = ncbi_link
     return sra_sources
 
+def normalize_sra_download_method(args):
+    method_raw = str(getattr(args, 'sra_download_method', 'auto')).strip().lower()
+    if method_raw in ['auto', 'urllib', 'curl']:
+        return method_raw
+    sys.stderr.write('Unknown --sra_download_method "{}". Falling back to "auto".\n'.format(method_raw))
+    return 'auto'
+
+def download_with_curl(source_url, path_downloaded_sra, args, sra_source_name):
+    curl_exe = shutil.which('curl')
+    if curl_exe is None:
+        return False
+    tmp_path = path_downloaded_sra + '.curltmp.{}'.format(time.time_ns())
+    command = [
+        curl_exe,
+        '-L',
+        '--fail',
+        '--retry', '3',
+        '--retry-delay', '2',
+        '--connect-timeout', '20',
+        '-o', tmp_path,
+        source_url,
+    ]
+    print('Command:', ' '.join(command))
+    out = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if should_print_getfastq_command_output(args):
+        print('curl stdout:')
+        print(out.stdout.decode('utf8', errors='replace'))
+        print('curl stderr:')
+        print(out.stderr.decode('utf8', errors='replace'))
+    if out.returncode != 0:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        sys.stderr.write('curl failed SRA download from {}.\n'.format(sra_source_name))
+        return False
+    if not os.path.exists(tmp_path):
+        sys.stderr.write('curl download did not create output file for {}.\n'.format(sra_source_name))
+        return False
+    os.replace(tmp_path, path_downloaded_sra)
+    print('SRA file was downloaded with curl from {}'.format(sra_source_name), flush=True)
+    return True
+
 
 def download_sra_from_source(sra_id, sra_source_name, source_url_original, path_downloaded_sra, args):
     source_url = normalize_url_for_urllib(
@@ -680,6 +721,17 @@ def download_sra_from_source(sra_id, sra_source_name, source_url_original, path_
         msg = 'Skipping {} download source due to unsupported URL scheme for urllib: {}\n'
         sys.stderr.write(msg.format(sra_source_name, scheme if scheme else '(none)'))
         return False
+    method = normalize_sra_download_method(args)
+    if method in ['auto', 'curl']:
+        if download_with_curl(
+            source_url=source_url,
+            path_downloaded_sra=path_downloaded_sra,
+            args=args,
+            sra_source_name=sra_source_name,
+        ):
+            return True
+        if method == 'curl':
+            sys.stderr.write('Falling back to urllib.request after curl failure.\n')
     try:
         urllib.request.urlretrieve(source_url, path_downloaded_sra)
         if os.path.exists(path_downloaded_sra):
@@ -1337,6 +1389,33 @@ def parse_fasterq_dump_written_spots(stdout_txt, stderr_txt):
         return None
     return int(matched[-1].replace(',', ''))
 
+def parse_fasterq_dump_written_reads(stdout_txt, stderr_txt):
+    combined = '\n'.join([stdout_txt or '', stderr_txt or ''])
+    matched = re.findall(r'^\s*reads\s+written\s*:\s*([0-9][0-9,]*)\s*$', combined, flags=re.IGNORECASE | re.MULTILINE)
+    if len(matched) == 0:
+        return None
+    return int(matched[-1].replace(',', ''))
+
+def infer_written_spots_from_written_reads(sra_stat, written_reads, run_file_state):
+    try:
+        written_reads = int(written_reads)
+    except (TypeError, ValueError):
+        return None
+    if written_reads < 0:
+        return None
+    layout = str(sra_stat.get('layout', '')).strip().lower()
+    if layout == 'single':
+        return written_reads
+    if layout != 'paired':
+        return None
+    # split-3 paired output can include singleton reads in <run>.fastq, which prevents exact inference.
+    singleton_name = sra_stat['sra_id'] + '.fastq'
+    if run_file_state.has(singleton_name):
+        return None
+    if (written_reads % 2) != 0:
+        return None
+    return int(written_reads / 2)
+
 def is_full_requested_spot_range(sra_stat, start, end):
     total_spot = sra_stat.get('total_spot', None)
     if total_spot is None:
@@ -1501,12 +1580,32 @@ def resolve_written_spots_from_fasterq_output(
     args=None,
     compress_trimmed_to_gz=False,
 ):
+    stdout_txt = fqd_out.stdout.decode('utf8', errors='replace')
+    stderr_txt = fqd_out.stderr.decode('utf8', errors='replace')
     written_spots = parse_fasterq_dump_written_spots(
-        stdout_txt=fqd_out.stdout.decode('utf8', errors='replace'),
-        stderr_txt=fqd_out.stderr.decode('utf8', errors='replace'),
+        stdout_txt=stdout_txt,
+        stderr_txt=stderr_txt,
     )
     if written_spots is not None:
         print('Using fasterq-dump reported spot count: {:,}'.format(written_spots))
+        return written_spots, run_file_state
+    written_reads = parse_fasterq_dump_written_reads(
+        stdout_txt=stdout_txt,
+        stderr_txt=stderr_txt,
+    )
+    if written_reads is not None:
+        written_spots = infer_written_spots_from_written_reads(
+            sra_stat=sra_stat,
+            written_reads=written_reads,
+            run_file_state=run_file_state,
+        )
+        if written_spots is not None:
+            txt = 'Using fasterq-dump reported read count to infer spot count: {:,} (reads written: {:,})'
+            print(txt.format(written_spots, written_reads))
+            return written_spots, run_file_state
+        txt = 'fasterq-dump reported reads written ({:,}), but exact spot inference was not possible. '
+        txt += 'Falling back to FASTQ record counting.'
+        print(txt.format(written_reads))
     else:
         print('fasterq-dump did not report written spots. Falling back to FASTQ record counting.')
     return written_spots, run_file_state
@@ -1515,6 +1614,10 @@ def resolve_written_spots_from_fasterq_output(
 def calculate_requested_spots(start, end):
     normalized_start, normalized_end = normalize_requested_spot_range(start=start, end=end)
     return max(0, (normalized_end - normalized_start + 1))
+
+def should_compress_fasterq_output_before_filters(args):
+    filter_order = get_filter_execution_order(args)
+    return len(filter_order) == 0
 
 
 def update_extraction_counts(metadata, ind_sra, written_spots, dumped_spots, spot_length):
@@ -1561,17 +1664,22 @@ def run_fasterq_dump(sra_stat, args, metadata, start, end, return_files=False, r
         fqd_out=fqd_out,
         run_file_state=run_file_state,
     )
-    updated_file_state = compress_fasterq_output_files(
-        sra_stat=sra_stat,
-        args=args,
-        file_state=run_file_state,
-        return_file_state=True,
-    )
-    if isinstance(updated_file_state, RunFileState):
-        run_file_state = updated_file_state
+    should_compress = should_compress_fasterq_output_before_filters(args)
+    if should_compress:
+        updated_file_state = compress_fasterq_output_files(
+            sra_stat=sra_stat,
+            args=args,
+            file_state=run_file_state,
+            return_file_state=True,
+        )
+        if isinstance(updated_file_state, RunFileState):
+            run_file_state = updated_file_state
+        else:
+            run_file_state = RunFileState(work_dir=sra_stat['getfastq_sra_dir'])
+        set_current_intermediate_extension(sra_stat, '.fastq.gz')
     else:
-        run_file_state = RunFileState(work_dir=sra_stat['getfastq_sra_dir'])
-    set_current_intermediate_extension(sra_stat, '.fastq.gz')
+        print('Skipping seqkit compression after fasterq-dump because downstream filtering is enabled.')
+        set_current_intermediate_extension(sra_stat, '.fastq')
     if written_spots is None:
         written_spots = estimate_num_written_spots_from_fastq(sra_stat, file_state=run_file_state)
     ind_sra = sra_stat.get('metadata_idx', get_metadata_row_index_by_run(metadata, sra_stat['sra_id']))
@@ -1614,7 +1722,7 @@ def remove_unpaired_files(sra_stat, files=None, file_state=None, return_file_sta
     )
     if (sra_stat['layout']=='paired'):
         # Order is important in this list. More downstream should come first.
-        extensions = ['.amalgkit.fastq.gz', '.rename.fastq.gz', '.fastp.fastq.gz', '.fastq.gz']
+        extensions = ['.amalgkit.fastq.gz', '.rename.fastq.gz', '.fastp.fastq.gz', '.fastq.gz', '.fastq']
         for ext in extensions:
             single_filename = sra_stat['sra_id'] + ext
             if run_file_state.has(single_filename):
@@ -1630,7 +1738,9 @@ def get_identical_paired_ratio(read1_path, read2_path, num_checked_reads=IDENTIC
     num_identical = 0
     num_checked = 0
     read_length = 0
-    with gzip.open(read1_path, 'rt') as read1, gzip.open(read2_path, 'rt') as read2:
+    open_read1 = gzip.open if str(read1_path).endswith('.gz') else open
+    open_read2 = gzip.open if str(read2_path).endswith('.gz') else open
+    with open_read1(read1_path, 'rt') as read1, open_read2(read2_path, 'rt') as read2:
         while num_checked < num_checked_reads:
             block1 = [read1.readline() for _ in range(4)]
             block2 = [read2.readline() for _ in range(4)]
@@ -2659,6 +2769,18 @@ def calc_2nd_ranges(metadata):
     metadata.df.loc[:, 'spot_end_2nd'] = end_2nds.astype(int)
     return metadata
 
+def has_remaining_spots_after_first_round(metadata):
+    df = metadata.df
+    if ('total_spots' not in df.columns) or ('spot_end_1st' not in df.columns):
+        return True
+    total_spots = pandas.to_numeric(df.loc[:, 'total_spots'], errors='coerce').to_numpy(dtype=float)
+    spot_end_1st = pandas.to_numeric(df.loc[:, 'spot_end_1st'], errors='coerce').to_numpy(dtype=float)
+    valid_mask = numpy.isfinite(total_spots) & numpy.isfinite(spot_end_1st)
+    if not valid_mask.any():
+        return True
+    remaining = numpy.maximum(total_spots[valid_mask] - spot_end_1st[valid_mask], 0.0)
+    return bool(float(remaining.sum()) > 0.0)
+
 def is_2nd_round_needed(rate_obtained_1st, tol):
     # tol is acceptable percentage loss relative to --max_bp.
     required_rate = 1 - (tol * 0.01)
@@ -3293,11 +3415,14 @@ def maybe_run_getfastq_second_round(args, metadata, run_rows, g, flag_private_fi
     if is_2nd_round_needed(g['rate_obtained_1st'], args.tol):
         txt = 'Only {:,.2f}% ({:,}/{:,}) of the target size (--max_bp) was obtained in the 1st round. Proceeding to the 2nd round read extraction.'
         print(txt.format(g['rate_obtained_1st'] * 100, metadata.df.loc[:, 'bp_amalgkit'].sum(), g['max_bp']), flush=True)
-        metadata = calc_2nd_ranges(metadata)
-        for _, sra_id in run_rows:
-            sra_stat = get_sra_stat(sra_id, metadata, g['num_bp_per_sra'])
-            sra_stat['getfastq_sra_dir'] = get_getfastq_run_dir(args, sra_id)
-            metadata = sequence_extraction_2nd_round(args, sra_stat, metadata, g)
+        if not has_remaining_spots_after_first_round(metadata):
+            print('All spots were already extracted in the 1st round. Skipping the 2nd round.', flush=True)
+        else:
+            metadata = calc_2nd_ranges(metadata)
+            for _, sra_id in run_rows:
+                sra_stat = get_sra_stat(sra_id, metadata, g['num_bp_per_sra'])
+                sra_stat['getfastq_sra_dir'] = get_getfastq_run_dir(args, sra_id)
+                metadata = sequence_extraction_2nd_round(args, sra_stat, metadata, g)
     else:
         print('Sufficient data were obtained in the 1st-round sequence extraction. Proceeding without the 2nd round.')
     g['rate_obtained_2nd'] = metadata.df.loc[:, 'bp_amalgkit'].sum() / g['max_bp']

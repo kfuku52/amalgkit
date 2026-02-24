@@ -29,6 +29,7 @@ from amalgkit.getfastq import (
     is_getfastq_output_present,
     initialize_columns,
     calc_2nd_ranges,
+    has_remaining_spots_after_first_round,
     is_2nd_round_needed,
     get_identical_paired_ratio,
     maybe_treat_paired_as_single,
@@ -41,11 +42,15 @@ from amalgkit.getfastq import (
     run_sortmerna_rrna_filter,
     parse_sortmerna_output_counts,
     update_metadata_after_rrna_filter,
+    parse_fasterq_dump_written_spots,
+    parse_fasterq_dump_written_reads,
+    infer_written_spots_from_written_reads,
     sequence_extraction,
     sequence_extraction_2nd_round,
     sequence_extraction_private,
     estimate_num_written_spots_from_fastq,
     compress_fasterq_output_files,
+    should_compress_fasterq_output_before_filters,
     normalize_fasterq_size_check,
     count_fastq_records_and_bases,
     summarize_layout_fastq_records_and_bases,
@@ -89,6 +94,55 @@ class TestNormalizeFasterqSizeCheck:
     ])
     def test_normalize(self, raw, expected):
         assert normalize_fasterq_size_check(raw) == expected
+
+
+class TestShouldCompressFasterqOutputBeforeFilters:
+    def test_compresses_when_no_filters(self):
+        args = SimpleNamespace(fastp=False, rrna_filter=False)
+        assert should_compress_fasterq_output_before_filters(args)
+
+    def test_skips_compression_when_fastp_is_first_filter(self):
+        args = SimpleNamespace(fastp=True, rrna_filter=False)
+        assert not should_compress_fasterq_output_before_filters(args)
+
+    def test_keeps_compression_when_rrna_is_first_filter(self):
+        args = SimpleNamespace(fastp=True, rrna_filter=True, filter_order='rrna_first')
+        assert not should_compress_fasterq_output_before_filters(args)
+
+
+class TestFasterqDumpWrittenCountParsing:
+    def test_parse_written_spots(self):
+        stderr_txt = '\n'.join([
+            'spots read      : 10',
+            'reads written   : 20',
+            'spots written   : 10',
+        ])
+        assert parse_fasterq_dump_written_spots('', stderr_txt) == 10
+
+    def test_parse_written_reads(self):
+        stderr_txt = '\n'.join([
+            'spots read      : 15,890,071',
+            'reads written   : 31,780,142',
+        ])
+        assert parse_fasterq_dump_written_reads('', stderr_txt) == 31780142
+
+    def test_infer_written_spots_single_layout(self):
+        from amalgkit.getfastq import RunFileState
+        sra_stat = {'sra_id': 'SRR001', 'layout': 'single'}
+        file_state = RunFileState(work_dir='/', files=set())
+        assert infer_written_spots_from_written_reads(sra_stat, 123, file_state) == 123
+
+    def test_infer_written_spots_paired_layout_without_singletons(self):
+        from amalgkit.getfastq import RunFileState
+        sra_stat = {'sra_id': 'SRR001', 'layout': 'paired'}
+        file_state = RunFileState(work_dir='/', files={'SRR001_1.fastq', 'SRR001_2.fastq'})
+        assert infer_written_spots_from_written_reads(sra_stat, 200, file_state) == 100
+
+    def test_infer_written_spots_paired_layout_with_singletons_returns_none(self):
+        from amalgkit.getfastq import RunFileState
+        sra_stat = {'sra_id': 'SRR001', 'layout': 'paired'}
+        file_state = RunFileState(work_dir='/', files={'SRR001.fastq', 'SRR001_1.fastq', 'SRR001_2.fastq'})
+        assert infer_written_spots_from_written_reads(sra_stat, 201, file_state) is None
 
 
 class TestCountFastqRecords:
@@ -2065,6 +2119,28 @@ class TestCalc2ndRanges:
         assert out.df.loc[0, 'spot_end_2nd'] == 12
 
 
+class TestHasRemainingSpotsAfterFirstRound:
+    def test_returns_true_when_any_spot_remains(self):
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'total_spots': [10, 20],
+            'spot_end_1st': [10, 19],
+        }))
+        assert has_remaining_spots_after_first_round(metadata)
+
+    def test_returns_false_when_all_spots_are_exhausted(self):
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'total_spots': [10, 20],
+            'spot_end_1st': [10, 20],
+        }))
+        assert not has_remaining_spots_after_first_round(metadata)
+
+    def test_returns_true_when_required_columns_are_missing(self):
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'total_spots': [10],
+        }))
+        assert has_remaining_spots_after_first_round(metadata)
+
+
 class TestFastpMetrics:
     def test_parse_fastp_metrics_extracts_duplication_and_insert_size(self):
         stderr_txt = '\n'.join([
@@ -2531,11 +2607,27 @@ class TestIdenticalPairedReads:
             for i, seq in enumerate(seqs, start=1):
                 out.write('@read{}\n{}\n+\n{}\n'.format(i, seq, 'I' * len(seq)))
 
+    @staticmethod
+    def _write_fastq_plain(path, seqs):
+        with open(path, 'wt') as out:
+            for i, seq in enumerate(seqs, start=1):
+                out.write('@read{}\n{}\n+\n{}\n'.format(i, seq, 'I' * len(seq)))
+
     def test_get_identical_paired_ratio(self, tmp_path):
         read1 = tmp_path / 'read1.fastq.gz'
         read2 = tmp_path / 'read2.fastq.gz'
         self._write_fastq_gz(read1, ['AAAA', 'CCCC', 'GGGG'])
         self._write_fastq_gz(read2, ['AAAA', 'TTTT', 'GGGG'])
+        ratio, num_checked, read_length = get_identical_paired_ratio(str(read1), str(read2), num_checked_reads=3)
+        assert ratio == pytest.approx(2 / 3)
+        assert num_checked == 3
+        assert read_length == 4
+
+    def test_get_identical_paired_ratio_plain_fastq(self, tmp_path):
+        read1 = tmp_path / 'read1.fastq'
+        read2 = tmp_path / 'read2.fastq'
+        self._write_fastq_plain(read1, ['AAAA', 'CCCC', 'GGGG'])
+        self._write_fastq_plain(read2, ['AAAA', 'TTTT', 'GGGG'])
         ratio, num_checked, read_length = get_identical_paired_ratio(str(read1), str(read2), num_checked_reads=3)
         assert ratio == pytest.approx(2 / 3)
         assert num_checked == 3
@@ -2983,6 +3075,154 @@ class TestSraRecovery:
         assert metadata.df.loc[0, 'num_written'] == 6667
         assert metadata.df.loc[0, 'num_dumped'] == 6667
         assert metadata.df.loc[0, 'num_rejected'] == 0
+
+    def test_run_fasterq_dump_infers_spots_from_reported_written_reads_for_paired_layout(self, tmp_path, monkeypatch):
+        sra_id = 'SRR001'
+        metadata = self._metadata_for_extraction(sra_id)
+        sra_stat = {
+            'sra_id': sra_id,
+            'getfastq_sra_dir': str(tmp_path),
+            'spot_length': 100,
+            'layout': 'paired',
+        }
+        args = self._args_for_fasterq_dump()
+
+        def fake_run(cmd, stdout=None, stderr=None):
+            return subprocess.CompletedProcess(
+                cmd,
+                0,
+                stdout=b'',
+                stderr=b'reads written   : 20\n',
+            )
+
+        def fail_estimate(*_args, **_kwargs):
+            raise AssertionError('estimate_num_written_spots_from_fastq should not be called when spots are inferred from reads written.')
+
+        monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
+        monkeypatch.setattr('amalgkit.getfastq.trim_fasterq_output_files', lambda *args, **kwargs: None)
+        monkeypatch.setattr('amalgkit.getfastq.compress_fasterq_output_files', lambda *args, **kwargs: None)
+        monkeypatch.setattr('amalgkit.getfastq.estimate_num_written_spots_from_fastq', fail_estimate)
+        monkeypatch.setattr('amalgkit.getfastq.detect_layout_from_file', lambda *args, **kwargs: args[0])
+        monkeypatch.setattr('amalgkit.getfastq.remove_unpaired_files', lambda *args, **kwargs: None)
+
+        metadata, _ = run_fasterq_dump(sra_stat, args, metadata, start=1, end=10)
+
+        assert metadata.df.loc[0, 'num_written'] == 10
+        assert metadata.df.loc[0, 'num_dumped'] == 10
+        assert metadata.df.loc[0, 'num_rejected'] == 0
+
+    def test_run_fasterq_dump_falls_back_to_fastq_count_when_singletons_exist(self, tmp_path, monkeypatch):
+        sra_id = 'SRR001'
+        metadata = self._metadata_for_extraction(sra_id)
+        sra_stat = {
+            'sra_id': sra_id,
+            'getfastq_sra_dir': str(tmp_path),
+            'spot_length': 100,
+            'layout': 'paired',
+        }
+        args = self._args_for_fasterq_dump()
+        (tmp_path / '{}.fastq'.format(sra_id)).write_text('@r0\nA\n+\nI\n')
+        observed = {'estimate_called': False}
+
+        def fake_run(cmd, stdout=None, stderr=None):
+            return subprocess.CompletedProcess(
+                cmd,
+                0,
+                stdout=b'',
+                stderr=b'reads written   : 21\n',
+            )
+
+        def fake_estimate(*_args, **_kwargs):
+            observed['estimate_called'] = True
+            return 3
+
+        monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
+        monkeypatch.setattr('amalgkit.getfastq.trim_fasterq_output_files', lambda *args, **kwargs: None)
+        monkeypatch.setattr('amalgkit.getfastq.compress_fasterq_output_files', lambda *args, **kwargs: None)
+        monkeypatch.setattr('amalgkit.getfastq.estimate_num_written_spots_from_fastq', fake_estimate)
+        monkeypatch.setattr('amalgkit.getfastq.detect_layout_from_file', lambda *args, **kwargs: args[0])
+        monkeypatch.setattr('amalgkit.getfastq.remove_unpaired_files', lambda *args, **kwargs: None)
+
+        metadata, _ = run_fasterq_dump(sra_stat, args, metadata, start=1, end=10)
+
+        assert observed['estimate_called']
+        assert metadata.df.loc[0, 'num_written'] == 3
+
+    def test_run_fasterq_dump_skips_pre_fastp_compression(self, tmp_path, monkeypatch):
+        sra_id = 'SRR001'
+        metadata = self._metadata_for_extraction(sra_id)
+        sra_stat = {
+            'sra_id': sra_id,
+            'getfastq_sra_dir': str(tmp_path),
+            'spot_length': 100,
+            'layout': 'paired',
+        }
+        args = self._args_for_fasterq_dump()
+        args.fastp = True
+        args.rrna_filter = False
+
+        def fake_run(cmd, stdout=None, stderr=None):
+            return subprocess.CompletedProcess(
+                cmd,
+                0,
+                stdout=b'',
+                stderr=b'reads written   : 20\n',
+            )
+
+        def fail_compress(*_args, **_kwargs):
+            raise AssertionError('compress_fasterq_output_files should be skipped when fastp is the next filter.')
+
+        def fail_estimate(*_args, **_kwargs):
+            raise AssertionError('estimate_num_written_spots_from_fastq should not be called when reads written is usable.')
+
+        monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
+        monkeypatch.setattr('amalgkit.getfastq.compress_fasterq_output_files', fail_compress)
+        monkeypatch.setattr('amalgkit.getfastq.estimate_num_written_spots_from_fastq', fail_estimate)
+        monkeypatch.setattr('amalgkit.getfastq.detect_layout_from_file', lambda *args, **kwargs: args[0])
+        monkeypatch.setattr('amalgkit.getfastq.remove_unpaired_files', lambda *args, **kwargs: None)
+
+        metadata, sra_stat_out = run_fasterq_dump(sra_stat, args, metadata, start=1, end=10)
+
+        assert sra_stat_out['current_ext'] == '.fastq'
+        assert metadata.df.loc[0, 'num_written'] == 10
+
+    def test_run_fasterq_dump_skips_pre_rrna_compression(self, tmp_path, monkeypatch):
+        sra_id = 'SRR001'
+        metadata = self._metadata_for_extraction(sra_id)
+        sra_stat = {
+            'sra_id': sra_id,
+            'getfastq_sra_dir': str(tmp_path),
+            'spot_length': 100,
+            'layout': 'paired',
+        }
+        args = self._args_for_fasterq_dump()
+        args.fastp = False
+        args.rrna_filter = True
+
+        def fake_run(cmd, stdout=None, stderr=None):
+            return subprocess.CompletedProcess(
+                cmd,
+                0,
+                stdout=b'',
+                stderr=b'reads written   : 20\n',
+            )
+
+        def fail_compress(*_args, **_kwargs):
+            raise AssertionError('compress_fasterq_output_files should be skipped when a downstream filter exists.')
+
+        def fail_estimate(*_args, **_kwargs):
+            raise AssertionError('estimate_num_written_spots_from_fastq should not be called when reads written is usable.')
+
+        monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
+        monkeypatch.setattr('amalgkit.getfastq.compress_fasterq_output_files', fail_compress)
+        monkeypatch.setattr('amalgkit.getfastq.estimate_num_written_spots_from_fastq', fail_estimate)
+        monkeypatch.setattr('amalgkit.getfastq.detect_layout_from_file', lambda *args, **kwargs: args[0])
+        monkeypatch.setattr('amalgkit.getfastq.remove_unpaired_files', lambda *args, **kwargs: None)
+
+        metadata, sra_stat_out = run_fasterq_dump(sra_stat, args, metadata, start=1, end=10)
+
+        assert sra_stat_out['current_ext'] == '.fastq'
+        assert metadata.df.loc[0, 'num_written'] == 10
 
     def test_run_fasterq_dump_skips_trim_for_full_range(self, tmp_path, monkeypatch):
         sra_id = 'SRR001'
@@ -3891,12 +4131,13 @@ class TestDownloadSraUrlSchemes:
         }))
 
     @staticmethod
-    def _make_args(gcp_project=''):
+    def _make_args(gcp_project='', sra_download_method='urllib'):
         args = type('Args', (), {})()
         args.aws = True
         args.gcp = True
         args.ncbi = True
         args.gcp_project = gcp_project
+        args.sra_download_method = sra_download_method
         return args
 
     def test_raises_when_existing_sra_path_is_directory(self, tmp_path):
@@ -3985,6 +4226,38 @@ class TestDownloadSraUrlSchemes:
             download_sra(metadata=metadata, sra_stat=sra_stat, args=args, work_dir=str(tmp_path), overwrite=False)
 
         assert called_urls == ['https://storage.googleapis.com/bucket/path/to.sra?userProject=test-project']
+
+    def test_uses_curl_when_requested(self, tmp_path, monkeypatch):
+        sra_id = 'SRR_CURL'
+        metadata = self._make_metadata(
+            sra_id=sra_id,
+            aws_link='',
+            gcp_link='',
+            ncbi_link='https://example.invalid/path/to.sra',
+        )
+        sra_stat = {'sra_id': sra_id}
+        args = self._make_args(sra_download_method='curl')
+        observed = {'cmd': None}
+
+        monkeypatch.setattr('amalgkit.getfastq.shutil.which', lambda exe: '/usr/bin/curl' if exe == 'curl' else None)
+
+        def fail_urlretrieve(*_args, **_kwargs):
+            raise AssertionError('urllib.request.urlretrieve should not be called when curl succeeds.')
+
+        def fake_run(cmd, stdout=None, stderr=None):
+            observed['cmd'] = cmd
+            out_path = cmd[cmd.index('-o') + 1]
+            with open(out_path, 'w') as fh:
+                fh.write('ok')
+            return subprocess.CompletedProcess(cmd, 0, stdout=b'', stderr=b'')
+
+        monkeypatch.setattr('amalgkit.getfastq.urllib.request.urlretrieve', fail_urlretrieve)
+        monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
+
+        download_sra(metadata=metadata, sra_stat=sra_stat, args=args, work_dir=str(tmp_path), overwrite=False)
+
+        assert observed['cmd'][0] == '/usr/bin/curl'
+        assert (tmp_path / '{}.sra'.format(sra_id)).exists()
 
 
 class TestSequenceExtractionPrivate:

@@ -171,6 +171,13 @@ def resolve_r_package_versions(packages):
                 versions[pkg] = fallback
     return versions
 
+def resolve_active_command(argv):
+    for arg in argv[1:]:
+        if arg.startswith('-'):
+            continue
+        return arg
+    return ''
+
 print('AMALGKIT version: {}'.format(__version__))
 print('AMALGKIT command: {}'.format(' '.join(sys.argv)))
 print('AMALGKIT bug report: https://github.com/kfuku52/amalgkit/issues')
@@ -179,12 +186,19 @@ print('AMALGKIT python: {}'.format(sys.version.split()[0]))
 for package_name, module_name in DEPENDENCY_SPECS:
     version = resolve_dependency_version(package_name=package_name, module_name=module_name)
     print('AMALGKIT dependency {}: {}'.format(package_name, version))
-for tool_label, tool_exe, version_commands in EXTERNAL_TOOL_SPECS:
-    status = resolve_external_tool_status(executable_name=tool_exe, version_commands=version_commands)
-    print('AMALGKIT tool {}: {}'.format(tool_label, status))
-r_package_versions = resolve_r_package_versions(R_PACKAGE_SPECS)
-for r_package in R_PACKAGE_SPECS:
-    print('AMALGKIT R package {}: {}'.format(r_package, r_package_versions.get(r_package, 'UNKNOWN')))
+active_command = resolve_active_command(sys.argv)
+if active_command == 'getfastq':
+    for tool_label, _tool_exe, _version_commands in EXTERNAL_TOOL_SPECS:
+        print('AMALGKIT tool {}: SKIPPED (command-specific dependency check will run)'.format(tool_label))
+    for r_package in R_PACKAGE_SPECS:
+        print('AMALGKIT R package {}: SKIPPED (not required for getfastq)'.format(r_package))
+else:
+    for tool_label, tool_exe, version_commands in EXTERNAL_TOOL_SPECS:
+        status = resolve_external_tool_status(executable_name=tool_exe, version_commands=version_commands)
+        print('AMALGKIT tool {}: {}'.format(tool_label, status))
+    r_package_versions = resolve_r_package_versions(R_PACKAGE_SPECS)
+    for r_package in R_PACKAGE_SPECS:
+        print('AMALGKIT R package {}: {}'.format(r_package, r_package_versions.get(r_package, 'UNKNOWN')))
 
 def strtobool(val):
     val = val.lower()
@@ -474,11 +488,11 @@ pge.add_argument('--remove_sra', metavar='yes|no', default='yes', type=strtobool
                  help='default=%(default)s: Remove downloaded SRA files after fastq extraction.')
 pge.add_argument('--remove_tmp', metavar='yes|no', default='yes', type=strtobool, required=False, action='store',
                  help='default=%(default)s: Remove temporary files.')
-pge.add_argument('--dump_print', '--pfd_print', dest='dump_print', metavar='yes|no', default='yes', type=strtobool,
+pge.add_argument('--dump_print', '--pfd_print', dest='dump_print', metavar='yes|no', default='no', type=strtobool,
                  required=False, action='store',
                  help='default=%(default)s: Show sequence extraction (fasterq-dump/compression) stdout and stderr. '
                       '--pfd_print is supported as an obsolete alias.')
-pge.add_argument('--fastp_print', metavar='yes|no', default='yes', type=strtobool, required=False, action='store',
+pge.add_argument('--fastp_print', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
                  help='default=%(default)s: Show fastp stdout and stderr.')
 pge.add_argument('--sci_name', metavar='STR', default=None, type=str, required=False, action='store',
                  help='default=%(default)s: Species name in case the BioProject covers multiple species. Example: "Homo sapiens"')
@@ -490,6 +504,9 @@ pge.add_argument('--gcp', metavar='yes|no', default='yes', type=strtobool, requi
                  help='default=%(default)s: Download SRA files from Google Cloud (GCP), if available.')
 pge.add_argument('--gcp_project', metavar='STR', default='', type=str, required=False, action='store',
                  help='default=%(default)s: Google Cloud project for requester-pays GCP buckets (used when GCP_Link is gs://).')
+pge.add_argument('--sra_download_method', metavar='auto|urllib|curl', default='auto', type=str, required=False, action='store',
+                 choices=['auto', 'urllib', 'curl'],
+                 help='default=%(default)s: Method for downloading SRA objects from cloud URLs.')
 pge.add_argument('--read_name', metavar='default|trinity', default='default', type=str, required=False, action='store',
                  choices=['default', 'trinity'],
                  help='default=%(default)s: read name formatting for downstream analysis.')

@@ -1643,6 +1643,17 @@ class TestDetectLayoutFromFile:
         result = detect_layout_from_file(sra_stat)
         assert result['layout'] == 'single'
 
+    def test_paired_plain_fastq_files_detected(self, tmp_path):
+        sra_stat = {
+            'sra_id': 'SRR001',
+            'layout': 'single',
+            'getfastq_sra_dir': str(tmp_path),
+        }
+        (tmp_path / 'SRR001_1.fastq').write_text('data')
+        (tmp_path / 'SRR001_2.fastq').write_text('data')
+        result = detect_layout_from_file(sra_stat)
+        assert result['layout'] == 'paired'
+
     def test_no_files_keeps_layout(self, tmp_path):
         """No fastq files -> layout unchanged."""
         sra_stat = {
@@ -1725,6 +1736,16 @@ class TestGetNewestIntermediateFileExtension:
         (tmp_path / 'SRR001.fastq.gz').write_text('data')
         ext = get_newest_intermediate_file_extension(sra_stat, str(tmp_path))
         assert ext == '.fastq.gz'
+
+    def test_finds_plain_fastq_extension(self, tmp_path):
+        sra_stat = {
+            'sra_id': 'SRR001',
+            'layout': 'single',
+            'getfastq_sra_dir': str(tmp_path),
+        }
+        (tmp_path / 'SRR001.fastq').write_text('data')
+        ext = get_newest_intermediate_file_extension(sra_stat, str(tmp_path))
+        assert ext == '.fastq'
 
     def test_safely_removed(self, tmp_path):
         """Detects .safely_removed flag."""
