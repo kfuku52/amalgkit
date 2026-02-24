@@ -3405,7 +3405,7 @@ class TestGetfastqDependencyChecks:
 
         monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
         check_getfastq_dependency(Args())
-        assert called['cmds'] == [['fasterq-dump', '-h']]
+        assert called['cmds'] == [['fasterq-dump', '-h'], ['seqkit', '--help']]
 
     def test_uses_default_fastp_exe_when_fastp_enabled_without_override(self, monkeypatch):
         class Args:
@@ -3421,7 +3421,8 @@ class TestGetfastqDependencyChecks:
         monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
         check_getfastq_dependency(Args())
         assert called['cmds'][0] == ['fasterq-dump', '-h']
-        assert called['cmds'][1] == ['fastp', '--help']
+        assert called['cmds'][1] == ['seqkit', '--help']
+        assert called['cmds'][2] == ['fastp', '--help']
 
     def test_uses_fasterq_dump_dependency(self, monkeypatch):
         class Args:
@@ -3492,6 +3493,23 @@ class TestGetfastqDependencyChecks:
         with pytest.raises(FileNotFoundError, match='fasterq-dump executable not found'):
             check_getfastq_dependency(Args())
 
+    def test_raises_clear_error_when_seqkit_missing(self, monkeypatch):
+        class Args:
+            fasterq_dump_exe = 'fasterq-dump'
+            seqkit_exe = 'missing-seqkit'
+            fastp = False
+            fastp_exe = 'fastp'
+            read_name = 'default'
+
+        def fake_run(cmd, stdout=None, stderr=None):
+            if cmd[0] == 'missing-seqkit':
+                raise FileNotFoundError(cmd[0])
+            return subprocess.CompletedProcess(cmd, 0, stdout=b'', stderr=b'')
+
+        monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
+        with pytest.raises(FileNotFoundError, match='seqkit executable not found'):
+            check_getfastq_dependency(Args())
+
     def test_raises_clear_error_when_fastp_probe_fails(self, monkeypatch):
         class Args:
             fasterq_dump_exe = 'fasterq-dump'
@@ -3499,20 +3517,17 @@ class TestGetfastqDependencyChecks:
             fastp_exe = 'fastp'
             read_name = 'default'
 
-        calls = {'n': 0}
-
         def fake_run(cmd, stdout=None, stderr=None):
-            calls['n'] += 1
-            if calls['n'] == 1:
-                return subprocess.CompletedProcess(cmd, 0, stdout=b'', stderr=b'')
-            return subprocess.CompletedProcess(cmd, 127, stdout=b'', stderr=b'')
+            if cmd[0] == 'fastp':
+                return subprocess.CompletedProcess(cmd, 127, stdout=b'', stderr=b'')
+            return subprocess.CompletedProcess(cmd, 0, stdout=b'', stderr=b'')
 
         monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
         with pytest.raises(RuntimeError, match='fastp dependency probe failed'):
             check_getfastq_dependency(Args())
 
 
-class TestFasterqCompressionFallback:
+class TestFasterqSeqkitCompression:
     def _write_fastq(self, path, reads):
         with open(path, 'wt') as out:
             for i, seq in enumerate(reads):
@@ -3521,7 +3536,7 @@ class TestFasterqCompressionFallback:
                 out.write('+\n')
                 out.write('I' * len(seq) + '\n')
 
-    def test_uses_python_gzip_when_pigz_not_available(self, tmp_path, monkeypatch):
+    def test_uses_seqkit_for_compression(self, tmp_path, monkeypatch):
         sra_id = 'SRR999'
         fastq_path = tmp_path / '{}.fastq'.format(sra_id)
         self._write_fastq(str(fastq_path), ['ACGT', 'TGCA'])
@@ -3529,17 +3544,24 @@ class TestFasterqCompressionFallback:
         class Args:
             threads = 2
             dump_print = False
+            seqkit_exe = 'seqkit'
 
         sra_stat = {
             'sra_id': sra_id,
             'getfastq_sra_dir': str(tmp_path),
         }
 
-        def fail_run(*_args, **_kwargs):
-            raise AssertionError('subprocess.run should not be used when pigz is unavailable.')
+        def fake_seqkit_run(cmd, stdout=None, stderr=None):
+            assert cmd[0] == 'seqkit'
+            assert cmd[1] == 'seq'
+            out_index = cmd.index('-o')
+            out_path = cmd[out_index + 1]
+            in_path = cmd[out_index + 2]
+            with open(in_path, 'rb') as fin, gzip.open(out_path, 'wb') as fout:
+                fout.write(fin.read())
+            return subprocess.CompletedProcess(cmd, 0, stdout=b'', stderr=b'')
 
-        monkeypatch.setattr('amalgkit.getfastq.shutil.which', lambda _x: None)
-        monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fail_run)
+        monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_seqkit_run)
         compress_fasterq_output_files(sra_stat=sra_stat, args=Args())
 
         gz_path = tmp_path / '{}.fastq.gz'.format(sra_id)
@@ -3551,7 +3573,7 @@ class TestFasterqCompressionFallback:
         assert '@r1' in content
 
 
-class TestRenameReadsPythonFallback:
+class TestRenameReadsSeqkitCompression:
     def _write_fastq_gz(self, path, headers_and_seqs):
         with gzip.open(path, 'wt') as out:
             for header, seq in headers_and_seqs:
@@ -3560,7 +3582,7 @@ class TestRenameReadsPythonFallback:
                 out.write('+\n')
                 out.write('I' * len(seq) + '\n')
 
-    def test_single_end_trinity_rename(self, tmp_path):
+    def test_single_end_trinity_rename(self, tmp_path, monkeypatch):
         sra_id = 'SRR777'
         in_path = tmp_path / '{}.fastq.gz'.format(sra_id)
         self._write_fastq_gz(str(in_path), [('@r0 comment', 'ACGT'), ('@r1 x', 'TGCA')])
@@ -3573,6 +3595,20 @@ class TestRenameReadsPythonFallback:
         class Args:
             threads = 1
             remove_tmp = False
+            dump_print = False
+            seqkit_exe = 'seqkit'
+
+        def fake_seqkit_run(cmd, stdout=None, stderr=None):
+            assert cmd[0] == 'seqkit'
+            assert cmd[1] == 'seq'
+            out_index = cmd.index('-o')
+            out_path = cmd[out_index + 1]
+            in_path = cmd[out_index + 2]
+            with open(in_path, 'rb') as fin, gzip.open(out_path, 'wb') as fout:
+                fout.write(fin.read())
+            return subprocess.CompletedProcess(cmd, 0, stdout=b'', stderr=b'')
+
+        monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_seqkit_run)
 
         rename_reads(sra_stat=sra_stat, args=Args(), output_dir=str(tmp_path))
         out_path = tmp_path / '{}.rename.fastq.gz'.format(sra_id)

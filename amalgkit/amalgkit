@@ -34,7 +34,7 @@ DEPENDENCY_SPECS = [
 
 EXTERNAL_TOOL_SPECS = [
     ('cat', 'cat', [['--version']]),
-    ('pigz', 'pigz', [['--version']]),
+    ('seqkit', 'seqkit', [['version'], ['--help']]),
     ('R', 'R', [['--version']]),
     ('Rscript', 'Rscript', [['--version']]),
     ('kallisto', 'kallisto', [['version'], ['-h']]),
@@ -434,6 +434,8 @@ pge.add_argument('--fasterq_dump_exe', '--fasterq-dump_exe', '--fasterq-dump-exe
                  dest='fasterq_dump_exe', metavar='PATH', default='fasterq-dump', type=str,
                  required=False, action='store',
                  help='default=%(default)s: PATH to fasterq-dump executable for public SRA extraction.')
+pge.add_argument('--seqkit_exe', metavar='PATH', default='seqkit', type=str, required=False, action='store',
+                 help='default=%(default)s: PATH to seqkit executable used for FASTQ .gz output.')
 pge.add_argument('--fasterq_size_check', metavar='yes|no', default='yes', type=strtobool, required=False, action='store',
                  help='default=%(default)s: Toggle fasterq-dump pre-run disk-size checks. '
                       '"yes" forwards --size-check on, "no" forwards --size-check off.')

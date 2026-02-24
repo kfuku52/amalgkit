@@ -677,6 +677,8 @@ def check_getfastq_dependency(args):
 
     fasterq_dump_exe = getattr(args, 'fasterq_dump_exe', 'fasterq-dump')
     probe_command([fasterq_dump_exe, '-h'], 'fasterq-dump')
+    seqkit_exe = resolve_seqkit_exe(args)
+    probe_command([seqkit_exe, '--help'], 'seqkit')
     if bool(getattr(args, 'fastp', False)):
         fastp_exe = getattr(args, 'fastp_exe', 'fastp')
         probe_command([fastp_exe, '--help'], 'fastp')
@@ -699,6 +701,56 @@ def should_print_getfastq_command_output(args):
     if legacy_dump_print is not None:
         return legacy_dump_print
     return True
+
+def resolve_seqkit_exe(args):
+    seqkit_exe = getattr(args, 'seqkit_exe', 'seqkit')
+    if seqkit_exe is None:
+        return 'seqkit'
+    seqkit_exe = str(seqkit_exe).strip()
+    if seqkit_exe == '':
+        return 'seqkit'
+    return seqkit_exe
+
+def resolve_seqkit_threads(args):
+    try:
+        seqkit_threads = int(getattr(args, 'threads', 1))
+    except (TypeError, ValueError):
+        seqkit_threads = 1
+    return max(1, seqkit_threads)
+
+def run_seqkit_seq_command(input_paths, output_path, args, command_label):
+    if len(input_paths) == 0:
+        raise ValueError('No input FASTQ path was provided for {}.'.format(command_label))
+    seqkit_exe = resolve_seqkit_exe(args)
+    seqkit_threads = resolve_seqkit_threads(args)
+    command = [seqkit_exe, 'seq', '-j', str(seqkit_threads), '-w', '0', '-o', output_path] + list(input_paths)
+    print('Command:', ' '.join(command))
+    out = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if should_print_getfastq_command_output(args):
+        print('{} stdout:'.format(command_label))
+        print(out.stdout.decode('utf8', errors='replace'))
+        print('{} stderr:'.format(command_label))
+        print(out.stderr.decode('utf8', errors='replace'))
+    if out.returncode != 0:
+        raise RuntimeError('{} failed.'.format(command_label))
+    return out
+
+def compress_fastq_with_seqkit(path_fastq, path_fastq_gz, args, command_label='FASTQ compression with seqkit'):
+    if not os.path.exists(path_fastq):
+        raise FileNotFoundError('FASTQ input not found: {}'.format(path_fastq))
+    if not os.path.isfile(path_fastq):
+        raise IsADirectoryError('FASTQ input path exists but is not a file: {}'.format(path_fastq))
+    if os.path.exists(path_fastq_gz) and (not os.path.isfile(path_fastq_gz)):
+        raise IsADirectoryError('FASTQ output path exists but is not a file: {}'.format(path_fastq_gz))
+    if os.path.exists(path_fastq_gz):
+        os.remove(path_fastq_gz)
+    run_seqkit_seq_command(
+        input_paths=[path_fastq],
+        output_path=path_fastq_gz,
+        args=args,
+        command_label=command_label,
+    )
+    os.remove(path_fastq)
 
 def count_fastq_records(path_fastq):
     num_lines = 0
@@ -806,28 +858,14 @@ def compress_fasterq_output_files(sra_stat, args, files=None, file_state=None, r
         if return_file_state:
             return run_file_state
         return run_file_state.to_set()
-    pigz_exe = shutil.which('pigz')
-    def compress_fastq_with_python(path_fastq):
-        path_fastq_gz = path_fastq + '.gz'
-        with open(path_fastq, 'rb') as f_in, gzip.open(path_fastq_gz, 'wb') as f_out:
-            shutil.copyfileobj(f_in, f_out)
-        os.remove(path_fastq)
-    if (pigz_exe is not None) and (args.threads > 1):
-        command = [pigz_exe, '-p', str(args.threads)] + fastq_paths
-        print('Command:', ' '.join(command))
-        out = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        if should_print_getfastq_command_output(args):
-            print('Compression stdout:')
-            print(out.stdout.decode('utf8', errors='replace'))
-            print('Compression stderr:')
-            print(out.stderr.decode('utf8', errors='replace'))
-        if out.returncode != 0:
-            raise RuntimeError('Compression failed.')
-    else:
-        print('Using Python gzip fallback for compression.')
-        for path_fastq in fastq_paths:
-            print('Compressing: {} -> {}'.format(path_fastq, path_fastq + '.gz'))
-            compress_fastq_with_python(path_fastq)
+    for path_fastq in fastq_paths:
+        print('Compressing with seqkit: {} -> {}'.format(path_fastq, path_fastq + '.gz'))
+        compress_fastq_with_seqkit(
+            path_fastq=path_fastq,
+            path_fastq_gz=path_fastq + '.gz',
+            args=args,
+            command_label='FASTQ compression with seqkit',
+        )
     for filename in fastq_filenames:
         run_file_state.discard(filename)
         run_file_state.add(filename + '.gz')
@@ -1363,13 +1401,19 @@ def rename_reads(sra_stat, args, output_dir, files=None, file_state=None, return
     run_file_state = _resolve_run_file_state(work_dir=output_dir, files=files, file_state=file_state)
     inext = get_or_detect_intermediate_extension(sra_stat, work_dir=output_dir, file_state=run_file_state)
     outext = '.rename.fastq.gz'
-    def open_fastq(path, mode):
+    def open_fastq_for_read(path, mode):
         if path.endswith('.gz'):
             return gzip.open(path, mode)
         return open(path, mode)
 
     def rewrite_headers(infile, outfile, suffix):
-        with open_fastq(infile, 'rt') as fin, open_fastq(outfile, 'wt') as fout:
+        tmp_outfile = outfile
+        should_compress = outfile.endswith('.gz')
+        if should_compress:
+            tmp_outfile = outfile[:-3]
+        if os.path.exists(tmp_outfile) and (not os.path.isfile(tmp_outfile)):
+            raise IsADirectoryError('Renaming output path exists but is not a file: {}'.format(tmp_outfile))
+        with open_fastq_for_read(infile, 'rt') as fin, open(tmp_outfile, 'wt') as fout:
             while True:
                 line1 = fin.readline()
                 if line1 == '':
@@ -1384,6 +1428,13 @@ def rename_reads(sra_stat, args, output_dir, files=None, file_state=None, return
                 fout.write(line2)
                 fout.write(line3)
                 fout.write(line4)
+        if should_compress:
+            compress_fastq_with_seqkit(
+                path_fastq=tmp_outfile,
+                path_fastq_gz=outfile,
+                args=args,
+                command_label='Trinity read-header rewrite compression with seqkit',
+            )
 
     if sra_stat['layout'] == 'single':
         inbase = os.path.join(output_dir, sra_stat['sra_id'])
