@@ -40,6 +40,8 @@ from amalgkit.getfastq import (
     write_getfastq_stats,
     run_fastp,
     run_sortmerna_rrna_filter,
+    run_mmseqs_contam_filter,
+    run_mmseqs_easy_taxonomy_single_fastq,
     parse_sortmerna_output_counts,
     update_metadata_after_rrna_filter,
     parse_fasterq_dump_written_spots,
@@ -107,6 +109,10 @@ class TestShouldCompressFasterqOutputBeforeFilters:
 
     def test_keeps_compression_when_rrna_is_first_filter(self):
         args = SimpleNamespace(fastp=True, rrna_filter=True, filter_order='rrna_first')
+        assert not should_compress_fasterq_output_before_filters(args)
+
+    def test_skips_compression_when_contam_filter_is_enabled(self):
+        args = SimpleNamespace(fastp=False, rrna_filter=False, contam_filter=True)
         assert not should_compress_fasterq_output_before_filters(args)
 
 
@@ -460,6 +466,159 @@ class TestRunSortmernaWithLogCounts:
         assert metadata.df.loc[0, 'num_rrna_out'] == 7
         assert metadata.df.loc[0, 'bp_rrna_out'] == 700
         assert run_file_state.has('{}.rrna.fastq.gz'.format(sra_id))
+
+
+class TestRunMmseqsContamFilter:
+    @staticmethod
+    def _write_fastq_gz(path, read_id_seq_pairs):
+        with gzip.open(path, 'wt') as out:
+            for read_id, seq in read_id_seq_pairs:
+                out.write('@{}\n'.format(read_id))
+                out.write(seq + '\n')
+                out.write('+\n')
+                out.write('I' * len(seq) + '\n')
+
+    def test_paired_strict_pair_removal_and_unclassified_keep(self, tmp_path, monkeypatch):
+        sra_id = 'SRR001'
+        in1 = tmp_path / '{}_1.fastq.gz'.format(sra_id)
+        in2 = tmp_path / '{}_2.fastq.gz'.format(sra_id)
+        self._write_fastq_gz(str(in1), [('rA/1', 'AAAA'), ('rB/1', 'CCCC'), ('rC/1', 'GGGG')])
+        self._write_fastq_gz(str(in2), [('rA/2', 'TTTT'), ('rB/2', 'GGGG'), ('rC/2', 'AAAA')])
+
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': [sra_id],
+            'taxid_phylum': [500],
+            'num_contam_in': [0],
+            'num_contam_out': [0],
+            'bp_contam_in': [0],
+            'bp_contam_out': [0],
+        }))
+        sra_stat = {
+            'sra_id': sra_id,
+            'layout': 'paired',
+            'metadata_idx': 0,
+            'current_ext': '.fastq.gz',
+            'getfastq_sra_dir': str(tmp_path),
+        }
+
+        class Args:
+            contam_filter = True
+            contam_filter_rank = 'phylum'
+            contam_filter_db = 'inferred'
+            contam_filter_db_name = 'UniRef90'
+            mmseqs_exe = 'mmseqs'
+            remove_tmp = False
+            dump_print = False
+            threads = 1
+            out_dir = str(tmp_path)
+            download_dir = 'inferred'
+
+        monkeypatch.setattr('amalgkit.getfastq.ensure_mmseqs_contam_taxonomy_db_exists', lambda _args: '/tmp/mockdb')
+
+        def fake_run_mmseqs(args, input_path, target_db, result_prefix, tmp_dir):
+            _ = (args, target_db, tmp_dir)
+            os.makedirs(os.path.dirname(result_prefix), exist_ok=True)
+            lca_path = result_prefix + '_lca.tsv'
+            if input_path.endswith('_1.fastq.gz'):
+                # rA -> match, rB -> mismatch, rC -> unclassified(keep)
+                lines = [
+                    'rA/1\t11\tphylum\tmatch',
+                    'rB/1\t22\tphylum\tmismatch',
+                    'rC/1\t0\tno rank\tunclassified',
+                ]
+            else:
+                lines = [
+                    'rA/2\t11\tphylum\tmatch',
+                    'rB/2\t11\tphylum\tmatch',
+                    'rC/2\t0\tno rank\tunclassified',
+                ]
+            with open(lca_path, 'wt') as fout:
+                fout.write('\n'.join(lines) + '\n')
+            return lca_path
+
+        # Map assigned taxid to phylum-level taxid.
+        monkeypatch.setattr(
+            'amalgkit.getfastq.resolve_taxid_at_rank',
+            lambda taxid, rank_name, ncbi, rank_cache: 500 if int(taxid) == 11 else (600 if int(taxid) == 22 else None),
+        )
+        monkeypatch.setattr('amalgkit.getfastq.run_mmseqs_easy_taxonomy_single_fastq', fake_run_mmseqs)
+        monkeypatch.setattr('amalgkit.getfastq.ete4.NCBITaxa', lambda: object())
+
+        metadata, run_file_state = run_mmseqs_contam_filter(
+            sra_stat=sra_stat,
+            args=Args(),
+            output_dir=str(tmp_path),
+            metadata=metadata,
+            files={'{}_1.fastq.gz'.format(sra_id), '{}_2.fastq.gz'.format(sra_id)},
+            return_file_state=True,
+        )
+
+        out1 = tmp_path / '{}_1.contam.fastq.gz'.format(sra_id)
+        out2 = tmp_path / '{}_2.contam.fastq.gz'.format(sra_id)
+        assert out1.exists()
+        assert out2.exists()
+        assert count_fastq_records(str(out1)) == 2
+        assert count_fastq_records(str(out2)) == 2
+        assert metadata.df.loc[0, 'num_contam_in'] == 3
+        assert metadata.df.loc[0, 'num_contam_out'] == 2
+        assert metadata.df.loc[0, 'bp_contam_in'] == 24
+        assert metadata.df.loc[0, 'bp_contam_out'] == 16
+        assert run_file_state.has('{}_1.contam.fastq.gz'.format(sra_id))
+        assert run_file_state.has('{}_2.contam.fastq.gz'.format(sra_id))
+
+
+class TestRunMmseqsEasyTaxonomy:
+    def test_adds_search_type_for_nucleotide_db(self, monkeypatch):
+        class Args:
+            mmseqs_exe = 'mmseqs'
+            threads = 2
+            dump_print = False
+
+        observed = {'cmd': None}
+
+        def fake_run(cmd, stdout=None, stderr=None):
+            observed['cmd'] = cmd
+            return subprocess.CompletedProcess(cmd, 0, stdout=b'', stderr=b'')
+
+        monkeypatch.setattr('amalgkit.getfastq.resolve_mmseqs_easy_taxonomy_search_type', lambda **_kwargs: '3')
+        monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
+
+        out_path = run_mmseqs_easy_taxonomy_single_fastq(
+            args=Args(),
+            input_path='/tmp/in.fastq.gz',
+            target_db='/tmp/db',
+            result_prefix='/tmp/out/result',
+            tmp_dir='/tmp/out/tmp',
+        )
+
+        assert out_path == '/tmp/out/result_lca.tsv'
+        assert '--search-type' in observed['cmd']
+        assert observed['cmd'][observed['cmd'].index('--search-type') + 1] == '3'
+
+    def test_omits_search_type_for_aminoacid_db(self, monkeypatch):
+        class Args:
+            mmseqs_exe = 'mmseqs'
+            threads = 2
+            dump_print = False
+
+        observed = {'cmd': None}
+
+        def fake_run(cmd, stdout=None, stderr=None):
+            observed['cmd'] = cmd
+            return subprocess.CompletedProcess(cmd, 0, stdout=b'', stderr=b'')
+
+        monkeypatch.setattr('amalgkit.getfastq.resolve_mmseqs_easy_taxonomy_search_type', lambda **_kwargs: None)
+        monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
+
+        run_mmseqs_easy_taxonomy_single_fastq(
+            args=Args(),
+            input_path='/tmp/in.fastq.gz',
+            target_db='/tmp/db',
+            result_prefix='/tmp/out/result',
+            tmp_dir='/tmp/out/tmp',
+        )
+
+        assert '--search-type' not in observed['cmd']
 
 
 class TestGetfastqXmlRetrieval:
@@ -3290,6 +3449,48 @@ class TestSraRecovery:
 
         assert metadata.df.loc[0, 'num_written'] == 7
 
+    def test_run_fasterq_dump_trims_when_spot_range_flags_are_not_supported(self, tmp_path, monkeypatch):
+        sra_id = 'SRR001'
+        metadata = self._metadata_for_extraction(sra_id)
+        sra_stat = {
+            'sra_id': sra_id,
+            'getfastq_sra_dir': str(tmp_path),
+            'spot_length': 100,
+            'layout': 'paired',
+            'total_spot': 20,
+        }
+        args = self._args_for_fasterq_dump()
+        args.fastp = True
+        args._fasterq_supports_spot_range = False
+        observed = {'cmd': None, 'trim': None}
+
+        def fake_run(cmd, stdout=None, stderr=None):
+            observed['cmd'] = cmd
+            return subprocess.CompletedProcess(cmd, 0, stdout=b'spots written : 100\n', stderr=b'')
+
+        def fake_trim(*_args, **kwargs):
+            observed['trim'] = (kwargs.get('start'), kwargs.get('end'), kwargs.get('compress_to_gz'))
+            return {'': 0, '_1': 3, '_2': 3}, kwargs.get('file_state')
+
+        def fail_estimate(*_args, **_kwargs):
+            raise AssertionError('estimate_num_written_spots_from_fastq should not be called when trim counts are available.')
+
+        monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
+        monkeypatch.setattr('amalgkit.getfastq.trim_fasterq_output_files', fake_trim)
+        monkeypatch.setattr('amalgkit.getfastq.estimate_num_written_spots_from_fastq', fail_estimate)
+        monkeypatch.setattr('amalgkit.getfastq.detect_layout_from_file', lambda *args, **kwargs: args[0])
+        monkeypatch.setattr('amalgkit.getfastq.remove_unpaired_files', lambda *args, **kwargs: None)
+
+        metadata, _ = run_fasterq_dump(sra_stat, args, metadata, start=2, end=8)
+
+        cmd = observed['cmd']
+        assert '-N' not in cmd
+        assert '-X' not in cmd
+        assert observed['trim'] == (2, 8, False)
+        assert metadata.df.loc[0, 'num_written'] == 3
+        assert metadata.df.loc[0, 'num_dumped'] == 7
+        assert metadata.df.loc[0, 'num_rejected'] == 4
+
     def test_run_fasterq_dump_full_range_uses_reported_spots_without_recount(self, tmp_path, monkeypatch):
         sra_id = 'SRR001'
         metadata = self._metadata_for_extraction(sra_id)
@@ -4546,6 +4747,44 @@ class TestGetfastqDependencyChecks:
         monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
         check_getfastq_dependency(Args())
         assert called['cmds'] == [['fasterq-dump', '-h'], ['seqkit', '--help']]
+
+    def test_detects_missing_fasterq_spot_range_flags(self, monkeypatch):
+        class Args:
+            fasterq_dump_exe = 'fasterq-dump'
+
+        def fake_run(cmd, stdout=None, stderr=None):
+            if cmd[0] == 'fasterq-dump':
+                return subprocess.CompletedProcess(
+                    cmd,
+                    0,
+                    stdout=b'Usage:\\n  -x|--details\\n  -s|--split-spot\\n',
+                    stderr=b'',
+                )
+            return subprocess.CompletedProcess(cmd, 0, stdout=b'', stderr=b'')
+
+        monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
+        args = Args()
+        check_getfastq_dependency(args)
+        assert args._fasterq_supports_spot_range is False
+
+    def test_detects_fasterq_spot_range_flags_when_present(self, monkeypatch):
+        class Args:
+            fasterq_dump_exe = 'fasterq-dump'
+
+        def fake_run(cmd, stdout=None, stderr=None):
+            if cmd[0] == 'fasterq-dump':
+                return subprocess.CompletedProcess(
+                    cmd,
+                    0,
+                    stdout=b'Usage:\\n  -N|--minSpotId\\n  -X|--maxSpotId\\n',
+                    stderr=b'',
+                )
+            return subprocess.CompletedProcess(cmd, 0, stdout=b'', stderr=b'')
+
+        monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
+        args = Args()
+        check_getfastq_dependency(args)
+        assert args._fasterq_supports_spot_range is True
 
     def test_uses_default_fastp_exe_when_fastp_enabled_without_override(self, monkeypatch):
         class Args:

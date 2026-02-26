@@ -994,7 +994,7 @@ def get_sra_stat(sra_id, metadata, num_bp_per_sra=None):
 def get_newest_intermediate_file_extension(sra_stat, work_dir, files=None):
     ext_out = 'no_extension_found'
     # Order is important in this list. More downstream should come first.
-    extensions = ['.amalgkit.fastq.gz','.rename.fastq.gz','.fastp.fastq.gz','.fastq.gz','.fastq']
+    extensions = ['.amalgkit.fastq.gz','.rename.fastq.gz','.contam.fastq.gz','.rrna.fastq.gz','.fastp.fastq.gz','.fastq.gz','.fastq']
     if 'getfastq_sra_dir' not in sra_stat:
         sra_stat['getfastq_sra_dir'] = work_dir
     if files is None:
@@ -1068,7 +1068,7 @@ def is_there_unpaired_file(sra_stat, extensions, files=None):
 
 def detect_layout_from_file(sra_stat, files=None):
     # Order is important in this list. More downstream should come first.
-    extensions = ['.amalgkit.fastq.gz','.rename.fastq.gz','.fastp.fastq.gz','.fastq.gz','.fastq']
+    extensions = ['.amalgkit.fastq.gz','.rename.fastq.gz','.contam.fastq.gz','.rrna.fastq.gz','.fastp.fastq.gz','.fastq.gz','.fastq']
     if files is None:
         try:
             with os.scandir(sra_stat['getfastq_sra_dir']) as entries:

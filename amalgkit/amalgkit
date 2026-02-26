@@ -484,6 +484,18 @@ pge.add_argument('--sortmerna_download_dir', dest='download_dir', metavar='PATH'
                  required=False, action='store', help=argparse.SUPPRESS)
 pge.add_argument('--sortmerna_option', metavar='STR', default='', type=str, required=False, action='store',
                  help='default=%(default)s: Additional options passed to SortMeRNA.')
+pge.add_argument('--contam_filter', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
+                 help='default=%(default)s: Remove contaminant reads using MMseqs2 taxonomy (unclassified reads are retained).')
+pge.add_argument('--contam_filter_rank', metavar='species|genus|family|order|class|phylum|kingdom|domain',
+                 choices=['species', 'genus', 'family', 'order', 'class', 'phylum', 'kingdom', 'domain'],
+                 default='phylum', type=str, required=False, action='store',
+                 help='default=%(default)s: Taxonomic rank used for contaminant filtering against metadata taxid lineage.')
+pge.add_argument('--contam_filter_db_name', metavar='STR', default='UniRef90', type=str, required=False, action='store',
+                 help='default=%(default)s: MMseqs2 downloadable DB name used for contaminant filtering (passed to `mmseqs databases`).')
+pge.add_argument('--contam_filter_db', metavar='PATH|inferred', default='inferred', type=str, required=False, action='store',
+                 help='default=%(default)s: MMseqs2 taxonomy DB prefix path. "inferred" = out_dir/downloads/mmseqs_<db_name>.')
+pge.add_argument('--mmseqs_exe', metavar='PATH', default='mmseqs', type=str, required=False, action='store',
+                 help='default=%(default)s: PATH to mmseqs executable used for contaminant filtering.')
 pge.add_argument('--remove_sra', metavar='yes|no', default='yes', type=strtobool, required=False, action='store',
                  help='default=%(default)s: Remove downloaded SRA files after fastq extraction.')
 pge.add_argument('--remove_tmp', metavar='yes|no', default='yes', type=strtobool, required=False, action='store',

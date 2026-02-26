@@ -37,6 +37,8 @@ SORTMERNA_REFERENCE_SPECS = [
         'fasta_filename': 'silva_lsu.fasta',
     },
 ]
+CONTAM_FILTER_SUPPORTED_RANKS = ['domain', 'kingdom', 'phylum', 'class', 'order', 'family', 'genus', 'species']
+CONTAM_FILTER_DEFAULT_DB_NAME = 'UniRef90'
 GETFASTQ_STATS_COLUMNS = [
     'num_dumped',
     'num_rejected',
@@ -45,6 +47,8 @@ GETFASTQ_STATS_COLUMNS = [
     'num_fastp_out',
     'num_rrna_in',
     'num_rrna_out',
+    'num_contam_in',
+    'num_contam_out',
     'bp_dumped',
     'bp_rejected',
     'bp_written',
@@ -52,6 +56,8 @@ GETFASTQ_STATS_COLUMNS = [
     'bp_fastp_out',
     'bp_rrna_in',
     'bp_rrna_out',
+    'bp_contam_in',
+    'bp_contam_out',
     'bp_discarded',
     'fastp_duplication_rate',
     'fastp_insert_size_peak',
@@ -827,7 +833,14 @@ def check_getfastq_dependency(args):
         return out
 
     fasterq_dump_exe = getattr(args, 'fasterq_dump_exe', 'fasterq-dump')
-    probe_command([fasterq_dump_exe, '-h'], 'fasterq-dump')
+    fasterq_help = probe_command([fasterq_dump_exe, '-h'], 'fasterq-dump')
+    help_stdout_txt = fasterq_help.stdout.decode('utf8', errors='replace')
+    help_stderr_txt = fasterq_help.stderr.decode('utf8', errors='replace')
+    setattr(
+        args,
+        '_fasterq_supports_spot_range',
+        detect_fasterq_spot_range_support(help_stdout_txt=help_stdout_txt, help_stderr_txt=help_stderr_txt),
+    )
     seqkit_exe = resolve_seqkit_exe(args)
     probe_command([seqkit_exe, '--help'], 'seqkit')
     if bool(getattr(args, 'fastp', False)):
@@ -837,6 +850,10 @@ def check_getfastq_dependency(args):
         ensure_sortmerna_download_dir_exists(resolve_sortmerna_download_dir(args))
         sortmerna_exe = getattr(args, 'sortmerna_exe', 'sortmerna')
         probe_command([sortmerna_exe, '--version'], 'sortmerna')
+    if is_contam_filter_enabled(args):
+        mmseqs_exe = resolve_mmseqs_exe(args)
+        probe_command([mmseqs_exe, '--help'], 'mmseqs')
+        ensure_mmseqs_contam_taxonomy_db_exists(args)
     return None
 
 def remove_sra_path(path_downloaded_sra):
@@ -1161,6 +1178,24 @@ def is_rrna_filter_enabled(args):
         return bool(strtobool(raw))
     return bool(raw)
 
+def is_contam_filter_enabled(args):
+    raw = getattr(args, 'contam_filter', False)
+    if isinstance(raw, str):
+        return bool(strtobool(raw))
+    return bool(raw)
+
+def resolve_contam_filter_rank(args):
+    raw_rank = getattr(args, 'contam_filter_rank', 'phylum')
+    if raw_rank is None:
+        rank = 'phylum'
+    else:
+        rank = str(raw_rank).strip().lower()
+    if rank not in CONTAM_FILTER_SUPPORTED_RANKS:
+        raise ValueError(
+            '--contam_filter_rank must be one of: {}.'.format(', '.join(CONTAM_FILTER_SUPPORTED_RANKS))
+        )
+    return rank
+
 def resolve_filter_order(args):
     raw_order = getattr(args, 'filter_order', 'fastp_first')
     if raw_order is None:
@@ -1175,15 +1210,20 @@ def resolve_filter_order(args):
 def get_filter_execution_order(args):
     fastp_enabled = bool(getattr(args, 'fastp', False))
     rrna_enabled = is_rrna_filter_enabled(args)
+    contam_enabled = is_contam_filter_enabled(args)
+    filter_order = []
     if fastp_enabled and rrna_enabled:
         if resolve_filter_order(args) == 'rrna_first':
-            return ['rrna', 'fastp']
-        return ['fastp', 'rrna']
-    if rrna_enabled:
-        return ['rrna']
-    if fastp_enabled:
-        return ['fastp']
-    return []
+            filter_order = ['rrna', 'fastp']
+        else:
+            filter_order = ['fastp', 'rrna']
+    elif rrna_enabled:
+        filter_order = ['rrna']
+    elif fastp_enabled:
+        filter_order = ['fastp']
+    if contam_enabled:
+        filter_order.append('contam')
+    return filter_order
 
 def resolve_bp_amalgkit_source_column(args):
     filter_order = get_filter_execution_order(args)
@@ -1194,6 +1234,8 @@ def resolve_bp_amalgkit_source_column(args):
         return 'bp_fastp_out'
     if last_filter == 'rrna':
         return 'bp_rrna_out'
+    if last_filter == 'contam':
+        return 'bp_contam_out'
     raise ValueError('Unknown filter name in execution order: {}'.format(last_filter))
 
 def parse_sortmerna_option_args(sortmerna_option):
@@ -1216,6 +1258,123 @@ def resolve_sortmerna_download_dir(args):
     if normalized.lower() in ['', 'inferred']:
         return resolve_shared_download_dir(args)
     return os.path.realpath(normalized)
+
+def resolve_mmseqs_exe(args):
+    raw = getattr(args, 'mmseqs_exe', 'mmseqs')
+    if raw is None:
+        return 'mmseqs'
+    exe = str(raw).strip()
+    if exe == '':
+        return 'mmseqs'
+    return exe
+
+
+def resolve_mmseqs_dbtype(args, target_db):
+    if target_db is None:
+        return ''
+    target_db = str(target_db).strip()
+    if target_db == '':
+        return ''
+    cache = getattr(args, '_mmseqs_dbtype_cache', None)
+    if not isinstance(cache, dict):
+        cache = {}
+        setattr(args, '_mmseqs_dbtype_cache', cache)
+    if target_db in cache:
+        return cache[target_db]
+    mmseqs_exe = resolve_mmseqs_exe(args)
+    out = subprocess.run([mmseqs_exe, 'dbtype', target_db], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if out.returncode != 0:
+        raise RuntimeError(
+            'mmseqs dbtype failed (exit code {}) for DB {}: {}'.format(
+                out.returncode,
+                target_db,
+                out.stderr.decode('utf8', errors='replace'),
+            )
+        )
+    dbtype_txt = out.stdout.decode('utf8', errors='replace').strip().lower()
+    cache[target_db] = dbtype_txt
+    return dbtype_txt
+
+
+def resolve_mmseqs_easy_taxonomy_search_type(args, target_db):
+    dbtype_txt = resolve_mmseqs_dbtype(args=args, target_db=target_db)
+    if 'nucleotide' in dbtype_txt:
+        return '3'
+    return None
+
+def resolve_contam_filter_db_name(args):
+    raw = getattr(args, 'contam_filter_db_name', CONTAM_FILTER_DEFAULT_DB_NAME)
+    if raw is None:
+        return CONTAM_FILTER_DEFAULT_DB_NAME
+    db_name = str(raw).strip()
+    if db_name == '':
+        return CONTAM_FILTER_DEFAULT_DB_NAME
+    return db_name
+
+def resolve_contam_filter_db_path(args):
+    raw = getattr(args, 'contam_filter_db', 'inferred')
+    if raw is None:
+        raw = 'inferred'
+    normalized = str(raw).strip()
+    if normalized.lower() in ['', 'inferred']:
+        db_name = resolve_contam_filter_db_name(args).replace('/', '_')
+        return os.path.join(resolve_shared_download_dir(args), 'mmseqs_{}'.format(db_name.lower()))
+    return os.path.realpath(normalized)
+
+def ensure_contam_filter_db_parent_dir_exists(db_path):
+    parent = os.path.dirname(db_path)
+    if parent == '':
+        parent = '.'
+    if os.path.exists(parent) and (not os.path.isdir(parent)):
+        raise NotADirectoryError('MMseqs taxonomy DB parent path exists but is not a directory: {}'.format(parent))
+    os.makedirs(parent, exist_ok=True)
+    return parent
+
+def ensure_mmseqs_contam_taxonomy_db_exists(args):
+    db_path = resolve_contam_filter_db_path(args)
+    dbtype_path = db_path + '.dbtype'
+    if os.path.exists(dbtype_path):
+        if not os.path.isfile(dbtype_path):
+            raise IsADirectoryError('MMseqs taxonomy DB path exists but is not a file: {}'.format(dbtype_path))
+        return db_path
+    ensure_contam_filter_db_parent_dir_exists(db_path=db_path)
+    download_dir = resolve_sortmerna_download_dir(args)
+    if os.path.exists(download_dir) and (not os.path.isdir(download_dir)):
+        raise NotADirectoryError('Download path exists but is not a directory: {}'.format(download_dir))
+    os.makedirs(download_dir, exist_ok=True)
+    tmp_dir = os.path.join(download_dir, 'mmseqs_databases_tmp')
+    os.makedirs(tmp_dir, exist_ok=True)
+    mmseqs_exe = resolve_mmseqs_exe(args)
+    db_name = resolve_contam_filter_db_name(args)
+    db_cmd = [
+        mmseqs_exe,
+        'databases',
+        db_name,
+        db_path,
+        tmp_dir,
+        '--threads',
+        str(max(1, int(getattr(args, 'threads', 1)))),
+    ]
+    print('Downloading MMseqs taxonomy DB with command: {}'.format(' '.join(db_cmd)), flush=True)
+    out = subprocess.run(db_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if should_print_getfastq_command_output(args):
+        print('mmseqs databases stdout:')
+        print(out.stdout.decode('utf8', errors='replace'))
+        print('mmseqs databases stderr:')
+        print(out.stderr.decode('utf8', errors='replace'))
+    if out.returncode != 0:
+        raise RuntimeError(
+            'mmseqs databases failed (exit code {}). Command: {}\n{}'.format(
+                out.returncode,
+                ' '.join(db_cmd),
+                out.stderr.decode('utf8', errors='replace'),
+            )
+        )
+    if not os.path.exists(dbtype_path):
+        raise FileNotFoundError('MMseqs taxonomy DB was not generated: {}'.format(dbtype_path))
+    if not os.path.isfile(dbtype_path):
+        raise IsADirectoryError('MMseqs taxonomy DB path exists but is not a file: {}'.format(dbtype_path))
+    return db_path
 
 def ensure_sortmerna_download_dir_exists(download_dir):
     if os.path.exists(download_dir) and (not os.path.isdir(download_dir)):
@@ -1395,6 +1554,27 @@ def parse_fasterq_dump_written_reads(stdout_txt, stderr_txt):
     if len(matched) == 0:
         return None
     return int(matched[-1].replace(',', ''))
+
+
+def detect_fasterq_spot_range_support(help_stdout_txt, help_stderr_txt=''):
+    combined = '\n'.join([str(help_stdout_txt or ''), str(help_stderr_txt or '')])
+    if combined.strip() == '':
+        return True
+    has_start = ('-N|' in combined) or ('--minSpotId' in combined) or ('--min-spot-id' in combined.lower())
+    has_end = ('-X|' in combined) or ('--maxSpotId' in combined) or ('--max-spot-id' in combined.lower())
+    return bool(has_start and has_end)
+
+
+def resolve_fasterq_spot_range_support(args):
+    raw = getattr(args, '_fasterq_supports_spot_range', None)
+    if raw is None:
+        return True
+    if isinstance(raw, str):
+        try:
+            return bool(strtobool(raw))
+        except Exception:
+            return True
+    return bool(raw)
 
 def infer_written_spots_from_written_reads(sra_stat, written_reads, run_file_state):
     try:
@@ -1637,6 +1817,17 @@ def update_extraction_counts(metadata, ind_sra, written_spots, dumped_spots, spo
 def run_fasterq_dump(sra_stat, args, metadata, start, end, return_files=False, return_file_state=False):
     path_downloaded_sra = os.path.join(sra_stat['getfastq_sra_dir'], sra_stat['sra_id'] + '.sra')
     start, end = normalize_requested_spot_range(start=start, end=end)
+    is_partial_range = not is_full_requested_spot_range(sra_stat=sra_stat, start=start, end=end)
+    supports_spot_range = resolve_fasterq_spot_range_support(args)
+    trim_after_dump = bool(is_partial_range and (not supports_spot_range))
+    command_start = start
+    command_end = end
+    if trim_after_dump:
+        command_start = None
+        command_end = None
+        txt = 'fasterq-dump spot-range flags (-N/-X) are not supported by this version. '
+        txt += 'Dumping full run and trimming FASTQ to requested range.'
+        print(txt, flush=True)
     raw_size_check = getattr(args, 'fasterq_size_check', True)
     size_check = normalize_fasterq_size_check(raw_size_check)
     fasterq_dump_command = build_fasterq_dump_command(
@@ -1644,8 +1835,8 @@ def run_fasterq_dump(sra_stat, args, metadata, start, end, return_files=False, r
         sra_stat=sra_stat,
         path_downloaded_sra=path_downloaded_sra,
         size_check=size_check,
-        start=start,
-        end=end,
+        start=command_start,
+        end=command_end,
     )
     print('Total sampled bases:', "{:,}".format(sra_stat['spot_length'] * (end - start + 1)), 'bp')
     fqd_out = run_fasterq_dump_with_retry(
@@ -1657,13 +1848,27 @@ def run_fasterq_dump(sra_stat, args, metadata, start, end, return_files=False, r
     )
     ensure_fasterq_output_files_exist(sra_stat=sra_stat)
     run_file_state = RunFileState(work_dir=sra_stat['getfastq_sra_dir'])
-    written_spots, run_file_state = resolve_written_spots_from_fasterq_output(
-        sra_stat=sra_stat,
-        start=start,
-        end=end,
-        fqd_out=fqd_out,
-        run_file_state=run_file_state,
-    )
+    if trim_after_dump:
+        trimmed_counts, run_file_state = trim_fasterq_output_files(
+            sra_stat=sra_stat,
+            start=start,
+            end=end,
+            file_state=run_file_state,
+            args=args,
+            compress_to_gz=False,
+            return_file_state=True,
+        )
+        written_spots = calculate_written_spots_from_trim_counts(trimmed_counts)
+        if written_spots is not None:
+            print('Using trimmed FASTQ spot count after fallback extraction: {:,}'.format(written_spots))
+    else:
+        written_spots, run_file_state = resolve_written_spots_from_fasterq_output(
+            sra_stat=sra_stat,
+            start=start,
+            end=end,
+            fqd_out=fqd_out,
+            run_file_state=run_file_state,
+        )
     should_compress = should_compress_fasterq_output_before_filters(args)
     if should_compress:
         updated_file_state = compress_fasterq_output_files(
@@ -1722,7 +1927,7 @@ def remove_unpaired_files(sra_stat, files=None, file_state=None, return_file_sta
     )
     if (sra_stat['layout']=='paired'):
         # Order is important in this list. More downstream should come first.
-        extensions = ['.amalgkit.fastq.gz', '.rename.fastq.gz', '.fastp.fastq.gz', '.fastq.gz', '.fastq']
+        extensions = ['.amalgkit.fastq.gz', '.rename.fastq.gz', '.contam.fastq.gz', '.rrna.fastq.gz', '.fastp.fastq.gz', '.fastq.gz', '.fastq']
         for ext in extensions:
             single_filename = sra_stat['sra_id'] + ext
             if run_file_state.has(single_filename):
@@ -2580,6 +2785,317 @@ def run_sortmerna_rrna_filter(
         return_file_state=return_file_state,
     )
 
+def parse_fastq_header_read_id(header_line):
+    if isinstance(header_line, bytes):
+        header_txt = header_line.decode('utf8', errors='replace')
+    else:
+        header_txt = str(header_line)
+    header_txt = header_txt.strip()
+    if header_txt.startswith('@'):
+        header_txt = header_txt[1:]
+    if header_txt == '':
+        return ''
+    return header_txt.split()[0]
+
+def normalize_paired_read_core(read_id):
+    read_id = str(read_id).strip()
+    if read_id == '':
+        return ''
+    for suffix in ['/1', '/2', '_1', '_2', '.1', '.2', '-1', '-2']:
+        if read_id.endswith(suffix):
+            return read_id[:-len(suffix)]
+    return read_id
+
+def resolve_taxid_at_rank(taxid, rank_name, ncbi, rank_cache):
+    try:
+        taxid_int = int(taxid)
+    except (TypeError, ValueError):
+        return None
+    if taxid_int <= 0:
+        return None
+    if taxid_int in rank_cache:
+        return rank_cache[taxid_int]
+    resolved_taxid = None
+    try:
+        lineage = ncbi.get_lineage(taxid_int)
+        rank_dict = ncbi.get_rank(lineage)
+        for lineage_taxid, lineage_rank in rank_dict.items():
+            if lineage_rank == rank_name:
+                resolved_taxid = int(lineage_taxid)
+                break
+    except Exception:
+        resolved_taxid = None
+    rank_cache[taxid_int] = resolved_taxid
+    return resolved_taxid
+
+def parse_mmseqs_lca_mismatched_cores(lca_tsv_path, target_rank, target_rank_taxid, ncbi, rank_cache):
+    mismatched_cores = set()
+    if not os.path.exists(lca_tsv_path):
+        raise FileNotFoundError('MMseqs taxonomy output was not generated: {}'.format(lca_tsv_path))
+    if not os.path.isfile(lca_tsv_path):
+        raise IsADirectoryError('MMseqs taxonomy output path exists but is not a file: {}'.format(lca_tsv_path))
+    with open(lca_tsv_path, 'rt', encoding='utf-8', errors='replace') as fin:
+        for line in fin:
+            line = line.rstrip('\n')
+            if line == '':
+                continue
+            fields = line.split('\t')
+            if len(fields) < 2:
+                continue
+            read_id = parse_fastq_header_read_id(fields[0])
+            if read_id == '':
+                continue
+            try:
+                assigned_taxid = int(str(fields[1]).strip())
+            except (TypeError, ValueError):
+                continue
+            if assigned_taxid <= 0:
+                # Keep unclassified reads.
+                continue
+            assigned_rank_taxid = resolve_taxid_at_rank(
+                taxid=assigned_taxid,
+                rank_name=target_rank,
+                ncbi=ncbi,
+                rank_cache=rank_cache,
+            )
+            if assigned_rank_taxid is None:
+                continue
+            if assigned_rank_taxid != target_rank_taxid:
+                mismatched_cores.add(normalize_paired_read_core(read_id))
+    return mismatched_cores
+
+def ensure_empty_workdir(path_dir):
+    if os.path.exists(path_dir):
+        if os.path.isdir(path_dir):
+            shutil.rmtree(path_dir)
+        else:
+            os.remove(path_dir)
+    os.makedirs(path_dir, exist_ok=True)
+    return path_dir
+
+def run_mmseqs_easy_taxonomy_single_fastq(args, input_path, target_db, result_prefix, tmp_dir):
+    mmseqs_exe = resolve_mmseqs_exe(args)
+    command = [
+        mmseqs_exe,
+        'easy-taxonomy',
+        input_path,
+        target_db,
+        result_prefix,
+        tmp_dir,
+        '--threads',
+        str(max(1, int(getattr(args, 'threads', 1)))),
+        '--orf-filter',
+        '0',
+    ]
+    search_type = resolve_mmseqs_easy_taxonomy_search_type(args=args, target_db=target_db)
+    if search_type is not None:
+        command.extend(['--search-type', str(search_type)])
+    print('Command:', ' '.join(command))
+    out = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if should_print_getfastq_command_output(args):
+        print('mmseqs easy-taxonomy stdout:')
+        print(out.stdout.decode('utf8', errors='replace'))
+        print('mmseqs easy-taxonomy stderr:')
+        print(out.stderr.decode('utf8', errors='replace'))
+    if out.returncode != 0:
+        raise RuntimeError(
+            'mmseqs easy-taxonomy failed (exit code {}). Command: {}\n{}'.format(
+                out.returncode,
+                ' '.join(command),
+                out.stderr.decode('utf8', errors='replace'),
+            )
+        )
+    return result_prefix + '_lca.tsv'
+
+def filter_fastq_by_core_set(input_path, output_path, remove_cores):
+    if not os.path.exists(input_path):
+        raise FileNotFoundError('Contaminant-filter input FASTQ not found: {}'.format(input_path))
+    if not os.path.isfile(input_path):
+        raise IsADirectoryError('Contaminant-filter input path exists but is not a file: {}'.format(input_path))
+    if os.path.exists(output_path):
+        if not os.path.isfile(output_path):
+            raise IsADirectoryError('Contaminant-filter output path exists but is not a file: {}'.format(output_path))
+        os.remove(output_path)
+
+    input_open = gzip.open if str(input_path).endswith('.gz') else open
+    num_in = 0
+    num_out = 0
+    bp_in = 0
+    bp_out = 0
+    with input_open(input_path, 'rb') as fin, gzip.open(output_path, 'wb') as fout:
+        while True:
+            line1 = fin.readline()
+            if line1 == b'':
+                break
+            line2 = fin.readline()
+            line3 = fin.readline()
+            line4 = fin.readline()
+            if (line2 == b'') or (line3 == b'') or (line4 == b''):
+                raise ValueError('Malformed FASTQ (record truncated): {}'.format(input_path))
+            num_in += 1
+            seq_len = len(line2.rstrip(b'\r\n'))
+            bp_in += seq_len
+            read_id = parse_fastq_header_read_id(line1)
+            read_core = normalize_paired_read_core(read_id)
+            if read_core in remove_cores:
+                continue
+            fout.write(line1)
+            fout.write(line2)
+            fout.write(line3)
+            fout.write(line4)
+            num_out += 1
+            bp_out += seq_len
+    return num_in, num_out, bp_in, bp_out
+
+def resolve_run_target_rank_taxid(metadata, sra_stat, rank_name):
+    rank_col = 'taxid_' + rank_name
+    if rank_col not in metadata.df.columns:
+        raise ValueError('Column "{}" is required in metadata for contaminant filtering.'.format(rank_col))
+    ind_sra = sra_stat.get('metadata_idx', get_metadata_row_index_by_run(metadata, sra_stat['sra_id']))
+    raw_taxid = metadata.df.at[ind_sra, rank_col]
+    if pandas.isna(raw_taxid):
+        raise ValueError(
+            'Missing metadata {} for run {}. Disable --contam_filter or use metadata with taxid lineage.'.format(
+                rank_col,
+                sra_stat['sra_id'],
+            )
+        )
+    try:
+        target_rank_taxid = int(raw_taxid)
+    except (TypeError, ValueError) as exc:
+        raise ValueError('Invalid {} value for run {}: {}'.format(rank_col, sra_stat['sra_id'], raw_taxid)) from exc
+    if target_rank_taxid <= 0:
+        raise ValueError(
+            'Invalid metadata {} value for run {}: {}'.format(rank_col, sra_stat['sra_id'], raw_taxid)
+        )
+    return ind_sra, target_rank_taxid
+
+def run_mmseqs_contam_filter(
+    sra_stat,
+    args,
+    output_dir,
+    metadata,
+    files=None,
+    file_state=None,
+    known_input_counts=None,
+    return_files=False,
+    return_file_state=False,
+):
+    _ = known_input_counts  # Kept for signature compatibility with other filters.
+    if not is_contam_filter_enabled(args):
+        run_file_state = _resolve_run_file_state(work_dir=output_dir, files=files, file_state=file_state)
+        return finalize_run_fastp_return(
+            metadata=metadata,
+            run_file_state=run_file_state,
+            return_files=return_files,
+            return_file_state=return_file_state,
+        )
+    run_file_state = _resolve_run_file_state(work_dir=output_dir, files=files, file_state=file_state)
+    inext = get_or_detect_intermediate_extension(sra_stat, work_dir=output_dir, file_state=run_file_state)
+    sra_id = sra_stat['sra_id']
+    layout = sra_stat['layout']
+    rank_name = resolve_contam_filter_rank(args)
+    ind_sra, target_rank_taxid = resolve_run_target_rank_taxid(
+        metadata=metadata,
+        sra_stat=sra_stat,
+        rank_name=rank_name,
+    )
+    target_db = ensure_mmseqs_contam_taxonomy_db_exists(args)
+    if layout == 'single':
+        input_names = [sra_id + inext]
+        output_name_by_suffix = {'': sra_id + '.contam.fastq.gz'}
+    elif layout == 'paired':
+        input_names = [sra_id + '_1' + inext, sra_id + '_2' + inext]
+        output_name_by_suffix = {
+            '_1': sra_id + '_1.contam.fastq.gz',
+            '_2': sra_id + '_2.contam.fastq.gz',
+        }
+    else:
+        raise ValueError('Unsupported library layout for contaminant filtering: {}'.format(layout))
+
+    input_path_by_suffix = {}
+    if layout == 'single':
+        input_name = input_names[0]
+        if not run_file_state.has(input_name):
+            raise FileNotFoundError('Contaminant-filter input file not found: {}'.format(run_file_state.path(input_name)))
+        input_path_by_suffix[''] = run_file_state.path(input_name)
+    else:
+        for suffix in ['_1', '_2']:
+            input_name = sra_id + suffix + inext
+            if not run_file_state.has(input_name):
+                raise FileNotFoundError('Contaminant-filter input file not found: {}'.format(run_file_state.path(input_name)))
+            input_path_by_suffix[suffix] = run_file_state.path(input_name)
+
+    mmseqs_root = os.path.join(output_dir, 'mmseqs_contam_work')
+    ensure_empty_workdir(mmseqs_root)
+    ncbi = ete4.NCBITaxa()
+    rank_cache = {}
+    remove_cores = set()
+    for suffix, input_path in input_path_by_suffix.items():
+        query_tag = '{}{}'.format(sra_id, suffix)
+        query_root = os.path.join(mmseqs_root, query_tag)
+        result_prefix = os.path.join(query_root, 'result')
+        tmp_dir = os.path.join(query_root, 'tmp')
+        os.makedirs(query_root, exist_ok=True)
+        os.makedirs(tmp_dir, exist_ok=True)
+        lca_tsv = run_mmseqs_easy_taxonomy_single_fastq(
+            args=args,
+            input_path=input_path,
+            target_db=target_db,
+            result_prefix=result_prefix,
+            tmp_dir=tmp_dir,
+        )
+        remove_cores.update(
+            parse_mmseqs_lca_mismatched_cores(
+                lca_tsv_path=lca_tsv,
+                target_rank=rank_name,
+                target_rank_taxid=target_rank_taxid,
+                ncbi=ncbi,
+                rank_cache=rank_cache,
+            )
+        )
+    output_path_by_suffix = {}
+    counts_by_suffix = {}
+    for suffix, input_path in input_path_by_suffix.items():
+        output_name = output_name_by_suffix[suffix]
+        output_path = os.path.join(output_dir, output_name)
+        num_in, num_out, bp_in, bp_out = filter_fastq_by_core_set(
+            input_path=input_path,
+            output_path=output_path,
+            remove_cores=remove_cores,
+        )
+        output_path_by_suffix[suffix] = output_path
+        counts_by_suffix[suffix] = (num_in, num_out, bp_in, bp_out)
+        run_file_state.add(output_name)
+
+    if layout == 'single':
+        num_in, num_out, bp_in, bp_out = counts_by_suffix['']
+    else:
+        r1_in, r1_out, r1_bp_in, r1_bp_out = counts_by_suffix['_1']
+        r2_in, r2_out, r2_bp_in, r2_bp_out = counts_by_suffix['_2']
+        num_in = max(r1_in, r2_in)
+        num_out = max(r1_out, r2_out)
+        bp_in = r1_bp_in + r2_bp_in
+        bp_out = r1_bp_out + r2_bp_out
+    metadata.df.at[ind_sra, 'num_contam_in'] += int(num_in)
+    metadata.df.at[ind_sra, 'num_contam_out'] += int(num_out)
+    metadata.df.at[ind_sra, 'bp_contam_in'] += int(bp_in)
+    metadata.df.at[ind_sra, 'bp_contam_out'] += int(bp_out)
+
+    if bool(getattr(args, 'remove_tmp', False)):
+        remove_intermediate_files(sra_stat, ext=inext, work_dir=output_dir)
+        for input_name in input_names:
+            run_file_state.discard(input_name)
+        if os.path.isdir(mmseqs_root):
+            shutil.rmtree(mmseqs_root)
+    set_current_intermediate_extension(sra_stat, '.contam.fastq.gz')
+    return finalize_run_fastp_return(
+        metadata=metadata,
+        run_file_state=run_file_state,
+        return_files=return_files,
+        return_file_state=return_file_state,
+    )
+
 def rename_reads(sra_stat, args, output_dir, files=None, file_state=None, return_file_state=False):
     run_file_state = _resolve_run_file_state(work_dir=output_dir, files=files, file_state=file_state)
     inext = get_or_detect_intermediate_extension(sra_stat, work_dir=output_dir, file_state=run_file_state)
@@ -2788,6 +3304,7 @@ def is_2nd_round_needed(rate_obtained_1st, tol):
 
 def print_read_stats(args, metadata, g, sra_stat=None, individual=False):
     rrna_filter = is_rrna_filter_enabled(args)
+    contam_filter = is_contam_filter_enabled(args)
     if sra_stat is None:
         df = metadata.df
         print('Target size (--max_bp): {:,} bp'.format(g['max_bp']))
@@ -2803,6 +3320,9 @@ def print_read_stats(args, metadata, g, sra_stat=None, individual=False):
     if rrna_filter:
         print('Sum of SortMeRNA input reads: {:,} bp'.format(df['bp_rrna_in'].sum()))
         print('Sum of SortMeRNA non-rRNA reads: {:,} bp'.format(df['bp_rrna_out'].sum()))
+    if contam_filter:
+        print('Sum of contaminant-filter input reads: {:,} bp'.format(df['bp_contam_in'].sum()))
+        print('Sum of contaminant-filter output reads: {:,} bp'.format(df['bp_contam_out'].sum()))
     if individual:
         print('Individual SRA IDs:', ' '.join(df['run'].values))
         read_types = list()
@@ -2816,6 +3336,9 @@ def print_read_stats(args, metadata, g, sra_stat=None, individual=False):
         if rrna_filter:
             read_types = read_types + ['SortMeRNA input reads', 'SortMeRNA non-rRNA reads']
             keys = keys + ['bp_rrna_in', 'bp_rrna_out']
+        if contam_filter:
+            read_types = read_types + ['contaminant-filter input reads', 'contaminant-filter output reads']
+            keys = keys + ['bp_contam_in', 'bp_contam_out']
         if len(read_types) > 0:
             for rt, key in zip(read_types, keys):
                 values = ['{:,}'.format(s) for s in df[key].values]
@@ -2841,6 +3364,42 @@ def _apply_batch_to_entrez_metadata(metadata, args):
         sys.stderr.write('--batch {} is too large. Exiting.\n'.format(batch_value))
         sys.exit(0)
     metadata.df = metadata.df.reset_index(drop=True).loc[[batch - 1], :].copy()
+    return metadata
+
+def ensure_contam_filter_metadata_rank_taxids(metadata, args):
+    if not is_contam_filter_enabled(args):
+        return metadata
+    rank_name = resolve_contam_filter_rank(args)
+    if 'taxid' not in metadata.df.columns:
+        raise ValueError(
+            '--contam_filter requires "taxid" column in metadata. '
+            'Use metadata generated by `amalgkit metadata` or provide taxid values.'
+        )
+    metadata.df['taxid'] = pandas.to_numeric(metadata.df['taxid'], errors='coerce').astype('Int64')
+    rank_cols = ['taxid_' + rank for rank in CONTAM_FILTER_SUPPORTED_RANKS]
+    missing_rank_cols = [col for col in rank_cols if col not in metadata.df.columns]
+    if len(missing_rank_cols) > 0:
+        metadata.add_standard_rank_taxids()
+    else:
+        for col in rank_cols:
+            metadata.df[col] = pandas.to_numeric(metadata.df[col], errors='coerce').astype('Int64')
+    required_col = 'taxid_' + rank_name
+    if required_col not in metadata.df.columns:
+        raise ValueError('Failed to resolve metadata taxonomy rank column: {}'.format(required_col))
+    missing_mask = metadata.df[required_col].isna()
+    if missing_mask.any():
+        run_values = metadata.df.loc[missing_mask, 'run'].fillna('').astype(str).tolist() if 'run' in metadata.df.columns else []
+        run_values = [run_id for run_id in run_values if run_id.strip() != '']
+        preview = ', '.join(run_values[:10])
+        if len(run_values) > 10:
+            preview += ', ...'
+        raise ValueError(
+            'Missing {} in metadata for {} run(s): {}'.format(
+                required_col,
+                int(missing_mask.sum()),
+                preview if preview != '' else '(run IDs unavailable)',
+            )
+        )
     return metadata
 
 
@@ -2949,9 +3508,9 @@ def initialize_columns(metadata, g):
     time_keys = ['time_start_1st', 'time_end_1st', 'time_start_2nd', 'time_end_2nd',]
     spot_keys = ['spot_start_1st', 'spot_end_1st', 'spot_start_2nd', 'spot_end_2nd',]
     keys = (['num_dumped', 'num_rejected', 'num_written', 'num_fastp_in', 'num_fastp_out',
-             'num_rrna_in', 'num_rrna_out', 'bp_amalgkit',
+             'num_rrna_in', 'num_rrna_out', 'num_contam_in', 'num_contam_out', 'bp_amalgkit',
              'bp_dumped', 'bp_rejected', 'bp_written', 'bp_fastp_in', 'bp_fastp_out',
-             'bp_rrna_in', 'bp_rrna_out', 'bp_discarded', 'spot_length_amalgkit',
+             'bp_rrna_in', 'bp_rrna_out', 'bp_contam_in', 'bp_contam_out', 'bp_discarded', 'spot_length_amalgkit',
              'bp_still_available', 'bp_specified_for_extraction','rate_obtained','layout_amalgkit',
              'fastp_duplication_rate', 'fastp_insert_size_peak',]
             + time_keys + spot_keys)
@@ -3053,6 +3612,28 @@ def sequence_extraction(args, sra_stat, metadata, g, start, end):
                 'bp_total': max(0, int(delta_out)),
             }
             latest_stage_source = 'rrna'
+            continue
+        if filter_name == 'contam':
+            prev_contam_in = metadata.df.at[ind_sra, 'bp_contam_in']
+            prev_contam_out = metadata.df.at[ind_sra, 'bp_contam_out']
+            prev_num_contam_out = metadata.df.at[ind_sra, 'num_contam_out']
+            metadata, run_file_state = run_mmseqs_contam_filter(
+                sra_stat=sra_stat,
+                args=args,
+                output_dir=sra_stat['getfastq_sra_dir'],
+                metadata=metadata,
+                file_state=run_file_state,
+                return_file_state=True,
+            )
+            delta_num_out = metadata.df.at[ind_sra, 'num_contam_out'] - prev_num_contam_out
+            delta_in = metadata.df.at[ind_sra, 'bp_contam_in'] - prev_contam_in
+            delta_out = metadata.df.at[ind_sra, 'bp_contam_out'] - prev_contam_out
+            metadata.df.at[ind_sra, 'bp_discarded'] += max(0, delta_in - delta_out)
+            latest_stage_counts = {
+                'num_spots': max(0, int(delta_num_out)),
+                'bp_total': max(0, int(delta_out)),
+            }
+            latest_stage_source = 'contam'
             continue
         raise ValueError('Unsupported filter name in execution order: {}'.format(filter_name))
     if args.read_name == 'trinity':
@@ -3228,6 +3809,23 @@ def sequence_extraction_private(metadata, sra_stat, args):
                 known_input_counts=rrna_known_input_counts,
             )
             latest_stage_source = 'rrna'
+            continue
+        if filter_name == 'contam':
+            prev_num_contam_out = metadata.df.at[ind_sra, 'num_contam_out']
+            prev_bp_contam_out = metadata.df.at[ind_sra, 'bp_contam_out']
+            metadata = run_mmseqs_contam_filter(
+                sra_stat=sra_stat,
+                args=args,
+                output_dir=sra_stat['getfastq_sra_dir'],
+                metadata=metadata,
+            )
+            delta_num_out = metadata.df.at[ind_sra, 'num_contam_out'] - prev_num_contam_out
+            delta_bp_out = metadata.df.at[ind_sra, 'bp_contam_out'] - prev_bp_contam_out
+            latest_stage_counts = {
+                'num_spots': max(0, int(delta_num_out)),
+                'bp_total': max(0, int(delta_bp_out)),
+            }
+            latest_stage_source = 'contam'
             continue
         raise ValueError('Unsupported filter name in execution order: {}'.format(filter_name))
     inext = get_or_detect_intermediate_extension(sra_stat, work_dir=sra_stat['getfastq_sra_dir'])
@@ -3459,6 +4057,7 @@ def getfastq_main(args):
     check_getfastq_dependency(args)
     metadata = getfastq_metadata(args)
     metadata = remove_experiment_without_run(metadata)
+    metadata = ensure_contam_filter_metadata_rank_taxids(metadata, args)
     metadata = check_metadata_validity(metadata)
     g = initialize_global_params(args, metadata)
     metadata = initialize_columns(metadata, g)
