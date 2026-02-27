@@ -23,7 +23,7 @@ IDENTICAL_PAIRED_CHECKED_READS = 2000
 ID_LIST_METADATA_MAX_WORKERS = 4
 ID_LIST_VERBOSE_LIMIT = 20
 FASTQ_RECORD_COUNT_CHUNK_BYTES = 16 * 1024 * 1024
-SORTMERNA_REFERENCE_SPECS = [
+RRNA_REFERENCE_SPECS = [
     {
         'label': 'SILVA SSU',
         'url': 'https://ftp.arb-silva.de/release_138.2/Exports/SILVA_138.2_SSURef_NR99_tax_silva.fasta.gz',
@@ -847,9 +847,10 @@ def check_getfastq_dependency(args):
         fastp_exe = getattr(args, 'fastp_exe', 'fastp')
         probe_command([fastp_exe, '--help'], 'fastp')
     if is_rrna_filter_enabled(args):
-        ensure_sortmerna_download_dir_exists(resolve_sortmerna_download_dir(args))
-        sortmerna_exe = getattr(args, 'sortmerna_exe', 'sortmerna')
-        probe_command([sortmerna_exe, '--version'], 'sortmerna')
+        ensure_shared_download_dir_exists(resolve_shared_download_dir(args))
+        mmseqs_exe = resolve_mmseqs_exe(args)
+        probe_command([mmseqs_exe, '--help'], 'mmseqs')
+        ensure_mmseqs_rrna_reference_db_exists(args)
     if is_contam_filter_enabled(args):
         mmseqs_exe = resolve_mmseqs_exe(args)
         probe_command([mmseqs_exe, '--help'], 'mmseqs')
@@ -1238,25 +1239,14 @@ def resolve_bp_amalgkit_source_column(args):
         return 'bp_contam_out'
     raise ValueError('Unknown filter name in execution order: {}'.format(last_filter))
 
-def parse_sortmerna_option_args(sortmerna_option):
-    if not sortmerna_option:
-        return []
-    try:
-        return shlex.split(sortmerna_option)
-    except ValueError as e:
-        raise ValueError('Invalid --sortmerna_option string: {}'.format(sortmerna_option)) from e
-
 def resolve_shared_download_dir(args):
     return resolve_download_dir(args)
 
-def resolve_sortmerna_download_dir(args):
-    raw_dir = getattr(args, 'download_dir', 'inferred')
-    if raw_dir is None:
-        return resolve_shared_download_dir(args)
-    normalized = str(raw_dir).strip()
-    if normalized.lower() in ['', 'inferred']:
-        return resolve_shared_download_dir(args)
-    return os.path.realpath(normalized)
+def ensure_shared_download_dir_exists(download_dir):
+    if os.path.exists(download_dir) and (not os.path.isdir(download_dir)):
+        raise NotADirectoryError('Download path exists but is not a directory: {}'.format(download_dir))
+    os.makedirs(download_dir, exist_ok=True)
+    return download_dir
 
 def resolve_mmseqs_exe(args):
     raw = getattr(args, 'mmseqs_exe', 'mmseqs')
@@ -1343,10 +1333,7 @@ def ensure_mmseqs_contam_taxonomy_db_exists(args):
                 raise IsADirectoryError('MMseqs taxonomy DB path exists but is not a file: {}'.format(dbtype_path))
             return db_path
         ensure_contam_filter_db_parent_dir_exists(db_path=db_path)
-        download_dir = resolve_sortmerna_download_dir(args)
-        if os.path.exists(download_dir) and (not os.path.isdir(download_dir)):
-            raise NotADirectoryError('Download path exists but is not a directory: {}'.format(download_dir))
-        os.makedirs(download_dir, exist_ok=True)
+        download_dir = ensure_shared_download_dir_exists(resolve_shared_download_dir(args))
         tmp_dir = os.path.join(download_dir, 'mmseqs_databases_tmp')
         os.makedirs(tmp_dir, exist_ok=True)
         mmseqs_exe = resolve_mmseqs_exe(args)
@@ -1381,19 +1368,11 @@ def ensure_mmseqs_contam_taxonomy_db_exists(args):
             raise IsADirectoryError('MMseqs taxonomy DB path exists but is not a file: {}'.format(dbtype_path))
     return db_path
 
-def ensure_sortmerna_download_dir_exists(download_dir):
-    if os.path.exists(download_dir) and (not os.path.isdir(download_dir)):
-        raise NotADirectoryError(
-            'SortMeRNA download path exists but is not a directory: {}'.format(download_dir)
-        )
-    os.makedirs(download_dir, exist_ok=True)
-    return download_dir
-
-def download_sortmerna_reference_gz(url, gz_path, label):
+def download_rrna_reference_gz(url, gz_path, label):
     tmp_path = gz_path + '.tmp.{}'.format(time.time_ns())
     if os.path.exists(tmp_path):
         if os.path.isdir(tmp_path):
-            raise IsADirectoryError('Temporary SortMeRNA download path is a directory: {}'.format(tmp_path))
+            raise IsADirectoryError('Temporary rRNA reference download path is a directory: {}'.format(tmp_path))
         os.remove(tmp_path)
     print('Downloading {} reference: {}'.format(label, url), flush=True)
     try:
@@ -1404,44 +1383,117 @@ def download_sortmerna_reference_gz(url, gz_path, label):
         raise RuntimeError('Failed to download {} reference: {}'.format(label, url)) from e
     os.replace(tmp_path, gz_path)
 
-def expand_sortmerna_reference_gz(gz_path, fasta_path):
+def expand_rrna_reference_gz(gz_path, fasta_path):
     tmp_path = fasta_path + '.tmp.{}'.format(time.time_ns())
     if os.path.exists(tmp_path):
         if os.path.isdir(tmp_path):
-            raise IsADirectoryError('Temporary SortMeRNA expansion path is a directory: {}'.format(tmp_path))
+            raise IsADirectoryError('Temporary rRNA reference expansion path is a directory: {}'.format(tmp_path))
         os.remove(tmp_path)
     with gzip.open(gz_path, 'rb') as fin, open(tmp_path, 'wb') as fout:
         shutil.copyfileobj(fin, fout)
     os.replace(tmp_path, fasta_path)
 
-def ensure_sortmerna_reference_files_exist(args):
-    download_dir = ensure_sortmerna_download_dir_exists(resolve_sortmerna_download_dir(args))
-    lock_path = os.path.join(download_dir, '.sortmerna_refs.download.lock')
-    with acquire_exclusive_lock(lock_path=lock_path, lock_label='SortMeRNA reference download'):
+def ensure_rrna_reference_files_exist(args):
+    download_dir = ensure_shared_download_dir_exists(resolve_shared_download_dir(args))
+    lock_path = os.path.join(download_dir, '.rrna_refs.download.lock')
+    with acquire_exclusive_lock(lock_path=lock_path, lock_label='rRNA reference download'):
         refs = []
-        for ref_spec in SORTMERNA_REFERENCE_SPECS:
+        for ref_spec in RRNA_REFERENCE_SPECS:
             fasta_path = os.path.join(download_dir, ref_spec['fasta_filename'])
             gz_path = os.path.join(download_dir, ref_spec['gz_filename'])
             if os.path.exists(fasta_path):
                 if not os.path.isfile(fasta_path):
-                    raise IsADirectoryError('SortMeRNA reference path exists but is not a file: {}'.format(fasta_path))
+                    raise IsADirectoryError('rRNA reference path exists but is not a file: {}'.format(fasta_path))
                 refs.append(fasta_path)
                 continue
             if os.path.exists(gz_path) and (not os.path.isfile(gz_path)):
-                raise IsADirectoryError('SortMeRNA compressed reference path is not a file: {}'.format(gz_path))
+                raise IsADirectoryError('rRNA compressed reference path is not a file: {}'.format(gz_path))
             if not os.path.exists(gz_path):
-                download_sortmerna_reference_gz(
+                download_rrna_reference_gz(
                     url=ref_spec['url'],
                     gz_path=gz_path,
                     label=ref_spec['label'],
                 )
-            print('Expanding SortMeRNA reference: {}'.format(gz_path), flush=True)
-            expand_sortmerna_reference_gz(gz_path=gz_path, fasta_path=fasta_path)
+            print('Expanding rRNA reference: {}'.format(gz_path), flush=True)
+            expand_rrna_reference_gz(gz_path=gz_path, fasta_path=fasta_path)
             refs.append(fasta_path)
         return refs
 
-def resolve_sortmerna_refs(args):
-    return ensure_sortmerna_reference_files_exist(args)
+def resolve_mmseqs_rrna_reference_db_path(args):
+    download_dir = resolve_shared_download_dir(args)
+    return os.path.join(download_dir, 'mmseqs_rrna_silva')
+
+def write_mmseqs_rrna_reference_fasta(rrna_refs, fasta_path):
+    tmp_path = fasta_path + '.tmp.{}'.format(time.time_ns())
+    if os.path.exists(tmp_path):
+        if os.path.isdir(tmp_path):
+            raise IsADirectoryError('Temporary MMseqs rRNA FASTA path is a directory: {}'.format(tmp_path))
+        os.remove(tmp_path)
+    with open(tmp_path, 'wb') as fout:
+        for idx, ref_path in enumerate(rrna_refs):
+            with open(ref_path, 'rb') as fin:
+                shutil.copyfileobj(fin, fout)
+            if idx < (len(rrna_refs) - 1):
+                fout.write(b'\n')
+    os.replace(tmp_path, fasta_path)
+    return fasta_path
+
+def remove_mmseqs_db_artifacts(db_prefix):
+    db_prefix = os.path.realpath(db_prefix)
+    parent_dir = os.path.dirname(db_prefix)
+    base_name = os.path.basename(db_prefix)
+    if not os.path.isdir(parent_dir):
+        return
+    with os.scandir(parent_dir) as entries:
+        for entry in entries:
+            if (entry.name != base_name) and (not entry.name.startswith(base_name + '.')):
+                continue
+            path = entry.path
+            if entry.is_dir():
+                shutil.rmtree(path)
+            else:
+                os.remove(path)
+
+def ensure_mmseqs_rrna_reference_db_exists(args):
+    download_dir = ensure_shared_download_dir_exists(resolve_shared_download_dir(args))
+    db_path = resolve_mmseqs_rrna_reference_db_path(args)
+    dbtype_path = db_path + '.dbtype'
+    if os.path.exists(dbtype_path):
+        if not os.path.isfile(dbtype_path):
+            raise IsADirectoryError('MMseqs rRNA DB path exists but is not a file: {}'.format(dbtype_path))
+        return db_path
+    lock_path = db_path + '.build.lock'
+    with acquire_exclusive_lock(lock_path=lock_path, lock_label='MMseqs rRNA DB build'):
+        if os.path.exists(dbtype_path):
+            if not os.path.isfile(dbtype_path):
+                raise IsADirectoryError('MMseqs rRNA DB path exists but is not a file: {}'.format(dbtype_path))
+            return db_path
+        rrna_refs = ensure_rrna_reference_files_exist(args)
+        combined_fasta = os.path.join(download_dir, 'mmseqs_rrna_silva_refs.fasta')
+        write_mmseqs_rrna_reference_fasta(rrna_refs=rrna_refs, fasta_path=combined_fasta)
+        remove_mmseqs_db_artifacts(db_prefix=db_path)
+        mmseqs_exe = resolve_mmseqs_exe(args)
+        command = [mmseqs_exe, 'createdb', combined_fasta, db_path]
+        print('Building MMseqs rRNA DB with command: {}'.format(' '.join(command)), flush=True)
+        out = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if should_print_getfastq_command_output(args):
+            print('mmseqs createdb stdout:')
+            print(out.stdout.decode('utf8', errors='replace'))
+            print('mmseqs createdb stderr:')
+            print(out.stderr.decode('utf8', errors='replace'))
+        if out.returncode != 0:
+            raise RuntimeError(
+                'mmseqs createdb failed (exit code {}). Command: {}\n{}'.format(
+                    out.returncode,
+                    ' '.join(command),
+                    out.stderr.decode('utf8', errors='replace'),
+                )
+            )
+        if not os.path.exists(dbtype_path):
+            raise FileNotFoundError('MMseqs rRNA DB was not generated: {}'.format(dbtype_path))
+        if not os.path.isfile(dbtype_path):
+            raise IsADirectoryError('MMseqs rRNA DB path exists but is not a file: {}'.format(dbtype_path))
+    return db_path
 
 def estimate_num_written_spots_from_fastq(sra_stat, files=None, file_state=None):
     work_dir = sra_stat['getfastq_sra_dir']
@@ -2301,240 +2353,6 @@ def run_fastp(
         return_file_state=return_file_state,
     )
 
-def prepare_sortmerna_workdir(work_dir):
-    os.makedirs(work_dir, exist_ok=True)
-    for sub_dir in ['kvdb', 'out']:
-        sub_path = os.path.join(work_dir, sub_dir)
-        if not os.path.exists(sub_path):
-            continue
-        if os.path.isdir(sub_path):
-            shutil.rmtree(sub_path)
-        else:
-            os.remove(sub_path)
-    os.makedirs(os.path.join(work_dir, 'out'), exist_ok=True)
-
-def build_sortmerna_command(args, sortmerna_refs, input_paths, layout, work_dir, other_prefix):
-    sortmerna_exe = getattr(args, 'sortmerna_exe', 'sortmerna')
-    command = [sortmerna_exe]
-    for sortmerna_ref in sortmerna_refs:
-        command.extend(['--ref', sortmerna_ref])
-    for input_path in input_paths:
-        command.extend(['--reads', input_path])
-    command.extend([
-        '--workdir', work_dir,
-        '--threads', str(max(1, int(getattr(args, 'threads', 1)))),
-        '--fastx',
-        '--other', other_prefix,
-    ])
-    if layout == 'paired':
-        command.extend(['--paired_in', '--out2'])
-    command.extend(parse_sortmerna_option_args(getattr(args, 'sortmerna_option', '')))
-    return command
-
-def execute_sortmerna_command(sortmerna_command, args):
-    print('Command:', ' '.join(sortmerna_command))
-    sm_out = subprocess.run(sortmerna_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if should_print_getfastq_command_output(args):
-        print('sortmerna stdout:')
-        print(sm_out.stdout.decode('utf8', errors='replace'))
-        print('sortmerna stderr:')
-        print(sm_out.stderr.decode('utf8', errors='replace'))
-    if sm_out.returncode != 0:
-        raise RuntimeError(
-            'SortMeRNA did not finish safely (exit code {}). Command: {}\n{}'.format(
-                sm_out.returncode,
-                ' '.join(sortmerna_command),
-                sm_out.stderr.decode('utf8', errors='replace'),
-            )
-        )
-    return sm_out
-
-def _parse_int_matches_from_text(pattern, text):
-    if text is None:
-        return []
-    matched_values = re.findall(pattern, text, flags=re.IGNORECASE)
-    parsed = []
-    for raw in matched_values:
-        try:
-            parsed.append(int(str(raw).replace(',', '')))
-        except (TypeError, ValueError):
-            continue
-    return parsed
-
-def infer_sortmerna_spot_divisor(layout, reads_total, num_input_files=1, known_input_counts=None):
-    if layout != 'paired':
-        return 1
-    default_divisor = max(1, int(num_input_files))
-    parsed_known_input = None
-    if known_input_counts is not None:
-        try:
-            parsed_known_input = parse_known_fastq_counts(known_input_counts)
-        except Exception:
-            parsed_known_input = None
-    if parsed_known_input is None:
-        return default_divisor
-    known_input_spots = parsed_known_input[0]
-    if known_input_spots <= 0:
-        return default_divisor
-    ratio = float(reads_total) / float(known_input_spots)
-    candidate_divisors = sorted(set([1, 2, default_divisor]))
-    best_divisor = min(candidate_divisors, key=lambda candidate: abs(ratio - float(candidate)))
-    return max(1, int(best_divisor))
-
-def parse_sortmerna_output_counts(stdout_txt, stderr_txt, layout, num_input_files=1, known_input_counts=None):
-    combined_txt = '\n'.join([stdout_txt or '', stderr_txt or ''])
-    reads_added_values = _parse_int_matches_from_text(
-        pattern=r'Reads\s+added:\s*([0-9][0-9,]*)',
-        text=combined_txt,
-    )
-    aligned_values = _parse_int_matches_from_text(
-        pattern=r'Num\s+aligned\s+reads\s*\(passing\s+E-value\)\s*:\s*([0-9][0-9,]*)',
-        text=combined_txt,
-    )
-    all_reads_count_values = _parse_int_matches_from_text(
-        pattern=r'all_reads_count\s*=\s*([0-9][0-9,]*)',
-        text=combined_txt,
-    )
-    total_reads_mapped_values = _parse_int_matches_from_text(
-        pattern=r'total_reads_mapped\s*=\s*([0-9][0-9,]*)',
-        text=combined_txt,
-    )
-    all_reads_len_values = _parse_int_matches_from_text(
-        pattern=r'all_reads_len\s*=\s*([0-9][0-9,]*)',
-        text=combined_txt,
-    )
-    reads_total = max(reads_added_values) if len(reads_added_values) > 0 else None
-    if reads_total is None:
-        reads_total = max(all_reads_count_values) if len(all_reads_count_values) > 0 else None
-    mapped_total = max(aligned_values) if len(aligned_values) > 0 else None
-    if mapped_total is None:
-        mapped_total = max(total_reads_mapped_values) if len(total_reads_mapped_values) > 0 else None
-    if (reads_total is None) or (mapped_total is None):
-        return None
-    reads_non_rrna_total = max(0, int(reads_total) - int(mapped_total))
-    divisor = infer_sortmerna_spot_divisor(
-        layout=layout,
-        reads_total=reads_total,
-        num_input_files=num_input_files,
-        known_input_counts=known_input_counts,
-    )
-    num_out_spots = int(round(float(reads_non_rrna_total) / float(divisor)))
-    num_out_spots = max(0, num_out_spots)
-    bp_out = None
-    parsed_known_input = None
-    if known_input_counts is not None:
-        try:
-            parsed_known_input = parse_known_fastq_counts(known_input_counts)
-        except Exception:
-            parsed_known_input = None
-    if (parsed_known_input is not None) and (parsed_known_input[0] > 0):
-        bp_per_spot = float(parsed_known_input[1]) / float(parsed_known_input[0])
-        bp_out = int(round(float(num_out_spots) * bp_per_spot))
-    elif (len(all_reads_len_values) > 0) and (reads_total > 0):
-        all_reads_len_total = max(all_reads_len_values)
-        bp_per_spot = (float(all_reads_len_total) * float(divisor)) / float(reads_total)
-        bp_out = int(round(float(num_out_spots) * bp_per_spot))
-    if bp_out is None:
-        return {'num_spots': num_out_spots}
-    return {
-        'num_spots': num_out_spots,
-        'bp_total': max(0, int(bp_out)),
-    }
-
-def collect_sortmerna_other_fastq_candidates(other_prefix):
-    out_dir = os.path.dirname(other_prefix)
-    out_basename = os.path.basename(other_prefix)
-    if not os.path.isdir(out_dir):
-        return []
-    candidates = []
-    valid_exts = ('.fastq', '.fq', '.fastq.gz', '.fq.gz')
-    with os.scandir(out_dir) as entries:
-        for entry in entries:
-            if (not entry.is_file()) or (not entry.name.startswith(out_basename)):
-                continue
-            if not entry.name.lower().endswith(valid_exts):
-                continue
-            candidates.append(entry.path)
-    return sorted(candidates)
-
-def resolve_sortmerna_single_output_path(other_prefix, candidates):
-    valid_exts = ('.fastq.gz', '.fq.gz', '.fastq', '.fq')
-    for ext in valid_exts:
-        preferred = other_prefix + ext
-        if preferred in candidates:
-            return preferred
-    if len(candidates) == 1:
-        return candidates[0]
-    return None
-
-def resolve_sortmerna_paired_output_paths(other_prefix, candidates):
-    valid_exts = ('.fastq.gz', '.fq.gz', '.fastq', '.fq')
-    pair_suffixes = [
-        ('_fwd', '_rev'),
-        ('-fwd', '-rev'),
-        ('.fwd', '.rev'),
-        ('_paired_fwd', '_paired_rev'),
-        ('-paired-fwd', '-paired-rev'),
-        ('_R1', '_R2'),
-        ('_r1', '_r2'),
-        ('_1', '_2'),
-        ('.1', '.2'),
-        ('-1', '-2'),
-    ]
-    candidate_set = set(candidates)
-    for suffix1, suffix2 in pair_suffixes:
-        for ext in valid_exts:
-            path1 = other_prefix + suffix1 + ext
-            path2 = other_prefix + suffix2 + ext
-            if (path1 in candidate_set) and (path2 in candidate_set):
-                return path1, path2
-    fwd_tokens = ['fwd', 'forward', '_r1', '.r1', '-r1', '_1.', '.1.', '-1.']
-    rev_tokens = ['rev', 'reverse', '_r2', '.r2', '-r2', '_2.', '.2.', '-2.']
-    fwd_candidates = []
-    rev_candidates = []
-    for candidate in candidates:
-        lower_name = os.path.basename(candidate).lower()
-        if any([token in lower_name for token in fwd_tokens]):
-            fwd_candidates.append(candidate)
-            continue
-        if any([token in lower_name for token in rev_tokens]):
-            rev_candidates.append(candidate)
-            continue
-    if (len(fwd_candidates) == 1) and (len(rev_candidates) == 1):
-        return fwd_candidates[0], rev_candidates[0]
-    return None, None
-
-def create_empty_fastq_gz(path_fastq_gz):
-    if os.path.exists(path_fastq_gz):
-        if not os.path.isfile(path_fastq_gz):
-            raise IsADirectoryError('Output path exists but is not a file: {}'.format(path_fastq_gz))
-        os.remove(path_fastq_gz)
-    with gzip.open(path_fastq_gz, 'wb'):
-        pass
-
-def materialize_sortmerna_output(source_path, dest_path, args, seqkit_threads=None):
-    if source_path is None:
-        create_empty_fastq_gz(dest_path)
-        return
-    if not os.path.exists(source_path):
-        raise FileNotFoundError('SortMeRNA output file not found: {}'.format(source_path))
-    if not os.path.isfile(source_path):
-        raise IsADirectoryError('SortMeRNA output path exists but is not a file: {}'.format(source_path))
-    if os.path.exists(dest_path):
-        if not os.path.isfile(dest_path):
-            raise IsADirectoryError('SortMeRNA destination path exists but is not a file: {}'.format(dest_path))
-        os.remove(dest_path)
-    if source_path.endswith('.gz'):
-        shutil.move(source_path, dest_path)
-    else:
-        compress_fastq_with_seqkit(
-            path_fastq=source_path,
-            path_fastq_gz=dest_path,
-            args=args,
-            command_label='SortMeRNA output compression with seqkit',
-            seqkit_threads=seqkit_threads,
-        )
-
 def parse_known_fastq_counts(known_counts):
     if known_counts is None:
         return None
@@ -2607,190 +2425,6 @@ def update_metadata_after_rrna_filter(
     metadata.df.at[ind_sra, 'bp_rrna_in'] += bp_in
     metadata.df.at[ind_sra, 'bp_rrna_out'] += bp_out
     return metadata
-
-def run_sortmerna_rrna_filter(
-    sra_stat,
-    args,
-    output_dir,
-    metadata,
-    files=None,
-    file_state=None,
-    known_input_counts=None,
-    return_files=False,
-    return_file_state=False,
-):
-    if not is_rrna_filter_enabled(args):
-        run_file_state = _resolve_run_file_state(work_dir=output_dir, files=files, file_state=file_state)
-        return finalize_run_fastp_return(
-            metadata=metadata,
-            run_file_state=run_file_state,
-            return_files=return_files,
-            return_file_state=return_file_state,
-        )
-    run_file_state = _resolve_run_file_state(work_dir=output_dir, files=files, file_state=file_state)
-    inext = get_or_detect_intermediate_extension(sra_stat, work_dir=output_dir, file_state=run_file_state)
-    sra_id = sra_stat['sra_id']
-    layout = sra_stat['layout']
-    if layout == 'single':
-        input_names = [sra_id + inext]
-        output_name_by_suffix = {'': sra_id + '.rrna.fastq.gz'}
-    elif layout == 'paired':
-        input_names = [sra_id + '_1' + inext, sra_id + '_2' + inext]
-        output_name_by_suffix = {
-            '_1': sra_id + '_1.rrna.fastq.gz',
-            '_2': sra_id + '_2.rrna.fastq.gz',
-        }
-    else:
-        raise ValueError('Unsupported library layout for SortMeRNA filtering: {}'.format(layout))
-    input_paths = {}
-    for input_name in input_names:
-        if not run_file_state.has(input_name):
-            raise FileNotFoundError('SortMeRNA input file not found: {}'.format(run_file_state.path(input_name)))
-        input_paths[input_name] = run_file_state.path(input_name)
-    sortmerna_refs = resolve_sortmerna_refs(args)
-    sortmerna_work_dir = os.path.join(output_dir, 'sortmerna_work')
-    prepare_sortmerna_workdir(sortmerna_work_dir)
-    other_prefix = os.path.join(sortmerna_work_dir, 'out', 'non_rrna')
-    sortmerna_command = build_sortmerna_command(
-        args=args,
-        sortmerna_refs=sortmerna_refs,
-        input_paths=[input_paths[input_name] for input_name in input_names],
-        layout=layout,
-        work_dir=sortmerna_work_dir,
-        other_prefix=other_prefix,
-    )
-    sm_out = execute_sortmerna_command(sortmerna_command=sortmerna_command, args=args)
-    sm_stdout_txt = sm_out.stdout.decode('utf8', errors='replace')
-    sm_stderr_txt = sm_out.stderr.decode('utf8', errors='replace')
-    known_output_counts = parse_sortmerna_output_counts(
-        stdout_txt=sm_stdout_txt,
-        stderr_txt=sm_stderr_txt,
-        layout=layout,
-        num_input_files=len(input_names),
-        known_input_counts=known_input_counts,
-    )
-    if isinstance(known_output_counts, dict):
-        if ('num_spots' in known_output_counts) and ('bp_total' in known_output_counts):
-            print(
-                'Using SortMeRNA log-derived output counts: {:,} reads, {:,} bp.'.format(
-                    int(known_output_counts['num_spots']),
-                    int(known_output_counts['bp_total']),
-                ),
-                flush=True,
-            )
-        elif 'num_spots' in known_output_counts:
-            print(
-                'Using SortMeRNA log-derived output read count: {:,} reads.'.format(
-                    int(known_output_counts['num_spots'])
-                ),
-                flush=True,
-            )
-    candidates = collect_sortmerna_other_fastq_candidates(other_prefix=other_prefix)
-    output_paths = {}
-    if layout == 'single':
-        source_path = resolve_sortmerna_single_output_path(other_prefix=other_prefix, candidates=candidates)
-        if (source_path is None) and (len(candidates) > 0):
-            txt = 'Could not resolve non-rRNA output file from SortMeRNA. Candidates: {}'
-            raise FileNotFoundError(txt.format(', '.join(candidates)))
-        output_name = output_name_by_suffix['']
-        output_path = os.path.join(output_dir, output_name)
-        materialize_sortmerna_output(
-            source_path=source_path,
-            dest_path=output_path,
-            args=args,
-            seqkit_threads=resolve_seqkit_threads(args),
-        )
-        run_file_state.add(output_name)
-        output_paths[''] = output_path
-    else:
-        source_path1, source_path2 = resolve_sortmerna_paired_output_paths(
-            other_prefix=other_prefix,
-            candidates=candidates,
-        )
-        if (source_path1 is None) and (source_path2 is None) and (len(candidates) > 0):
-            txt = 'Could not resolve paired non-rRNA output files from SortMeRNA. Candidates: {}'
-            raise FileNotFoundError(txt.format(', '.join(candidates)))
-        if (source_path1 is None) != (source_path2 is None):
-            txt = 'Could not resolve paired non-rRNA output files from SortMeRNA. Candidates: {}'
-            raise FileNotFoundError(txt.format(', '.join(candidates)))
-        output_name1 = output_name_by_suffix['_1']
-        output_name2 = output_name_by_suffix['_2']
-        output_path1 = os.path.join(output_dir, output_name1)
-        output_path2 = os.path.join(output_dir, output_name2)
-        total_seqkit_threads = resolve_seqkit_threads(args)
-        materialize_jobs = [
-            (source_path1, output_path1, output_name1, '_1'),
-            (source_path2, output_path2, output_name2, '_2'),
-        ]
-        worker_count = min(len(materialize_jobs), total_seqkit_threads)
-        worker_count = max(1, worker_count)
-        threads_per_worker = max(1, int(total_seqkit_threads / worker_count))
-        if worker_count <= 1:
-            for source_path, output_path, _output_name, _suffix in materialize_jobs:
-                materialize_sortmerna_output(
-                    source_path=source_path,
-                    dest_path=output_path,
-                    args=args,
-                    seqkit_threads=threads_per_worker,
-                )
-        else:
-            print(
-                'Materializing SortMeRNA paired outputs with {:,} parallel worker(s), {:,} thread(s) each.'.format(
-                    worker_count,
-                    threads_per_worker,
-                ),
-                flush=True,
-            )
-            def materialize_single_job(job_idx):
-                source_path, output_path, _output_name, _suffix = materialize_jobs[job_idx]
-                materialize_sortmerna_output(
-                    source_path=source_path,
-                    dest_path=output_path,
-                    args=args,
-                    seqkit_threads=threads_per_worker,
-                )
-                return job_idx
-            _, failures = run_tasks_with_optional_threads(
-                task_items=list(range(len(materialize_jobs))),
-                task_fn=materialize_single_job,
-                max_workers=worker_count,
-            )
-            if failures:
-                details = '; '.join([
-                    '{}: {}'.format(materialize_jobs[job_idx][3], exc)
-                    for job_idx, exc in failures
-                ])
-                raise RuntimeError('SortMeRNA output materialization failed for paired FASTQ files. {}'.format(details))
-        run_file_state.add(output_name1)
-        run_file_state.add(output_name2)
-        output_paths['_1'] = output_path1
-        output_paths['_2'] = output_path2
-    input_paths_by_suffix = {}
-    if layout == 'single':
-        input_paths_by_suffix[''] = input_paths[sra_id + inext]
-    else:
-        input_paths_by_suffix['_1'] = input_paths[sra_id + '_1' + inext]
-        input_paths_by_suffix['_2'] = input_paths[sra_id + '_2' + inext]
-    metadata = update_metadata_after_rrna_filter(
-        metadata=metadata,
-        sra_stat=sra_stat,
-        input_paths=input_paths_by_suffix,
-        output_paths=output_paths,
-        args=args,
-        known_input_counts=known_input_counts,
-        known_output_counts=known_output_counts,
-    )
-    if bool(getattr(args, 'remove_tmp', False)):
-        remove_intermediate_files(sra_stat, ext=inext, work_dir=output_dir)
-        for input_name in input_names:
-            run_file_state.discard(input_name)
-    set_current_intermediate_extension(sra_stat, '.rrna.fastq.gz')
-    return finalize_run_fastp_return(
-        metadata=metadata,
-        run_file_state=run_file_state,
-        return_files=return_files,
-        return_file_state=return_file_state,
-    )
 
 def parse_fastq_header_read_id(header_line):
     if isinstance(header_line, bytes):
@@ -2914,6 +2548,57 @@ def run_mmseqs_easy_taxonomy_single_fastq(args, input_path, target_db, result_pr
         )
     return result_prefix + '_lca.tsv'
 
+def run_mmseqs_easy_search_single_fastq(args, input_path, target_db, result_tsv, tmp_dir):
+    mmseqs_exe = resolve_mmseqs_exe(args)
+    command = [
+        mmseqs_exe,
+        'easy-search',
+        input_path,
+        target_db,
+        result_tsv,
+        tmp_dir,
+        '--threads',
+        str(max(1, int(getattr(args, 'threads', 1)))),
+        '--search-type',
+        '3',
+        '--format-output',
+        'query',
+    ]
+    print('Command:', ' '.join(command))
+    out = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if should_print_getfastq_command_output(args):
+        print('mmseqs easy-search stdout:')
+        print(out.stdout.decode('utf8', errors='replace'))
+        print('mmseqs easy-search stderr:')
+        print(out.stderr.decode('utf8', errors='replace'))
+    if out.returncode != 0:
+        raise RuntimeError(
+            'mmseqs easy-search failed (exit code {}). Command: {}\n{}'.format(
+                out.returncode,
+                ' '.join(command),
+                out.stderr.decode('utf8', errors='replace'),
+            )
+        )
+    return result_tsv
+
+def parse_mmseqs_search_matched_cores(result_tsv_path):
+    matched_cores = set()
+    if not os.path.exists(result_tsv_path):
+        return matched_cores
+    if not os.path.isfile(result_tsv_path):
+        raise IsADirectoryError('MMseqs search output path exists but is not a file: {}'.format(result_tsv_path))
+    with open(result_tsv_path, 'rt', encoding='utf-8', errors='replace') as fin:
+        for line in fin:
+            line = line.rstrip('\n')
+            if line == '':
+                continue
+            query_id = line.split('\t', 1)[0]
+            read_id = parse_fastq_header_read_id(query_id)
+            if read_id == '':
+                continue
+            matched_cores.add(normalize_paired_read_core(read_id))
+    return matched_cores
+
 def filter_fastq_by_core_set(input_path, output_path, remove_cores):
     if not os.path.exists(input_path):
         raise FileNotFoundError('Contaminant-filter input FASTQ not found: {}'.format(input_path))
@@ -2953,6 +2638,152 @@ def filter_fastq_by_core_set(input_path, output_path, remove_cores):
             num_out += 1
             bp_out += seq_len
     return num_in, num_out, bp_in, bp_out
+
+def run_mmseqs_rrna_filter(
+    sra_stat,
+    args,
+    output_dir,
+    metadata,
+    files=None,
+    file_state=None,
+    known_input_counts=None,
+    return_files=False,
+    return_file_state=False,
+):
+    if not is_rrna_filter_enabled(args):
+        run_file_state = _resolve_run_file_state(work_dir=output_dir, files=files, file_state=file_state)
+        return finalize_run_fastp_return(
+            metadata=metadata,
+            run_file_state=run_file_state,
+            return_files=return_files,
+            return_file_state=return_file_state,
+        )
+    run_file_state = _resolve_run_file_state(work_dir=output_dir, files=files, file_state=file_state)
+    inext = get_or_detect_intermediate_extension(sra_stat, work_dir=output_dir, file_state=run_file_state)
+    sra_id = sra_stat['sra_id']
+    layout = sra_stat['layout']
+    if layout == 'single':
+        input_names = [sra_id + inext]
+        output_name_by_suffix = {'': sra_id + '.rrna.fastq.gz'}
+    elif layout == 'paired':
+        input_names = [sra_id + '_1' + inext, sra_id + '_2' + inext]
+        output_name_by_suffix = {
+            '_1': sra_id + '_1.rrna.fastq.gz',
+            '_2': sra_id + '_2.rrna.fastq.gz',
+        }
+    else:
+        raise ValueError('Unsupported library layout for MMseqs rRNA filtering: {}'.format(layout))
+
+    input_path_by_suffix = {}
+    if layout == 'single':
+        input_name = input_names[0]
+        if not run_file_state.has(input_name):
+            raise FileNotFoundError('MMseqs rRNA-filter input file not found: {}'.format(run_file_state.path(input_name)))
+        input_path_by_suffix[''] = run_file_state.path(input_name)
+    else:
+        for suffix in ['_1', '_2']:
+            input_name = sra_id + suffix + inext
+            if not run_file_state.has(input_name):
+                raise FileNotFoundError('MMseqs rRNA-filter input file not found: {}'.format(run_file_state.path(input_name)))
+            input_path_by_suffix[suffix] = run_file_state.path(input_name)
+
+    target_db = ensure_mmseqs_rrna_reference_db_exists(args)
+    mmseqs_root = os.path.join(output_dir, 'mmseqs_rrna_work')
+    ensure_empty_workdir(mmseqs_root)
+    remove_cores = set()
+    for suffix, input_path in input_path_by_suffix.items():
+        query_tag = '{}{}'.format(sra_id, suffix)
+        query_root = os.path.join(mmseqs_root, query_tag)
+        result_tsv = os.path.join(query_root, 'result.tsv')
+        tmp_dir = os.path.join(query_root, 'tmp')
+        os.makedirs(query_root, exist_ok=True)
+        os.makedirs(tmp_dir, exist_ok=True)
+        result_path = run_mmseqs_easy_search_single_fastq(
+            args=args,
+            input_path=input_path,
+            target_db=target_db,
+            result_tsv=result_tsv,
+            tmp_dir=tmp_dir,
+        )
+        remove_cores.update(parse_mmseqs_search_matched_cores(result_tsv_path=result_path))
+
+    output_path_by_suffix = {}
+    counts_by_suffix = {}
+    for suffix, input_path in input_path_by_suffix.items():
+        output_name = output_name_by_suffix[suffix]
+        output_path = os.path.join(output_dir, output_name)
+        num_in, num_out, bp_in, bp_out = filter_fastq_by_core_set(
+            input_path=input_path,
+            output_path=output_path,
+            remove_cores=remove_cores,
+        )
+        output_path_by_suffix[suffix] = output_path
+        counts_by_suffix[suffix] = (num_in, num_out, bp_in, bp_out)
+        run_file_state.add(output_name)
+
+    if layout == 'single':
+        num_in, num_out, bp_in, bp_out = counts_by_suffix['']
+        estimated_input_counts = {'num_spots': int(num_in), 'bp_total': int(bp_in)}
+        known_output_counts = {'num_spots': int(num_out), 'bp_total': int(bp_out)}
+    else:
+        r1_in, r1_out, r1_bp_in, r1_bp_out = counts_by_suffix['_1']
+        r2_in, r2_out, r2_bp_in, r2_bp_out = counts_by_suffix['_2']
+        estimated_input_counts = {
+            'num_spots': int(max(r1_in, r2_in)),
+            'bp_total': int(r1_bp_in + r2_bp_in),
+        }
+        known_output_counts = {
+            'num_spots': int(max(r1_out, r2_out)),
+            'bp_total': int(r1_bp_out + r2_bp_out),
+        }
+    effective_input_counts = known_input_counts
+    if effective_input_counts is None:
+        effective_input_counts = estimated_input_counts
+    metadata = update_metadata_after_rrna_filter(
+        metadata=metadata,
+        sra_stat=sra_stat,
+        input_paths=input_path_by_suffix,
+        output_paths=output_path_by_suffix,
+        args=args,
+        known_input_counts=effective_input_counts,
+        known_output_counts=known_output_counts,
+    )
+    if bool(getattr(args, 'remove_tmp', False)):
+        remove_intermediate_files(sra_stat, ext=inext, work_dir=output_dir)
+        for input_name in input_names:
+            run_file_state.discard(input_name)
+        if os.path.isdir(mmseqs_root):
+            shutil.rmtree(mmseqs_root)
+    set_current_intermediate_extension(sra_stat, '.rrna.fastq.gz')
+    return finalize_run_fastp_return(
+        metadata=metadata,
+        run_file_state=run_file_state,
+        return_files=return_files,
+        return_file_state=return_file_state,
+    )
+
+def run_rrna_filter(
+    sra_stat,
+    args,
+    output_dir,
+    metadata,
+    files=None,
+    file_state=None,
+    known_input_counts=None,
+    return_files=False,
+    return_file_state=False,
+):
+    return run_mmseqs_rrna_filter(
+        sra_stat=sra_stat,
+        args=args,
+        output_dir=output_dir,
+        metadata=metadata,
+        files=files,
+        file_state=file_state,
+        known_input_counts=known_input_counts,
+        return_files=return_files,
+        return_file_state=return_file_state,
+    )
 
 def resolve_run_target_rank_taxid(metadata, sra_stat, rank_name):
     rank_col = 'taxid_' + rank_name
@@ -3312,6 +3143,7 @@ def is_2nd_round_needed(rate_obtained_1st, tol):
 def print_read_stats(args, metadata, g, sra_stat=None, individual=False):
     rrna_filter = is_rrna_filter_enabled(args)
     contam_filter = is_contam_filter_enabled(args)
+    rrna_label = 'MMseqs2 rRNA filter'
     if sra_stat is None:
         df = metadata.df
         print('Target size (--max_bp): {:,} bp'.format(g['max_bp']))
@@ -3325,8 +3157,8 @@ def print_read_stats(args, metadata, g, sra_stat=None, individual=False):
         print('Sum of fastp input reads: {:,} bp'.format(df['bp_fastp_in'].sum()))
         print('Sum of fastp output reads: {:,} bp'.format(df['bp_fastp_out'].sum()))
     if rrna_filter:
-        print('Sum of SortMeRNA input reads: {:,} bp'.format(df['bp_rrna_in'].sum()))
-        print('Sum of SortMeRNA non-rRNA reads: {:,} bp'.format(df['bp_rrna_out'].sum()))
+        print('Sum of {} input reads: {:,} bp'.format(rrna_label, df['bp_rrna_in'].sum()))
+        print('Sum of {} non-rRNA reads: {:,} bp'.format(rrna_label, df['bp_rrna_out'].sum()))
     if contam_filter:
         print('Sum of contaminant-filter input reads: {:,} bp'.format(df['bp_contam_in'].sum()))
         print('Sum of contaminant-filter output reads: {:,} bp'.format(df['bp_contam_out'].sum()))
@@ -3341,7 +3173,7 @@ def print_read_stats(args, metadata, g, sra_stat=None, individual=False):
             read_types = read_types + ['fastp input reads', 'fastp output reads']
             keys = keys + ['bp_fastp_in', 'bp_fastp_out']
         if rrna_filter:
-            read_types = read_types + ['SortMeRNA input reads', 'SortMeRNA non-rRNA reads']
+            read_types = read_types + ['{} input reads'.format(rrna_label), '{} non-rRNA reads'.format(rrna_label)]
             keys = keys + ['bp_rrna_in', 'bp_rrna_out']
         if contam_filter:
             read_types = read_types + ['contaminant-filter input reads', 'contaminant-filter output reads']
@@ -3601,7 +3433,7 @@ def sequence_extraction(args, sra_stat, metadata, g, start, end):
             prev_rrna_out = metadata.df.at[ind_sra, 'bp_rrna_out']
             prev_num_rrna_out = metadata.df.at[ind_sra, 'num_rrna_out']
             rrna_known_input_counts = latest_stage_counts if (latest_stage_source == 'fastp') else None
-            metadata, run_file_state = run_sortmerna_rrna_filter(
+            metadata, run_file_state = run_rrna_filter(
                 sra_stat=sra_stat,
                 args=args,
                 output_dir=sra_stat['getfastq_sra_dir'],
@@ -3808,7 +3640,7 @@ def sequence_extraction_private(metadata, sra_stat, args):
             continue
         if filter_name == 'rrna':
             rrna_known_input_counts = latest_stage_counts if (latest_stage_source == 'fastp') else None
-            metadata = run_sortmerna_rrna_filter(
+            metadata = run_rrna_filter(
                 sra_stat=sra_stat,
                 args=args,
                 output_dir=sra_stat['getfastq_sra_dir'],

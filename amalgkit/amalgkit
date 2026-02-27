@@ -473,17 +473,11 @@ pge.add_argument('--fastp_option', metavar='STR', default='-j /dev/null -h /dev/
                  help='default=%(default)s: Options to be passed to fastp. Do not include --length_required option here. '
                       'It can be specified throught --min_read_length in amalgkit. ')
 pge.add_argument('--rrna_filter', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
-                 help='default=%(default)s: Remove rRNA reads using SortMeRNA before final FASTQ output.')
+                 help='default=%(default)s: Remove rRNA reads using MMseqs2 before final FASTQ output.')
 pge.add_argument('--filter_order', metavar='fastp_first|rrna_first',
                  choices=['fastp_first', 'rrna_first'],
                  default='fastp_first', type=str, required=False, action='store',
                  help='default=%(default)s: Order of optional filtering when both --fastp and --rrna_filter are enabled.')
-pge.add_argument('--sortmerna_exe', metavar='PATH', default='sortmerna', type=str, required=False, action='store',
-                 help='default=%(default)s: PATH to SortMeRNA executable.')
-pge.add_argument('--sortmerna_download_dir', dest='download_dir', metavar='PATH', default=argparse.SUPPRESS, type=str,
-                 required=False, action='store', help=argparse.SUPPRESS)
-pge.add_argument('--sortmerna_option', metavar='STR', default='', type=str, required=False, action='store',
-                 help='default=%(default)s: Additional options passed to SortMeRNA.')
 pge.add_argument('--contam_filter', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
                  help='default=%(default)s: Remove contaminant reads using MMseqs2 taxonomy (unclassified reads are retained).')
 pge.add_argument('--contam_filter_rank', metavar='species|genus|family|order|class|phylum|kingdom|domain',
