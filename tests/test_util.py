@@ -9,6 +9,7 @@ import xml.etree.ElementTree as ET
 from types import SimpleNamespace
 
 from amalgkit.util import (
+    acquire_exclusive_lock,
     strtobool,
     parse_bool_flags,
     Metadata,
@@ -2227,3 +2228,77 @@ class TestMetadataTaxidValidation:
             metadata.add_standard_rank_taxids()
         assert 'taxid_species' in metadata.df.columns
         assert metadata.df['taxid_species'].isna().all()
+
+    def test_add_standard_rank_taxids_uses_download_dir_for_ete4_cache(self, tmp_path, monkeypatch):
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001'],
+            'scientific_name': ['Homo sapiens'],
+            'exclusion': ['no'],
+            'taxid': [9606],
+        }))
+        metadata.df['taxid'] = metadata.df['taxid'].astype('Int64')
+        captured = {'lock_path': None}
+
+        class DummyLock:
+            def __init__(self, lock_path, lock_label='Lock', poll_seconds=5, timeout_seconds=3600):
+                _ = (lock_label, poll_seconds, timeout_seconds)
+                captured['lock_path'] = lock_path
+
+            def __enter__(self):
+                return None
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        class RecordingNcbi:
+            def __init__(self, **kwargs):
+                captured['kwargs'] = kwargs
+
+            def get_lineage(self, _taxid):
+                return [1, 9606]
+
+            def get_rank(self, _lineage):
+                return {1: 'domain', 9606: 'species'}
+
+        monkeypatch.setattr('amalgkit.util.acquire_exclusive_lock', DummyLock)
+        monkeypatch.setattr('amalgkit.util.ete4.NCBITaxa', RecordingNcbi)
+        args = SimpleNamespace(
+            out_dir=str(tmp_path / 'out'),
+            download_dir=str(tmp_path / 'shared_downloads'),
+        )
+        metadata.add_standard_rank_taxids(args=args)
+
+        expected_ete_dir = os.path.join(os.path.realpath(args.download_dir), 'ete4')
+        assert captured['kwargs']['dbfile'] == os.path.join(expected_ete_dir, 'taxa.sqlite')
+        assert captured['kwargs']['taxdump_file'] == os.path.join(expected_ete_dir, 'taxdump.tar.gz')
+        assert os.path.isdir(expected_ete_dir)
+        assert captured['lock_path'] == os.path.join(expected_ete_dir, '.ete4_taxonomy.lock')
+
+
+class TestDownloadLockRecovery:
+    def test_acquire_exclusive_lock_reclaims_stale_pid_lock(self, tmp_path, monkeypatch):
+        lock_path = tmp_path / 'download.lock'
+        lock_path.write_text('999999\n')
+
+        def fake_kill(_pid, _sig):
+            raise ProcessLookupError()
+
+        monkeypatch.setattr('amalgkit.util.os.kill', fake_kill)
+
+        with acquire_exclusive_lock(str(lock_path), lock_label='test lock', poll_seconds=1, timeout_seconds=2):
+            assert lock_path.exists()
+            assert lock_path.read_text().strip() == str(os.getpid())
+
+        assert not lock_path.exists()
+
+    def test_acquire_exclusive_lock_times_out_when_owner_pid_is_alive(self, tmp_path, monkeypatch):
+        lock_path = tmp_path / 'download.lock'
+        lock_path.write_text('12345\n')
+
+        monkeypatch.setattr('amalgkit.util.os.kill', lambda _pid, _sig: None)
+
+        with pytest.raises(TimeoutError, match='Timed out'):
+            with acquire_exclusive_lock(str(lock_path), lock_label='test lock', poll_seconds=1, timeout_seconds=1):
+                pass
+
+        assert lock_path.exists()

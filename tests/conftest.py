@@ -11,7 +11,10 @@ if 'ete4' not in sys.modules:
         import ete4
     except ModuleNotFoundError:
         ete4_mock = types.ModuleType('ete4')
-        ete4_mock.NCBITaxa = type('NCBITaxa', (), {})
+        class _DummyNcbiTaxa:
+            def __init__(self, *args, **kwargs):
+                pass
+        ete4_mock.NCBITaxa = _DummyNcbiTaxa
         sys.modules['ete4'] = ete4_mock
 
 from amalgkit.util import Metadata

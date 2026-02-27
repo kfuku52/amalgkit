@@ -9,6 +9,7 @@ import sys
 import pandas
 
 from amalgkit.util import (
+    acquire_exclusive_lock,
     find_species_prefixed_entries,
     load_metadata,
     run_tasks_with_optional_threads,
@@ -265,6 +266,45 @@ def resolve_download_dir(args):
     return os.path.realpath(normalized)
 
 
+def _sanitize_lock_suffix(text):
+    normalized = re.sub(r'[^A-Za-z0-9._-]+', '_', str(text).strip())
+    if normalized == '':
+        return 'lineage'
+    return normalized
+
+
+def _dir_has_entries(path_dir):
+    if not os.path.isdir(path_dir):
+        return False
+    try:
+        with os.scandir(path_dir) as entries:
+            for _ in entries:
+                return True
+    except OSError:
+        return False
+    return False
+
+
+def has_busco_lineage_cache(download_path, lineage):
+    lineage = str(lineage).strip()
+    if lineage == '':
+        return False
+    candidates = [
+        os.path.join(download_path, lineage),
+        os.path.join(download_path, 'lineages', lineage),
+    ]
+    for candidate in candidates:
+        if _dir_has_entries(candidate):
+            return True
+        if os.path.isfile(candidate):
+            return True
+        if os.path.isfile(candidate + '.tar.gz'):
+            return True
+        if os.path.isfile(candidate + '.tgz'):
+            return True
+    return False
+
+
 def run_busco(fasta_path, sci_name, output_root, args, extra_args):
     out_name = sci_name.replace(' ', '_')
     download_path = resolve_download_dir(args)
@@ -286,7 +326,21 @@ def run_busco(fasta_path, sci_name, output_root, args, extra_args):
     if args.redo:
         cmd.append('--force')
     cmd.extend(extra_args)
-    run_command(cmd)
+    if has_busco_lineage_cache(download_path=download_path, lineage=args.lineage):
+        run_command(cmd)
+        return os.path.join(output_root, out_name)
+
+    lock_filename = '.busco_{}.download.lock'.format(_sanitize_lock_suffix(args.lineage))
+    lock_path = os.path.join(download_path, lock_filename)
+    cache_ready_from_other_process = False
+    with acquire_exclusive_lock(lock_path=lock_path, lock_label='BUSCO lineage download'):
+        if has_busco_lineage_cache(download_path=download_path, lineage=args.lineage):
+            cache_ready_from_other_process = True
+        else:
+            run_command(cmd)
+            return os.path.join(output_root, out_name)
+    if cache_ready_from_other_process:
+        run_command(cmd)
     return os.path.join(output_root, out_name)
 
 

@@ -227,7 +227,7 @@ class TestMetadataMain:
 
         monkeypatch.setattr('amalgkit.metadata.fetch_sra_xml', lambda search_term: ET.Element('EXPERIMENT_PACKAGE_SET'))
         monkeypatch.setattr('amalgkit.metadata.Metadata.from_xml', lambda xml_root: empty_metadata)
-        monkeypatch.setattr('amalgkit.metadata.Metadata.add_standard_rank_taxids', lambda self: None)
+        monkeypatch.setattr('amalgkit.metadata.Metadata.add_standard_rank_taxids', lambda self, args=None: None)
 
         metadata_main(args)
 

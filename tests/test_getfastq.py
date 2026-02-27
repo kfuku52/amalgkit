@@ -61,6 +61,8 @@ from amalgkit.getfastq import (
     getfastq_main,
     check_getfastq_dependency,
     resolve_sortmerna_refs,
+    resolve_contam_filter_db_path,
+    ensure_mmseqs_contam_taxonomy_db_exists,
     count_fastq_records,
     collect_valid_run_ids,
     remove_sra_files,
@@ -542,7 +544,7 @@ class TestRunMmseqsContamFilter:
             lambda taxid, rank_name, ncbi, rank_cache: 500 if int(taxid) == 11 else (600 if int(taxid) == 22 else None),
         )
         monkeypatch.setattr('amalgkit.getfastq.run_mmseqs_easy_taxonomy_single_fastq', fake_run_mmseqs)
-        monkeypatch.setattr('amalgkit.getfastq.ete4.NCBITaxa', lambda: object())
+        monkeypatch.setattr('amalgkit.getfastq.get_ete_ncbitaxa', lambda args=None: object())
 
         metadata, run_file_state = run_mmseqs_contam_filter(
             sra_stat=sra_stat,
@@ -617,9 +619,71 @@ class TestRunMmseqsEasyTaxonomy:
             result_prefix='/tmp/out/result',
             tmp_dir='/tmp/out/tmp',
         )
-
         assert '--search-type' not in observed['cmd']
 
+
+class TestContamFilterDbPathResolution:
+    def test_inferred_db_path_uses_out_dir_downloads_when_download_dir_is_inferred(self, tmp_path):
+        args = SimpleNamespace(
+            out_dir=str(tmp_path / 'out'),
+            download_dir='inferred',
+            contam_filter_db='inferred',
+            contam_filter_db_name='UniRef90',
+        )
+        observed = resolve_contam_filter_db_path(args)
+        expected = os.path.join(os.path.realpath(str(tmp_path / 'out')), 'downloads', 'mmseqs_uniref90')
+        assert observed == expected
+
+    def test_inferred_db_path_uses_custom_download_dir(self, tmp_path):
+        custom_download_dir = tmp_path / 'shared_downloads'
+        args = SimpleNamespace(
+            out_dir=str(tmp_path / 'out'),
+            download_dir=str(custom_download_dir),
+            contam_filter_db='inferred',
+            contam_filter_db_name='UniRef90',
+        )
+        observed = resolve_contam_filter_db_path(args)
+        expected = os.path.join(os.path.realpath(str(custom_download_dir)), 'mmseqs_uniref90')
+        assert observed == expected
+
+    def test_mmseqs_db_download_uses_lock_file(self, tmp_path, monkeypatch):
+        out_dir = tmp_path / 'out'
+        args = SimpleNamespace(
+            out_dir=str(out_dir),
+            download_dir='inferred',
+            contam_filter_db='inferred',
+            contam_filter_db_name='UniRef90',
+            mmseqs_exe='mmseqs',
+            threads=1,
+            dump_print=False,
+        )
+        captured = {'lock_path': None, 'cmd': None}
+
+        class DummyLock:
+            def __init__(self, lock_path, lock_label='Lock', poll_seconds=5, timeout_seconds=3600):
+                _ = (lock_label, poll_seconds, timeout_seconds)
+                captured['lock_path'] = lock_path
+
+            def __enter__(self):
+                return None
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        def fake_run(cmd, stdout=None, stderr=None):
+            _ = (stdout, stderr)
+            captured['cmd'] = cmd
+            db_path = cmd[3]
+            with open(db_path + '.dbtype', 'wt') as fout:
+                fout.write('mock')
+            return subprocess.CompletedProcess(cmd, 0, stdout=b'', stderr=b'')
+
+        monkeypatch.setattr('amalgkit.getfastq.acquire_exclusive_lock', DummyLock)
+        monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
+
+        db_path = ensure_mmseqs_contam_taxonomy_db_exists(args)
+        assert captured['cmd'] is not None
+        assert captured['lock_path'] == db_path + '.download.lock'
 
 class TestGetfastqXmlRetrieval:
     class _DummyTree:
@@ -4980,12 +5044,25 @@ class TestSortmernaReferenceDownload:
 
     def test_downloads_silva_refs_to_custom_download_dir(self, tmp_path, monkeypatch):
         custom_dir = tmp_path / 'custom_downloads'
+        captured = {'lock_path': None}
+
+        class DummyLock:
+            def __init__(self, lock_path, lock_label='Lock', poll_seconds=5, timeout_seconds=3600):
+                _ = (lock_label, poll_seconds, timeout_seconds)
+                captured['lock_path'] = lock_path
+
+            def __enter__(self):
+                return None
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
 
         def fake_urlretrieve(_url, out_path):
             with gzip.open(out_path, 'wt') as fout:
                 fout.write('>rRNA\nACGT\n')
             return (out_path, None)
 
+        monkeypatch.setattr('amalgkit.getfastq.acquire_exclusive_lock', DummyLock)
         monkeypatch.setattr('amalgkit.getfastq.urllib.request.urlretrieve', fake_urlretrieve)
 
         args = SimpleNamespace(
@@ -4998,6 +5075,7 @@ class TestSortmernaReferenceDownload:
         for ref_path in refs:
             assert ref_path.startswith(str(custom_dir))
             assert os.path.exists(ref_path)
+        assert captured['lock_path'] == os.path.join(str(custom_dir), '.sortmerna_refs.download.lock')
 
 
 class TestFasterqSeqkitCompression:

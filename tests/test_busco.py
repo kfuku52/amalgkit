@@ -547,6 +547,83 @@ def test_run_busco_uses_custom_download_dir(tmp_path, monkeypatch):
     assert custom_download_dir.exists()
 
 
+def test_run_busco_uses_download_lock_when_lineage_cache_missing(tmp_path, monkeypatch):
+    out_dir = tmp_path / 'out'
+    busco_root = out_dir / 'busco'
+    out_dir.mkdir()
+    busco_root.mkdir()
+    args = SimpleNamespace(
+        busco_exe='busco',
+        lineage='eukaryota_odb12',
+        threads=4,
+        redo=False,
+        out_dir=str(out_dir),
+    )
+    captured = {'lock_path': None, 'run_calls': 0}
+
+    class DummyLock:
+        def __init__(self, lock_path, lock_label='Lock', poll_seconds=5, timeout_seconds=3600):
+            _ = (lock_label, poll_seconds, timeout_seconds)
+            captured['lock_path'] = lock_path
+
+        def __enter__(self):
+            return None
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr('amalgkit.busco.has_busco_lineage_cache', lambda **_kwargs: False)
+    monkeypatch.setattr('amalgkit.busco.acquire_exclusive_lock', DummyLock)
+    monkeypatch.setattr('amalgkit.busco.run_command', lambda _cmd: captured.__setitem__('run_calls', captured['run_calls'] + 1))
+    run_busco(
+        fasta_path='/tmp/input.fa',
+        sci_name='Species A',
+        output_root=str(busco_root),
+        args=args,
+        extra_args=[],
+    )
+    assert captured['run_calls'] == 1
+    assert captured['lock_path'] == os.path.join(str(out_dir), 'downloads', '.busco_eukaryota_odb12.download.lock')
+
+
+def test_run_busco_skips_download_lock_when_lineage_cache_exists(tmp_path, monkeypatch):
+    out_dir = tmp_path / 'out'
+    busco_root = out_dir / 'busco'
+    out_dir.mkdir()
+    busco_root.mkdir()
+    args = SimpleNamespace(
+        busco_exe='busco',
+        lineage='eukaryota_odb12',
+        threads=4,
+        redo=False,
+        out_dir=str(out_dir),
+    )
+    captured = {'lock_used': False, 'run_calls': 0}
+
+    class FailingLock:
+        def __init__(self, *args, **kwargs):
+            captured['lock_used'] = True
+
+        def __enter__(self):
+            return None
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr('amalgkit.busco.has_busco_lineage_cache', lambda **_kwargs: True)
+    monkeypatch.setattr('amalgkit.busco.acquire_exclusive_lock', FailingLock)
+    monkeypatch.setattr('amalgkit.busco.run_command', lambda _cmd: captured.__setitem__('run_calls', captured['run_calls'] + 1))
+    run_busco(
+        fasta_path='/tmp/input.fa',
+        sci_name='Species A',
+        output_root=str(busco_root),
+        args=args,
+        extra_args=[],
+    )
+    assert captured['run_calls'] == 1
+    assert captured['lock_used'] is False
+
+
 def test_busco_main_rejects_nonpositive_species_jobs(tmp_path):
     args = SimpleNamespace(
         lineage='eukaryota_odb12',

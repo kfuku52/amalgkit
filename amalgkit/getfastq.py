@@ -1247,8 +1247,7 @@ def parse_sortmerna_option_args(sortmerna_option):
         raise ValueError('Invalid --sortmerna_option string: {}'.format(sortmerna_option)) from e
 
 def resolve_shared_download_dir(args):
-    out_dir = getattr(args, 'out_dir', './')
-    return os.path.join(os.path.realpath(out_dir), 'downloads')
+    return resolve_download_dir(args)
 
 def resolve_sortmerna_download_dir(args):
     raw_dir = getattr(args, 'download_dir', 'inferred')
@@ -1337,43 +1336,49 @@ def ensure_mmseqs_contam_taxonomy_db_exists(args):
         if not os.path.isfile(dbtype_path):
             raise IsADirectoryError('MMseqs taxonomy DB path exists but is not a file: {}'.format(dbtype_path))
         return db_path
-    ensure_contam_filter_db_parent_dir_exists(db_path=db_path)
-    download_dir = resolve_sortmerna_download_dir(args)
-    if os.path.exists(download_dir) and (not os.path.isdir(download_dir)):
-        raise NotADirectoryError('Download path exists but is not a directory: {}'.format(download_dir))
-    os.makedirs(download_dir, exist_ok=True)
-    tmp_dir = os.path.join(download_dir, 'mmseqs_databases_tmp')
-    os.makedirs(tmp_dir, exist_ok=True)
-    mmseqs_exe = resolve_mmseqs_exe(args)
-    db_name = resolve_contam_filter_db_name(args)
-    db_cmd = [
-        mmseqs_exe,
-        'databases',
-        db_name,
-        db_path,
-        tmp_dir,
-        '--threads',
-        str(max(1, int(getattr(args, 'threads', 1)))),
-    ]
-    print('Downloading MMseqs taxonomy DB with command: {}'.format(' '.join(db_cmd)), flush=True)
-    out = subprocess.run(db_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if should_print_getfastq_command_output(args):
-        print('mmseqs databases stdout:')
-        print(out.stdout.decode('utf8', errors='replace'))
-        print('mmseqs databases stderr:')
-        print(out.stderr.decode('utf8', errors='replace'))
-    if out.returncode != 0:
-        raise RuntimeError(
-            'mmseqs databases failed (exit code {}). Command: {}\n{}'.format(
-                out.returncode,
-                ' '.join(db_cmd),
-                out.stderr.decode('utf8', errors='replace'),
+    lock_path = db_path + '.download.lock'
+    with acquire_exclusive_lock(lock_path=lock_path, lock_label='MMseqs taxonomy DB download'):
+        if os.path.exists(dbtype_path):
+            if not os.path.isfile(dbtype_path):
+                raise IsADirectoryError('MMseqs taxonomy DB path exists but is not a file: {}'.format(dbtype_path))
+            return db_path
+        ensure_contam_filter_db_parent_dir_exists(db_path=db_path)
+        download_dir = resolve_sortmerna_download_dir(args)
+        if os.path.exists(download_dir) and (not os.path.isdir(download_dir)):
+            raise NotADirectoryError('Download path exists but is not a directory: {}'.format(download_dir))
+        os.makedirs(download_dir, exist_ok=True)
+        tmp_dir = os.path.join(download_dir, 'mmseqs_databases_tmp')
+        os.makedirs(tmp_dir, exist_ok=True)
+        mmseqs_exe = resolve_mmseqs_exe(args)
+        db_name = resolve_contam_filter_db_name(args)
+        db_cmd = [
+            mmseqs_exe,
+            'databases',
+            db_name,
+            db_path,
+            tmp_dir,
+            '--threads',
+            str(max(1, int(getattr(args, 'threads', 1)))),
+        ]
+        print('Downloading MMseqs taxonomy DB with command: {}'.format(' '.join(db_cmd)), flush=True)
+        out = subprocess.run(db_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if should_print_getfastq_command_output(args):
+            print('mmseqs databases stdout:')
+            print(out.stdout.decode('utf8', errors='replace'))
+            print('mmseqs databases stderr:')
+            print(out.stderr.decode('utf8', errors='replace'))
+        if out.returncode != 0:
+            raise RuntimeError(
+                'mmseqs databases failed (exit code {}). Command: {}\n{}'.format(
+                    out.returncode,
+                    ' '.join(db_cmd),
+                    out.stderr.decode('utf8', errors='replace'),
+                )
             )
-        )
-    if not os.path.exists(dbtype_path):
-        raise FileNotFoundError('MMseqs taxonomy DB was not generated: {}'.format(dbtype_path))
-    if not os.path.isfile(dbtype_path):
-        raise IsADirectoryError('MMseqs taxonomy DB path exists but is not a file: {}'.format(dbtype_path))
+        if not os.path.exists(dbtype_path):
+            raise FileNotFoundError('MMseqs taxonomy DB was not generated: {}'.format(dbtype_path))
+        if not os.path.isfile(dbtype_path):
+            raise IsADirectoryError('MMseqs taxonomy DB path exists but is not a file: {}'.format(dbtype_path))
     return db_path
 
 def ensure_sortmerna_download_dir_exists(download_dir):
@@ -1411,27 +1416,29 @@ def expand_sortmerna_reference_gz(gz_path, fasta_path):
 
 def ensure_sortmerna_reference_files_exist(args):
     download_dir = ensure_sortmerna_download_dir_exists(resolve_sortmerna_download_dir(args))
-    refs = []
-    for ref_spec in SORTMERNA_REFERENCE_SPECS:
-        fasta_path = os.path.join(download_dir, ref_spec['fasta_filename'])
-        gz_path = os.path.join(download_dir, ref_spec['gz_filename'])
-        if os.path.exists(fasta_path):
-            if not os.path.isfile(fasta_path):
-                raise IsADirectoryError('SortMeRNA reference path exists but is not a file: {}'.format(fasta_path))
+    lock_path = os.path.join(download_dir, '.sortmerna_refs.download.lock')
+    with acquire_exclusive_lock(lock_path=lock_path, lock_label='SortMeRNA reference download'):
+        refs = []
+        for ref_spec in SORTMERNA_REFERENCE_SPECS:
+            fasta_path = os.path.join(download_dir, ref_spec['fasta_filename'])
+            gz_path = os.path.join(download_dir, ref_spec['gz_filename'])
+            if os.path.exists(fasta_path):
+                if not os.path.isfile(fasta_path):
+                    raise IsADirectoryError('SortMeRNA reference path exists but is not a file: {}'.format(fasta_path))
+                refs.append(fasta_path)
+                continue
+            if os.path.exists(gz_path) and (not os.path.isfile(gz_path)):
+                raise IsADirectoryError('SortMeRNA compressed reference path is not a file: {}'.format(gz_path))
+            if not os.path.exists(gz_path):
+                download_sortmerna_reference_gz(
+                    url=ref_spec['url'],
+                    gz_path=gz_path,
+                    label=ref_spec['label'],
+                )
+            print('Expanding SortMeRNA reference: {}'.format(gz_path), flush=True)
+            expand_sortmerna_reference_gz(gz_path=gz_path, fasta_path=fasta_path)
             refs.append(fasta_path)
-            continue
-        if os.path.exists(gz_path) and (not os.path.isfile(gz_path)):
-            raise IsADirectoryError('SortMeRNA compressed reference path is not a file: {}'.format(gz_path))
-        if not os.path.exists(gz_path):
-            download_sortmerna_reference_gz(
-                url=ref_spec['url'],
-                gz_path=gz_path,
-                label=ref_spec['label'],
-            )
-        print('Expanding SortMeRNA reference: {}'.format(gz_path), flush=True)
-        expand_sortmerna_reference_gz(gz_path=gz_path, fasta_path=fasta_path)
-        refs.append(fasta_path)
-    return refs
+        return refs
 
 def resolve_sortmerna_refs(args):
     return ensure_sortmerna_reference_files_exist(args)
@@ -3028,7 +3035,7 @@ def run_mmseqs_contam_filter(
 
     mmseqs_root = os.path.join(output_dir, 'mmseqs_contam_work')
     ensure_empty_workdir(mmseqs_root)
-    ncbi = ete4.NCBITaxa()
+    ncbi = get_ete_ncbitaxa(args=args)
     rank_cache = {}
     remove_cores = set()
     for suffix, input_path in input_path_by_suffix.items():
@@ -3379,7 +3386,7 @@ def ensure_contam_filter_metadata_rank_taxids(metadata, args):
     rank_cols = ['taxid_' + rank for rank in CONTAM_FILTER_SUPPORTED_RANKS]
     missing_rank_cols = [col for col in rank_cols if col not in metadata.df.columns]
     if len(missing_rank_cols) > 0:
-        metadata.add_standard_rank_taxids()
+        metadata.add_standard_rank_taxids(args=args)
     else:
         for col in rank_cols:
             metadata.df[col] = pandas.to_numeric(metadata.df[col], errors='coerce').astype('Int64')

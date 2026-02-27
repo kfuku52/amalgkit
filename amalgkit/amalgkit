@@ -395,7 +395,7 @@ pp_sgc.add_argument('--sample_group_color', metavar='#d95f02ff,#1b9e77ff,#7570b3
 
 # Sub parser: metadata
 pme_help = 'NCBI SRA metadata retrieval and curation. See `amalgkit metadata -h`'
-pme = subparsers.add_parser('metadata', help=pme_help, parents=[pp_out, pp_redo])
+pme = subparsers.add_parser('metadata', help=pme_help, parents=[pp_out, pp_redo, pp_download])
 pme.add_argument('--search_string', metavar='PATH', default=None, type=str, required=True, action='store',
                  help='default=%(default)s: Entrez search string. See https://www.ncbi.nlm.nih.gov/books/NBK25499/ for details. '
                       'The search string is used to identify SRA entries that can be found at https://www.ncbi.nlm.nih.gov/sra/ using the same string. '
