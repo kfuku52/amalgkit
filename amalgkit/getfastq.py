@@ -1173,6 +1173,13 @@ def summarize_layout_fastq_records_and_bases(layout, single_path=None, pair1_pat
         bp_total = bp_single
     return num_spots, bp_total
 
+def convert_record_count_to_spot_count(record_count, layout):
+    normalized_count = max(0, int(record_count))
+    if layout == 'paired':
+        # fastp reports read counts for each mate separately; downstream spot counts should represent pairs.
+        return int((normalized_count + 1) // 2)
+    return normalized_count
+
 def is_rrna_filter_enabled(args):
     raw = getattr(args, 'rrna_filter', False)
     if isinstance(raw, str):
@@ -3423,7 +3430,10 @@ def sequence_extraction(args, sra_stat, metadata, g, start, end):
             delta_out = metadata.df.at[ind_sra, 'bp_fastp_out'] - prev_bp_fastp_out
             metadata.df.at[ind_sra, 'bp_discarded'] += max(0, delta_in - delta_out)
             latest_stage_counts = {
-                'num_spots': max(0, int(delta_num_out)),
+                'num_spots': convert_record_count_to_spot_count(
+                    record_count=delta_num_out,
+                    layout=sra_stat['layout'],
+                ),
                 'bp_total': max(0, int(delta_out)),
             }
             latest_stage_source = 'fastp'
@@ -3633,7 +3643,10 @@ def sequence_extraction_private(metadata, sra_stat, args):
             delta_num_out = metadata.df.at[ind_sra, 'num_fastp_out'] - prev_num_fastp_out
             delta_bp_out = metadata.df.at[ind_sra, 'bp_fastp_out'] - prev_bp_fastp_out
             latest_stage_counts = {
-                'num_spots': max(0, int(delta_num_out)),
+                'num_spots': convert_record_count_to_spot_count(
+                    record_count=delta_num_out,
+                    layout=sra_stat['layout'],
+                ),
                 'bp_total': max(0, int(delta_bp_out)),
             }
             latest_stage_source = 'fastp'
