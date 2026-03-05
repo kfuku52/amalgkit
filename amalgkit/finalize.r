@@ -7,7 +7,7 @@ if (is.na(detected_cores) && (is.null(getOption("cores")) || is.na(getOption("co
 suppressWarnings(suppressPackageStartupMessages(library(Rtsne, quietly = TRUE)))
 
 debug_mode = ifelse(length(commandArgs(trailingOnly = TRUE)) == 1, "debug", "batch")
-log_prefix = "transcriptome_curation.r:"
+log_prefix = "finalize.r:"
 cat(log_prefix, "mode =", debug_mode, "\n")
 if (debug_mode == "debug") {
     out_dir = '/Users/kf/Dropbox/data/evolutionary_transcriptomics/20230527_amalgkit/amalgkit_out'
@@ -32,45 +32,74 @@ if (debug_mode == "debug") {
     outlier_method = 'legacy'
     robust_margin_threshold = 0
     robust_z_threshold = -2.5
-    disable_auto_outlier_filter_flag = FALSE
+    disable_auto_outlier_filter_flag = TRUE
+    ruvseq_control_mode = 'auto'
+    ruvseq_k_setting = 'auto'
+    ruvseq_k_max = 5
+    ruvseq_control_top_n = 1000
+    ruvseq_min_controls = 100
+    random_seed_setting = 'auto'
+    sva_nsv_setting = 'auto'
+    sva_B_setting = 'auto'
+    sva_B_auto_max = 100
     setwd(file.path(out_dir, 'curate'))
 } else if (debug_mode == "batch") {
     args = commandArgs(trailingOnly = TRUE)
+    if (length(args) < 11) {
+        stop('finalize.r expects 11 arguments.')
+    }
     est_counts_path = args[1]
     metadata_path = args[2]
     out_dir = args[3]
     eff_length_path = args[4]
-    dist_method = args[5]
-    mapping_rate_cutoff = as.numeric(args[6])
-    min_dif = as.numeric(args[7])
-    plot_intermediate = as.logical(as.integer(args[8]))
-    selected_sample_groups = strsplit(args[9], "\\|")[[1]]
-    sample_group_colors = strsplit(args[10], ",")[[1]]
-    transform_method = args[11]
-    one_outlier_per_iteration = as.integer(args[12])
-    correlation_threshold = as.numeric(args[13])
-    batch_effect_alg = args[14]
-    clip_negative = as.logical(as.integer(args[15]))
-    maintain_zero = as.logical(as.integer(args[16]))
-    r_util_path = file.path(args[17])
-    skip_curation_flag = as.logical(as.integer(args[18]))
+    dist_method = "pearson"
+    mapping_rate_cutoff = 0
+    min_dif = 0
+    plot_intermediate = FALSE
+    selected_sample_groups = strsplit(args[5], "\\|")[[1]]
+    sample_group_colors = strsplit(args[6], ",")[[1]]
+    transform_method = args[7]
+    one_outlier_per_iteration = 0
+    correlation_threshold = 0.3
+    batch_effect_alg = args[8]
+    clip_negative = as.logical(as.integer(args[9]))
+    maintain_zero = as.logical(as.integer(args[10]))
+    r_util_path = file.path(args[11])
+    skip_curation_flag = FALSE
     outlier_method = 'legacy'
     robust_margin_threshold = 0
     robust_z_threshold = -2.5
-    disable_auto_outlier_filter_flag = FALSE
-    if (length(args) >= 19) {
-        outlier_method = as.character(args[19])
+    disable_auto_outlier_filter_flag = TRUE
+    ruvseq_control_mode = ifelse(length(args) >= 12, args[12], 'auto')
+    ruvseq_k_setting = ifelse(length(args) >= 13, args[13], 'auto')
+    ruvseq_k_max = ifelse(length(args) >= 14, as.integer(args[14]), 5L)
+    ruvseq_control_top_n = ifelse(length(args) >= 15, as.integer(args[15]), 1000L)
+    ruvseq_min_controls = ifelse(length(args) >= 16, as.integer(args[16]), 100L)
+    random_seed_setting = ifelse(length(args) >= 17, args[17], 'auto')
+    sva_nsv_setting = ifelse(length(args) >= 18, args[18], 'auto')
+    sva_B_setting = ifelse(length(args) >= 19, args[19], 'auto')
+    sva_B_auto_max = ifelse(length(args) >= 20, as.integer(args[20]), 100L)
+    if (!is.finite(ruvseq_k_max) || (ruvseq_k_max < 1)) {
+        ruvseq_k_max = 5L
     }
-    if (length(args) >= 20) {
-        robust_margin_threshold = as.numeric(args[20])
+    if (!is.finite(ruvseq_control_top_n) || (ruvseq_control_top_n < 1)) {
+        ruvseq_control_top_n = 1000L
     }
-    if (length(args) >= 21) {
-        robust_z_threshold = as.numeric(args[21])
+    if (!is.finite(ruvseq_min_controls) || (ruvseq_min_controls < 1)) {
+        ruvseq_min_controls = 100L
     }
-    if (length(args) >= 22) {
-        disable_auto_outlier_filter_flag = as.logical(as.integer(args[22]))
+    if (!is.finite(sva_B_auto_max) || (sva_B_auto_max < 5)) {
+        sva_B_auto_max = 100L
     }
 }
+ruvseq_control_mode = tolower(as.character(ruvseq_control_mode))
+if (!(ruvseq_control_mode %in% c('auto', 'all'))) {
+    ruvseq_control_mode = 'auto'
+}
+ruvseq_k_setting = as.character(ruvseq_k_setting)
+random_seed_setting = as.character(random_seed_setting)
+sva_nsv_setting = as.character(sva_nsv_setting)
+sva_B_setting = as.character(sva_B_setting)
 cat('est_counts_path:', est_counts_path, "\n")
 cat('metadata_path:', metadata_path, "\n")
 cat('out_dir:', out_dir, "\n")
@@ -93,6 +122,34 @@ cat('outlier_method:', outlier_method, "\n")
 cat('robust_margin_threshold:', robust_margin_threshold, "\n")
 cat('robust_z_threshold:', robust_z_threshold, "\n")
 cat('disable_auto_outlier_filter_flag:', disable_auto_outlier_filter_flag, "\n")
+cat('ruvseq_control_mode:', ruvseq_control_mode, "\n")
+cat('ruvseq_k_setting:', ruvseq_k_setting, "\n")
+cat('ruvseq_k_max:', ruvseq_k_max, "\n")
+cat('ruvseq_control_top_n:', ruvseq_control_top_n, "\n")
+cat('ruvseq_min_controls:', ruvseq_min_controls, "\n")
+cat('random_seed_setting:', random_seed_setting, "\n")
+cat('sva_nsv_setting:', sva_nsv_setting, "\n")
+cat('sva_B_setting:', sva_B_setting, "\n")
+cat('sva_B_auto_max:', sva_B_auto_max, "\n")
+
+resolve_random_seed = function(seed_setting) {
+    seed_chr = tolower(as.character(seed_setting))
+    if (seed_chr == 'auto') {
+        return(NA_integer_)
+    }
+    seed_int = suppressWarnings(as.integer(seed_chr))
+    if (!is.finite(seed_int) || (seed_int < 0)) {
+        cat('Invalid --seed value; falling back to auto.\n')
+        return(NA_integer_)
+    }
+    as.integer(seed_int)
+}
+
+random_seed_value = resolve_random_seed(random_seed_setting)
+if (!is.na(random_seed_value)) {
+    set.seed(random_seed_value)
+    cat('Random seed initialized to', random_seed_value, "\n")
+}
 
 source(r_util_path)
 
@@ -126,6 +183,339 @@ compute_effective_text_cex = function(target_pt = CURATE_FONT_SIZE_PT) {
         return(1)
     }
     target_pt / (current_ps * current_cex)
+}
+
+compute_factor_r2 = function(y, f) {
+    f = as.factor(f)
+    if (length(unique(as.character(f[!is.na(f)]))) <= 1) {
+        return(NA_real_)
+    }
+    fit = try(lm(y ~ f))
+    if ("try-error" %in% class(fit)) {
+        return(NA_real_)
+    }
+    as.numeric(summary(fit)[['r.squared']])
+}
+
+score_ruvseq_components = function(mat, sra, n_pc = 3) {
+    if ((ncol(mat) < 3) || (nrow(mat) < 2)) {
+        return(list(score = NA_real_, group_score = NA_real_, batch_score = NA_real_))
+    }
+    pca = try(prcomp(t(mat), center = TRUE, scale. = FALSE))
+    if ("try-error" %in% class(pca)) {
+        return(list(score = NA_real_, group_score = NA_real_, batch_score = NA_real_))
+    }
+    pcs = pca[['x']]
+    if (is.null(dim(pcs)) || (ncol(pcs) == 0)) {
+        return(list(score = NA_real_, group_score = NA_real_, batch_score = NA_real_))
+    }
+    npc = min(n_pc, ncol(pcs))
+    bioproject = if ('bioproject' %in% colnames(sra)) sra[['bioproject']] else rep('not_provided', nrow(sra))
+    sample_group = sra[['sample_group']]
+    batch_r2 = rep(NA_real_, npc)
+    group_r2 = rep(NA_real_, npc)
+    for (i in seq_len(npc)) {
+        batch_r2[i] = compute_factor_r2(pcs[, i], bioproject)
+        group_r2[i] = compute_factor_r2(pcs[, i], sample_group)
+    }
+    batch_score = ifelse(all(is.na(batch_r2)), 0, mean(batch_r2, na.rm = TRUE))
+    group_score = ifelse(all(is.na(group_r2)), 0, mean(group_r2, na.rm = TRUE))
+    list(
+        score = group_score - batch_score,
+        group_score = group_score,
+        batch_score = batch_score
+    )
+}
+
+score_ruvseq_matrix = function(mat, sra, n_pc = 3) {
+    score_ruvseq_components(mat = mat, sra = sra, n_pc = n_pc)[['score']]
+}
+
+select_ruvseq_controls = function(y, seqUQ, fit, design, mode = 'auto', top_n = 1000, min_controls = 100) {
+    num_genes = nrow(seqUQ)
+    controls = rep(TRUE, num_genes)
+    if (mode == 'all') {
+        cat('RUVseq control genes: using all genes.\n')
+        return(controls)
+    }
+    if (ncol(design) <= 1) {
+        cat('RUVseq auto controls: design has no sample_group contrast; using all genes.\n')
+        return(controls)
+    }
+    coef_idx = seq.int(2, ncol(design))
+    lrt = try(glmLRT(fit, coef = coef_idx))
+    if ("try-error" %in% class(lrt)) {
+        cat('RUVseq auto controls: glmLRT failed; using all genes.\n')
+        return(controls)
+    }
+    pvals = suppressWarnings(as.numeric(lrt$table$PValue))
+    if (length(pvals) != num_genes) {
+        cat('RUVseq auto controls: unexpected p-value vector length; using all genes.\n')
+        return(controls)
+    }
+    cpm_mat = edgeR::cpm(y)
+    min_samples = max(2, floor(ncol(seqUQ) / 4))
+    is_expressed = rowSums(cpm_mat > 1, na.rm = TRUE) >= min_samples
+    eligible = is_expressed & is.finite(pvals)
+    num_eligible = sum(eligible)
+    if (num_eligible < min_controls) {
+        cat('RUVseq auto controls: too few eligible genes; using all genes.\n')
+        return(controls)
+    }
+    n_select = min(top_n, num_eligible)
+    ord = order(pvals[eligible], decreasing = TRUE)
+    idx_stage1 = which(eligible)[ord[seq_len(n_select)]]
+    mad_vals = apply(seqUQ[idx_stage1, , drop = FALSE], 1, mad, na.rm = TRUE)
+    ord_mad = order(mad_vals, decreasing = FALSE, na.last = NA)
+    keep_n = max(min_controls, floor(length(ord_mad) * 0.5))
+    keep_n = min(keep_n, length(ord_mad))
+    if (keep_n < min_controls) {
+        cat('RUVseq auto controls: too few stable genes after MAD ranking; using all genes.\n')
+        return(controls)
+    }
+    chosen = idx_stage1[ord_mad[seq_len(keep_n)]]
+    controls = rep(FALSE, num_genes)
+    controls[chosen] = TRUE
+    cat(sprintf('RUVseq auto controls selected: %d/%d genes.\n', sum(controls), num_genes))
+    controls
+}
+
+run_ruvseq_with_k = function(seqUQ, controls, k, res) {
+    if (k <= 0) {
+        return(seqUQ)
+    }
+    obj = try(RUVr(seqUQ, controls, k = as.integer(k), res)[[2]])
+    if ("try-error" %in% class(obj)) {
+        return(obj)
+    }
+    obj
+}
+
+resolve_ruvseq_k_and_matrix = function(seqUQ, controls, res, sra, k_setting = 'auto', k_max = 5) {
+    if (k_setting != 'auto') {
+        selected_k = suppressWarnings(as.integer(k_setting))
+        if (!is.finite(selected_k) || (selected_k < 0)) {
+            selected_k = 1L
+        }
+        mat = run_ruvseq_with_k(seqUQ, controls, selected_k, res)
+        comp = score_ruvseq_components(mat, sra)
+        return(list(
+            k = selected_k,
+            matrix = mat,
+            score = comp[['score']],
+            group_score = comp[['group_score']],
+            batch_score = comp[['batch_score']],
+            penalized_score = comp[['score']],
+            baseline_score = NA_real_,
+            baseline_group_score = NA_real_,
+            penalty = 0
+        ))
+    }
+    max_k = suppressWarnings(as.integer(k_max))
+    if (!is.finite(max_k) || (max_k < 1)) {
+        max_k = 1L
+    }
+    max_allowed = max(0L, ncol(seqUQ) - 1L)
+    max_k = min(max_k, max_allowed)
+    baseline_comp = score_ruvseq_components(seqUQ, sra)
+    baseline_score = baseline_comp[['score']]
+    baseline_group_score = baseline_comp[['group_score']]
+    best_k = 0L
+    best_score = baseline_score
+    best_group_score = baseline_group_score
+    best_batch_score = baseline_comp[['batch_score']]
+    best_penalty = 0
+    best_penalized_score = baseline_score
+    best_matrix = seqUQ
+    if (max_k >= 1L) {
+        for (k in seq_len(max_k)) {
+            mat = run_ruvseq_with_k(seqUQ, controls, k, res)
+            if ("try-error" %in% class(mat)) {
+                next
+            }
+            comp = score_ruvseq_components(mat, sra)
+            score = comp[['score']]
+            group_score = comp[['group_score']]
+            penalty = 0
+            # Penalize solutions that degrade sample_group signal relative to baseline (over-correction).
+            if (is.finite(baseline_group_score) && is.finite(group_score)) {
+                penalty = max(0, baseline_group_score - group_score) * 2
+            } else if (is.finite(baseline_group_score) && !is.finite(group_score)) {
+                penalty = 1
+            }
+            penalized_score = ifelse(is.finite(score), score - penalty, NA_real_)
+            if (!is.finite(best_penalized_score) || (is.finite(penalized_score) && (penalized_score > best_penalized_score))) {
+                best_k = k
+                best_score = score
+                best_group_score = group_score
+                best_batch_score = comp[['batch_score']]
+                best_penalty = penalty
+                best_penalized_score = penalized_score
+                best_matrix = mat
+            }
+        }
+    }
+    cat(sprintf('RUVseq auto-k selected k=%d (score=%.4f; penalized=%.4f; baseline=%.4f; baseline_group=%.4f).\n',
+                best_k,
+                ifelse(is.finite(best_score), best_score, NA_real_),
+                ifelse(is.finite(best_penalized_score), best_penalized_score, NA_real_),
+                ifelse(is.finite(baseline_score), baseline_score, NA_real_),
+                ifelse(is.finite(baseline_group_score), baseline_group_score, NA_real_)))
+    list(
+        k = best_k,
+        matrix = best_matrix,
+        score = best_score,
+        group_score = best_group_score,
+        batch_score = best_batch_score,
+        penalized_score = best_penalized_score,
+        baseline_score = baseline_score,
+        baseline_group_score = baseline_group_score,
+        penalty = best_penalty
+    )
+}
+
+resolve_sva_B_value = function(B_setting = 'auto', sample_count, auto_max = 100L) {
+    auto_max = suppressWarnings(as.integer(auto_max))
+    if (!is.finite(auto_max) || (auto_max < 5)) {
+        auto_max = 100L
+    }
+    setting_chr = tolower(as.character(B_setting))
+    if (setting_chr != 'auto') {
+        B_manual = suppressWarnings(as.integer(setting_chr))
+        if (is.finite(B_manual) && (B_manual >= 1)) {
+            return(as.integer(B_manual))
+        }
+        cat('Invalid --sva_B value. Falling back to auto mode.\n')
+    }
+    n = suppressWarnings(as.integer(sample_count))
+    if (!is.finite(n) || (n < 2)) {
+        return(as.integer(min(auto_max, 20L)))
+    }
+    # Keep permutation count modest for larger cohorts while preserving stability in small cohorts.
+    B_auto = as.integer(ceiling(120 / n))
+    B_auto = as.integer(max(5L, min(auto_max, B_auto)))
+    return(B_auto)
+}
+
+estimate_sva_nsv_at_B = function(tc, mod, B_value, max_nsv) {
+    B_value = as.integer(max(1L, suppressWarnings(as.integer(B_value))))
+    nsv_be = try(num.sv(dat = as.matrix(tc), mod = mod, method = 'be', B = B_value))
+    if (!("try-error" %in% class(nsv_be)) && is.finite(as.numeric(nsv_be))) {
+        nsv_auto = as.integer(round(as.numeric(nsv_be)))
+        nsv_auto = as.integer(min(max_nsv, max(0L, nsv_auto)))
+        return(list(nsv = nsv_auto, method = 'be'))
+    }
+    nsv_leek = try(num.sv(dat = as.matrix(tc), mod = mod, method = 'leek'))
+    if (!("try-error" %in% class(nsv_leek)) && is.finite(as.numeric(nsv_leek))) {
+        nsv_auto = as.integer(round(as.numeric(nsv_leek)))
+        nsv_auto = as.integer(min(max_nsv, max(0L, nsv_auto)))
+        return(list(nsv = nsv_auto, method = 'leek'))
+    }
+    return(list(nsv = NA_integer_, method = 'failed'))
+}
+
+resolve_sva_parameters = function(tc, mod, nsv_setting = 'auto', B_setting = 'auto', B_auto_max = 100L) {
+    max_nsv = max(0L, ncol(tc) - ncol(mod) - 1L)
+    nsv_setting_chr = tolower(as.character(nsv_setting))
+    B_setting_chr = tolower(as.character(B_setting))
+    B_default = resolve_sva_B_value(B_setting = B_setting_chr, sample_count = ncol(tc), auto_max = B_auto_max)
+    trace_B = integer(0)
+    trace_nsv = integer(0)
+    trace_method = character(0)
+
+    if (nsv_setting_chr != 'auto') {
+        nsv_manual_raw = suppressWarnings(as.integer(nsv_setting_chr))
+        if (!is.finite(nsv_manual_raw) || (nsv_manual_raw < 0)) {
+            cat('Invalid --sva_nsv value. Falling back to auto mode.\n')
+        } else {
+            nsv_manual = as.integer(min(max_nsv, max(0L, nsv_manual_raw)))
+            if (nsv_manual != nsv_manual_raw) {
+                cat(sprintf('Requested n.sv was clamped to %d to match sample size/design rank.\n', nsv_manual))
+            }
+            return(list(
+                nsv = nsv_manual,
+                B = B_default,
+                stable = TRUE,
+                method = 'manual_nsv',
+                trace_B = trace_B,
+                trace_nsv = trace_nsv,
+                trace_method = trace_method
+            ))
+        }
+    }
+
+    if (max_nsv == 0L) {
+        return(list(
+            nsv = 0L,
+            B = B_default,
+            stable = TRUE,
+            method = 'max_nsv_zero',
+            trace_B = trace_B,
+            trace_nsv = trace_nsv,
+            trace_method = trace_method
+        ))
+    }
+
+    if (B_setting_chr != 'auto') {
+        est = estimate_sva_nsv_at_B(tc = tc, mod = mod, B_value = B_default, max_nsv = max_nsv)
+        nsv_val = ifelse(is.finite(est[['nsv']]), as.integer(est[['nsv']]), 0L)
+        return(list(
+            nsv = nsv_val,
+            B = B_default,
+            stable = TRUE,
+            method = paste0('manual_B_', est[['method']]),
+            trace_B = as.integer(B_default),
+            trace_nsv = as.integer(nsv_val),
+            trace_method = as.character(est[['method']])
+        ))
+    }
+
+    B_auto_max = suppressWarnings(as.integer(B_auto_max))
+    if (!is.finite(B_auto_max) || (B_auto_max < 5)) {
+        B_auto_max = 100L
+    }
+    base_B = resolve_sva_B_value(B_setting = 'auto', sample_count = ncol(tc), auto_max = B_auto_max)
+    B_candidates = unique(as.integer(c(base_B, ceiling(base_B * 1.5), base_B * 2, B_auto_max)))
+    B_candidates = B_candidates[is.finite(B_candidates) & (B_candidates >= 1) & (B_candidates <= B_auto_max)]
+    B_candidates = sort(unique(B_candidates))
+    if (length(B_candidates) == 0) {
+        B_candidates = as.integer(min(B_auto_max, 20L))
+    }
+
+    prev_nsv = NA_integer_
+    selected_nsv = NA_integer_
+    selected_B = as.integer(tail(B_candidates, 1))
+    stable = FALSE
+    selected_method = 'failed'
+    for (cand_B in B_candidates) {
+        est = estimate_sva_nsv_at_B(tc = tc, mod = mod, B_value = cand_B, max_nsv = max_nsv)
+        nsv_curr = suppressWarnings(as.integer(est[['nsv']]))
+        trace_B = c(trace_B, as.integer(cand_B))
+        trace_nsv = c(trace_nsv, ifelse(is.finite(nsv_curr), nsv_curr, -1L))
+        trace_method = c(trace_method, as.character(est[['method']]))
+        if (is.finite(nsv_curr)) {
+            selected_nsv = as.integer(nsv_curr)
+            selected_B = as.integer(cand_B)
+            selected_method = as.character(est[['method']])
+            if (!is.na(prev_nsv) && (nsv_curr == prev_nsv)) {
+                stable = TRUE
+                break
+            }
+            prev_nsv = nsv_curr
+        }
+    }
+    if (!is.finite(selected_nsv)) {
+        selected_nsv = 0L
+    }
+    return(list(
+        nsv = as.integer(selected_nsv),
+        B = as.integer(selected_B),
+        stable = stable,
+        method = paste0('auto_', selected_method),
+        trace_B = as.integer(trace_B),
+        trace_nsv = as.integer(trace_nsv),
+        trace_method = as.character(trace_method)
+    ))
 }
 
 if (batch_effect_alg == "ruvseq") {
@@ -215,6 +605,93 @@ sort_tc_and_metadata = function(tc, sra, sort_columns = c("sample_group", "scien
     sra_intersection = sra[(sra[['run']] %in% colnames(tc)), 'run']
     tc = tc[, sra_intersection, drop = FALSE]
     return(list(tc = tc, sra = sra))
+}
+
+normalize_run_vector = function(run_ids) {
+    run_ids = unique(as.character(run_ids))
+    run_ids = run_ids[(!is.na(run_ids)) & (run_ids != '')]
+    run_ids
+}
+
+initialize_batch_info = function(run_ids = character(0), batch_effect_alg = 'no') {
+    run_ids = normalize_run_vector(run_ids)
+    list(
+        batch_effect_alg_requested = as.character(batch_effect_alg),
+        batch_effect_alg_applied = as.character(batch_effect_alg),
+        corrected_runs = character(0),
+        uncorrected_runs = run_ids,
+        resolved_sva_nsv = NA_integer_,
+        resolved_sva_B = NA_integer_,
+        sva_estimation_method = NA_character_,
+        sva_stable = NA,
+        resolved_ruv_k = NA_integer_,
+        resolved_ruv_controls = NA_integer_,
+        ruv_baseline_score = NA_real_,
+        ruv_selected_score = NA_real_,
+        ruv_selected_penalized_score = NA_real_,
+        ruv_penalty = NA_real_,
+        skip_reason = 'not_run'
+    )
+}
+
+annotate_metadata_with_batch_info = function(sra, batch_info) {
+    if (nrow(sra) == 0) {
+        if (!'batch_corrected' %in% colnames(sra)) {
+            sra[['batch_corrected']] = character(0)
+        }
+        if (!'batch_alg_used' %in% colnames(sra)) {
+            sra[['batch_alg_used']] = character(0)
+        }
+        return(sra)
+    }
+    corrected_runs = normalize_run_vector(batch_info[['corrected_runs']])
+    used_alg = as.character(batch_info[['batch_effect_alg_applied']])
+    if (!is.character(used_alg) || is.na(used_alg) || (used_alg == '')) {
+        used_alg = 'no'
+    }
+    run_chr = as.character(sra[['run']])
+    sra[['batch_corrected']] = ifelse(run_chr %in% corrected_runs, 'yes', 'no')
+    sra[['batch_alg_used']] = ifelse(run_chr %in% corrected_runs, used_alg, 'no')
+    return(sra)
+}
+
+write_batch_effect_summary = function(batch_info, scientific_name, species_tag, dir_tsv, random_seed_value = NA_integer_) {
+    collapse_runs = function(run_ids) {
+        run_ids = normalize_run_vector(run_ids)
+        if (length(run_ids) == 0) {
+            return('')
+        }
+        paste(run_ids, collapse = '|')
+    }
+    corrected_runs = normalize_run_vector(batch_info[['corrected_runs']])
+    uncorrected_runs = normalize_run_vector(batch_info[['uncorrected_runs']])
+    summary_df = data.frame(
+        scientific_name = as.character(scientific_name),
+        batch_effect_alg_requested = as.character(batch_info[['batch_effect_alg_requested']]),
+        batch_effect_alg_applied = as.character(batch_info[['batch_effect_alg_applied']]),
+        random_seed = ifelse(is.na(random_seed_value), 'auto', as.character(random_seed_value)),
+        resolved_sva_nsv = suppressWarnings(as.integer(batch_info[['resolved_sva_nsv']])),
+        resolved_sva_B = suppressWarnings(as.integer(batch_info[['resolved_sva_B']])),
+        sva_estimation_method = as.character(batch_info[['sva_estimation_method']]),
+        sva_stable = as.character(batch_info[['sva_stable']]),
+        resolved_ruv_k = suppressWarnings(as.integer(batch_info[['resolved_ruv_k']])),
+        resolved_ruv_controls = suppressWarnings(as.integer(batch_info[['resolved_ruv_controls']])),
+        ruv_baseline_score = suppressWarnings(as.numeric(batch_info[['ruv_baseline_score']])),
+        ruv_selected_score = suppressWarnings(as.numeric(batch_info[['ruv_selected_score']])),
+        ruv_selected_penalized_score = suppressWarnings(as.numeric(batch_info[['ruv_selected_penalized_score']])),
+        ruv_penalty = suppressWarnings(as.numeric(batch_info[['ruv_penalty']])),
+        corrected_run_count = as.integer(length(corrected_runs)),
+        corrected_runs = collapse_runs(corrected_runs),
+        uncorrected_run_count = as.integer(length(uncorrected_runs)),
+        uncorrected_runs = collapse_runs(uncorrected_runs),
+        skip_reason = as.character(batch_info[['skip_reason']]),
+        stringsAsFactors = FALSE
+    )
+    file_summary = file.path(
+        dir_tsv,
+        paste0(species_tag, ".", as.character(batch_info[['batch_effect_alg_requested']]), ".batch_effect_summary.tsv")
+    )
+    write.table(summary_df, file = file_summary, sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
 }
 
 cleanY = function(y, mod, svs) {
@@ -608,7 +1085,9 @@ check_within_sample_group_correlation = function(tc, sra, dist_method, min_dif, 
 batch_effect_subtraction = function(tc, sra, batch_effect_alg, transform_method, clip_negative) {
     if (ncol(tc) == 1) {
         cat('Only 1 sample is available. Skipping batch effect subtraction.\n')
-        return(list(tc = tc, sva = NULL))
+        batch_info = initialize_batch_info(run_ids = colnames(tc), batch_effect_alg = batch_effect_alg)
+        batch_info[['skip_reason']] = 'single_sample'
+        return(list(tc = tc, sva = NULL, batch_info = batch_info))
     }
     out = tc_metadata_intersect(tc, sra)
     tc = out[["tc"]]
@@ -619,86 +1098,214 @@ batch_effect_subtraction = function(tc, sra, batch_effect_alg, transform_method,
     out = remove_nonexpressed_gene(tc)
     tc = out[["tc_ex"]]
     tc_ne = out[["tc_ne"]]
+    run_all = colnames(tc)
+    batch_info = initialize_batch_info(run_ids = run_all, batch_effect_alg = batch_effect_alg)
+    sva1 = NULL
     if (batch_effect_alg == "sva") {
         mod = try(model.matrix(~sample_group, data = sra))
         if ("try-error" %in% class(mod)) {
-            return(list(tc = tc, sva = NULL))
+            cat("SVA design construction failed. Skipping SVA correction.\n")
+            tc = rbind(tc[, run_all, drop = FALSE], tc_ne[, run_all, drop = FALSE])
+            batch_info[['skip_reason']] = 'sva_design_failed'
+            return(list(tc = tc, sva = NULL, batch_info = batch_info))
         }
         mod0 = model.matrix(~1, data = sra)
-        sva1 = try(sva(dat = as.matrix(tc), mod = mod, mod0 = mod0, B = 10))
-        if ((class(sva1) != "try-error")) {
-            cat("SVA correction was correctly performed.\n")
-            tc = cleanY(y = tc, mod = mod, svs = sva1[['sv']])
-            tc = rbind(tc, tc_ne)
-        } else if ((class(sva1) == "try-error")) {
-            cat("SVA correction failed.")
-            # tc = rbind(tc, tc_ne) # Original tc shouldn't be returned as it is confusing. We may need a logic to retrieve the result of the previous round as final output.
+        sva_params = resolve_sva_parameters(
+            tc = tc,
+            mod = mod,
+            nsv_setting = sva_nsv_setting,
+            B_setting = sva_B_setting,
+            B_auto_max = sva_B_auto_max
+        )
+        sva_nsv_value = as.integer(sva_params[['nsv']])
+        sva_B_value = as.integer(sva_params[['B']])
+        batch_info[['resolved_sva_nsv']] = sva_nsv_value
+        batch_info[['resolved_sva_B']] = sva_B_value
+        batch_info[['sva_estimation_method']] = as.character(sva_params[['method']])
+        batch_info[['sva_stable']] = as.logical(sva_params[['stable']])
+        cat(sprintf("SVA settings resolved: n.sv=%d, B=%d.\n", sva_nsv_value, sva_B_value))
+        if (length(sva_params[['trace_B']]) > 0) {
+            trace_txt = paste0(
+                sva_params[['trace_B']],
+                ':',
+                sva_params[['trace_nsv']],
+                '(',
+                sva_params[['trace_method']],
+                ')'
+            )
+            cat('SVA auto-estimation trace [B:n.sv(method)] =', paste(trace_txt, collapse = ', '), '\n')
+            if (!isTRUE(sva_params[['stable']])) {
+                cat('SVA auto-estimation did not converge to stable n.sv within B candidates.\n')
+            }
+        }
+        if (sva_nsv_value <= 0L) {
+            cat("SVA selected n.sv=0. Keeping uncorrected values.\n")
+            empty_sv = matrix(numeric(0), nrow = ncol(tc), ncol = 0)
+            rownames(empty_sv) = colnames(tc)
+            sva1 = list(n.sv = 0L, sv = empty_sv)
+            tc = rbind(tc[, run_all, drop = FALSE], tc_ne[, run_all, drop = FALSE])
+            batch_info[['skip_reason']] = 'sva_nsv_zero'
+        } else {
+            sva1 = try(sva(dat = as.matrix(tc), mod = mod, mod0 = mod0, n.sv = as.integer(sva_nsv_value), B = as.integer(sva_B_value)))
+            if ((class(sva1) != "try-error")) {
+                cat("SVA correction was correctly performed.\n")
+                sv_matrix = sva1[['sv']]
+                sv_matrix = as.matrix(sv_matrix)
+                if (is.null(sv_matrix) || (ncol(sv_matrix) == 0)) {
+                    cat("SVA returned no surrogate variables after correction. Keeping uncorrected values.\n")
+                    tc = tc[, run_all, drop = FALSE]
+                    batch_info[['skip_reason']] = 'sva_no_sv_after_fit'
+                } else {
+                    tc = cleanY(y = tc, mod = mod, svs = sv_matrix)
+                    batch_info[['corrected_runs']] = run_all
+                    batch_info[['skip_reason']] = ''
+                }
+                tc = rbind(tc[, run_all, drop = FALSE], tc_ne[, run_all, drop = FALSE])
+            } else if ((class(sva1) == "try-error")) {
+                cat("SVA correction failed. Keeping uncorrected values.\n")
+                tc = rbind(tc[, run_all, drop = FALSE], tc_ne[, run_all, drop = FALSE])
+                sva1 = NULL
+                batch_info[['skip_reason']] = 'sva_fit_failed'
+            }
         }
     } else if (batch_effect_alg == "combatseq") {
         bp_freq = as.data.frame(table(sra[, "bioproject"]))
-        bp_freq_gt1 = bp_freq[bp_freq[, "Freq"] > 1, "Var1"]
-        bp_freq_eq1 = bp_freq[bp_freq[, "Freq"] == 1, "Var1"]
-        run_bp_freq_gt1 = sra[sra[, "bioproject"] %in% bp_freq_gt1, "run"]
-        run_bp_freq_eq1 = sra[sra[, "bioproject"] %in% bp_freq_eq1, "run"]
-        tc_combat = tc[, colnames(tc) %in% run_bp_freq_gt1]
-        tcc_cn = colnames(tc_combat)
-        batch = sra[(sra[, "bioproject"] %in% bp_freq_gt1), "bioproject"]
-        group = sra[(sra[, "run"] %in% run_bp_freq_gt1), "sample_group"]
-        tc_combat = try(ComBat_seq(as.matrix(tc_combat), batch = batch, group = group))
-        if (class(tc_combat)[1] != "try-error") {
-            cat("These runs are being removed, due to the bioproject only having 1 sample: \n")
+        bp_freq_gt1 = as.character(bp_freq[bp_freq[, "Freq"] > 1, "Var1"])
+        bp_freq_eq1 = as.character(bp_freq[bp_freq[, "Freq"] == 1, "Var1"])
+        run_bp_freq_gt1 = as.character(sra[sra[, "bioproject"] %in% bp_freq_gt1, "run"])
+        run_bp_freq_eq1 = as.character(sra[sra[, "bioproject"] %in% bp_freq_eq1, "run"])
+        run_bp_freq_gt1 = run_bp_freq_gt1[run_bp_freq_gt1 %in% run_all]
+        run_bp_freq_eq1 = run_bp_freq_eq1[run_bp_freq_eq1 %in% run_all]
+        if (length(run_bp_freq_eq1) > 0) {
+            cat("Singleton bioproject runs will be kept without Combatseq adjustment:\n")
             print(run_bp_freq_eq1)
-            cat("Combatseq correction was correctly performed.\n")
-            tc_combat = as.data.frame(tc_combat)
-            colnames(tc_combat) = tcc_cn
-            tc = rbind(tc_combat, tc_ne[, colnames(tc_combat)])
-            sva1 = ''
+        }
+        if (length(run_bp_freq_gt1) == 0) {
+            cat("All batches are singleton. Skipping Combatseq and keeping uncorrected values.\n")
+            tc = rbind(tc[, run_all, drop = FALSE], tc_ne[, run_all, drop = FALSE])
+            batch_info[['skip_reason']] = 'combatseq_all_singleton'
         } else {
-            cat("Combatseq correction failed. Trying again without group parameter. \n")
-            tc_combat = tc[, colnames(tc) %in% run_bp_freq_gt1]
-            tc_combat = try(ComBat_seq(as.matrix(tc_combat), batch = batch))
-            if (class(tc_combat)[1] != "try-error") {
-                cat("These runs are being removed, due to the bioproject only having 1 sample: \n")
-                print(run_bp_freq_eq1)
+            tc_combat_input = tc[, run_bp_freq_gt1, drop = FALSE]
+            tcc_cn = colnames(tc_combat_input)
+            sra_idx = match(tcc_cn, as.character(sra[['run']]))
+            batch = as.character(sra[sra_idx, "bioproject"])
+            group = as.character(sra[sra_idx, "sample_group"])
+            tc_combat = try(ComBat_seq(as.matrix(tc_combat_input), batch = batch, group = group))
+            if (class(tc_combat)[1] == "try-error") {
+                cat("Combatseq correction failed. Trying again without group parameter. \n")
+                tc_combat = try(ComBat_seq(as.matrix(tc_combat_input), batch = batch))
+            }
+            if (class(tc_combat)[1] == "try-error") {
+                cat("Combatseq correction failed. Keeping uncorrected values.\n")
+                tc = rbind(tc[, run_all, drop = FALSE], tc_ne[, run_all, drop = FALSE])
+                batch_info[['skip_reason']] = 'combatseq_fit_failed'
+            } else {
                 cat("Combatseq correction was correctly performed.\n")
                 tc_combat = as.data.frame(tc_combat)
                 colnames(tc_combat) = tcc_cn
-                tc = rbind(tc_combat, tc_ne[, colnames(tc_combat)])
-                sva1 = ''
-            }
-            else {
-                stop("Combatseq correction failed.")
+                tc_corrected = tc
+                tc_corrected[, tcc_cn] = tc_combat[, tcc_cn, drop = FALSE]
+                tc_corrected = tc_corrected[, run_all, drop = FALSE]
+                tc = rbind(tc_corrected, tc_ne[, run_all, drop = FALSE])
+                batch_info[['corrected_runs']] = tcc_cn
+                if (length(run_bp_freq_eq1) > 0) {
+                    batch_info[['skip_reason']] = 'combatseq_singleton_kept'
+                } else {
+                    batch_info[['skip_reason']] = ''
+                }
             }
         }
     } else if (batch_effect_alg == "ruvseq") {
         x = as.factor(sra$sample_group)
         design = try(model.matrix(~sample_group, data = sra))
         if ("try-error" %in% class(design)) {
-            return(list(tc = tc, sva = NULL))
+            cat("RUVseq design construction failed. Skipping RUVseq correction.\n")
+            tc = rbind(tc[, run_all, drop = FALSE], tc_ne[, run_all, drop = FALSE])
+            batch_info[['skip_reason']] = 'ruvseq_design_failed'
+            return(list(tc = tc, sva = NULL, batch_info = batch_info))
         }
-        y = DGEList(counts = as.matrix(tc + 1), group = x)
-        y = calcNormFactors(y, method = "upperquartile")
-        y = estimateGLMCommonDisp(y, design)
-        y = estimateGLMTagwiseDisp(y, design)
-        fit = glmFit(y, design)
-        res = residuals(fit, type = "deviance")
-        seqUQ = betweenLaneNormalization(as.matrix(tc + 1), which = "upper", round = TRUE, offset = FALSE)
-        controls = rep(TRUE, dim(as.matrix(tc + 1))[1])
-        batch_ruv_res = try(RUVr(seqUQ, controls, k = 1, res)[[2]])
-        if (class(batch_ruv_res)[1] != "try-error") {
-            cat("RUVseq correction was correctly performed.\n")
-            tc = rbind(batch_ruv_res, tc_ne)
-            sva1 = ''
+        ruv_work = try({
+            y = DGEList(counts = as.matrix(tc + 1), group = x)
+            y = calcNormFactors(y, method = "upperquartile")
+            y = estimateGLMCommonDisp(y, design)
+            y = estimateGLMTagwiseDisp(y, design)
+            fit = glmFit(y, design)
+            res = residuals(fit, type = "deviance")
+            seqUQ = betweenLaneNormalization(as.matrix(tc + 1), which = "upper", round = TRUE, offset = FALSE)
+            controls = select_ruvseq_controls(
+                y = y,
+                seqUQ = seqUQ,
+                fit = fit,
+                design = design,
+                mode = ruvseq_control_mode,
+                top_n = ruvseq_control_top_n,
+                min_controls = ruvseq_min_controls
+            )
+            if (sum(controls) < 2) {
+                cat("RUVseq controls are insufficient. Falling back to all genes.\n")
+                controls = rep(TRUE, nrow(seqUQ))
+            }
+            ruvseq_out = resolve_ruvseq_k_and_matrix(
+                seqUQ = seqUQ,
+                controls = controls,
+                res = res,
+                sra = sra,
+                k_setting = ruvseq_k_setting,
+                k_max = ruvseq_k_max
+            )
+            list(
+                controls_n = as.integer(sum(controls)),
+                ruvseq_out = ruvseq_out
+            )
+        })
+        if ("try-error" %in% class(ruv_work)) {
+            cat("RUVseq correction failed during fitting. Keeping uncorrected values.\n")
+            tc = rbind(tc[, run_all, drop = FALSE], tc_ne[, run_all, drop = FALSE])
+            batch_info[['skip_reason']] = 'ruvseq_fit_failed'
         } else {
-            stop("RUVseq correction failed.")
-            # tc = rbind(tc, tc_ne) # Original tc shouldn't be returned as it is confusing. We may need a logic to retrieve the result of the previous round as final output.
+            selected_k = suppressWarnings(as.integer(ruv_work[['ruvseq_out']][['k']]))
+            batch_ruv_res = ruv_work[['ruvseq_out']][['matrix']]
+            batch_info[['resolved_ruv_k']] = selected_k
+            batch_info[['resolved_ruv_controls']] = suppressWarnings(as.integer(ruv_work[['controls_n']]))
+            batch_info[['ruv_baseline_score']] = suppressWarnings(as.numeric(ruv_work[['ruvseq_out']][['baseline_score']]))
+            batch_info[['ruv_selected_score']] = suppressWarnings(as.numeric(ruv_work[['ruvseq_out']][['score']]))
+            batch_info[['ruv_selected_penalized_score']] = suppressWarnings(as.numeric(ruv_work[['ruvseq_out']][['penalized_score']]))
+            batch_info[['ruv_penalty']] = suppressWarnings(as.numeric(ruv_work[['ruvseq_out']][['penalty']]))
+            if ("try-error" %in% class(batch_ruv_res)) {
+                cat("RUVseq correction matrix generation failed. Keeping uncorrected values.\n")
+                tc = rbind(tc[, run_all, drop = FALSE], tc_ne[, run_all, drop = FALSE])
+                batch_info[['skip_reason']] = 'ruvseq_matrix_failed'
+            } else if (!is.finite(selected_k) || (selected_k <= 0L)) {
+                cat(sprintf("RUVseq auto-k selected k=%d. Keeping uncorrected values.\n", ifelse(is.finite(selected_k), selected_k, 0L)))
+                tc = rbind(tc[, run_all, drop = FALSE], tc_ne[, run_all, drop = FALSE])
+                batch_info[['skip_reason']] = 'ruvseq_k_zero'
+            } else {
+                cat(sprintf("RUVseq correction was correctly performed (k=%d).\n", selected_k))
+                batch_ruv_res = as.data.frame(batch_ruv_res)
+                batch_ruv_res = batch_ruv_res[, run_all, drop = FALSE]
+                tc = rbind(batch_ruv_res, tc_ne[, run_all, drop = FALSE])
+                batch_info[['corrected_runs']] = run_all
+                batch_info[['skip_reason']] = ''
+            }
         }
     } else if (batch_effect_alg == "no") {
         cat("No batch effect correction was performed.\n")
-        tc = rbind(tc, tc_ne)
-        sva1 = ''
+        tc = rbind(tc[, run_all, drop = FALSE], tc_ne[, run_all, drop = FALSE])
+        batch_info[['skip_reason']] = 'batch_effect_alg_no'
     } else {
         stop("Invalid batch effect correction algorithm.")
+    }
+    corrected_runs = normalize_run_vector(batch_info[['corrected_runs']])
+    corrected_runs = corrected_runs[corrected_runs %in% run_all]
+    batch_info[['corrected_runs']] = corrected_runs
+    batch_info[['uncorrected_runs']] = setdiff(run_all, corrected_runs)
+    if (length(corrected_runs) == 0) {
+        batch_info[['batch_effect_alg_applied']] = 'no'
+    } else {
+        batch_info[['batch_effect_alg_applied']] = as.character(batch_effect_alg)
+    }
+    if (is.null(batch_info[['skip_reason']]) || is.na(batch_info[['skip_reason']])) {
+        batch_info[['skip_reason']] = ''
     }
     if (clip_negative) {
         if (endsWith(sub('-.*', '', transform_method), 'p1')) {
@@ -716,7 +1323,7 @@ batch_effect_subtraction = function(tc, sra, batch_effect_alg, transform_method,
             cat('`--clip_negative yes` is only applicable to `--norm log*p1-*`.\n')
         }
     }
-    return(list(tc = tc, sva = sva1))
+    return(list(tc = tc, sva = sva1, batch_info = batch_info))
 }
 
 compute_dense_label_pt = function(num_labels, base_pt = 8, min_pt = 4, soft_limit = 20) {
@@ -1343,6 +1950,9 @@ draw_tsne = function(sra, tc, fontsize = 8) {
         return(NULL)
     }
     perplexity = min(30, max_perplexity)
+    if (exists('random_seed_value', inherits = TRUE) && !is.na(random_seed_value)) {
+        set.seed(as.integer(random_seed_value))
+    }
     try_out = tryCatch({
         Rtsne(
             as.matrix(t(tc)),
@@ -1398,16 +2008,38 @@ draw_sva_summary = function(sva_out, tc, sra, fontsize) {
         out = sort_tc_and_metadata(tc, sra)
         tc = out[["tc"]]
         sra = out[["sra"]]
-        sra[['log10_total_spots']] = log10(sra[['total_spots']])
-        sra[['log10_total_bases']] = log10(sra[['total_bases']])
-        cols = c("sample_group", "bioproject", "lib_layout", "lib_selection", "instrument", "mapping_rate", 'log10_total_spots', 'log10_total_bases')
-        label_cols = c("Sample group", "BioProject", "Library layout", "Library selection", "Instrument", "Mapping rate", 'Log10 total reads', 'Log10 total bases')
-        if ('tmm_normalization_factor' %in% colnames(sra)) {
-            cols = c(cols, 'tmm_normalization_factor')
-            label_cols = c(label_cols, 'TMM normalization factor')
+        cov_setup = prepare_sva_covariates(sra)
+        sra = cov_setup[['sra']]
+        cols = cov_setup[['cols']]
+        label_cols = cov_setup[['label_cols']]
+        if (length(cols) == 0) {
+            plot(c(0, 1), c(0, 1), ann = FALSE, bty = "n", type = "n", xaxt = "n", yaxt = "n")
+            text(
+                x = 0.5,
+                y = 0.5,
+                labels = "SV covariate metadata unavailable",
+                cex = axis_text_cex
+            )
+            return(data.frame())
         }
-        num_sv = sva_out[['n.sv']]
-        if (num_sv == 0) {
+        sv_matrix = align_sva_matrix_with_runs(sva_out = sva_out, run_ids = as.character(sra[['run']]))
+        if (is.null(sv_matrix) || (nrow(sv_matrix) == 0) || (ncol(sv_matrix) == 0)) {
+            plot(c(0, 1), c(0, 1), ann = FALSE, bty = "n", type = "n", xaxt = "n", yaxt = "n")
+            text(
+                x = 0.5,
+                y = 0.5,
+                labels = "SV summary unavailable",
+                cex = axis_text_cex
+            )
+            return(data.frame())
+        }
+        sra = sra[match(rownames(sv_matrix), sra[['run']]), , drop = FALSE]
+        num_sv_raw = suppressWarnings(as.integer(sva_out[['n.sv']]))
+        if (!is.finite(num_sv_raw)) {
+            num_sv_raw = ncol(sv_matrix)
+        }
+        num_sv = as.integer(min(num_sv_raw, ncol(sv_matrix)))
+        if ((num_sv <= 0) || !is.finite(num_sv)) {
             cat('No surrogate variables found.\n')
             plot(c(0, 1), c(0, 1), ann = FALSE, bty = "n", type = "n", xaxt = "n", yaxt = "n")
             text(
@@ -1425,28 +2057,186 @@ draw_sva_summary = function(sva_out, tc, sra, fontsize) {
             )
             return(data.frame())
         }
+        sv_matrix = sv_matrix[, seq_len(num_sv), drop = FALSE]
         df = data.frame(matrix(NA, num_sv, length(cols)))
         colnames(df) = cols
         rownames(df) = paste0("SV", 1:nrow(df))
         for (i in seq_along(cols)) {
             for (j in 1:num_sv) {
-                if (length(unique(sra[, cols[i]])) == 1) {
-                    df[j, i] = NA
-                } else {
-                    lm_summary = summary(lm(sva_out[['sv']][, j] ~ sra[, cols[i]]))
-                    df[j, i] = lm_summary[['adj.r.squared']]
-                }
+                df[j, i] = calc_sv_covariate_r2(
+                    sv_vec = sv_matrix[, j],
+                    covariate_vec = sra[[cols[i]]]
+                )
             }
         }
         colnames(df) = label_cols
         breaks = seq(0, 1, 0.02)
         colors = colorRampPalette(c("blue", "yellow", "red"))(length(breaks))
         df2 = t(df)
+        df2[!is.finite(df2)] = 0
         df2[df2 < 0] = 0
         g = build_numeric_heatmap_ggplot(mat = df2, breaks = breaks, colors = colors, fontsize = fontsize, legend_title = 'Adj. R-squared')
         draw_ggplot_in_current_plot_panel(g)
     }
     return(df)
+}
+
+prepare_sva_covariates = function(sra) {
+    cols = character(0)
+    label_cols = character(0)
+    add_col = function(col, label) {
+        if (col %in% colnames(sra)) {
+            cols <<- c(cols, col)
+            label_cols <<- c(label_cols, label)
+        }
+    }
+    add_col("sample_group", "Sample group")
+    add_col("bioproject", "BioProject")
+    add_col("lib_layout", "Library layout")
+    add_col("lib_selection", "Library selection")
+    add_col("instrument", "Instrument")
+    add_col("mapping_rate", "Mapping rate")
+    if ('total_spots' %in% colnames(sra)) {
+        sra[['log10_total_spots']] = suppressWarnings(log10(as.numeric(sra[['total_spots']])))
+        add_col('log10_total_spots', 'Log10 total reads')
+    }
+    if ('total_bases' %in% colnames(sra)) {
+        sra[['log10_total_bases']] = suppressWarnings(log10(as.numeric(sra[['total_bases']])))
+        add_col('log10_total_bases', 'Log10 total bases')
+    }
+    if ('tmm_normalization_factor' %in% colnames(sra)) {
+        add_col('tmm_normalization_factor', 'TMM normalization factor')
+    }
+    return(list(sra = sra, cols = cols, label_cols = label_cols))
+}
+
+align_sva_matrix_with_runs = function(sva_out, run_ids) {
+    sv_matrix = as.matrix(sva_out[['sv']])
+    if (is.null(sv_matrix)) {
+        return(NULL)
+    }
+    if (is.null(dim(sv_matrix))) {
+        sv_matrix = matrix(sv_matrix, ncol = 1)
+    }
+    if (is.null(rownames(sv_matrix))) {
+        if (nrow(sv_matrix) != length(run_ids)) {
+            return(NULL)
+        }
+        rownames(sv_matrix) = run_ids
+    }
+    common_runs = intersect(run_ids, rownames(sv_matrix))
+    if (length(common_runs) == 0) {
+        return(NULL)
+    }
+    sv_matrix = sv_matrix[common_runs, , drop = FALSE]
+    return(sv_matrix)
+}
+
+calc_sv_covariate_r2 = function(sv_vec, covariate_vec) {
+    model_df = data.frame(
+        sv = as.numeric(sv_vec),
+        covariate = covariate_vec,
+        stringsAsFactors = FALSE
+    )
+    model_df = model_df[is.finite(model_df[['sv']]) & !is.na(model_df[['covariate']]), , drop = FALSE]
+    if (nrow(model_df) < 3) {
+        return(NA_real_)
+    }
+    if (length(unique(model_df[['covariate']])) <= 1) {
+        return(NA_real_)
+    }
+    fit = try(lm(sv ~ covariate, data = model_df), silent = TRUE)
+    if ("try-error" %in% class(fit)) {
+        return(NA_real_)
+    }
+    adj_r2 = suppressWarnings(as.numeric(summary(fit)[['adj.r.squared']]))
+    if (!is.finite(adj_r2)) {
+        return(NA_real_)
+    }
+    return(adj_r2)
+}
+
+draw_sva_summary_base = function(sva_out, tc, sra, fontsize = 8) {
+    fontsize = resolve_curate_fontsize(fontsize)
+    axis_text_cex = compute_effective_text_cex(target_pt = fontsize)
+    if ((is.null(sva_out)) | (class(sva_out) == "try-error")) {
+        plot(c(0, 1), c(0, 1), ann = FALSE, bty = "n", type = "n", xaxt = "n", yaxt = "n")
+        text(0.5, 0.5, labels = "SV summary unavailable", cex = axis_text_cex)
+        return(invisible(NULL))
+    }
+    out = tc_metadata_intersect(tc, sra)
+    tc = out[["tc"]]
+    sra = out[["sra"]]
+    out = sort_tc_and_metadata(tc, sra)
+    tc = out[["tc"]]
+    sra = out[["sra"]]
+    cov_setup = prepare_sva_covariates(sra)
+    sra = cov_setup[['sra']]
+    cols = cov_setup[['cols']]
+    label_cols = cov_setup[['label_cols']]
+    if (length(cols) == 0) {
+        plot(c(0, 1), c(0, 1), ann = FALSE, bty = "n", type = "n", xaxt = "n", yaxt = "n")
+        text(0.5, 0.5, labels = "SV covariate metadata unavailable", cex = axis_text_cex)
+        return(invisible(NULL))
+    }
+    sv_matrix = align_sva_matrix_with_runs(sva_out = sva_out, run_ids = as.character(sra[['run']]))
+    if (is.null(sv_matrix) || (nrow(sv_matrix) == 0) || (ncol(sv_matrix) == 0)) {
+        plot(c(0, 1), c(0, 1), ann = FALSE, bty = "n", type = "n", xaxt = "n", yaxt = "n")
+        text(0.5, 0.5, labels = "SV summary unavailable", cex = axis_text_cex)
+        return(invisible(NULL))
+    }
+    sra = sra[match(rownames(sv_matrix), sra[['run']]), , drop = FALSE]
+    num_sv_raw = suppressWarnings(as.integer(sva_out[['n.sv']]))
+    if (!is.finite(num_sv_raw)) {
+        num_sv_raw = ncol(sv_matrix)
+    }
+    num_sv = as.integer(min(num_sv_raw, ncol(sv_matrix)))
+    if (is.null(num_sv) || !is.finite(num_sv) || (num_sv <= 0)) {
+        plot(c(0, 1), c(0, 1), ann = FALSE, bty = "n", type = "n", xaxt = "n", yaxt = "n")
+        text(0.5, 0.58, labels = "No SV detected", cex = axis_text_cex, font = 2)
+        text(0.5, 0.42, labels = "Adjusted R-squared not available", cex = axis_text_cex)
+        return(invisible(NULL))
+    }
+    num_sv = as.integer(num_sv)
+    sv_matrix = sv_matrix[, seq_len(num_sv), drop = FALSE]
+    df = data.frame(matrix(NA_real_, num_sv, length(cols)))
+    colnames(df) = cols
+    rownames(df) = paste0("SV", seq_len(num_sv))
+    for (i in seq_along(cols)) {
+        for (j in seq_len(num_sv)) {
+            df[j, i] = calc_sv_covariate_r2(
+                sv_vec = sv_matrix[, j],
+                covariate_vec = sra[[cols[i]]]
+            )
+        }
+    }
+    colnames(df) = label_cols
+    mat = as.matrix(t(df))
+    mat[!is.finite(mat)] = 0
+    mat[mat < 0] = 0
+    nr = nrow(mat)
+    nc = ncol(mat)
+    if ((nr == 0) || (nc == 0)) {
+        plot(c(0, 1), c(0, 1), ann = FALSE, bty = "n", type = "n", xaxt = "n", yaxt = "n")
+        text(0.5, 0.5, labels = "SV summary unavailable", cex = axis_text_cex)
+        return(invisible(NULL))
+    }
+    colors = colorRampPalette(c("blue", "yellow", "red"))(100)
+    image(
+        x = seq_len(nc),
+        y = seq_len(nr),
+        z = t(mat[nr:1, , drop = FALSE]),
+        col = colors,
+        zlim = c(0, 1),
+        axes = FALSE,
+        xlab = "",
+        ylab = ""
+    )
+    axis(1, at = seq_len(nc), labels = colnames(mat), las = 2, cex.axis = axis_text_cex * 0.8)
+    axis(2, at = seq_len(nr), labels = rev(rownames(mat)), las = 2, cex.axis = axis_text_cex * 0.8)
+    box()
+    title(main = "SV summary (Adj. R-squared)", cex.main = axis_text_cex)
+    invisible(NULL)
 }
 
 draw_boxplot = function(sra, tc_dist_matrix, fontsize = 8) {
@@ -1781,6 +2571,146 @@ save_plot = function(tc, sra, sva_out, dist_method, file, selected_sample_groups
     return(invisible(tc_dist_matrix))
 }
 
+resolve_correction_label = function(batch_effect_alg) {
+    alg = tolower(as.character(batch_effect_alg))
+    if (alg == 'sva') {
+        return('SVA')
+    } else if (alg == 'ruvseq') {
+        return('RUV-seq')
+    } else if (alg == 'combatseq') {
+        return('ComBat-seq')
+    }
+    return(toupper(alg))
+}
+
+save_quick_state_comparison_plot = function(tc_before, tc_after, sra, dist_method, file, selected_sample_groups, sample_group_colors, transform_method, batch_effect_alg, fontsize = 8, sva_out = NULL) {
+    fontsize = resolve_curate_fontsize(fontsize)
+    if ((ncol(tc_before) <= 1) || (ncol(tc_after) <= 1)) {
+        cat('1 or fewer samples are available. Skipping quick comparison plot.\n')
+        return(invisible(NULL))
+    }
+    common_runs = intersect(colnames(tc_before), colnames(tc_after))
+    common_runs = intersect(common_runs, as.character(sra[['run']]))
+    if (length(common_runs) <= 1) {
+        cat('1 or fewer intersected samples are available. Skipping quick comparison plot.\n')
+        return(invisible(NULL))
+    }
+    tc_before = tc_before[, common_runs, drop = FALSE]
+    tc_after = tc_after[, common_runs, drop = FALSE]
+    sra = sra[match(common_runs, sra[['run']]), , drop = FALSE]
+    sra = add_color_to_curate_metadata(sra, selected_sample_groups, sample_group_colors)
+    out = sort_tc_and_metadata(tc_before, sra)
+    tc_before = out[["tc"]]
+    sra = out[["sra"]]
+    tc_after = tc_after[, colnames(tc_before), drop = FALSE]
+    colnames(tc_before) = sra$run
+    colnames(tc_after) = sra$run
+
+    tc_dist_matrix_before = as.matrix(suppressWarnings(cor(tc_before, method = dist_method, use = 'pairwise.complete.obs')))
+    tc_dist_matrix_before[!is.finite(tc_dist_matrix_before)] = 0
+    if (is.null(dim(tc_dist_matrix_before))) {
+        tc_dist_matrix_before = matrix(tc_dist_matrix_before, nrow = ncol(tc_before), ncol = ncol(tc_before))
+    }
+    rownames(tc_dist_matrix_before) = colnames(tc_before)
+    colnames(tc_dist_matrix_before) = colnames(tc_before)
+    tc_dist_dist_before = calc_sample_distance(
+        tc_before,
+        method = dist_method,
+        na_fill = 1,
+        epsilon = 1e-09,
+        cor_mat = tc_dist_matrix_before
+    )
+
+    tc_dist_matrix_after = as.matrix(suppressWarnings(cor(tc_after, method = dist_method, use = 'pairwise.complete.obs')))
+    tc_dist_matrix_after[!is.finite(tc_dist_matrix_after)] = 0
+    if (is.null(dim(tc_dist_matrix_after))) {
+        tc_dist_matrix_after = matrix(tc_dist_matrix_after, nrow = ncol(tc_after), ncol = ncol(tc_after))
+    }
+    rownames(tc_dist_matrix_after) = colnames(tc_after)
+    colnames(tc_dist_matrix_after) = colnames(tc_after)
+    tc_dist_dist_after = calc_sample_distance(
+        tc_after,
+        method = dist_method,
+        na_fill = 1,
+        epsilon = 1e-09,
+        cor_mat = tc_dist_matrix_after
+    )
+    correction_label = resolve_correction_label(batch_effect_alg)
+    before_label = paste0('Before ', correction_label, ' correction')
+    after_label = paste0('After ', correction_label, ' correction')
+    with_pdf_defaults(
+        file = file.path(dir_pdf, paste0(file, ".pdf")),
+        width = 14.0,
+        height = 32.0,
+        font_size = fontsize,
+        font_family = CURATE_FONT_FAMILY,
+        plot_fn = function(local_font_size, local_font_family) {
+            par(mfrow = c(6, 2))
+            par(mar = c(4, 4, 2, 1))
+            draw_pca(sra, tc_dist_matrix_before, local_font_size)
+            mtext(paste0(before_label, ' | PCA'), side = 3, line = 0.3, cex = 0.9)
+            par(mar = c(4, 4, 2, 1))
+            draw_pca(sra, tc_dist_matrix_after, local_font_size)
+            mtext(paste0(after_label, ' | PCA'), side = 3, line = 0.3, cex = 0.9)
+
+            par(mar = c(4, 4, 2, 1))
+            draw_mds(sra, tc_dist_dist_before, local_font_size)
+            mtext(paste0(before_label, ' | MDS'), side = 3, line = 0.3, cex = 0.9)
+            par(mar = c(4, 4, 2, 1))
+            draw_mds(sra, tc_dist_dist_after, local_font_size)
+            mtext(paste0(after_label, ' | MDS'), side = 3, line = 0.3, cex = 0.9)
+
+            par(mar = c(6, 6, 2, 0))
+            draw_dendrogram(sra, tc_dist_dist_before, local_font_size)
+            mtext(paste0(before_label, ' | Dendrogram'), side = 3, line = 0.3, cex = 0.9)
+            par(mar = c(6, 6, 2, 0))
+            draw_dendrogram(sra, tc_dist_dist_after, local_font_size)
+            mtext(paste0(after_label, ' | Dendrogram'), side = 3, line = 0.3, cex = 0.9)
+
+            par(mar = c(0, 0, 2, 0))
+            draw_heatmap_base(sra, tc_dist_matrix_before, legend = FALSE, fontsize = local_font_size)
+            mtext(paste0(before_label, ' | Heatmap'), side = 3, line = -1.0, cex = 0.9)
+            par(mar = c(0, 0, 2, 0))
+            draw_heatmap_base(sra, tc_dist_matrix_after, legend = FALSE, fontsize = local_font_size)
+            mtext(paste0(after_label, ' | Heatmap'), side = 3, line = -1.0, cex = 0.9)
+
+            par(mar = c(4, 4, 2, 1))
+            draw_tau_histogram(
+                tc = tc_before,
+                sra = sra,
+                selected_sample_groups = selected_sample_groups,
+                fontsize = local_font_size,
+                transform_method = transform_method
+            )
+            mtext(paste0(before_label, ' | Tau distribution'), side = 3, line = 0.3, cex = 0.9)
+            par(mar = c(1, 1, 2, 1))
+            draw_tau_histogram(
+                tc = tc_after,
+                sra = sra,
+                selected_sample_groups = selected_sample_groups,
+                fontsize = local_font_size,
+                transform_method = transform_method
+            )
+            mtext(paste0(after_label, ' | Tau distribution'), side = 3, line = 0.3, cex = 0.9)
+
+            par(mar = rep(0.1, 4))
+            draw_legend(sra, new = TRUE, pos = "center", fontsize = local_font_size, nlabel.in.col = 8)
+            mtext('Legend', side = 3, line = 0.3, cex = 0.9)
+            par(mar = c(1, 1, 2, 1))
+            if ((tolower(as.character(batch_effect_alg)) == 'sva') && !is.null(sva_out) && !(class(sva_out) == "try-error")) {
+                draw_sva_summary_base(sva_out = sva_out, tc = tc_after, sra = sra, fontsize = local_font_size)
+                mtext(paste0('SV summary | ', after_label), side = 3, line = 0.3, cex = 0.9)
+            } else {
+                plot(c(0, 1), c(0, 1), ann = FALSE, bty = "n", type = "n", xaxt = "n", yaxt = "n")
+                text(x = 0.5, y = 0.58, labels = 'SV summary available only for SVA', cex = compute_effective_text_cex(target_pt = local_font_size), font = 2)
+                text(x = 0.5, y = 0.42, labels = paste0('Current correction: ', correction_label), cex = compute_effective_text_cex(target_pt = local_font_size))
+                mtext('SV summary', side = 3, line = 0.3, cex = 0.9)
+            }
+        }
+    )
+    return(invisible(list(before = tc_dist_matrix_before, after = tc_dist_matrix_after)))
+}
+
 transform_raw_to_fpkm = function(counts, effective_lengths, sra) {
     if ('tmm_library_size' %in% colnames(sra)) {
         cat('FPKM transformation with the original library sizes from amalgkit cstmm output.\n')
@@ -1880,6 +2810,39 @@ apply_transformation_logic = function(tc, tc_eff_length, transform_method, batch
         }
     }
     return(tc)
+}
+
+run_batch_effect_step = function(tc, sra, tc_eff_length, transform_method, batch_effect_alg, clip_negative) {
+    if (batch_effect_alg == 'no') {
+        cat('Skipping batch-effect subtraction because --batch_effect_alg is no.\n')
+        out = tc_metadata_intersect(tc, sra)
+        tc_aligned = out[['tc']]
+        sra_aligned = out[['sra']]
+        out = sort_tc_and_metadata(tc_aligned, sra_aligned)
+        tc_aligned = out[['tc']]
+        batch_info = initialize_batch_info(run_ids = colnames(tc_aligned), batch_effect_alg = batch_effect_alg)
+        batch_info[['skip_reason']] = 'batch_effect_alg_no'
+        tc_batch_corrected = apply_transformation_logic(
+            tc_aligned,
+            tc_eff_length,
+            transform_method,
+            batch_effect_alg,
+            step = 'after_batch',
+            sra = sra_aligned
+        )
+        return(list(tc = tc_batch_corrected, sva = NULL, batch_info = batch_info))
+    }
+    out = batch_effect_subtraction(tc, sra, batch_effect_alg, transform_method, clip_negative)
+    tc_batch_corrected = out[['tc']]
+    tc_batch_corrected = apply_transformation_logic(
+        tc_batch_corrected,
+        tc_eff_length,
+        transform_method,
+        batch_effect_alg,
+        step = 'after_batch',
+        sra = sra
+    )
+    return(list(tc = tc_batch_corrected, sva = out[['sva']], batch_info = out[['batch_info']]))
 }
 
 standardize_metadata_all = function(sra_all) {
@@ -2011,6 +2974,7 @@ cat(log_prefix, "Working at:", getwd(), "\n")
 sra = get_species_metadata(sra_all, scientific_name, selected_sample_groups)
 num_runs_after_sample_group_filter = nrow(sra)
 round_summary = initialize_round_summary()
+batch_info_current = initialize_batch_info(run_ids = sra[['run']], batch_effect_alg = batch_effect_alg)
 tc = exclude_inappropriate_sample_from_tc(tc, sra)
 out = sort_tc_and_metadata(tc, sra); tc = out[["tc"]]; sra = out[["sra"]]
 tc_eff_length = exclude_inappropriate_sample_from_eff_length(tc_eff_length, tc)
@@ -2033,8 +2997,13 @@ write_table_with_index_name(df = tc_sample_group_uncorrected, file_path = file_n
 
 if (skip_curation_flag == TRUE) {
     cat("No curation requested, finishing early.\n")
+    batch_info_current[['skip_reason']] = 'skip_curation_requested'
+    batch_info_current[['batch_effect_alg_applied']] = 'no'
+    batch_info_current[['corrected_runs']] = character(0)
+    batch_info_current[['uncorrected_runs']] = colnames(tc_tmp)
+    sra_out = annotate_metadata_with_batch_info(sra, batch_info_current)
     file_metadata = file.path(dir_tsv, paste0(species_tag, ".metadata.tsv"))
-    write.table(sra[, colnames(sra) != 'index'], file = file_metadata, sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
+    write.table(sra_out[, colnames(sra_out) != 'index'], file = file_metadata, sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
     file_corrected_tc = file.path(dir_tsv, paste0(species_tag, ".", batch_effect_alg, ".tc.tsv"))
     write_table_with_index_name(df = tc_tmp, file_path = file_corrected_tc, index_name = 'target_id')
     file_corrected_mean = file.path(dir_tsv, paste0(species_tag, ".", batch_effect_alg, ".sample_group.mean.tsv"))
@@ -2056,7 +3025,7 @@ if (skip_curation_flag == TRUE) {
     )
     write_curation_summaries(
         round_summary = round_summary,
-        sra = sra,
+        sra = sra_out,
         scientific_name = scientific_name,
         batch_effect_alg = batch_effect_alg,
         dir_tsv = dir_tsv,
@@ -2067,23 +3036,39 @@ if (skip_curation_flag == TRUE) {
         num_runs_after_sample_group_filter = num_runs_after_sample_group_filter,
         script_start_elapsed = script_start_elapsed
     )
+    write_batch_effect_summary(
+        batch_info = batch_info_current,
+        scientific_name = scientific_name,
+        species_tag = species_tag,
+        dir_tsv = dir_tsv,
+        random_seed_value = random_seed_value
+    )
     cat(log_prefix, "Completed.\n")
     quit(save = 'no', status = 0)
 }
 
 if (disable_auto_outlier_filter_flag == TRUE) {
     cat("Automatic outlier filtering is disabled. Using metadata exclusion as-is.\n")
-    out = batch_effect_subtraction(tc, sra, batch_effect_alg, transform_method, clip_negative)
+    out = run_batch_effect_step(tc, sra, tc_eff_length, transform_method, batch_effect_alg, clip_negative)
     tc_batch_corrected = out[['tc']]
     sva_out = out[['sva']]
-    tc_batch_corrected = apply_transformation_logic(
-        tc_batch_corrected,
-        tc_eff_length,
-        transform_method,
-        batch_effect_alg,
-        step = 'after_batch',
-        sra = sra
-    )
+    batch_info_current = out[['batch_info']]
+    if (batch_effect_alg %in% c('sva', 'combatseq', 'ruvseq')) {
+        compare_plot_file = paste0(species_tag, ".batch_compare.", batch_effect_alg)
+        save_quick_state_comparison_plot(
+            tc_before = tc_tmp,
+            tc_after = tc_batch_corrected,
+            sra = sra,
+            dist_method = dist_method,
+            file = compare_plot_file,
+            selected_sample_groups = selected_sample_groups,
+            sample_group_colors = sample_group_colors,
+            transform_method = transform_method,
+            batch_effect_alg = batch_effect_alg,
+            fontsize = fontsize,
+            sva_out = sva_out
+        )
+    }
     if (maintain_zero) {
         cat('Any zero expression levels in the input will remain as zero-values in the output tables.\n')
         tc_batch_corrected = tc_batch_corrected[order(rownames(tc_batch_corrected)),]
@@ -2106,8 +3091,9 @@ if (disable_auto_outlier_filter_flag == TRUE) {
         assign("correlation_statistics", correlation_statistics, envir = .GlobalEnv)
     }
     cat("Writing summary files for", scientific_name, "\n")
+    sra_out = annotate_metadata_with_batch_info(sra, batch_info_current)
     file = file.path(dir_tsv, paste0(species_tag, ".metadata.tsv"))
-    write.table(sra[, colnames(sra) != 'index'], file = file, sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
+    write.table(sra_out[, colnames(sra_out) != 'index'], file = file, sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
     file = file.path(dir_tsv, paste0(species_tag, ".", batch_effect_alg, ".tc.tsv"))
     write_table_with_index_name(df = tc_batch_corrected, file_path = file, index_name = 'target_id')
     out = sample_group_mean(tc_batch_corrected, sra, selected_sample_groups)
@@ -2121,7 +3107,7 @@ if (disable_auto_outlier_filter_flag == TRUE) {
     write_table_with_index_name(df = tc_tau, file_path = file, index_name = 'target_id')
     write_curation_summaries(
         round_summary = round_summary,
-        sra = sra,
+        sra = sra_out,
         scientific_name = scientific_name,
         batch_effect_alg = batch_effect_alg,
         dir_tsv = dir_tsv,
@@ -2131,6 +3117,13 @@ if (disable_auto_outlier_filter_flag == TRUE) {
         num_total_runs_species = num_total_runs_species,
         num_runs_after_sample_group_filter = num_runs_after_sample_group_filter,
         script_start_elapsed = script_start_elapsed
+    )
+    write_batch_effect_summary(
+        batch_info = batch_info_current,
+        scientific_name = scientific_name,
+        species_tag = species_tag,
+        dir_tsv = dir_tsv,
+        random_seed_value = random_seed_value
     )
     cat(log_prefix, "Completed.\n")
     quit(save = 'no', status = 0)
@@ -2157,8 +3150,9 @@ tc_tmp = apply_transformation_logic(tc, tc_eff_length, transform_method, batch_e
 tc_dist_matrix = save_plot(tc_tmp, sra, NULL, dist_method, paste0(species_tag, ".", round, ".original"),
                            selected_sample_groups, sample_group_colors, fontsize, transform_method, batch_effect_alg)
 save_correlation(tc_tmp, sra, dist_method, round, precomputed_tc_dist_matrix = tc_dist_matrix)
-out = batch_effect_subtraction(tc, sra, batch_effect_alg, transform_method, clip_negative)
+out = run_batch_effect_step(tc, sra, tc_eff_length, transform_method, batch_effect_alg, clip_negative)
 tc_batch_corrected = out[["tc"]]
+batch_info_current = out[['batch_info']]
 if (batch_effect_alg == "combatseq") {
     tc = tc[, colnames(tc_batch_corrected)]
 }
@@ -2167,7 +3161,7 @@ if (!is.null(sva_out)) {
     file_name = paste0(species_tag, ".", batch_effect_alg, ".", round, ".RData")
     save(sva_out, file = file.path(dir_rdata, file_name))
 }
-tc_batch_corrected_tmp = apply_transformation_logic(tc_batch_corrected, tc_eff_length, transform_method, batch_effect_alg, step = 'after_batch', sra = sra)
+tc_batch_corrected_tmp = tc_batch_corrected
 save_plot(tc_batch_corrected_tmp, sra, sva_out, dist_method, paste0(species_tag, ".", round, ".original", ".", batch_effect_alg),
           selected_sample_groups, sample_group_colors, fontsize, transform_method, batch_effect_alg)
 
@@ -2192,8 +3186,9 @@ round_summary = append_round_summary(
 tc_tmp = apply_transformation_logic(tc, tc_eff_length, transform_method, batch_effect_alg, step = 'before_batch_plot', sra = sra)
 save_plot(tc_tmp, sra, NULL, dist_method, paste0(species_tag, ".", round, ".mapping_cutoff"),
           selected_sample_groups, sample_group_colors, fontsize, transform_method, batch_effect_alg)
-out = batch_effect_subtraction(tc, sra, batch_effect_alg, transform_method, clip_negative)
+out = run_batch_effect_step(tc, sra, tc_eff_length, transform_method, batch_effect_alg, clip_negative)
 tc_batch_corrected = out[["tc"]]
+batch_info_current = out[['batch_info']]
 if (batch_effect_alg == "combatseq") {
     tc = tc[, colnames(tc_batch_corrected)]
 }
@@ -2201,7 +3196,7 @@ sva_out = out[["sva"]]
 if (!is.null(sva_out)) {
     save(sva_out, file = file.path(dir_rdata, paste0(species_tag, ".", batch_effect_alg, ".", round, ".RData")))
 }
-tc_batch_corrected_tmp = apply_transformation_logic(tc_batch_corrected, tc_eff_length, transform_method, batch_effect_alg, step = 'after_batch', sra = sra)
+tc_batch_corrected_tmp = tc_batch_corrected
 tc_dist_matrix = save_plot(tc_batch_corrected_tmp, sra, sva_out, dist_method, paste0(species_tag, ".", round, ".mapping_cutoff", ".", batch_effect_alg),
                            selected_sample_groups, sample_group_colors, fontsize, transform_method, batch_effect_alg)
 save_correlation(tc_batch_corrected_tmp, sra, dist_method, round, precomputed_tc_dist_matrix = tc_dist_matrix)
@@ -2229,8 +3224,9 @@ while (end_flag == 0) {
     if ((num_run_before == num_run_after) | (plot_intermediate)) {
         sva_out = NULL
         tc_batch_corrected = NULL
-        out = batch_effect_subtraction(tc[, colnames(tc_cwtc)], sra, batch_effect_alg, transform_method, clip_negative)
+        out = run_batch_effect_step(tc[, colnames(tc_cwtc)], sra, tc_eff_length, transform_method, batch_effect_alg, clip_negative)
         tc_batch_corrected = out[["tc"]]
+        batch_info_current = out[['batch_info']]
         if (batch_effect_alg == "combatseq") {
             tc = tc[, colnames(tc_batch_corrected)]
         }
@@ -2241,7 +3237,7 @@ while (end_flag == 0) {
         tc_cwtc_tmp = apply_transformation_logic(tc_cwtc, tc_eff_length, transform_method, batch_effect_alg, step = 'before_batch_plot', sra = sra)
         save_plot(tc_cwtc_tmp, sra, NULL, dist_method, paste0(species_tag, ".", round, ".correlation_cutoff"),
                   selected_sample_groups, sample_group_colors, fontsize, transform_method, batch_effect_alg)
-        tc_batch_corrected_tmp = apply_transformation_logic(tc_batch_corrected, tc_eff_length, transform_method, batch_effect_alg, step = 'after_batch', sra = sra)
+        tc_batch_corrected_tmp = tc_batch_corrected
         file_base = paste0(species_tag, ".", round, ".correlation_cutoff", ".", batch_effect_alg)
         tc_dist_matrix = save_plot(tc_batch_corrected_tmp, sra, sva_out, dist_method, file_base, selected_sample_groups, sample_group_colors, fontsize, transform_method, batch_effect_alg)
         save_correlation(tc_batch_corrected_tmp, sra, dist_method, round, precomputed_tc_dist_matrix = tc_dist_matrix)
@@ -2269,8 +3265,9 @@ if (maintain_zero) {
     }
 }
 cat("Writing summary files for", scientific_name, "\n")
+sra_out = annotate_metadata_with_batch_info(sra, batch_info_current)
 file = file.path(dir_tsv, paste0(species_tag, ".metadata.tsv"))
-write.table(sra[, colnames(sra) != 'index'], file = file, sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
+write.table(sra_out[, colnames(sra_out) != 'index'], file = file, sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
 file = file.path(dir_tsv, paste0(species_tag, ".", batch_effect_alg, ".tc.tsv"))
 write_table_with_index_name(df = tc_batch_corrected, file_path = file, index_name = 'target_id')
 out = sample_group_mean(tc_batch_corrected, sra, selected_sample_groups)
@@ -2288,7 +3285,7 @@ file = file.path(dir_tsv, paste0(species_tag, ".", batch_effect_alg, ".tau.tsv")
 write_table_with_index_name(df = tc_tau, file_path = file, index_name = 'target_id')
 write_curation_summaries(
     round_summary = round_summary,
-    sra = sra,
+    sra = sra_out,
     scientific_name = scientific_name,
     batch_effect_alg = batch_effect_alg,
     dir_tsv = dir_tsv,
@@ -2298,6 +3295,13 @@ write_curation_summaries(
     num_total_runs_species = num_total_runs_species,
     num_runs_after_sample_group_filter = num_runs_after_sample_group_filter,
     script_start_elapsed = script_start_elapsed
+)
+write_batch_effect_summary(
+    batch_info = batch_info_current,
+    scientific_name = scientific_name,
+    species_tag = species_tag,
+    dir_tsv = dir_tsv,
+    random_seed_value = random_seed_value
 )
 cat(log_prefix, "Completed.\n")
 quit(save = 'no', status = 0)

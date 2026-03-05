@@ -153,6 +153,10 @@ def csca_main(args):
                  dir_csca,
                  args.batch_effect_alg,
                  args.missing_strategy,
+                 str(getattr(args, 'outlier_method', 'none')),
+                 str(getattr(args, 'margin_threshold', 0.0)),
+                 str(getattr(args, 'robust_z_threshold', -2.5)),
+                 str(getattr(args, 'plot_mode', 'dual')),
                  ]
     print(f"Rscript command: {' '.join(call_list)}")
     subprocess.check_call(call_list)

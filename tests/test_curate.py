@@ -150,6 +150,58 @@ class TestRunCurateRScript:
         assert captured['check'] is False
         assert captured['cmd'][13] == expected_flag
 
+    def test_prefers_explicit_metadata_path_for_rscript(self, tmp_path, monkeypatch):
+        class Args:
+            pass
+        args = Args()
+        args.dist_method = 'pearson'
+        args.mapping_rate = 0.2
+        args.correlation_threshold = 0.3
+        args.plot_intermediate = False
+        args.sample_group = None
+        args.sample_group_color = 'DEFAULT'
+        args.norm = 'log2p1-fpkm'
+        args.one_outlier_per_iter = False
+        args.batch_effect_alg = 'no'
+        args.clip_negative = True
+        args.maintain_zero = True
+        args.skip_curation = False
+        args.out_dir = str(tmp_path / 'out')
+        args.metadata = str(tmp_path / 'custom_metadata.tsv')
+
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['R1'],
+            'sample_group': ['groupA'],
+            'exclusion': ['no'],
+            'scientific_name': ['sp'],
+        }))
+        input_dir = tmp_path / 'input_cstmm'
+        (input_dir / 'SpA').mkdir(parents=True)
+        (input_dir / 'metadata.tsv').write_text('run\tsample_group\texclusion\nR1\tgroupA\tno\n')
+        (tmp_path / 'custom_metadata.tsv').write_text('run\tsample_group\texclusion\nR1\tgroupA\tno\n')
+        (input_dir / 'SpA' / 'SpA_cstmm_counts.tsv').write_text('target_id\tR1\nG1\t1\n')
+        (input_dir / 'SpA' / 'SpA_eff_length.tsv').write_text('target_id\tR1\nG1\t100\n')
+        captured = {}
+
+        class FakeCompleted:
+            returncode = 0
+
+        def fake_run(cmd, check):
+            captured['cmd'] = cmd
+            captured['check'] = check
+            return FakeCompleted()
+
+        monkeypatch.setattr('amalgkit.curate.subprocess.run', fake_run)
+        code = run_curate_r_script(
+            args=args,
+            metadata=metadata,
+            sp='SpA',
+            input_dir=str(input_dir),
+        )
+        assert code == 0
+        assert captured['check'] is False
+        assert captured['cmd'][3] == os.path.realpath(args.metadata)
+
     def test_prefers_existing_est_counts_even_if_input_dir_name_contains_cstmm(self, tmp_path, monkeypatch):
         class Args:
             pass
@@ -200,6 +252,110 @@ class TestRunCurateRScript:
         assert captured['check'] is False
         assert captured['cmd'][1].endswith('curate.r')
         assert captured['cmd'][2].endswith('SpA_est_counts.tsv')
+
+    def test_uses_wsfilter_r_with_reduced_argument_set(self, tmp_path, monkeypatch):
+        class Args:
+            pass
+        args = Args()
+        args.r_script_name = 'wsfilter.r'
+        args.dist_method = 'pearson'
+        args.mapping_rate = 0.2
+        args.correlation_threshold = 0.3
+        args.plot_intermediate = False
+        args.sample_group = None
+        args.sample_group_color = 'DEFAULT'
+        args.norm = 'log2p1-fpkm'
+        args.one_outlier_per_iter = False
+        args.margin_threshold = 0.0
+        args.robust_z_threshold = -2.5
+        args.out_dir = str(tmp_path / 'out')
+        args.metadata = str(tmp_path / 'metadata.tsv')
+
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['R1'],
+            'sample_group': ['groupA'],
+            'exclusion': ['no'],
+            'scientific_name': ['sp'],
+        }))
+        input_dir = tmp_path / 'input'
+        (input_dir / 'SpA').mkdir(parents=True)
+        (tmp_path / 'metadata.tsv').write_text('run\tsample_group\texclusion\nR1\tgroupA\tno\n')
+        (input_dir / 'SpA' / 'SpA_est_counts.tsv').write_text('target_id\tR1\nG1\t1\n')
+        (input_dir / 'SpA' / 'SpA_eff_length.tsv').write_text('target_id\tR1\nG1\t100\n')
+        captured = {}
+
+        class FakeCompleted:
+            returncode = 0
+
+        def fake_run(cmd, check):
+            captured['cmd'] = cmd
+            captured['check'] = check
+            return FakeCompleted()
+
+        monkeypatch.setattr('amalgkit.curate.subprocess.run', fake_run)
+        code = run_curate_r_script(
+            args=args,
+            metadata=metadata,
+            sp='SpA',
+            input_dir=str(input_dir),
+        )
+        assert code == 0
+        assert captured['check'] is False
+        assert captured['cmd'][1].endswith('wsfilter.r')
+        assert len(captured['cmd']) == 17  # Rscript + script + 15 args
+
+    def test_uses_finalize_r_with_reduced_argument_set(self, tmp_path, monkeypatch):
+        class Args:
+            pass
+        args = Args()
+        args.r_script_name = 'finalize.r'
+        args.sample_group = None
+        args.sample_group_color = 'DEFAULT'
+        args.norm = 'log2p1-fpkm'
+        args.batch_effect_alg = 'no'
+        args.clip_negative = True
+        args.maintain_zero = True
+        args.out_dir = str(tmp_path / 'out')
+        args.metadata = str(tmp_path / 'metadata.tsv')
+        args.dist_method = 'pearson'
+        args.mapping_rate = 0.2
+        args.correlation_threshold = 0.3
+        args.plot_intermediate = False
+        args.one_outlier_per_iter = False
+
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['R1'],
+            'sample_group': ['groupA'],
+            'exclusion': ['no'],
+            'scientific_name': ['sp'],
+        }))
+        input_dir = tmp_path / 'input'
+        (input_dir / 'SpA').mkdir(parents=True)
+        (tmp_path / 'metadata.tsv').write_text('run\tsample_group\texclusion\nR1\tgroupA\tno\n')
+        (input_dir / 'SpA' / 'SpA_est_counts.tsv').write_text('target_id\tR1\nG1\t1\n')
+        (input_dir / 'SpA' / 'SpA_eff_length.tsv').write_text('target_id\tR1\nG1\t100\n')
+        captured = {}
+
+        class FakeCompleted:
+            returncode = 0
+
+        def fake_run(cmd, check):
+            captured['cmd'] = cmd
+            captured['check'] = check
+            return FakeCompleted()
+
+        monkeypatch.setattr('amalgkit.curate.subprocess.run', fake_run)
+        code = run_curate_r_script(
+            args=args,
+            metadata=metadata,
+            sp='SpA',
+            input_dir=str(input_dir),
+        )
+        assert code == 0
+        assert captured['check'] is False
+        assert captured['cmd'][1].endswith('finalize.r')
+        assert len(captured['cmd']) == 22  # Rscript + script + 20 args
+        assert captured['cmd'][-4:] == ['auto', 'auto', 'auto', '100']
 
     def test_skips_when_count_path_exists_but_is_not_file(self, tmp_path, monkeypatch, capsys):
         class Args:

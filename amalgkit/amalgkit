@@ -319,6 +319,30 @@ def command_csca(args):
     print('Time elapsed: {:,} sec'.format(int(time.time() - start)))
     sys.stdout.write('amalgkit csca: end\n')
 
+def command_wsfilter(args):
+    sys.stdout.write('amalgkit wsfilter: start\n')
+    start = time.time()
+    from amalgkit.wsfilter import wsfilter_main
+    wsfilter_main(args)
+    print('Time elapsed: {:,} sec'.format(int(time.time() - start)))
+    sys.stdout.write('amalgkit wsfilter: end\n')
+
+def command_csfilter(args):
+    sys.stdout.write('amalgkit csfilter: start\n')
+    start = time.time()
+    from amalgkit.csfilter import csfilter_main
+    csfilter_main(args)
+    print('Time elapsed: {:,} sec'.format(int(time.time() - start)))
+    sys.stdout.write('amalgkit csfilter: end\n')
+
+def command_finalize(args):
+    sys.stdout.write('amalgkit finalize: start\n')
+    start = time.time()
+    from amalgkit.finalize import finalize_main
+    finalize_main(args)
+    print('Time elapsed: {:,} sec'.format(int(time.time() - start)))
+    sys.stdout.write('amalgkit finalize: end\n')
+
 def command_config(args):
     sys.stdout.write('amalgkit config: start\n')
     start = time.time()
@@ -352,7 +376,9 @@ subparsers = parser.add_subparsers()
 pp_meta = argparse.ArgumentParser(add_help=False)
 pp_meta.add_argument('--metadata', metavar='PATH', default='inferred', type=str, required=False, action='store',
                  help='default=%(default)s: "inferred" = out_dir/metadata/metadata.tsv. '
-                      'PATH to metadata table, the output file of `amalgkit metadata`.')
+                      'PATH to metadata table, the output file of `amalgkit metadata`. '
+                      'In wsfilter/csfilter/finalize, if "inferred" and prior filter metadata exists, the newest of '
+                      'out_dir/wsfilter/metadata.tsv and out_dir/csfilter/metadata.tsv is used automatically.')
 pp_out = argparse.ArgumentParser(add_help=False)
 pp_out.add_argument('--out_dir', metavar='PATH', default='./', type=str, required=False, action='store',
                  help='default=%(default)s: PATH to the directory where intermediate and output files are generated.')
@@ -611,7 +637,101 @@ pca.add_argument('--missing_strategy', metavar='em_pca|nipals|row_mean',
                       '`em_pca` uses a dependency-free iterative low-rank reconstruction (EM/PPCA-style). '
                       '`nipals` uses a dependency-free NIPALS-style low-rank iterative reconstruction. '
                       '`row_mean` uses per-gene mean fill as a fast fallback.')
+pca.add_argument('--outlier_method', metavar='none|robust_margin',
+                 choices=['none', 'robust_margin'],
+                 default='none', type=str, required=False, action='store',
+                 help='default=%(default)s: Optional outlier-flagging strategy applied to csca metadata.')
+pca.add_argument('--margin_threshold', metavar='FLOAT', default=0.0, type=float, required=False, action='store',
+                 help='default=%(default)s: Margin threshold for robust-margin outlier detection.')
+pca.add_argument('--robust_z_threshold', metavar='FLOAT', default=-2.5, type=float, required=False, action='store',
+                 help='default=%(default)s: Robust z-score threshold for robust-margin outlier detection.')
 pca.set_defaults(handler=command_csca)
+
+# Sub parser: wsfilter
+pws_help = 'Within-species outlier filtering. Outputs metadata.tsv + excluded.tsv + species PDFs (no plots/). See `amalgkit wsfilter -h`'
+pws = subparsers.add_parser('wsfilter', help=pws_help, parents=[pp_out, pp_meta, pp_batch, pp_threads, pp_internal_jobs, pp_cpu_budget, pp_sg, pp_sgc, pp_redo])
+pws.add_argument('--input_dir', metavar='PATH', default='inferred', type=str, required=False, action='store',
+                 help='default=%(default)s: PATH to `amalgkit merge` or `amalgkit cstmm` output folder. '
+                      '"inferred" = out_dir/cstmm if exist, else out_dir/merge.')
+pws.add_argument('--dist_method', metavar='STR', default='pearson', type=str, required=False, action='store',
+                 help='default=%(default)s: Method for calculating distance.')
+pws.add_argument('--mapping_rate', metavar='FLOAT', default=0.20, type=float, required=False, action='store',
+                 help='default=%(default)s: Cutoff for mapping rate.')
+pws.add_argument('--correlation_threshold', metavar='FLOAT', default=0.30, type=float, required=False, action='store',
+                 help='default=%(default)s: Lower cutoff for pearson r during outlier removal (legacy fallback).')
+pws.add_argument('--plot_intermediate', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
+                 help='default=%(default)s: If yes, writes intermediate plots during filtering.')
+pws.add_argument('--one_outlier_per_iter', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
+                 help='default=%(default)s: If yes, removes at most one outlier per sample_group/BioProject per iteration.')
+pws.add_argument('--norm', metavar='(logn|log2|lognp1|log2p1|none)-(fpkm|tpm|none)',
+                 default='log2p1-fpkm', type=str, required=False, action='store',
+                 help='default=%(default)s: Expression transformation before filtering.')
+pws.add_argument('--margin_threshold', metavar='FLOAT', default=0.0, type=float, required=False, action='store',
+                 help='default=%(default)s: Margin threshold for robust-margin outlier detection.')
+pws.add_argument('--robust_z_threshold', metavar='FLOAT', default=-2.5, type=float, required=False, action='store',
+                 help='default=%(default)s: Robust z-score threshold for robust-margin outlier detection.')
+pws.set_defaults(handler=command_wsfilter)
+
+# Sub parser: csfilter
+pcsf_help = 'Cross-species outlier filtering. Outputs metadata.tsv + excluded.tsv + PDFs (no plots/). See `amalgkit csfilter -h`'
+pcsf = subparsers.add_parser('csfilter', help=pcsf_help, parents=[pp_out, pp_meta, pp_batch, pp_threads, pp_internal_jobs, pp_cpu_budget, pp_sg, pp_sgc, pp_redo])
+pcsf.add_argument('--input_dir', metavar='PATH', default='inferred', type=str, required=False, action='store',
+                  help='default=%(default)s: PATH to `amalgkit merge` or `amalgkit cstmm` output folder. '
+                       '"inferred" = out_dir/cstmm if exist, else out_dir/merge.')
+pcsf.add_argument('--norm', metavar='(logn|log2|lognp1|log2p1|none)-(fpkm|tpm|none)',
+                  default='log2p1-fpkm', type=str, required=False, action='store',
+                  help='default=%(default)s: Expression transformation used during temporary table generation.')
+pcsf.add_argument('--orthogroup_table', metavar='PATH', default=None, type=str, required=False, action='store',
+                  help='default=%(default)s: PATH to orthogroup table, for example Orthogroups.tsv or N0.tsv in OrthoFinder.')
+pcsf.add_argument('--dir_busco', metavar='PATH', default=None, type=str, required=False, action='store',
+                  help='default=%(default)s: PATH to per-species BUSCO full tables.')
+pcsf.add_argument('--missing_strategy', metavar='em_pca|nipals|row_mean',
+                  choices=['em_pca', 'nipals', 'row_mean'],
+                  default='em_pca', type=str, required=False, action='store',
+                  help='default=%(default)s: Missing-value handling strategy before dimensionality reduction.')
+pcsf.add_argument('--margin_threshold', metavar='FLOAT', default=0.0, type=float, required=False, action='store',
+                  help='default=%(default)s: Margin threshold for robust-margin outlier detection.')
+pcsf.add_argument('--robust_z_threshold', metavar='FLOAT', default=-2.5, type=float, required=False, action='store',
+                  help='default=%(default)s: Robust z-score threshold for robust-margin outlier detection.')
+pcsf.set_defaults(handler=command_csfilter)
+
+# Sub parser: finalize
+pfi_help = 'Final table export from filtered metadata. See `amalgkit finalize -h`'
+pfi = subparsers.add_parser('finalize', help=pfi_help, parents=[pp_out, pp_meta, pp_batch, pp_threads, pp_internal_jobs, pp_cpu_budget, pp_sg, pp_sgc, pp_redo])
+pfi.add_argument('--input_dir', metavar='PATH', default='inferred', type=str, required=False, action='store',
+                 help='default=%(default)s: PATH to `amalgkit merge` or `amalgkit cstmm` output folder. '
+                      '"inferred" = out_dir/cstmm if exist, else out_dir/merge.')
+pfi.add_argument('--norm', metavar='(logn|log2|lognp1|log2p1|none)-(fpkm|tpm|none)',
+                 default='log2p1-fpkm', type=str, required=False, action='store',
+                 help='default=%(default)s: Expression transformation before optional batch correction.')
+pfi.add_argument('--batch_effect_alg', metavar='(no|sva|ruvseq|combatseq)',
+                 choices=['no', 'sva', 'ruvseq', 'combatseq'],
+                 default='no', type=str, required=False, action='store',
+                 help='default=%(default)s: Batch-effect removal algorithm for finalized output tables.')
+pfi.add_argument('--clip_negative', metavar='yes|no', default='yes', type=strtobool, required=False, action='store',
+                 help='default=%(default)s: Clip negative values to zero after batch effect removal.')
+pfi.add_argument('--maintain_zero', metavar='yes|no', default='yes', type=strtobool, required=False, action='store',
+                 help='default=%(default)s: Preserve zero values from input after batch effect removal.')
+pfi.add_argument('--ruvseq_control_genes', metavar='auto|all', choices=['auto', 'all'],
+                 default='auto', type=str, required=False, action='store',
+                 help='default=%(default)s: Control-gene selection strategy when --batch_effect_alg ruvseq is used.')
+pfi.add_argument('--ruvseq_k', metavar='INT|auto', default='auto', type=nonnegative_int_or_auto, required=False, action='store',
+                 help='default=%(default)s: Number of unwanted factors for RUVSeq. "auto" selects k from PCA score tradeoff.')
+pfi.add_argument('--ruvseq_k_max', metavar='INT', default=5, type=int, required=False, action='store',
+                 help='default=%(default)s: Maximum k considered when --ruvseq_k auto.')
+pfi.add_argument('--ruvseq_control_top_n', metavar='INT', default=1000, type=int, required=False, action='store',
+                 help='default=%(default)s: Top non-DE genes considered as control candidates when --ruvseq_control_genes auto.')
+pfi.add_argument('--ruvseq_min_controls', metavar='INT', default=100, type=int, required=False, action='store',
+                 help='default=%(default)s: Minimum number of control genes required for RUVSeq auto selection.')
+pfi.add_argument('--seed', metavar='INT|auto', default='auto', type=nonnegative_int_or_auto, required=False, action='store',
+                 help='default=%(default)s: Random seed for stochastic steps (SVA/RUVSeq/t-SNE). "auto" keeps default RNG behavior.')
+pfi.add_argument('--sva_nsv', metavar='INT|auto', default='auto', type=nonnegative_int_or_auto, required=False, action='store',
+                 help='default=%(default)s: Number of surrogate variables for SVA. "auto" lets sva estimate n.sv.')
+pfi.add_argument('--sva_B', metavar='INT|auto', default='auto', type=int_or_auto, required=False, action='store',
+                 help='default=%(default)s: Number of permutation iterations used by SVA. "auto" chooses B from sample size.')
+pfi.add_argument('--sva_B_auto_max', metavar='INT', default=100, type=int, required=False, action='store',
+                 help='default=%(default)s: Upper bound for auto-selected SVA permutation iterations.')
+pfi.set_defaults(handler=command_finalize)
 
 # Sub parser: curate
 pcu_help = 'Automatic removal of outlier samples and SVA-based unwanted biases. See `amalgkit curate -h`'
@@ -735,7 +855,7 @@ parser_help.add_argument(
     'topic',
     nargs='?',
     default=None,
-    choices=['metadata', 'select', 'getfastq', 'quant', 'merge', 'busco', 'cstmm', 'csca', 'curate', 'sanity', 'integrate', 'config', 'dataset', 'help'],
+    choices=['metadata', 'select', 'getfastq', 'quant', 'merge', 'busco', 'cstmm', 'csca', 'wsfilter', 'csfilter', 'finalize', 'curate', 'sanity', 'integrate', 'config', 'dataset', 'help'],
     help='Optional command name to show detailed help for.',
 )
 parser_help.set_defaults(handler=command_help)

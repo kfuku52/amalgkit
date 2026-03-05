@@ -26,3 +26,29 @@ def test_help_topic_metadata_exits_zero():
     assert out.returncode == 0
     merged = (out.stdout + '\n' + out.stderr).lower()
     assert '--search_string' in merged
+
+
+def test_help_topic_wsfilter_exits_zero():
+    out = run_cli('help', 'wsfilter')
+    assert out.returncode == 0
+    merged = (out.stdout + '\n' + out.stderr).lower()
+    assert '--input_dir' in merged
+    assert '--margin_threshold' in merged
+
+
+def test_help_topic_csfilter_exits_zero():
+    out = run_cli('help', 'csfilter')
+    assert out.returncode == 0
+    merged = (out.stdout + '\n' + out.stderr).lower()
+    assert '--orthogroup_table' in merged
+    assert '--robust_z_threshold' in merged
+
+
+def test_help_topic_finalize_exits_zero():
+    out = run_cli('help', 'finalize')
+    assert out.returncode == 0
+    merged = (out.stdout + '\n' + out.stderr).lower()
+    assert '--batch_effect_alg' in merged
+    assert '--seed' in merged
+    assert '--sva_nsv' in merged
+    assert '--sva_b' in merged

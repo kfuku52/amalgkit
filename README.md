@@ -43,6 +43,12 @@ See [Wiki](https://github.com/kfuku52/amalgkit/wiki) for details.
 
 - [`amalgkit cstmm`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-cstmm): Cross-species TMM normalization using single-copy genes
 
+- [`amalgkit wsfilter`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-wsfilter): Within-species outlier filtering (`metadata.tsv` + `excluded.tsv` + `wsfilter_exclusion.pdf` + `wsfilter/<Species>/<Species>_*.pdf`)
+
+- [`amalgkit csfilter`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-csfilter): Cross-species outlier filtering (`metadata.tsv` + `excluded.tsv` + `csfilter_exclusion.pdf` + `csfilter/*.pdf`)
+
+- [`amalgkit finalize`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-finalize): Export final tables from filtered metadata (with optional batch-effect removal)
+
 - [`amalgkit curate`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-curate): Automatic removal of outlier samples and unwanted biases
 
 - [`amalgkit csca`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-csca): Generating plots with cross-species correlation analysis
@@ -50,6 +56,18 @@ See [Wiki](https://github.com/kfuku52/amalgkit/wiki) for details.
 - [`amalgkit sanity`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-sanity): Checking the integrity of AMALGKIT input and output files
 
 - [`amalgkit dataset`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-dataset): Extracting bundled test datasets
+
+## Split Filtering Workflow
+`wsfilter` and `csfilter` are decoupled filters that output `metadata.tsv`, `excluded.tsv`, exclusion summary PDF, and species PDFs (without a `plots/` directory).  
+Run one or both in any order, then export tables once with `finalize`.
+When `--metadata inferred` is used in these commands, the latest filter metadata (`wsfilter/metadata.tsv` or `csfilter/metadata.tsv`) is auto-detected.
+
+```bash
+# Example: wsfilter -> csfilter -> finalize
+amalgkit wsfilter --out_dir ./
+amalgkit csfilter --out_dir ./ --metadata ./wsfilter/metadata.tsv --dir_busco ./busco
+amalgkit finalize --out_dir ./ --metadata ./csfilter/metadata.tsv --batch_effect_alg no
+```
 
 ## Citation
 Although **AMALGKIT** supports novel unpublished functions, some functionalities including metadata curation, expression level quantification, and further curation steps have been described in this paper, in which we reported the transcriptome amalgamation of 21 vertebrate species.

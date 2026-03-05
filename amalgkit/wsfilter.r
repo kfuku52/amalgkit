@@ -7,7 +7,7 @@ if (is.na(detected_cores) && (is.null(getOption("cores")) || is.na(getOption("co
 suppressWarnings(suppressPackageStartupMessages(library(Rtsne, quietly = TRUE)))
 
 debug_mode = ifelse(length(commandArgs(trailingOnly = TRUE)) == 1, "debug", "batch")
-log_prefix = "transcriptome_curation.r:"
+log_prefix = "wsfilter.r:"
 cat(log_prefix, "mode =", debug_mode, "\n")
 if (debug_mode == "debug") {
     out_dir = '/Users/kf/Dropbox/data/evolutionary_transcriptomics/20230527_amalgkit/amalgkit_out'
@@ -23,53 +23,44 @@ if (debug_mode == "debug") {
     transform_method = "log2p1-fpkm"
     one_outlier_per_iteration = as.logical(0)
     correlation_threshold = 0.3
-    batch_effect_alg = 'sva'
+    batch_effect_alg = 'no'
     dist_method = "pearson"
     clip_negative = as.logical(1)
     maintain_zero = as.logical(1)
     r_util_path = '/Users/kf/Dropbox/repos/amalgkit/amalgkit/util.r'
     skip_curation_flag = FALSE
-    outlier_method = 'legacy'
+    outlier_method = 'robust_margin'
     robust_margin_threshold = 0
     robust_z_threshold = -2.5
     disable_auto_outlier_filter_flag = FALSE
     setwd(file.path(out_dir, 'curate'))
 } else if (debug_mode == "batch") {
     args = commandArgs(trailingOnly = TRUE)
+    if (length(args) < 15) {
+        stop('wsfilter.r expects 15 arguments.')
+    }
     est_counts_path = args[1]
     metadata_path = args[2]
     out_dir = args[3]
     eff_length_path = args[4]
     dist_method = args[5]
     mapping_rate_cutoff = as.numeric(args[6])
-    min_dif = as.numeric(args[7])
-    plot_intermediate = as.logical(as.integer(args[8]))
-    selected_sample_groups = strsplit(args[9], "\\|")[[1]]
-    sample_group_colors = strsplit(args[10], ",")[[1]]
-    transform_method = args[11]
-    one_outlier_per_iteration = as.integer(args[12])
-    correlation_threshold = as.numeric(args[13])
-    batch_effect_alg = args[14]
-    clip_negative = as.logical(as.integer(args[15]))
-    maintain_zero = as.logical(as.integer(args[16]))
-    r_util_path = file.path(args[17])
-    skip_curation_flag = as.logical(as.integer(args[18]))
-    outlier_method = 'legacy'
-    robust_margin_threshold = 0
-    robust_z_threshold = -2.5
+    min_dif = 0
+    plot_intermediate = as.logical(as.integer(args[7]))
+    selected_sample_groups = strsplit(args[8], "\\|")[[1]]
+    sample_group_colors = strsplit(args[9], ",")[[1]]
+    transform_method = args[10]
+    one_outlier_per_iteration = as.integer(args[11])
+    correlation_threshold = as.numeric(args[12])
+    batch_effect_alg = 'no'
+    clip_negative = TRUE
+    maintain_zero = TRUE
+    r_util_path = file.path(args[15])
+    skip_curation_flag = FALSE
+    outlier_method = 'robust_margin'
+    robust_margin_threshold = as.numeric(args[13])
+    robust_z_threshold = as.numeric(args[14])
     disable_auto_outlier_filter_flag = FALSE
-    if (length(args) >= 19) {
-        outlier_method = as.character(args[19])
-    }
-    if (length(args) >= 20) {
-        robust_margin_threshold = as.numeric(args[20])
-    }
-    if (length(args) >= 21) {
-        robust_z_threshold = as.numeric(args[21])
-    }
-    if (length(args) >= 22) {
-        disable_auto_outlier_filter_flag = as.logical(as.integer(args[22]))
-    }
 }
 cat('est_counts_path:', est_counts_path, "\n")
 cat('metadata_path:', metadata_path, "\n")
@@ -98,6 +89,8 @@ source(r_util_path)
 
 CURATE_FONT_SIZE_PT = 8
 CURATE_FONT_FAMILY = 'Helvetica'
+# wsfilter command only needs per-species metadata.tsv plus PDFs.
+WRITE_AUXILIARY_TABLES = FALSE
 
 normalize_exclusion_values = function(exclusion_values) {
     normalized = as.character(exclusion_values)
@@ -1695,6 +1688,11 @@ draw_legend = function(sra, new = TRUE, pos = "center", fontsize = 8, nlabel.in.
 
 save_plot = function(tc, sra, sva_out, dist_method, file, selected_sample_groups, sample_group_colors, fontsize = 8, transform_method, batch_effect_alg) {
     fontsize = resolve_curate_fontsize(fontsize)
+    # wsfilter is always no-batch mode; suppress redundant *.no.pdf files.
+    if (endsWith(as.character(file), '.no')) {
+        cat('Skipping redundant no-batch plot:', file, '\n')
+        return(invisible(NULL))
+    }
     if (ncol(tc) <= 1) {
         cat('1 or fewer samples are available. Skipping the plot.\n')
         return(invisible(NULL))
@@ -1882,6 +1880,37 @@ apply_transformation_logic = function(tc, tc_eff_length, transform_method, batch
     return(tc)
 }
 
+run_batch_effect_step = function(tc, sra, tc_eff_length, transform_method, batch_effect_alg, clip_negative) {
+    if (batch_effect_alg == 'no') {
+        cat('Skipping batch-effect subtraction because --batch_effect_alg is no.\n')
+        out = tc_metadata_intersect(tc, sra)
+        tc_aligned = out[['tc']]
+        sra_aligned = out[['sra']]
+        out = sort_tc_and_metadata(tc_aligned, sra_aligned)
+        tc_aligned = out[['tc']]
+        tc_batch_corrected = apply_transformation_logic(
+            tc_aligned,
+            tc_eff_length,
+            transform_method,
+            batch_effect_alg,
+            step = 'after_batch',
+            sra = sra_aligned
+        )
+        return(list(tc = tc_batch_corrected, sva = NULL))
+    }
+    out = batch_effect_subtraction(tc, sra, batch_effect_alg, transform_method, clip_negative)
+    tc_batch_corrected = out[['tc']]
+    tc_batch_corrected = apply_transformation_logic(
+        tc_batch_corrected,
+        tc_eff_length,
+        transform_method,
+        batch_effect_alg,
+        step = 'after_batch',
+        sra = sra
+    )
+    return(list(tc = tc_batch_corrected, sva = out[['sva']]))
+}
+
 standardize_metadata_all = function(sra_all) {
     for (col in c('instrument', 'bioproject')) {
         if (!col %in% colnames(sra_all)) {
@@ -2017,8 +2046,10 @@ tc_eff_length = exclude_inappropriate_sample_from_eff_length(tc_eff_length, tc)
 tc = apply_transformation_logic(tc, tc_eff_length, transform_method, batch_effect_alg, step = 'before_batch', sra = sra)
 tc_tmp = apply_transformation_logic(tc, tc_eff_length, transform_method, batch_effect_alg, step = 'before_batch_plot', sra = sra)
 is_input_zero = data.frame(tc_tmp == 0, check.names = FALSE)
-file_name = file.path(dir_tsv, paste0(species_tag, ".uncorrected.tc.tsv"))
-write_table_with_index_name(df = tc_tmp, file_path = file_name, index_name = 'target_id')
+if (WRITE_AUXILIARY_TABLES) {
+    file_name = file.path(dir_tsv, paste0(species_tag, ".uncorrected.tc.tsv"))
+    write_table_with_index_name(df = tc_tmp, file_path = file_name, index_name = 'target_id')
+}
 original_sample_groups = selected_sample_groups
 out = sample_group_mean(tc_tmp, sra, selected_sample_groups)
 tc_sample_group_uncorrected = out[['tc_ave']]
@@ -2028,22 +2059,30 @@ if (length(selected_sample_groups) != length(original_sample_groups)) {
         sample_group_colors = sample_group_colors[match(selected_sample_groups, original_sample_groups)]
     }
 }
-file_name = file.path(dir_tsv, paste0(species_tag, ".uncorrected.sample_group.mean.tsv"))
-write_table_with_index_name(df = tc_sample_group_uncorrected, file_path = file_name, index_name = 'target_id')
+if (WRITE_AUXILIARY_TABLES) {
+    file_name = file.path(dir_tsv, paste0(species_tag, ".uncorrected.sample_group.mean.tsv"))
+    write_table_with_index_name(df = tc_sample_group_uncorrected, file_path = file_name, index_name = 'target_id')
+}
 
 if (skip_curation_flag == TRUE) {
     cat("No curation requested, finishing early.\n")
     file_metadata = file.path(dir_tsv, paste0(species_tag, ".metadata.tsv"))
     write.table(sra[, colnames(sra) != 'index'], file = file_metadata, sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
-    file_corrected_tc = file.path(dir_tsv, paste0(species_tag, ".", batch_effect_alg, ".tc.tsv"))
-    write_table_with_index_name(df = tc_tmp, file_path = file_corrected_tc, index_name = 'target_id')
-    file_corrected_mean = file.path(dir_tsv, paste0(species_tag, ".", batch_effect_alg, ".sample_group.mean.tsv"))
-    write_table_with_index_name(df = tc_sample_group_uncorrected, file_path = file_corrected_mean, index_name = 'target_id')
+    if (WRITE_AUXILIARY_TABLES) {
+        file_corrected_tc = file.path(dir_tsv, paste0(species_tag, ".", batch_effect_alg, ".tc.tsv"))
+        write_table_with_index_name(df = tc_tmp, file_path = file_corrected_tc, index_name = 'target_id')
+        file_corrected_mean = file.path(dir_tsv, paste0(species_tag, ".", batch_effect_alg, ".sample_group.mean.tsv"))
+        write_table_with_index_name(df = tc_sample_group_uncorrected, file_path = file_corrected_mean, index_name = 'target_id')
+    } else {
+        cat("Skipping auxiliary expression table export in wsfilter mode.\n")
+    }
     cat("Files created: \n")
-    cat(file.path(dir_tsv, paste0(species_tag, ".uncorrected.tc.tsv")), "\n")
-    cat(file.path(dir_tsv, paste0(species_tag, ".uncorrected.sample_group.mean.tsv")), "\n")
-    cat(file_corrected_tc, "\n")
-    cat(file_corrected_mean, "\n")
+    if (WRITE_AUXILIARY_TABLES) {
+        cat(file.path(dir_tsv, paste0(species_tag, ".uncorrected.tc.tsv")), "\n")
+        cat(file.path(dir_tsv, paste0(species_tag, ".uncorrected.sample_group.mean.tsv")), "\n")
+        cat(file_corrected_tc, "\n")
+        cat(file_corrected_mean, "\n")
+    }
     cat(file_metadata, "\n")
     cat("Transformation applied: ", transform_method, "\n")
     round_summary = append_round_summary(
@@ -2073,17 +2112,9 @@ if (skip_curation_flag == TRUE) {
 
 if (disable_auto_outlier_filter_flag == TRUE) {
     cat("Automatic outlier filtering is disabled. Using metadata exclusion as-is.\n")
-    out = batch_effect_subtraction(tc, sra, batch_effect_alg, transform_method, clip_negative)
+    out = run_batch_effect_step(tc, sra, tc_eff_length, transform_method, batch_effect_alg, clip_negative)
     tc_batch_corrected = out[['tc']]
     sva_out = out[['sva']]
-    tc_batch_corrected = apply_transformation_logic(
-        tc_batch_corrected,
-        tc_eff_length,
-        transform_method,
-        batch_effect_alg,
-        step = 'after_batch',
-        sra = sra
-    )
     if (maintain_zero) {
         cat('Any zero expression levels in the input will remain as zero-values in the output tables.\n')
         tc_batch_corrected = tc_batch_corrected[order(rownames(tc_batch_corrected)),]
@@ -2108,17 +2139,19 @@ if (disable_auto_outlier_filter_flag == TRUE) {
     cat("Writing summary files for", scientific_name, "\n")
     file = file.path(dir_tsv, paste0(species_tag, ".metadata.tsv"))
     write.table(sra[, colnames(sra) != 'index'], file = file, sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
-    file = file.path(dir_tsv, paste0(species_tag, ".", batch_effect_alg, ".tc.tsv"))
-    write_table_with_index_name(df = tc_batch_corrected, file_path = file, index_name = 'target_id')
-    out = sample_group_mean(tc_batch_corrected, sra, selected_sample_groups)
-    tc_sample_group = out[['tc_ave']]
-    file = file.path(dir_tsv, paste0(species_tag, ".", batch_effect_alg, ".sample_group.mean.tsv"))
-    write_table_with_index_name(df = tc_sample_group, file_path = file, index_name = 'target_id')
-    file = file.path(dir_tsv, paste0(species_tag, ".", batch_effect_alg, ".correlation_statistics.tsv"))
-    write.table(correlation_statistics, file = file, row.names = TRUE, sep = "\t", quote = FALSE)
-    tc_tau = sample_group2tau(tc_sample_group, rich.annotation = TRUE, transform_method)
-    file = file.path(dir_tsv, paste0(species_tag, ".", batch_effect_alg, ".tau.tsv"))
-    write_table_with_index_name(df = tc_tau, file_path = file, index_name = 'target_id')
+    if (WRITE_AUXILIARY_TABLES) {
+        file = file.path(dir_tsv, paste0(species_tag, ".", batch_effect_alg, ".tc.tsv"))
+        write_table_with_index_name(df = tc_batch_corrected, file_path = file, index_name = 'target_id')
+        out = sample_group_mean(tc_batch_corrected, sra, selected_sample_groups)
+        tc_sample_group = out[['tc_ave']]
+        file = file.path(dir_tsv, paste0(species_tag, ".", batch_effect_alg, ".sample_group.mean.tsv"))
+        write_table_with_index_name(df = tc_sample_group, file_path = file, index_name = 'target_id')
+        file = file.path(dir_tsv, paste0(species_tag, ".", batch_effect_alg, ".correlation_statistics.tsv"))
+        write.table(correlation_statistics, file = file, row.names = TRUE, sep = "\t", quote = FALSE)
+        tc_tau = sample_group2tau(tc_sample_group, rich.annotation = TRUE, transform_method)
+        file = file.path(dir_tsv, paste0(species_tag, ".", batch_effect_alg, ".tau.tsv"))
+        write_table_with_index_name(df = tc_tau, file_path = file, index_name = 'target_id')
+    }
     write_curation_summaries(
         round_summary = round_summary,
         sra = sra,
@@ -2157,7 +2190,7 @@ tc_tmp = apply_transformation_logic(tc, tc_eff_length, transform_method, batch_e
 tc_dist_matrix = save_plot(tc_tmp, sra, NULL, dist_method, paste0(species_tag, ".", round, ".original"),
                            selected_sample_groups, sample_group_colors, fontsize, transform_method, batch_effect_alg)
 save_correlation(tc_tmp, sra, dist_method, round, precomputed_tc_dist_matrix = tc_dist_matrix)
-out = batch_effect_subtraction(tc, sra, batch_effect_alg, transform_method, clip_negative)
+out = run_batch_effect_step(tc, sra, tc_eff_length, transform_method, batch_effect_alg, clip_negative)
 tc_batch_corrected = out[["tc"]]
 if (batch_effect_alg == "combatseq") {
     tc = tc[, colnames(tc_batch_corrected)]
@@ -2167,7 +2200,7 @@ if (!is.null(sva_out)) {
     file_name = paste0(species_tag, ".", batch_effect_alg, ".", round, ".RData")
     save(sva_out, file = file.path(dir_rdata, file_name))
 }
-tc_batch_corrected_tmp = apply_transformation_logic(tc_batch_corrected, tc_eff_length, transform_method, batch_effect_alg, step = 'after_batch', sra = sra)
+tc_batch_corrected_tmp = tc_batch_corrected
 save_plot(tc_batch_corrected_tmp, sra, sva_out, dist_method, paste0(species_tag, ".", round, ".original", ".", batch_effect_alg),
           selected_sample_groups, sample_group_colors, fontsize, transform_method, batch_effect_alg)
 
@@ -2192,7 +2225,7 @@ round_summary = append_round_summary(
 tc_tmp = apply_transformation_logic(tc, tc_eff_length, transform_method, batch_effect_alg, step = 'before_batch_plot', sra = sra)
 save_plot(tc_tmp, sra, NULL, dist_method, paste0(species_tag, ".", round, ".mapping_cutoff"),
           selected_sample_groups, sample_group_colors, fontsize, transform_method, batch_effect_alg)
-out = batch_effect_subtraction(tc, sra, batch_effect_alg, transform_method, clip_negative)
+out = run_batch_effect_step(tc, sra, tc_eff_length, transform_method, batch_effect_alg, clip_negative)
 tc_batch_corrected = out[["tc"]]
 if (batch_effect_alg == "combatseq") {
     tc = tc[, colnames(tc_batch_corrected)]
@@ -2201,7 +2234,7 @@ sva_out = out[["sva"]]
 if (!is.null(sva_out)) {
     save(sva_out, file = file.path(dir_rdata, paste0(species_tag, ".", batch_effect_alg, ".", round, ".RData")))
 }
-tc_batch_corrected_tmp = apply_transformation_logic(tc_batch_corrected, tc_eff_length, transform_method, batch_effect_alg, step = 'after_batch', sra = sra)
+tc_batch_corrected_tmp = tc_batch_corrected
 tc_dist_matrix = save_plot(tc_batch_corrected_tmp, sra, sva_out, dist_method, paste0(species_tag, ".", round, ".mapping_cutoff", ".", batch_effect_alg),
                            selected_sample_groups, sample_group_colors, fontsize, transform_method, batch_effect_alg)
 save_correlation(tc_batch_corrected_tmp, sra, dist_method, round, precomputed_tc_dist_matrix = tc_dist_matrix)
@@ -2229,7 +2262,7 @@ while (end_flag == 0) {
     if ((num_run_before == num_run_after) | (plot_intermediate)) {
         sva_out = NULL
         tc_batch_corrected = NULL
-        out = batch_effect_subtraction(tc[, colnames(tc_cwtc)], sra, batch_effect_alg, transform_method, clip_negative)
+        out = run_batch_effect_step(tc[, colnames(tc_cwtc)], sra, tc_eff_length, transform_method, batch_effect_alg, clip_negative)
         tc_batch_corrected = out[["tc"]]
         if (batch_effect_alg == "combatseq") {
             tc = tc[, colnames(tc_batch_corrected)]
@@ -2241,7 +2274,7 @@ while (end_flag == 0) {
         tc_cwtc_tmp = apply_transformation_logic(tc_cwtc, tc_eff_length, transform_method, batch_effect_alg, step = 'before_batch_plot', sra = sra)
         save_plot(tc_cwtc_tmp, sra, NULL, dist_method, paste0(species_tag, ".", round, ".correlation_cutoff"),
                   selected_sample_groups, sample_group_colors, fontsize, transform_method, batch_effect_alg)
-        tc_batch_corrected_tmp = apply_transformation_logic(tc_batch_corrected, tc_eff_length, transform_method, batch_effect_alg, step = 'after_batch', sra = sra)
+        tc_batch_corrected_tmp = tc_batch_corrected
         file_base = paste0(species_tag, ".", round, ".correlation_cutoff", ".", batch_effect_alg)
         tc_dist_matrix = save_plot(tc_batch_corrected_tmp, sra, sva_out, dist_method, file_base, selected_sample_groups, sample_group_colors, fontsize, transform_method, batch_effect_alg)
         save_correlation(tc_batch_corrected_tmp, sra, dist_method, round, precomputed_tc_dist_matrix = tc_dist_matrix)
@@ -2271,21 +2304,23 @@ if (maintain_zero) {
 cat("Writing summary files for", scientific_name, "\n")
 file = file.path(dir_tsv, paste0(species_tag, ".metadata.tsv"))
 write.table(sra[, colnames(sra) != 'index'], file = file, sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
-file = file.path(dir_tsv, paste0(species_tag, ".", batch_effect_alg, ".tc.tsv"))
-write_table_with_index_name(df = tc_batch_corrected, file_path = file, index_name = 'target_id')
-out = sample_group_mean(tc_batch_corrected, sra, selected_sample_groups)
-tc_sample_group = out[['tc_ave']]
-file = file.path(dir_tsv, paste0(species_tag, ".", batch_effect_alg, ".sample_group.mean.tsv"))
-write_table_with_index_name(df = tc_sample_group, file_path = file, index_name = 'target_id')
-if (!exists("correlation_statistics", envir = .GlobalEnv)) {
-    correlation_statistics <- data.frame()
-    assign("correlation_statistics", correlation_statistics, envir = .GlobalEnv)
+if (WRITE_AUXILIARY_TABLES) {
+    file = file.path(dir_tsv, paste0(species_tag, ".", batch_effect_alg, ".tc.tsv"))
+    write_table_with_index_name(df = tc_batch_corrected, file_path = file, index_name = 'target_id')
+    out = sample_group_mean(tc_batch_corrected, sra, selected_sample_groups)
+    tc_sample_group = out[['tc_ave']]
+    file = file.path(dir_tsv, paste0(species_tag, ".", batch_effect_alg, ".sample_group.mean.tsv"))
+    write_table_with_index_name(df = tc_sample_group, file_path = file, index_name = 'target_id')
+    if (!exists("correlation_statistics", envir = .GlobalEnv)) {
+        correlation_statistics <- data.frame()
+        assign("correlation_statistics", correlation_statistics, envir = .GlobalEnv)
+    }
+    file = file.path(dir_tsv, paste0(species_tag, ".", batch_effect_alg, ".correlation_statistics.tsv"))
+    write.table(correlation_statistics, file = file, row.names = TRUE, sep = "\t", quote = FALSE)
+    tc_tau = sample_group2tau(tc_sample_group, rich.annotation = TRUE, transform_method)
+    file = file.path(dir_tsv, paste0(species_tag, ".", batch_effect_alg, ".tau.tsv"))
+    write_table_with_index_name(df = tc_tau, file_path = file, index_name = 'target_id')
 }
-file = file.path(dir_tsv, paste0(species_tag, ".", batch_effect_alg, ".correlation_statistics.tsv"))
-write.table(correlation_statistics, file = file, row.names = TRUE, sep = "\t", quote = FALSE)
-tc_tau = sample_group2tau(tc_sample_group, rich.annotation = TRUE, transform_method)
-file = file.path(dir_tsv, paste0(species_tag, ".", batch_effect_alg, ".tau.tsv"))
-write_table_with_index_name(df = tc_tau, file_path = file, index_name = 'target_id')
 write_curation_summaries(
     round_summary = round_summary,
     sra = sra,

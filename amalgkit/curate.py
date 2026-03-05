@@ -78,10 +78,29 @@ def run_curate_r_script(args, metadata, sp, input_dir):
     correlation_threshold = args.correlation_threshold
     intermediate = args.plot_intermediate
     sample_group = get_sample_group(args, metadata)
+    outlier_method = getattr(args, 'outlier_method', 'legacy')
+    margin_threshold = float(getattr(args, 'margin_threshold', 0.0))
+    robust_z_threshold = float(getattr(args, 'robust_z_threshold', -2.5))
+    disable_auto_outlier_filter = bool(getattr(args, 'disable_auto_outlier_filter', False))
     dir_amalgkit_script = os.path.dirname(os.path.realpath(__file__))
-    r_script_path = os.path.join(dir_amalgkit_script, 'curate.r')
+    requested_script = str(getattr(args, 'r_script_name', 'curate.r'))
+    if os.path.isabs(requested_script):
+        r_script_path = requested_script
+    else:
+        r_script_path = os.path.join(dir_amalgkit_script, requested_script)
+    r_script_name = os.path.basename(r_script_path)
+    if not os.path.isfile(r_script_path):
+        raise FileNotFoundError('R script not found: {}'.format(r_script_path))
     r_util_path = os.path.join(dir_amalgkit_script, 'util.r')
-    path_curate_input_metadata = os.path.join(input_dir, 'metadata.tsv')
+    metadata_arg = getattr(args, 'metadata', 'inferred')
+    if metadata_arg != 'inferred':
+        path_curate_input_metadata = os.path.realpath(metadata_arg)
+    else:
+        path_curate_input_metadata = os.path.join(input_dir, 'metadata.tsv')
+    if not os.path.exists(path_curate_input_metadata):
+        raise FileNotFoundError('Metadata file not found for curate R script: {}'.format(path_curate_input_metadata))
+    if not os.path.isfile(path_curate_input_metadata):
+        raise IsADirectoryError('Metadata path exists but is not a file: {}'.format(path_curate_input_metadata))
     input_dir_abs = os.path.abspath(input_dir)
     len_file = os.path.join(input_dir_abs, sp, sp + '_eff_length.tsv')
     count_file_candidates = [
@@ -112,10 +131,59 @@ def run_curate_r_script(args, metadata, sp, input_dir):
         sys.stderr.write('Skipping {}\n'.format(sp))
         print('Skipping {}'.format(sp), flush=True)
         return 1
-    print("Starting Rscript to obtain curated {} values.".format(args.norm), flush=True)
-    curate_r_result = subprocess.run([
-            'Rscript',
-            r_script_path,
+    print("Starting Rscript ({}) to obtain curated {} values.".format(r_script_name, args.norm), flush=True)
+    if r_script_name == 'wsfilter.r':
+        script_args = [
+            count_file,
+            path_curate_input_metadata,
+            os.path.realpath(args.out_dir),
+            len_file,
+            dist_method,
+            str(mr_cut),
+            str(int(intermediate)),
+            sample_group,
+            args.sample_group_color,
+            str(args.norm),
+            str(int(args.one_outlier_per_iter)),
+            str(correlation_threshold),
+            str(margin_threshold),
+            str(robust_z_threshold),
+            os.path.realpath(r_util_path),
+        ]
+    elif r_script_name == 'finalize.r':
+        ruvseq_control_genes = str(getattr(args, 'ruvseq_control_genes', 'auto'))
+        ruvseq_k = str(getattr(args, 'ruvseq_k', 'auto'))
+        ruvseq_k_max = int(getattr(args, 'ruvseq_k_max', 5))
+        ruvseq_control_top_n = int(getattr(args, 'ruvseq_control_top_n', 1000))
+        ruvseq_min_controls = int(getattr(args, 'ruvseq_min_controls', 100))
+        random_seed = str(getattr(args, 'seed', 'auto'))
+        sva_nsv = str(getattr(args, 'sva_nsv', 'auto'))
+        sva_B = str(getattr(args, 'sva_B', 'auto'))
+        sva_B_auto_max = int(getattr(args, 'sva_B_auto_max', 100))
+        script_args = [
+            count_file,
+            path_curate_input_metadata,
+            os.path.realpath(args.out_dir),
+            len_file,
+            sample_group,
+            args.sample_group_color,
+            str(args.norm),
+            str(args.batch_effect_alg),
+            str(int(args.clip_negative)),
+            str(int(args.maintain_zero)),
+            os.path.realpath(r_util_path),
+            ruvseq_control_genes,
+            ruvseq_k,
+            str(ruvseq_k_max),
+            str(ruvseq_control_top_n),
+            str(ruvseq_min_controls),
+            random_seed,
+            sva_nsv,
+            sva_B,
+            str(sva_B_auto_max),
+        ]
+    elif r_script_name == 'curate.r':
+        script_args = [
             count_file,
             path_curate_input_metadata,
             os.path.realpath(args.out_dir),
@@ -133,8 +201,16 @@ def run_curate_r_script(args, metadata, sp, input_dir):
             str(int(args.clip_negative)),
             str(int(args.maintain_zero)),
             os.path.realpath(r_util_path),
-            str(int(args.skip_curation))
-         ], check=False)
+            str(int(args.skip_curation)),
+            str(outlier_method),
+            str(margin_threshold),
+            str(robust_z_threshold),
+            str(int(disable_auto_outlier_filter)),
+        ]
+    else:
+        raise ValueError('Unsupported R script for curate pipeline: {}'.format(r_script_name))
+
+    curate_r_result = subprocess.run(['Rscript', r_script_path] + script_args, check=False)
     return curate_r_result.returncode
 
 def resolve_curate_input(args):

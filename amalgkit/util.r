@@ -554,3 +554,63 @@ save_exclusion_plot = function(df, out_path, font_size, y_label = "Count") {
     plot_width = max(3.6, 0.11 * num_spp)
     ggsave(out_path, plot = g, width = plot_width, height = 3.6, units = 'in')
 }
+
+compute_groupwise_robust_z = function(values, groups, mad_scale = 1.4826, min_group_size = 3) {
+    values = suppressWarnings(as.numeric(values))
+    groups = as.character(groups)
+    out = rep(NA_real_, length(values))
+    if (length(values) == 0) {
+        return(out)
+    }
+    valid_group = (!is.na(groups)) & (trimws(groups) != '')
+    group_levels = unique(groups[valid_group])
+    for (group_value in group_levels) {
+        idx = which(valid_group & (groups == group_value) & is.finite(values))
+        if (length(idx) == 0) {
+            next
+        }
+        if (length(idx) < min_group_size) {
+            out[idx] = NA_real_
+            next
+        }
+        x = values[idx]
+        med = stats::median(x, na.rm = TRUE)
+        mad_raw = stats::median(abs(x - med), na.rm = TRUE)
+        scale = mad_raw * mad_scale
+        if (!is.finite(scale) || (scale <= 0)) {
+            sd_val = stats::sd(x, na.rm = TRUE)
+            if (is.finite(sd_val) && (sd_val > 0)) {
+                scale = sd_val
+            } else {
+                out[idx] = 0
+                next
+            }
+        }
+        out[idx] = (x - med) / scale
+    }
+    return(out)
+}
+
+flag_margin_outliers = function(df, margin_col, group_col = 'sample_group',
+                                margin_threshold = 0, robust_z_threshold = -2.5,
+                                min_group_size = 3,
+                                robust_z_col = 'robust_z', outlier_col = 'outlier_flag') {
+    if (!margin_col %in% colnames(df)) {
+        stop(paste0('Margin column not found: ', margin_col))
+    }
+    if (!group_col %in% colnames(df)) {
+        stop(paste0('Group column not found: ', group_col))
+    }
+    margin_values = suppressWarnings(as.numeric(df[[margin_col]]))
+    robust_z = compute_groupwise_robust_z(
+        values = margin_values,
+        groups = df[[group_col]],
+        min_group_size = min_group_size
+    )
+    is_finite_margin = is.finite(margin_values)
+    outlier_flag = is_finite_margin & (margin_values < margin_threshold) &
+        ((robust_z <= robust_z_threshold) | is.na(robust_z))
+    df[[robust_z_col]] = robust_z
+    df[[outlier_col]] = outlier_flag
+    return(df)
+}
