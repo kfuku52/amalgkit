@@ -4,7 +4,25 @@ import subprocess
 import sys
 import time
 
-from amalgkit.util import *
+import numpy
+import pandas
+
+from amalgkit.arg_utils import clone_namespace
+from amalgkit.command_context import PrefetchedDirEntries, QuantRuntimeContext
+from amalgkit.metadata_utils import (
+    get_metadata_row_index_by_run,
+    get_newest_intermediate_file_extension,
+    get_sra_stat,
+    load_metadata,
+)
+from amalgkit.parallel_utils import (
+    is_auto_parallel_option,
+    resolve_detected_cpu_count,
+    resolve_thread_worker_allocation,
+    run_tasks_with_optional_threads,
+)
+from amalgkit.prefix_utils import find_run_prefixed_entries, find_species_prefixed_entries
+from amalgkit.subprocess_utils import probe_dependency_command, run_logged_command
 
 INDEX_BUILD_LOCK_POLL_SECONDS = 5
 INDEX_BUILD_LOCK_TIMEOUT_SECONDS = 3600
@@ -132,14 +150,14 @@ def call_kallisto(args, in_files, metadata, sra_stat, output_dir, index):
             index=index,
         )
 
-    print('Command: {}'.format(' '.join(kallisto_cmd)))
-    kallisto_out = subprocess.run(kallisto_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    stdout_txt = kallisto_out.stdout.decode('utf8', errors='replace')
-    stderr_txt = kallisto_out.stderr.decode('utf8', errors='replace')
-    print('kallisto quant stdout:')
-    print(stdout_txt)
-    print('kallisto quant stderr:')
-    print(stderr_txt)
+    kallisto_out, stdout_txt, stderr_txt = run_logged_command(
+        command=kallisto_cmd,
+        runner=subprocess.run,
+        print_command=True,
+        print_output=True,
+        stdout_label='kallisto quant stdout:',
+        stderr_label='kallisto quant stderr:',
+    )
     if kallisto_out.returncode != 0:
         sys.stderr.write("kallisto did not finish safely.\n")
         if 'Zero reads pseudoaligned' in stderr_txt:
@@ -155,12 +173,11 @@ def call_kallisto(args, in_files, metadata, sra_stat, output_dir, index):
 
 
 def check_kallisto_dependency():
-    try:
-        probe = subprocess.run(['kallisto', 'version'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    except FileNotFoundError as exc:
-        raise FileNotFoundError('kallisto executable not found: kallisto') from exc
-    if probe.returncode != 0:
-        raise RuntimeError('kallisto dependency probe failed with exit code {}: kallisto version'.format(probe.returncode))
+    probe_dependency_command(
+        command=['kallisto', 'version'],
+        label='kallisto',
+        runner=subprocess.run,
+    )
 
 
 def list_getfastq_run_files(output_dir):
@@ -242,7 +259,7 @@ def resolve_input_fastq_files(sra_stat, output_dir_getfastq, ext, files=None):
     return [os.path.join(output_dir_getfastq, f) for f in matched]
 
 
-def run_quant(args, metadata, sra_id, index):
+def run_quant(args, metadata, sra_id, index, runtime_context=None):
     # make results directory, if not already there
     output_dir = os.path.join(args.out_dir, 'quant', sra_id)
     if os.path.exists(output_dir) and (not os.path.isdir(output_dir)):
@@ -263,11 +280,9 @@ def run_quant(args, metadata, sra_id, index):
             'getfastq run path exists but is not a directory: {}'.format(output_dir_getfastq)
         )
     sra_stat = get_sra_stat(sra_id, metadata, num_bp_per_sra=None)
-    prefetched_run_files_map = getattr(args, '_prefetched_getfastq_run_files', None)
-    if isinstance(prefetched_run_files_map, dict):
-        run_files = prefetched_run_files_map.get(sra_id, None)
-    else:
-        run_files = None
+    run_files = None
+    if isinstance(runtime_context, QuantRuntimeContext):
+        run_files = runtime_context.run_files_by_run.get(sra_id, None)
     if run_files is None:
         run_files = list_getfastq_run_files(output_dir_getfastq)
     sra_stat = check_layout_mismatch(sra_stat, output_dir_getfastq, files=run_files)
@@ -400,40 +415,19 @@ def _find_single_index_file(index_dir, sci_name, entries=None):
             return index_file
     return None
 
-def _resolve_prefetched_index_entries(args, index_dir):
-    prefetched_index_entries = getattr(args, '_prefetched_index_entries', None)
-    prefetched_index_entries_sorted = getattr(args, '_prefetched_index_entries_sorted', None)
-    prefetched_index_dir = getattr(args, '_prefetched_index_dir', None)
-    is_matching_prefetch_dir = isinstance(prefetched_index_dir, str) and (os.path.realpath(index_dir) == prefetched_index_dir)
-    if (not is_matching_prefetch_dir):
-        return None
-    if isinstance(prefetched_index_entries_sorted, (list, tuple)):
-        return prefetched_index_entries_sorted
-    if isinstance(prefetched_index_entries, (set, list, tuple)):
-        return prefetched_index_entries
+def _resolve_prefetched_index_entries(index_dir, runtime_context=None):
+    if isinstance(runtime_context, QuantRuntimeContext):
+        return runtime_context.prefetched_index.resolve_entries(index_dir)
     return None
 
-def _resolve_single_fasta_file(args, sci_name):
+def _resolve_single_fasta_file(args, sci_name, runtime_context=None):
     if args.fasta_dir == 'inferred':
         path_fasta_dir = os.path.join(args.out_dir, 'fasta')
     else:
         path_fasta_dir = args.fasta_dir
-    prefetched_fasta_entries = getattr(args, '_prefetched_fasta_entries', None)
-    prefetched_fasta_entries_sorted = getattr(args, '_prefetched_fasta_entries_sorted', None)
-    prefetched_fasta_dir = getattr(args, '_prefetched_fasta_dir', None)
     prefetched_entries = None
-    if (
-        isinstance(prefetched_fasta_entries_sorted, (list, tuple))
-        and isinstance(prefetched_fasta_dir, str)
-        and (os.path.realpath(path_fasta_dir) == prefetched_fasta_dir)
-    ):
-        prefetched_entries = prefetched_fasta_entries_sorted
-    elif (
-        isinstance(prefetched_fasta_entries, (set, list, tuple))
-        and isinstance(prefetched_fasta_dir, str)
-        and (os.path.realpath(path_fasta_dir) == prefetched_fasta_dir)
-    ):
-        prefetched_entries = prefetched_fasta_entries
+    if isinstance(runtime_context, QuantRuntimeContext):
+        prefetched_entries = runtime_context.prefetched_fasta.resolve_entries(path_fasta_dir)
     fasta_files = find_species_fasta_files(
         path_fasta_dir=path_fasta_dir,
         sci_name=sci_name,
@@ -453,36 +447,25 @@ def _build_kallisto_index(index_path, fasta_file, sci_name):
     print('Reference fasta file found: {}'.format(fasta_file), flush=True)
     print('Building index: {}'.format(index_path), flush=True)
     kallisto_build_cmd = ["kallisto", "index", "-i", index_path, fasta_file]
-    print('Command: {}'.format(' '.join(kallisto_build_cmd)), flush=True)
-    index_out = subprocess.run(kallisto_build_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    stdout_txt = index_out.stdout.decode('utf8', errors='replace')
-    stderr_txt = index_out.stderr.decode('utf8', errors='replace')
-    print('kallisto index stdout:')
-    print(stdout_txt)
-    print('kallisto index stderr:')
-    print(stderr_txt)
+    index_out, _stdout_txt, _stderr_txt = run_logged_command(
+        command=kallisto_build_cmd,
+        runner=subprocess.run,
+        print_command=True,
+        print_output=True,
+        stdout_label='kallisto index stdout:',
+        stderr_label='kallisto index stderr:',
+    )
     if index_out.returncode != 0:
         raise RuntimeError("kallisto index failed for {}.".format(sci_name))
     if not os.path.isfile(index_path):
         raise RuntimeError("Index file was not generated: {}".format(index_path))
 
-def _store_prefetched_entries(args, attr_prefix, entries, path_dir):
-    setattr(args, '_{}_entries'.format(attr_prefix), entries)
-    if isinstance(entries, set):
-        setattr(args, '_{}_entries_sorted'.format(attr_prefix), sorted(entries))
-    else:
-        setattr(args, '_{}_entries_sorted'.format(attr_prefix), None)
-    if isinstance(path_dir, str):
-        setattr(args, '_{}_dir'.format(attr_prefix), os.path.realpath(path_dir))
-    else:
-        setattr(args, '_{}_dir'.format(attr_prefix), None)
-
-def get_index(args, sci_name):
+def get_index(args, sci_name, runtime_context=None):
     lock_poll_seconds, lock_timeout_seconds = _resolve_index_lock_options(args)
     index_dir = _resolve_index_dir(args)
     index_path = os.path.join(index_dir, sci_name + '.idx')
     lock_path = os.path.join(index_dir, '.{}.idx.lock'.format(sci_name))
-    prefetched_index_lookup_entries = _resolve_prefetched_index_entries(args, index_dir)
+    prefetched_index_lookup_entries = _resolve_prefetched_index_entries(index_dir, runtime_context=runtime_context)
     use_prefetched_index = prefetched_index_lookup_entries is not None
 
     while True:
@@ -522,7 +505,7 @@ def get_index(args, sci_name):
                 return index
 
             print("--build_index set. Building index for {}".format(sci_name))
-            fasta_file = _resolve_single_fasta_file(args, sci_name)
+            fasta_file = _resolve_single_fasta_file(args, sci_name, runtime_context=runtime_context)
             _build_kallisto_index(index_path=index_path, fasta_file=fasta_file, sci_name=sci_name)
             print("Kallisto index file found: {}".format(index_path), flush=True)
             return index_path
@@ -532,22 +515,26 @@ def get_index(args, sci_name):
                 os.remove(lock_path)
 
 
-def run_quant_for_sra(args, metadata, sra_id, sci_name):
+def run_quant_for_sra(args, metadata, sra_id, sci_name, runtime_context=None):
     print('')
     print('Species: {}'.format(sci_name))
     print('SRA Run ID: {}'.format(sra_id))
     sci_name = _normalize_species_identifier(sci_name)
-    index_cache = getattr(args, '_resolved_index_cache', None)
+    index_cache = None
+    if isinstance(runtime_context, QuantRuntimeContext):
+        index_cache = runtime_context.resolved_index_cache
     if isinstance(index_cache, dict) and (sci_name in index_cache):
         index = index_cache[sci_name]
         print('Using pre-resolved index: {}'.format(index))
     else:
         print('Looking for index folder in ', args.out_dir)
-        index = get_index(args, sci_name)
-    run_quant(args, metadata, sra_id, index)
+        index = get_index(args, sci_name, runtime_context=runtime_context)
+    run_quant(args, metadata, sra_id, index, runtime_context=runtime_context)
 
-def pre_resolve_species_indices(args, tasks):
+def pre_resolve_species_indices(args, tasks, runtime_context=None):
     # Resolve one index per species once to avoid redundant index lookups across SRA runs.
+    if runtime_context is None:
+        runtime_context = QuantRuntimeContext()
     species_list = sorted(set([_normalize_species_identifier(sci_name) for _, sci_name in tasks]))
     if len(species_list) == 0:
         return {}
@@ -562,9 +549,7 @@ def pre_resolve_species_indices(args, tasks):
             raise NotADirectoryError('Fasta path exists but is not a directory: {}'.format(path_fasta_dir))
         prefetched_fasta_entries = list_dir_entries(path_fasta_dir)
         prefetched_fasta_dir = path_fasta_dir
-    _store_prefetched_entries(
-        args=args,
-        attr_prefix='prefetched_fasta',
+    runtime_context.prefetched_fasta = PrefetchedDirEntries.from_entries(
         entries=prefetched_fasta_entries,
         path_dir=prefetched_fasta_dir,
     )
@@ -577,9 +562,7 @@ def pre_resolve_species_indices(args, tasks):
     if (not os.path.exists(index_dir)) and args.build_index:
         os.makedirs(index_dir, exist_ok=True)
     prefetched_index_entries = list_dir_entries(index_dir)
-    _store_prefetched_entries(
-        args=args,
-        attr_prefix='prefetched_index',
+    runtime_context.prefetched_index = PrefetchedDirEntries.from_entries(
         entries=prefetched_index_entries,
         path_dir=index_dir,
     )
@@ -596,13 +579,13 @@ def pre_resolve_species_indices(args, tasks):
         resolved = dict()
         for sci_name in species_list:
             print('Pre-resolving index for species: {}'.format(sci_name), flush=True)
-            resolved[sci_name] = get_index(args, sci_name)
+            resolved[sci_name] = get_index(args, sci_name, runtime_context=runtime_context)
         return resolved
 
     print('Pre-resolving indices with {:,} parallel jobs.'.format(max_workers), flush=True)
     resolved_by_species, failures = run_tasks_with_optional_threads(
         task_items=species_list,
-        task_fn=lambda sci_name: get_index(args, sci_name),
+        task_fn=lambda sci_name: get_index(args, sci_name, runtime_context=runtime_context),
         max_workers=max_workers,
     )
     if failures:
@@ -638,6 +621,17 @@ def prefetch_getfastq_run_files(args, tasks):
         except (FileNotFoundError, NotADirectoryError):
             continue
     return prefetched
+
+
+def prepare_quant_runtime_context(args, tasks):
+    runtime_context = QuantRuntimeContext()
+    runtime_context.run_files_by_run = prefetch_getfastq_run_files(args, tasks)
+    runtime_context.resolved_index_cache = pre_resolve_species_indices(
+        args,
+        tasks,
+        runtime_context=runtime_context,
+    )
+    return runtime_context
 
 
 def build_quant_tasks(metadata):
@@ -687,30 +681,33 @@ def quant_main(args):
         context='quant:',
         disable_workers=(getattr(args, 'batch', None) is not None),
     )
-    args.threads = threads
-    args.internal_jobs = jobs
     out_dir = os.path.realpath(args.out_dir)
     if os.path.exists(out_dir) and (not os.path.isdir(out_dir)):
         raise NotADirectoryError('Output path exists but is not a directory: {}'.format(out_dir))
     quant_dir = os.path.join(out_dir, 'quant')
     if os.path.exists(quant_dir) and (not os.path.isdir(quant_dir)):
         raise NotADirectoryError('Quant path exists but is not a directory: {}'.format(quant_dir))
-    args.out_dir = out_dir
+    runtime_args = clone_namespace(args, threads=threads, internal_jobs=jobs, out_dir=out_dir)
     check_kallisto_dependency()
-    metadata = load_metadata(args)
+    metadata = load_metadata(runtime_args)
     tasks = build_quant_tasks(metadata)
-    setattr(args, '_prefetched_getfastq_run_files', prefetch_getfastq_run_files(args, tasks))
-    setattr(args, '_resolved_index_cache', pre_resolve_species_indices(args, tasks))
+    runtime_context = prepare_quant_runtime_context(runtime_args, tasks)
     if (jobs == 1) or (len(tasks) <= 1):
         for sra_id, sci_name in tasks:
-            run_quant_for_sra(args, metadata, sra_id, sci_name)
+            run_quant_for_sra(runtime_args, metadata, sra_id, sci_name, runtime_context=runtime_context)
         return
 
     max_workers = min(jobs, len(tasks))
     print('Running quant for {:,} SRA runs with {:,} parallel jobs.'.format(len(tasks), max_workers), flush=True)
     _, failures = run_tasks_with_optional_threads(
         task_items=tasks,
-        task_fn=lambda task: run_quant_for_sra(args, metadata, task[0], task[1]),
+        task_fn=lambda task: run_quant_for_sra(
+            runtime_args,
+            metadata,
+            task[0],
+            task[1],
+            runtime_context=runtime_context,
+        ),
         max_workers=max_workers,
     )
     if failures:

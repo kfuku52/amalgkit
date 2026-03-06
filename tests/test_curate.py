@@ -1,9 +1,9 @@
-import re
 import os
 import pytest
 import pandas
 from types import SimpleNamespace
 
+from amalgkit.command_context import CurateContext
 from amalgkit.curate import (
     get_sample_group,
     run_curate_r_script,
@@ -144,11 +144,12 @@ class TestRunCurateRScript:
 
         class FakeCompleted:
             returncode = 0
+            stdout = b''
+            stderr = b''
 
-        def fake_run(cmd, check):
+        def fake_run(cmd, stdout=None, stderr=None):
             captured['cmd'] = cmd
             captured['config'] = _read_dcf(cmd[2])
-            captured['check'] = check
             return FakeCompleted()
 
         monkeypatch.setattr('amalgkit.curate.subprocess.run', fake_run)
@@ -159,7 +160,6 @@ class TestRunCurateRScript:
             input_dir=str(input_dir),
         )
         assert code == 0
-        assert captured['check'] is False
         assert captured['cmd'][1].endswith('curate.r')
         assert captured['config']['one_outlier_per_iteration'] == expected_flag
 
@@ -198,11 +198,12 @@ class TestRunCurateRScript:
 
         class FakeCompleted:
             returncode = 0
+            stdout = b''
+            stderr = b''
 
-        def fake_run(cmd, check):
+        def fake_run(cmd, stdout=None, stderr=None):
             captured['cmd'] = cmd
             captured['config'] = _read_dcf(cmd[2])
-            captured['check'] = check
             return FakeCompleted()
 
         monkeypatch.setattr('amalgkit.curate.subprocess.run', fake_run)
@@ -213,7 +214,6 @@ class TestRunCurateRScript:
             input_dir=str(input_dir),
         )
         assert code == 0
-        assert captured['check'] is False
         assert captured['config']['metadata_path'] == os.path.realpath(args.metadata)
 
     def test_prefers_existing_est_counts_even_if_input_dir_name_contains_cstmm(self, tmp_path, monkeypatch):
@@ -249,11 +249,12 @@ class TestRunCurateRScript:
 
         class FakeCompleted:
             returncode = 0
+            stdout = b''
+            stderr = b''
 
-        def fake_run(cmd, check):
+        def fake_run(cmd, stdout=None, stderr=None):
             captured['cmd'] = cmd
             captured['config'] = _read_dcf(cmd[2])
-            captured['check'] = check
             return FakeCompleted()
 
         monkeypatch.setattr('amalgkit.curate.subprocess.run', fake_run)
@@ -264,7 +265,6 @@ class TestRunCurateRScript:
             input_dir=str(input_dir),
         )
         assert code == 0
-        assert captured['check'] is False
         assert captured['cmd'][1].endswith('curate.r')
         assert captured['config']['est_counts_path'].endswith('SpA_est_counts.tsv')
 
@@ -301,11 +301,12 @@ class TestRunCurateRScript:
 
         class FakeCompleted:
             returncode = 0
+            stdout = b''
+            stderr = b''
 
-        def fake_run(cmd, check):
+        def fake_run(cmd, stdout=None, stderr=None):
             captured['cmd'] = cmd
             captured['config'] = _read_dcf(cmd[2])
-            captured['check'] = check
             return FakeCompleted()
 
         monkeypatch.setattr('amalgkit.curate.subprocess.run', fake_run)
@@ -316,7 +317,6 @@ class TestRunCurateRScript:
             input_dir=str(input_dir),
         )
         assert code == 0
-        assert captured['check'] is False
         assert captured['cmd'][1].endswith('wsfilter.r')
         assert len(captured['cmd']) == 3
         assert captured['config']['batch_effect_alg'] == 'no'
@@ -356,11 +356,12 @@ class TestRunCurateRScript:
 
         class FakeCompleted:
             returncode = 0
+            stdout = b''
+            stderr = b''
 
-        def fake_run(cmd, check):
+        def fake_run(cmd, stdout=None, stderr=None):
             captured['cmd'] = cmd
             captured['config'] = _read_dcf(cmd[2])
-            captured['check'] = check
             return FakeCompleted()
 
         monkeypatch.setattr('amalgkit.curate.subprocess.run', fake_run)
@@ -371,7 +372,6 @@ class TestRunCurateRScript:
             input_dir=str(input_dir),
         )
         assert code == 0
-        assert captured['check'] is False
         assert captured['cmd'][1].endswith('finalize.r')
         assert len(captured['cmd']) == 3
         assert captured['config']['ruvseq_control_mode'] == 'auto'
@@ -549,6 +549,36 @@ class TestCurateMain:
         curate_main(args)
         assert (out_dir / 'curate' / 'Species_A' / 'curate_completion_flag.txt').exists()
         assert (out_dir / 'curate' / 'Species_B' / 'curate_completion_flag.txt').exists()
+
+    def test_uses_explicit_context_without_resolving_input(self, tmp_path, monkeypatch):
+        out_dir = tmp_path / 'nested' / 'output'
+        input_dir = tmp_path / 'custom_input'
+        args = self._args(out_dir)
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'scientific_name': ['Species A'],
+            'run': ['R1'],
+            'sample_group': ['g1'],
+            'exclusion': ['no'],
+        }))
+
+        monkeypatch.setattr('amalgkit.curate.check_rscript', lambda: None)
+        monkeypatch.setattr(
+            'amalgkit.curate.resolve_curate_input',
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError('resolve_curate_input should not be called')),
+        )
+
+        def fake_run_curate(args, metadata, sp, input_dir):
+            os.makedirs(os.path.join(args.out_dir, 'curate', sp), exist_ok=True)
+            return 0
+
+        monkeypatch.setattr('amalgkit.curate.run_curate_r_script', fake_run_curate)
+
+        curate_main(
+            args,
+            context=CurateContext(metadata=metadata, input_dir=str(input_dir)),
+        )
+
+        assert (out_dir / 'curate' / 'Species_A' / 'curate_completion_flag.txt').exists()
 
     def test_exits_nonzero_when_any_species_fails(self, tmp_path, monkeypatch):
         out_dir = tmp_path / 'nested' / 'output'

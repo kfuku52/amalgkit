@@ -4,6 +4,7 @@ import pytest
 import pandas
 from types import SimpleNamespace
 
+from amalgkit.command_context import PrefetchedDirEntries, QuantRuntimeContext
 from amalgkit.quant import (
     quant_output_exists,
     purge_existing_quant_outputs,
@@ -299,8 +300,8 @@ class TestGetfastqPrefetch:
             redo=False,
             clean_fastq=False,
             threads=1,
-            _prefetched_getfastq_run_files={'SRR001': {'SRR001.fastq.gz'}},
         )
+        runtime_context = QuantRuntimeContext(run_files_by_run={'SRR001': {'SRR001.fastq.gz'}})
         metadata = Metadata.from_DataFrame(pandas.DataFrame({
             'run': ['SRR001'],
             'scientific_name': ['Species A'],
@@ -325,7 +326,7 @@ class TestGetfastqPrefetch:
         monkeypatch.setattr('amalgkit.quant.list_getfastq_run_files', fail_if_listdir_used)
         monkeypatch.setattr('amalgkit.quant.call_kallisto', fake_call_kallisto)
 
-        run_quant(args, metadata, 'SRR001', 'dummy.idx')
+        run_quant(args, metadata, 'SRR001', 'dummy.idx', runtime_context=runtime_context)
 
         assert called['kallisto'] == 1
 
@@ -340,8 +341,8 @@ class TestGetfastqPrefetch:
             redo=True,
             clean_fastq=False,
             threads=1,
-            _prefetched_getfastq_run_files={'SRR001': {'SRR001.fastq.gz'}},
         )
+        runtime_context = QuantRuntimeContext(run_files_by_run={'SRR001': {'SRR001.fastq.gz'}})
         metadata = Metadata.from_DataFrame(pandas.DataFrame({
             'run': ['SRR001'],
             'scientific_name': ['Species A'],
@@ -362,7 +363,7 @@ class TestGetfastqPrefetch:
 
         monkeypatch.setattr('amalgkit.quant.call_kallisto', fake_call_kallisto)
 
-        run_quant(args, metadata, 'SRR001', 'dummy.idx')
+        run_quant(args, metadata, 'SRR001', 'dummy.idx', runtime_context=runtime_context)
         assert called['kallisto'] == 1
 
     def test_run_quant_raises_when_fastq_is_missing(self, tmp_path, monkeypatch):
@@ -373,8 +374,8 @@ class TestGetfastqPrefetch:
             redo=False,
             clean_fastq=False,
             threads=1,
-            _prefetched_getfastq_run_files={'SRR001': set()},
         )
+        runtime_context = QuantRuntimeContext(run_files_by_run={'SRR001': set()})
         metadata = Metadata.from_DataFrame(pandas.DataFrame({
             'run': ['SRR001'],
             'scientific_name': ['Species A'],
@@ -397,7 +398,7 @@ class TestGetfastqPrefetch:
         )
 
         with pytest.raises(FileNotFoundError, match=r'SRR001: Fastq file not found\. Check .*getfastq.*SRR001'):
-            run_quant(args, metadata, 'SRR001', 'dummy.idx')
+            run_quant(args, metadata, 'SRR001', 'dummy.idx', runtime_context=runtime_context)
 
     def test_run_quant_rejects_getfastq_run_path_that_is_file(self, tmp_path):
         out_dir = tmp_path / 'out'
@@ -745,14 +746,17 @@ class TestQuantEdgeCases:
         fasta_dir.mkdir()
         index_dir.mkdir()
         index_path = index_dir / 'Homo_sapiens.idx'
-        prefetched_entries = {'Homo_sapiens.fa'}
         args = SimpleNamespace(
             out_dir=str(out_dir),
             index_dir=str(index_dir),
             build_index=True,
             fasta_dir=str(fasta_dir),
-            _prefetched_fasta_entries=prefetched_entries,
-            _prefetched_fasta_dir=os.path.realpath(str(fasta_dir)),
+        )
+        runtime_context = QuantRuntimeContext(
+            prefetched_fasta=PrefetchedDirEntries.from_entries(
+                entries=['Homo_sapiens.fa'],
+                path_dir=str(fasta_dir),
+            ),
         )
         seen = {'entries': None}
 
@@ -767,10 +771,10 @@ class TestQuantEdgeCases:
         monkeypatch.setattr('amalgkit.quant.find_species_fasta_files', fake_find_species_fasta_files)
         monkeypatch.setattr(subprocess, 'run', fake_run)
 
-        observed = get_index(args, 'Homo_sapiens')
+        observed = get_index(args, 'Homo_sapiens', runtime_context=runtime_context)
 
         assert observed == str(index_path)
-        assert seen['entries'] is prefetched_entries
+        assert seen['entries'] == ['Homo_sapiens.fa']
 
     def test_get_index_uses_prefetched_index_entries_first(self, tmp_path, monkeypatch):
         out_dir = tmp_path / 'out'
@@ -784,8 +788,12 @@ class TestQuantEdgeCases:
             index_dir=str(index_dir),
             build_index=False,
             fasta_dir='inferred',
-            _prefetched_index_entries={'Homo_sapiens.idx'},
-            _prefetched_index_dir=os.path.realpath(str(index_dir)),
+        )
+        runtime_context = QuantRuntimeContext(
+            prefetched_index=PrefetchedDirEntries.from_entries(
+                entries=['Homo_sapiens.idx'],
+                path_dir=str(index_dir),
+            ),
         )
 
         def fail_if_called(_path_dir):
@@ -793,7 +801,7 @@ class TestQuantEdgeCases:
 
         monkeypatch.setattr('amalgkit.quant.list_dir_entries', fail_if_called)
 
-        observed = get_index(args, 'Homo_sapiens')
+        observed = get_index(args, 'Homo_sapiens', runtime_context=runtime_context)
 
         assert observed == str(index_path)
 
@@ -1017,13 +1025,22 @@ class TestQuantEdgeCases:
             'nominal_length': [200, 200],
         }))
         dispatched = []
+        observed = {}
 
         monkeypatch.setattr('amalgkit.quant.check_kallisto_dependency', lambda: None)
-        monkeypatch.setattr('amalgkit.quant.load_metadata', lambda _args: metadata)
-        monkeypatch.setattr('amalgkit.quant.pre_resolve_species_indices', lambda _args, _tasks: {})
+        def fake_load_metadata(runtime_args):
+            observed['load_threads'] = runtime_args.threads
+            return metadata
+
+        monkeypatch.setattr('amalgkit.quant.load_metadata', fake_load_metadata)
+        monkeypatch.setattr('amalgkit.quant.pre_resolve_species_indices', lambda _args, _tasks, runtime_context=None: {})
         monkeypatch.setattr(
             'amalgkit.quant.run_quant_for_sra',
-            lambda _args, _metadata, sra_id, sci_name: dispatched.append((sra_id, sci_name)),
+            lambda runtime_args, _metadata, sra_id, sci_name, runtime_context=None: (
+                observed.setdefault('run_threads', runtime_args.threads),
+                observed.setdefault('run_jobs', runtime_args.internal_jobs),
+                dispatched.append((sra_id, sci_name)),
+            )[-1],
         )
 
         quant_main(args)
@@ -1053,9 +1070,9 @@ class TestQuantEdgeCases:
 
         monkeypatch.setattr('amalgkit.quant.check_kallisto_dependency', lambda: None)
         monkeypatch.setattr('amalgkit.quant.load_metadata', lambda _args: metadata)
-        monkeypatch.setattr('amalgkit.quant.pre_resolve_species_indices', lambda _args, _tasks: {})
+        monkeypatch.setattr('amalgkit.quant.pre_resolve_species_indices', lambda _args, _tasks, runtime_context=None: {})
 
-        def fake_run_quant_for_sra(_args, _metadata, sra_id, _sci_name):
+        def fake_run_quant_for_sra(_args, _metadata, sra_id, _sci_name, runtime_context=None):
             if sra_id == 'SRR002':
                 raise SystemExit(1)
             return None
@@ -1087,13 +1104,22 @@ class TestQuantEdgeCases:
             'nominal_length': [200, 200],
         }))
         dispatched = []
+        observed = {}
 
         monkeypatch.setattr('amalgkit.quant.check_kallisto_dependency', lambda: None)
-        monkeypatch.setattr('amalgkit.quant.load_metadata', lambda _args: metadata)
-        monkeypatch.setattr('amalgkit.quant.pre_resolve_species_indices', lambda _args, _tasks: {})
+        def fake_load_metadata(runtime_args):
+            observed['load_threads'] = runtime_args.threads
+            return metadata
+
+        monkeypatch.setattr('amalgkit.quant.load_metadata', fake_load_metadata)
+        monkeypatch.setattr('amalgkit.quant.pre_resolve_species_indices', lambda _args, _tasks, runtime_context=None: {})
         monkeypatch.setattr(
             'amalgkit.quant.run_quant_for_sra',
-            lambda _args, _metadata, sra_id, sci_name: dispatched.append((sra_id, sci_name)),
+            lambda runtime_args, _metadata, sra_id, sci_name, runtime_context=None: (
+                observed.setdefault('run_threads', runtime_args.threads),
+                observed.setdefault('run_jobs', runtime_args.internal_jobs),
+                dispatched.append((sra_id, sci_name)),
+            )[-1],
         )
 
         def fail_if_called(*_args, **_kwargs):
@@ -1104,7 +1130,73 @@ class TestQuantEdgeCases:
         quant_main(args)
 
         assert set(dispatched) == {('SRR001', 'Species A'), ('SRR002', 'Species B')}
-        assert args.threads == 1
+        assert observed['load_threads'] == 1
+        assert observed['run_threads'] == 1
+        assert observed['run_jobs'] == 1
+        assert args.threads == 4
+        assert args.internal_jobs == 4
+
+    def test_quant_main_uses_runtime_copy_without_mutating_caller_namespace(self, tmp_path, monkeypatch):
+        raw_out_dir = str(tmp_path / 'nested' / '..' / 'out')
+        args = SimpleNamespace(
+            out_dir=raw_out_dir,
+            internal_jobs=1,
+            threads=1,
+            redo=False,
+            metadata='inferred',
+            index_dir=None,
+            build_index=False,
+            fasta_dir='inferred',
+            clean_fastq=False,
+            index_lock_poll=1,
+            index_lock_timeout=10,
+        )
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001'],
+            'scientific_name': ['Species A'],
+            'exclusion': ['no'],
+            'nominal_length': [200],
+        }))
+        observed = {}
+
+        monkeypatch.setattr('amalgkit.quant.check_kallisto_dependency', lambda: None)
+
+        def fake_load_metadata(runtime_args):
+            observed['load_out_dir'] = runtime_args.out_dir
+            return metadata
+
+        def fake_prefetch_getfastq_run_files(runtime_args, _tasks):
+            observed['prefetch_out_dir'] = runtime_args.out_dir
+            return {'SRR001': {'SRR001_1.fastq.gz'}}
+
+        def fake_pre_resolve_species_indices(runtime_args, _tasks, runtime_context=None):
+            observed['resolve_out_dir'] = runtime_args.out_dir
+            observed['prefetched_context_run_files'] = runtime_context.run_files_by_run
+            return {'Species_A': 'Species_A.idx'}
+
+        def fake_run_quant_for_sra(runtime_args, _metadata, sra_id, sci_name, runtime_context=None):
+            observed['runtime_has_run_files'] = runtime_context.run_files_by_run
+            observed['runtime_has_index_cache'] = runtime_context.resolved_index_cache
+            observed['runtime_is_caller'] = (runtime_args is args)
+            observed['dispatched'] = (sra_id, sci_name)
+
+        monkeypatch.setattr('amalgkit.quant.load_metadata', fake_load_metadata)
+        monkeypatch.setattr('amalgkit.quant.prefetch_getfastq_run_files', fake_prefetch_getfastq_run_files)
+        monkeypatch.setattr('amalgkit.quant.pre_resolve_species_indices', fake_pre_resolve_species_indices)
+        monkeypatch.setattr('amalgkit.quant.run_quant_for_sra', fake_run_quant_for_sra)
+
+        quant_main(args)
+
+        normalized_out_dir = os.path.realpath(raw_out_dir)
+        assert observed['load_out_dir'] == normalized_out_dir
+        assert observed['prefetch_out_dir'] == normalized_out_dir
+        assert observed['resolve_out_dir'] == normalized_out_dir
+        assert observed['prefetched_context_run_files'] == {'SRR001': {'SRR001_1.fastq.gz'}}
+        assert observed['runtime_has_run_files'] == {'SRR001': {'SRR001_1.fastq.gz'}}
+        assert observed['runtime_has_index_cache'] == {'Species_A': 'Species_A.idx'}
+        assert observed['runtime_is_caller'] is False
+        assert observed['dispatched'] == ('SRR001', 'Species A')
+        assert args.out_dir == raw_out_dir
 
     def test_quant_main_pre_resolves_index_once_per_species(self, tmp_path, monkeypatch):
         args = SimpleNamespace(
@@ -1133,11 +1225,11 @@ class TestQuantEdgeCases:
         monkeypatch.setattr('amalgkit.quant.load_metadata', lambda _args: metadata)
         monkeypatch.setattr(
             'amalgkit.quant.get_index',
-            lambda _args, sci_name: resolved_species.append(sci_name) or '{}.idx'.format(sci_name),
+            lambda _args, sci_name, runtime_context=None: resolved_species.append(sci_name) or '{}.idx'.format(sci_name),
         )
         monkeypatch.setattr(
             'amalgkit.quant.run_quant_for_sra',
-            lambda _args, _metadata, sra_id, sci_name: dispatched.append((sra_id, sci_name)),
+            lambda _args, _metadata, sra_id, sci_name, runtime_context=None: dispatched.append((sra_id, sci_name)),
         )
 
         quant_main(args)
@@ -1164,16 +1256,18 @@ class TestQuantEdgeCases:
         )
         tasks = [('SRR001', 'Species A'), ('SRR002', 'Species B')]
         resolved = []
+        runtime_context = QuantRuntimeContext()
 
-        monkeypatch.setattr('amalgkit.quant.get_index', lambda _args, sci_name: resolved.append(sci_name) or sci_name + '.idx')
-        out = pre_resolve_species_indices(args, tasks)
+        monkeypatch.setattr(
+            'amalgkit.quant.get_index',
+            lambda _args, sci_name, runtime_context=None: resolved.append(sci_name) or sci_name + '.idx',
+        )
+        out = pre_resolve_species_indices(args, tasks, runtime_context=runtime_context)
 
         assert out == {'Species_A': 'Species_A.idx', 'Species_B': 'Species_B.idx'}
         assert resolved == ['Species_A', 'Species_B']
-        assert getattr(args, '_prefetched_fasta_entries') == {'Species_A.fa', 'Species_B.fa'}
-        assert getattr(args, '_prefetched_fasta_dir') == os.path.realpath(str(fasta_dir))
-        assert getattr(args, '_prefetched_index_entries') == {'Species_A.idx'}
-        assert getattr(args, '_prefetched_index_dir') == os.path.realpath(str(index_dir))
+        assert runtime_context.prefetched_fasta.resolve_entries(str(fasta_dir)) == ['Species_A.fa', 'Species_B.fa']
+        assert runtime_context.prefetched_index.resolve_entries(str(index_dir)) == ['Species_A.idx']
 
     def test_pre_resolve_species_indices_normalizes_redundant_species_whitespace(self, tmp_path, monkeypatch):
         out_dir = tmp_path / 'out'
@@ -1190,7 +1284,10 @@ class TestQuantEdgeCases:
         tasks = [('SRR001', 'Species  A'), ('SRR002', 'Species A')]
         resolved = []
 
-        monkeypatch.setattr('amalgkit.quant.get_index', lambda _args, sci_name: resolved.append(sci_name) or sci_name + '.idx')
+        monkeypatch.setattr(
+            'amalgkit.quant.get_index',
+            lambda _args, sci_name, runtime_context=None: resolved.append(sci_name) or sci_name + '.idx',
+        )
 
         out = pre_resolve_species_indices(args, tasks)
 
@@ -1218,7 +1315,10 @@ class TestQuantEdgeCases:
             return {item: task_fn(item) for item in items}, []
 
         monkeypatch.setattr('amalgkit.quant.run_tasks_with_optional_threads', fake_run_tasks)
-        monkeypatch.setattr('amalgkit.quant.get_index', lambda _args, sci_name: sci_name + '.idx')
+        monkeypatch.setattr(
+            'amalgkit.quant.get_index',
+            lambda _args, sci_name, runtime_context=None: sci_name + '.idx',
+        )
 
         out = pre_resolve_species_indices(args, tasks)
 

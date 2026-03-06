@@ -8,6 +8,8 @@ from contextlib import contextmanager
 
 import pandas
 
+from amalgkit.subprocess_utils import run_logged_command
+
 
 def merge_metadata_by_run(source_df, update_df):
     if 'run' not in source_df.columns:
@@ -228,8 +230,8 @@ def save_exclusion_plot_pdf(df_metadata, out_pdf_path, r_util_path, y_label='Sam
             "comment.char='', stringsAsFactors=FALSE, check.names=FALSE); "
             "save_exclusion_plot(df=df, out_path=args[3], font_size=as.numeric(args[4]), y_label=args[5]);"
         )
-        run = subprocess.run(
-            [
+        run, _stdout_txt, stderr_txt = run_logged_command(
+            command=[
                 'Rscript',
                 '-e',
                 r_expr,
@@ -239,17 +241,17 @@ def save_exclusion_plot_pdf(df_metadata, out_pdf_path, r_util_path, y_label='Sam
                 str(font_size),
                 str(y_label),
             ],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            check=False,
+            runner=subprocess.run,
+            print_command=False,
+            print_output=False,
+            not_found_label='Rscript',
         )
         if run.returncode != 0:
             warnings.warn(
                 'Failed to generate exclusion plot {} (exit code {}): {}'.format(
                     out_pdf_path,
                     run.returncode,
-                    run.stderr.strip().splitlines()[-1] if run.stderr.strip() else 'no stderr output',
+                    stderr_txt.strip().splitlines()[-1] if stderr_txt.strip() else 'no stderr output',
                 )
             )
     finally:

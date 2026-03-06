@@ -1,7 +1,6 @@
 import json
 import os
 import warnings
-import warnings
 import pytest
 import pandas
 import numpy
@@ -972,13 +971,13 @@ class TestCheckOrthologParameterCompatibility:
         class Args:
             orthogroup_table = 'table.tsv'
             dir_busco = None
-        check_ortholog_parameter_compatibility(Args())  # should not raise
+        assert check_ortholog_parameter_compatibility(Args()) == ('table.tsv', None)
 
     def test_only_busco_ok(self):
         class Args:
             orthogroup_table = None
             dir_busco = '/path/to/busco'
-        check_ortholog_parameter_compatibility(Args())  # should not raise
+        assert check_ortholog_parameter_compatibility(Args()) == (None, '/path/to/busco')
 
     def test_blank_orthogroup_table_is_treated_as_none(self):
         class Args:
@@ -986,6 +985,18 @@ class TestCheckOrthologParameterCompatibility:
             dir_busco = None
         with pytest.raises(ValueError, match='One of'):
             check_ortholog_parameter_compatibility(Args())
+
+    def test_does_not_mutate_args(self):
+        class Args:
+            orthogroup_table = ' table.tsv '
+            dir_busco = None
+
+        args = Args()
+        normalized = check_ortholog_parameter_compatibility(args)
+
+        assert normalized == ('table.tsv', None)
+        assert args.orthogroup_table == ' table.tsv '
+        assert args.dir_busco is None
 
 
 class TestOrthogroup2Genecount:
@@ -1100,6 +1111,25 @@ class TestMetadataGroupAttributes:
         m.group_attributes(str(tmp_path))
         assert 'brain' in m.df.loc[0, 'tissue']
         assert 'frontal lobe[source_name]' in m.df.loc[0, 'tissue']
+
+    def test_can_defer_dropping_source_columns(self, tmp_path):
+        ga = tmp_path / 'group_attribute.config'
+        ga.write_text('tissue\tsource_name\n')
+        data = {
+            'scientific_name': ['Sp1'],
+            'sample_group': [''],
+            'tissue': [''],
+            'source_name': ['brain cortex'],
+            'run': ['R1'],
+            'exclusion': ['no'],
+        }
+        m = Metadata.from_DataFrame(pandas.DataFrame(data))
+
+        dropped_columns = m.group_attributes(str(tmp_path), drop_source_columns=False)
+
+        assert dropped_columns == ['source_name']
+        assert 'brain cortex[source_name]' in m.df.loc[0, 'tissue']
+        assert 'source_name' in m.df.columns
 
     def test_missing_config_no_error(self, tmp_path):
         """Issue #108: Missing config should not raise error."""
@@ -2171,7 +2201,7 @@ class TestMetadataTaxidValidation:
         def fail_if_called():
             raise AssertionError('NCBITaxa should not be initialized for invalid taxid dtype.')
 
-        monkeypatch.setattr('amalgkit.util.ete4.NCBITaxa', fail_if_called)
+        monkeypatch.setattr('amalgkit.download_utils.ete4.NCBITaxa', fail_if_called)
 
         with pytest.raises(TypeError, match='taxid column must be Int64 dtype'):
             metadata.add_standard_rank_taxids()
@@ -2187,7 +2217,7 @@ class TestMetadataTaxidValidation:
         def fail_if_called():
             raise AssertionError('NCBITaxa should not be initialized for invalid taxid dtype.')
 
-        monkeypatch.setattr('amalgkit.util.ete4.NCBITaxa', fail_if_called)
+        monkeypatch.setattr('amalgkit.download_utils.ete4.NCBITaxa', fail_if_called)
 
         with pytest.raises(TypeError, match='taxid column must be Int64 dtype'):
             metadata.resolve_scientific_names()
@@ -2208,7 +2238,7 @@ class TestMetadataTaxidValidation:
             def get_rank(self, _lineage):
                 return {}
 
-        monkeypatch.setattr('amalgkit.util.ete4.NCBITaxa', lambda: InterruptingNcbi())
+        monkeypatch.setattr('amalgkit.download_utils.ete4.NCBITaxa', lambda: InterruptingNcbi())
 
         with pytest.raises(KeyboardInterrupt):
             metadata.add_standard_rank_taxids()
@@ -2229,7 +2259,7 @@ class TestMetadataTaxidValidation:
             def get_rank(self, _lineage):
                 return {}
 
-        monkeypatch.setattr('amalgkit.util.ete4.NCBITaxa', lambda: FailingNcbi())
+        monkeypatch.setattr('amalgkit.download_utils.ete4.NCBITaxa', lambda: FailingNcbi())
 
         with pytest.warns(UserWarning, match='Failed to resolve NCBI lineage'):
             metadata.add_standard_rank_taxids()
@@ -2270,7 +2300,7 @@ class TestMetadataTaxidValidation:
                     10090: 'species',
                 }
 
-        monkeypatch.setattr('amalgkit.util.ete4.NCBITaxa', lambda: BatchNcbi())
+        monkeypatch.setattr('amalgkit.download_utils.ete4.NCBITaxa', lambda: BatchNcbi())
 
         metadata.add_standard_rank_taxids()
 
@@ -2312,8 +2342,8 @@ class TestMetadataTaxidValidation:
             def get_rank(self, _lineage):
                 return {1: 'domain', 9606: 'species'}
 
-        monkeypatch.setattr('amalgkit.util.acquire_exclusive_lock', DummyLock)
-        monkeypatch.setattr('amalgkit.util.ete4.NCBITaxa', RecordingNcbi)
+        monkeypatch.setattr('amalgkit.download_utils.acquire_exclusive_lock', DummyLock)
+        monkeypatch.setattr('amalgkit.download_utils.ete4.NCBITaxa', RecordingNcbi)
         args = SimpleNamespace(
             out_dir=str(tmp_path / 'out'),
             download_dir=str(tmp_path / 'shared_downloads'),

@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 import pandas
 
+from amalgkit.command_context import CscaContext, CurateContext
 from amalgkit.util import Metadata
 from amalgkit import wsfilter as wsfilter_module
 from amalgkit import csfilter as csfilter_module
@@ -52,11 +53,13 @@ def _base_args(tmp_path):
 def test_wsfilter_outputs_metadata_excluded_and_species_pdfs(tmp_path, monkeypatch):
     args = _base_args(tmp_path)
     metadata = _base_metadata()
+    captured = {}
 
     def fake_resolve_curate_input(_args):
         return metadata, str(tmp_path / 'input')
 
-    def fake_curate_main(curate_args):
+    def fake_curate_main(curate_args, context=None):
+        captured['context'] = context
         tables_dir = os.path.join(curate_args.out_dir, 'curate', 'Species_A', 'tables')
         plots_dir = os.path.join(curate_args.out_dir, 'curate', 'Species_A', 'plots')
         os.makedirs(tables_dir, exist_ok=True)
@@ -94,6 +97,9 @@ def test_wsfilter_outputs_metadata_excluded_and_species_pdfs(tmp_path, monkeypat
     assert (tmp_path / 'out' / 'wsfilter' / 'Species_A' / 'Species_A_ws_plot.pdf').is_file()
     assert not (tmp_path / 'out' / 'wsfilter' / 'plots').exists()
     assert not (tmp_path / 'out' / 'wsfilter' / 'tables').exists()
+    assert isinstance(captured['context'], CurateContext)
+    assert captured['context'].metadata is metadata
+    assert captured['context'].input_dir == str(tmp_path / 'input')
 
 
 def test_wsfilter_uses_latest_filter_metadata_when_inferred(tmp_path, monkeypatch):
@@ -108,7 +114,8 @@ def test_wsfilter_uses_latest_filter_metadata_when_inferred(tmp_path, monkeypatc
         captured['metadata'] = passed_args.metadata
         return metadata, str(tmp_path / 'input')
 
-    def fake_curate_main(curate_args):
+    def fake_curate_main(curate_args, context=None):
+        captured['context'] = context
         tables_dir = os.path.join(curate_args.out_dir, 'curate', 'Species_A', 'tables')
         os.makedirs(tables_dir, exist_ok=True)
         pandas.DataFrame({
@@ -128,6 +135,9 @@ def test_wsfilter_uses_latest_filter_metadata_when_inferred(tmp_path, monkeypatc
     wsfilter_module.wsfilter_main(args)
 
     assert captured['metadata'] == os.path.realpath(str(latest_meta))
+    assert isinstance(captured['context'], CurateContext)
+    assert captured['context'].metadata is metadata
+    assert captured['context'].input_dir == str(tmp_path / 'input')
 
 
 def test_csfilter_outputs_metadata_excluded_and_root_pdfs(tmp_path, monkeypatch):
@@ -138,14 +148,16 @@ def test_csfilter_outputs_metadata_excluded_and_root_pdfs(tmp_path, monkeypatch)
     def fake_resolve_curate_input(_args):
         return metadata, str(tmp_path / 'input')
 
-    def fake_curate_main(_curate_args):
+    def fake_curate_main(_curate_args, context=None):
+        captured['curate_context'] = context
         return None
 
-    def fake_csca_main(csca_args):
+    def fake_csca_main(csca_args, context=None):
         captured['sample_group'] = csca_args.sample_group
         captured['outlier_method'] = csca_args.outlier_method
         captured['batch_effect_alg'] = csca_args.batch_effect_alg
         captured['plot_mode'] = csca_args.plot_mode
+        captured['csca_context'] = context
         csca_dir = os.path.join(csca_args.out_dir, 'csca')
         os.makedirs(csca_dir, exist_ok=True)
         pandas.DataFrame({
@@ -188,6 +200,11 @@ def test_csfilter_outputs_metadata_excluded_and_root_pdfs(tmp_path, monkeypatch)
     assert captured['outlier_method'] == 'robust_margin'
     assert captured['batch_effect_alg'] == 'no'
     assert captured['plot_mode'] == 'single'
+    assert isinstance(captured['curate_context'], CurateContext)
+    assert captured['curate_context'].metadata is metadata
+    assert captured['curate_context'].input_dir == str(tmp_path / 'input')
+    assert isinstance(captured['csca_context'], CscaContext)
+    assert captured['csca_context'].metadata is metadata
 
 
 def test_finalize_outputs_tables_and_merged_metadata(tmp_path, monkeypatch):
@@ -199,8 +216,9 @@ def test_finalize_outputs_tables_and_merged_metadata(tmp_path, monkeypatch):
     def fake_resolve_curate_input(_args):
         return metadata, str(tmp_path / 'input')
 
-    def fake_curate_main(curate_args):
+    def fake_curate_main(curate_args, context=None):
         captured['seed'] = getattr(curate_args, 'seed')
+        captured['context'] = context
         tables_dir = os.path.join(curate_args.out_dir, 'curate', 'Species_A', 'tables')
         plots_dir = os.path.join(curate_args.out_dir, 'curate', 'Species_A', 'plots')
         os.makedirs(tables_dir, exist_ok=True)
@@ -257,3 +275,6 @@ def test_finalize_outputs_tables_and_merged_metadata(tmp_path, monkeypatch):
     assert (tmp_path / 'out' / 'finalize' / 'Species_A' / 'Species_A_batch_effect_summary.tsv').is_file()
     assert (tmp_path / 'out' / 'finalize' / 'Species_A' / 'Species_A_batch_compare_sva.pdf').is_file()
     assert not (tmp_path / 'out' / 'finalize' / 'Species_A' / 'tables').exists()
+    assert isinstance(captured['context'], CurateContext)
+    assert captured['context'].metadata is metadata
+    assert captured['context'].input_dir == str(tmp_path / 'input')

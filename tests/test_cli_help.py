@@ -52,3 +52,25 @@ def test_help_topic_finalize_exits_zero():
     assert '--seed' in merged
     assert '--sva_nsv' in merged
     assert '--sva_b' in merged
+
+
+def test_help_topic_csca_includes_redo():
+    out = run_cli('help', 'csca')
+    assert out.returncode == 0
+    merged = (out.stdout + '\n' + out.stderr).lower()
+    assert '--redo' in merged
+
+
+def test_help_topic_cstmm_includes_redo():
+    out = run_cli('help', 'cstmm')
+    assert out.returncode == 0
+    merged = (out.stdout + '\n' + out.stderr).lower()
+    assert '--redo' in merged
+
+
+def test_dataset_list_skips_runtime_banner():
+    out = run_cli('dataset', '--list')
+    assert out.returncode == 0
+    assert 'available datasets:' in out.stdout.lower()
+    assert 'amalgkit dependency' not in out.stdout.lower()
+    assert 'amalgkit tool' not in out.stdout.lower()

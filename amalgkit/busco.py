@@ -4,17 +4,16 @@ import re
 import shlex
 import shutil
 import subprocess
-import sys
 
 import pandas
 
-from amalgkit.util import (
-    acquire_exclusive_lock,
-    find_species_prefixed_entries,
-    load_metadata,
-    run_tasks_with_optional_threads,
-    resolve_thread_worker_allocation,
-)
+from amalgkit.arg_utils import clone_namespace
+from amalgkit.download_utils import acquire_exclusive_lock, resolve_download_dir
+from amalgkit.filter_utils import staged_output_dir
+from amalgkit.metadata_utils import load_metadata
+from amalgkit.parallel_utils import resolve_thread_worker_allocation, run_tasks_with_optional_threads
+from amalgkit.prefix_utils import find_species_prefixed_entries
+from amalgkit.subprocess_utils import run_checked_command
 
 
 REQUIRED_COLUMNS = [
@@ -249,22 +248,12 @@ def ensure_clean_dir(path, redo):
 
 
 def run_command(cmd):
-    print('Command: {}'.format(' '.join(cmd)), flush=True)
-    out = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    print(out.stdout.decode('utf8', errors='replace'))
-    print(out.stderr.decode('utf8', errors='replace'))
-    if out.returncode != 0:
-        raise RuntimeError('Command failed with exit code {}: {}'.format(out.returncode, ' '.join(cmd)))
-
-def resolve_download_dir(args):
-    raw_dir = getattr(args, 'download_dir', 'inferred')
-    if raw_dir is None:
-        return os.path.join(os.path.realpath(args.out_dir), 'downloads')
-    normalized = str(raw_dir).strip()
-    if normalized.lower() in ['', 'inferred']:
-        return os.path.join(os.path.realpath(args.out_dir), 'downloads')
-    return os.path.realpath(normalized)
-
+    run_checked_command(
+        command=cmd,
+        runner=subprocess.run,
+        print_command=True,
+        print_output=True,
+    )
 
 def _sanitize_lock_suffix(text):
     normalized = re.sub(r'[^A-Za-z0-9._-]+', '_', str(text).strip())
@@ -459,7 +448,6 @@ def busco_main(args):
     lineage = str(getattr(args, 'lineage', '')).strip()
     if lineage == '':
         raise ValueError('--lineage is required.')
-    args.lineage = lineage
     threads, species_jobs, _ = resolve_thread_worker_allocation(
         requested_threads=getattr(args, 'threads', 'auto'),
         requested_workers=getattr(args, 'internal_jobs', 'auto'),
@@ -467,25 +455,24 @@ def busco_main(args):
         worker_option_name='internal_jobs',
         context='busco:',
     )
-    args.threads = threads
-    args.internal_jobs = species_jobs
     out_dir = os.path.realpath(args.out_dir)
     if os.path.exists(out_dir) and (not os.path.isdir(out_dir)):
         raise NotADirectoryError('Output path exists but is not a directory: {}'.format(out_dir))
     busco_dir = os.path.join(out_dir, 'busco')
     if os.path.exists(busco_dir) and (not os.path.isdir(busco_dir)):
         raise NotADirectoryError('BUSCO path exists but is not a directory: {}'.format(busco_dir))
-    tool = select_tool(args)
-    extra_args = shlex.split(args.tool_args) if args.tool_args else []
-    metadata = load_metadata_if_needed_for_busco(args)
-    species, fasta_map = collect_species(args, metadata)
-    os.makedirs(busco_dir, exist_ok=True)
-    run_busco_species_jobs(
-        species=species,
-        fasta_map=fasta_map,
-        busco_dir=busco_dir,
-        tool=tool,
-        args=args,
-        extra_args=extra_args,
-        species_jobs=species_jobs,
-    )
+    runtime_args = clone_namespace(args, lineage=lineage, threads=threads, internal_jobs=species_jobs, out_dir=out_dir)
+    tool = select_tool(runtime_args)
+    extra_args = shlex.split(runtime_args.tool_args) if runtime_args.tool_args else []
+    metadata = load_metadata_if_needed_for_busco(runtime_args)
+    species, fasta_map = collect_species(runtime_args, metadata)
+    with staged_output_dir(busco_dir, redo=runtime_args.redo, prefix='amalgkit_busco_stage_') as stage_dir:
+        run_busco_species_jobs(
+            species=species,
+            fasta_map=fasta_map,
+            busco_dir=stage_dir,
+            tool=tool,
+            args=runtime_args,
+            extra_args=extra_args,
+            species_jobs=species_jobs,
+        )

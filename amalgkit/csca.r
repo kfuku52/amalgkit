@@ -15,7 +15,7 @@ save_ggplot_grid = function(plots, filename, width, height, nrow, ncol, font_siz
     font_size = resolve_csca_font_size(font_size)
     font_family = resolve_csca_font_family(font_family)
     with_pdf_defaults(
-        file = filename,
+        file = resolve_csca_output_path(filename),
         width = width,
         height = height,
         font_size = font_size,
@@ -89,7 +89,20 @@ compute_dense_label_cex = function(num_labels, base_pt = PLOT_FONT_SIZE_PT, min_
 }
 font_size = resolve_csca_font_size(font_size)
 font_family = resolve_csca_font_family('Helvetica')
-setwd(dir_csca)
+resolve_csca_output_path = function(path) {
+    path = as.character(path)
+    if (length(path) == 0) {
+        return(path)
+    }
+    path = path[[1]]
+    if (is.na(path) || (path == '')) {
+        return(path)
+    }
+    if (grepl('^(/|[A-Za-z]:[/\\\\]|~)', path)) {
+        return(path.expand(path))
+    }
+    file.path(dir_csca, path)
+}
 cat('selected_sample_groups:', selected_sample_groups, "\n")
 cat('selected_sample_group_colors:', sample_group_colors, "\n")
 cat('dir_work:', dir_work, "\n")
@@ -104,6 +117,7 @@ cat('csca_outlier_method:', csca_outlier_method, "\n")
 cat('csca_margin_threshold:', csca_margin_threshold, "\n")
 cat('csca_robust_z_threshold:', csca_robust_z_threshold, "\n")
 cat('csca_plot_mode:', csca_plot_mode, "\n")
+cat('Working at:', dir_csca, "\n")
 
 resolve_plot_correction_labels = function(corrections, plot_mode) {
     plot_mode = tolower(trimws(as.character(plot_mode)))
@@ -1275,7 +1289,7 @@ get_df_labels_averaged = function(df_metadata, label_orders, selected_sample_gro
         df_label[['has_outlier']] = FALSE
     }
     rownames(df_label) = NULL
-    write.table(df_label, paste0('csca_color_averaged.tsv'), sep = '\t', row.names = FALSE, quote = FALSE)
+    write.table(df_label, resolve_csca_output_path('csca_color_averaged.tsv'), sep = '\t', row.names = FALSE, quote = FALSE)
     return(df_label)
 }
 
@@ -1286,7 +1300,7 @@ get_df_labels_unaveraged = function(df_metadata, selected_sample_groups, sample_
     df_color = df_color[, cols]
     label_order = order(df_color[['run']])
     df_color = df_color[label_order,]
-    write.table(df_color, paste0('csca_color_unaveraged.tsv'), sep = '\t', row.names = FALSE, quote = FALSE)
+    write.table(df_color, resolve_csca_output_path('csca_color_unaveraged.tsv'), sep = '\t', row.names = FALSE, quote = FALSE)
     return(df_color)
 }
 
@@ -1830,7 +1844,7 @@ save_averaged_heatmap_plot = function(averaged_orthologs, df_color_averaged, ave
                                       averaged_orthologs_removed = NULL, df_color_averaged_removed = NULL,
                                       averaged_plot_cache_removed = NULL) {
     cat('Generating averaged heatmap.\n')
-    file_name = 'csca_heatmap.pdf'
+    file_name = resolve_csca_output_path('csca_heatmap.pdf')
     use_side_by_side = is_single_plot_correction_mode() && !is.null(averaged_orthologs_removed) &&
         !is.null(df_color_averaged_removed)
     if (use_side_by_side) {
@@ -1928,7 +1942,7 @@ save_averaged_dendrogram_plot = function(averaged_orthologs, df_color_averaged, 
                                          averaged_orthologs_removed = NULL, df_color_averaged_removed = NULL,
                                          averaged_plot_cache_removed = NULL, df_metadata_removed = NULL) {
     cat('Generating averaged dendrogram.\n')
-    file_name = 'csca_dendrogram.pdf'
+    file_name = resolve_csca_output_path('csca_dendrogram.pdf')
     use_side_by_side = is_single_plot_correction_mode() && !is.null(averaged_orthologs_removed) &&
         !is.null(df_color_averaged_removed)
     if (use_side_by_side) {
@@ -2064,7 +2078,7 @@ save_averaged_dimensionality_reduction_summary = function(averaged_orthologs, df
                                                           averaged_orthologs_removed = NULL, df_color_averaged_removed = NULL,
                                                           averaged_plot_cache_removed = NULL) {
     cat('Generating averaged dimensionality reduction summary.\n')
-    file_name = 'csca_averaged_summary.pdf'
+    file_name = resolve_csca_output_path('csca_averaged_summary.pdf')
     use_side_by_side = is_single_plot_correction_mode() && !is.null(averaged_orthologs_removed) &&
         !is.null(df_color_averaged_removed)
     if (use_side_by_side) {
@@ -2219,7 +2233,7 @@ save_averaged_box_plot = function(averaged_orthologs, df_color_averaged, average
                                   averaged_orthologs_removed = NULL, df_color_averaged_removed = NULL,
                                   averaged_plot_cache_removed = NULL) {
     cat('Generating averaged boxplot.\n')
-    file_name = 'csca_boxplot.pdf'
+    file_name = resolve_csca_output_path('csca_boxplot.pdf')
     use_side_by_side = is_single_plot_correction_mode() && !is.null(averaged_orthologs_removed) &&
         !is.null(df_color_averaged_removed)
     if (use_side_by_side) {
@@ -2731,7 +2745,7 @@ save_group_cor_histogram = function(df_metadata, df_color_unaveraged, font_size 
             plot_group_marked = build_single_panel(df_metadata, 'sample_group', panel_label = 'outlier marked')
             plot_group_removed = build_single_panel(df_metadata_removed, 'sample_group', panel_label = 'outlier removed')
             with_pdf_defaults(
-                file = "csca_within_group_cor.pdf",
+                file = resolve_csca_output_path("csca_within_group_cor.pdf"),
                 width = 7.2,
                 height = 5.4 + legend_height_in,
                 font_size = font_size,
@@ -2763,7 +2777,7 @@ save_group_cor_histogram = function(df_metadata, df_color_unaveraged, font_size 
             plot_species = build_single_panel(df_metadata, 'scientific_name')
             plot_group = build_single_panel(df_metadata, 'sample_group')
             with_pdf_defaults(
-                file = "csca_within_group_cor.pdf",
+                file = resolve_csca_output_path("csca_within_group_cor.pdf"),
                 width = 7.2,
                 height = 2.8 + legend_height_in,
                 font_size = font_size,
@@ -2846,7 +2860,7 @@ save_group_cor_histogram = function(df_metadata, df_color_unaveraged, font_size 
     pdf_height = 5.2 + legend_height_in + header_height_in
 
     with_pdf_defaults(
-        file = "csca_within_group_cor.pdf",
+        file = resolve_csca_output_path("csca_within_group_cor.pdf"),
         width = 7.2,
         height = pdf_height,
         font_size = font_size,
@@ -3033,7 +3047,7 @@ write_pivot_table = function(df_metadata, unaveraged_tcs, selected_sample_groups
     tmp = df_metadata[is_selected, c('scientific_name', 'sample_group')]
     pivot_table = as.data.frame.matrix(table(tmp[['scientific_name']], tmp[['sample_group']]))
     pivot_table = cbind(data.frame(scientific_name = rownames(pivot_table)), pivot_table)
-    write.table(pivot_table, 'csca_pivot_selected_samples.tsv', sep = '\t', row.names = FALSE, quote = FALSE)
+    write.table(pivot_table, resolve_csca_output_path('csca_pivot_selected_samples.tsv'), sep = '\t', row.names = FALSE, quote = FALSE)
 }
 
 save_delta_pcc_plot = function(directory, plot_title) {
@@ -3310,7 +3324,7 @@ save_sample_number_heatmap <- function(df_metadata, font_size = 8, dpi = 300, df
     }
 
     p <- build_heatmap_plot(df_sample_count_marked)
-    ggsave('csca_sample_number_heatmap.pdf', plot = p, width = width_per_panel, height = height, dpi = dpi)
+    ggsave(resolve_csca_output_path('csca_sample_number_heatmap.pdf'), plot = p, width = width_per_panel, height = height, dpi = dpi)
 }
 
 write_ortholog_tables_for_correction = function(correction,
@@ -3327,7 +3341,7 @@ write_ortholog_tables_for_correction = function(correction,
     for (spec in table_specs) {
         write_table_with_index_name(
             df = spec[['df']],
-            file_path = paste0(spec[['prefix']], '.', correction, '.tsv'),
+            file_path = resolve_csca_output_path(paste0(spec[['prefix']], '.', correction, '.tsv')),
             index_name = 'target_id',
             sort = FALSE
         )
@@ -3525,7 +3539,7 @@ tryCatch(
     ),
     error = function(e) cat("Warning: save_unaveraged_tsne_plot skipped:", conditionMessage(e), "\n")
 )
-tryCatch(save_delta_pcc_plot(directory = dir_csca_input_table, plot_title = 'csca_delta_pcc_boxplot.pdf'), error = function(e) cat("Warning: save_delta_pcc_plot skipped:", conditionMessage(e), "\n"))
+tryCatch(save_delta_pcc_plot(directory = dir_csca_input_table, plot_title = resolve_csca_output_path('csca_delta_pcc_boxplot.pdf')), error = function(e) cat("Warning: save_delta_pcc_plot skipped:", conditionMessage(e), "\n"))
 
 file_metadata_out = file.path(dir_csca, 'metadata.tsv')
 write.table(df_metadata, file_metadata_out, row.names = FALSE, sep = '\t', quote = FALSE)
@@ -3542,8 +3556,10 @@ cat(sprintf('Number of SRA samples for exclusion potting: %s\n', formatC(nrow(df
 out_path = file.path(dir_csca, 'csca_exclusion.pdf')
 save_exclusion_plot(df = df_metadata, out_path = out_path, font_size = font_size, y_label = "Sample count")
 
-if (file.exists('Rplots.pdf')) {
-    file.remove('Rplots.pdf')
+for (rplots_path in unique(c('Rplots.pdf', resolve_csca_output_path('Rplots.pdf')))) {
+    if (file.exists(rplots_path)) {
+        file.remove(rplots_path)
+    }
 }
 cleanup_csca_input_symlinks(dir_csca_input_table)
 cat('csca.r completed!\n')

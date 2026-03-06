@@ -2,9 +2,19 @@ import pandas
 import numpy
 
 import os
+import subprocess
 import warnings
+from amalgkit.filter_utils import staged_output_dir
+from amalgkit.metadata_utils import load_metadata, write_updated_metadata
+from amalgkit.parallel_utils import (
+    is_auto_parallel_option,
+    resolve_worker_allocation,
+    run_tasks_with_optional_threads,
+    validate_positive_int_option,
+)
 from amalgkit.r_config import temporary_r_config
-from amalgkit.util import *
+from amalgkit.runtime_utils import check_rscript
+from amalgkit.subprocess_utils import run_logged_check_call
 
 FASTP_STATS_COLUMNS = ['fastp_duplication_rate', 'fastp_insert_size_peak']
 GETFASTQ_STAGE_COLUMNS = [
@@ -370,8 +380,12 @@ def run_merge_plot_rscript(merge_dir, path_metadata_merge):
     }
     with temporary_r_config(config_map, prefix='amalgkit_merge_r_') as config_path:
         r_command = ['Rscript', r_merge_path, config_path]
-        print('Starting R script for plot generation: {}'.format(' '.join(r_command)), flush=True)
-        subprocess.check_call(r_command)
+        run_logged_check_call(
+            command=r_command,
+            runner=subprocess.check_call,
+            command_prefix='Starting R script for plot generation',
+            not_found_label='Rscript',
+        )
 
 
 def merge_main(args):
@@ -397,7 +411,6 @@ def merge_main(args):
     merge_dir = os.path.realpath(os.path.join(out_dir, 'merge'))
     if os.path.exists(merge_dir) and (not os.path.isdir(merge_dir)):
         raise NotADirectoryError('Merge path exists but is not a directory: {}'.format(merge_dir))
-    os.makedirs(merge_dir, exist_ok=True)
     metadata = load_metadata(args)
     validate_metadata_columns(
         metadata=metadata,
@@ -409,15 +422,16 @@ def merge_main(args):
         target_runs=set(collect_valid_run_ids(metadata.df.loc[:, 'run'].values)),
     )
     print('Detected {:,} quant abundance files across all runs.'.format(len(run_abundance_paths)), flush=True)
-    run_merge_species_jobs(
-        metadata=metadata,
-        quant_dir=quant_dir,
-        merge_dir=merge_dir,
-        run_abundance_paths=run_abundance_paths,
-        species_jobs=species_jobs,
-    )
-    print('Getting mapping rate from quant output and write new metadata file into merge directory.', flush=True)
-    metadata = merge_fastp_stats_into_metadata(metadata, out_dir, max_workers=postprocess_workers)
-    path_metadata_merge = os.path.realpath(os.path.join(out_dir, 'merge', 'metadata.tsv'))
-    write_updated_metadata(metadata, path_metadata_merge, args, max_workers=postprocess_workers)
-    run_merge_plot_rscript(merge_dir=merge_dir, path_metadata_merge=path_metadata_merge)
+    with staged_output_dir(merge_dir, redo=True, prefix='amalgkit_merge_stage_') as stage_dir:
+        run_merge_species_jobs(
+            metadata=metadata,
+            quant_dir=quant_dir,
+            merge_dir=stage_dir,
+            run_abundance_paths=run_abundance_paths,
+            species_jobs=species_jobs,
+        )
+        print('Getting mapping rate from quant output and write new metadata file into merge directory.', flush=True)
+        metadata = merge_fastp_stats_into_metadata(metadata, out_dir, max_workers=postprocess_workers)
+        path_metadata_merge = os.path.join(stage_dir, 'metadata.tsv')
+        write_updated_metadata(metadata, path_metadata_merge, args, max_workers=postprocess_workers)
+        run_merge_plot_rscript(merge_dir=stage_dir, path_metadata_merge=path_metadata_merge)

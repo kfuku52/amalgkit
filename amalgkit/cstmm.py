@@ -2,8 +2,15 @@ import subprocess
 import os
 import sys
 
+from amalgkit.filter_utils import staged_output_dir
+from amalgkit.orthology_utils import (
+    check_ortholog_parameter_compatibility,
+    generate_multisp_busco_table,
+    orthogroup2genecount,
+)
 from amalgkit.r_config import temporary_r_config
-from amalgkit.util import *
+from amalgkit.runtime_utils import check_rscript, cleanup_tmp_amalgkit_files
+from amalgkit.subprocess_utils import run_logged_check_call
 
 def resolve_species_count_file(sciname_path):
     sciname_count_files = []
@@ -59,52 +66,65 @@ def cstmm_main(args):
     if os.path.exists(dir_cstmm) and (not os.path.isdir(dir_cstmm)):
         raise NotADirectoryError('cstmm path exists but is not a directory: {}'.format(dir_cstmm))
     check_rscript()
-    os.makedirs(dir_cstmm, exist_ok=True)
     if args.dir_count=='inferred':
         dir_count = os.path.join(dir_out, 'merge')
     else:
         dir_count = os.path.realpath(args.dir_count)
     count_files = get_count_files(dir_count)
-    if len(count_files) == 1:
-        txt = 'Only one species was detected. Standard TMM normalization will be applied.'
-        print(txt, flush=True)
-        mode_tmm = 'single_species'
-        file_orthogroup_table = ''
-        file_genecount = ''
-    else:
-        txt = 'Multiple species were detected. ' \
-              'Cross-species TMM normalization will be applied with single-copy orthologs.'
-        print(txt, flush=True)
-        mode_tmm = 'multi_species'
-        check_ortholog_parameter_compatibility(args)
-        if args.dir_busco is not None:
-            file_orthogroup_table = os.path.join(dir_cstmm, 'cstmm_multispecies_busco_table.tsv')
-            generate_multisp_busco_table(dir_busco=args.dir_busco, outfile=file_orthogroup_table)
-        elif args.orthogroup_table is not None:
-            file_orthogroup_table = os.path.realpath(args.orthogroup_table)
-            if not os.path.exists(file_orthogroup_table):
-                raise FileNotFoundError('Orthogroup table not found: {}'.format(file_orthogroup_table))
-            if not os.path.isfile(file_orthogroup_table):
-                raise IsADirectoryError(
-                    'Orthogroup table path exists but is not a file: {}'.format(file_orthogroup_table)
-                )
-        file_genecount = os.path.join(dir_cstmm, 'cstmm_orthogroup_genecount.tsv')
-        spp = filepath2spp(count_files)
-        orthogroup2genecount(file_orthogroup=file_orthogroup_table, file_genecount=file_genecount, spp=spp)
     dir_amalgkit_script = os.path.dirname(os.path.realpath(__file__))
     r_cstmm_path = os.path.join(dir_amalgkit_script, 'cstmm.r')
     r_util_path = os.path.join(dir_amalgkit_script, 'util.r')
-    config_map = {
-        'dir_count': dir_count,
-        'file_orthogroup_table': file_orthogroup_table,
-        'file_genecount': file_genecount,
-        'dir_cstmm': dir_cstmm,
-        'mode_tmm': mode_tmm,
-        'r_util_path': r_util_path,
-    }
-    with temporary_r_config(config_map, prefix='amalgkit_cstmm_r_') as config_path:
-        r_command = ['Rscript', r_cstmm_path, config_path]
-        print('')
-        print('Starting R script: {}'.format(' '.join(r_command)), flush=True)
-        subprocess.check_call(r_command)
+    with staged_output_dir(
+        dir_cstmm,
+        redo=bool(getattr(args, 'redo', False)),
+        prefix='amalgkit_cstmm_stage_',
+    ) as stage_dir:
+        if len(count_files) == 1:
+            txt = 'Only one species was detected. Standard TMM normalization will be applied.'
+            print(txt, flush=True)
+            mode_tmm = 'single_species'
+            file_orthogroup_table = ''
+            file_genecount = ''
+        else:
+            txt = 'Multiple species were detected. ' \
+                  'Cross-species TMM normalization will be applied with single-copy orthologs.'
+            print(txt, flush=True)
+            mode_tmm = 'multi_species'
+            orthology_params = check_ortholog_parameter_compatibility(args)
+            if orthology_params is None:
+                orthogroup_table = getattr(args, 'orthogroup_table', None)
+                dir_busco = getattr(args, 'dir_busco', None)
+            else:
+                orthogroup_table, dir_busco = orthology_params
+            if dir_busco is not None:
+                file_orthogroup_table = os.path.join(stage_dir, 'cstmm_multispecies_busco_table.tsv')
+                generate_multisp_busco_table(dir_busco=dir_busco, outfile=file_orthogroup_table)
+            elif orthogroup_table is not None:
+                file_orthogroup_table = os.path.realpath(orthogroup_table)
+                if not os.path.exists(file_orthogroup_table):
+                    raise FileNotFoundError('Orthogroup table not found: {}'.format(file_orthogroup_table))
+                if not os.path.isfile(file_orthogroup_table):
+                    raise IsADirectoryError(
+                        'Orthogroup table path exists but is not a file: {}'.format(file_orthogroup_table)
+                    )
+            file_genecount = os.path.join(stage_dir, 'cstmm_orthogroup_genecount.tsv')
+            spp = filepath2spp(count_files)
+            orthogroup2genecount(file_orthogroup=file_orthogroup_table, file_genecount=file_genecount, spp=spp)
+        config_map = {
+            'dir_count': dir_count,
+            'file_orthogroup_table': file_orthogroup_table,
+            'file_genecount': file_genecount,
+            'dir_cstmm': stage_dir,
+            'mode_tmm': mode_tmm,
+            'r_util_path': r_util_path,
+        }
+        with temporary_r_config(config_map, prefix='amalgkit_cstmm_r_') as config_path:
+            r_command = ['Rscript', r_cstmm_path, config_path]
+            print('', flush=True)
+            run_logged_check_call(
+                command=r_command,
+                runner=subprocess.check_call,
+                command_prefix='Starting R script',
+                not_found_label='Rscript',
+            )
     cleanup_tmp_amalgkit_files(work_dir='.')

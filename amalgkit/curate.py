@@ -4,11 +4,17 @@ import re
 import shutil
 import subprocess
 import sys
-import warnings
 from types import SimpleNamespace
 
+import pandas
+
+from amalgkit.arg_utils import clone_namespace
+from amalgkit.command_context import CurateContext
+from amalgkit.metadata_utils import load_metadata
+from amalgkit.parallel_utils import resolve_worker_allocation, run_tasks_with_optional_threads
 from amalgkit.r_config import temporary_r_config
-from amalgkit.util import *
+from amalgkit.runtime_utils import check_rscript
+from amalgkit.subprocess_utils import run_logged_command
 
 
 def validate_curate_metadata_columns(metadata, required_columns, context):
@@ -194,8 +200,20 @@ def run_curate_r_script(args, metadata, sp, input_dir):
     else:
         raise ValueError('Unsupported R script for curate pipeline: {}'.format(r_script_name))
     with temporary_r_config(config_map, prefix='amalgkit_curate_r_') as config_path:
-        curate_r_result = subprocess.run(['Rscript', r_script_path, config_path], check=False)
+        curate_r_result, _stdout_txt, _stderr_txt = run_logged_command(
+            command=['Rscript', r_script_path, config_path],
+            runner=subprocess.run,
+            command_prefix='Rscript command',
+            print_output=False,
+            not_found_label='Rscript',
+        )
     return curate_r_result.returncode
+
+
+def resolve_curate_execution_context(args, context=None):
+    if isinstance(context, CurateContext):
+        return context.resolve()
+    return resolve_curate_input(args)
 
 def resolve_curate_input(args):
     if args.input_dir != 'inferred':
@@ -329,7 +347,7 @@ def run_curate_species_jobs(args, metadata, input_dir, curate_dir, pending_speci
         )
 
 
-def curate_main(args):
+def curate_main(args, context=None):
     species_jobs, _ = resolve_worker_allocation(
         requested_workers=getattr(args, 'internal_jobs', 'auto'),
         requested_threads=getattr(args, 'threads', 'auto'),
@@ -338,20 +356,18 @@ def curate_main(args):
         context='curate:',
         disable_workers=(getattr(args, 'batch', None) is not None),
     )
-    args.internal_jobs = species_jobs
+    runtime_args = clone_namespace(args, internal_jobs=species_jobs)
     check_rscript()
-    out_dir = os.path.realpath(args.out_dir)
+    out_dir = os.path.realpath(runtime_args.out_dir)
     if os.path.exists(out_dir) and (not os.path.isdir(out_dir)):
         raise NotADirectoryError('Output path exists but is not a directory: {}'.format(out_dir))
     curate_dir = os.path.join(out_dir, 'curate')
     if os.path.exists(curate_dir) and (not os.path.isdir(curate_dir)):
         raise NotADirectoryError('Curate path exists but is not a directory: {}'.format(curate_dir))
-    metadata = getattr(args, '_resolved_metadata', None)
-    input_dir = getattr(args, '_resolved_input_dir', None)
-    if (metadata is None) or (input_dir is None):
-        metadata, input_dir = resolve_curate_input(args)
+    runtime_args = clone_namespace(runtime_args, out_dir=out_dir)
+    metadata, input_dir = resolve_curate_execution_context(runtime_args, context=context)
     selected_species = list_selected_species(metadata)
-    if ('tpm' in str(args.norm).lower()) and has_cstmm_counts_input(input_dir, selected_species):
+    if ('tpm' in str(runtime_args.norm).lower()) and has_cstmm_counts_input(input_dir, selected_species):
         txt = ("TPM and TMM are incompatible. "
                "If input data are CSTMM-normalized, "
                "please switch --norm to any of the 'fpkm' normalization methods instead.")
@@ -362,9 +378,9 @@ def curate_main(args):
         'Number of species in the selected metadata table ("exclusion"=="no"): {}'.format(len(selected_species)),
         flush=True,
     )
-    pending_species = collect_pending_species_for_curate(args, curate_dir, selected_species)
+    pending_species = collect_pending_species_for_curate(runtime_args, curate_dir, selected_species)
     run_curate_species_jobs(
-        args=args,
+        args=runtime_args,
         metadata=metadata,
         input_dir=input_dir,
         curate_dir=curate_dir,

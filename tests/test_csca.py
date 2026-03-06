@@ -268,6 +268,7 @@ class TestCscaMain:
             orthogroup_table='dummy.tsv',
             batch_effect_alg='no',
             missing_strategy='strict',
+            redo=False,
         )
 
     def test_raises_clear_error_when_curate_dir_missing(self, tmp_path, monkeypatch):
@@ -317,6 +318,23 @@ class TestCscaMain:
         with pytest.raises(NotADirectoryError, match='csca path exists but is not a directory'):
             csca_main(args)
 
+    def test_existing_output_requires_redo(self, tmp_path, monkeypatch):
+        out_dir = tmp_path / 'out'
+        tables_dir = out_dir / 'curate' / 'Species_A' / 'tables'
+        tables_dir.mkdir(parents=True)
+        (tables_dir / 'Species_A_est_counts.tsv').write_text('target_id\tR1\nG1\t1\n')
+        existing_dir = out_dir / 'csca'
+        existing_dir.mkdir()
+        orthogroup = tmp_path / 'orthogroup.tsv'
+        orthogroup.write_text('busco_id\tSpecies_A\nOG1\tgene1\n')
+        args = self._base_args(out_dir)
+        args.orthogroup_table = str(orthogroup)
+
+        monkeypatch.setattr('amalgkit.csca.check_rscript', lambda: None)
+
+        with pytest.raises(FileExistsError, match='Use --redo yes to overwrite'):
+            csca_main(args)
+
     def test_raises_when_curate_dir_has_no_species_subdirs(self, tmp_path, monkeypatch):
         out_dir = tmp_path / 'out'
         (out_dir / 'curate').mkdir(parents=True)
@@ -353,3 +371,28 @@ class TestCscaMain:
 
         with pytest.raises(IsADirectoryError, match='Orthogroup table path exists but is not a file'):
             csca_main(args)
+
+    def test_restores_existing_output_when_staged_run_fails(self, tmp_path, monkeypatch):
+        out_dir = tmp_path / 'out'
+        tables_dir = out_dir / 'curate' / 'Species_A' / 'tables'
+        tables_dir.mkdir(parents=True)
+        (tables_dir / 'Species_A_est_counts.tsv').write_text('target_id\tR1\nG1\t1\n')
+        existing_dir = out_dir / 'csca'
+        existing_dir.mkdir()
+        (existing_dir / 'old.txt').write_text('old')
+        orthogroup = tmp_path / 'orthogroup.tsv'
+        orthogroup.write_text('busco_id\tSpecies_A\nOG1\tgene1\n')
+        args = self._base_args(out_dir)
+        args.orthogroup_table = str(orthogroup)
+        args.redo = True
+
+        monkeypatch.setattr('amalgkit.csca.check_rscript', lambda: None)
+        monkeypatch.setattr(
+            'amalgkit.csca.orthogroup2genecount',
+            lambda **_kwargs: (_ for _ in ()).throw(RuntimeError('boom')),
+        )
+
+        with pytest.raises(RuntimeError, match='boom'):
+            csca_main(args)
+
+        assert (existing_dir / 'old.txt').read_text() == 'old'

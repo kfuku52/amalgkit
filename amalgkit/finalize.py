@@ -3,6 +3,7 @@ import shutil
 import tempfile
 from types import SimpleNamespace
 
+from amalgkit.command_context import CurateContext
 from amalgkit.curate import curate_main, resolve_curate_input
 from amalgkit.filter_utils import (
     copy_curate_species_pdfs,
@@ -41,9 +42,7 @@ def _build_curate_args(args, input_dir, tmp_out_dir):
     data.setdefault('sva_nsv', 'auto')
     data.setdefault('sva_B', 'auto')
     data.setdefault('sva_B_auto_max', 100)
-    curate_args = SimpleNamespace(**data)
-    curate_args._resolved_input_dir = input_dir
-    return curate_args
+    return SimpleNamespace(**data)
 
 
 def _simplify_table_filename(filename, species, batch_effect_alg):
@@ -110,8 +109,7 @@ def finalize_main(args):
     tmp_out_dir = tempfile.mkdtemp(prefix='amalgkit_finalize_')
     try:
         curate_args = _build_curate_args(args=resolve_args, input_dir=input_dir, tmp_out_dir=tmp_out_dir)
-        curate_args._resolved_metadata = metadata
-        curate_main(curate_args)
+        curate_main(curate_args, context=CurateContext(metadata=metadata, input_dir=input_dir))
         curate_dir = os.path.join(tmp_out_dir, 'curate')
         merged_species_metadata = load_merged_species_metadata(curate_dir=curate_dir)
         merged_metadata = merge_metadata_by_run(metadata.df, merged_species_metadata)

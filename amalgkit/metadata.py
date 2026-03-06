@@ -1,15 +1,15 @@
-import numpy
 import pandas
 
 import os
-import re
 import sys
-import warnings
+import time  # noqa: F401
+import xml.etree.ElementTree as ET  # noqa: F401
 
 from Bio import Entrez
-import xml.etree.ElementTree as ET
 
 from amalgkit.exceptions import AmalgkitExit
+from amalgkit.metadata_utils import Metadata
+from amalgkit.output_utils import atomic_write_dataframe
 from amalgkit.sra import (
     esearch_sra_with_retry as _esearch_sra_with_retry,
     fetch_sra_xml as _fetch_sra_xml,
@@ -19,7 +19,6 @@ from amalgkit.sra import (
     raise_if_xml_has_error as _raise_if_xml_has_error,
     search_sra_record_ids as _search_sra_record_ids,
 )
-from amalgkit.util import *
 
 def merge_xml_chunk(root, chunk):
     return _merge_xml_chunk(root, chunk)
@@ -71,9 +70,7 @@ def metadata_main(args):
             raise NotADirectoryError(
                 'Output path exists but is not a file: {}'.format(metadata_outfile_path)
             )
-        if args.redo:
-            os.remove(metadata_outfile_path)
-        else:
+        if not args.redo:
             raise AmalgkitExit(
                 'Output file already exists (set --redo yes to overwrite): {}'.format(metadata_outfile_path),
                 exit_code=0,
@@ -103,7 +100,7 @@ def metadata_main(args):
     if args.resolve_names:
         metadata.resolve_scientific_names(args=args)
     metadata.reorder(omit_misc=False)
-    metadata.df.to_csv(metadata_outfile_path, sep="\t", index=False)
+    atomic_write_dataframe(metadata.df, metadata_outfile_path, sep="\t", index=False)
     if metadata.df.shape[0]==0:
         txt = 'No entry was found/survived in the metadata processing. Please reconsider the --search_string specification.\n'
         sys.stderr.write(txt)

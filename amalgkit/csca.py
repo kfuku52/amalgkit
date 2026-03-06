@@ -1,10 +1,20 @@
-from amalgkit.util import *
-
-import re
-import subprocess
 import os
+import re
 import shutil
-import sys
+import subprocess
+
+import pandas
+
+from amalgkit.command_context import CscaContext
+from amalgkit.filter_utils import staged_output_dir
+from amalgkit.metadata_utils import load_metadata
+from amalgkit.orthology_utils import (
+    check_ortholog_parameter_compatibility,
+    generate_multisp_busco_table,
+    orthogroup2genecount,
+)
+from amalgkit.runtime_utils import check_rscript, cleanup_tmp_amalgkit_files
+from amalgkit.subprocess_utils import run_logged_check_call
 
 def _normalize_sample_groups(values):
     groups = []
@@ -42,8 +52,10 @@ def _collect_tsv_files(path_tables_dir):
             files.append((entry.name, entry.path))
     return sorted(files)
 
-def get_sample_group_string(args):
-    metadata = getattr(args, '_resolved_metadata', None)
+def get_sample_group_string(args, context=None):
+    metadata = None
+    if isinstance(context, CscaContext):
+        metadata = context.metadata
     if args.sample_group is None:
         if metadata is None:
             metadata = load_metadata(args)
@@ -108,9 +120,14 @@ def generate_csca_input_symlinks(dir_csca_input_table, dir_curate, spp):
                 os.remove(path_dst)
             os.symlink(path_src, path_dst)
 
-def csca_main(args):
+def csca_main(args, context=None):
     check_rscript()
-    check_ortholog_parameter_compatibility(args)
+    orthology_params = check_ortholog_parameter_compatibility(args)
+    if orthology_params is None:
+        orthogroup_table = getattr(args, 'orthogroup_table', None)
+        dir_busco = getattr(args, 'dir_busco', None)
+    else:
+        orthogroup_table, dir_busco = orthology_params
     dir_out = os.path.realpath(args.out_dir)
     if os.path.exists(dir_out) and (not os.path.isdir(dir_out)):
         raise NotADirectoryError('Output path exists but is not a directory: {}'.format(dir_out))
@@ -120,48 +137,56 @@ def csca_main(args):
     if not os.path.isdir(dir_curate):
         raise FileNotFoundError('Curate output directory not found: {}. Run `amalgkit curate` first.'.format(dir_curate))
     dir_csca = os.path.join(dir_out, 'csca')
-    dir_csca_input_table = os.path.join(dir_csca, 'csca_input_symlinks')
     if os.path.exists(dir_csca) and (not os.path.isdir(dir_csca)):
         raise NotADirectoryError('csca path exists but is not a directory: {}'.format(dir_csca))
     spp = get_spp_from_dir(dir_curate)
     if len(spp) == 0:
         raise ValueError('No curated species directories were found in: {}'.format(dir_curate))
-    generate_csca_input_symlinks(dir_csca_input_table, dir_curate, spp)
-    sample_group_string = get_sample_group_string(args)
-    os.makedirs(dir_csca, exist_ok=True)
-    if args.dir_busco is not None:
-        file_orthogroup_table = os.path.join(dir_csca, 'multispecies_busco_table.tsv')
-        generate_multisp_busco_table(dir_busco=args.dir_busco, outfile=file_orthogroup_table)
-    elif args.orthogroup_table is not None:
-        file_orthogroup_table = os.path.realpath(args.orthogroup_table)
-        if not os.path.exists(file_orthogroup_table):
-            raise FileNotFoundError('Orthogroup table not found: {}'.format(file_orthogroup_table))
-        if not os.path.isfile(file_orthogroup_table):
-            raise IsADirectoryError('Orthogroup table path exists but is not a file: {}'.format(file_orthogroup_table))
+    sample_group_string = get_sample_group_string(args, context=context)
     dir_amalgkit_script = os.path.dirname(os.path.realpath(__file__))
     csca_r_script_path = os.path.join(dir_amalgkit_script, 'csca.r')
     r_util_path = os.path.join(dir_amalgkit_script, 'util.r')
-    file_genecount = os.path.join(dir_csca, 'multispecies_genecount.tsv')
-    orthogroup2genecount(file_orthogroup=file_orthogroup_table, file_genecount=file_genecount, spp=spp)
     from amalgkit.r_config import temporary_r_config
-    config_map = {
-        'selected_sample_groups': sample_group_string,
-        'sample_group_colors': args.sample_group_color,
-        'dir_work': dir_out,
-        'dir_csca_input_table': dir_csca_input_table,
-        'file_orthogroup': file_orthogroup_table,
-        'file_genecount': file_genecount,
-        'r_util_path': r_util_path,
-        'dir_csca': dir_csca,
-        'batch_effect_alg': args.batch_effect_alg,
-        'missing_strategy': args.missing_strategy,
-        'csca_outlier_method': str(getattr(args, 'outlier_method', 'none')),
-        'csca_margin_threshold': str(getattr(args, 'margin_threshold', 0.0)),
-        'csca_robust_z_threshold': str(getattr(args, 'robust_z_threshold', -2.5)),
-        'csca_plot_mode': str(getattr(args, 'plot_mode', 'dual')),
-    }
-    with temporary_r_config(config_map, prefix='amalgkit_csca_r_') as config_path:
-        call_list = ['Rscript', csca_r_script_path, config_path]
-        print(f"Rscript command: {' '.join(call_list)}")
-        subprocess.check_call(call_list)
+    with staged_output_dir(
+        dir_csca,
+        redo=bool(getattr(args, 'redo', False)),
+        prefix='amalgkit_csca_stage_',
+    ) as stage_dir:
+        dir_csca_input_table = os.path.join(stage_dir, 'csca_input_symlinks')
+        generate_csca_input_symlinks(dir_csca_input_table, dir_curate, spp)
+        if dir_busco is not None:
+            file_orthogroup_table = os.path.join(stage_dir, 'multispecies_busco_table.tsv')
+            generate_multisp_busco_table(dir_busco=dir_busco, outfile=file_orthogroup_table)
+        elif orthogroup_table is not None:
+            file_orthogroup_table = os.path.realpath(orthogroup_table)
+            if not os.path.exists(file_orthogroup_table):
+                raise FileNotFoundError('Orthogroup table not found: {}'.format(file_orthogroup_table))
+            if not os.path.isfile(file_orthogroup_table):
+                raise IsADirectoryError('Orthogroup table path exists but is not a file: {}'.format(file_orthogroup_table))
+        file_genecount = os.path.join(stage_dir, 'multispecies_genecount.tsv')
+        orthogroup2genecount(file_orthogroup=file_orthogroup_table, file_genecount=file_genecount, spp=spp)
+        config_map = {
+            'selected_sample_groups': sample_group_string,
+            'sample_group_colors': args.sample_group_color,
+            'dir_work': dir_out,
+            'dir_csca_input_table': dir_csca_input_table,
+            'file_orthogroup': file_orthogroup_table,
+            'file_genecount': file_genecount,
+            'r_util_path': r_util_path,
+            'dir_csca': stage_dir,
+            'batch_effect_alg': args.batch_effect_alg,
+            'missing_strategy': args.missing_strategy,
+            'csca_outlier_method': str(getattr(args, 'outlier_method', 'none')),
+            'csca_margin_threshold': str(getattr(args, 'margin_threshold', 0.0)),
+            'csca_robust_z_threshold': str(getattr(args, 'robust_z_threshold', -2.5)),
+            'csca_plot_mode': str(getattr(args, 'plot_mode', 'dual')),
+        }
+        with temporary_r_config(config_map, prefix='amalgkit_csca_r_') as config_path:
+            call_list = ['Rscript', csca_r_script_path, config_path]
+            run_logged_check_call(
+                command=call_list,
+                runner=subprocess.check_call,
+                command_prefix='Rscript command',
+                not_found_label='Rscript',
+            )
     cleanup_tmp_amalgkit_files(work_dir='.')

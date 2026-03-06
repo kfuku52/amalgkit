@@ -1,7 +1,13 @@
+import datetime
+import os
 import shutil
 import re
 
-from amalgkit.util import *
+from amalgkit.arg_utils import clone_namespace
+from amalgkit.filter_utils import staged_output_dir
+from amalgkit.metadata_utils import load_metadata
+from amalgkit.output_utils import atomic_write_dataframe
+from amalgkit.runtime_utils import check_config_dir
 
 def resolve_select_config_dir(args):
     if args.config_dir == 'inferred':
@@ -32,9 +38,11 @@ def apply_select_filters(metadata, args, dir_config):
     metadata.mark_missing_rank(args.mark_missing_rank)
     metadata.mark_redundant_biosample(args.mark_redundant_biosamples)
     metadata.remove_specialchars()
-    metadata.group_attributes(dir_config)
+    dropped_group_columns = metadata.group_attributes(dir_config, drop_source_columns=False)
     metadata.mark_exclude_keywords(dir_config)
     metadata.mark_treatment_terms(dir_config)
+    if len(dropped_group_columns) > 0:
+        metadata.df = metadata.df.drop(columns=[col for col in dropped_group_columns if col in metadata.df.columns])
     metadata.label_sampled_data(args.max_sample)
     metadata.reorder(omit_misc=True)
     return metadata
@@ -46,42 +54,43 @@ def write_select_outputs(path_metadata_original, path_metadata_table, metadata_d
     for output_path in [path_metadata_original, path_metadata_table]:
         if os.path.exists(output_path) and (not os.path.isfile(output_path)):
             raise NotADirectoryError('Output path exists but is not a file: {}'.format(output_path))
-    os.makedirs(metadata_dir, exist_ok=True)
+    if metadata_original_df is None:
+        metadata_original_df = metadata.df
     if os.path.exists(path_metadata_original):
-        print('Original metadata copy exists and will not be renewed: {}'.format(path_metadata_original), flush=True)
+        print('Refreshing original metadata copy at: {}'.format(path_metadata_original), flush=True)
     else:
-        print('Original metadata copy does not exist. Creating: {}'.format(path_metadata_original), flush=True)
-        if os.path.exists(path_metadata_table):
-            shutil.copyfile(path_metadata_table, path_metadata_original)
-        else:
-            if metadata_original_df is None:
-                metadata_original_df = metadata.df
-            metadata_original_df.to_csv(path_metadata_original, sep='\t', index=False)
+        print('Creating original metadata copy at: {}'.format(path_metadata_original), flush=True)
     print('Updating metadata table at: {}'.format(path_metadata_table), flush=True)
-    metadata.df.to_csv(path_metadata_table, sep='\t', index=False)
-    pivot_specs = [
-        ('pivot_qualified.tsv', False),
-        ('pivot_selected.tsv', True),
-    ]
-    for filename, sampled_only in pivot_specs:
-        pivot_df = metadata.pivot(n_sp_cutoff=0, qualified_only=True, sampled_only=sampled_only)
-        pivot_df.to_csv(os.path.join(metadata_dir, filename), sep='\t')
+    with staged_output_dir(metadata_dir, redo=True, prefix='amalgkit_select_stage_') as stage_dir:
+        if os.path.isdir(metadata_dir):
+            shutil.copytree(metadata_dir, stage_dir, dirs_exist_ok=True)
+        stage_original = os.path.join(stage_dir, os.path.basename(path_metadata_original))
+        stage_table = os.path.join(stage_dir, os.path.basename(path_metadata_table))
+        atomic_write_dataframe(metadata_original_df, stage_original, sep='\t', index=False)
+        atomic_write_dataframe(metadata.df, stage_table, sep='\t', index=False)
+        pivot_specs = [
+            ('pivot_qualified.tsv', False),
+            ('pivot_selected.tsv', True),
+        ]
+        for filename, sampled_only in pivot_specs:
+            pivot_df = metadata.pivot(n_sp_cutoff=0, qualified_only=True, sampled_only=sampled_only)
+            atomic_write_dataframe(pivot_df, os.path.join(stage_dir, filename), sep='\t')
 
 def select_main(args):
     out_dir = os.path.realpath(args.out_dir)
     if os.path.exists(out_dir) and (not os.path.isdir(out_dir)):
         raise NotADirectoryError('Output path exists but is not a directory: {}'.format(out_dir))
-    args.out_dir = out_dir
+    runtime_args = clone_namespace(args, out_dir=out_dir)
     metadata_dir = os.path.join(out_dir, 'metadata')
-    dir_config = resolve_select_config_dir(args)
+    dir_config = resolve_select_config_dir(runtime_args)
     check_config_dir(dir_path=dir_config, mode='select')
     path_metadata_table = os.path.join(metadata_dir, 'metadata.tsv')
     path_metadata_original = os.path.join(metadata_dir, 'metadata_original.tsv')
 
-    metadata = load_metadata(args)
+    metadata = load_metadata(runtime_args)
     metadata_original_df = metadata.df.copy(deep=True)
-    metadata = filter_metadata_by_sample_group(metadata, args.sample_group)
-    metadata = apply_select_filters(metadata, args, dir_config)
+    metadata = filter_metadata_by_sample_group(metadata, runtime_args.sample_group)
+    metadata = apply_select_filters(metadata, runtime_args, dir_config)
     write_select_outputs(
         path_metadata_original=path_metadata_original,
         path_metadata_table=path_metadata_table,

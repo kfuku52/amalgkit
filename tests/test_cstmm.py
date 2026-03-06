@@ -1,4 +1,3 @@
-import os
 import pytest
 from types import SimpleNamespace
 
@@ -267,3 +266,57 @@ class TestCstmmMain:
         monkeypatch.setattr('amalgkit.cstmm.check_rscript', lambda: None)
         with pytest.raises(FileNotFoundError, match='No est_counts.tsv file found for species directory\\(ies\\): Species_B'):
             cstmm_main(args)
+
+    def test_existing_output_requires_redo(self, tmp_path, monkeypatch):
+        out_dir = tmp_path / 'out'
+        merge_dir = out_dir / 'merge'
+        for species in ['Species_A', 'Species_B']:
+            species_dir = merge_dir / species
+            species_dir.mkdir(parents=True)
+            (species_dir / f'{species}_est_counts.tsv').write_text('target_id\tR1\nG1\t1\n')
+        (out_dir / 'cstmm').mkdir()
+        orthogroup = tmp_path / 'orthogroup.tsv'
+        orthogroup.write_text('busco_id\tSpecies_A\tSpecies_B\nOG1\tgene1\tgene2\n')
+        args = SimpleNamespace(
+            out_dir=str(out_dir),
+            dir_count='inferred',
+            dir_busco=None,
+            orthogroup_table=str(orthogroup),
+            redo=False,
+        )
+
+        monkeypatch.setattr('amalgkit.cstmm.check_rscript', lambda: None)
+
+        with pytest.raises(FileExistsError, match='Use --redo yes to overwrite'):
+            cstmm_main(args)
+
+    def test_restores_existing_output_when_staged_run_fails(self, tmp_path, monkeypatch):
+        out_dir = tmp_path / 'out'
+        merge_dir = out_dir / 'merge'
+        for species in ['Species_A', 'Species_B']:
+            species_dir = merge_dir / species
+            species_dir.mkdir(parents=True)
+            (species_dir / f'{species}_est_counts.tsv').write_text('target_id\tR1\nG1\t1\n')
+        existing_dir = out_dir / 'cstmm'
+        existing_dir.mkdir()
+        (existing_dir / 'old.txt').write_text('old')
+        orthogroup = tmp_path / 'orthogroup.tsv'
+        orthogroup.write_text('busco_id\tSpecies_A\tSpecies_B\nOG1\tgene1\tgene2\n')
+        args = SimpleNamespace(
+            out_dir=str(out_dir),
+            dir_count='inferred',
+            dir_busco=None,
+            orthogroup_table=str(orthogroup),
+            redo=True,
+        )
+
+        monkeypatch.setattr('amalgkit.cstmm.check_rscript', lambda: None)
+        monkeypatch.setattr(
+            'amalgkit.cstmm.orthogroup2genecount',
+            lambda **_kwargs: (_ for _ in ()).throw(RuntimeError('boom')),
+        )
+
+        with pytest.raises(RuntimeError, match='boom'):
+            cstmm_main(args)
+
+        assert (existing_dir / 'old.txt').read_text() == 'old'

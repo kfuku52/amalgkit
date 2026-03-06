@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pandas
 
+from amalgkit.command_context import CscaContext, CurateContext
 from amalgkit.csca import csca_main
 from amalgkit.curate import curate_main, resolve_curate_input
 from amalgkit.filter_utils import (
@@ -78,9 +79,7 @@ def _build_prepare_curate_args(args, input_dir, tmp_out_dir):
     data.setdefault('internal_jobs', 'auto')
     data.setdefault('internal_cpu_budget', 'auto')
     data.setdefault('sample_group_color', 'DEFAULT')
-    curate_args = SimpleNamespace(**data)
-    curate_args._resolved_input_dir = input_dir
-    return curate_args
+    return SimpleNamespace(**data)
 
 
 def _build_csca_args(args, tmp_out_dir, sample_group_arg):
@@ -195,12 +194,10 @@ def csfilter_main(args):
     tmp_out_dir = tempfile.mkdtemp(prefix='amalgkit_csfilter_')
     try:
         curate_args = _build_prepare_curate_args(args=resolve_args, input_dir=input_dir, tmp_out_dir=tmp_out_dir)
-        curate_args._resolved_metadata = metadata
-        curate_main(curate_args)
+        curate_main(curate_args, context=CurateContext(metadata=metadata, input_dir=input_dir))
         sample_group_arg = _resolve_sample_group_arg(args=resolve_args, metadata_df=metadata.df)
         csca_args = _build_csca_args(args=resolve_args, tmp_out_dir=tmp_out_dir, sample_group_arg=sample_group_arg)
-        csca_args._resolved_metadata = metadata
-        csca_main(csca_args)
+        csca_main(csca_args, context=CscaContext(metadata=metadata))
         csca_metadata_path = os.path.join(tmp_out_dir, 'csca', 'metadata.tsv')
         if not os.path.isfile(csca_metadata_path):
             raise FileNotFoundError('csfilter metadata.tsv was not generated: {}'.format(csca_metadata_path))

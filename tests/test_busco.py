@@ -705,6 +705,41 @@ def test_busco_main_rejects_busco_dir_file_path(tmp_path):
         busco_main(args)
 
 
+def test_busco_main_existing_output_requires_redo(tmp_path, monkeypatch):
+    out_dir = tmp_path / 'out'
+    fasta_dir = out_dir / 'fasta'
+    busco_dir = out_dir / 'busco'
+    out_dir.mkdir()
+    fasta_dir.mkdir(parents=True)
+    busco_dir.mkdir()
+    (fasta_dir / 'Species_A.fa').write_text('>a\nAAAA\n')
+    metadata = Metadata.from_DataFrame(pandas.DataFrame({
+        'scientific_name': ['Species A'],
+        'run': ['R1'],
+        'exclusion': ['no'],
+    }))
+    args = SimpleNamespace(
+        lineage='eukaryota_odb12',
+        internal_jobs=1,
+        tool='auto',
+        tool_args=None,
+        fasta=None,
+        out_dir=str(out_dir),
+        metadata='inferred',
+        fasta_dir='inferred',
+        threads=1,
+        redo=False,
+        busco_exe='busco',
+        compleasm_exe='compleasm',
+    )
+
+    monkeypatch.setattr('amalgkit.busco.load_metadata', lambda _args: metadata)
+    monkeypatch.setattr('amalgkit.busco.select_tool', lambda _args: 'busco')
+
+    with pytest.raises(FileExistsError, match='Use --redo yes to overwrite'):
+        busco_main(args)
+
+
 def test_busco_main_parallel_species_jobs(tmp_path, monkeypatch):
     out_dir = tmp_path / 'out'
     fasta_dir = out_dir / 'fasta'
@@ -733,8 +768,12 @@ def test_busco_main_parallel_species_jobs(tmp_path, monkeypatch):
         compleasm_exe='compleasm',
     )
     processed = []
+    observed = {}
 
     def fake_run_busco(fasta_path, sci_name, output_root, _args, _extra):
+        observed.setdefault('runtime_threads', _args.threads)
+        observed.setdefault('runtime_jobs', _args.internal_jobs)
+        observed.setdefault('runtime_lineage', _args.lineage)
         processed.append(sci_name)
         out_species = os.path.join(output_root, sci_name.replace(' ', '_'))
         os.makedirs(out_species, exist_ok=True)
@@ -753,6 +792,98 @@ def test_busco_main_parallel_species_jobs(tmp_path, monkeypatch):
     assert set(processed) == {'Species A', 'Species B'}
     assert (out_dir / 'busco' / 'Species_A_busco.tsv').exists()
     assert (out_dir / 'busco' / 'Species_B_busco.tsv').exists()
+
+
+def test_busco_main_prunes_stale_species_outputs(tmp_path, monkeypatch):
+    out_dir = tmp_path / 'out'
+    fasta_dir = out_dir / 'fasta'
+    stale_dir = out_dir / 'busco' / 'Stale_Species'
+    out_dir.mkdir()
+    fasta_dir.mkdir(parents=True)
+    stale_dir.mkdir(parents=True)
+    (stale_dir / 'stale.txt').write_text('old')
+    (fasta_dir / 'Species_A.fa').write_text('>a\nAAAA\n')
+    metadata = Metadata.from_DataFrame(pandas.DataFrame({
+        'scientific_name': ['Species A'],
+        'run': ['R1'],
+        'exclusion': ['no'],
+    }))
+    args = SimpleNamespace(
+        lineage='eukaryota_odb12',
+        internal_jobs=1,
+        tool='auto',
+        tool_args=None,
+        fasta=None,
+        out_dir=str(out_dir),
+        metadata='inferred',
+        fasta_dir='inferred',
+        threads=1,
+        redo=True,
+        busco_exe='busco',
+        compleasm_exe='compleasm',
+    )
+
+    def fake_run_busco(fasta_path, sci_name, output_root, _args, _extra):
+        _ = (fasta_path, _args, _extra)
+        out_species = os.path.join(output_root, sci_name.replace(' ', '_'))
+        os.makedirs(out_species, exist_ok=True)
+        table = os.path.join(out_species, 'full_table.tsv')
+        with open(table, 'w') as handle:
+            handle.write('Busco id\tStatus\tSequence\tScore\tLength\tOrthoDB url\tDescription\n')
+            handle.write('BUSCO1\tComplete\tseq1\t100\t200\turl\tdesc\n')
+        return out_species
+
+    monkeypatch.setattr('amalgkit.busco.load_metadata', lambda _args: metadata)
+    monkeypatch.setattr('amalgkit.busco.select_tool', lambda _args: 'busco')
+    monkeypatch.setattr('amalgkit.busco.run_busco', fake_run_busco)
+
+    busco_main(args)
+
+    assert not stale_dir.exists()
+    assert (out_dir / 'busco' / 'Species_A').exists()
+    assert (out_dir / 'busco' / 'Species_A_busco.tsv').exists()
+
+
+def test_busco_main_restores_existing_output_when_staged_run_fails(tmp_path, monkeypatch):
+    out_dir = tmp_path / 'out'
+    fasta_dir = out_dir / 'fasta'
+    existing_dir = out_dir / 'busco'
+    out_dir.mkdir()
+    fasta_dir.mkdir(parents=True)
+    existing_dir.mkdir()
+    (existing_dir / 'old.txt').write_text('old')
+    (fasta_dir / 'Species_A.fa').write_text('>a\nAAAA\n')
+    metadata = Metadata.from_DataFrame(pandas.DataFrame({
+        'scientific_name': ['Species A'],
+        'run': ['R1'],
+        'exclusion': ['no'],
+    }))
+    args = SimpleNamespace(
+        lineage='eukaryota_odb12',
+        internal_jobs=1,
+        tool='auto',
+        tool_args=None,
+        fasta=None,
+        out_dir=str(out_dir),
+        metadata='inferred',
+        fasta_dir='inferred',
+        threads=1,
+        redo=True,
+        busco_exe='busco',
+        compleasm_exe='compleasm',
+    )
+
+    monkeypatch.setattr('amalgkit.busco.load_metadata', lambda _args: metadata)
+    monkeypatch.setattr('amalgkit.busco.select_tool', lambda _args: 'busco')
+    monkeypatch.setattr(
+        'amalgkit.busco.run_busco',
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError('boom')),
+    )
+
+    with pytest.raises(RuntimeError, match='boom'):
+        busco_main(args)
+
+    assert (existing_dir / 'old.txt').read_text() == 'old'
 
 
 def test_busco_main_cpu_budget_caps_species_jobs_to_serial(tmp_path, monkeypatch):
@@ -784,8 +915,12 @@ def test_busco_main_cpu_budget_caps_species_jobs_to_serial(tmp_path, monkeypatch
         compleasm_exe='compleasm',
     )
     processed = []
+    observed = {}
 
     def fake_run_busco(fasta_path, sci_name, output_root, _args, _extra):
+        observed.setdefault('runtime_threads', _args.threads)
+        observed.setdefault('runtime_jobs', _args.internal_jobs)
+        observed.setdefault('runtime_lineage', _args.lineage)
         processed.append(sci_name)
         out_species = os.path.join(output_root, sci_name.replace(' ', '_'))
         os.makedirs(out_species, exist_ok=True)
@@ -806,4 +941,8 @@ def test_busco_main_cpu_budget_caps_species_jobs_to_serial(tmp_path, monkeypatch
     busco_main(args)
 
     assert set(processed) == {'Species A', 'Species B'}
-    assert args.threads == 1
+    assert observed['runtime_threads'] == 1
+    assert observed['runtime_jobs'] == 1
+    assert observed['runtime_lineage'] == 'eukaryota_odb12'
+    assert args.threads == 2
+    assert args.internal_jobs == 4

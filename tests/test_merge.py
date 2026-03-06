@@ -668,3 +668,48 @@ def test_merge_main_calls_check_rscript(tmp_path, monkeypatch):
     merge_main(args)
 
     assert called['check_rscript'] == 1
+
+
+def test_merge_main_prunes_stale_species_outputs(tmp_path, monkeypatch):
+    out_dir = tmp_path / 'out'
+    out_dir.mkdir()
+    stale_dir = out_dir / 'merge' / 'Stale_Species'
+    stale_dir.mkdir(parents=True)
+    (stale_dir / 'stale.tsv').write_text('old')
+    metadata = Metadata.from_DataFrame(pandas.DataFrame({
+        'run': ['R1'],
+        'scientific_name': ['Species A'],
+        'exclusion': ['no'],
+    }))
+    args = SimpleNamespace(out_dir=str(out_dir), internal_jobs=1, metadata='inferred')
+
+    def fake_merge_species(sp, metadata=None, quant_dir=None, merge_dir=None, run_abundance_paths=None):
+        _ = (metadata, quant_dir, run_abundance_paths)
+        species_dir = os.path.join(merge_dir, sp.replace(' ', '_'))
+        os.makedirs(species_dir, exist_ok=True)
+        pandas.DataFrame({'target_id': ['G1'], 'R1': [1.0]}).to_csv(
+            os.path.join(species_dir, 'Species_A_tpm.tsv'),
+            sep='\t',
+            index=False,
+        )
+        return 1
+
+    monkeypatch.setattr('amalgkit.merge.check_rscript', lambda: None)
+    monkeypatch.setattr('amalgkit.merge.load_metadata', lambda _args: metadata)
+    monkeypatch.setattr('amalgkit.merge.merge_species_quant_tables', fake_merge_species)
+    monkeypatch.setattr('amalgkit.merge.merge_fastp_stats_into_metadata', lambda m, _d, max_workers='auto': m)
+    monkeypatch.setattr(
+        'amalgkit.merge.write_updated_metadata',
+        lambda _m, path, _a, max_workers='auto': pandas.DataFrame({'run': ['R1']}).to_csv(path, sep='\t', index=False),
+    )
+    monkeypatch.setattr(
+        'amalgkit.merge.run_merge_plot_rscript',
+        lambda merge_dir, path_metadata_merge: (open(os.path.join(merge_dir, 'merge_summary.pdf'), 'w').write('ok'), path_metadata_merge),
+    )
+
+    merge_main(args)
+
+    assert not stale_dir.exists()
+    assert (out_dir / 'merge' / 'Species_A' / 'Species_A_tpm.tsv').exists()
+    assert (out_dir / 'merge' / 'metadata.tsv').exists()
+    assert (out_dir / 'merge' / 'merge_summary.pdf').exists()

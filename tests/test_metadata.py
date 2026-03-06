@@ -234,6 +234,26 @@ class TestMetadataMain:
         captured = capsys.readouterr()
         assert '--search_string' in captured.err
 
+    def test_redo_keeps_existing_metadata_when_generation_fails(self, tmp_path, monkeypatch):
+        out_dir = tmp_path / 'out'
+        metadata_dir = out_dir / 'metadata'
+        metadata_dir.mkdir(parents=True)
+        metadata_path = metadata_dir / 'metadata.tsv'
+        metadata_path.write_text('old\tvalue\n', encoding='utf-8')
+        args = self._args(out_dir)
+        args.redo = True
+
+        monkeypatch.setattr('amalgkit.metadata.search_sra_record_ids', lambda _search_term: ['ID1'])
+        monkeypatch.setattr(
+            'amalgkit.metadata.Metadata.from_xml_roots',
+            lambda _xml_roots: (_ for _ in ()).throw(RuntimeError('generation failed')),
+        )
+
+        with pytest.raises(RuntimeError, match='generation failed'):
+            metadata_main(args)
+
+        assert metadata_path.read_text(encoding='utf-8') == 'old\tvalue\n'
+
     def test_rejects_missing_search_string(self, tmp_path, monkeypatch):
         args = self._args(tmp_path / 'out')
         args.search_string = None
