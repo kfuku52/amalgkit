@@ -16,6 +16,18 @@ from amalgkit.curate import (
 from amalgkit.util import Metadata
 
 
+def _read_dcf(path):
+    config = {}
+    with open(path, encoding='utf-8') as handle:
+        for raw_line in handle:
+            line = raw_line.rstrip('\n')
+            if line == '':
+                continue
+            key, value = line.split(':', 1)
+            config[key] = value.lstrip()
+    return config
+
+
 # ---------------------------------------------------------------------------
 # get_sample_group (wiki: curate extracts sample groups from args or metadata)
 # ---------------------------------------------------------------------------
@@ -82,7 +94,7 @@ class TestGetSampleGroup:
             'exclusion': ['no'],
             'sample_group': [float('nan')],
         }))
-        with pytest.raises(SystemExit):
+        with pytest.raises(ValueError, match='sample_group'):
             get_sample_group(Args(), m)
 
     def test_missing_sample_group_column_exits_with_clear_error(self, capsys):
@@ -93,9 +105,8 @@ class TestGetSampleGroup:
             'run': ['R1'],
             'exclusion': ['no'],
         }))
-        with pytest.raises(SystemExit):
+        with pytest.raises(ValueError, match='sample_group'):
             get_sample_group(Args(), m)
-        assert 'sample_group' in capsys.readouterr().err
 
 
 class TestRunCurateRScript:
@@ -136,6 +147,7 @@ class TestRunCurateRScript:
 
         def fake_run(cmd, check):
             captured['cmd'] = cmd
+            captured['config'] = _read_dcf(cmd[2])
             captured['check'] = check
             return FakeCompleted()
 
@@ -148,7 +160,8 @@ class TestRunCurateRScript:
         )
         assert code == 0
         assert captured['check'] is False
-        assert captured['cmd'][13] == expected_flag
+        assert captured['cmd'][1].endswith('curate.r')
+        assert captured['config']['one_outlier_per_iteration'] == expected_flag
 
     def test_prefers_explicit_metadata_path_for_rscript(self, tmp_path, monkeypatch):
         class Args:
@@ -188,6 +201,7 @@ class TestRunCurateRScript:
 
         def fake_run(cmd, check):
             captured['cmd'] = cmd
+            captured['config'] = _read_dcf(cmd[2])
             captured['check'] = check
             return FakeCompleted()
 
@@ -200,7 +214,7 @@ class TestRunCurateRScript:
         )
         assert code == 0
         assert captured['check'] is False
-        assert captured['cmd'][3] == os.path.realpath(args.metadata)
+        assert captured['config']['metadata_path'] == os.path.realpath(args.metadata)
 
     def test_prefers_existing_est_counts_even_if_input_dir_name_contains_cstmm(self, tmp_path, monkeypatch):
         class Args:
@@ -238,6 +252,7 @@ class TestRunCurateRScript:
 
         def fake_run(cmd, check):
             captured['cmd'] = cmd
+            captured['config'] = _read_dcf(cmd[2])
             captured['check'] = check
             return FakeCompleted()
 
@@ -251,7 +266,7 @@ class TestRunCurateRScript:
         assert code == 0
         assert captured['check'] is False
         assert captured['cmd'][1].endswith('curate.r')
-        assert captured['cmd'][2].endswith('SpA_est_counts.tsv')
+        assert captured['config']['est_counts_path'].endswith('SpA_est_counts.tsv')
 
     def test_uses_wsfilter_r_with_reduced_argument_set(self, tmp_path, monkeypatch):
         class Args:
@@ -289,6 +304,7 @@ class TestRunCurateRScript:
 
         def fake_run(cmd, check):
             captured['cmd'] = cmd
+            captured['config'] = _read_dcf(cmd[2])
             captured['check'] = check
             return FakeCompleted()
 
@@ -302,7 +318,9 @@ class TestRunCurateRScript:
         assert code == 0
         assert captured['check'] is False
         assert captured['cmd'][1].endswith('wsfilter.r')
-        assert len(captured['cmd']) == 17  # Rscript + script + 15 args
+        assert len(captured['cmd']) == 3
+        assert captured['config']['batch_effect_alg'] == 'no'
+        assert captured['config']['outlier_method'] == 'robust_margin'
 
     def test_uses_finalize_r_with_reduced_argument_set(self, tmp_path, monkeypatch):
         class Args:
@@ -341,6 +359,7 @@ class TestRunCurateRScript:
 
         def fake_run(cmd, check):
             captured['cmd'] = cmd
+            captured['config'] = _read_dcf(cmd[2])
             captured['check'] = check
             return FakeCompleted()
 
@@ -354,8 +373,12 @@ class TestRunCurateRScript:
         assert code == 0
         assert captured['check'] is False
         assert captured['cmd'][1].endswith('finalize.r')
-        assert len(captured['cmd']) == 22  # Rscript + script + 20 args
-        assert captured['cmd'][-4:] == ['auto', 'auto', 'auto', '100']
+        assert len(captured['cmd']) == 3
+        assert captured['config']['ruvseq_control_mode'] == 'auto'
+        assert captured['config']['ruvseq_k_setting'] == 'auto'
+        assert captured['config']['sva_nsv_setting'] == 'auto'
+        assert captured['config']['sva_B_setting'] == 'auto'
+        assert captured['config']['sva_B_auto_max'] == '100'
 
     def test_skips_when_count_path_exists_but_is_not_file(self, tmp_path, monkeypatch, capsys):
         class Args:
@@ -545,9 +568,8 @@ class TestCurateMain:
             return 1 if sp == 'Species_A' else 0
 
         monkeypatch.setattr('amalgkit.curate.run_curate_r_script', fake_run_curate)
-        with pytest.raises(SystemExit) as e:
+        with pytest.raises(RuntimeError, match='amalgkit curate failed for 1/2 species'):
             curate_main(args)
-        assert e.value.code == 1
         assert not (out_dir / 'curate' / 'Species_A' / 'curate_completion_flag.txt').exists()
         assert (out_dir / 'curate' / 'Species_B' / 'curate_completion_flag.txt').exists()
 

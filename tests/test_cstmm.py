@@ -5,6 +5,18 @@ from types import SimpleNamespace
 from amalgkit.cstmm import filepath2spp, get_count_files, cstmm_main
 
 
+def _read_dcf(path):
+    config = {}
+    with open(path, encoding='utf-8') as handle:
+        for raw_line in handle:
+            line = raw_line.rstrip('\n')
+            if line == '':
+                continue
+            key, value = line.split(':', 1)
+            config[key] = value.lstrip()
+    return config
+
+
 class TestFilepath2spp:
     def test_basic_extraction(self):
         paths = [
@@ -162,7 +174,12 @@ class TestCstmmMain:
 
         monkeypatch.setattr('amalgkit.cstmm.check_rscript', lambda: None)
         monkeypatch.setattr('amalgkit.cstmm.cleanup_tmp_amalgkit_files', lambda work_dir: None)
-        monkeypatch.setattr('amalgkit.cstmm.subprocess.check_call', lambda cmd: captured.setdefault('cmd', cmd))
+        def fake_check_call(cmd):
+            captured['cmd'] = cmd
+            captured['config'] = _read_dcf(cmd[2])
+            return 0
+
+        monkeypatch.setattr('amalgkit.cstmm.subprocess.check_call', fake_check_call)
         monkeypatch.setattr(
             'amalgkit.cstmm.orthogroup2genecount',
             lambda **_kwargs: (_ for _ in ()).throw(AssertionError('orthogroup2genecount should not run for single species')),
@@ -170,9 +187,10 @@ class TestCstmmMain:
 
         cstmm_main(args)
 
-        assert captured['cmd'][6] == 'single_species'
-        assert captured['cmd'][3] == ''
-        assert captured['cmd'][4] == ''
+        assert captured['cmd'][1].endswith('cstmm.r')
+        assert captured['config']['mode_tmm'] == 'single_species'
+        assert captured['config']['file_orthogroup_table'] == ''
+        assert captured['config']['file_genecount'] == ''
 
     def test_multi_species_requires_ortholog_inputs(self, tmp_path, monkeypatch):
         out_dir = tmp_path / 'out'

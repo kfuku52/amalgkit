@@ -6,7 +6,6 @@ import datetime
 import ete4
 
 import errno
-import inspect
 import os
 import re
 import shutil
@@ -17,6 +16,8 @@ import warnings
 from bisect import bisect_left
 from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+from amalgkit.exceptions import AmalgkitExit
 
 DOWNLOAD_LOCK_POLL_SECONDS = 5
 DOWNLOAD_LOCK_TIMEOUT_SECONDS = 3600
@@ -1071,7 +1072,7 @@ def read_config_file(file_name, dir_path):
         df = df.iloc[:,0]
     return df
 
-def load_metadata(args, dir_subcommand='metadata'):
+def load_metadata(args, dir_subcommand='metadata', batch_scope='run'):
     if args.metadata=='inferred':
         relative_path = os.path.join(args.out_dir, dir_subcommand, 'metadata.tsv')
         real_path = os.path.realpath(relative_path)
@@ -1091,12 +1092,8 @@ def load_metadata(args, dir_subcommand='metadata'):
     batch = int(args.batch)
     if batch <= 0:
         raise ValueError('--batch must be >= 1.')
-    # --batch must be handled species-wise in curate.py
-    # so we need to find out where the call came from
-    frm = inspect.stack()[1]
-    mod = inspect.getmodule(frm[0])
-    mod_name = getattr(mod, '__name__', '')
-    if mod_name == 'amalgkit.curate':
+    normalized_scope = str(batch_scope).strip().lower()
+    if normalized_scope == 'species':
         print('Entering --batch mode for amalgkit curate. processing 1 species', flush=True)
         txt = 'This is {:,}th job. In total, {:,} jobs will be necessary for this metadata table.'
         species_series = metadata.df.loc[:, 'scientific_name'].fillna('').astype(str).str.strip()
@@ -1104,14 +1101,15 @@ def load_metadata(args, dir_subcommand='metadata'):
         if len(spp) == 0:
             raise ValueError('No valid scientific_name was found in metadata for curate --batch mode.')
         if batch > len(spp):
-            sys.stderr.write('--batch {} is too large. Exiting.\n'.format(args.batch))
-            sys.exit(0)
+            raise AmalgkitExit('--batch {} is too large. Exiting.'.format(args.batch), exit_code=0)
         print(txt.format(batch, len(spp)), flush=True)
         sp = spp[batch - 1]
         print('Processing species: {}'.format(sp), flush=True)
         is_sp = (species_series == sp)
         metadata.df = metadata.df.loc[is_sp,:].reset_index(drop=True)
         return metadata
+    if normalized_scope != 'run':
+        raise ValueError('Unknown batch_scope "{}". Expected "run" or "species".'.format(batch_scope))
     else:
         print('--batch is specified. Processing one SRA per job.', flush=True)
         if 'is_sampled' not in df.columns:
@@ -1123,14 +1121,12 @@ def load_metadata(args, dir_subcommand='metadata'):
         )
         num_sampled = int(is_sampled.sum())
         if num_sampled == 0:
-            print('No sample is "sampled". Please check the "is_sampled" column in the metadata. Exiting.')
-            sys.exit(1)
+            raise ValueError('No sample is "sampled". Please check the "is_sampled" column in the metadata.')
         txt = 'This is {:,}th job. In total, {:,} jobs will be necessary for this metadata table. {:,} '
         txt += 'SRAs were excluded from the table (is_sampled==no).'
         print(txt.format(batch, num_sampled, len(numpy.where(is_sampled == False)[0])), flush=True)
         if batch > num_sampled:
-            sys.stderr.write('--batch {} is too large. Exiting.\n'.format(args.batch))
-            sys.exit(0)
+            raise AmalgkitExit('--batch {} is too large. Exiting.'.format(args.batch), exit_code=0)
         metadata.df = metadata.df.loc[is_sampled,:]
         metadata.df = metadata.df.reset_index(drop=True)
         metadata.df = metadata.df.loc[[batch - 1,],:]
@@ -1431,12 +1427,9 @@ def check_rscript():
     try:
         probe = subprocess.run(['Rscript', '--help'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     except FileNotFoundError as e:
-        print(e)
-        print("R (Rscript) is not installed. Exiting.")
-        sys.exit(1)
+        raise FileNotFoundError('R (Rscript) is not installed.') from e
     if probe.returncode != 0:
-        sys.stderr.write('Rscript dependency probe failed with exit code {}: Rscript --help\n'.format(probe.returncode))
-        sys.exit(1)
+        raise RuntimeError('Rscript dependency probe failed with exit code {}: Rscript --help'.format(probe.returncode))
 
 def orthogroup2genecount(file_orthogroup, file_genecount, spp):
     df = pandas.read_csv(file_orthogroup, sep='\t', header=0, low_memory=False)

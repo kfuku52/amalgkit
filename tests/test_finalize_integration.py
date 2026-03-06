@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pandas
 import pytest
+from amalgkit.r_config import temporary_r_config
 
 
 REQUIRED_R_PACKAGES = [
@@ -86,31 +87,42 @@ def _run_finalize_r(tmp_path, fixture, sva_nsv='auto', sva_B='auto', sva_B_auto_
     out_dir = tmp_path / 'out'
     out_dir.mkdir(parents=True, exist_ok=True)
     selected_sample_groups = '|'.join(sorted(set(fixture['sample_groups'])))
-    cmd = [
-        'Rscript',
-        str(repo / 'amalgkit' / 'finalize.r'),
-        str(fixture['count_path']),
-        str(fixture['metadata_path']),
-        str(out_dir),
-        str(fixture['eff_length_path']),
-        selected_sample_groups,
-        'DEFAULT',
-        'log2p1-fpkm',
-        'sva',
-        '1',    # clip_negative
-        '1',    # maintain_zero
-        str(repo / 'amalgkit' / 'util.r'),
-        'auto',  # ruvseq_control_genes
-        'auto',  # ruvseq_k
-        '5',     # ruvseq_k_max
-        '1000',  # ruvseq_control_top_n
-        '100',   # ruvseq_min_controls
-        str(seed),
-        str(sva_nsv),
-        str(sva_B),
-        str(sva_B_auto_max),
-    ]
-    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    config_map = {
+        'est_counts_path': str(fixture['count_path']),
+        'metadata_path': str(fixture['metadata_path']),
+        'out_dir': str(out_dir),
+        'eff_length_path': str(fixture['eff_length_path']),
+        'dist_method': 'pearson',
+        'mapping_rate_cutoff': '0',
+        'min_dif': '0',
+        'plot_intermediate': '0',
+        'selected_sample_groups': selected_sample_groups,
+        'sample_group_colors': 'DEFAULT',
+        'transform_method': 'log2p1-fpkm',
+        'one_outlier_per_iteration': '0',
+        'correlation_threshold': '0.3',
+        'batch_effect_alg': 'sva',
+        'clip_negative': '1',
+        'maintain_zero': '1',
+        'r_util_path': str(repo / 'amalgkit' / 'util.r'),
+        'skip_curation_flag': '0',
+        'outlier_method': 'legacy',
+        'robust_margin_threshold': '0',
+        'robust_z_threshold': '-2.5',
+        'disable_auto_outlier_filter_flag': '1',
+        'ruvseq_control_mode': 'auto',
+        'ruvseq_k_setting': 'auto',
+        'ruvseq_k_max': '5',
+        'ruvseq_control_top_n': '1000',
+        'ruvseq_min_controls': '100',
+        'random_seed_setting': str(seed),
+        'sva_nsv_setting': str(sva_nsv),
+        'sva_B_setting': str(sva_B),
+        'sva_B_auto_max': str(sva_B_auto_max),
+    }
+    with temporary_r_config(config_map, prefix='test_finalize_r_') as config_path:
+        cmd = ['Rscript', str(repo / 'amalgkit' / 'finalize.r'), config_path]
+        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     return proc, out_dir
 
 

@@ -10,8 +10,8 @@ from amalgkit.curate import curate_main, resolve_curate_input
 from amalgkit.filter_utils import (
     infer_latest_filter_metadata,
     merge_metadata_by_run,
-    prepare_output_dir,
     save_exclusion_plot_pdf,
+    staged_output_dir,
 )
 
 
@@ -78,7 +78,9 @@ def _build_prepare_curate_args(args, input_dir, tmp_out_dir):
     data.setdefault('internal_jobs', 'auto')
     data.setdefault('internal_cpu_budget', 'auto')
     data.setdefault('sample_group_color', 'DEFAULT')
-    return SimpleNamespace(**data)
+    curate_args = SimpleNamespace(**data)
+    curate_args._resolved_input_dir = input_dir
+    return curate_args
 
 
 def _build_csca_args(args, tmp_out_dir, sample_group_arg):
@@ -92,7 +94,8 @@ def _build_csca_args(args, tmp_out_dir, sample_group_arg):
     data['outlier_method'] = 'robust_margin'
     data.setdefault('margin_threshold', 0.0)
     data.setdefault('robust_z_threshold', -2.5)
-    return SimpleNamespace(**data)
+    csca_args = SimpleNamespace(**data)
+    return csca_args
 
 
 def _write_excluded_table(df_metadata, out_path):
@@ -189,13 +192,14 @@ def csfilter_main(args):
     metadata, input_dir = resolve_curate_input(resolve_args)
     out_root = os.path.realpath(args.out_dir)
     dir_cs = os.path.join(out_root, 'csfilter')
-    prepare_output_dir(dir_cs, redo=args.redo)
     tmp_out_dir = tempfile.mkdtemp(prefix='amalgkit_csfilter_')
     try:
         curate_args = _build_prepare_curate_args(args=resolve_args, input_dir=input_dir, tmp_out_dir=tmp_out_dir)
+        curate_args._resolved_metadata = metadata
         curate_main(curate_args)
         sample_group_arg = _resolve_sample_group_arg(args=resolve_args, metadata_df=metadata.df)
         csca_args = _build_csca_args(args=resolve_args, tmp_out_dir=tmp_out_dir, sample_group_arg=sample_group_arg)
+        csca_args._resolved_metadata = metadata
         csca_main(csca_args)
         csca_metadata_path = os.path.join(tmp_out_dir, 'csca', 'metadata.tsv')
         if not os.path.isfile(csca_metadata_path):
@@ -203,23 +207,24 @@ def csfilter_main(args):
         csca_metadata = pandas.read_csv(csca_metadata_path, sep='\t', low_memory=False)
         merged_metadata = merge_metadata_by_run(metadata.df, csca_metadata)
         merged_metadata = _normalize_csfilter_metadata_columns(merged_metadata)
-        merged_metadata.to_csv(os.path.join(dir_cs, 'metadata.tsv'), sep='\t', index=False)
-        _write_excluded_table(
-            df_metadata=merged_metadata,
-            out_path=os.path.join(dir_cs, 'excluded.tsv'),
-        )
-        r_util_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'util.r')
-        save_exclusion_plot_pdf(
-            df_metadata=merged_metadata,
-            out_pdf_path=os.path.join(dir_cs, 'csfilter_exclusion.pdf'),
-            r_util_path=r_util_path,
-            y_label='Sample count',
-            font_size=8,
-        )
-        _copy_csfilter_pdf_outputs(
-            src_dir=os.path.join(tmp_out_dir, 'csca'),
-            dst_dir=dir_cs,
-        )
+        with staged_output_dir(dir_cs, redo=args.redo, prefix='amalgkit_csfilter_stage_') as stage_dir:
+            merged_metadata.to_csv(os.path.join(stage_dir, 'metadata.tsv'), sep='\t', index=False)
+            _write_excluded_table(
+                df_metadata=merged_metadata,
+                out_path=os.path.join(stage_dir, 'excluded.tsv'),
+            )
+            r_util_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'util.r')
+            save_exclusion_plot_pdf(
+                df_metadata=merged_metadata,
+                out_pdf_path=os.path.join(stage_dir, 'csfilter_exclusion.pdf'),
+                r_util_path=r_util_path,
+                y_label='Sample count',
+                font_size=8,
+            )
+            _copy_csfilter_pdf_outputs(
+                src_dir=os.path.join(tmp_out_dir, 'csca'),
+                dst_dir=stage_dir,
+            )
     finally:
         if os.path.isdir(tmp_out_dir):
             shutil.rmtree(tmp_out_dir, ignore_errors=True)

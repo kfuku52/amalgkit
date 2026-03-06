@@ -1,6 +1,8 @@
 import os
 import sys
 
+from amalgkit.exceptions import AmalgkitExit
+
 try:
     import importlib.resources as ir
 except ImportError:
@@ -19,8 +21,7 @@ def check_directory(args):
         if args.overwrite:
             print('--overwrite is set to "yes". Any config files will be overwritten in: {}'.format(path_config))
         else:
-            print('--overwrite is set to "no". Exiting.')
-            sys.exit()
+            raise AmalgkitExit('--overwrite is set to "no". Exiting.', exit_code=0, use_stderr=False)
     else:
         os.makedirs(path_config, exist_ok=True)
     return path_config

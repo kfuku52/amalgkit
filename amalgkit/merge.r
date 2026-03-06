@@ -1,19 +1,21 @@
 #!/usr/bin/env Rscript
 
 suppressWarnings(suppressPackageStartupMessages(library(ggplot2, quietly = TRUE)))
-mode = ifelse(length(commandArgs(trailingOnly = TRUE)) == 1, 'debug', 'batch')
-if (mode == "debug") {
-    dir_work = '/Users/kf/Dropbox/data/evolutionary_transcriptomics/20230527_amalgkit/amalgkit_out'
-    setwd(dir_work)
-    dir_merge = file.path(dir_work, 'merge')
-    file_metadata = file.path(dir_merge, 'metadata.tsv')
-    r_util_path = '/Users/kf/Dropbox/repos/amalgkit/amalgkit/util.r'
-} else if (mode == "batch") {
+log_prefix = "merge.r:"
+read_amalgkit_config = function(script_name) {
     args = commandArgs(trailingOnly = TRUE)
-    dir_merge = args[1]
-    file_metadata = args[2]
-    r_util_path = args[3]
+    if (length(args) != 1) {
+        stop(paste0(script_name, ' expects exactly 1 config path argument.'))
+    }
+    config = as.list(read.dcf(args[1], keep.white = TRUE)[1, ])
+    config[sapply(config, is.na)] = ''
+    return(config)
 }
+config = read_amalgkit_config('merge.r')
+cat(log_prefix, "mode = config", "\n")
+dir_merge = config[['dir_merge']]
+file_metadata = config[['file_metadata']]
+r_util_path = config[['r_util_path']]
 source(r_util_path)
 font_size = resolve_plot_font_size(8)
 font_family = resolve_plot_font_family('Helvetica')

@@ -2,6 +2,7 @@ import os
 import pytest
 
 from amalgkit.config import check_directory, config_main, list_available_config_sets, validate_config_set
+from amalgkit.exceptions import AmalgkitExit
 
 
 # ---------------------------------------------------------------------------
@@ -26,8 +27,9 @@ class TestCheckDirectory:
             out_dir = str(tmp_path)
             config = 'default'
             overwrite = False
-        with pytest.raises(SystemExit):
+        with pytest.raises(AmalgkitExit) as exc:
             check_directory(Args())
+        assert exc.value.exit_code == 0
 
     def test_existing_directory_with_overwrite(self, tmp_path):
         """Does not exit when directory exists and overwrite is True."""

@@ -281,7 +281,7 @@ def run_quant(args, metadata, sra_id, index):
         sys.stderr.write('getfastq output not found in: {}, layout = {}\n'.format(sra_stat['getfastq_sra_dir'], sra_stat['layout']))
         txt = 'Exiting. If you wish to obtain the .fastq file(s), run: getfastq --id {}\n'
         sys.stderr.write(txt.format(sra_stat['sra_id']))
-        sys.exit(1)
+        raise FileNotFoundError('getfastq output not found for {}.'.format(sra_stat['sra_id']))
     in_files = resolve_input_fastq_files(sra_stat, output_dir_getfastq, ext, files=run_files)
     if len(in_files) == 0:
         # Refresh once in case files changed after initial snapshot.

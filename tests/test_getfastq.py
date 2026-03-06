@@ -10,6 +10,7 @@ import os
 import urllib.error
 from types import SimpleNamespace
 
+from amalgkit.exceptions import AmalgkitExit
 from amalgkit.getfastq import (
     getfastq_search_term,
     getfastq_getxml,
@@ -1346,10 +1347,10 @@ class TestGetfastqMetadataIdListParsing:
         monkeypatch.setattr('amalgkit.getfastq.getfastq_getxml', fake_getxml)
         monkeypatch.setattr('amalgkit.getfastq.Metadata.from_xml', fake_from_xml)
 
-        with pytest.raises(SystemExit) as exit_info:
+        with pytest.raises(AmalgkitExit) as exit_info:
             getfastq_metadata(Args())
 
-        assert exit_info.value.code == 0
+        assert exit_info.value.exit_code == 0
 
 
 class TestGetRange:
@@ -3191,7 +3192,7 @@ class TestSraRecovery:
         monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
         monkeypatch.setattr('amalgkit.getfastq.download_sra', fake_download_sra)
 
-        with pytest.raises(SystemExit):
+        with pytest.raises(RuntimeError, match='fasterq-dump did not finish safely after re-download'):
             run_fasterq_dump(sra_stat, args, metadata, start=1, end=10)
         assert run_calls['count'] == 2
         assert redownload_calls == [True]

@@ -9,8 +9,8 @@ from amalgkit.filter_utils import (
     infer_latest_filter_metadata,
     load_merged_species_metadata,
     merge_metadata_by_run,
-    prepare_output_dir,
     save_exclusion_plot_pdf,
+    staged_output_dir,
 )
 
 
@@ -41,7 +41,9 @@ def _build_curate_args(args, input_dir, tmp_out_dir):
     data.setdefault('sva_nsv', 'auto')
     data.setdefault('sva_B', 'auto')
     data.setdefault('sva_B_auto_max', 100)
-    return SimpleNamespace(**data)
+    curate_args = SimpleNamespace(**data)
+    curate_args._resolved_input_dir = input_dir
+    return curate_args
 
 
 def _simplify_table_filename(filename, species, batch_effect_alg):
@@ -105,29 +107,30 @@ def finalize_main(args):
     metadata, input_dir = resolve_curate_input(resolve_args)
     out_root = os.path.realpath(args.out_dir)
     dir_finalize = os.path.join(out_root, 'finalize')
-    prepare_output_dir(dir_finalize, redo=args.redo)
     tmp_out_dir = tempfile.mkdtemp(prefix='amalgkit_finalize_')
     try:
         curate_args = _build_curate_args(args=resolve_args, input_dir=input_dir, tmp_out_dir=tmp_out_dir)
+        curate_args._resolved_metadata = metadata
         curate_main(curate_args)
         curate_dir = os.path.join(tmp_out_dir, 'curate')
-        _copy_species_tables(
-            curate_dir=curate_dir,
-            finalize_dir=dir_finalize,
-            batch_effect_alg=curate_args.batch_effect_alg,
-        )
-        copy_curate_species_pdfs(curate_dir=curate_dir, dst_dir=dir_finalize)
         merged_species_metadata = load_merged_species_metadata(curate_dir=curate_dir)
         merged_metadata = merge_metadata_by_run(metadata.df, merged_species_metadata)
-        merged_metadata.to_csv(os.path.join(dir_finalize, 'metadata.tsv'), sep='\t', index=False)
-        r_util_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'util.r')
-        save_exclusion_plot_pdf(
-            df_metadata=merged_metadata,
-            out_pdf_path=os.path.join(dir_finalize, 'finalize_exclusion.pdf'),
-            r_util_path=r_util_path,
-            y_label='Sample count',
-            font_size=8,
-        )
+        with staged_output_dir(dir_finalize, redo=args.redo, prefix='amalgkit_finalize_stage_') as stage_dir:
+            _copy_species_tables(
+                curate_dir=curate_dir,
+                finalize_dir=stage_dir,
+                batch_effect_alg=curate_args.batch_effect_alg,
+            )
+            copy_curate_species_pdfs(curate_dir=curate_dir, dst_dir=stage_dir)
+            merged_metadata.to_csv(os.path.join(stage_dir, 'metadata.tsv'), sep='\t', index=False)
+            r_util_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'util.r')
+            save_exclusion_plot_pdf(
+                df_metadata=merged_metadata,
+                out_pdf_path=os.path.join(stage_dir, 'finalize_exclusion.pdf'),
+                r_util_path=r_util_path,
+                y_label='Sample count',
+                font_size=8,
+            )
     finally:
         if os.path.isdir(tmp_out_dir):
             shutil.rmtree(tmp_out_dir, ignore_errors=True)

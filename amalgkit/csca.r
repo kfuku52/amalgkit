@@ -32,66 +32,45 @@ save_ggplot_grid = function(plots, filename, width, height, nrow, ncol, font_siz
     )
 }
 
-debug_mode = ifelse(length(commandArgs(trailingOnly = TRUE)) == 1, "debug", "batch")
+log_prefix = "csca.r:"
+read_amalgkit_config = function(script_name) {
+    args = commandArgs(trailingOnly = TRUE)
+    if (length(args) != 1) {
+        stop(paste0(script_name, ' expects exactly 1 config path argument.'))
+    }
+    config = as.list(read.dcf(args[1], keep.white = TRUE)[1, ])
+    config[sapply(config, is.na)] = ''
+    return(config)
+}
+
+split_config_field = function(value) {
+    if (is.null(value) || identical(value, '')) {
+        return(character())
+    }
+    parts = unlist(strsplit(as.character(value), "[\\|,]+", perl = TRUE), use.names = FALSE)
+    parts = trimws(parts)
+    return(parts[parts != ''])
+}
+
 font_size = 8
 species_shape_threshold = 12
 
-if (debug_mode == "debug") {
-    developer = 'kf'
-    if (developer == 'mf') {
-        selected_sample_groups = c('root', 'flower', 'leaf')
-        dir_work = '/home/s229181/projects/amalgkit_paper/Plant_set'
-        #selected_sample_groups = c('Amicoumacin_low','Amicoumacin_high','anaerobic','Azithromycin_low','Azithromycin_high','control','ciprofloxacin_low','ciprofloxacin_high','colistin_low','colistin_high','H2O2','heat','meropenem_low','meropenem_high','NaCl','Anaerobic','IPTG','biofilm_medium','acid','H202','butyrate','aerobic','Ampicillin','Vancomycin','ciprofloxacin','colistin','glucose','Glucose','rifampicin','probiotic','cleaner','ampicillin','tetracycline','pediocin','glycerol','Pyruvate','Ca2+','Glycerol','H2o2','anhydrotetracycline','TB47','treated','iron','Lactate','rion','phage','Ag','biofilm','MIC','AZM','citrate','NaNO2','Acetate','sucrose','coumermycin','copper','mitomycin','arabinose','Cefotaxime','Cellulose','vancomycin','mupirocin','galactose','macrophages','tobramycin')
-        sample_group_colors = 'DEFAULT'
-        #dir_work = '/home/s229181/projects/amalgkit_paper/Prokaryote_set'
-        dir_csca_input_table = file.path(dir_work, 'csca/csca_input_symlinks')
-        file_orthogroup = file.path(dir_work, 'csca/multispecies_busco_table.tsv')
-        file_genecount = file.path(dir_work, 'csca/multispecies_genecount.tsv')
-        r_util_path = '/home/s229181/projects/amalgkit_paper/amalgkit/amalgkit/util.r'
-        dir_csca = file.path(dir_work, 'csca')
-        batch_effect_alg = 'sva'
-        missing_strategy = 'em_pca'
-        csca_outlier_method = 'none'
-        csca_margin_threshold = 0
-        csca_robust_z_threshold = -2.5
-        csca_plot_mode = 'dual'
-    } else if (developer == 'kf') {
-        selected_sample_groups = c('root', 'flower', 'leaf')
-        sample_group_colors = c('#d95f02ff', '#1b9e77ff', '#7570b3ff')
-        dir_work = '/Users/kf/Library/CloudStorage/GoogleDrive-kenji.fukushima@nig.ac.jp/My Drive/psnl/data/evolutionary_transcriptomics/20230527_amalgkit/amalgkit_out'
-        dir_csca_input_table = file.path(dir_work, 'csca/csca_input_symlinks')
-        file_orthogroup = file.path(dir_work, 'csca/multispecies_busco_table.tsv')
-        file_genecount = file.path(dir_work, 'csca/multispecies_genecount.tsv')
-        r_util_path = '/Users/kf/Library/CloudStorage/GoogleDrive-kenji.fukushima@nig.ac.jp/My Drive/psnl/repos/amalgkit/amalgkit/util.r'
-        dir_csca = file.path(dir_work, 'csca')
-        batch_effect_alg = 'sva'
-        missing_strategy = 'em_pca'
-        csca_outlier_method = 'none'
-        csca_margin_threshold = 0
-        csca_robust_z_threshold = -2.5
-        csca_plot_mode = 'dual'
-    }
-} else if (debug_mode == "batch") {
-    args = commandArgs(trailingOnly = TRUE)
-    selected_sample_groups = strsplit(args[1], "\\|")[[1]]
-    sample_group_colors = strsplit(args[2], ",")[[1]]
-    dir_work = args[3]
-    dir_csca_input_table = args[4]
-    file_orthogroup = args[5]
-    file_genecount = args[6]
-    r_util_path = args[7]
-    dir_csca = args[8]
-    batch_effect_alg = args[9]
-    if (length(args) >= 10) {
-        missing_strategy = args[10]
-    } else {
-        missing_strategy = 'em_pca'
-    }
-    csca_outlier_method = ifelse(length(args) >= 11, as.character(args[11]), 'none')
-    csca_margin_threshold = ifelse(length(args) >= 12, as.numeric(args[12]), 0)
-    csca_robust_z_threshold = ifelse(length(args) >= 13, as.numeric(args[13]), -2.5)
-    csca_plot_mode = ifelse(length(args) >= 14, as.character(args[14]), 'dual')
-}
+config = read_amalgkit_config('csca.r')
+cat(log_prefix, "mode = config", "\n")
+selected_sample_groups = split_config_field(config[['selected_sample_groups']])
+sample_group_colors = split_config_field(config[['sample_group_colors']])
+dir_work = config[['dir_work']]
+dir_csca_input_table = config[['dir_csca_input_table']]
+file_orthogroup = config[['file_orthogroup']]
+file_genecount = config[['file_genecount']]
+r_util_path = config[['r_util_path']]
+dir_csca = config[['dir_csca']]
+batch_effect_alg = config[['batch_effect_alg']]
+missing_strategy = ifelse(config[['missing_strategy']] != '', config[['missing_strategy']], 'em_pca')
+csca_outlier_method = ifelse(config[['csca_outlier_method']] != '', as.character(config[['csca_outlier_method']]), 'none')
+csca_margin_threshold = ifelse(config[['csca_margin_threshold']] != '', as.numeric(config[['csca_margin_threshold']]), 0)
+csca_robust_z_threshold = ifelse(config[['csca_robust_z_threshold']] != '', as.numeric(config[['csca_robust_z_threshold']]), -2.5)
+csca_plot_mode = ifelse(config[['csca_plot_mode']] != '', as.character(config[['csca_plot_mode']]), 'dual')
 source(r_util_path)
 resolve_csca_font_size = function(font_size = PLOT_FONT_SIZE_PT) {
     resolve_plot_font_size(font_size)

@@ -24,6 +24,7 @@ def sanitize_sys_path():
 sanitize_sys_path()
 
 from amalgkit.__init__ import __version__
+from amalgkit.exceptions import AmalgkitExit
 
 DEPENDENCY_SPECS = [
     ('numpy', 'numpy'),
@@ -178,27 +179,12 @@ def resolve_active_command(argv):
         return arg
     return ''
 
-print('AMALGKIT version: {}'.format(__version__))
-print('AMALGKIT command: {}'.format(' '.join(sys.argv)))
-print('AMALGKIT bug report: https://github.com/kfuku52/amalgkit/issues')
-print('AMALGKIT os: {} (os.name={})'.format(describe_os(), os.name))
-print('AMALGKIT python: {}'.format(sys.version.split()[0]))
-for package_name, module_name in DEPENDENCY_SPECS:
-    version = resolve_dependency_version(package_name=package_name, module_name=module_name)
-    print('AMALGKIT dependency {}: {}'.format(package_name, version))
-active_command = resolve_active_command(sys.argv)
-if active_command == 'getfastq':
-    for tool_label, _tool_exe, _version_commands in EXTERNAL_TOOL_SPECS:
-        print('AMALGKIT tool {}: SKIPPED (command-specific dependency check will run)'.format(tool_label))
-    for r_package in R_PACKAGE_SPECS:
-        print('AMALGKIT R package {}: SKIPPED (not required for getfastq)'.format(r_package))
-else:
-    for tool_label, tool_exe, version_commands in EXTERNAL_TOOL_SPECS:
-        status = resolve_external_tool_status(executable_name=tool_exe, version_commands=version_commands)
-        print('AMALGKIT tool {}: {}'.format(tool_label, status))
-    r_package_versions = resolve_r_package_versions(R_PACKAGE_SPECS)
-    for r_package in R_PACKAGE_SPECS:
-        print('AMALGKIT R package {}: {}'.format(r_package, r_package_versions.get(r_package, 'UNKNOWN')))
+def print_runtime_banner(argv):
+    print('AMALGKIT version: {}'.format(__version__))
+    print('AMALGKIT command: {}'.format(' '.join(argv)))
+    print('AMALGKIT bug report: https://github.com/kfuku52/amalgkit/issues')
+    print('AMALGKIT os: {} (os.name={})'.format(describe_os(), os.name))
+    print('AMALGKIT python: {}'.format(sys.version.split()[0]))
 
 def strtobool(val):
     val = val.lower()
@@ -255,11 +241,7 @@ def command_quant(args):
     sys.stdout.write('amalgkit quant: start\n')
     start = time.time()
     from amalgkit.quant import quant_main
-    try:
-        quant_main(args)
-    except ValueError as err:
-        print("ERROR: ", err)
-        sys.exit(1)
+    quant_main(args)
     print('Time elapsed: {:,} sec'.format(int(time.time() - start)))
     sys.stdout.write('amalgkit quant: end\n')
 
@@ -860,9 +842,32 @@ parser_help.add_argument(
 )
 parser_help.set_defaults(handler=command_help)
 
-# Handler
-args = parser.parse_args()
-if hasattr(args, 'handler'):
-    args.handler(args)
-else:
-    parser.print_help()
+def main(argv=None):
+    if argv is None:
+        argv = sys.argv
+    args = parser.parse_args(argv[1:])
+    active_command = resolve_active_command(argv)
+    try:
+        if active_command not in ['', 'help']:
+            print_runtime_banner(argv)
+        if hasattr(args, 'handler'):
+            args.handler(args)
+        else:
+            parser.print_help()
+        return 0
+    except AmalgkitExit as exc:
+        if exc.message != '':
+            if exc.use_stderr:
+                sys.stderr.write(exc.message.rstrip('\n') + '\n')
+            else:
+                print(exc.message)
+        return exc.exit_code
+    except KeyboardInterrupt:
+        sys.stderr.write('Interrupted.\n')
+        return 130
+    except Exception as exc:
+        sys.stderr.write('ERROR: {}\n'.format(exc))
+        return 1
+
+
+sys.exit(main())

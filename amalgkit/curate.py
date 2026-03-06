@@ -7,6 +7,7 @@ import sys
 import warnings
 from types import SimpleNamespace
 
+from amalgkit.r_config import temporary_r_config
 from amalgkit.util import *
 
 
@@ -41,18 +42,15 @@ def get_sample_group(args, metadata):
     if args.sample_group is None:
         if 'sample_group' not in metadata.df.columns:
             txt = 'The "sample_group" column was not found in --metadata ({}). '
-            txt += 'Please add this column or provide --sample_group.\n'
-            sys.stderr.write(txt.format(args.metadata))
-            sys.exit(1)
+            txt += 'Please add this column or provide --sample_group.'
+            raise ValueError(txt.format(args.metadata))
         sample_group = normalize_sample_groups(metadata.df.loc[:, 'sample_group'].tolist())
     else:
         sample_group = parse_sample_group_argument(args.sample_group)
     if (len(sample_group)==0):
-        txt = 'The "sample_group" column in --metadata ({}) is not filled. Please manually edit the file.\n'
-        txt += '`amalgkit curate` recognizes samples with the same string in this columns to belong the same group.\n'
-        txt += 'Exiting.\n'
-        sys.stderr.write(txt.format(args.metadata))
-        sys.exit(1)
+        txt = 'The "sample_group" column in --metadata ({}) is not filled. Please manually edit the file. '
+        txt += '`amalgkit curate` recognizes samples with the same string in this column to belong the same group.'
+        raise ValueError(txt.format(args.metadata))
     print('Tissues to be included: {}'.format(', '.join(sample_group)))
     sample_group = '|'.join(sample_group)
     return sample_group
@@ -132,24 +130,37 @@ def run_curate_r_script(args, metadata, sp, input_dir):
         print('Skipping {}'.format(sp), flush=True)
         return 1
     print("Starting Rscript ({}) to obtain curated {} values.".format(r_script_name, args.norm), flush=True)
+    config_map = {
+        'est_counts_path': count_file,
+        'metadata_path': path_curate_input_metadata,
+        'out_dir': os.path.realpath(args.out_dir),
+        'eff_length_path': len_file,
+        'dist_method': dist_method,
+        'mapping_rate_cutoff': mr_cut,
+        'min_dif': 0,
+        'plot_intermediate': int(intermediate),
+        'selected_sample_groups': sample_group,
+        'sample_group_colors': args.sample_group_color,
+        'transform_method': str(args.norm),
+        'one_outlier_per_iteration': int(args.one_outlier_per_iter),
+        'correlation_threshold': correlation_threshold,
+        'batch_effect_alg': str(getattr(args, 'batch_effect_alg', 'no')),
+        'clip_negative': int(getattr(args, 'clip_negative', True)),
+        'maintain_zero': int(getattr(args, 'maintain_zero', True)),
+        'r_util_path': os.path.realpath(r_util_path),
+        'skip_curation_flag': int(getattr(args, 'skip_curation', False)),
+        'outlier_method': str(outlier_method),
+        'robust_margin_threshold': str(margin_threshold),
+        'robust_z_threshold': str(robust_z_threshold),
+        'disable_auto_outlier_filter_flag': int(disable_auto_outlier_filter),
+    }
     if r_script_name == 'wsfilter.r':
-        script_args = [
-            count_file,
-            path_curate_input_metadata,
-            os.path.realpath(args.out_dir),
-            len_file,
-            dist_method,
-            str(mr_cut),
-            str(int(intermediate)),
-            sample_group,
-            args.sample_group_color,
-            str(args.norm),
-            str(int(args.one_outlier_per_iter)),
-            str(correlation_threshold),
-            str(margin_threshold),
-            str(robust_z_threshold),
-            os.path.realpath(r_util_path),
-        ]
+        config_map['batch_effect_alg'] = 'no'
+        config_map['clip_negative'] = 1
+        config_map['maintain_zero'] = 1
+        config_map['skip_curation_flag'] = 0
+        config_map['outlier_method'] = 'robust_margin'
+        config_map['disable_auto_outlier_filter_flag'] = 0
     elif r_script_name == 'finalize.r':
         ruvseq_control_genes = str(getattr(args, 'ruvseq_control_genes', 'auto'))
         ruvseq_k = str(getattr(args, 'ruvseq_k', 'auto'))
@@ -160,57 +171,30 @@ def run_curate_r_script(args, metadata, sp, input_dir):
         sva_nsv = str(getattr(args, 'sva_nsv', 'auto'))
         sva_B = str(getattr(args, 'sva_B', 'auto'))
         sva_B_auto_max = int(getattr(args, 'sva_B_auto_max', 100))
-        script_args = [
-            count_file,
-            path_curate_input_metadata,
-            os.path.realpath(args.out_dir),
-            len_file,
-            sample_group,
-            args.sample_group_color,
-            str(args.norm),
-            str(args.batch_effect_alg),
-            str(int(args.clip_negative)),
-            str(int(args.maintain_zero)),
-            os.path.realpath(r_util_path),
-            ruvseq_control_genes,
-            ruvseq_k,
-            str(ruvseq_k_max),
-            str(ruvseq_control_top_n),
-            str(ruvseq_min_controls),
-            random_seed,
-            sva_nsv,
-            sva_B,
-            str(sva_B_auto_max),
-        ]
+        config_map['mapping_rate_cutoff'] = 0
+        config_map['plot_intermediate'] = 0
+        config_map['one_outlier_per_iteration'] = 0
+        config_map['correlation_threshold'] = 0.3
+        config_map['skip_curation_flag'] = 0
+        config_map['outlier_method'] = 'legacy'
+        config_map['robust_margin_threshold'] = 0
+        config_map['robust_z_threshold'] = -2.5
+        config_map['disable_auto_outlier_filter_flag'] = 1
+        config_map['ruvseq_control_mode'] = ruvseq_control_genes
+        config_map['ruvseq_k_setting'] = ruvseq_k
+        config_map['ruvseq_k_max'] = ruvseq_k_max
+        config_map['ruvseq_control_top_n'] = ruvseq_control_top_n
+        config_map['ruvseq_min_controls'] = ruvseq_min_controls
+        config_map['random_seed_setting'] = random_seed
+        config_map['sva_nsv_setting'] = sva_nsv
+        config_map['sva_B_setting'] = sva_B
+        config_map['sva_B_auto_max'] = sva_B_auto_max
     elif r_script_name == 'curate.r':
-        script_args = [
-            count_file,
-            path_curate_input_metadata,
-            os.path.realpath(args.out_dir),
-            len_file,
-            dist_method,
-            str(mr_cut),
-            '0',
-            str(int(intermediate)),
-            sample_group,
-            args.sample_group_color,
-            str(args.norm),
-            str(int(args.one_outlier_per_iter)),
-            str(correlation_threshold),
-            str(args.batch_effect_alg),
-            str(int(args.clip_negative)),
-            str(int(args.maintain_zero)),
-            os.path.realpath(r_util_path),
-            str(int(args.skip_curation)),
-            str(outlier_method),
-            str(margin_threshold),
-            str(robust_z_threshold),
-            str(int(disable_auto_outlier_filter)),
-        ]
+        pass
     else:
         raise ValueError('Unsupported R script for curate pipeline: {}'.format(r_script_name))
-
-    curate_r_result = subprocess.run(['Rscript', r_script_path] + script_args, check=False)
+    with temporary_r_config(config_map, prefix='amalgkit_curate_r_') as config_path:
+        curate_r_result = subprocess.run(['Rscript', r_script_path, config_path], check=False)
     return curate_r_result.returncode
 
 def resolve_curate_input(args):
@@ -232,9 +216,9 @@ def resolve_curate_input(args):
                 )
             proxy_args = SimpleNamespace(**vars(args))
             proxy_args.metadata = input_metadata_path
-            metadata = load_metadata(proxy_args)
+            metadata = load_metadata(proxy_args, batch_scope='species')
         else:
-            metadata = load_metadata(args, dir_subcommand=os.path.basename(input_dir))
+            metadata = load_metadata(args, dir_subcommand=os.path.basename(input_dir), batch_scope='species')
         return metadata, input_dir
 
     dir_merge = os.path.realpath(os.path.join(args.out_dir, 'merge'))
@@ -243,12 +227,12 @@ def resolve_curate_input(args):
         if not os.path.isdir(dir_cstmm):
             raise NotADirectoryError('cstmm input path exists but is not a directory: {}'.format(dir_cstmm))
         print('Subdirectory for amalgkit cstmm will be used as input: {}'.format(dir_cstmm))
-        metadata = load_metadata(args, dir_subcommand='cstmm')
+        metadata = load_metadata(args, dir_subcommand='cstmm', batch_scope='species')
         return metadata, dir_cstmm
     if os.path.exists(dir_merge) and (not os.path.isdir(dir_merge)):
         raise NotADirectoryError('merge input path exists but is not a directory: {}'.format(dir_merge))
     print('Subdirectory for amalgkit merge will be used as input: {}'.format(dir_merge))
-    metadata = load_metadata(args, dir_subcommand='merge')
+    metadata = load_metadata(args, dir_subcommand='merge', batch_scope='species')
     return metadata, dir_merge
 
 
@@ -362,7 +346,10 @@ def curate_main(args):
     curate_dir = os.path.join(out_dir, 'curate')
     if os.path.exists(curate_dir) and (not os.path.isdir(curate_dir)):
         raise NotADirectoryError('Curate path exists but is not a directory: {}'.format(curate_dir))
-    metadata, input_dir = resolve_curate_input(args)
+    metadata = getattr(args, '_resolved_metadata', None)
+    input_dir = getattr(args, '_resolved_input_dir', None)
+    if (metadata is None) or (input_dir is None):
+        metadata, input_dir = resolve_curate_input(args)
     selected_species = list_selected_species(metadata)
     if ('tpm' in str(args.norm).lower()) and has_cstmm_counts_input(input_dir, selected_species):
         txt = ("TPM and TMM are incompatible. "
@@ -387,5 +374,4 @@ def curate_main(args):
     )
     if len(failed_species) > 0:
         txt = 'amalgkit curate failed for {}/{} species: {}\n'
-        sys.stderr.write(txt.format(len(failed_species), len(selected_species), ', '.join(sorted(failed_species))))
-        sys.exit(1)
+        raise RuntimeError(txt.format(len(failed_species), len(selected_species), ', '.join(sorted(failed_species))).strip())

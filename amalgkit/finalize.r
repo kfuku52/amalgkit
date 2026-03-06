@@ -6,91 +6,70 @@ if (is.na(detected_cores) && (is.null(getOption("cores")) || is.na(getOption("co
 }
 suppressWarnings(suppressPackageStartupMessages(library(Rtsne, quietly = TRUE)))
 
-debug_mode = ifelse(length(commandArgs(trailingOnly = TRUE)) == 1, "debug", "batch")
 log_prefix = "finalize.r:"
-cat(log_prefix, "mode =", debug_mode, "\n")
-if (debug_mode == "debug") {
-    out_dir = '/Users/kf/Dropbox/data/evolutionary_transcriptomics/20230527_amalgkit/amalgkit_out'
-    metadata_path = '/Users/kf/Dropbox/data/evolutionary_transcriptomics/20230527_amalgkit/amalgkit_out/cstmm/metadata.tsv'
-    est_counts_path = '/Users/kf/Dropbox/data/evolutionary_transcriptomics/20230527_amalgkit/amalgkit_out/cstmm/Actinidia_chinensis/Actinidia_chinensis_cstmm_counts.tsv'
-    eff_length_path = '/Users/kf/Dropbox/data/evolutionary_transcriptomics/20230527_amalgkit/amalgkit_out/cstmm/Actinidia_chinensis/Actinidia_chinensis_eff_length.tsv'
-    dist_method = "pearson"
-    mapping_rate_cutoff = .20
-    min_dif = 0
-    plot_intermediate = as.logical(0)
-    selected_sample_groups = c("root", "flower", "leaf")
-    sample_group_colors = 'DEFAULT'
-    transform_method = "log2p1-fpkm"
-    one_outlier_per_iteration = as.logical(0)
-    correlation_threshold = 0.3
-    batch_effect_alg = 'sva'
-    dist_method = "pearson"
-    clip_negative = as.logical(1)
-    maintain_zero = as.logical(1)
-    r_util_path = '/Users/kf/Dropbox/repos/amalgkit/amalgkit/util.r'
-    skip_curation_flag = FALSE
-    outlier_method = 'legacy'
-    robust_margin_threshold = 0
-    robust_z_threshold = -2.5
-    disable_auto_outlier_filter_flag = TRUE
-    ruvseq_control_mode = 'auto'
-    ruvseq_k_setting = 'auto'
-    ruvseq_k_max = 5
-    ruvseq_control_top_n = 1000
-    ruvseq_min_controls = 100
-    random_seed_setting = 'auto'
-    sva_nsv_setting = 'auto'
-    sva_B_setting = 'auto'
-    sva_B_auto_max = 100
-    setwd(file.path(out_dir, 'curate'))
-} else if (debug_mode == "batch") {
+read_amalgkit_config = function(script_name) {
     args = commandArgs(trailingOnly = TRUE)
-    if (length(args) < 11) {
-        stop('finalize.r expects 11 arguments.')
+    if (length(args) != 1) {
+        stop(paste0(script_name, ' expects exactly 1 config path argument.'))
     }
-    est_counts_path = args[1]
-    metadata_path = args[2]
-    out_dir = args[3]
-    eff_length_path = args[4]
-    dist_method = "pearson"
-    mapping_rate_cutoff = 0
-    min_dif = 0
-    plot_intermediate = FALSE
-    selected_sample_groups = strsplit(args[5], "\\|")[[1]]
-    sample_group_colors = strsplit(args[6], ",")[[1]]
-    transform_method = args[7]
-    one_outlier_per_iteration = 0
-    correlation_threshold = 0.3
-    batch_effect_alg = args[8]
-    clip_negative = as.logical(as.integer(args[9]))
-    maintain_zero = as.logical(as.integer(args[10]))
-    r_util_path = file.path(args[11])
-    skip_curation_flag = FALSE
-    outlier_method = 'legacy'
-    robust_margin_threshold = 0
-    robust_z_threshold = -2.5
-    disable_auto_outlier_filter_flag = TRUE
-    ruvseq_control_mode = ifelse(length(args) >= 12, args[12], 'auto')
-    ruvseq_k_setting = ifelse(length(args) >= 13, args[13], 'auto')
-    ruvseq_k_max = ifelse(length(args) >= 14, as.integer(args[14]), 5L)
-    ruvseq_control_top_n = ifelse(length(args) >= 15, as.integer(args[15]), 1000L)
-    ruvseq_min_controls = ifelse(length(args) >= 16, as.integer(args[16]), 100L)
-    random_seed_setting = ifelse(length(args) >= 17, args[17], 'auto')
-    sva_nsv_setting = ifelse(length(args) >= 18, args[18], 'auto')
-    sva_B_setting = ifelse(length(args) >= 19, args[19], 'auto')
-    sva_B_auto_max = ifelse(length(args) >= 20, as.integer(args[20]), 100L)
-    if (!is.finite(ruvseq_k_max) || (ruvseq_k_max < 1)) {
-        ruvseq_k_max = 5L
+    config = as.list(read.dcf(args[1], keep.white = TRUE)[1, ])
+    config[sapply(config, is.na)] = ''
+    return(config)
+}
+
+split_config_field = function(value) {
+    if (is.null(value) || identical(value, '')) {
+        return(character())
     }
-    if (!is.finite(ruvseq_control_top_n) || (ruvseq_control_top_n < 1)) {
-        ruvseq_control_top_n = 1000L
-    }
-    if (!is.finite(ruvseq_min_controls) || (ruvseq_min_controls < 1)) {
-        ruvseq_min_controls = 100L
-    }
-    if (!is.finite(sva_B_auto_max) || (sva_B_auto_max < 5)) {
-        sva_B_auto_max = 100L
-    }
+    parts = unlist(strsplit(as.character(value), "[\\|,]+", perl = TRUE), use.names = FALSE)
+    parts = trimws(parts)
+    return(parts[parts != ''])
+}
+
+config = read_amalgkit_config('finalize.r')
+cat(log_prefix, "mode = config", "\n")
+est_counts_path = config[['est_counts_path']]
+metadata_path = config[['metadata_path']]
+out_dir = config[['out_dir']]
+eff_length_path = config[['eff_length_path']]
+dist_method = ifelse(config[['dist_method']] != '', config[['dist_method']], 'pearson')
+mapping_rate_cutoff = ifelse(config[['mapping_rate_cutoff']] != '', as.numeric(config[['mapping_rate_cutoff']]), 0)
+min_dif = ifelse(config[['min_dif']] != '', as.numeric(config[['min_dif']]), 0)
+plot_intermediate = ifelse(config[['plot_intermediate']] != '', as.logical(as.integer(config[['plot_intermediate']])), FALSE)
+selected_sample_groups = split_config_field(config[['selected_sample_groups']])
+sample_group_colors = split_config_field(config[['sample_group_colors']])
+transform_method = config[['transform_method']]
+one_outlier_per_iteration = ifelse(config[['one_outlier_per_iteration']] != '', as.integer(config[['one_outlier_per_iteration']]), 0L)
+correlation_threshold = ifelse(config[['correlation_threshold']] != '', as.numeric(config[['correlation_threshold']]), 0.3)
+batch_effect_alg = config[['batch_effect_alg']]
+clip_negative = ifelse(config[['clip_negative']] != '', as.logical(as.integer(config[['clip_negative']])), TRUE)
+maintain_zero = ifelse(config[['maintain_zero']] != '', as.logical(as.integer(config[['maintain_zero']])), TRUE)
+r_util_path = config[['r_util_path']]
+skip_curation_flag = FALSE
+outlier_method = 'legacy'
+robust_margin_threshold = 0
+robust_z_threshold = -2.5
+disable_auto_outlier_filter_flag = TRUE
+ruvseq_control_mode = ifelse(config[['ruvseq_control_mode']] != '', config[['ruvseq_control_mode']], 'auto')
+ruvseq_k_setting = ifelse(config[['ruvseq_k_setting']] != '', config[['ruvseq_k_setting']], 'auto')
+ruvseq_k_max = ifelse(config[['ruvseq_k_max']] != '', as.integer(config[['ruvseq_k_max']]), 5L)
+ruvseq_control_top_n = ifelse(config[['ruvseq_control_top_n']] != '', as.integer(config[['ruvseq_control_top_n']]), 1000L)
+ruvseq_min_controls = ifelse(config[['ruvseq_min_controls']] != '', as.integer(config[['ruvseq_min_controls']]), 100L)
+random_seed_setting = ifelse(config[['random_seed_setting']] != '', config[['random_seed_setting']], 'auto')
+sva_nsv_setting = ifelse(config[['sva_nsv_setting']] != '', config[['sva_nsv_setting']], 'auto')
+sva_B_setting = ifelse(config[['sva_B_setting']] != '', config[['sva_B_setting']], 'auto')
+sva_B_auto_max = ifelse(config[['sva_B_auto_max']] != '', as.integer(config[['sva_B_auto_max']]), 100L)
+if (!is.finite(ruvseq_k_max) || (ruvseq_k_max < 1)) {
+    ruvseq_k_max = 5L
+}
+if (!is.finite(ruvseq_control_top_n) || (ruvseq_control_top_n < 1)) {
+    ruvseq_control_top_n = 1000L
+}
+if (!is.finite(ruvseq_min_controls) || (ruvseq_min_controls < 1)) {
+    ruvseq_min_controls = 100L
+}
+if (!is.finite(sva_B_auto_max) || (sva_B_auto_max < 5)) {
+    sva_B_auto_max = 100L
 }
 ruvseq_control_mode = tolower(as.character(ruvseq_control_mode))
 if (!(ruvseq_control_mode %in% c('auto', 'all'))) {

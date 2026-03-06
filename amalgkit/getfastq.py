@@ -5,9 +5,10 @@ import gzip
 import pandas
 import shlex
 
+from amalgkit.exceptions import AmalgkitExit
+from amalgkit.sra import fetch_sra_xml as shared_fetch_sra_xml
 from amalgkit.util import *
 
-import xml.etree.ElementTree as ET
 import os
 import re
 import shutil
@@ -16,7 +17,6 @@ import sys
 import time
 import urllib.parse
 import urllib.request
-from urllib.error import HTTPError, URLError
 
 IDENTICAL_PAIRED_RATIO_THRESHOLD = 0.99
 IDENTICAL_PAIRED_CHECKED_READS = 2000
@@ -237,84 +237,13 @@ def _fetch_id_list_metadata_frames(args, sra_id_list):
     return metadata_frames
 
 def getfastq_getxml(search_term, retmax=1000, verbose=True):
-    def merge_xml_chunk(root, chunk):
-        # Merge package-set chunks directly to avoid nested container nodes.
-        if (chunk.tag == root.tag) and root.tag.endswith('_SET'):
-            root.extend(list(chunk))
-            return root
-        if root.tag.endswith('_SET'):
-            root.append(chunk)
-            return root
-        # If roots are non-container records, wrap them to preserve all entries.
-        container_tag = root.tag + '_SET'
-        wrapped = ET.Element(container_tag)
-        wrapped.append(root)
-        if (chunk.tag == root.tag) and (not chunk.tag.endswith('_SET')):
-            wrapped.append(chunk)
-        elif chunk.tag == container_tag:
-            wrapped.extend(list(chunk))
-        else:
-            wrapped.append(chunk)
-        return wrapped
-
-    def fetch_xml_chunk(record_ids, start, end, retmax, max_retry=10):
-        for _ in range(max_retry):
-            try:
-                handle = Entrez.efetch(
-                    db="sra",
-                    id=record_ids[start:end],
-                    rettype="full",
-                    retmode="xml",
-                    retmax=retmax,
-                )
-            except (HTTPError, URLError) as e:
-                if verbose:
-                    print(e, '- Trying Entrez.efetch() again...')
-                continue
-            try:
-                return ET.parse(handle).getroot()
-            except ET.ParseError:
-                if verbose:
-                    print('XML may be truncated. Retrying...', flush=True)
-                continue
-        raise RuntimeError(
-            'Failed to parse Entrez XML chunk after {} retries (records {}-{}).'.format(
-                max_retry,
-                start,
-                end - 1,
-            )
-        )
-
-    entrez_db = 'sra'
-    try:
-        sra_handle = Entrez.esearch(db=entrez_db, term=search_term, retmax=10000000)
-    except (HTTPError, URLError) as e:
-        print(e, '- Trying Entrez.esearch() again...')
-        sra_handle = Entrez.esearch(db=entrez_db, term=search_term, retmax=10000000)
-    sra_record = Entrez.read(sra_handle)
-    record_ids = sra_record["IdList"]
-    num_record = len(record_ids)
-    if verbose:
-        print('Number of SRA records:', num_record)
-    if num_record == 0:
-        return ET.Element('EXPERIMENT_PACKAGE_SET')
-    root = None
-    for start in range(0, num_record, retmax):
-        end = min(start + retmax, num_record)
-        if verbose:
-            print('processing SRA records:', start, '-', end - 1, flush=True)
-        chunk = fetch_xml_chunk(record_ids=record_ids, start=start, end=end, retmax=retmax, max_retry=10)
-        if root is None:
-            root = chunk
-        else:
-            root = merge_xml_chunk(root, chunk)
-    error_node = root.find('.//Error')
-    if error_node is not None:
-        error_text = ''.join(error_node.itertext()).strip()
-        if error_text != '':
-            print(error_text)
-        raise RuntimeError('Error found in Entrez XML response. Search term: ' + search_term)
-    return root
+    return shared_fetch_sra_xml(
+        search_term=search_term,
+        retmax=retmax,
+        verbose=verbose,
+        timestamp_logs=False,
+        progress_label='processing SRA records',
+    )
 
 def get_range(sra_stat, offset, total_sra_bp, max_bp):
     if (total_sra_bp <= max_bp):
@@ -1792,7 +1721,7 @@ def run_fasterq_dump_with_retry(fasterq_dump_command, path_downloaded_sra, metad
     fqd_out = execute_fasterq_dump_command(fasterq_dump_command, args, prefix='Retry command')
     if fqd_out.returncode != 0:
         sys.stderr.write("fasterq-dump did not finish safely after re-download.\n")
-        sys.exit(1)
+        raise RuntimeError('fasterq-dump did not finish safely after re-download.')
     return fqd_out
 
 
@@ -3207,8 +3136,7 @@ def _apply_batch_to_entrez_metadata(metadata, args):
     txt = 'This is {:,}th job. In total, {:,} jobs will be necessary for this metadata table.'
     print(txt.format(batch, total_rows), flush=True)
     if batch > total_rows:
-        sys.stderr.write('--batch {} is too large. Exiting.\n'.format(batch_value))
-        sys.exit(0)
+        raise AmalgkitExit('--batch {} is too large. Exiting.'.format(batch_value), exit_code=0)
     metadata.df = metadata.df.reset_index(drop=True).loc[[batch - 1], :].copy()
     return metadata
 
@@ -3279,8 +3207,7 @@ def getfastq_metadata(args):
         sra_id_list = _read_sra_id_list(id_list_path)
         metadata_frames = _fetch_id_list_metadata_frames(args, sra_id_list)
         if len(metadata_frames)==0:
-            print('No associated SRA is found with --id_list. Exiting.')
-            sys.exit(1)
+            raise RuntimeError('No associated SRA is found with --id_list.')
         metadata = Metadata.from_DataFrame(pandas.concat(metadata_frames, ignore_index=True))
         print('Filtering SRA entries with --layout:', args.layout)
         layout = get_layout(args, metadata)

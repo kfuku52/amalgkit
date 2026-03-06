@@ -50,16 +50,14 @@ def validate_dataset_name(name):
     if name in DATASETS:
         return
     available = ', '.join(DATASETS.keys())
-    sys.stderr.write(f'Error: Unknown dataset "{name}". Available: {available}\n')
-    sys.exit(1)
+    raise ValueError(f'Unknown dataset "{name}". Available: {available}')
 
 
 def resolve_dataset_source_dir(name):
     dataset_src = os.path.join(get_dataset_dir(), name)
     if os.path.isdir(dataset_src):
         return dataset_src
-    sys.stderr.write(f'Error: Dataset directory not found: {dataset_src}\n')
-    sys.exit(1)
+    raise FileNotFoundError(f'Dataset directory not found: {dataset_src}')
 
 
 def build_extracted_dirs(out_dir):
@@ -143,8 +141,7 @@ def dataset_main(args):
         return
 
     if args.name is None:
-        sys.stderr.write('Error: Please specify --name or use --list to see available datasets.\n')
-        sys.exit(1)
+        raise ValueError('Please specify --name or use --list to see available datasets.')
 
     print(f'Extracting dataset "{args.name}" to: {args.out_dir}')
 

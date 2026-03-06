@@ -4,6 +4,7 @@ import shutil
 import subprocess
 import tempfile
 import warnings
+from contextlib import contextmanager
 
 import pandas
 
@@ -76,6 +77,46 @@ def prepare_output_dir(path_dir, redo=False):
         else:
             shutil.rmtree(path_dir)
     os.makedirs(path_dir, exist_ok=True)
+
+
+@contextmanager
+def staged_output_dir(target_dir, redo=False, prefix='amalgkit_stage_'):
+    target_dir = os.path.realpath(target_dir)
+    parent_dir = os.path.dirname(target_dir)
+    if parent_dir != '':
+        if os.path.exists(parent_dir) and (not os.path.isdir(parent_dir)):
+            raise NotADirectoryError('Output parent path exists but is not a directory: {}'.format(parent_dir))
+        os.makedirs(parent_dir, exist_ok=True)
+    if os.path.lexists(target_dir) and (not redo):
+        raise FileExistsError('Output already exists. Use --redo yes to overwrite: {}'.format(target_dir))
+    stage_dir = tempfile.mkdtemp(prefix=prefix, dir=parent_dir if parent_dir != '' else None)
+    backup_path = None
+    committed = False
+    try:
+        yield stage_dir
+        if os.path.lexists(target_dir):
+            backup_path = tempfile.mkdtemp(prefix=prefix + 'backup_', dir=parent_dir if parent_dir != '' else None)
+            os.rmdir(backup_path)
+            os.rename(target_dir, backup_path)
+        os.rename(stage_dir, target_dir)
+        committed = True
+        if backup_path is not None:
+            if os.path.islink(backup_path) or os.path.isfile(backup_path):
+                os.remove(backup_path)
+            elif os.path.isdir(backup_path):
+                shutil.rmtree(backup_path)
+    except Exception:
+        if (backup_path is not None) and (not os.path.lexists(target_dir)) and os.path.lexists(backup_path):
+            os.rename(backup_path, target_dir)
+        raise
+    finally:
+        if (not committed) and os.path.isdir(stage_dir):
+            shutil.rmtree(stage_dir, ignore_errors=True)
+        if (not committed) and (backup_path is not None) and os.path.lexists(backup_path):
+            if os.path.islink(backup_path) or os.path.isfile(backup_path):
+                os.remove(backup_path)
+            elif os.path.isdir(backup_path):
+                shutil.rmtree(backup_path, ignore_errors=True)
 
 
 def copy_curate_species_plots(curate_dir, dst_plot_dir):

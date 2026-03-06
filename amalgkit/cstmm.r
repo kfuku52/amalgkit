@@ -3,26 +3,24 @@
 suppressWarnings(suppressPackageStartupMessages(library(edgeR, quietly = TRUE)))
 suppressWarnings(suppressPackageStartupMessages(library(ggplot2, quietly = TRUE)))
 
-mode = ifelse(length(commandArgs(trailingOnly = TRUE)) == 1, 'debug', 'batch')
-
-if (mode == "debug") {
-    dir_work = '/Users/kf/Dropbox/data/evolutionary_transcriptomics/20230527_gfe_pipeline/amalgkit_out'
-    dir_count = file.path(dir_work, "merge")
-    file_orthogroup_table = file.path(dir_work, 'cstmm', 'cstmm_multispecies_busco_table.tsv')
-    file_genecount = file.path(dir_work, 'cstmm', 'cstmm_orthogroup_genecount.tsv')
-    dir_cstmm = file.path(dir_work, "cstmm")
-    mode_tmm = 'multi_species'
-    r_util_path = '/Users/kf/Dropbox/repos/amalgkit/amalgkit/util.r'
-    setwd(dir_work)
-} else if (mode == "batch") {
+log_prefix = "cstmm.r:"
+read_amalgkit_config = function(script_name) {
     args = commandArgs(trailingOnly = TRUE)
-    dir_count = args[1]
-    file_orthogroup_table = args[2]
-    file_genecount = args[3]
-    dir_cstmm = args[4]
-    mode_tmm = args[5]
-    r_util_path = args[6]
+    if (length(args) != 1) {
+        stop(paste0(script_name, ' expects exactly 1 config path argument.'))
+    }
+    config = as.list(read.dcf(args[1], keep.white = TRUE)[1, ])
+    config[sapply(config, is.na)] = ''
+    return(config)
 }
+config = read_amalgkit_config('cstmm.r')
+cat(log_prefix, "mode = config", "\n")
+dir_count = config[['dir_count']]
+file_orthogroup_table = config[['file_orthogroup_table']]
+file_genecount = config[['file_genecount']]
+dir_cstmm = config[['dir_cstmm']]
+mode_tmm = config[['mode_tmm']]
+r_util_path = config[['r_util_path']]
 source(r_util_path)
 font_size = resolve_plot_font_size(8)
 font_family = resolve_plot_font_family('Helvetica')

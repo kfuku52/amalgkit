@@ -8,6 +8,7 @@ import numpy
 import xml.etree.ElementTree as ET
 from types import SimpleNamespace
 
+from amalgkit.exceptions import AmalgkitExit
 from amalgkit.util import (
     acquire_exclusive_lock,
     strtobool,
@@ -815,18 +816,16 @@ class TestCheckRscript:
             'amalgkit.util.subprocess.run',
             lambda *_args, **_kwargs: (_ for _ in ()).throw(FileNotFoundError('Rscript')),
         )
-        with pytest.raises(SystemExit) as exc:
+        with pytest.raises(FileNotFoundError, match='R \\(Rscript\\) is not installed'):
             check_rscript()
-        assert exc.value.code == 1
 
     def test_exits_when_rscript_probe_returns_nonzero(self, monkeypatch):
         monkeypatch.setattr(
             'amalgkit.util.subprocess.run',
             lambda *_args, **_kwargs: SimpleNamespace(returncode=127, stdout=b'', stderr=b''),
         )
-        with pytest.raises(SystemExit) as exc:
+        with pytest.raises(RuntimeError, match='Rscript dependency probe failed'):
             check_rscript()
-        assert exc.value.code == 1
 
     def test_passes_when_rscript_probe_returns_zero(self, monkeypatch):
         monkeypatch.setattr(
@@ -1549,11 +1548,10 @@ class TestLoadMetadata:
             out_dir = str(tmp_path)
             batch = 1
 
-        with pytest.raises(SystemExit) as exc:
+        with pytest.raises(ValueError, match='No sample is "sampled"'):
             load_metadata(Args())
-        assert exc.value.code == 1
 
-    def test_batch_mode_handles_missing_caller_module(self, tmp_path, monkeypatch):
+    def test_batch_mode_uses_explicit_run_scope(self, tmp_path):
         path = tmp_path / 'metadata.tsv'
         pandas.DataFrame({
             'run': ['R1', 'R2'],
@@ -1567,12 +1565,11 @@ class TestLoadMetadata:
             out_dir = str(tmp_path)
             batch = 1
 
-        monkeypatch.setattr('amalgkit.util.inspect.getmodule', lambda *_args, **_kwargs: None)
-        m = load_metadata(Args())
+        m = load_metadata(Args(), batch_scope='run')
         assert m.df.shape[0] == 1
         assert m.df.iloc[0]['run'] == 'R1'
 
-    def test_curate_batch_ignores_missing_species_names(self, tmp_path, monkeypatch):
+    def test_curate_batch_ignores_missing_species_names(self, tmp_path):
         path = tmp_path / 'metadata.tsv'
         pandas.DataFrame({
             'run': ['R1', 'R2', 'R3'],
@@ -1586,15 +1583,11 @@ class TestLoadMetadata:
             out_dir = str(tmp_path)
             batch = 1
 
-        monkeypatch.setattr(
-            'amalgkit.util.inspect.getmodule',
-            lambda *_args, **_kwargs: type('DummyModule', (), {'__name__': 'amalgkit.curate'})(),
-        )
-        m = load_metadata(Args())
+        m = load_metadata(Args(), batch_scope='species')
         assert m.df.shape[0] == 1
         assert m.df.iloc[0]['scientific_name'] == 'Sp1'
 
-    def test_curate_batch_raises_when_no_valid_species(self, tmp_path, monkeypatch):
+    def test_curate_batch_raises_when_no_valid_species(self, tmp_path):
         path = tmp_path / 'metadata.tsv'
         pandas.DataFrame({
             'run': ['R1', 'R2'],
@@ -1608,12 +1601,26 @@ class TestLoadMetadata:
             out_dir = str(tmp_path)
             batch = 1
 
-        monkeypatch.setattr(
-            'amalgkit.util.inspect.getmodule',
-            lambda *_args, **_kwargs: type('DummyModule', (), {'__name__': 'amalgkit.curate'})(),
-        )
         with pytest.raises(ValueError, match='No valid scientific_name'):
+            load_metadata(Args(), batch_scope='species')
+
+    def test_batch_mode_raises_amalgkit_exit_when_batch_too_large(self, tmp_path):
+        path = tmp_path / 'metadata.tsv'
+        pandas.DataFrame({
+            'run': ['R1'],
+            'scientific_name': ['Sp1'],
+            'is_sampled': ['yes'],
+            'exclusion': ['no'],
+        }).to_csv(str(path), sep='\t', index=False)
+
+        class Args:
+            metadata = str(path)
+            out_dir = str(tmp_path)
+            batch = 2
+
+        with pytest.raises(AmalgkitExit) as exc:
             load_metadata(Args())
+        assert exc.value.exit_code == 0
 
 
 # ---------------------------------------------------------------------------

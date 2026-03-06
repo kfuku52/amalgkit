@@ -43,8 +43,10 @@ def _collect_tsv_files(path_tables_dir):
     return sorted(files)
 
 def get_sample_group_string(args):
+    metadata = getattr(args, '_resolved_metadata', None)
     if args.sample_group is None:
-        metadata = load_metadata(args)
+        if metadata is None:
+            metadata = load_metadata(args)
         if 'sample_group' not in metadata.df.columns:
             raise ValueError(
                 'The "sample_group" column was not found in metadata. '
@@ -141,23 +143,25 @@ def csca_main(args):
     r_util_path = os.path.join(dir_amalgkit_script, 'util.r')
     file_genecount = os.path.join(dir_csca, 'multispecies_genecount.tsv')
     orthogroup2genecount(file_orthogroup=file_orthogroup_table, file_genecount=file_genecount, spp=spp)
-    call_list = ['Rscript',
-                 csca_r_script_path,
-                 sample_group_string,
-                 args.sample_group_color,
-                 dir_out,
-                 dir_csca_input_table,
-                 file_orthogroup_table,
-                 file_genecount,
-                 r_util_path,
-                 dir_csca,
-                 args.batch_effect_alg,
-                 args.missing_strategy,
-                 str(getattr(args, 'outlier_method', 'none')),
-                 str(getattr(args, 'margin_threshold', 0.0)),
-                 str(getattr(args, 'robust_z_threshold', -2.5)),
-                 str(getattr(args, 'plot_mode', 'dual')),
-                 ]
-    print(f"Rscript command: {' '.join(call_list)}")
-    subprocess.check_call(call_list)
+    from amalgkit.r_config import temporary_r_config
+    config_map = {
+        'selected_sample_groups': sample_group_string,
+        'sample_group_colors': args.sample_group_color,
+        'dir_work': dir_out,
+        'dir_csca_input_table': dir_csca_input_table,
+        'file_orthogroup': file_orthogroup_table,
+        'file_genecount': file_genecount,
+        'r_util_path': r_util_path,
+        'dir_csca': dir_csca,
+        'batch_effect_alg': args.batch_effect_alg,
+        'missing_strategy': args.missing_strategy,
+        'csca_outlier_method': str(getattr(args, 'outlier_method', 'none')),
+        'csca_margin_threshold': str(getattr(args, 'margin_threshold', 0.0)),
+        'csca_robust_z_threshold': str(getattr(args, 'robust_z_threshold', -2.5)),
+        'csca_plot_mode': str(getattr(args, 'plot_mode', 'dual')),
+    }
+    with temporary_r_config(config_map, prefix='amalgkit_csca_r_') as config_path:
+        call_list = ['Rscript', csca_r_script_path, config_path]
+        print(f"Rscript command: {' '.join(call_list)}")
+        subprocess.check_call(call_list)
     cleanup_tmp_amalgkit_files(work_dir='.')

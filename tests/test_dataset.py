@@ -102,10 +102,10 @@ class TestDatasetExtract:
 
 class TestDatasetValidation:
     def test_validate_dataset_name_unknown_exits(self):
-        with pytest.raises(SystemExit):
+        with pytest.raises(ValueError):
             validate_dataset_name('unknown_dataset')
 
     def test_resolve_dataset_source_dir_missing_exits(self, tmp_path, monkeypatch):
         monkeypatch.setattr(dataset_module, 'get_dataset_dir', lambda: str(tmp_path / 'missing_root'))
-        with pytest.raises(SystemExit):
+        with pytest.raises(FileNotFoundError):
             resolve_dataset_source_dir('toy')

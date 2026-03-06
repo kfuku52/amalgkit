@@ -6,71 +6,50 @@ if (is.na(detected_cores) && (is.null(getOption("cores")) || is.na(getOption("co
 }
 suppressWarnings(suppressPackageStartupMessages(library(Rtsne, quietly = TRUE)))
 
-debug_mode = ifelse(length(commandArgs(trailingOnly = TRUE)) == 1, "debug", "batch")
 log_prefix = "transcriptome_curation.r:"
-cat(log_prefix, "mode =", debug_mode, "\n")
-if (debug_mode == "debug") {
-    out_dir = '/Users/kf/Dropbox/data/evolutionary_transcriptomics/20230527_amalgkit/amalgkit_out'
-    metadata_path = '/Users/kf/Dropbox/data/evolutionary_transcriptomics/20230527_amalgkit/amalgkit_out/cstmm/metadata.tsv'
-    est_counts_path = '/Users/kf/Dropbox/data/evolutionary_transcriptomics/20230527_amalgkit/amalgkit_out/cstmm/Actinidia_chinensis/Actinidia_chinensis_cstmm_counts.tsv'
-    eff_length_path = '/Users/kf/Dropbox/data/evolutionary_transcriptomics/20230527_amalgkit/amalgkit_out/cstmm/Actinidia_chinensis/Actinidia_chinensis_eff_length.tsv'
-    dist_method = "pearson"
-    mapping_rate_cutoff = .20
-    min_dif = 0
-    plot_intermediate = as.logical(0)
-    selected_sample_groups = c("root", "flower", "leaf")
-    sample_group_colors = 'DEFAULT'
-    transform_method = "log2p1-fpkm"
-    one_outlier_per_iteration = as.logical(0)
-    correlation_threshold = 0.3
-    batch_effect_alg = 'sva'
-    dist_method = "pearson"
-    clip_negative = as.logical(1)
-    maintain_zero = as.logical(1)
-    r_util_path = '/Users/kf/Dropbox/repos/amalgkit/amalgkit/util.r'
-    skip_curation_flag = FALSE
-    outlier_method = 'legacy'
-    robust_margin_threshold = 0
-    robust_z_threshold = -2.5
-    disable_auto_outlier_filter_flag = FALSE
-    setwd(file.path(out_dir, 'curate'))
-} else if (debug_mode == "batch") {
+read_amalgkit_config = function(script_name) {
     args = commandArgs(trailingOnly = TRUE)
-    est_counts_path = args[1]
-    metadata_path = args[2]
-    out_dir = args[3]
-    eff_length_path = args[4]
-    dist_method = args[5]
-    mapping_rate_cutoff = as.numeric(args[6])
-    min_dif = as.numeric(args[7])
-    plot_intermediate = as.logical(as.integer(args[8]))
-    selected_sample_groups = strsplit(args[9], "\\|")[[1]]
-    sample_group_colors = strsplit(args[10], ",")[[1]]
-    transform_method = args[11]
-    one_outlier_per_iteration = as.integer(args[12])
-    correlation_threshold = as.numeric(args[13])
-    batch_effect_alg = args[14]
-    clip_negative = as.logical(as.integer(args[15]))
-    maintain_zero = as.logical(as.integer(args[16]))
-    r_util_path = file.path(args[17])
-    skip_curation_flag = as.logical(as.integer(args[18]))
-    outlier_method = 'legacy'
-    robust_margin_threshold = 0
-    robust_z_threshold = -2.5
-    disable_auto_outlier_filter_flag = FALSE
-    if (length(args) >= 19) {
-        outlier_method = as.character(args[19])
+    if (length(args) != 1) {
+        stop(paste0(script_name, ' expects exactly 1 config path argument.'))
     }
-    if (length(args) >= 20) {
-        robust_margin_threshold = as.numeric(args[20])
-    }
-    if (length(args) >= 21) {
-        robust_z_threshold = as.numeric(args[21])
-    }
-    if (length(args) >= 22) {
-        disable_auto_outlier_filter_flag = as.logical(as.integer(args[22]))
-    }
+    config = as.list(read.dcf(args[1], keep.white = TRUE)[1, ])
+    config[sapply(config, is.na)] = ''
+    return(config)
 }
+
+split_config_field = function(value) {
+    if (is.null(value) || identical(value, '')) {
+        return(character())
+    }
+    parts = unlist(strsplit(as.character(value), "[\\|,]+", perl = TRUE), use.names = FALSE)
+    parts = trimws(parts)
+    return(parts[parts != ''])
+}
+
+config = read_amalgkit_config('curate.r')
+cat(log_prefix, "mode = config", "\n")
+est_counts_path = config[['est_counts_path']]
+metadata_path = config[['metadata_path']]
+out_dir = config[['out_dir']]
+eff_length_path = config[['eff_length_path']]
+dist_method = config[['dist_method']]
+mapping_rate_cutoff = as.numeric(config[['mapping_rate_cutoff']])
+min_dif = as.numeric(config[['min_dif']])
+plot_intermediate = as.logical(as.integer(config[['plot_intermediate']]))
+selected_sample_groups = split_config_field(config[['selected_sample_groups']])
+sample_group_colors = split_config_field(config[['sample_group_colors']])
+transform_method = config[['transform_method']]
+one_outlier_per_iteration = as.integer(config[['one_outlier_per_iteration']])
+correlation_threshold = as.numeric(config[['correlation_threshold']])
+batch_effect_alg = config[['batch_effect_alg']]
+clip_negative = as.logical(as.integer(config[['clip_negative']]))
+maintain_zero = as.logical(as.integer(config[['maintain_zero']]))
+r_util_path = config[['r_util_path']]
+skip_curation_flag = as.logical(as.integer(config[['skip_curation_flag']]))
+outlier_method = ifelse(('outlier_method' %in% names(config)) && (config[['outlier_method']] != ''), as.character(config[['outlier_method']]), 'legacy')
+robust_margin_threshold = ifelse(('robust_margin_threshold' %in% names(config)) && (config[['robust_margin_threshold']] != ''), as.numeric(config[['robust_margin_threshold']]), 0)
+robust_z_threshold = ifelse(('robust_z_threshold' %in% names(config)) && (config[['robust_z_threshold']] != ''), as.numeric(config[['robust_z_threshold']]), -2.5)
+disable_auto_outlier_filter_flag = ifelse(('disable_auto_outlier_filter_flag' %in% names(config)) && (config[['disable_auto_outlier_filter_flag']] != ''), as.logical(as.integer(config[['disable_auto_outlier_filter_flag']])), FALSE)
 cat('est_counts_path:', est_counts_path, "\n")
 cat('metadata_path:', metadata_path, "\n")
 cat('out_dir:', out_dir, "\n")

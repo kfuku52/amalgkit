@@ -8,6 +8,7 @@ import pandas
 import pytest
 
 from amalgkit.curate import curate_main
+from amalgkit.r_config import temporary_r_config
 
 
 REQUIRED_R_PACKAGES = [
@@ -91,29 +92,33 @@ def _run_curate_r(
     repo = _repo_root()
     out_dir = tmp_path / 'out'
     out_dir.mkdir(parents=True, exist_ok=True)
-    cmd = [
-        'Rscript',
-        str(repo / 'amalgkit' / 'curate.r'),
-        str(fixture['count_path']),
-        str(fixture['metadata_path']),
-        str(out_dir),
-        str(fixture['eff_length_path']),
-        'pearson',      # dist_method
-        '0.2',          # mapping_rate_cutoff
-        '0',            # min_dif
-        '0',            # plot_intermediate
-        selected_sample_groups,
-        sample_group_colors,
-        'log2p1-fpkm',  # transform_method
-        '1' if one_outlier_per_iteration else '0',
-        str(correlation_threshold),
-        'no',           # batch_effect_alg
-        '1',            # clip_negative
-        '1',            # maintain_zero
-        str(repo / 'amalgkit' / 'util.r'),
-        '0',            # skip_curation_flag
-    ]
-    return subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True), out_dir
+    config_map = {
+        'est_counts_path': str(fixture['count_path']),
+        'metadata_path': str(fixture['metadata_path']),
+        'out_dir': str(out_dir),
+        'eff_length_path': str(fixture['eff_length_path']),
+        'dist_method': 'pearson',
+        'mapping_rate_cutoff': '0.2',
+        'min_dif': '0',
+        'plot_intermediate': '0',
+        'selected_sample_groups': selected_sample_groups,
+        'sample_group_colors': sample_group_colors,
+        'transform_method': 'log2p1-fpkm',
+        'one_outlier_per_iteration': '1' if one_outlier_per_iteration else '0',
+        'correlation_threshold': str(correlation_threshold),
+        'batch_effect_alg': 'no',
+        'clip_negative': '1',
+        'maintain_zero': '1',
+        'r_util_path': str(repo / 'amalgkit' / 'util.r'),
+        'skip_curation_flag': '0',
+        'outlier_method': 'legacy',
+        'robust_margin_threshold': '0',
+        'robust_z_threshold': '-2.5',
+        'disable_auto_outlier_filter_flag': '0',
+    }
+    with temporary_r_config(config_map, prefix='test_curate_r_') as config_path:
+        cmd = ['Rscript', str(repo / 'amalgkit' / 'curate.r'), config_path]
+        return subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True), out_dir
 
 
 def _write_sample_group_drop_fixture(tmp_path):
@@ -253,6 +258,6 @@ def test_curate_main_exits_nonzero_when_species_input_files_are_missing(tmp_path
     )
 
     monkeypatch.setattr('amalgkit.curate.check_rscript', lambda: None)
-    with pytest.raises(SystemExit) as e:
+    with pytest.raises(RuntimeError) as e:
         curate_main(args)
-    assert e.value.code == 1
+    assert 'amalgkit curate failed for 1/1 species' in str(e.value)

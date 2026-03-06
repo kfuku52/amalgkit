@@ -3,6 +3,7 @@ import numpy
 
 import os
 import warnings
+from amalgkit.r_config import temporary_r_config
 from amalgkit.util import *
 
 FASTP_STATS_COLUMNS = ['fastp_duplication_rate', 'fastp_insert_size_peak']
@@ -362,9 +363,15 @@ def run_merge_plot_rscript(merge_dir, path_metadata_merge):
     script_dir = os.path.dirname(os.path.realpath(__file__))
     r_merge_path = os.path.join(script_dir, 'merge.r')
     r_util_path = os.path.join(script_dir, 'util.r')
-    r_command = ['Rscript', r_merge_path, merge_dir, path_metadata_merge, r_util_path]
-    print('Starting R script for plot generation: {}'.format(' '.join(r_command)), flush=True)
-    subprocess.check_call(r_command)
+    config_map = {
+        'dir_merge': merge_dir,
+        'file_metadata': path_metadata_merge,
+        'r_util_path': r_util_path,
+    }
+    with temporary_r_config(config_map, prefix='amalgkit_merge_r_') as config_path:
+        r_command = ['Rscript', r_merge_path, config_path]
+        print('Starting R script for plot generation: {}'.format(' '.join(r_command)), flush=True)
+        subprocess.check_call(r_command)
 
 
 def merge_main(args):

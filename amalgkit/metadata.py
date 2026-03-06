@@ -1,114 +1,66 @@
-from Bio import Entrez
-import xml.etree.ElementTree as ET
 import numpy
 import pandas
 
-import datetime
 import os
 import re
 import sys
-import time
 import warnings
 
+from Bio import Entrez
+import xml.etree.ElementTree as ET
+
+from amalgkit.exceptions import AmalgkitExit
+from amalgkit.sra import (
+    esearch_sra_with_retry as _esearch_sra_with_retry,
+    fetch_sra_xml as _fetch_sra_xml,
+    fetch_sra_xml_chunk as _fetch_sra_xml_chunk,
+    iter_sra_xml_chunks as _iter_sra_xml_chunks,
+    merge_xml_chunk as _merge_xml_chunk,
+    raise_if_xml_has_error as _raise_if_xml_has_error,
+    search_sra_record_ids as _search_sra_record_ids,
+)
 from amalgkit.util import *
 
-from urllib.error import HTTPError, URLError
-
 def merge_xml_chunk(root, chunk):
-    # Merge package-set chunks directly to avoid nested container nodes.
-    if (chunk.tag == root.tag) and root.tag.endswith('_SET'):
-        root.extend(list(chunk))
-        return root
-    if root.tag.endswith('_SET'):
-        root.append(chunk)
-        return root
-    # If roots are non-container records, wrap them to preserve all entries.
-    container_tag = root.tag + '_SET'
-    wrapped = ET.Element(container_tag)
-    wrapped.append(root)
-    if (chunk.tag == root.tag) and (not chunk.tag.endswith('_SET')):
-        wrapped.append(chunk)
-    elif chunk.tag == container_tag:
-        wrapped.extend(list(chunk))
-    else:
-        wrapped.append(chunk)
-    return wrapped
+    return _merge_xml_chunk(root, chunk)
 
 
 def esearch_sra_with_retry(search_term):
-    try:
-        sra_handle = Entrez.esearch(db="sra", term=search_term, retmax=10000000)
-    except (HTTPError, URLError) as e:
-        print(e, '- Trying Entrez.esearch() again...')
-        sra_handle = Entrez.esearch(db="sra", term=search_term, retmax=10000000)
-    return Entrez.read(sra_handle)
+    return _esearch_sra_with_retry(search_term)
 
 
 def fetch_sra_xml_chunk(record_ids, start, end, retmax, max_retry=10):
-    for _ in range(max_retry):
-        try:
-            handle = Entrez.efetch(db="sra", id=record_ids[start:end], rettype="full", retmode="xml", retmax=retmax)
-        except (HTTPError, URLError) as e:
-            sleep_second = 60
-            print('{} - Trying Entrez.efetch() again after {:,} seconds...'.format(e, sleep_second), flush=True)
-            time.sleep(sleep_second)
-            continue
-        try:
-            return ET.parse(handle).getroot()
-        except ET.ParseError:
-            print('XML may be truncated. Retrying...', flush=True)
-            continue
-    raise RuntimeError('Failed to parse Entrez XML chunk after {} retries (records {}-{}).'.format(
-        max_retry, start, end - 1
-    ))
+    return _fetch_sra_xml_chunk(record_ids, start, end, retmax, max_retry=max_retry, verbose=True)
 
 
 def raise_if_xml_has_error(root):
-    error_node = root.find('.//Error')
-    if error_node is None:
-        return
-    error_text = ''.join(error_node.itertext()).strip()
-    if error_text != '':
-        print(error_text)
-    raise RuntimeError('Error found in Entrez XML response.')
+    return _raise_if_xml_has_error(root)
 
 
 def search_sra_record_ids(search_term):
-    sra_record = esearch_sra_with_retry(search_term)
-    record_ids = sra_record["IdList"]
-    print('Number of SRA records: {:,}'.format(len(record_ids)))
-    return record_ids
+    return _search_sra_record_ids(search_term, verbose=True)
 
 
 def iter_sra_xml_chunks(record_ids, retmax=1000):
-    num_record = len(record_ids)
-    if num_record == 0:
-        return
-    start_time = time.time()
-    print('{}: SRA XML retrieval started.'.format(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
-    for start in range(0, num_record, retmax):
-        end = min(start + retmax, num_record)
-        now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        print('{}: Retrieving SRA XML: {:,}-{:,} of {:,} records'.format(now, start, end - 1, num_record), flush=True)
-        chunk = fetch_sra_xml_chunk(record_ids, start, end, retmax, max_retry=10)
+    for chunk in _iter_sra_xml_chunks(
+        record_ids=record_ids,
+        retmax=retmax,
+        verbose=True,
+        timestamp_logs=True,
+        progress_label='Retrieving SRA XML',
+    ):
         raise_if_xml_has_error(chunk)
         yield chunk
-    elapsed_time = int(time.time() - start_time)
-    print('{}: SRA XML retrieval ended.'.format(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
-    print('SRA XML retrieval time: {:,.1f} sec'.format(elapsed_time), flush=True)
 
 
 def fetch_sra_xml(search_term, retmax=1000):
-    record_ids = search_sra_record_ids(search_term)
-    if len(record_ids) == 0:
-        return ET.Element('EXPERIMENT_PACKAGE_SET')
-    root = None
-    for chunk in iter_sra_xml_chunks(record_ids=record_ids, retmax=retmax):
-        if root is None:
-            root = chunk
-        else:
-            root = merge_xml_chunk(root, chunk)
-    return root
+    return _fetch_sra_xml(
+        search_term=search_term,
+        retmax=retmax,
+        verbose=True,
+        timestamp_logs=True,
+        progress_label='Retrieving SRA XML',
+    )
 
 def metadata_main(args):
     Entrez.email = args.entrez_email
@@ -122,8 +74,11 @@ def metadata_main(args):
         if args.redo:
             os.remove(metadata_outfile_path)
         else:
-            print('Exiting. Output file already exists (set --redo yes to overwrite): {}'.format(metadata_outfile_path))
-            sys.exit(0)
+            raise AmalgkitExit(
+                'Output file already exists (set --redo yes to overwrite): {}'.format(metadata_outfile_path),
+                exit_code=0,
+                use_stderr=False,
+            )
     for path_dir in [args.out_dir, metadata_dir]:
         if os.path.exists(path_dir) and (not os.path.isdir(path_dir)):
             raise NotADirectoryError('Output path exists but is not a directory: {}'.format(path_dir))

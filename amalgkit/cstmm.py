@@ -2,6 +2,7 @@ import subprocess
 import os
 import sys
 
+from amalgkit.r_config import temporary_r_config
 from amalgkit.util import *
 
 def resolve_species_count_file(sciname_path):
@@ -93,8 +94,17 @@ def cstmm_main(args):
     dir_amalgkit_script = os.path.dirname(os.path.realpath(__file__))
     r_cstmm_path = os.path.join(dir_amalgkit_script, 'cstmm.r')
     r_util_path = os.path.join(dir_amalgkit_script, 'util.r')
-    r_command = ['Rscript', r_cstmm_path, dir_count, file_orthogroup_table, file_genecount, dir_cstmm, mode_tmm, r_util_path]
-    print('')
-    print('Starting R script: {}'.format(' '.join(r_command)), flush=True)
-    subprocess.check_call(r_command)
+    config_map = {
+        'dir_count': dir_count,
+        'file_orthogroup_table': file_orthogroup_table,
+        'file_genecount': file_genecount,
+        'dir_cstmm': dir_cstmm,
+        'mode_tmm': mode_tmm,
+        'r_util_path': r_util_path,
+    }
+    with temporary_r_config(config_map, prefix='amalgkit_cstmm_r_') as config_path:
+        r_command = ['Rscript', r_cstmm_path, config_path]
+        print('')
+        print('Starting R script: {}'.format(' '.join(r_command)), flush=True)
+        subprocess.check_call(r_command)
     cleanup_tmp_amalgkit_files(work_dir='.')

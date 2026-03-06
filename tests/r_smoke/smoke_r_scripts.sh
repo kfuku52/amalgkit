@@ -29,56 +29,84 @@ run_rscript_checked() {
     tail -n 10 "$log_file"
 }
 
+write_dcf() {
+    local out_file="$1"
+    shift
+    : >"$out_file"
+    while (($# >= 2)); do
+        printf '%s: %s\n' "$1" "$2" >>"$out_file"
+        shift 2
+    done
+}
+
 # 1) merge.r smoke
 cp -R "$FIXTURE_DIR/merge" "$TMP_ROOT/merge"
+write_dcf \
+    "$TMP_ROOT/merge.dcf" \
+    "dir_merge" "$TMP_ROOT/merge" \
+    "file_metadata" "$TMP_ROOT/merge/metadata.tsv" \
+    "r_util_path" "$REPO_DIR/amalgkit/util.r"
 run_rscript_checked \
     merge \
     "$REPO_DIR/amalgkit/merge.r" \
-    "$TMP_ROOT/merge" \
-    "$TMP_ROOT/merge/metadata.tsv" \
-    "$REPO_DIR/amalgkit/util.r"
+    "$TMP_ROOT/merge.dcf"
 test -f "$TMP_ROOT/merge/merge_mapping_rate.pdf"
 test -f "$TMP_ROOT/merge/merge_mean_expression_boxplot.pdf"
 
 # 2) curate.r smoke
 mkdir -p "$TMP_ROOT/curate_out"
+write_dcf \
+    "$TMP_ROOT/curate.dcf" \
+    "est_counts_path" "$FIXTURE_DIR/cstmm/Saccharomyces_cerevisiae/Saccharomyces_cerevisiae_cstmm_counts.tsv" \
+    "metadata_path" "$FIXTURE_DIR/cstmm/metadata.tsv" \
+    "out_dir" "$TMP_ROOT/curate_out" \
+    "eff_length_path" "$FIXTURE_DIR/cstmm/Saccharomyces_cerevisiae/Saccharomyces_cerevisiae_eff_length.tsv" \
+    "dist_method" "pearson" \
+    "mapping_rate_cutoff" "0.2" \
+    "min_dif" "0" \
+    "plot_intermediate" "0" \
+    "selected_sample_groups" "h2bk119r|wt|ire1-delta|wild_type_genotype" \
+    "sample_group_colors" "DEFAULT" \
+    "transform_method" "log2p1-fpkm" \
+    "one_outlier_per_iteration" "0" \
+    "correlation_threshold" "0.3" \
+    "batch_effect_alg" "no" \
+    "clip_negative" "1" \
+    "maintain_zero" "1" \
+    "r_util_path" "$REPO_DIR/amalgkit/util.r" \
+    "skip_curation_flag" "1" \
+    "outlier_method" "legacy" \
+    "robust_margin_threshold" "0" \
+    "robust_z_threshold" "-2.5" \
+    "disable_auto_outlier_filter_flag" "0"
 run_rscript_checked \
     curate \
     "$REPO_DIR/amalgkit/curate.r" \
-    "$FIXTURE_DIR/cstmm/Saccharomyces_cerevisiae/Saccharomyces_cerevisiae_cstmm_counts.tsv" \
-    "$FIXTURE_DIR/cstmm/metadata.tsv" \
-    "$TMP_ROOT/curate_out" \
-    "$FIXTURE_DIR/cstmm/Saccharomyces_cerevisiae/Saccharomyces_cerevisiae_eff_length.tsv" \
-    "pearson" \
-    "0.2" \
-    "0" \
-    "0" \
-    "h2bk119r|wt|ire1-delta|wild_type_genotype" \
-    "DEFAULT" \
-    "log2p1-fpkm" \
-    "0" \
-    "0.3" \
-    "no" \
-    "1" \
-    "1" \
-    "$REPO_DIR/amalgkit/util.r" \
-    "1"
+    "$TMP_ROOT/curate.dcf"
 test -f "$TMP_ROOT/curate_out/curate/Saccharomyces_cerevisiae/tables/Saccharomyces_cerevisiae.no.curation_final_summary.tsv"
 
 # 3) csca.r smoke
 cp -R "$FIXTURE_DIR/csca" "$TMP_ROOT/csca"
+write_dcf \
+    "$TMP_ROOT/csca.dcf" \
+    "selected_sample_groups" "h2bk119r|wt|ire1-delta|wild_type_genotype" \
+    "sample_group_colors" "DEFAULT" \
+    "dir_work" "$TMP_ROOT/csca" \
+    "dir_csca_input_table" "$TMP_ROOT/csca/csca_input" \
+    "file_orthogroup" "$TMP_ROOT/csca/multispecies_busco_table.tsv" \
+    "file_genecount" "$TMP_ROOT/csca/multispecies_genecount.tsv" \
+    "r_util_path" "$REPO_DIR/amalgkit/util.r" \
+    "dir_csca" "$TMP_ROOT/csca" \
+    "batch_effect_alg" "no" \
+    "missing_strategy" "em_pca" \
+    "csca_outlier_method" "none" \
+    "csca_margin_threshold" "0" \
+    "csca_robust_z_threshold" "-2.5" \
+    "csca_plot_mode" "dual"
 run_rscript_checked \
     csca \
     "$REPO_DIR/amalgkit/csca.r" \
-    "h2bk119r|wt|ire1-delta|wild_type_genotype" \
-    "DEFAULT" \
-    "$TMP_ROOT/csca" \
-    "$TMP_ROOT/csca/csca_input" \
-    "$TMP_ROOT/csca/multispecies_busco_table.tsv" \
-    "$TMP_ROOT/csca/multispecies_genecount.tsv" \
-    "$REPO_DIR/amalgkit/util.r" \
-    "$TMP_ROOT/csca" \
-    "no"
+    "$TMP_ROOT/csca.dcf"
 test -f "$TMP_ROOT/csca/csca_exclusion.pdf"
 
 echo "[r-smoke] all checks passed"
