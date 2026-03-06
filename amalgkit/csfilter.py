@@ -5,15 +5,15 @@ from types import SimpleNamespace
 
 import pandas
 
-from amalgkit.command_context import CscaContext, CurateContext
-from amalgkit.csca import csca_main
-from amalgkit.curate import curate_main, resolve_curate_input
+from amalgkit.command_context import CrossSpeciesFilterContext, PerSpeciesTableContext
+from amalgkit.cross_species_filter import run_cross_species_filter
 from amalgkit.filter_utils import (
     infer_latest_filter_metadata,
     merge_metadata_by_run,
     save_exclusion_plot_pdf,
     staged_output_dir,
 )
+from amalgkit.per_species_tables import generate_per_species_tables, resolve_per_species_input
 
 
 def _copy_csfilter_pdf_outputs(src_dir, dst_dir):
@@ -26,16 +26,16 @@ def _copy_csfilter_pdf_outputs(src_dir, dst_dir):
         src_path = os.path.join(src_dir, name)
         if not os.path.isfile(src_path):
             continue
-        # csca_exclusion.pdf duplicates csfilter_exclusion.pdf generated in Python.
-        if name == 'csca_exclusion.pdf':
+        # cross_species_exclusion.pdf duplicates csfilter_exclusion.pdf generated in Python.
+        if name == 'cross_species_exclusion.pdf':
             continue
         # group_cor_scatter is intentionally suppressed in csfilter output.
-        if name == 'csca_group_cor_scatter.pdf':
+        if name == 'cross_species_group_cor_scatter.pdf':
             continue
-        if name == 'csca_csfilter_scatter.pdf':
+        if name == 'cross_species_csfilter_scatter.pdf':
             dst_name = 'csfilter_outlier_scatter.pdf'
-        elif name.startswith('csca_'):
-            dst_name = 'csfilter_' + name[len('csca_'):]
+        elif name.startswith('cross_species_'):
+            dst_name = 'csfilter_' + name[len('cross_species_'):]
         else:
             dst_name = name
         shutil.copy2(src_path, os.path.join(dst_dir, dst_name))
@@ -58,11 +58,12 @@ def _resolve_sample_group_arg(args, metadata_df):
     return '|'.join(values)
 
 
-def _build_prepare_curate_args(args, input_dir, tmp_out_dir):
+def _build_prepare_per_species_args(args, input_dir, tmp_out_dir):
     data = vars(args).copy()
     data['out_dir'] = tmp_out_dir
     data['input_dir'] = input_dir
     data['batch_effect_alg'] = 'no'
+    data['r_script_name'] = 'prepare_tables.r'
     data['skip_curation'] = True
     data['disable_auto_outlier_filter'] = True
     data['outlier_method'] = 'legacy'
@@ -82,7 +83,7 @@ def _build_prepare_curate_args(args, input_dir, tmp_out_dir):
     return SimpleNamespace(**data)
 
 
-def _build_csca_args(args, tmp_out_dir, sample_group_arg):
+def _build_cross_species_args(args, tmp_out_dir, sample_group_arg):
     data = vars(args).copy()
     data['out_dir'] = tmp_out_dir
     data['sample_group'] = sample_group_arg
@@ -93,8 +94,8 @@ def _build_csca_args(args, tmp_out_dir, sample_group_arg):
     data['outlier_method'] = 'robust_margin'
     data.setdefault('margin_threshold', 0.0)
     data.setdefault('robust_z_threshold', -2.5)
-    csca_args = SimpleNamespace(**data)
-    return csca_args
+    cross_species_args = SimpleNamespace(**data)
+    return cross_species_args
 
 
 def _write_excluded_table(df_metadata, out_path):
@@ -188,21 +189,24 @@ def csfilter_main(args):
             data['metadata'] = latest_metadata
             resolve_args = SimpleNamespace(**data)
             print('Using latest filter metadata: {}'.format(latest_metadata))
-    metadata, input_dir = resolve_curate_input(resolve_args)
+    metadata, input_dir = resolve_per_species_input(resolve_args)
     out_root = os.path.realpath(args.out_dir)
     dir_cs = os.path.join(out_root, 'csfilter')
     tmp_out_dir = tempfile.mkdtemp(prefix='amalgkit_csfilter_')
     try:
-        curate_args = _build_prepare_curate_args(args=resolve_args, input_dir=input_dir, tmp_out_dir=tmp_out_dir)
-        curate_main(curate_args, context=CurateContext(metadata=metadata, input_dir=input_dir))
+        per_species_args = _build_prepare_per_species_args(args=resolve_args, input_dir=input_dir, tmp_out_dir=tmp_out_dir)
+        generate_per_species_tables(
+            per_species_args,
+            context=PerSpeciesTableContext(metadata=metadata, input_dir=input_dir),
+        )
         sample_group_arg = _resolve_sample_group_arg(args=resolve_args, metadata_df=metadata.df)
-        csca_args = _build_csca_args(args=resolve_args, tmp_out_dir=tmp_out_dir, sample_group_arg=sample_group_arg)
-        csca_main(csca_args, context=CscaContext(metadata=metadata))
-        csca_metadata_path = os.path.join(tmp_out_dir, 'csca', 'metadata.tsv')
-        if not os.path.isfile(csca_metadata_path):
-            raise FileNotFoundError('csfilter metadata.tsv was not generated: {}'.format(csca_metadata_path))
-        csca_metadata = pandas.read_csv(csca_metadata_path, sep='\t', low_memory=False)
-        merged_metadata = merge_metadata_by_run(metadata.df, csca_metadata)
+        cross_species_args = _build_cross_species_args(args=resolve_args, tmp_out_dir=tmp_out_dir, sample_group_arg=sample_group_arg)
+        run_cross_species_filter(cross_species_args, context=CrossSpeciesFilterContext(metadata=metadata))
+        cross_species_metadata_path = os.path.join(tmp_out_dir, 'cross_species', 'metadata.tsv')
+        if not os.path.isfile(cross_species_metadata_path):
+            raise FileNotFoundError('csfilter metadata.tsv was not generated: {}'.format(cross_species_metadata_path))
+        cross_species_metadata = pandas.read_csv(cross_species_metadata_path, sep='\t', low_memory=False)
+        merged_metadata = merge_metadata_by_run(metadata.df, cross_species_metadata)
         merged_metadata = _normalize_csfilter_metadata_columns(merged_metadata)
         with staged_output_dir(dir_cs, redo=args.redo, prefix='amalgkit_csfilter_stage_') as stage_dir:
             merged_metadata.to_csv(os.path.join(stage_dir, 'metadata.tsv'), sep='\t', index=False)
@@ -219,7 +223,7 @@ def csfilter_main(args):
                 font_size=8,
             )
             _copy_csfilter_pdf_outputs(
-                src_dir=os.path.join(tmp_out_dir, 'csca'),
+                src_dir=os.path.join(tmp_out_dir, 'cross_species'),
                 dst_dir=stage_dir,
             )
     finally:

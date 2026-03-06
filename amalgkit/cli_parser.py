@@ -216,7 +216,7 @@ def build_parser(command_handlers, command_names, version):
     pmg = subparsers.add_parser('merge', help=pmg_help, parents=[pp_out, pp_meta, pp_threads, pp_internal_jobs, pp_cpu_budget])
     pmg.set_defaults(handler=command_handlers['merge'])
 
-    pbu_help = 'Generating BUSCO tables for amalgkit cstmm/csca. See `amalgkit busco -h`'
+    pbu_help = 'Generating BUSCO tables for amalgkit cstmm/csfilter. See `amalgkit busco -h`'
     pbu = subparsers.add_parser('busco', help=pbu_help, parents=[pp_out, pp_meta, pp_threads, pp_internal_jobs, pp_cpu_budget, pp_redo, pp_download])
     pbu.add_argument('--tool', metavar='auto|busco|compleasm', default='auto', type=str, required=False, action='store',
                      choices=['auto', 'busco', 'compleasm'],
@@ -249,33 +249,6 @@ def build_parser(command_handlers, command_names, version):
                      help='default=%(default)s: AMALGKIT subfolder PATH to per-species transcript abundance data as produced by `amalgkit merge`. '
                           '"inferred" = out_dir/merge')
     pcs.set_defaults(handler=command_handlers['cstmm'])
-
-    pca_help = 'Generating plots with cross-species correlation analysis. See `amalgkit csca -h`'
-    pca = subparsers.add_parser('csca', help=pca_help, parents=[pp_out, pp_meta, pp_sg, pp_sgc, pp_redo])
-    pca.add_argument('--orthogroup_table', metavar='PATH', default=None, type=str, required=False, action='store',
-                     help='default=%(default)s: PATH to orthogroup table, which is, for example, Orthogroups.tsv and N0.tsv in OrthoFinder.')
-    pca.add_argument('--dir_busco', metavar='PATH', default=None, type=str, required=False, action='store',
-                     help='default=%(default)s: PATH to the directory where per-species BUSCO full tables are stored. '
-                          'File names in this directory are expected to be GENUS_SPECIES_busco.tsv: e.g., Arabidopsis_thaliana_busco.tsv')
-    pca.add_argument('--batch_effect_alg', metavar='(no|sva|ruvseq|combatseq)', choices=['no', 'sva', 'ruvseq', 'combatseq'],
-                     default='sva', type=str, required=False, action='store',
-                     help='default=%(default)s: Batch-effect removal algorithm used in `amalgkit curate`.')
-    pca.add_argument('--missing_strategy', metavar='em_pca|nipals|row_mean',
-                     choices=['em_pca', 'nipals', 'row_mean'],
-                     default='em_pca', type=str, required=False, action='store',
-                     help='default=%(default)s: Missing-value handling strategy before csca dimensionality reduction. '
-                          '`em_pca` uses a dependency-free iterative low-rank reconstruction (EM/PPCA-style). '
-                          '`nipals` uses a dependency-free NIPALS-style low-rank iterative reconstruction. '
-                          '`row_mean` uses per-gene mean fill as a fast fallback.')
-    pca.add_argument('--outlier_method', metavar='none|robust_margin',
-                     choices=['none', 'robust_margin'],
-                     default='none', type=str, required=False, action='store',
-                     help='default=%(default)s: Optional outlier-flagging strategy applied to csca metadata.')
-    pca.add_argument('--margin_threshold', metavar='FLOAT', default=0.0, type=float, required=False, action='store',
-                     help='default=%(default)s: Margin threshold for robust-margin outlier detection.')
-    pca.add_argument('--robust_z_threshold', metavar='FLOAT', default=-2.5, type=float, required=False, action='store',
-                     help='default=%(default)s: Robust z-score threshold for robust-margin outlier detection.')
-    pca.set_defaults(handler=command_handlers['csca'])
 
     pws_help = 'Within-species outlier filtering. Outputs metadata.tsv + excluded.tsv + species PDFs (no plots/). See `amalgkit wsfilter -h`'
     pws = subparsers.add_parser('wsfilter', help=pws_help, parents=[pp_out, pp_meta, pp_batch, pp_threads, pp_internal_jobs, pp_cpu_budget, pp_sg, pp_sgc, pp_redo])
@@ -359,49 +332,6 @@ def build_parser(command_handlers, command_names, version):
     pfi.add_argument('--sva_B_auto_max', metavar='INT', default=100, type=int, required=False, action='store',
                      help='default=%(default)s: Upper bound for auto-selected SVA permutation iterations.')
     pfi.set_defaults(handler=command_handlers['finalize'])
-
-    pcu_help = 'Automatic removal of outlier samples and SVA-based unwanted biases. See `amalgkit curate -h`'
-    pcu = subparsers.add_parser('curate', help=pcu_help, parents=[pp_out, pp_meta, pp_batch, pp_threads, pp_internal_jobs, pp_cpu_budget, pp_sg, pp_sgc, pp_redo])
-    pcu.add_argument('--input_dir', metavar='PATH', default='inferred', type=str, required=False, action='store',
-                     help='default=%(default)s: PATH to `amalgkit merge` or `amalgkit cstmm` output folder. '
-                          '"inferred" = out_dir/cstmm if exist, else out_dir/merge.')
-    pcu.add_argument('--dist_method', metavar='STR', default='pearson', type=str, required=False, action='store',
-                     help='default=%(default)s: Method for calculating distance.')
-    pcu.add_argument('--mapping_rate', metavar='FLOAT', default=0.20, type=float, required=False, action='store',
-                     help='default=%(default)s: Cutoff for mapping rate.')
-    pcu.add_argument('--correlation_threshold', metavar='FLOAT', default=0.30, type=float, required=False, action='store',
-                     help='default=%(default)s: Lower cutoff for pearson r during outlier removal.')
-    pcu.add_argument('--plot_intermediate', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
-                     help='default=%(default)s: If yes, calculates and plots SVA correction after each iteration of outlier removal. Drastically increases computing times!')
-    pcu.add_argument('--one_outlier_per_iter', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
-                     help='default=%(default)s: If yes, allows curate to remove only 1 sample per same-sample-group or same-bioproject. Increases computing times!')
-    pcu.add_argument('--norm', metavar='(logn|log2|lognp1|log2p1|none)-(fpkm|tpm|none)',
-                     default='log2p1-fpkm', type=str, required=False, action='store',
-                     help='default=%(default)s: Expression level transformation before the batch effect removal. '
-                          'SVA is best performed with log-transformed values. '
-                          'logn: log_n normalization after FPKM/TPM transformation. '
-                          'log2: log_2 normalization after FPKM/TPM transformation. '
-                          'lognp1: log_n(x+1) normalization after FPKM/TPM transformation. '
-                          'log2p1: log_2(x+1) normalization after FPKM/TPM transformation. '
-                          'fpkm/tpm/none: FPKM, TPM, or no transformation. ')
-    pcu.add_argument('--batch_effect_alg', metavar='(no|sva|ruvseq|combatseq)', choices=['no', 'sva', 'ruvseq', 'combatseq'],
-                     default='sva', type=str, required=False, action='store',
-                     help='default=%(default)s: Batch-effect removal algorithm. '
-                     'no: No batch-effect removal. '
-                     'sva: Surrogate variable analysis. Use with log-transformed values. '
-                     'ruvseq: Experimental. Batch effect removal based on control genes. Control genes are obtained from the residuals of a GLM. '
-                     'combatseq: Experimental. Batch effect removal based on BioProject IDs. '
-                     'If log-fpkm/tpm is set in combination with ruvseq or combatseq, transformation will be applied after batch-effect removal. ')
-    pcu.add_argument('--clip_negative', metavar='yes|no', default='yes', type=strtobool, required=False, action='store',
-                     help='default=%(default)s: Negative values will be clipped to 0 after the batch effect removal, '
-                          'if the log*p1-* transformation is applied before the batch effect removal.')
-    pcu.add_argument('--maintain_zero', metavar='yes|no', default='yes', type=strtobool, required=False, action='store',
-                     help='default=%(default)s: Any instances of zero expression levels in the input will remain as '
-                          'zero-values in the output tables, even if the process of batch effect removal causes deviation.')
-    pcu.add_argument('--skip_curation', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
-                     help='default=%(default)s: stops curate before mapping-rate based sample removal step. Outputs only '
-                          'uncorrected + transformed (see --norm) count-table and the corresponding mean count-table.')
-    pcu.set_defaults(handler=command_handlers['curate'])
 
     psa_help = 'Checking the integrity of AMALGKIT input and output files. See `amalgkit sanity -h`'
     psa = subparsers.add_parser('sanity', help=psa_help, parents=[pp_out, pp_meta])

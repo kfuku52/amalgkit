@@ -38,11 +38,9 @@ RUNTIME_BANNER_COMMANDS = {
     'merge',
     'busco',
     'cstmm',
-    'csca',
     'wsfilter',
     'csfilter',
     'finalize',
-    'curate',
     'sanity',
     'integrate',
 }

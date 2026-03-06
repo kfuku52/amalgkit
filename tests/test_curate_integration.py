@@ -1,4 +1,3 @@
-import os
 import shutil
 import subprocess
 from types import SimpleNamespace
@@ -7,7 +6,7 @@ from pathlib import Path
 import pandas
 import pytest
 
-from amalgkit.curate import curate_main
+from amalgkit.per_species_tables import generate_per_species_tables
 from amalgkit.r_config import temporary_r_config
 
 
@@ -33,7 +32,7 @@ def _has_rscript_and_required_packages():
 @pytest.fixture(scope='module')
 def require_r_runtime():
     if not _has_rscript_and_required_packages():
-        pytest.skip('Rscript or required R packages are not available for curate integration tests.')
+        pytest.skip('Rscript or required R packages are not available for per-species table integration tests.')
 
 
 def _repo_root():
@@ -117,7 +116,7 @@ def _run_curate_r(
         'disable_auto_outlier_filter_flag': '0',
     }
     with temporary_r_config(config_map, prefix='test_curate_r_') as config_path:
-        cmd = ['Rscript', str(repo / 'amalgkit' / 'curate.r'), config_path]
+        cmd = ['Rscript', str(repo / 'amalgkit' / 'prepare_tables.r'), config_path]
         return subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True), out_dir
 
 
@@ -171,7 +170,7 @@ def test_curate_r_writes_round_and_final_summaries(require_r_runtime, tmp_path):
     assert proc.returncode == 0, proc.stdout
 
     species_tag = fixture['species'].replace(' ', '_')
-    tables_dir = out_dir / 'curate' / species_tag / 'tables'
+    tables_dir = out_dir / 'per_species' / species_tag / 'tables'
     round_path = tables_dir / '{}.no.curation_round_summary.tsv'.format(species_tag)
     final_path = tables_dir / '{}.no.curation_final_summary.tsv'.format(species_tag)
     assert round_path.exists(), proc.stdout
@@ -199,7 +198,7 @@ def test_curate_r_handles_all_samples_removed_in_iterative_round(require_r_runti
     assert 'No sample is available. Outlier removal will be skipped.' in proc.stdout
 
     species_tag = fixture['species'].replace(' ', '_')
-    final_path = out_dir / 'curate' / species_tag / 'tables' / '{}.no.curation_final_summary.tsv'.format(species_tag)
+    final_path = out_dir / 'per_species' / species_tag / 'tables' / '{}.no.curation_final_summary.tsv'.format(species_tag)
     final_df = pandas.read_csv(final_path, sep='\t')
     assert final_df.loc[0, 'num_runs_final_kept'] == 0
     assert final_df.loc[0, 'num_runs_final_excluded'] == 4
@@ -220,13 +219,13 @@ def test_curate_r_handles_filtered_out_sample_group_with_default_colors(require_
     assert 'missing value where TRUE/FALSE needed' not in proc.stdout
 
     species_tag = fixture['species'].replace(' ', '_')
-    final_path = out_dir / 'curate' / species_tag / 'tables' / '{}.no.curation_final_summary.tsv'.format(species_tag)
+    final_path = out_dir / 'per_species' / species_tag / 'tables' / '{}.no.curation_final_summary.tsv'.format(species_tag)
     final_df = pandas.read_csv(final_path, sep='\t')
     assert final_df.loc[0, 'num_runs_after_sample_group_filter'] == 3
     assert final_df.loc[0, 'num_runs_final_kept'] == 2
 
 
-def test_curate_main_exits_nonzero_when_species_input_files_are_missing(tmp_path, monkeypatch):
+def test_generate_per_species_tables_exits_nonzero_when_species_input_files_are_missing(tmp_path, monkeypatch):
     input_dir = tmp_path / 'input_merge'
     input_dir.mkdir(parents=True, exist_ok=True)
     metadata_path = tmp_path / 'metadata.tsv'
@@ -257,7 +256,7 @@ def test_curate_main_exits_nonzero_when_species_input_files_are_missing(tmp_path
         skip_curation=False,
     )
 
-    monkeypatch.setattr('amalgkit.curate.check_rscript', lambda: None)
+    monkeypatch.setattr('amalgkit.per_species_tables.check_rscript', lambda: None)
     with pytest.raises(RuntimeError) as e:
-        curate_main(args)
-    assert 'amalgkit curate failed for 1/1 species' in str(e.value)
+        generate_per_species_tables(args)
+    assert 'Per-species table generation failed for 1/1 species' in str(e.value)

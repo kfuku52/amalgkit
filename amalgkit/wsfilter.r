@@ -93,14 +93,14 @@ is_non_excluded_flag = function(exclusion_values) {
     (!is.na(exclusion_norm)) & (exclusion_norm == 'no')
 }
 
-resolve_curate_fontsize = function(fontsize = CURATE_FONT_SIZE_PT) {
+resolve_per_species_fontsize = function(fontsize = CURATE_FONT_SIZE_PT) {
     return(CURATE_FONT_SIZE_PT)
 }
 
 compute_effective_text_cex = function(target_pt = CURATE_FONT_SIZE_PT) {
     current_ps = suppressWarnings(as.numeric(par('ps'))[[1]])
     current_cex = suppressWarnings(as.numeric(par('cex'))[[1]])
-    target_pt = suppressWarnings(as.numeric(resolve_curate_fontsize(target_pt))[[1]])
+    target_pt = suppressWarnings(as.numeric(resolve_per_species_fontsize(target_pt))[[1]])
     if (!is.finite(current_ps) || (current_ps <= 0) ||
         !is.finite(current_cex) || (current_cex <= 0) ||
         !is.finite(target_pt) || (target_pt <= 0)) {
@@ -129,7 +129,7 @@ remove_nonexpressed_gene = function(tc) {
     return(list(tc_ex = tc_ex, tc_ne = tc_ne))
 }
 
-add_color_to_curate_metadata = function(sra, selected_sample_groups, sample_group_colors) {
+add_color_to_per_species_metadata = function(sra, selected_sample_groups, sample_group_colors) {
     if (nrow(sra) == 0) {
         sra[['bp_color']] = character(0)
         sra[['sp_color']] = character(0)
@@ -754,7 +754,7 @@ prepare_sample_correlation_heatmap_data = function(sra, tc_dist_matrix) {
 }
 
 draw_heatmap_base = function(sra, tc_dist_matrix, legend = TRUE, fontsize = 8) {
-    fontsize = resolve_curate_fontsize(fontsize)
+    fontsize = resolve_per_species_fontsize(fontsize)
     out = prepare_sample_correlation_heatmap_data(sra = sra, tc_dist_matrix = tc_dist_matrix)
     if (is.null(out)) {
         plot(c(0, 1), c(0, 1), type = 'n', ann = FALSE, bty = 'n', xaxt = 'n', yaxt = 'n')
@@ -882,7 +882,7 @@ draw_heatmap_base = function(sra, tc_dist_matrix, legend = TRUE, fontsize = 8) {
 }
 
 build_numeric_heatmap_ggplot = function(mat, breaks, colors, fontsize = 8, legend_title = '') {
-    fontsize = resolve_curate_fontsize(fontsize)
+    fontsize = resolve_per_species_fontsize(fontsize)
     mat = as.matrix(mat)
     if ((nrow(mat) == 0) || (ncol(mat) == 0)) {
         return(ggplot2::ggplot() + ggplot2::theme_void(base_size = fontsize, base_family = CURATE_FONT_FAMILY))
@@ -914,7 +914,7 @@ build_numeric_heatmap_ggplot = function(mat, breaks, colors, fontsize = 8, legen
 }
 
 draw_heatmap = function(sra, tc_dist_matrix, legend = TRUE, show_colorbar = legend, fontsize = 8) {
-    fontsize = resolve_curate_fontsize(fontsize)
+    fontsize = resolve_per_species_fontsize(fontsize)
     g = build_heatmap_ggplot(
         sra = sra,
         tc_dist_matrix = tc_dist_matrix,
@@ -928,7 +928,7 @@ draw_heatmap = function(sra, tc_dist_matrix, legend = TRUE, show_colorbar = lege
 # ggplot2 heatmap for sample-correlation with row/column annotations.
 # This keeps the same information content: correlation tiles + bioproject/sample_group strips on top and left.
 build_heatmap_ggplot = function(sra, tc_dist_matrix, legend = TRUE, show_colorbar = legend, fontsize = 8) {
-    fontsize = resolve_curate_fontsize(fontsize)
+    fontsize = resolve_per_species_fontsize(fontsize)
     run_order = colnames(tc_dist_matrix)
     run_order = run_order[run_order %in% sra[['run']]]
     if (length(run_order) == 0) {
@@ -1131,7 +1131,7 @@ build_heatmap_ggplot = function(sra, tc_dist_matrix, legend = TRUE, show_colorba
 }
 
 draw_heatmap_ggplot = function(sra, tc_dist_matrix, legend = TRUE, show_colorbar = legend, fontsize = 8) {
-    fontsize = resolve_curate_fontsize(fontsize)
+    fontsize = resolve_per_species_fontsize(fontsize)
     g = build_heatmap_ggplot(
         sra = sra,
         tc_dist_matrix = tc_dist_matrix,
@@ -1145,7 +1145,7 @@ draw_heatmap_ggplot = function(sra, tc_dist_matrix, legend = TRUE, show_colorbar
 
 save_heatmap_ggplot = function(sra, tc_dist_matrix, out_path, legend = TRUE, fontsize = 8, width = 3.6, height = 3.6,
                                legend_extra_width = 2.0, show_colorbar = legend) {
-    fontsize = resolve_curate_fontsize(fontsize)
+    fontsize = resolve_per_species_fontsize(fontsize)
     g = build_heatmap_ggplot(
         sra = sra,
         tc_dist_matrix = tc_dist_matrix,
@@ -1159,7 +1159,7 @@ save_heatmap_ggplot = function(sra, tc_dist_matrix, out_path, legend = TRUE, fon
 }
 
 draw_dendrogram = function(sra, tc_dist_dist, fontsize = 8) {
-    fontsize = resolve_curate_fontsize(fontsize)
+    fontsize = resolve_per_species_fontsize(fontsize)
     dend = as.dendrogram(hclust(tc_dist_dist))
     dend_colors = sra[order.dendrogram(dend), 'sample_group_color']
     dend = apply_leaf_label_colors(dend, dend_colors)
@@ -1188,7 +1188,7 @@ draw_dendrogram = function(sra, tc_dist_dist, fontsize = 8) {
 }
 
 draw_dendrogram_ggplot = function(sra, tc_dist_dist, fontsize = 8) {
-    fontsize = resolve_curate_fontsize(fontsize)
+    fontsize = resolve_per_species_fontsize(fontsize)
 
     cg_col = unique(sra[, c('sample_group', 'sample_group_color')])
     bp_col = unique(sra[, c('bioproject', 'bp_color')])
@@ -1227,7 +1227,7 @@ draw_dendrogram_ggplot = function(sra, tc_dist_dist, fontsize = 8) {
 }
 
 draw_dendrogram_pvclust = function(sra, tc, nboot, pvclust_file, fontsize = 8) {
-    fontsize = resolve_curate_fontsize(fontsize)
+    fontsize = resolve_per_species_fontsize(fontsize)
     cat("draw_dendrogram_pvclust(): bootstrap support is deprecated. Using hclust without bootstrap.\n")
     dend = as.dendrogram(hclust(calc_sample_distance(tc, method = 'pearson'), method = "average"))
     dend_colors = sra[order.dendrogram(dend), 'sample_group_color']
@@ -1256,7 +1256,7 @@ draw_dendrogram_pvclust = function(sra, tc, nboot, pvclust_file, fontsize = 8) {
 }
 
 draw_pca = function(sra, tc_dist_matrix, fontsize = 8) {
-    fontsize = resolve_curate_fontsize(fontsize)
+    fontsize = resolve_per_species_fontsize(fontsize)
     axis_text_cex = compute_effective_text_cex(target_pt = fontsize)
     pca = prcomp(tc_dist_matrix)
     xlabel = paste0("PC 1 (", round(summary(pca)[['importance']][2, 1] * 100, digits = 1), "%)")
@@ -1280,7 +1280,7 @@ draw_pca = function(sra, tc_dist_matrix, fontsize = 8) {
 }
 
 draw_mds = function(sra, tc_dist_dist, fontsize = 8) {
-    fontsize = resolve_curate_fontsize(fontsize)
+    fontsize = resolve_per_species_fontsize(fontsize)
     axis_text_cex = compute_effective_text_cex(target_pt = fontsize)
     mds_points = tryCatch({
         as.matrix(stats::cmdscale(tc_dist_dist, k = 2))
@@ -1309,7 +1309,7 @@ draw_mds = function(sra, tc_dist_dist, fontsize = 8) {
 }
 
 draw_tsne = function(sra, tc, fontsize = 8) {
-    fontsize = resolve_curate_fontsize(fontsize)
+    fontsize = resolve_per_species_fontsize(fontsize)
     axis_text_cex = compute_effective_text_cex(target_pt = fontsize)
     num_samples = suppressWarnings(as.integer(min(nrow(sra), ncol(tc), na.rm = TRUE)))
     if (!is.finite(num_samples) || is.na(num_samples) || (num_samples < 4)) {
@@ -1367,7 +1367,7 @@ draw_tsne = function(sra, tc, fontsize = 8) {
 }
 
 draw_sva_summary = function(sva_out, tc, sra, fontsize) {
-    fontsize = resolve_curate_fontsize(fontsize)
+    fontsize = resolve_per_species_fontsize(fontsize)
     axis_text_cex = compute_effective_text_cex(target_pt = fontsize)
     if ((is.null(sva_out)) | (class(sva_out) == "try-error")) {
         plot(c(0, 1), c(0, 1), ann = F, bty = "n", type = "n", xaxt = "n", yaxt = "n")
@@ -1431,7 +1431,7 @@ draw_sva_summary = function(sva_out, tc, sra, fontsize) {
 }
 
 draw_boxplot = function(sra, tc_dist_matrix, fontsize = 8) {
-    fontsize = resolve_curate_fontsize(fontsize)
+    fontsize = resolve_per_species_fontsize(fontsize)
     axis_text_cex = compute_effective_text_cex(target_pt = fontsize)
     old_mar = par('mar')
     old_mgp = par('mgp')
@@ -1623,7 +1623,7 @@ save_correlation = function(tc, sra, dist_method, round, precomputed_tc_dist_mat
 
 
 draw_tau_histogram = function(tc, sra, selected_sample_groups, fontsize = 8, transform_method, tc_sample_group = NULL) {
-    fontsize = resolve_curate_fontsize(fontsize)
+    fontsize = resolve_per_species_fontsize(fontsize)
     axis_text_cex = compute_effective_text_cex(target_pt = fontsize)
     if (is.null(tc_sample_group)) {
         tc_sample_group = sample_group_mean(tc, sra, selected_sample_groups)[['tc_ave']]
@@ -1638,7 +1638,7 @@ draw_tau_histogram = function(tc, sra, selected_sample_groups, fontsize = 8, tra
 }
 
 draw_exp_level_histogram = function(tc, sra, selected_sample_groups, fontsize = 8, transform_method, tc_sample_group = NULL) {
-    fontsize = resolve_curate_fontsize(fontsize)
+    fontsize = resolve_per_species_fontsize(fontsize)
     axis_text_cex = compute_effective_text_cex(target_pt = fontsize)
     if (is.null(tc_sample_group)) {
         tc_sample_group = sample_group_mean(tc, sra, selected_sample_groups)[['tc_ave']]
@@ -1652,7 +1652,7 @@ draw_exp_level_histogram = function(tc, sra, selected_sample_groups, fontsize = 
 }
 
 draw_legend = function(sra, new = TRUE, pos = "center", fontsize = 8, nlabel.in.col) {
-    fontsize = resolve_curate_fontsize(fontsize)
+    fontsize = resolve_per_species_fontsize(fontsize)
     axis_text_cex = compute_effective_text_cex(target_pt = fontsize)
     if (new) {
         plot.new()
@@ -1675,7 +1675,7 @@ draw_legend = function(sra, new = TRUE, pos = "center", fontsize = 8, nlabel.in.
 }
 
 save_plot = function(tc, sra, sva_out, dist_method, file, selected_sample_groups, sample_group_colors, fontsize = 8, transform_method, batch_effect_alg) {
-    fontsize = resolve_curate_fontsize(fontsize)
+    fontsize = resolve_per_species_fontsize(fontsize)
     # wsfilter is always no-batch mode; suppress redundant *.no.pdf files.
     if (endsWith(as.character(file), '.no')) {
         cat('Skipping redundant no-batch plot:', file, '\n')
@@ -1688,7 +1688,7 @@ save_plot = function(tc, sra, sva_out, dist_method, file, selected_sample_groups
     out = tc_metadata_intersect(tc, sra)
     tc = out[["tc"]]
     sra = out[["sra"]]
-    sra = add_color_to_curate_metadata(sra, selected_sample_groups, sample_group_colors)
+    sra = add_color_to_per_species_metadata(sra, selected_sample_groups, sample_group_colors)
     out = sort_tc_and_metadata(tc, sra)
     tc = out[["tc"]]
     sra = out[["sra"]]
@@ -2015,14 +2015,14 @@ scientific_name = sra_all[(sra_all[['run']] %in% colnames(tc)), "scientific_name
 species_tag = gsub(" ", "_", scientific_name)
 script_start_elapsed = as.numeric(proc.time()[["elapsed"]])
 num_total_runs_species = sum(sra_all[, 'scientific_name'] == scientific_name, na.rm = TRUE)
-dir_curate = file.path(out_dir, 'curate')
-dir_pdf = file.path(dir_curate, species_tag, 'plots')
+dir_per_species = file.path(out_dir, 'per_species')
+dir_pdf = file.path(dir_per_species, species_tag, 'plots')
 dir.create(dir_pdf, showWarnings = FALSE, recursive = TRUE)
-dir_rdata = file.path(dir_curate, species_tag, 'rdata')
+dir_rdata = file.path(dir_per_species, species_tag, 'rdata')
 dir.create(dir_rdata, showWarnings = FALSE, recursive = TRUE)
-dir_tsv = file.path(dir_curate, species_tag, 'tables')
+dir_tsv = file.path(dir_per_species, species_tag, 'tables')
 dir.create(dir_tsv, showWarnings = FALSE, recursive = TRUE)
-cat(log_prefix, "Working at:", dir_curate, "\n")
+cat(log_prefix, "Working at:", dir_per_species, "\n")
 
 sra = get_species_metadata(sra_all, scientific_name, selected_sample_groups)
 num_runs_after_sample_group_filter = nrow(sra)

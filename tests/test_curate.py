@@ -3,14 +3,14 @@ import pytest
 import pandas
 from types import SimpleNamespace
 
-from amalgkit.command_context import CurateContext
-from amalgkit.curate import (
+from amalgkit.command_context import PerSpeciesTableContext
+from amalgkit.per_species_tables import (
     get_sample_group,
-    run_curate_r_script,
-    resolve_curate_input,
-    collect_pending_species_for_curate,
-    write_curate_completion_flag,
-    curate_main,
+    run_per_species_r_script,
+    resolve_per_species_input,
+    collect_pending_species_for_tables,
+    write_completion_flag,
+    generate_per_species_tables,
     list_selected_species,
 )
 from amalgkit.util import Metadata
@@ -152,15 +152,15 @@ class TestRunCurateRScript:
             captured['config'] = _read_dcf(cmd[2])
             return FakeCompleted()
 
-        monkeypatch.setattr('amalgkit.curate.subprocess.run', fake_run)
-        code = run_curate_r_script(
+        monkeypatch.setattr('amalgkit.per_species_tables.subprocess.run', fake_run)
+        code = run_per_species_r_script(
             args=args,
             metadata=metadata,
             sp='SpA',
             input_dir=str(input_dir),
         )
         assert code == 0
-        assert captured['cmd'][1].endswith('curate.r')
+        assert captured['cmd'][1].endswith('prepare_tables.r')
         assert captured['config']['one_outlier_per_iteration'] == expected_flag
 
     def test_prefers_explicit_metadata_path_for_rscript(self, tmp_path, monkeypatch):
@@ -206,8 +206,8 @@ class TestRunCurateRScript:
             captured['config'] = _read_dcf(cmd[2])
             return FakeCompleted()
 
-        monkeypatch.setattr('amalgkit.curate.subprocess.run', fake_run)
-        code = run_curate_r_script(
+        monkeypatch.setattr('amalgkit.per_species_tables.subprocess.run', fake_run)
+        code = run_per_species_r_script(
             args=args,
             metadata=metadata,
             sp='SpA',
@@ -257,15 +257,15 @@ class TestRunCurateRScript:
             captured['config'] = _read_dcf(cmd[2])
             return FakeCompleted()
 
-        monkeypatch.setattr('amalgkit.curate.subprocess.run', fake_run)
-        code = run_curate_r_script(
+        monkeypatch.setattr('amalgkit.per_species_tables.subprocess.run', fake_run)
+        code = run_per_species_r_script(
             args=args,
             metadata=metadata,
             sp='SpA',
             input_dir=str(input_dir),
         )
         assert code == 0
-        assert captured['cmd'][1].endswith('curate.r')
+        assert captured['cmd'][1].endswith('prepare_tables.r')
         assert captured['config']['est_counts_path'].endswith('SpA_est_counts.tsv')
 
     def test_uses_wsfilter_r_with_reduced_argument_set(self, tmp_path, monkeypatch):
@@ -309,8 +309,8 @@ class TestRunCurateRScript:
             captured['config'] = _read_dcf(cmd[2])
             return FakeCompleted()
 
-        monkeypatch.setattr('amalgkit.curate.subprocess.run', fake_run)
-        code = run_curate_r_script(
+        monkeypatch.setattr('amalgkit.per_species_tables.subprocess.run', fake_run)
+        code = run_per_species_r_script(
             args=args,
             metadata=metadata,
             sp='SpA',
@@ -364,8 +364,8 @@ class TestRunCurateRScript:
             captured['config'] = _read_dcf(cmd[2])
             return FakeCompleted()
 
-        monkeypatch.setattr('amalgkit.curate.subprocess.run', fake_run)
-        code = run_curate_r_script(
+        monkeypatch.setattr('amalgkit.per_species_tables.subprocess.run', fake_run)
+        code = run_per_species_r_script(
             args=args,
             metadata=metadata,
             sp='SpA',
@@ -411,11 +411,11 @@ class TestRunCurateRScript:
         (input_dir / 'SpA' / 'SpA_eff_length.tsv').write_text('target_id\tR1\nG1\t100\n')
 
         monkeypatch.setattr(
-            'amalgkit.curate.subprocess.run',
+            'amalgkit.per_species_tables.subprocess.run',
             lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError('subprocess.run should not be called')),
         )
 
-        code = run_curate_r_script(
+        code = run_per_species_r_script(
             args=args,
             metadata=metadata,
             sp='SpA',
@@ -451,7 +451,7 @@ class TestResolveCurateInput:
         }).to_csv(input_dir / 'metadata.tsv', sep='\t', index=False)
 
         args = self._args(out_dir=out_dir, input_dir=input_dir)
-        metadata, resolved_input_dir = resolve_curate_input(args)
+        metadata, resolved_input_dir = resolve_per_species_input(args)
 
         assert resolved_input_dir == str(input_dir)
         assert metadata.df['run'].tolist() == ['R1']
@@ -463,7 +463,7 @@ class TestResolveCurateInput:
         args = self._args(out_dir=out_dir, input_dir=input_dir)
 
         with pytest.raises(FileNotFoundError, match='metadata.tsv not found in --input_dir'):
-            resolve_curate_input(args)
+            resolve_per_species_input(args)
 
     def test_explicit_input_dir_file_path_raises(self, tmp_path):
         out_dir = tmp_path / 'out'
@@ -472,7 +472,7 @@ class TestResolveCurateInput:
         args = self._args(out_dir=out_dir, input_dir=input_path)
 
         with pytest.raises(NotADirectoryError, match='Input path exists but is not a directory'):
-            resolve_curate_input(args)
+            resolve_per_species_input(args)
 
     def test_inferred_cstmm_path_file_raises(self, tmp_path):
         out_dir = tmp_path / 'out'
@@ -481,22 +481,22 @@ class TestResolveCurateInput:
         args = self._args(out_dir=out_dir, input_dir='inferred')
 
         with pytest.raises(NotADirectoryError, match='cstmm input path exists but is not a directory'):
-            resolve_curate_input(args)
+            resolve_per_species_input(args)
 
 
 class TestCollectPendingSpeciesForCurate:
     def test_redo_replaces_species_symlink(self, tmp_path):
-        curate_dir = tmp_path / 'curate'
+        curate_dir = tmp_path / 'per_species'
         curate_dir.mkdir()
         species = 'Species_A'
         real_species_dir = tmp_path / 'real_species_dir'
         real_species_dir.mkdir()
         (real_species_dir / 'keep.txt').write_text('keep')
         os.symlink(real_species_dir, curate_dir / species)
-        write_curate_completion_flag(str(curate_dir), species)
+        write_completion_flag(str(curate_dir), species)
 
         args = SimpleNamespace(redo=True)
-        pending = collect_pending_species_for_curate(args, str(curate_dir), [species])
+        pending = collect_pending_species_for_tables(args, str(curate_dir), [species])
 
         assert pending == [species]
         assert not os.path.lexists(str(curate_dir / species))
@@ -538,17 +538,17 @@ class TestCurateMain:
             'exclusion': ['no', 'no'],
         }))
 
-        monkeypatch.setattr('amalgkit.curate.check_rscript', lambda: None)
-        monkeypatch.setattr('amalgkit.curate.load_metadata', lambda *_args, **_kwargs: metadata)
+        monkeypatch.setattr('amalgkit.per_species_tables.check_rscript', lambda: None)
+        monkeypatch.setattr('amalgkit.per_species_tables.load_metadata', lambda *_args, **_kwargs: metadata)
 
         def fake_run_curate(args, metadata, sp, input_dir):
-            os.makedirs(os.path.join(args.out_dir, 'curate', sp), exist_ok=True)
+            os.makedirs(os.path.join(args.out_dir, 'per_species', sp), exist_ok=True)
             return 0
 
-        monkeypatch.setattr('amalgkit.curate.run_curate_r_script', fake_run_curate)
-        curate_main(args)
-        assert (out_dir / 'curate' / 'Species_A' / 'curate_completion_flag.txt').exists()
-        assert (out_dir / 'curate' / 'Species_B' / 'curate_completion_flag.txt').exists()
+        monkeypatch.setattr('amalgkit.per_species_tables.run_per_species_r_script', fake_run_curate)
+        generate_per_species_tables(args)
+        assert (out_dir / 'per_species' / 'Species_A' / 'per_species_completion_flag.txt').exists()
+        assert (out_dir / 'per_species' / 'Species_B' / 'per_species_completion_flag.txt').exists()
 
     def test_uses_explicit_context_without_resolving_input(self, tmp_path, monkeypatch):
         out_dir = tmp_path / 'nested' / 'output'
@@ -561,24 +561,24 @@ class TestCurateMain:
             'exclusion': ['no'],
         }))
 
-        monkeypatch.setattr('amalgkit.curate.check_rscript', lambda: None)
+        monkeypatch.setattr('amalgkit.per_species_tables.check_rscript', lambda: None)
         monkeypatch.setattr(
-            'amalgkit.curate.resolve_curate_input',
-            lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError('resolve_curate_input should not be called')),
+            'amalgkit.per_species_tables.resolve_per_species_input',
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError('resolve_per_species_input should not be called')),
         )
 
         def fake_run_curate(args, metadata, sp, input_dir):
-            os.makedirs(os.path.join(args.out_dir, 'curate', sp), exist_ok=True)
+            os.makedirs(os.path.join(args.out_dir, 'per_species', sp), exist_ok=True)
             return 0
 
-        monkeypatch.setattr('amalgkit.curate.run_curate_r_script', fake_run_curate)
+        monkeypatch.setattr('amalgkit.per_species_tables.run_per_species_r_script', fake_run_curate)
 
-        curate_main(
+        generate_per_species_tables(
             args,
-            context=CurateContext(metadata=metadata, input_dir=str(input_dir)),
+            context=PerSpeciesTableContext(metadata=metadata, input_dir=str(input_dir)),
         )
 
-        assert (out_dir / 'curate' / 'Species_A' / 'curate_completion_flag.txt').exists()
+        assert (out_dir / 'per_species' / 'Species_A' / 'per_species_completion_flag.txt').exists()
 
     def test_exits_nonzero_when_any_species_fails(self, tmp_path, monkeypatch):
         out_dir = tmp_path / 'nested' / 'output'
@@ -590,18 +590,18 @@ class TestCurateMain:
             'exclusion': ['no', 'no'],
         }))
 
-        monkeypatch.setattr('amalgkit.curate.check_rscript', lambda: None)
-        monkeypatch.setattr('amalgkit.curate.load_metadata', lambda *_args, **_kwargs: metadata)
+        monkeypatch.setattr('amalgkit.per_species_tables.check_rscript', lambda: None)
+        monkeypatch.setattr('amalgkit.per_species_tables.load_metadata', lambda *_args, **_kwargs: metadata)
 
         def fake_run_curate(args, metadata, sp, input_dir):
-            os.makedirs(os.path.join(args.out_dir, 'curate', sp), exist_ok=True)
+            os.makedirs(os.path.join(args.out_dir, 'per_species', sp), exist_ok=True)
             return 1 if sp == 'Species_A' else 0
 
-        monkeypatch.setattr('amalgkit.curate.run_curate_r_script', fake_run_curate)
-        with pytest.raises(RuntimeError, match='amalgkit curate failed for 1/2 species'):
-            curate_main(args)
-        assert not (out_dir / 'curate' / 'Species_A' / 'curate_completion_flag.txt').exists()
-        assert (out_dir / 'curate' / 'Species_B' / 'curate_completion_flag.txt').exists()
+        monkeypatch.setattr('amalgkit.per_species_tables.run_per_species_r_script', fake_run_curate)
+        with pytest.raises(RuntimeError, match='Per-species table generation failed for 1/2 species'):
+            generate_per_species_tables(args)
+        assert not (out_dir / 'per_species' / 'Species_A' / 'per_species_completion_flag.txt').exists()
+        assert (out_dir / 'per_species' / 'Species_B' / 'per_species_completion_flag.txt').exists()
 
     def test_raises_for_tpm_with_cstmm_counts_input(self, tmp_path, monkeypatch):
         out_dir = tmp_path / 'nested' / 'output'
@@ -617,15 +617,15 @@ class TestCurateMain:
         (input_dir / 'Species_A').mkdir(parents=True)
         (input_dir / 'Species_A' / 'Species_A_cstmm_counts.tsv').write_text('target_id\tR1\nG1\t1\n')
 
-        monkeypatch.setattr('amalgkit.curate.check_rscript', lambda: None)
-        monkeypatch.setattr('amalgkit.curate.resolve_curate_input', lambda _args: (metadata, str(input_dir)))
+        monkeypatch.setattr('amalgkit.per_species_tables.check_rscript', lambda: None)
+        monkeypatch.setattr('amalgkit.per_species_tables.resolve_per_species_input', lambda _args: (metadata, str(input_dir)))
         monkeypatch.setattr(
-            'amalgkit.curate.run_curate_r_script',
-            lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError('run_curate_r_script should not be called')),
+            'amalgkit.per_species_tables.run_per_species_r_script',
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError('run_per_species_r_script should not be called')),
         )
 
         with pytest.raises(ValueError, match='TPM and TMM are incompatible'):
-            curate_main(args)
+            generate_per_species_tables(args)
 
     def test_tpm_does_not_false_positive_on_input_dir_name(self, tmp_path, monkeypatch):
         out_dir = tmp_path / 'nested' / 'output'
@@ -641,17 +641,17 @@ class TestCurateMain:
         (input_dir / 'Species_A').mkdir(parents=True)
         (input_dir / 'Species_A' / 'Species_A_est_counts.tsv').write_text('target_id\tR1\nG1\t1\n')
 
-        monkeypatch.setattr('amalgkit.curate.check_rscript', lambda: None)
-        monkeypatch.setattr('amalgkit.curate.resolve_curate_input', lambda _args: (metadata, str(input_dir)))
+        monkeypatch.setattr('amalgkit.per_species_tables.check_rscript', lambda: None)
+        monkeypatch.setattr('amalgkit.per_species_tables.resolve_per_species_input', lambda _args: (metadata, str(input_dir)))
 
         def fake_run_curate(args, metadata, sp, input_dir):
-            os.makedirs(os.path.join(args.out_dir, 'curate', sp), exist_ok=True)
+            os.makedirs(os.path.join(args.out_dir, 'per_species', sp), exist_ok=True)
             return 0
 
-        monkeypatch.setattr('amalgkit.curate.run_curate_r_script', fake_run_curate)
+        monkeypatch.setattr('amalgkit.per_species_tables.run_per_species_r_script', fake_run_curate)
 
-        curate_main(args)
-        assert (out_dir / 'curate' / 'Species_A' / 'curate_completion_flag.txt').exists()
+        generate_per_species_tables(args)
+        assert (out_dir / 'per_species' / 'Species_A' / 'per_species_completion_flag.txt').exists()
 
     def test_tpm_does_not_false_positive_on_directory_named_cstmm_counts_file(self, tmp_path, monkeypatch):
         out_dir = tmp_path / 'nested' / 'output'
@@ -668,17 +668,17 @@ class TestCurateMain:
         (input_dir / 'Species_A' / 'Species_A_cstmm_counts.tsv').mkdir()
         (input_dir / 'Species_A' / 'Species_A_est_counts.tsv').write_text('target_id\tR1\nG1\t1\n')
 
-        monkeypatch.setattr('amalgkit.curate.check_rscript', lambda: None)
-        monkeypatch.setattr('amalgkit.curate.resolve_curate_input', lambda _args: (metadata, str(input_dir)))
+        monkeypatch.setattr('amalgkit.per_species_tables.check_rscript', lambda: None)
+        monkeypatch.setattr('amalgkit.per_species_tables.resolve_per_species_input', lambda _args: (metadata, str(input_dir)))
 
         def fake_run_curate(args, metadata, sp, input_dir):
-            os.makedirs(os.path.join(args.out_dir, 'curate', sp), exist_ok=True)
+            os.makedirs(os.path.join(args.out_dir, 'per_species', sp), exist_ok=True)
             return 0
 
-        monkeypatch.setattr('amalgkit.curate.run_curate_r_script', fake_run_curate)
+        monkeypatch.setattr('amalgkit.per_species_tables.run_per_species_r_script', fake_run_curate)
 
-        curate_main(args)
-        assert (out_dir / 'curate' / 'Species_A' / 'curate_completion_flag.txt').exists()
+        generate_per_species_tables(args)
+        assert (out_dir / 'per_species' / 'Species_A' / 'per_species_completion_flag.txt').exists()
 
     def test_parallel_species_jobs_creates_completion_flags(self, tmp_path, monkeypatch):
         out_dir = tmp_path / 'nested' / 'output'
@@ -691,18 +691,18 @@ class TestCurateMain:
             'exclusion': ['no', 'no'],
         }))
 
-        monkeypatch.setattr('amalgkit.curate.check_rscript', lambda: None)
-        monkeypatch.setattr('amalgkit.curate.load_metadata', lambda *_args, **_kwargs: metadata)
+        monkeypatch.setattr('amalgkit.per_species_tables.check_rscript', lambda: None)
+        monkeypatch.setattr('amalgkit.per_species_tables.load_metadata', lambda *_args, **_kwargs: metadata)
 
         def fake_run_curate(args, metadata, sp, input_dir):
-            os.makedirs(os.path.join(args.out_dir, 'curate', sp), exist_ok=True)
+            os.makedirs(os.path.join(args.out_dir, 'per_species', sp), exist_ok=True)
             return 0
 
-        monkeypatch.setattr('amalgkit.curate.run_curate_r_script', fake_run_curate)
-        curate_main(args)
+        monkeypatch.setattr('amalgkit.per_species_tables.run_per_species_r_script', fake_run_curate)
+        generate_per_species_tables(args)
 
-        assert (out_dir / 'curate' / 'Species_A' / 'curate_completion_flag.txt').exists()
-        assert (out_dir / 'curate' / 'Species_B' / 'curate_completion_flag.txt').exists()
+        assert (out_dir / 'per_species' / 'Species_A' / 'per_species_completion_flag.txt').exists()
+        assert (out_dir / 'per_species' / 'Species_B' / 'per_species_completion_flag.txt').exists()
 
     def test_cpu_budget_caps_species_jobs_to_serial(self, tmp_path, monkeypatch):
         out_dir = tmp_path / 'nested' / 'output'
@@ -717,21 +717,21 @@ class TestCurateMain:
         }))
         processed = []
 
-        monkeypatch.setattr('amalgkit.curate.check_rscript', lambda: None)
-        monkeypatch.setattr('amalgkit.curate.load_metadata', lambda *_args, **_kwargs: metadata)
+        monkeypatch.setattr('amalgkit.per_species_tables.check_rscript', lambda: None)
+        monkeypatch.setattr('amalgkit.per_species_tables.load_metadata', lambda *_args, **_kwargs: metadata)
 
         def fake_run_curate(args, metadata, sp, input_dir):
             processed.append(sp)
-            os.makedirs(os.path.join(args.out_dir, 'curate', sp), exist_ok=True)
+            os.makedirs(os.path.join(args.out_dir, 'per_species', sp), exist_ok=True)
             return 0
 
         def fail_if_called(*_args, **_kwargs):
             raise AssertionError('run_tasks_with_optional_threads should not be used when --internal_cpu_budget caps internal_jobs to 1.')
 
-        monkeypatch.setattr('amalgkit.curate.run_curate_r_script', fake_run_curate)
-        monkeypatch.setattr('amalgkit.curate.run_tasks_with_optional_threads', fail_if_called)
+        monkeypatch.setattr('amalgkit.per_species_tables.run_per_species_r_script', fake_run_curate)
+        monkeypatch.setattr('amalgkit.per_species_tables.run_tasks_with_optional_threads', fail_if_called)
 
-        curate_main(args)
+        generate_per_species_tables(args)
 
         assert set(processed) == {'Species_A', 'Species_B'}
 
@@ -739,36 +739,36 @@ class TestCurateMain:
         out_dir = tmp_path / 'nested' / 'output'
         args = self._args(out_dir)
         args.internal_jobs = 0
-        monkeypatch.setattr('amalgkit.curate.check_rscript', lambda: None)
+        monkeypatch.setattr('amalgkit.per_species_tables.check_rscript', lambda: None)
         with pytest.raises(ValueError, match='--internal_jobs must be > 0'):
-            curate_main(args)
+            generate_per_species_tables(args)
 
     def test_rejects_out_dir_file_path(self, tmp_path, monkeypatch):
         out_path = tmp_path / 'out_path'
         out_path.write_text('not a directory')
         args = self._args(out_path)
-        monkeypatch.setattr('amalgkit.curate.check_rscript', lambda: None)
+        monkeypatch.setattr('amalgkit.per_species_tables.check_rscript', lambda: None)
         monkeypatch.setattr(
-            'amalgkit.curate.resolve_curate_input',
-            lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError('resolve_curate_input should not be called')),
+            'amalgkit.per_species_tables.resolve_per_species_input',
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError('resolve_per_species_input should not be called')),
         )
 
         with pytest.raises(NotADirectoryError, match='Output path exists but is not a directory'):
-            curate_main(args)
+            generate_per_species_tables(args)
 
     def test_rejects_curate_path_file(self, tmp_path, monkeypatch):
         out_dir = tmp_path / 'out'
         out_dir.mkdir()
-        (out_dir / 'curate').write_text('not a directory')
+        (out_dir / 'per_species').write_text('not a directory')
         args = self._args(out_dir)
-        monkeypatch.setattr('amalgkit.curate.check_rscript', lambda: None)
+        monkeypatch.setattr('amalgkit.per_species_tables.check_rscript', lambda: None)
         monkeypatch.setattr(
-            'amalgkit.curate.resolve_curate_input',
-            lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError('resolve_curate_input should not be called')),
+            'amalgkit.per_species_tables.resolve_per_species_input',
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError('resolve_per_species_input should not be called')),
         )
 
-        with pytest.raises(NotADirectoryError, match='Curate path exists but is not a directory'):
-            curate_main(args)
+        with pytest.raises(NotADirectoryError, match='Per-species path exists but is not a directory'):
+            generate_per_species_tables(args)
 
     def test_list_selected_species_ignores_missing_scientific_name(self):
         metadata = Metadata.from_DataFrame(pandas.DataFrame({
@@ -805,7 +805,7 @@ class TestCurateMain:
         }))
         metadata.df = metadata.df.drop(columns=['exclusion'])
 
-        with pytest.raises(ValueError, match='Missing required metadata column\\(s\\) for curate: exclusion'):
+        with pytest.raises(ValueError, match='Missing required metadata column\\(s\\) for per-species table generation: exclusion'):
             list_selected_species(metadata)
 
     def test_list_selected_species_rejects_missing_scientific_name_column(self):
@@ -816,5 +816,5 @@ class TestCurateMain:
         }))
         metadata.df = metadata.df.drop(columns=['scientific_name'])
 
-        with pytest.raises(ValueError, match='Missing required metadata column\\(s\\) for curate: scientific_name'):
+        with pytest.raises(ValueError, match='Missing required metadata column\\(s\\) for per-species table generation: scientific_name'):
             list_selected_species(metadata)

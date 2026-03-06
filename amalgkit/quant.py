@@ -161,7 +161,9 @@ def call_kallisto(args, in_files, metadata, sra_stat, output_dir, index):
     if kallisto_out.returncode != 0:
         sys.stderr.write("kallisto did not finish safely.\n")
         if 'Zero reads pseudoaligned' in stderr_txt:
-            sys.stderr.write('No reads are mapped to the reference. This sample will be removed by `amalgkit curate`.')
+            sys.stderr.write(
+                'No reads are mapped to the reference. This sample will be excluded by downstream filtering/final export.'
+            )
         raise RuntimeError(
             'kallisto quant failed with exit code {} for {}.'.format(kallisto_out.returncode, sra_id)
         )

@@ -11,19 +11,25 @@
 ## Overview
 **AMALGKIT** ([/əm`ælgkit/](http://ipa-reader.xyz/?text=%C9%99m%60%C3%A6lgkit&voice=Joanna)) is a toolkit to integrate RNA-seq data from [the NCBI SRA database](https://www.ncbi.nlm.nih.gov/sra) and from private fastq files to generate unbiased cross-species transcript abundance dataset for a large-scale evolutionary gene expression analysis.
 
-![](logo/flowchart_00.png)
+The README intentionally keeps the workflow summary text-based. The historical flowchart has been removed from this page because it drifts out of date faster than the CLI and wiki documentation.
 
 ## Installation
-```
-# Installation with pip
+```bash
+# Installation with Bioconda
+mamba install -c bioconda amalgkit
+
+# Or install the latest GitHub version with pip
 pip install git+https://github.com/kfuku52/amalgkit
 
-# This should show complete options
+# Show top-level commands
 amalgkit -h
+
+# Show command-specific help
+amalgkit help metadata
 ```
 
-## Functions
-See [Wiki](https://github.com/kfuku52/amalgkit/wiki) for details.
+## Commands
+See [Wiki](https://github.com/kfuku52/amalgkit/wiki) for detailed examples and option descriptions.
 
 - [`amalgkit metadata`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-metadata): NCBI SRA metadata retrieval
 
@@ -39,7 +45,7 @@ See [Wiki](https://github.com/kfuku52/amalgkit/wiki) for details.
 
 - [`amalgkit merge`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-merge): Generating transcript abundance tables
 
-- [`amalgkit busco`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-busco): Generating BUSCO tables for downstream cstmm/csca
+- [`amalgkit busco`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-busco): Generating BUSCO tables for downstream cstmm/csfilter
 
 - [`amalgkit cstmm`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-cstmm): Cross-species TMM normalization using single-copy genes
 
@@ -49,13 +55,42 @@ See [Wiki](https://github.com/kfuku52/amalgkit/wiki) for details.
 
 - [`amalgkit finalize`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-finalize): Export final tables from filtered metadata (with optional batch-effect removal)
 
-- [`amalgkit curate`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-curate): Automatic removal of outlier samples and unwanted biases
-
-- [`amalgkit csca`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-csca): Generating plots with cross-species correlation analysis
-
 - [`amalgkit sanity`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-sanity): Checking the integrity of AMALGKIT input and output files
 
 - [`amalgkit dataset`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-dataset): Extracting bundled test datasets
+
+## Typical Workflows
+### Metadata to merged quantification tables
+```bash
+# 1. Retrieve metadata from SRA
+amalgkit metadata --search_string 'vertebrata[Organism] AND liver'
+
+# 2. Create/edit config files, then select runs
+amalgkit config --out_dir ./ --config base --overwrite yes
+amalgkit select --out_dir ./
+
+# 3. Optionally append private FASTQ files to metadata
+amalgkit integrate --out_dir ./ --fastq_dir ./private_fastq
+
+# 4. Download/process FASTQ, quantify, and merge per-species abundance tables
+amalgkit getfastq --out_dir ./
+amalgkit quant --out_dir ./
+amalgkit merge --out_dir ./
+```
+
+### Cross-species normalization and filtering
+```bash
+# Prepare single-copy ortholog tables
+amalgkit busco --out_dir ./ --lineage eukaryota_odb12
+
+# Cross-species TMM normalization
+amalgkit cstmm --out_dir ./ --dir_busco ./busco
+
+# Metadata filtering and final export
+amalgkit wsfilter --out_dir ./
+amalgkit csfilter --out_dir ./ --metadata ./wsfilter/metadata.tsv --dir_busco ./busco
+amalgkit finalize --out_dir ./ --metadata ./csfilter/metadata.tsv --batch_effect_alg no
+```
 
 ## Split Filtering Workflow
 `wsfilter` and `csfilter` are decoupled filters that output `metadata.tsv`, `excluded.tsv`, exclusion summary PDF, and species PDFs (without a `plots/` directory).  
@@ -67,6 +102,14 @@ When `--metadata inferred` is used in these commands, the latest filter metadata
 amalgkit wsfilter --out_dir ./
 amalgkit csfilter --out_dir ./ --metadata ./wsfilter/metadata.tsv --dir_busco ./busco
 amalgkit finalize --out_dir ./ --metadata ./csfilter/metadata.tsv --batch_effect_alg no
+```
+
+## Bundled Demo Data
+AMALGKIT ships with a small bundled dataset for smoke testing and examples.
+
+```bash
+amalgkit dataset --list
+amalgkit dataset --name yeast --out_dir ./demo
 ```
 
 ## Citation

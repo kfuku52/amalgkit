@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pandas
 
-from amalgkit.command_context import CscaContext, CurateContext
+from amalgkit.command_context import CrossSpeciesFilterContext, PerSpeciesTableContext
 from amalgkit.util import Metadata
 from amalgkit import wsfilter as wsfilter_module
 from amalgkit import csfilter as csfilter_module
@@ -55,13 +55,13 @@ def test_wsfilter_outputs_metadata_excluded_and_species_pdfs(tmp_path, monkeypat
     metadata = _base_metadata()
     captured = {}
 
-    def fake_resolve_curate_input(_args):
+    def fake_resolve_per_species_input(_args):
         return metadata, str(tmp_path / 'input')
 
-    def fake_curate_main(curate_args, context=None):
+    def fake_generate_per_species_tables(per_species_args, context=None):
         captured['context'] = context
-        tables_dir = os.path.join(curate_args.out_dir, 'curate', 'Species_A', 'tables')
-        plots_dir = os.path.join(curate_args.out_dir, 'curate', 'Species_A', 'plots')
+        tables_dir = os.path.join(per_species_args.out_dir, 'per_species', 'Species_A', 'tables')
+        plots_dir = os.path.join(per_species_args.out_dir, 'per_species', 'Species_A', 'plots')
         os.makedirs(tables_dir, exist_ok=True)
         os.makedirs(plots_dir, exist_ok=True)
         pandas.DataFrame({
@@ -76,8 +76,8 @@ def test_wsfilter_outputs_metadata_excluded_and_species_pdfs(tmp_path, monkeypat
         with open(os.path.join(plots_dir, 'ws_plot.pdf'), 'wb') as handle:
             handle.write(b'%PDF-1.4\n')
 
-    monkeypatch.setattr(wsfilter_module, 'resolve_curate_input', fake_resolve_curate_input)
-    monkeypatch.setattr(wsfilter_module, 'curate_main', fake_curate_main)
+    monkeypatch.setattr(wsfilter_module, 'resolve_per_species_input', fake_resolve_per_species_input)
+    monkeypatch.setattr(wsfilter_module, 'generate_per_species_tables', fake_generate_per_species_tables)
     def fake_exclusion_plot(df_metadata, out_pdf_path, r_util_path, y_label='Sample count', font_size=8):
         _ = (df_metadata, r_util_path, y_label, font_size)
         os.makedirs(os.path.dirname(out_pdf_path), exist_ok=True)
@@ -97,7 +97,7 @@ def test_wsfilter_outputs_metadata_excluded_and_species_pdfs(tmp_path, monkeypat
     assert (tmp_path / 'out' / 'wsfilter' / 'Species_A' / 'Species_A_ws_plot.pdf').is_file()
     assert not (tmp_path / 'out' / 'wsfilter' / 'plots').exists()
     assert not (tmp_path / 'out' / 'wsfilter' / 'tables').exists()
-    assert isinstance(captured['context'], CurateContext)
+    assert isinstance(captured['context'], PerSpeciesTableContext)
     assert captured['context'].metadata is metadata
     assert captured['context'].input_dir == str(tmp_path / 'input')
 
@@ -110,21 +110,21 @@ def test_wsfilter_uses_latest_filter_metadata_when_inferred(tmp_path, monkeypatc
     latest_meta.write_text('run\texclusion\nR1\tno\n')
     captured = {}
 
-    def fake_resolve_curate_input(passed_args):
+    def fake_resolve_per_species_input(passed_args):
         captured['metadata'] = passed_args.metadata
         return metadata, str(tmp_path / 'input')
 
-    def fake_curate_main(curate_args, context=None):
+    def fake_generate_per_species_tables(per_species_args, context=None):
         captured['context'] = context
-        tables_dir = os.path.join(curate_args.out_dir, 'curate', 'Species_A', 'tables')
+        tables_dir = os.path.join(per_species_args.out_dir, 'per_species', 'Species_A', 'tables')
         os.makedirs(tables_dir, exist_ok=True)
         pandas.DataFrame({
             'run': ['R1'],
             'exclusion': ['no'],
         }).to_csv(os.path.join(tables_dir, 'Species_A.metadata.tsv'), sep='\t', index=False)
 
-    monkeypatch.setattr(wsfilter_module, 'resolve_curate_input', fake_resolve_curate_input)
-    monkeypatch.setattr(wsfilter_module, 'curate_main', fake_curate_main)
+    monkeypatch.setattr(wsfilter_module, 'resolve_per_species_input', fake_resolve_per_species_input)
+    monkeypatch.setattr(wsfilter_module, 'generate_per_species_tables', fake_generate_per_species_tables)
     def fake_exclusion_plot(df_metadata, out_pdf_path, r_util_path, y_label='Sample count', font_size=8):
         _ = (df_metadata, r_util_path, y_label, font_size)
         os.makedirs(os.path.dirname(out_pdf_path), exist_ok=True)
@@ -135,7 +135,7 @@ def test_wsfilter_uses_latest_filter_metadata_when_inferred(tmp_path, monkeypatc
     wsfilter_module.wsfilter_main(args)
 
     assert captured['metadata'] == os.path.realpath(str(latest_meta))
-    assert isinstance(captured['context'], CurateContext)
+    assert isinstance(captured['context'], PerSpeciesTableContext)
     assert captured['context'].metadata is metadata
     assert captured['context'].input_dir == str(tmp_path / 'input')
 
@@ -145,32 +145,32 @@ def test_csfilter_outputs_metadata_excluded_and_root_pdfs(tmp_path, monkeypatch)
     metadata = _base_metadata()
     captured = {}
 
-    def fake_resolve_curate_input(_args):
+    def fake_resolve_per_species_input(_args):
         return metadata, str(tmp_path / 'input')
 
-    def fake_curate_main(_curate_args, context=None):
-        captured['curate_context'] = context
+    def fake_generate_per_species_tables(_per_species_args, context=None):
+        captured['per_species_context'] = context
         return None
 
-    def fake_csca_main(csca_args, context=None):
-        captured['sample_group'] = csca_args.sample_group
-        captured['outlier_method'] = csca_args.outlier_method
-        captured['batch_effect_alg'] = csca_args.batch_effect_alg
-        captured['plot_mode'] = csca_args.plot_mode
-        captured['csca_context'] = context
-        csca_dir = os.path.join(csca_args.out_dir, 'csca')
-        os.makedirs(csca_dir, exist_ok=True)
+    def fake_run_cross_species_filter(cross_species_args, context=None):
+        captured['sample_group'] = cross_species_args.sample_group
+        captured['outlier_method'] = cross_species_args.outlier_method
+        captured['batch_effect_alg'] = cross_species_args.batch_effect_alg
+        captured['plot_mode'] = cross_species_args.plot_mode
+        captured['cross_species_context'] = context
+        cross_species_dir = os.path.join(cross_species_args.out_dir, 'cross_species')
+        os.makedirs(cross_species_dir, exist_ok=True)
         pandas.DataFrame({
             'run': ['R2'],
             'exclusion': ['low_cross_species_group_correlation'],
             'cs_margin_corrected': [-0.2],
-        }).to_csv(os.path.join(csca_dir, 'metadata.tsv'), sep='\t', index=False)
-        with open(os.path.join(csca_dir, 'csca_overview.pdf'), 'wb') as handle:
+        }).to_csv(os.path.join(cross_species_dir, 'metadata.tsv'), sep='\t', index=False)
+        with open(os.path.join(cross_species_dir, 'cross_species_overview.pdf'), 'wb') as handle:
             handle.write(b'%PDF-1.4\n')
 
-    monkeypatch.setattr(csfilter_module, 'resolve_curate_input', fake_resolve_curate_input)
-    monkeypatch.setattr(csfilter_module, 'curate_main', fake_curate_main)
-    monkeypatch.setattr(csfilter_module, 'csca_main', fake_csca_main)
+    monkeypatch.setattr(csfilter_module, 'resolve_per_species_input', fake_resolve_per_species_input)
+    monkeypatch.setattr(csfilter_module, 'generate_per_species_tables', fake_generate_per_species_tables)
+    monkeypatch.setattr(csfilter_module, 'run_cross_species_filter', fake_run_cross_species_filter)
     def fake_exclusion_plot(df_metadata, out_pdf_path, r_util_path, y_label='Sample count', font_size=8):
         _ = (df_metadata, r_util_path, y_label, font_size)
         os.makedirs(os.path.dirname(out_pdf_path), exist_ok=True)
@@ -200,11 +200,11 @@ def test_csfilter_outputs_metadata_excluded_and_root_pdfs(tmp_path, monkeypatch)
     assert captured['outlier_method'] == 'robust_margin'
     assert captured['batch_effect_alg'] == 'no'
     assert captured['plot_mode'] == 'single'
-    assert isinstance(captured['curate_context'], CurateContext)
-    assert captured['curate_context'].metadata is metadata
-    assert captured['curate_context'].input_dir == str(tmp_path / 'input')
-    assert isinstance(captured['csca_context'], CscaContext)
-    assert captured['csca_context'].metadata is metadata
+    assert isinstance(captured['per_species_context'], PerSpeciesTableContext)
+    assert captured['per_species_context'].metadata is metadata
+    assert captured['per_species_context'].input_dir == str(tmp_path / 'input')
+    assert isinstance(captured['cross_species_context'], CrossSpeciesFilterContext)
+    assert captured['cross_species_context'].metadata is metadata
 
 
 def test_finalize_outputs_tables_and_merged_metadata(tmp_path, monkeypatch):
@@ -213,14 +213,14 @@ def test_finalize_outputs_tables_and_merged_metadata(tmp_path, monkeypatch):
     metadata = _base_metadata()
     captured = {}
 
-    def fake_resolve_curate_input(_args):
+    def fake_resolve_per_species_input(_args):
         return metadata, str(tmp_path / 'input')
 
-    def fake_curate_main(curate_args, context=None):
-        captured['seed'] = getattr(curate_args, 'seed')
+    def fake_generate_per_species_tables(per_species_args, context=None):
+        captured['seed'] = getattr(per_species_args, 'seed')
         captured['context'] = context
-        tables_dir = os.path.join(curate_args.out_dir, 'curate', 'Species_A', 'tables')
-        plots_dir = os.path.join(curate_args.out_dir, 'curate', 'Species_A', 'plots')
+        tables_dir = os.path.join(per_species_args.out_dir, 'per_species', 'Species_A', 'tables')
+        plots_dir = os.path.join(per_species_args.out_dir, 'per_species', 'Species_A', 'plots')
         os.makedirs(tables_dir, exist_ok=True)
         os.makedirs(plots_dir, exist_ok=True)
         pandas.DataFrame({
@@ -253,8 +253,8 @@ def test_finalize_outputs_tables_and_merged_metadata(tmp_path, monkeypatch):
         with open(os.path.join(plots_dir, 'Species_A.batch_compare.sva.pdf'), 'wb') as handle:
             handle.write(b'%PDF-1.4\n')
 
-    monkeypatch.setattr(finalize_module, 'resolve_curate_input', fake_resolve_curate_input)
-    monkeypatch.setattr(finalize_module, 'curate_main', fake_curate_main)
+    monkeypatch.setattr(finalize_module, 'resolve_per_species_input', fake_resolve_per_species_input)
+    monkeypatch.setattr(finalize_module, 'generate_per_species_tables', fake_generate_per_species_tables)
     def fake_exclusion_plot(df_metadata, out_pdf_path, r_util_path, y_label='Sample count', font_size=8):
         _ = (df_metadata, r_util_path, y_label, font_size)
         os.makedirs(os.path.dirname(out_pdf_path), exist_ok=True)
@@ -275,6 +275,6 @@ def test_finalize_outputs_tables_and_merged_metadata(tmp_path, monkeypatch):
     assert (tmp_path / 'out' / 'finalize' / 'Species_A' / 'Species_A_batch_effect_summary.tsv').is_file()
     assert (tmp_path / 'out' / 'finalize' / 'Species_A' / 'Species_A_batch_compare_sva.pdf').is_file()
     assert not (tmp_path / 'out' / 'finalize' / 'Species_A' / 'tables').exists()
-    assert isinstance(captured['context'], CurateContext)
+    assert isinstance(captured['context'], PerSpeciesTableContext)
     assert captured['context'].metadata is metadata
     assert captured['context'].input_dir == str(tmp_path / 'input')

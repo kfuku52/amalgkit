@@ -41,12 +41,12 @@ def merge_metadata_by_run(source_df, update_df):
     return source.reset_index(drop=True)
 
 
-def collect_species_metadata_tables(curate_dir):
+def collect_per_species_metadata_tables(per_species_dir):
     tables = []
-    if not os.path.isdir(curate_dir):
+    if not os.path.isdir(per_species_dir):
         return tables
-    for species in sorted(os.listdir(curate_dir)):
-        species_dir = os.path.join(curate_dir, species)
+    for species in sorted(os.listdir(per_species_dir)):
+        species_dir = os.path.join(per_species_dir, species)
         tables_dir = os.path.join(species_dir, 'tables')
         if not os.path.isdir(tables_dir):
             continue
@@ -59,10 +59,10 @@ def collect_species_metadata_tables(curate_dir):
     return tables
 
 
-def load_merged_species_metadata(curate_dir):
-    metadata_tables = collect_species_metadata_tables(curate_dir=curate_dir)
+def load_merged_per_species_metadata(per_species_dir):
+    metadata_tables = collect_per_species_metadata_tables(per_species_dir=per_species_dir)
     if len(metadata_tables) == 0:
-        raise FileNotFoundError('No per-species metadata table was found under: {}'.format(curate_dir))
+        raise FileNotFoundError('No per-species metadata table was found under: {}'.format(per_species_dir))
     frames = [
         pandas.read_csv(path, sep='\t', low_memory=False)
         for path in metadata_tables
@@ -121,12 +121,12 @@ def staged_output_dir(target_dir, redo=False, prefix='amalgkit_stage_'):
                 shutil.rmtree(backup_path, ignore_errors=True)
 
 
-def copy_curate_species_plots(curate_dir, dst_plot_dir):
+def copy_per_species_plots(per_species_dir, dst_plot_dir):
     os.makedirs(dst_plot_dir, exist_ok=True)
-    if not os.path.isdir(curate_dir):
+    if not os.path.isdir(per_species_dir):
         return
-    for species in sorted(os.listdir(curate_dir)):
-        src_plot_dir = os.path.join(curate_dir, species, 'plots')
+    for species in sorted(os.listdir(per_species_dir)):
+        src_plot_dir = os.path.join(per_species_dir, species, 'plots')
         if not os.path.isdir(src_plot_dir):
             continue
         dst_species_plot_dir = os.path.join(dst_plot_dir, species)
@@ -169,17 +169,17 @@ def build_species_prefixed_filename(species, filename):
     return '{}_{}{}'.format(species, suffix, ext)
 
 
-def copy_curate_species_pdfs(curate_dir, dst_dir, species_subset=None):
+def copy_per_species_pdfs(per_species_dir, dst_dir, species_subset=None):
     os.makedirs(dst_dir, exist_ok=True)
     wanted = None
     if species_subset is not None:
         wanted = set(species_subset)
-    if not os.path.isdir(curate_dir):
+    if not os.path.isdir(per_species_dir):
         return
-    for species in sorted(os.listdir(curate_dir)):
+    for species in sorted(os.listdir(per_species_dir)):
         if (wanted is not None) and (species not in wanted):
             continue
-        src_plot_dir = os.path.join(curate_dir, species, 'plots')
+        src_plot_dir = os.path.join(per_species_dir, species, 'plots')
         if not os.path.isdir(src_plot_dir):
             continue
         dst_species_dir = os.path.join(dst_dir, species)

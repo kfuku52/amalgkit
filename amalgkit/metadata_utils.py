@@ -667,12 +667,12 @@ def load_metadata(args, dir_subcommand='metadata', batch_scope='run'):
         raise ValueError('--batch must be >= 1.')
     normalized_scope = str(batch_scope).strip().lower()
     if normalized_scope == 'species':
-        print('Entering --batch mode for amalgkit curate. processing 1 species', flush=True)
+        print('Entering species batch mode for per-species table generation. processing 1 species', flush=True)
         txt = 'This is {:,}th job. In total, {:,} jobs will be necessary for this metadata table.'
         species_series = metadata.df.loc[:, 'scientific_name'].fillna('').astype(str).str.strip()
         spp = species_series.loc[species_series != ''].drop_duplicates().sort_values().values
         if len(spp) == 0:
-            raise ValueError('No valid scientific_name was found in metadata for curate --batch mode.')
+            raise ValueError('No valid scientific_name was found in metadata for species batch mode.')
         if batch > len(spp):
             raise AmalgkitExit('--batch {} is too large. Exiting.'.format(args.batch), exit_code=0)
         print(txt.format(batch, len(spp)), flush=True)
@@ -1011,5 +1011,5 @@ def write_updated_metadata(
         print('Updated metadata file was detected. Will be overwritten: {}'.format(outpath), flush=True)
     quant_dir = os.path.join(args.out_dir, 'quant')
     metadata = get_mapping_rate_fn(metadata, quant_dir, max_workers=max_workers)
-    print('Writing curate metadata containing mapping rate: {}'.format(outpath))
+    print('Writing per-species metadata containing mapping rate: {}'.format(outpath))
     atomic_write_dataframe(metadata.df, outpath, sep='\t', index=False)

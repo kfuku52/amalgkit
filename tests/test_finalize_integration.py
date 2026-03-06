@@ -127,13 +127,13 @@ def _run_finalize_r(tmp_path, fixture, sva_nsv='auto', sva_B='auto', sva_B_auto_
 
 
 def _read_batch_summary(out_dir, species_tag):
-    path = out_dir / 'curate' / species_tag / 'tables' / '{}.sva.batch_effect_summary.tsv'.format(species_tag)
+    path = out_dir / 'per_species' / species_tag / 'tables' / '{}.sva.batch_effect_summary.tsv'.format(species_tag)
     assert path.exists()
     return pandas.read_csv(path, sep='\t')
 
 
 def _read_species_metadata(out_dir, species_tag):
-    path = out_dir / 'curate' / species_tag / 'tables' / '{}.metadata.tsv'.format(species_tag)
+    path = out_dir / 'per_species' / species_tag / 'tables' / '{}.metadata.tsv'.format(species_tag)
     assert path.exists()
     return pandas.read_csv(path, sep='\t')
 
@@ -215,5 +215,5 @@ def test_finalize_r_sva_plots_work_when_optional_metadata_columns_missing(requir
     assert proc.returncode == 0, proc.stdout
 
     species_tag = fixture['species_tag']
-    plot_dir = out_dir / 'curate' / species_tag / 'plots'
+    plot_dir = out_dir / 'per_species' / species_tag / 'plots'
     assert (plot_dir / '{}.batch_compare.sva.pdf'.format(species_tag)).exists()

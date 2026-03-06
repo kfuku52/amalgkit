@@ -53,13 +53,13 @@ run_rscript_checked \
 test -f "$TMP_ROOT/merge/merge_mapping_rate.pdf"
 test -f "$TMP_ROOT/merge/merge_mean_expression_boxplot.pdf"
 
-# 2) curate.r smoke
-mkdir -p "$TMP_ROOT/curate_out"
+# 2) prepare_tables.r smoke
+mkdir -p "$TMP_ROOT/per_species_out"
 write_dcf \
-    "$TMP_ROOT/curate.dcf" \
+    "$TMP_ROOT/per_species.dcf" \
     "est_counts_path" "$FIXTURE_DIR/cstmm/Saccharomyces_cerevisiae/Saccharomyces_cerevisiae_cstmm_counts.tsv" \
     "metadata_path" "$FIXTURE_DIR/cstmm/metadata.tsv" \
-    "out_dir" "$TMP_ROOT/curate_out" \
+    "out_dir" "$TMP_ROOT/per_species_out" \
     "eff_length_path" "$FIXTURE_DIR/cstmm/Saccharomyces_cerevisiae/Saccharomyces_cerevisiae_eff_length.tsv" \
     "dist_method" "pearson" \
     "mapping_rate_cutoff" "0.2" \
@@ -80,33 +80,36 @@ write_dcf \
     "robust_z_threshold" "-2.5" \
     "disable_auto_outlier_filter_flag" "0"
 run_rscript_checked \
-    curate \
-    "$REPO_DIR/amalgkit/curate.r" \
-    "$TMP_ROOT/curate.dcf"
-test -f "$TMP_ROOT/curate_out/curate/Saccharomyces_cerevisiae/tables/Saccharomyces_cerevisiae.no.curation_final_summary.tsv"
+    per_species \
+    "$REPO_DIR/amalgkit/prepare_tables.r" \
+    "$TMP_ROOT/per_species.dcf"
+test -f "$TMP_ROOT/per_species_out/per_species/Saccharomyces_cerevisiae/tables/Saccharomyces_cerevisiae.no.curation_final_summary.tsv"
 
-# 3) csca.r smoke
-cp -R "$FIXTURE_DIR/csca" "$TMP_ROOT/csca"
+# 3) cross_species_filter.r smoke
+cp -R "$FIXTURE_DIR/csca" "$TMP_ROOT/cross_species"
+if [ -d "$TMP_ROOT/cross_species/csca_input" ]; then
+    mv "$TMP_ROOT/cross_species/csca_input" "$TMP_ROOT/cross_species/cross_species_input_symlinks"
+fi
 write_dcf \
-    "$TMP_ROOT/csca.dcf" \
+    "$TMP_ROOT/cross_species.dcf" \
     "selected_sample_groups" "h2bk119r|wt|ire1-delta|wild_type_genotype" \
     "sample_group_colors" "DEFAULT" \
-    "dir_work" "$TMP_ROOT/csca" \
-    "dir_csca_input_table" "$TMP_ROOT/csca/csca_input" \
-    "file_orthogroup" "$TMP_ROOT/csca/multispecies_busco_table.tsv" \
-    "file_genecount" "$TMP_ROOT/csca/multispecies_genecount.tsv" \
+    "dir_work" "$TMP_ROOT/cross_species" \
+    "dir_cross_species_input_table" "$TMP_ROOT/cross_species/cross_species_input_symlinks" \
+    "file_orthogroup" "$TMP_ROOT/cross_species/multispecies_busco_table.tsv" \
+    "file_genecount" "$TMP_ROOT/cross_species/multispecies_genecount.tsv" \
     "r_util_path" "$REPO_DIR/amalgkit/util.r" \
-    "dir_csca" "$TMP_ROOT/csca" \
+    "dir_cross_species" "$TMP_ROOT/cross_species" \
     "batch_effect_alg" "no" \
     "missing_strategy" "em_pca" \
-    "csca_outlier_method" "none" \
-    "csca_margin_threshold" "0" \
-    "csca_robust_z_threshold" "-2.5" \
-    "csca_plot_mode" "dual"
+    "cross_species_outlier_method" "none" \
+    "cross_species_margin_threshold" "0" \
+    "cross_species_robust_z_threshold" "-2.5" \
+    "cross_species_plot_mode" "dual"
 run_rscript_checked \
-    csca \
-    "$REPO_DIR/amalgkit/csca.r" \
-    "$TMP_ROOT/csca.dcf"
-test -f "$TMP_ROOT/csca/csca_exclusion.pdf"
+    cross_species \
+    "$REPO_DIR/amalgkit/cross_species_filter.r" \
+    "$TMP_ROOT/cross_species.dcf"
+test -f "$TMP_ROOT/cross_species/cross_species_exclusion.pdf"
 
 echo "[r-smoke] all checks passed"

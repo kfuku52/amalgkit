@@ -3,19 +3,19 @@ import shutil
 import tempfile
 from types import SimpleNamespace
 
-from amalgkit.command_context import CurateContext
-from amalgkit.curate import curate_main, resolve_curate_input
+from amalgkit.command_context import PerSpeciesTableContext
 from amalgkit.filter_utils import (
-    copy_curate_species_pdfs,
+    copy_per_species_pdfs,
     infer_latest_filter_metadata,
-    load_merged_species_metadata,
+    load_merged_per_species_metadata,
     merge_metadata_by_run,
     save_exclusion_plot_pdf,
     staged_output_dir,
 )
+from amalgkit.per_species_tables import generate_per_species_tables, resolve_per_species_input
 
 
-def _build_curate_args(args, input_dir, tmp_out_dir):
+def _build_per_species_args(args, input_dir, tmp_out_dir):
     data = vars(args).copy()
     data['out_dir'] = tmp_out_dir
     data['input_dir'] = input_dir
@@ -70,9 +70,9 @@ def _simplify_table_filename(filename, species, batch_effect_alg):
     return '{}_{}{}'.format(species, stem, ext)
 
 
-def _copy_species_tables(curate_dir, finalize_dir, batch_effect_alg):
-    for species in sorted(os.listdir(curate_dir)):
-        src_tables = os.path.join(curate_dir, species, 'tables')
+def _copy_species_tables(per_species_dir, finalize_dir, batch_effect_alg):
+    for species in sorted(os.listdir(per_species_dir)):
+        src_tables = os.path.join(per_species_dir, species, 'tables')
         if not os.path.isdir(src_tables):
             continue
         dst_species_dir = os.path.join(finalize_dir, species)
@@ -103,23 +103,26 @@ def finalize_main(args):
             data['metadata'] = latest_metadata
             resolve_args = SimpleNamespace(**data)
             print('Using latest filter metadata: {}'.format(latest_metadata))
-    metadata, input_dir = resolve_curate_input(resolve_args)
+    metadata, input_dir = resolve_per_species_input(resolve_args)
     out_root = os.path.realpath(args.out_dir)
     dir_finalize = os.path.join(out_root, 'finalize')
     tmp_out_dir = tempfile.mkdtemp(prefix='amalgkit_finalize_')
     try:
-        curate_args = _build_curate_args(args=resolve_args, input_dir=input_dir, tmp_out_dir=tmp_out_dir)
-        curate_main(curate_args, context=CurateContext(metadata=metadata, input_dir=input_dir))
-        curate_dir = os.path.join(tmp_out_dir, 'curate')
-        merged_species_metadata = load_merged_species_metadata(curate_dir=curate_dir)
+        per_species_args = _build_per_species_args(args=resolve_args, input_dir=input_dir, tmp_out_dir=tmp_out_dir)
+        generate_per_species_tables(
+            per_species_args,
+            context=PerSpeciesTableContext(metadata=metadata, input_dir=input_dir),
+        )
+        per_species_dir = os.path.join(tmp_out_dir, 'per_species')
+        merged_species_metadata = load_merged_per_species_metadata(per_species_dir=per_species_dir)
         merged_metadata = merge_metadata_by_run(metadata.df, merged_species_metadata)
         with staged_output_dir(dir_finalize, redo=args.redo, prefix='amalgkit_finalize_stage_') as stage_dir:
             _copy_species_tables(
-                curate_dir=curate_dir,
+                per_species_dir=per_species_dir,
                 finalize_dir=stage_dir,
-                batch_effect_alg=curate_args.batch_effect_alg,
+                batch_effect_alg=per_species_args.batch_effect_alg,
             )
-            copy_curate_species_pdfs(curate_dir=curate_dir, dst_dir=stage_dir)
+            copy_per_species_pdfs(per_species_dir=per_species_dir, dst_dir=stage_dir)
             merged_metadata.to_csv(os.path.join(stage_dir, 'metadata.tsv'), sep='\t', index=False)
             r_util_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'util.r')
             save_exclusion_plot_pdf(

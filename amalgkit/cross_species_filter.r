@@ -9,13 +9,13 @@ suppressWarnings(suppressPackageStartupMessages(library(ggplot2, quietly = TRUE)
 options(stringsAsFactors = FALSE)
 correction_labels = c('uncorrected', 'corrected')
 plot_correction_labels = correction_labels
-csca_plot_mode = 'dual'
+cross_species_plot_mode = 'dual'
 
 save_ggplot_grid = function(plots, filename, width, height, nrow, ncol, font_size = 8, font_family = 'Helvetica') {
-    font_size = resolve_csca_font_size(font_size)
-    font_family = resolve_csca_font_family(font_family)
+    font_size = resolve_cross_species_font_size(font_size)
+    font_family = resolve_cross_species_font_family(font_family)
     with_pdf_defaults(
-        file = resolve_csca_output_path(filename),
+        file = resolve_cross_species_output_path(filename),
         width = width,
         height = height,
         font_size = font_size,
@@ -32,7 +32,7 @@ save_ggplot_grid = function(plots, filename, width, height, nrow, ncol, font_siz
     )
 }
 
-log_prefix = "csca.r:"
+log_prefix = "cross_species_filter.r:"
 read_amalgkit_config = function(script_name) {
     args = commandArgs(trailingOnly = TRUE)
     if (length(args) != 1) {
@@ -55,27 +55,27 @@ split_config_field = function(value) {
 font_size = 8
 species_shape_threshold = 12
 
-config = read_amalgkit_config('csca.r')
+config = read_amalgkit_config('cross_species_filter.r')
 cat(log_prefix, "mode = config", "\n")
 selected_sample_groups = split_config_field(config[['selected_sample_groups']])
 sample_group_colors = split_config_field(config[['sample_group_colors']])
 dir_work = config[['dir_work']]
-dir_csca_input_table = config[['dir_csca_input_table']]
+dir_cross_species_input_table = config[['dir_cross_species_input_table']]
 file_orthogroup = config[['file_orthogroup']]
 file_genecount = config[['file_genecount']]
 r_util_path = config[['r_util_path']]
-dir_csca = config[['dir_csca']]
+dir_cross_species = config[['dir_cross_species']]
 batch_effect_alg = config[['batch_effect_alg']]
 missing_strategy = ifelse(config[['missing_strategy']] != '', config[['missing_strategy']], 'em_pca')
-csca_outlier_method = ifelse(config[['csca_outlier_method']] != '', as.character(config[['csca_outlier_method']]), 'none')
-csca_margin_threshold = ifelse(config[['csca_margin_threshold']] != '', as.numeric(config[['csca_margin_threshold']]), 0)
-csca_robust_z_threshold = ifelse(config[['csca_robust_z_threshold']] != '', as.numeric(config[['csca_robust_z_threshold']]), -2.5)
-csca_plot_mode = ifelse(config[['csca_plot_mode']] != '', as.character(config[['csca_plot_mode']]), 'dual')
+cross_species_outlier_method = ifelse(config[['cross_species_outlier_method']] != '', as.character(config[['cross_species_outlier_method']]), 'none')
+cross_species_margin_threshold = ifelse(config[['cross_species_margin_threshold']] != '', as.numeric(config[['cross_species_margin_threshold']]), 0)
+cross_species_robust_z_threshold = ifelse(config[['cross_species_robust_z_threshold']] != '', as.numeric(config[['cross_species_robust_z_threshold']]), -2.5)
+cross_species_plot_mode = ifelse(config[['cross_species_plot_mode']] != '', as.character(config[['cross_species_plot_mode']]), 'dual')
 source(r_util_path)
-resolve_csca_font_size = function(font_size = PLOT_FONT_SIZE_PT) {
+resolve_cross_species_font_size = function(font_size = PLOT_FONT_SIZE_PT) {
     resolve_plot_font_size(font_size)
 }
-resolve_csca_font_family = function(font_family = PLOT_FONT_FAMILY) {
+resolve_cross_species_font_family = function(font_family = PLOT_FONT_FAMILY) {
     resolve_plot_font_family(font_family)
 }
 compute_dense_label_cex = function(num_labels, base_pt = PLOT_FONT_SIZE_PT, min_pt = 4, soft_limit = 20) {
@@ -87,9 +87,9 @@ compute_dense_label_cex = function(num_labels, base_pt = PLOT_FONT_SIZE_PT, min_
     )
     dense_pt / base_pt
 }
-font_size = resolve_csca_font_size(font_size)
-font_family = resolve_csca_font_family('Helvetica')
-resolve_csca_output_path = function(path) {
+font_size = resolve_cross_species_font_size(font_size)
+font_family = resolve_cross_species_font_family('Helvetica')
+resolve_cross_species_output_path = function(path) {
     path = as.character(path)
     if (length(path) == 0) {
         return(path)
@@ -101,28 +101,28 @@ resolve_csca_output_path = function(path) {
     if (grepl('^(/|[A-Za-z]:[/\\\\]|~)', path)) {
         return(path.expand(path))
     }
-    file.path(dir_csca, path)
+    file.path(dir_cross_species, path)
 }
 cat('selected_sample_groups:', selected_sample_groups, "\n")
 cat('selected_sample_group_colors:', sample_group_colors, "\n")
 cat('dir_work:', dir_work, "\n")
-cat('dir_csca_input_table:', dir_csca_input_table, "\n")
+cat('dir_cross_species_input_table:', dir_cross_species_input_table, "\n")
 cat('file_orthogroup:', file_orthogroup, "\n")
 cat('file_genecount:', file_genecount, "\n")
 cat('r_util_path:', r_util_path, "\n")
-cat('dir_csca:', dir_csca, "\n")
+cat('dir_cross_species:', dir_cross_species, "\n")
 cat('batch_effect_alg:', batch_effect_alg, "\n")
 cat('missing_strategy:', missing_strategy, "\n")
-cat('csca_outlier_method:', csca_outlier_method, "\n")
-cat('csca_margin_threshold:', csca_margin_threshold, "\n")
-cat('csca_robust_z_threshold:', csca_robust_z_threshold, "\n")
-cat('csca_plot_mode:', csca_plot_mode, "\n")
-cat('Working at:', dir_csca, "\n")
+cat('cross_species_outlier_method:', cross_species_outlier_method, "\n")
+cat('cross_species_margin_threshold:', cross_species_margin_threshold, "\n")
+cat('cross_species_robust_z_threshold:', cross_species_robust_z_threshold, "\n")
+cat('cross_species_plot_mode:', cross_species_plot_mode, "\n")
+cat('Working at:', dir_cross_species, "\n")
 
 resolve_plot_correction_labels = function(corrections, plot_mode) {
     plot_mode = tolower(trimws(as.character(plot_mode)))
     if (!(plot_mode %in% c('dual', 'single'))) {
-        warning(sprintf('Unknown csca plot mode: %s. Falling back to dual.', plot_mode))
+        warning(sprintf('Unknown cross-species plot mode: %s. Falling back to dual.', plot_mode))
         plot_mode = 'dual'
     }
     if (plot_mode == 'single') {
@@ -133,7 +133,7 @@ resolve_plot_correction_labels = function(corrections, plot_mode) {
     }
     corrections
 }
-plot_correction_labels = resolve_plot_correction_labels(correction_labels, csca_plot_mode)
+plot_correction_labels = resolve_plot_correction_labels(correction_labels, cross_species_plot_mode)
 
 normalize_exclusion_values = function(exclusion_values) {
     normalized = as.character(exclusion_values)
@@ -148,11 +148,11 @@ is_non_excluded_flag = function(exclusion_values) {
     return((!is.na(exclusion_norm)) & (exclusion_norm == 'no'))
 }
 
-normalize_csca_metadata_table = function(df_metadata) {
+normalize_cross_species_metadata_table = function(df_metadata) {
     required_cols = c('run', 'scientific_name', 'sample_group', 'exclusion', 'bioproject')
     missing_cols = required_cols[!required_cols %in% colnames(df_metadata)]
     if (length(missing_cols) > 0) {
-        stop(paste0('Missing required metadata column(s) for csca: ', paste(missing_cols, collapse = ', ')))
+        stop(paste0('Missing required metadata column(s) for cross-species filtering: ', paste(missing_cols, collapse = ', ')))
     }
     df_metadata[['run']] = trimws(as.character(df_metadata[['run']]))
     df_metadata[['scientific_name']] = trimws(as.character(df_metadata[['scientific_name']]))
@@ -262,7 +262,7 @@ for_each_averaged_correction = function(averaged_orthologs, df_color_averaged, f
     }
 }
 
-format_csca_heatmap_labels = function(labels) {
+format_cross_species_heatmap_labels = function(labels) {
     labels = as.character(labels)
     sapply(labels, function(label) {
         tokens = strsplit(label, "_", fixed = TRUE)[[1]]
@@ -342,8 +342,8 @@ add_species_centroid_labels_base = function(x, y, species_values, cex = 1, col =
 }
 
 add_species_centroid_labels_ggplot = function(g, df, x_col, y_col, font_size = 8) {
-    font_size = resolve_csca_font_size(font_size)
-    font_family = resolve_csca_font_family('Helvetica')
+    font_size = resolve_cross_species_font_size(font_size)
+    font_family = resolve_cross_species_font_family('Helvetica')
     centroids = get_species_centroids(
         x = df[[x_col]],
         y = df[[y_col]],
@@ -576,16 +576,16 @@ compute_shared_scatter_axis_limits = function(df_list, x_col, y_col, require_var
 }
 
 add_scatter_text_theme = function(g, font_size = 8) {
-    font_size = resolve_csca_font_size(font_size)
-    font_family = resolve_csca_font_family('Helvetica')
+    font_size = resolve_cross_species_font_size(font_size)
+    font_family = resolve_cross_species_font_family('Helvetica')
     g + build_standard_ggplot_theme(font_size = font_size, font_family = font_family)
 }
 
 build_unaveraged_scatter_plot = function(df, x_col, y_col, x_label, y_label, axis_limits, sample_group_colors,
                                          font_size = 8, point_size = 0.7, point_alpha = 1, na_rm = TRUE,
                                          outlier_runs = NULL) {
-    font_size = resolve_csca_font_size(font_size)
-    font_family = resolve_csca_font_family('Helvetica')
+    font_size = resolve_cross_species_font_size(font_size)
+    font_family = resolve_cross_species_font_family('Helvetica')
     g = ggplot(df, ggplot2::aes(x = !!rlang::sym(x_col), y = !!rlang::sym(y_col), color = sample_group))
     outlier_flags = get_df_outlier_flags(df, outlier_runs = outlier_runs)
     g = g + ggplot2::theme_bw(base_size = font_size, base_family = font_family)
@@ -684,8 +684,8 @@ draw_correction_header_panel = function(corrections = correction_labels, target_
 
 add_correction_title_ggplot = function(g, correction_label, font_size = 8, font_family = 'Helvetica',
                                        normalize_label = TRUE) {
-    font_size = resolve_csca_font_size(font_size)
-    font_family = resolve_csca_font_family(font_family)
+    font_size = resolve_cross_species_font_size(font_size)
+    font_family = resolve_cross_species_font_family(font_family)
     if (normalize_label) {
         correction_label = display_correction_label(correction_label)
     } else {
@@ -705,8 +705,8 @@ add_correction_title_ggplot = function(g, correction_label, font_size = 8, font_
 
 build_unavailable_scatter_panel = function(correction_label, message = 'Not available', font_size = 8, font_family = 'Helvetica',
                                            normalize_label = TRUE) {
-    font_size = resolve_csca_font_size(font_size)
-    font_family = resolve_csca_font_family(font_family)
+    font_size = resolve_cross_species_font_size(font_size)
+    font_family = resolve_cross_species_font_family(font_family)
     g = ggplot2::ggplot(data.frame(x = 0.5, y = 0.5), ggplot2::aes(x = x, y = y)) +
         ggplot2::geom_text(label = message, family = font_family, size = max(2.8, font_size / 2.4), color = 'black') +
         ggplot2::xlim(0, 1) +
@@ -771,8 +771,8 @@ compute_tsne_embedding = function(tc, seed = 1, max_perplexity = 30, min_samples
 }
 
 draw_multisp_heatmap = function(tc, df_label, tc_dist_matrix = NULL, font_size = 8, show_colorbar = FALSE) {
-    font_size = resolve_csca_font_size(font_size)
-    font_family = resolve_csca_font_family('Helvetica')
+    font_size = resolve_cross_species_font_size(font_size)
+    font_family = resolve_cross_species_font_family('Helvetica')
     if (is.null(tc_dist_matrix)) {
         tc_dist_matrix = as.matrix(suppressWarnings(cor(tc, method = 'pearson')))
     } else {
@@ -794,8 +794,8 @@ draw_multisp_heatmap = function(tc, df_label, tc_dist_matrix = NULL, font_size =
     if (is.null(col_names) || length(col_names) != n) {
         col_names = as.character(seq_len(n))
     }
-    row_label_text = format_csca_heatmap_labels(row_names)
-    col_label_text = format_csca_heatmap_labels(col_names)
+    row_label_text = format_cross_species_heatmap_labels(row_names)
+    col_label_text = format_cross_species_heatmap_labels(col_names)
     label_key = paste0(gsub(' ', '_', as.character(df_label[['scientific_name']])), '_', as.character(df_label[['sample_group']]))
     label_index = match(col_names, label_key)
     row_index = match(row_names, label_key)
@@ -1124,20 +1124,20 @@ draw_multisp_legend = function(df_label) {
     legend("right", legend = legend_text, pt.cex = 1, pch = legend_pch, lty = 0, lwd = 2, col = legend_col, cex = cex_axis, text.font = legend_font)
 }
 
-prepare_metadata_table = function(dir_csca_input_table, selected_sample_groups, spp) {
+prepare_metadata_table = function(dir_cross_species_input_table, selected_sample_groups, spp) {
     selected_sample_groups = trimws(as.character(selected_sample_groups))
     selected_sample_groups = selected_sample_groups[selected_sample_groups != '']
     selected_sample_groups = unique(selected_sample_groups)
     if (length(selected_sample_groups) == 0) {
-        stop('No selected sample groups were provided for csca.')
+        stop('No selected sample groups were provided for cross-species filtering.')
     }
     spp = trimws(as.character(spp))
     spp = spp[spp != '']
     spp = unique(spp)
     if (length(spp) == 0) {
-        stop('No species labels were provided for csca metadata filtering.')
+        stop('No species labels were provided for cross-species metadata filtering.')
     }
-    metadata_paths = list.files(dir_csca_input_table, pattern = "\\.metadata\\.tsv$", full.names = TRUE)
+    metadata_paths = list.files(dir_cross_species_input_table, pattern = "\\.metadata\\.tsv$", full.names = TRUE)
     if (length(metadata_paths) > 0) {
         is_file = file.exists(metadata_paths) & (!dir.exists(metadata_paths))
         metadata_paths = metadata_paths[is_file]
@@ -1146,11 +1146,11 @@ prepare_metadata_table = function(dir_csca_input_table, selected_sample_groups, 
         read.table(metadata_path, header = TRUE, sep = '\t', quote = '', comment.char = '', check.names = FALSE)
     })
     if (length(metadata_tables) == 0) {
-        stop('No metadata files found in csca input table directory.')
+        stop('No metadata files found in the cross-species input table directory.')
     }
     df_metadata = do.call(rbind, metadata_tables)
     df_metadata = df_metadata[, !startsWith(colnames(df_metadata), 'Unnamed')]
-    df_metadata = normalize_csca_metadata_table(df_metadata)
+    df_metadata = normalize_cross_species_metadata_table(df_metadata)
     df_metadata = df_metadata[(df_metadata[['sample_group']] %in% selected_sample_groups) & (df_metadata[['scientific_name']] %in% spp),]
     return(df_metadata)
 }
@@ -1212,13 +1212,13 @@ extract_ortholog_mean_expression_table = function(df_singleog, averaged_tcs, lab
     return(averaged_orthologs)
 }
 
-load_unaveraged_expression_tables = function(dir_csca_input_table, spp_filled, batch_effect_alg) {
+load_unaveraged_expression_tables = function(dir_cross_species_input_table, spp_filled, batch_effect_alg) {
     unaveraged_tcs = list()
     unaveraged_tcs[['uncorrected']] = list()
     unaveraged_tcs[['corrected']] = list()
-    all_files = list.files(dir_csca_input_table, pattern = "\\.tc\\.tsv$", full.names = FALSE)
+    all_files = list.files(dir_cross_species_input_table, pattern = "\\.tc\\.tsv$", full.names = FALSE)
     if (length(all_files) > 0) {
-        all_paths = file.path(dir_csca_input_table, all_files)
+        all_paths = file.path(dir_cross_species_input_table, all_files)
         is_file = file.exists(all_paths) & (!dir.exists(all_paths))
         all_files = all_files[is_file]
     }
@@ -1237,11 +1237,11 @@ load_unaveraged_expression_tables = function(dir_csca_input_table, spp_filled, b
             stop(sprintf('Multiple corrected tc tables matched species %s: %s', sp, paste(corrected_file, collapse = ', ')))
         }
         if ((length(uncorrected_file) == 0) | (length(corrected_file) == 0)) {
-            cat(paste("Skipping. `amalgkit curate` output(s) not found:", sp, "\n"), file = stderr())
+            cat(paste("Skipping. per-species table output(s) not found:", sp, "\n"), file = stderr())
             next
         }
-        uncorrected_path = file.path(dir_csca_input_table, uncorrected_file[[1]])
-        corrected_path = file.path(dir_csca_input_table, corrected_file[[1]])
+        uncorrected_path = file.path(dir_cross_species_input_table, uncorrected_file[[1]])
+        corrected_path = file.path(dir_cross_species_input_table, corrected_file[[1]])
         unaveraged_tcs[['uncorrected']][[sp]] = read.delim(uncorrected_path, header = TRUE, row.names = 1, sep = '\t', check.names = FALSE)
         unaveraged_tcs[['corrected']][[sp]] = read.delim(corrected_path, header = TRUE, row.names = 1, sep = '\t', check.names = FALSE)
     }
@@ -1289,7 +1289,7 @@ get_df_labels_averaged = function(df_metadata, label_orders, selected_sample_gro
         df_label[['has_outlier']] = FALSE
     }
     rownames(df_label) = NULL
-    write.table(df_label, resolve_csca_output_path('csca_color_averaged.tsv'), sep = '\t', row.names = FALSE, quote = FALSE)
+    write.table(df_label, resolve_cross_species_output_path('cross_species_color_averaged.tsv'), sep = '\t', row.names = FALSE, quote = FALSE)
     return(df_label)
 }
 
@@ -1300,7 +1300,7 @@ get_df_labels_unaveraged = function(df_metadata, selected_sample_groups, sample_
     df_color = df_color[, cols]
     label_order = order(df_color[['run']])
     df_color = df_color[label_order,]
-    write.table(df_color, resolve_csca_output_path('csca_color_unaveraged.tsv'), sep = '\t', row.names = FALSE, quote = FALSE)
+    write.table(df_color, resolve_cross_species_output_path('cross_species_color_unaveraged.tsv'), sep = '\t', row.names = FALSE, quote = FALSE)
     return(df_color)
 }
 
@@ -1662,7 +1662,7 @@ save_unaveraged_pca_plot = function(unaveraged_orthologs, df_color_unaveraged, d
             panel_count = max(1, length(active_corrections))
         }
 
-        filename = paste0('csca_unaveraged_pca_PC', pcx, pcy, '.pdf')
+        filename = paste0('cross_species_unaveraged_pca_PC', pcx, pcy, '.pdf')
         save_ggplot_grid(
             plots = plots,
             filename = filename,
@@ -1830,7 +1830,7 @@ save_unaveraged_tsne_plot = function(unaveraged_orthologs, df_color_unaveraged,
     }
     save_ggplot_grid(
         plots = plots,
-        filename = 'csca_unaveraged_tsne.pdf',
+        filename = 'cross_species_unaveraged_tsne.pdf',
         width = 3.6 * panel_count,
         height = 2.8,
         nrow = 1,
@@ -1844,7 +1844,7 @@ save_averaged_heatmap_plot = function(averaged_orthologs, df_color_averaged, ave
                                       averaged_orthologs_removed = NULL, df_color_averaged_removed = NULL,
                                       averaged_plot_cache_removed = NULL) {
     cat('Generating averaged heatmap.\n')
-    file_name = resolve_csca_output_path('csca_heatmap.pdf')
+    file_name = resolve_cross_species_output_path('cross_species_heatmap.pdf')
     use_side_by_side = is_single_plot_correction_mode() && !is.null(averaged_orthologs_removed) &&
         !is.null(df_color_averaged_removed)
     if (use_side_by_side) {
@@ -1942,7 +1942,7 @@ save_averaged_dendrogram_plot = function(averaged_orthologs, df_color_averaged, 
                                          averaged_orthologs_removed = NULL, df_color_averaged_removed = NULL,
                                          averaged_plot_cache_removed = NULL, df_metadata_removed = NULL) {
     cat('Generating averaged dendrogram.\n')
-    file_name = resolve_csca_output_path('csca_dendrogram.pdf')
+    file_name = resolve_cross_species_output_path('cross_species_dendrogram.pdf')
     use_side_by_side = is_single_plot_correction_mode() && !is.null(averaged_orthologs_removed) &&
         !is.null(df_color_averaged_removed)
     if (use_side_by_side) {
@@ -2078,7 +2078,7 @@ save_averaged_dimensionality_reduction_summary = function(averaged_orthologs, df
                                                           averaged_orthologs_removed = NULL, df_color_averaged_removed = NULL,
                                                           averaged_plot_cache_removed = NULL) {
     cat('Generating averaged dimensionality reduction summary.\n')
-    file_name = resolve_csca_output_path('csca_averaged_summary.pdf')
+    file_name = resolve_cross_species_output_path('cross_species_averaged_summary.pdf')
     use_side_by_side = is_single_plot_correction_mode() && !is.null(averaged_orthologs_removed) &&
         !is.null(df_color_averaged_removed)
     if (use_side_by_side) {
@@ -2233,7 +2233,7 @@ save_averaged_box_plot = function(averaged_orthologs, df_color_averaged, average
                                   averaged_orthologs_removed = NULL, df_color_averaged_removed = NULL,
                                   averaged_plot_cache_removed = NULL) {
     cat('Generating averaged boxplot.\n')
-    file_name = resolve_csca_output_path('csca_boxplot.pdf')
+    file_name = resolve_cross_species_output_path('cross_species_boxplot.pdf')
     use_side_by_side = is_single_plot_correction_mode() && !is.null(averaged_orthologs_removed) &&
         !is.null(df_color_averaged_removed)
     if (use_side_by_side) {
@@ -2318,7 +2318,7 @@ save_averaged_box_plot = function(averaged_orthologs, df_color_averaged, average
     )
 }
 
-cleanup_csca_input_symlinks = function(path) {
+cleanup_cross_species_input_symlinks = function(path) {
     if (is.null(path) || (length(path) == 0)) {
         return(invisible(FALSE))
     }
@@ -2327,7 +2327,7 @@ cleanup_csca_input_symlinks = function(path) {
         return(invisible(FALSE))
     }
     normalized = normalizePath(path, winslash = '/', mustWork = FALSE)
-    if (basename(normalized) != 'csca_input_symlinks') {
+    if (basename(normalized) != 'cross_species_input_symlinks') {
         return(invisible(FALSE))
     }
     remove_result = unlink(path, recursive = TRUE, force = TRUE)
@@ -2547,8 +2547,8 @@ apply_csfilter_outlier_flags = function(df_metadata, outlier_method = 'none',
 }
 
 save_csfilter_outlier_scatter_plots = function(df_metadata, df_color_unaveraged = NULL, font_size = 8) {
-    font_size = resolve_csca_font_size(font_size)
-    font_family = resolve_csca_font_family('Helvetica')
+    font_size = resolve_cross_species_font_size(font_size)
+    font_family = resolve_cross_species_font_family('Helvetica')
     required_cols = c('within_group_cor_corrected', 'max_nongroup_cor_corrected', 'cs_outlier_candidate')
     if (!all(required_cols %in% colnames(df_metadata))) {
         return(invisible(NULL))
@@ -2622,7 +2622,7 @@ save_csfilter_outlier_scatter_plots = function(df_metadata, df_color_unaveraged 
     p_kept = p_kept + ggplot2::ggtitle('outlier removed')
     save_ggplot_grid(
         plots = list(p_marked, p_kept),
-        filename = 'csca_csfilter_scatter.pdf',
+        filename = 'cross_species_csfilter_scatter.pdf',
         width = 7.2,
         height = 3.2,
         nrow = 1,
@@ -2633,8 +2633,8 @@ save_csfilter_outlier_scatter_plots = function(df_metadata, df_color_unaveraged 
 }
 
 save_group_cor_histogram = function(df_metadata, df_color_unaveraged, font_size = 8, df_metadata_removed = NULL) {
-    font_size = resolve_csca_font_size(font_size)
-    font_family = resolve_csca_font_family('Helvetica')
+    font_size = resolve_cross_species_font_size(font_size)
+    font_family = resolve_cross_species_font_family('Helvetica')
     cat('Generating unaveraged group correlation histogram.\n')
     group_cor_breaks = seq(0, 1, length.out = 21)
     cor_cols = c('within_group_cor_uncorrected', 'within_group_cor_corrected')
@@ -2745,7 +2745,7 @@ save_group_cor_histogram = function(df_metadata, df_color_unaveraged, font_size 
             plot_group_marked = build_single_panel(df_metadata, 'sample_group', panel_label = 'outlier marked')
             plot_group_removed = build_single_panel(df_metadata_removed, 'sample_group', panel_label = 'outlier removed')
             with_pdf_defaults(
-                file = resolve_csca_output_path("csca_within_group_cor.pdf"),
+                file = resolve_cross_species_output_path("cross_species_within_group_cor.pdf"),
                 width = 7.2,
                 height = 5.4 + legend_height_in,
                 font_size = font_size,
@@ -2777,7 +2777,7 @@ save_group_cor_histogram = function(df_metadata, df_color_unaveraged, font_size 
             plot_species = build_single_panel(df_metadata, 'scientific_name')
             plot_group = build_single_panel(df_metadata, 'sample_group')
             with_pdf_defaults(
-                file = resolve_csca_output_path("csca_within_group_cor.pdf"),
+                file = resolve_cross_species_output_path("cross_species_within_group_cor.pdf"),
                 width = 7.2,
                 height = 2.8 + legend_height_in,
                 font_size = font_size,
@@ -2860,7 +2860,7 @@ save_group_cor_histogram = function(df_metadata, df_color_unaveraged, font_size 
     pdf_height = 5.2 + legend_height_in + header_height_in
 
     with_pdf_defaults(
-        file = resolve_csca_output_path("csca_within_group_cor.pdf"),
+        file = resolve_cross_species_output_path("cross_species_within_group_cor.pdf"),
         width = 7.2,
         height = pdf_height,
         font_size = font_size,
@@ -2974,11 +2974,11 @@ unaveraged2averaged = function(unaveraged_tcs, df_metadata, selected_sample_grou
 }
 
 save_group_cor_scatter = function(df_metadata, font_size = 8) {
-    font_size = resolve_csca_font_size(font_size)
-    font_family = resolve_csca_font_family('Helvetica')
+    font_size = resolve_cross_species_font_size(font_size)
+    font_family = resolve_cross_species_font_family('Helvetica')
     cat('Generating unaveraged group correlation scatter plot.\n')
     if (is_single_plot_correction_mode()) {
-        cat('Skipping csca_group_cor_scatter.pdf in single plot mode.\n')
+        cat('Skipping cross_species_group_cor_scatter.pdf in single plot mode.\n')
         return(invisible(NULL))
     }
     alpha_value = 0.2
@@ -3002,7 +3002,7 @@ save_group_cor_scatter = function(df_metadata, font_size = 8) {
                             is.finite(df_metadata$corrected_per_uncorrected_max_nongroup_cor), ]
     if (nrow(df_clean) == 0) {
         p = ggplot() + theme_void(base_size = font_size, base_family = font_family) + annotate('text', x = 0.5, y = 0.5, label = 'No finite data for group-correlation scatter', family = font_family, size = font_size / ggplot2::.pt)
-        save_ggplot_grid(c(list(p), rep(list(ggplot() + theme_void(base_size = font_size, base_family = font_family)), 5)), filename = "csca_group_cor_scatter.pdf", width = 7.2, height = 4.8, nrow = 2, ncol = 3)
+        save_ggplot_grid(c(list(p), rep(list(ggplot() + theme_void(base_size = font_size, base_family = font_family)), 5)), filename = "cross_species_group_cor_scatter.pdf", width = 7.2, height = 4.8, nrow = 2, ncol = 3)
         return(invisible(NULL))
     }
 
@@ -3031,7 +3031,7 @@ save_group_cor_scatter = function(df_metadata, font_size = 8) {
                            c(improvement_xymin, improvement_xymax), c(improvement_xymin, improvement_xymax)),
         ggplot() + theme_void(base_size = font_size, base_family = font_family)
     )
-    save_ggplot_grid(ps, filename = "csca_group_cor_scatter.pdf", width = 7.2, height = 4.8, nrow = 2, ncol = 3)
+    save_ggplot_grid(ps, filename = "cross_species_group_cor_scatter.pdf", width = 7.2, height = 4.8, nrow = 2, ncol = 3)
 }
 
 write_pivot_table = function(df_metadata, unaveraged_tcs, selected_sample_groups) {
@@ -3047,7 +3047,7 @@ write_pivot_table = function(df_metadata, unaveraged_tcs, selected_sample_groups
     tmp = df_metadata[is_selected, c('scientific_name', 'sample_group')]
     pivot_table = as.data.frame.matrix(table(tmp[['scientific_name']], tmp[['sample_group']]))
     pivot_table = cbind(data.frame(scientific_name = rownames(pivot_table)), pivot_table)
-    write.table(pivot_table, resolve_csca_output_path('csca_pivot_selected_samples.tsv'), sep = '\t', row.names = FALSE, quote = FALSE)
+    write.table(pivot_table, resolve_cross_species_output_path('cross_species_pivot_selected_samples.tsv'), sep = '\t', row.names = FALSE, quote = FALSE)
 }
 
 save_delta_pcc_plot = function(directory, plot_title) {
@@ -3055,8 +3055,8 @@ save_delta_pcc_plot = function(directory, plot_title) {
         cat('Skipping delta PCC plot in single-correction mode.\n')
         return(invisible(NULL))
     }
-    local_font_size = resolve_csca_font_size(font_size)
-    local_font_family = resolve_csca_font_family('Helvetica')
+    local_font_size = resolve_cross_species_font_size(font_size)
+    local_font_family = resolve_cross_species_font_family('Helvetica')
 
     first_row_means <- list()
     last_row_means <- list()
@@ -3219,8 +3219,8 @@ save_delta_pcc_plot = function(directory, plot_title) {
 }
 
 save_sample_number_heatmap <- function(df_metadata, font_size = 8, dpi = 300, df_metadata_removed = NULL) {
-    font_size = resolve_csca_font_size(font_size)
-    font_family = resolve_csca_font_family('Helvetica')
+    font_size = resolve_cross_species_font_size(font_size)
+    font_family = resolve_cross_species_font_family('Helvetica')
     use_side_by_side = is_single_plot_correction_mode() && !is.null(df_metadata_removed)
     all_scientific_names <- unique(as.character(df_metadata$scientific_name))
     all_sample_groups <- unique(as.character(df_metadata$sample_group))
@@ -3312,7 +3312,7 @@ save_sample_number_heatmap <- function(df_metadata, font_size = 8, dpi = 300, df
         p_removed = build_heatmap_plot(df_sample_count_removed, panel_label = 'outlier removed')
         save_ggplot_grid(
             plots = list(p_marked, p_removed),
-            filename = 'csca_sample_number_heatmap.pdf',
+            filename = 'cross_species_sample_number_heatmap.pdf',
             width = width_per_panel * 2,
             height = height,
             nrow = 1,
@@ -3324,7 +3324,7 @@ save_sample_number_heatmap <- function(df_metadata, font_size = 8, dpi = 300, df
     }
 
     p <- build_heatmap_plot(df_sample_count_marked)
-    ggsave(resolve_csca_output_path('csca_sample_number_heatmap.pdf'), plot = p, width = width_per_panel, height = height, dpi = dpi)
+    ggsave(resolve_cross_species_output_path('cross_species_sample_number_heatmap.pdf'), plot = p, width = width_per_panel, height = height, dpi = dpi)
 }
 
 write_ortholog_tables_for_correction = function(correction,
@@ -3333,15 +3333,15 @@ write_ortholog_tables_for_correction = function(correction,
                                                  imputed_averaged_orthologs,
                                                  imputed_unaveraged_orthologs) {
     table_specs = list(
-        list(df = averaged_orthologs[[correction]], prefix = 'csca_ortholog_averaged'),
-        list(df = unaveraged_orthologs[[correction]], prefix = 'csca_ortholog_unaveraged'),
-        list(df = imputed_averaged_orthologs[[correction]], prefix = 'csca_ortholog_averaged.imputed'),
-        list(df = imputed_unaveraged_orthologs[[correction]], prefix = 'csca_ortholog_unaveraged.imputed')
+        list(df = averaged_orthologs[[correction]], prefix = 'cross_species_ortholog_averaged'),
+        list(df = unaveraged_orthologs[[correction]], prefix = 'cross_species_ortholog_unaveraged'),
+        list(df = imputed_averaged_orthologs[[correction]], prefix = 'cross_species_ortholog_averaged.imputed'),
+        list(df = imputed_unaveraged_orthologs[[correction]], prefix = 'cross_species_ortholog_unaveraged.imputed')
     )
     for (spec in table_specs) {
         write_table_with_index_name(
             df = spec[['df']],
-            file_path = resolve_csca_output_path(paste0(spec[['prefix']], '.', correction, '.tsv')),
+            file_path = resolve_cross_species_output_path(paste0(spec[['prefix']], '.', correction, '.tsv')),
             index_name = 'target_id',
             sort = FALSE
         )
@@ -3357,7 +3357,7 @@ spp_filled = colnames(df_gc)
 is_singlecopy = get_singlecopy_bool_index(df_gc, spp_filled)
 df_singleog = df_og[is_singlecopy, spp_filled, drop = FALSE]
 spp = gsub('_', ' ', spp_filled)
-df_metadata = prepare_metadata_table(dir_csca_input_table, selected_sample_groups, spp)
+df_metadata = prepare_metadata_table(dir_cross_species_input_table, selected_sample_groups, spp)
 label_orders = get_label_orders(df_metadata)
 df_color_averaged = get_df_labels_averaged(df_metadata, label_orders, selected_sample_groups, sample_group_colors)
 df_color_unaveraged = get_df_labels_unaveraged(df_metadata, selected_sample_groups, sample_group_colors)
@@ -3366,7 +3366,7 @@ cat('Number of selected single-copy orthologs:', nrow(df_singleog), '\n')
 cat('Number of selected species:', length(spp), '\n')
 df_metadata_marked = df_metadata
 
-unaveraged_tcs = load_unaveraged_expression_tables(dir_csca_input_table, spp_filled, batch_effect_alg)
+unaveraged_tcs = load_unaveraged_expression_tables(dir_cross_species_input_table, spp_filled, batch_effect_alg)
 unaveraged_tcs = extract_selected_tc_only(unaveraged_tcs, df_metadata)
 
 # if a species was skipped during load_unaveraged_expression_tables(), it will cause indexing issues down the line, due to df_singleog having more species entries than the tcs
@@ -3407,9 +3407,9 @@ cat(nrow(imputed_unaveraged_orthologs[['corrected']]), 'orthologs were found aft
 df_metadata = calculate_correlation_within_group(unaveraged_orthologs, averaged_orthologs, df_metadata, selected_sample_groups)
 df_metadata = apply_csfilter_outlier_flags(
     df_metadata = df_metadata,
-    outlier_method = csca_outlier_method,
-    margin_threshold = csca_margin_threshold,
-    robust_z_threshold = csca_robust_z_threshold
+    outlier_method = cross_species_outlier_method,
+    margin_threshold = cross_species_margin_threshold,
+    robust_z_threshold = cross_species_robust_z_threshold
 )
 df_metadata_removed = df_metadata
 df_color_averaged = get_df_labels_averaged(
@@ -3539,9 +3539,9 @@ tryCatch(
     ),
     error = function(e) cat("Warning: save_unaveraged_tsne_plot skipped:", conditionMessage(e), "\n")
 )
-tryCatch(save_delta_pcc_plot(directory = dir_csca_input_table, plot_title = resolve_csca_output_path('csca_delta_pcc_boxplot.pdf')), error = function(e) cat("Warning: save_delta_pcc_plot skipped:", conditionMessage(e), "\n"))
+tryCatch(save_delta_pcc_plot(directory = dir_cross_species_input_table, plot_title = resolve_cross_species_output_path('cross_species_delta_pcc_boxplot.pdf')), error = function(e) cat("Warning: save_delta_pcc_plot skipped:", conditionMessage(e), "\n"))
 
-file_metadata_out = file.path(dir_csca, 'metadata.tsv')
+file_metadata_out = file.path(dir_cross_species, 'metadata.tsv')
 write.table(df_metadata, file_metadata_out, row.names = FALSE, sep = '\t', quote = FALSE)
 tryCatch(
     save_csfilter_outlier_scatter_plots(
@@ -3553,13 +3553,13 @@ tryCatch(
 )
 
 cat(sprintf('Number of SRA samples for exclusion potting: %s\n', formatC(nrow(df_metadata), format = 'd', big.mark = ',')))
-out_path = file.path(dir_csca, 'csca_exclusion.pdf')
+out_path = file.path(dir_cross_species, 'cross_species_exclusion.pdf')
 save_exclusion_plot(df = df_metadata, out_path = out_path, font_size = font_size, y_label = "Sample count")
 
-for (rplots_path in unique(c('Rplots.pdf', resolve_csca_output_path('Rplots.pdf')))) {
+for (rplots_path in unique(c('Rplots.pdf', resolve_cross_species_output_path('Rplots.pdf')))) {
     if (file.exists(rplots_path)) {
         file.remove(rplots_path)
     }
 }
-cleanup_csca_input_symlinks(dir_csca_input_table)
-cat('csca.r completed!\n')
+cleanup_cross_species_input_symlinks(dir_cross_species_input_table)
+cat('cross_species_filter.r completed!\n')

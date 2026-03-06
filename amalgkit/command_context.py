@@ -3,20 +3,20 @@ from dataclasses import dataclass, field
 
 
 @dataclass
-class CurateContext:
+class PerSpeciesTableContext:
     metadata: object = None
     input_dir: str | None = None
 
     def resolve(self):
         if self.metadata is None:
-            raise ValueError('CurateContext.metadata is required.')
+            raise ValueError('PerSpeciesTableContext.metadata is required.')
         if self.input_dir is None:
-            raise ValueError('CurateContext.input_dir is required.')
+            raise ValueError('PerSpeciesTableContext.input_dir is required.')
         return self.metadata, self.input_dir
 
 
 @dataclass
-class CscaContext:
+class CrossSpeciesFilterContext:
     metadata: object = None
 
 

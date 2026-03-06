@@ -5,7 +5,7 @@ import subprocess
 
 import pandas
 
-from amalgkit.command_context import CscaContext
+from amalgkit.command_context import CrossSpeciesFilterContext
 from amalgkit.filter_utils import staged_output_dir
 from amalgkit.metadata_utils import load_metadata
 from amalgkit.orthology_utils import (
@@ -54,7 +54,7 @@ def _collect_tsv_files(path_tables_dir):
 
 def get_sample_group_string(args, context=None):
     metadata = None
-    if isinstance(context, CscaContext):
+    if isinstance(context, CrossSpeciesFilterContext):
         metadata = context.metadata
     if args.sample_group is None:
         if metadata is None:
@@ -73,31 +73,31 @@ def get_sample_group_string(args, context=None):
     sample_group_string = '|'.join(sample_group)
     return sample_group_string
 
-def get_spp_from_dir(dir_curate):
-    return _iter_visible_subdirs(dir_curate)
+def get_species_from_dir(per_species_dir):
+    return _iter_visible_subdirs(per_species_dir)
 
-def generate_csca_input_symlinks(dir_csca_input_table, dir_curate, spp):
-    if os.path.lexists(dir_csca_input_table):
-        if os.path.islink(dir_csca_input_table):
-            os.remove(dir_csca_input_table)
-        elif os.path.isdir(dir_csca_input_table):
-            shutil.rmtree(dir_csca_input_table)
+def generate_input_symlinks(input_table_dir, per_species_dir, spp):
+    if os.path.lexists(input_table_dir):
+        if os.path.islink(input_table_dir):
+            os.remove(input_table_dir)
+        elif os.path.isdir(input_table_dir):
+            shutil.rmtree(input_table_dir)
         else:
             raise NotADirectoryError(
-                'CSCA input path exists but is not a directory: {}'.format(dir_csca_input_table)
+                'Cross-species input path exists but is not a directory: {}'.format(input_table_dir)
             )
-    os.makedirs(dir_csca_input_table, exist_ok=True)
+    os.makedirs(input_table_dir, exist_ok=True)
     src_by_filename = {}
     for sp in spp:
-        path_tables_dir = os.path.join(dir_curate, sp, 'tables')
+        path_tables_dir = os.path.join(per_species_dir, sp, 'tables')
         if not os.path.isdir(path_tables_dir):
             raise FileNotFoundError(
-                'Curate tables directory not found for species {}: {}'.format(sp, path_tables_dir)
+                'Per-species tables directory not found for species {}: {}'.format(sp, path_tables_dir)
             )
         tsv_files = _collect_tsv_files(path_tables_dir)
         if len(tsv_files) == 0:
             raise FileNotFoundError(
-                'No TSV table file was found in curate tables directory for species {}: {}'.format(
+                'No TSV table file was found in per-species tables directory for species {}: {}'.format(
                     sp,
                     path_tables_dir,
                 )
@@ -106,21 +106,21 @@ def generate_csca_input_symlinks(dir_csca_input_table, dir_curate, spp):
             existing_src = src_by_filename.get(file)
             if (existing_src is not None) and (os.path.realpath(existing_src) != os.path.realpath(path_src)):
                 raise ValueError(
-                    'Duplicate table filename across species in curate output: {} ({} vs {})'.format(
+                    'Duplicate table filename across species in per-species output: {} ({} vs {})'.format(
                         file, existing_src, path_src
                     )
                 )
             src_by_filename[file] = path_src
-            path_dst = os.path.join(dir_csca_input_table, file)
+            path_dst = os.path.join(input_table_dir, file)
             if os.path.lexists(path_dst):
                 if os.path.isdir(path_dst) and (not os.path.islink(path_dst)):
                     raise IsADirectoryError(
-                        'CSCA input destination exists but is a directory: {}'.format(path_dst)
+                        'Cross-species input destination exists but is a directory: {}'.format(path_dst)
                     )
                 os.remove(path_dst)
             os.symlink(path_src, path_dst)
 
-def csca_main(args, context=None):
+def run_cross_species_filter(args, context=None):
     check_rscript()
     orthology_params = check_ortholog_parameter_compatibility(args)
     if orthology_params is None:
@@ -131,29 +131,32 @@ def csca_main(args, context=None):
     dir_out = os.path.realpath(args.out_dir)
     if os.path.exists(dir_out) and (not os.path.isdir(dir_out)):
         raise NotADirectoryError('Output path exists but is not a directory: {}'.format(dir_out))
-    dir_curate = os.path.join(dir_out, 'curate')
-    if os.path.exists(dir_curate) and (not os.path.isdir(dir_curate)):
-        raise NotADirectoryError('Curate output path exists but is not a directory: {}'.format(dir_curate))
-    if not os.path.isdir(dir_curate):
-        raise FileNotFoundError('Curate output directory not found: {}. Run `amalgkit curate` first.'.format(dir_curate))
-    dir_csca = os.path.join(dir_out, 'csca')
-    if os.path.exists(dir_csca) and (not os.path.isdir(dir_csca)):
-        raise NotADirectoryError('csca path exists but is not a directory: {}'.format(dir_csca))
-    spp = get_spp_from_dir(dir_curate)
+    per_species_dir = os.path.join(dir_out, 'per_species')
+    if os.path.exists(per_species_dir) and (not os.path.isdir(per_species_dir)):
+        raise NotADirectoryError('Per-species output path exists but is not a directory: {}'.format(per_species_dir))
+    if not os.path.isdir(per_species_dir):
+        raise FileNotFoundError(
+            'Per-species table output directory not found: {}. Per-species table generation must run before cross-species analysis.'
+            .format(per_species_dir)
+        )
+    cross_species_dir = os.path.join(dir_out, 'cross_species')
+    if os.path.exists(cross_species_dir) and (not os.path.isdir(cross_species_dir)):
+        raise NotADirectoryError('Cross-species path exists but is not a directory: {}'.format(cross_species_dir))
+    spp = get_species_from_dir(per_species_dir)
     if len(spp) == 0:
-        raise ValueError('No curated species directories were found in: {}'.format(dir_curate))
+        raise ValueError('No per-species directories were found in: {}'.format(per_species_dir))
     sample_group_string = get_sample_group_string(args, context=context)
     dir_amalgkit_script = os.path.dirname(os.path.realpath(__file__))
-    csca_r_script_path = os.path.join(dir_amalgkit_script, 'csca.r')
+    cross_species_r_script_path = os.path.join(dir_amalgkit_script, 'cross_species_filter.r')
     r_util_path = os.path.join(dir_amalgkit_script, 'util.r')
     from amalgkit.r_config import temporary_r_config
     with staged_output_dir(
-        dir_csca,
+        cross_species_dir,
         redo=bool(getattr(args, 'redo', False)),
-        prefix='amalgkit_csca_stage_',
+        prefix='amalgkit_cross_species_stage_',
     ) as stage_dir:
-        dir_csca_input_table = os.path.join(stage_dir, 'csca_input_symlinks')
-        generate_csca_input_symlinks(dir_csca_input_table, dir_curate, spp)
+        input_table_dir = os.path.join(stage_dir, 'cross_species_input_symlinks')
+        generate_input_symlinks(input_table_dir, per_species_dir, spp)
         if dir_busco is not None:
             file_orthogroup_table = os.path.join(stage_dir, 'multispecies_busco_table.tsv')
             generate_multisp_busco_table(dir_busco=dir_busco, outfile=file_orthogroup_table)
@@ -169,20 +172,20 @@ def csca_main(args, context=None):
             'selected_sample_groups': sample_group_string,
             'sample_group_colors': args.sample_group_color,
             'dir_work': dir_out,
-            'dir_csca_input_table': dir_csca_input_table,
+            'dir_cross_species_input_table': input_table_dir,
             'file_orthogroup': file_orthogroup_table,
             'file_genecount': file_genecount,
             'r_util_path': r_util_path,
-            'dir_csca': stage_dir,
+            'dir_cross_species': stage_dir,
             'batch_effect_alg': args.batch_effect_alg,
             'missing_strategy': args.missing_strategy,
-            'csca_outlier_method': str(getattr(args, 'outlier_method', 'none')),
-            'csca_margin_threshold': str(getattr(args, 'margin_threshold', 0.0)),
-            'csca_robust_z_threshold': str(getattr(args, 'robust_z_threshold', -2.5)),
-            'csca_plot_mode': str(getattr(args, 'plot_mode', 'dual')),
+            'cross_species_outlier_method': str(getattr(args, 'outlier_method', 'none')),
+            'cross_species_margin_threshold': str(getattr(args, 'margin_threshold', 0.0)),
+            'cross_species_robust_z_threshold': str(getattr(args, 'robust_z_threshold', -2.5)),
+            'cross_species_plot_mode': str(getattr(args, 'plot_mode', 'dual')),
         }
-        with temporary_r_config(config_map, prefix='amalgkit_csca_r_') as config_path:
-            call_list = ['Rscript', csca_r_script_path, config_path]
+        with temporary_r_config(config_map, prefix='amalgkit_cross_species_r_') as config_path:
+            call_list = ['Rscript', cross_species_r_script_path, config_path]
             run_logged_check_call(
                 command=call_list,
                 runner=subprocess.check_call,

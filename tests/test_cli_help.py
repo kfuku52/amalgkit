@@ -54,18 +54,25 @@ def test_help_topic_finalize_exits_zero():
     assert '--sva_b' in merged
 
 
-def test_help_topic_csca_includes_redo():
-    out = run_cli('help', 'csca')
-    assert out.returncode == 0
-    merged = (out.stdout + '\n' + out.stderr).lower()
-    assert '--redo' in merged
-
-
 def test_help_topic_cstmm_includes_redo():
     out = run_cli('help', 'cstmm')
     assert out.returncode == 0
     merged = (out.stdout + '\n' + out.stderr).lower()
     assert '--redo' in merged
+
+
+def test_help_topic_csca_is_rejected():
+    out = run_cli('help', 'csca')
+    assert out.returncode != 0
+    merged = (out.stdout + '\n' + out.stderr).lower()
+    assert 'invalid choice' in merged
+
+
+def test_help_topic_curate_is_rejected():
+    out = run_cli('help', 'curate')
+    assert out.returncode != 0
+    merged = (out.stdout + '\n' + out.stderr).lower()
+    assert 'invalid choice' in merged
 
 
 def test_dataset_list_skips_runtime_banner():

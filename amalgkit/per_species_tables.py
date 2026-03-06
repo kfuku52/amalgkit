@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pandas
 
 from amalgkit.arg_utils import clone_namespace
-from amalgkit.command_context import CurateContext
+from amalgkit.command_context import PerSpeciesTableContext
 from amalgkit.metadata_utils import load_metadata
 from amalgkit.parallel_utils import resolve_worker_allocation, run_tasks_with_optional_threads
 from amalgkit.r_config import temporary_r_config
@@ -17,7 +17,7 @@ from amalgkit.runtime_utils import check_rscript
 from amalgkit.subprocess_utils import run_logged_command
 
 
-def validate_curate_metadata_columns(metadata, required_columns, context):
+def validate_per_species_metadata_columns(metadata, required_columns, context):
     missing = [col for col in required_columns if col not in metadata.df.columns]
     if len(missing) > 0:
         raise ValueError(
@@ -55,28 +55,28 @@ def get_sample_group(args, metadata):
         sample_group = parse_sample_group_argument(args.sample_group)
     if (len(sample_group)==0):
         txt = 'The "sample_group" column in --metadata ({}) is not filled. Please manually edit the file. '
-        txt += '`amalgkit curate` recognizes samples with the same string in this column to belong the same group.'
+        txt += 'Per-species table generation recognizes samples with the same string in this column to belong to the same group.'
         raise ValueError(txt.format(args.metadata))
     print('Tissues to be included: {}'.format(', '.join(sample_group)))
     sample_group = '|'.join(sample_group)
     return sample_group
 
-def get_curate_completion_flag_path(curate_dir, sp):
-    return os.path.join(curate_dir, sp, 'curate_completion_flag.txt')
+def get_completion_flag_path(per_species_dir, sp):
+    return os.path.join(per_species_dir, sp, 'per_species_completion_flag.txt')
 
-def write_curate_completion_flag(curate_dir, sp):
-    file_curate_completion_flag = get_curate_completion_flag_path(curate_dir, sp)
-    with open(file_curate_completion_flag, 'w') as f:
-        f.write('amalgkit curate completed at {}\n'.format(datetime.datetime.now()))
+def write_completion_flag(per_species_dir, sp):
+    completion_flag_path = get_completion_flag_path(per_species_dir, sp)
+    with open(completion_flag_path, 'w') as f:
+        f.write('amalgkit per-species table generation completed at {}\n'.format(datetime.datetime.now()))
 
-def register_curate_exit_status(curate_dir, sp, exit_status, failed_species):
+def register_exit_status(per_species_dir, sp, exit_status, failed_species):
     if exit_status == 0:
-        write_curate_completion_flag(curate_dir=curate_dir, sp=sp)
+        write_completion_flag(per_species_dir=per_species_dir, sp=sp)
     else:
         failed_species.add(sp)
-        sys.stderr.write('amalgkit curate failed for species: {}\n'.format(sp))
+        sys.stderr.write('Per-species table generation failed for species: {}\n'.format(sp))
 
-def run_curate_r_script(args, metadata, sp, input_dir):
+def run_per_species_r_script(args, metadata, sp, input_dir):
     dist_method = args.dist_method
     mr_cut = args.mapping_rate
     correlation_threshold = args.correlation_threshold
@@ -87,7 +87,7 @@ def run_curate_r_script(args, metadata, sp, input_dir):
     robust_z_threshold = float(getattr(args, 'robust_z_threshold', -2.5))
     disable_auto_outlier_filter = bool(getattr(args, 'disable_auto_outlier_filter', False))
     dir_amalgkit_script = os.path.dirname(os.path.realpath(__file__))
-    requested_script = str(getattr(args, 'r_script_name', 'curate.r'))
+    requested_script = str(getattr(args, 'r_script_name', 'prepare_tables.r'))
     if os.path.isabs(requested_script):
         r_script_path = requested_script
     else:
@@ -98,13 +98,13 @@ def run_curate_r_script(args, metadata, sp, input_dir):
     r_util_path = os.path.join(dir_amalgkit_script, 'util.r')
     metadata_arg = getattr(args, 'metadata', 'inferred')
     if metadata_arg != 'inferred':
-        path_curate_input_metadata = os.path.realpath(metadata_arg)
+        metadata_input_path = os.path.realpath(metadata_arg)
     else:
-        path_curate_input_metadata = os.path.join(input_dir, 'metadata.tsv')
-    if not os.path.exists(path_curate_input_metadata):
-        raise FileNotFoundError('Metadata file not found for curate R script: {}'.format(path_curate_input_metadata))
-    if not os.path.isfile(path_curate_input_metadata):
-        raise IsADirectoryError('Metadata path exists but is not a file: {}'.format(path_curate_input_metadata))
+        metadata_input_path = os.path.join(input_dir, 'metadata.tsv')
+    if not os.path.exists(metadata_input_path):
+        raise FileNotFoundError('Metadata file not found for per-species R script: {}'.format(metadata_input_path))
+    if not os.path.isfile(metadata_input_path):
+        raise IsADirectoryError('Metadata path exists but is not a file: {}'.format(metadata_input_path))
     input_dir_abs = os.path.abspath(input_dir)
     len_file = os.path.join(input_dir_abs, sp, sp + '_eff_length.tsv')
     count_file_candidates = [
@@ -135,10 +135,10 @@ def run_curate_r_script(args, metadata, sp, input_dir):
         sys.stderr.write('Skipping {}\n'.format(sp))
         print('Skipping {}'.format(sp), flush=True)
         return 1
-    print("Starting Rscript ({}) to obtain curated {} values.".format(r_script_name, args.norm), flush=True)
+    print("Starting Rscript ({}) to generate per-species {} tables.".format(r_script_name, args.norm), flush=True)
     config_map = {
         'est_counts_path': count_file,
-        'metadata_path': path_curate_input_metadata,
+        'metadata_path': metadata_input_path,
         'out_dir': os.path.realpath(args.out_dir),
         'eff_length_path': len_file,
         'dist_method': dist_method,
@@ -195,27 +195,27 @@ def run_curate_r_script(args, metadata, sp, input_dir):
         config_map['sva_nsv_setting'] = sva_nsv
         config_map['sva_B_setting'] = sva_B
         config_map['sva_B_auto_max'] = sva_B_auto_max
-    elif r_script_name == 'curate.r':
+    elif r_script_name == 'prepare_tables.r':
         pass
     else:
-        raise ValueError('Unsupported R script for curate pipeline: {}'.format(r_script_name))
-    with temporary_r_config(config_map, prefix='amalgkit_curate_r_') as config_path:
-        curate_r_result, _stdout_txt, _stderr_txt = run_logged_command(
+        raise ValueError('Unsupported R script for per-species table pipeline: {}'.format(r_script_name))
+    with temporary_r_config(config_map, prefix='amalgkit_per_species_r_') as config_path:
+        r_result, _stdout_txt, _stderr_txt = run_logged_command(
             command=['Rscript', r_script_path, config_path],
             runner=subprocess.run,
             command_prefix='Rscript command',
             print_output=False,
             not_found_label='Rscript',
         )
-    return curate_r_result.returncode
+    return r_result.returncode
 
 
-def resolve_curate_execution_context(args, context=None):
-    if isinstance(context, CurateContext):
+def resolve_per_species_execution_context(args, context=None):
+    if isinstance(context, PerSpeciesTableContext):
         return context.resolve()
-    return resolve_curate_input(args)
+    return resolve_per_species_input(args)
 
-def resolve_curate_input(args):
+def resolve_per_species_input(args):
     if args.input_dir != 'inferred':
         input_dir = os.path.realpath(args.input_dir)
         print('Input_directory: {}'.format(input_dir))
@@ -255,10 +255,10 @@ def resolve_curate_input(args):
 
 
 def list_selected_species(metadata):
-    validate_curate_metadata_columns(
+    validate_per_species_metadata_columns(
         metadata=metadata,
         required_columns=['scientific_name', 'exclusion'],
-        context='curate',
+        context='per-species table generation',
     )
     exclusion_series = (
         metadata.df['exclusion']
@@ -290,16 +290,16 @@ def has_cstmm_counts_input(input_dir, selected_species):
     return False
 
 
-def collect_pending_species_for_curate(args, curate_dir, selected_species):
+def collect_pending_species_for_tables(args, per_species_dir, selected_species):
     pending_species = []
     for species in selected_species:
-        flag_path = get_curate_completion_flag_path(curate_dir=curate_dir, sp=species)
+        flag_path = get_completion_flag_path(per_species_dir=per_species_dir, sp=species)
         if not os.path.exists(flag_path):
             pending_species.append(species)
             continue
         if args.redo:
             print('Output file detected. Will be overwritten: {}'.format(species), flush=True)
-            species_dir = os.path.join(curate_dir, species)
+            species_dir = os.path.join(per_species_dir, species)
             if os.path.lexists(species_dir):
                 if os.path.islink(species_dir):
                     os.remove(species_dir)
@@ -307,7 +307,7 @@ def collect_pending_species_for_curate(args, curate_dir, selected_species):
                     shutil.rmtree(species_dir)
                 else:
                     raise NotADirectoryError(
-                        'Curate output path exists but is not a directory: {}'.format(species_dir)
+                        'Per-species output path exists but is not a directory: {}'.format(species_dir)
                     )
             pending_species.append(species)
             continue
@@ -315,13 +315,13 @@ def collect_pending_species_for_curate(args, curate_dir, selected_species):
     return pending_species
 
 
-def run_curate_species_jobs(args, metadata, input_dir, curate_dir, pending_species, failed_species, species_jobs):
+def run_per_species_jobs(args, metadata, input_dir, per_species_dir, pending_species, failed_species, species_jobs):
     if (species_jobs == 1) or (len(pending_species) <= 1):
         for species in pending_species:
             print('Starting: {}'.format(species), flush=True)
-            exit_status = run_curate_r_script(args, metadata, species, input_dir)
-            register_curate_exit_status(
-                curate_dir=curate_dir,
+            exit_status = run_per_species_r_script(args, metadata, species, input_dir)
+            register_exit_status(
+                per_species_dir=per_species_dir,
                 sp=species,
                 exit_status=exit_status,
                 failed_species=failed_species,
@@ -329,31 +329,37 @@ def run_curate_species_jobs(args, metadata, input_dir, curate_dir, pending_speci
         return
 
     max_workers = min(species_jobs, len(pending_species))
-    print('Running curate for {:,} species with {:,} parallel jobs.'.format(len(pending_species), max_workers), flush=True)
+    print(
+        'Running per-species table generation for {:,} species with {:,} parallel jobs.'.format(
+            len(pending_species),
+            max_workers,
+        ),
+        flush=True,
+    )
     exit_status_by_species, failures = run_tasks_with_optional_threads(
         task_items=pending_species,
-        task_fn=lambda species: run_curate_r_script(args, metadata, species, input_dir),
+        task_fn=lambda species: run_per_species_r_script(args, metadata, species, input_dir),
         max_workers=max_workers,
     )
     for species, exc in failures:
         failed_species.add(species)
-        sys.stderr.write('amalgkit curate failed for species: {} ({})\n'.format(species, exc))
+        sys.stderr.write('Per-species table generation failed for species: {} ({})\n'.format(species, exc))
     for species, exit_status in exit_status_by_species.items():
-        register_curate_exit_status(
-            curate_dir=curate_dir,
+        register_exit_status(
+            per_species_dir=per_species_dir,
             sp=species,
             exit_status=exit_status,
             failed_species=failed_species,
         )
 
 
-def curate_main(args, context=None):
+def generate_per_species_tables(args, context=None):
     species_jobs, _ = resolve_worker_allocation(
         requested_workers=getattr(args, 'internal_jobs', 'auto'),
         requested_threads=getattr(args, 'threads', 'auto'),
         internal_cpu_budget=getattr(args, 'internal_cpu_budget', 'auto'),
         worker_option_name='internal_jobs',
-        context='curate:',
+        context='per-species table generation:',
         disable_workers=(getattr(args, 'batch', None) is not None),
     )
     runtime_args = clone_namespace(args, internal_jobs=species_jobs)
@@ -361,33 +367,33 @@ def curate_main(args, context=None):
     out_dir = os.path.realpath(runtime_args.out_dir)
     if os.path.exists(out_dir) and (not os.path.isdir(out_dir)):
         raise NotADirectoryError('Output path exists but is not a directory: {}'.format(out_dir))
-    curate_dir = os.path.join(out_dir, 'curate')
-    if os.path.exists(curate_dir) and (not os.path.isdir(curate_dir)):
-        raise NotADirectoryError('Curate path exists but is not a directory: {}'.format(curate_dir))
+    per_species_dir = os.path.join(out_dir, 'per_species')
+    if os.path.exists(per_species_dir) and (not os.path.isdir(per_species_dir)):
+        raise NotADirectoryError('Per-species path exists but is not a directory: {}'.format(per_species_dir))
     runtime_args = clone_namespace(runtime_args, out_dir=out_dir)
-    metadata, input_dir = resolve_curate_execution_context(runtime_args, context=context)
+    metadata, input_dir = resolve_per_species_execution_context(runtime_args, context=context)
     selected_species = list_selected_species(metadata)
     if ('tpm' in str(runtime_args.norm).lower()) and has_cstmm_counts_input(input_dir, selected_species):
         txt = ("TPM and TMM are incompatible. "
                "If input data are CSTMM-normalized, "
                "please switch --norm to any of the 'fpkm' normalization methods instead.")
         raise ValueError(txt)
-    os.makedirs(curate_dir, exist_ok=True)
+    os.makedirs(per_species_dir, exist_ok=True)
     failed_species = set()
     print(
         'Number of species in the selected metadata table ("exclusion"=="no"): {}'.format(len(selected_species)),
         flush=True,
     )
-    pending_species = collect_pending_species_for_curate(runtime_args, curate_dir, selected_species)
-    run_curate_species_jobs(
+    pending_species = collect_pending_species_for_tables(runtime_args, per_species_dir, selected_species)
+    run_per_species_jobs(
         args=runtime_args,
         metadata=metadata,
         input_dir=input_dir,
-        curate_dir=curate_dir,
+        per_species_dir=per_species_dir,
         pending_species=pending_species,
         failed_species=failed_species,
         species_jobs=species_jobs,
     )
     if len(failed_species) > 0:
-        txt = 'amalgkit curate failed for {}/{} species: {}\n'
+        txt = 'Per-species table generation failed for {}/{} species: {}\n'
         raise RuntimeError(txt.format(len(failed_species), len(selected_species), ', '.join(sorted(failed_species))).strip())

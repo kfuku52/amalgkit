@@ -3,36 +3,36 @@ import pytest
 import pandas
 from types import SimpleNamespace
 
-from amalgkit.csca import get_spp_from_dir, generate_csca_input_symlinks, get_sample_group_string, csca_main
+from amalgkit.cross_species_filter import get_species_from_dir, generate_input_symlinks, get_sample_group_string, run_cross_species_filter
 from amalgkit.util import Metadata
 
 
 # ---------------------------------------------------------------------------
-# get_spp_from_dir (filters hidden and tmp files from directory listing)
+# get_species_from_dir (filters hidden and tmp files from directory listing)
 # ---------------------------------------------------------------------------
 
 class TestGetSppFromDir:
     def test_basic_listing(self, tmp_path):
         (tmp_path / 'Homo_sapiens').mkdir()
         (tmp_path / 'Mus_musculus').mkdir()
-        result = get_spp_from_dir(str(tmp_path))
+        result = get_species_from_dir(str(tmp_path))
         assert sorted(result) == ['Homo_sapiens', 'Mus_musculus']
 
     def test_excludes_hidden_files(self, tmp_path):
         (tmp_path / 'Homo_sapiens').mkdir()
         (tmp_path / '.hidden').mkdir()
         (tmp_path / '.DS_Store').touch()
-        result = get_spp_from_dir(str(tmp_path))
+        result = get_species_from_dir(str(tmp_path))
         assert result == ['Homo_sapiens']
 
     def test_excludes_tmp_files(self, tmp_path):
         (tmp_path / 'Homo_sapiens').mkdir()
         (tmp_path / 'tmp.amalgkit.1234').touch()
-        result = get_spp_from_dir(str(tmp_path))
+        result = get_species_from_dir(str(tmp_path))
         assert result == ['Homo_sapiens']
 
     def test_empty_directory(self, tmp_path):
-        result = get_spp_from_dir(str(tmp_path))
+        result = get_species_from_dir(str(tmp_path))
         assert result == []
 
     def test_mixed_entries(self, tmp_path):
@@ -41,62 +41,62 @@ class TestGetSppFromDir:
         (tmp_path / 'Species_B').mkdir()
         (tmp_path / '.gitkeep').touch()
         (tmp_path / 'tmp.output').touch()
-        result = get_spp_from_dir(str(tmp_path))
+        result = get_species_from_dir(str(tmp_path))
         assert sorted(result) == ['Species_A', 'Species_B']
 
     def test_ignores_non_directory_entries(self, tmp_path):
         (tmp_path / 'Species_A').mkdir()
         (tmp_path / 'metadata.tsv').write_text('data')
-        result = get_spp_from_dir(str(tmp_path))
+        result = get_species_from_dir(str(tmp_path))
         assert result == ['Species_A']
 
 
 # ---------------------------------------------------------------------------
-# generate_csca_input_symlinks (creates symlinks from curate to csca)
+# generate_input_symlinks (creates symlinks from curate to csca)
 # ---------------------------------------------------------------------------
 
 class TestGenerateCscaInputSymlinks:
     def test_creates_symlinks(self, tmp_path):
         """Creates symlinks to curate output tables."""
-        dir_curate = tmp_path / 'curate'
+        dir_curate = tmp_path / 'per_species'
         sp_tables = dir_curate / 'Homo_sapiens' / 'tables'
         sp_tables.mkdir(parents=True)
         (sp_tables / 'Homo_sapiens_tpm.tsv').write_text('data')
         (sp_tables / 'Homo_sapiens_est_counts.tsv').write_text('data')
         dir_csca_input = str(tmp_path / 'csca_input')
-        generate_csca_input_symlinks(dir_csca_input, str(dir_curate), ['Homo_sapiens'])
+        generate_input_symlinks(dir_csca_input, str(dir_curate), ['Homo_sapiens'])
         assert os.path.isdir(dir_csca_input)
         assert os.path.islink(os.path.join(dir_csca_input, 'Homo_sapiens_tpm.tsv'))
         assert os.path.islink(os.path.join(dir_csca_input, 'Homo_sapiens_est_counts.tsv'))
 
     def test_multiple_species(self, tmp_path):
         """Creates symlinks for multiple species."""
-        dir_curate = tmp_path / 'curate'
+        dir_curate = tmp_path / 'per_species'
         for sp in ['Homo_sapiens', 'Mus_musculus']:
             tables = dir_curate / sp / 'tables'
             tables.mkdir(parents=True)
             (tables / f'{sp}_tpm.tsv').write_text('data')
         dir_csca_input = str(tmp_path / 'csca_input')
-        generate_csca_input_symlinks(dir_csca_input, str(dir_curate), ['Homo_sapiens', 'Mus_musculus'])
+        generate_input_symlinks(dir_csca_input, str(dir_curate), ['Homo_sapiens', 'Mus_musculus'])
         assert os.path.islink(os.path.join(dir_csca_input, 'Homo_sapiens_tpm.tsv'))
         assert os.path.islink(os.path.join(dir_csca_input, 'Mus_musculus_tpm.tsv'))
 
     def test_recreates_directory(self, tmp_path):
         """Removes and recreates csca input directory."""
-        dir_curate = tmp_path / 'curate'
+        dir_curate = tmp_path / 'per_species'
         sp_tables = dir_curate / 'Homo_sapiens' / 'tables'
         sp_tables.mkdir(parents=True)
         (sp_tables / 'Homo_sapiens_tpm.tsv').write_text('data')
         dir_csca_input = tmp_path / 'csca_input'
         dir_csca_input.mkdir()
         (dir_csca_input / 'old_file.txt').write_text('old')
-        generate_csca_input_symlinks(str(dir_csca_input), str(dir_curate), ['Homo_sapiens'])
+        generate_input_symlinks(str(dir_csca_input), str(dir_curate), ['Homo_sapiens'])
         # Old file should be gone
         assert not os.path.exists(str(dir_csca_input / 'old_file.txt'))
         assert os.path.islink(str(dir_csca_input / 'Homo_sapiens_tpm.tsv'))
 
     def test_replaces_symlinked_csca_input_path(self, tmp_path):
-        dir_curate = tmp_path / 'curate'
+        dir_curate = tmp_path / 'per_species'
         sp_tables = dir_curate / 'Homo_sapiens' / 'tables'
         sp_tables.mkdir(parents=True)
         (sp_tables / 'Homo_sapiens_tpm.tsv').write_text('data')
@@ -106,7 +106,7 @@ class TestGenerateCscaInputSymlinks:
         dir_csca_input = tmp_path / 'csca_input'
         os.symlink(real_target, dir_csca_input)
 
-        generate_csca_input_symlinks(str(dir_csca_input), str(dir_curate), ['Homo_sapiens'])
+        generate_input_symlinks(str(dir_csca_input), str(dir_curate), ['Homo_sapiens'])
 
         assert os.path.isdir(str(dir_csca_input))
         assert not os.path.islink(str(dir_csca_input))
@@ -114,7 +114,7 @@ class TestGenerateCscaInputSymlinks:
         assert os.path.exists(str(real_target / 'keep.txt'))
 
     def test_ignores_non_tsv_and_subdirectories(self, tmp_path):
-        dir_curate = tmp_path / 'curate'
+        dir_curate = tmp_path / 'per_species'
         sp_tables = dir_curate / 'Homo_sapiens' / 'tables'
         sp_tables.mkdir(parents=True)
         (sp_tables / 'Homo_sapiens_tpm.tsv').write_text('data')
@@ -122,32 +122,32 @@ class TestGenerateCscaInputSymlinks:
         (sp_tables / 'nested').mkdir()
         dir_csca_input = str(tmp_path / 'csca_input')
 
-        generate_csca_input_symlinks(dir_csca_input, str(dir_curate), ['Homo_sapiens'])
+        generate_input_symlinks(dir_csca_input, str(dir_curate), ['Homo_sapiens'])
 
         assert os.path.islink(os.path.join(dir_csca_input, 'Homo_sapiens_tpm.tsv'))
         assert not os.path.exists(os.path.join(dir_csca_input, 'notes.txt'))
         assert not os.path.exists(os.path.join(dir_csca_input, 'nested'))
 
     def test_raises_clear_error_when_species_tables_dir_missing(self, tmp_path):
-        dir_curate = tmp_path / 'curate'
+        dir_curate = tmp_path / 'per_species'
         (dir_curate / 'Homo_sapiens').mkdir(parents=True)
         dir_csca_input = str(tmp_path / 'csca_input')
 
-        with pytest.raises(FileNotFoundError, match='Curate tables directory not found for species'):
-            generate_csca_input_symlinks(dir_csca_input, str(dir_curate), ['Homo_sapiens'])
+        with pytest.raises(FileNotFoundError, match='Per-species tables directory not found for species'):
+            generate_input_symlinks(dir_csca_input, str(dir_curate), ['Homo_sapiens'])
 
     def test_raises_when_species_tables_dir_has_no_tsv_files(self, tmp_path):
-        dir_curate = tmp_path / 'curate'
+        dir_curate = tmp_path / 'per_species'
         sp_tables = dir_curate / 'Homo_sapiens' / 'tables'
         sp_tables.mkdir(parents=True)
         (sp_tables / 'notes.txt').write_text('not a tsv')
         dir_csca_input = str(tmp_path / 'csca_input')
 
-        with pytest.raises(FileNotFoundError, match='No TSV table file was found in curate tables directory'):
-            generate_csca_input_symlinks(dir_csca_input, str(dir_curate), ['Homo_sapiens'])
+        with pytest.raises(FileNotFoundError, match='No TSV table file was found in per-species tables directory'):
+            generate_input_symlinks(dir_csca_input, str(dir_curate), ['Homo_sapiens'])
 
     def test_raises_on_duplicate_table_filename_across_species(self, tmp_path):
-        dir_curate = tmp_path / 'curate'
+        dir_curate = tmp_path / 'per_species'
         hs_tables = dir_curate / 'Homo_sapiens' / 'tables'
         mm_tables = dir_curate / 'Mus_musculus' / 'tables'
         hs_tables.mkdir(parents=True)
@@ -157,25 +157,25 @@ class TestGenerateCscaInputSymlinks:
         dir_csca_input = str(tmp_path / 'csca_input')
 
         with pytest.raises(ValueError, match='Duplicate table filename across species'):
-            generate_csca_input_symlinks(
+            generate_input_symlinks(
                 dir_csca_input,
                 str(dir_curate),
                 ['Homo_sapiens', 'Mus_musculus'],
             )
 
     def test_raises_when_csca_input_path_is_a_file(self, tmp_path):
-        dir_curate = tmp_path / 'curate'
+        dir_curate = tmp_path / 'per_species'
         sp_tables = dir_curate / 'Homo_sapiens' / 'tables'
         sp_tables.mkdir(parents=True)
         (sp_tables / 'Homo_sapiens_tpm.tsv').write_text('data')
         dir_csca_input = tmp_path / 'csca_input'
         dir_csca_input.write_text('not a directory')
 
-        with pytest.raises(NotADirectoryError, match='CSCA input path exists but is not a directory'):
-            generate_csca_input_symlinks(str(dir_csca_input), str(dir_curate), ['Homo_sapiens'])
+        with pytest.raises(NotADirectoryError, match='Cross-species input path exists but is not a directory'):
+            generate_input_symlinks(str(dir_csca_input), str(dir_curate), ['Homo_sapiens'])
 
     def test_raises_when_symlink_destination_is_directory(self, tmp_path, monkeypatch):
-        dir_curate = tmp_path / 'curate'
+        dir_curate = tmp_path / 'per_species'
         sp_tables = dir_curate / 'Homo_sapiens' / 'tables'
         sp_tables.mkdir(parents=True)
         (sp_tables / 'Homo_sapiens_tpm.tsv').write_text('data')
@@ -194,11 +194,11 @@ class TestGenerateCscaInputSymlinks:
                 return True
             return real_isdir(path)
 
-        monkeypatch.setattr('amalgkit.csca.os.path.lexists', fake_lexists)
-        monkeypatch.setattr('amalgkit.csca.os.path.isdir', fake_isdir)
+        monkeypatch.setattr('amalgkit.cross_species_filter.os.path.lexists', fake_lexists)
+        monkeypatch.setattr('amalgkit.cross_species_filter.os.path.isdir', fake_isdir)
 
-        with pytest.raises(IsADirectoryError, match='CSCA input destination exists but is a directory'):
-            generate_csca_input_symlinks(str(dir_csca_input), str(dir_curate), ['Homo_sapiens'])
+        with pytest.raises(IsADirectoryError, match='Cross-species input destination exists but is a directory'):
+            generate_input_symlinks(str(dir_csca_input), str(dir_curate), ['Homo_sapiens'])
 
 
 class TestGetSampleGroupString:
@@ -217,7 +217,7 @@ class TestGetSampleGroupString:
             'sample_group': ['treated', 'control'],
             'exclusion': ['no', 'no'],
         }))
-        monkeypatch.setattr('amalgkit.csca.load_metadata', lambda _args: metadata)
+        monkeypatch.setattr('amalgkit.cross_species_filter.load_metadata', lambda _args: metadata)
         out = get_sample_group_string(args)
         assert set(out.split('|')) == {'treated', 'control'}
 
@@ -228,7 +228,7 @@ class TestGetSampleGroupString:
             'sample_group': [' treated ', '', 'treated', 'control'],
             'exclusion': ['no', 'no', 'no', 'no'],
         }))
-        monkeypatch.setattr('amalgkit.csca.load_metadata', lambda _args: metadata)
+        monkeypatch.setattr('amalgkit.cross_species_filter.load_metadata', lambda _args: metadata)
         assert get_sample_group_string(args) == 'treated|control'
 
     def test_metadata_sample_groups_drop_nan(self, monkeypatch):
@@ -238,7 +238,7 @@ class TestGetSampleGroupString:
             'sample_group': ['treated', float('nan'), 'control'],
             'exclusion': ['no', 'no', 'no'],
         }))
-        monkeypatch.setattr('amalgkit.csca.load_metadata', lambda _args: metadata)
+        monkeypatch.setattr('amalgkit.cross_species_filter.load_metadata', lambda _args: metadata)
         assert get_sample_group_string(args) == 'treated|control'
 
     def test_raises_when_no_sample_group_selected(self):
@@ -252,7 +252,7 @@ class TestGetSampleGroupString:
             'run': ['R1'],
             'exclusion': ['no'],
         }))
-        monkeypatch.setattr('amalgkit.csca.load_metadata', lambda _args: metadata)
+        monkeypatch.setattr('amalgkit.cross_species_filter.load_metadata', lambda _args: metadata)
         with pytest.raises(ValueError, match='sample_group'):
             get_sample_group_string(args)
 
@@ -273,111 +273,111 @@ class TestCscaMain:
 
     def test_raises_clear_error_when_curate_dir_missing(self, tmp_path, monkeypatch):
         args = self._base_args(tmp_path / 'out')
-        monkeypatch.setattr('amalgkit.csca.check_rscript', lambda: None)
-        monkeypatch.setattr('amalgkit.csca.check_ortholog_parameter_compatibility', lambda _args: None)
-        with pytest.raises(FileNotFoundError, match='Curate output directory not found'):
-            csca_main(args)
+        monkeypatch.setattr('amalgkit.cross_species_filter.check_rscript', lambda: None)
+        monkeypatch.setattr('amalgkit.cross_species_filter.check_ortholog_parameter_compatibility', lambda _args: None)
+        with pytest.raises(FileNotFoundError, match='Per-species table output directory not found'):
+            run_cross_species_filter(args)
 
     def test_blank_orthogroup_table_raises_parameter_error(self, tmp_path, monkeypatch):
         args = self._base_args(tmp_path / 'out')
         args.orthogroup_table = '   '
-        monkeypatch.setattr('amalgkit.csca.check_rscript', lambda: None)
+        monkeypatch.setattr('amalgkit.cross_species_filter.check_rscript', lambda: None)
         with pytest.raises(ValueError, match='One of --orthogroup_table and --dir_busco should be specified'):
-            csca_main(args)
+            run_cross_species_filter(args)
 
     def test_raises_when_out_dir_is_file(self, tmp_path, monkeypatch):
         out_path = tmp_path / 'out_path'
         out_path.write_text('not a directory')
         args = self._base_args(out_path)
-        monkeypatch.setattr('amalgkit.csca.check_rscript', lambda: None)
-        monkeypatch.setattr('amalgkit.csca.check_ortholog_parameter_compatibility', lambda _args: None)
+        monkeypatch.setattr('amalgkit.cross_species_filter.check_rscript', lambda: None)
+        monkeypatch.setattr('amalgkit.cross_species_filter.check_ortholog_parameter_compatibility', lambda _args: None)
         with pytest.raises(NotADirectoryError, match='Output path exists but is not a directory'):
-            csca_main(args)
+            run_cross_species_filter(args)
 
     def test_raises_when_curate_path_is_file(self, tmp_path, monkeypatch):
         out_dir = tmp_path / 'out'
         out_dir.mkdir()
-        (out_dir / 'curate').write_text('not a directory')
+        (out_dir / 'per_species').write_text('not a directory')
         args = self._base_args(out_dir)
-        monkeypatch.setattr('amalgkit.csca.check_rscript', lambda: None)
-        monkeypatch.setattr('amalgkit.csca.check_ortholog_parameter_compatibility', lambda _args: None)
-        with pytest.raises(NotADirectoryError, match='Curate output path exists but is not a directory'):
-            csca_main(args)
+        monkeypatch.setattr('amalgkit.cross_species_filter.check_rscript', lambda: None)
+        monkeypatch.setattr('amalgkit.cross_species_filter.check_ortholog_parameter_compatibility', lambda _args: None)
+        with pytest.raises(NotADirectoryError, match='Per-species output path exists but is not a directory'):
+            run_cross_species_filter(args)
 
     def test_raises_when_csca_path_is_file(self, tmp_path, monkeypatch):
         out_dir = tmp_path / 'out'
-        curate_dir = out_dir / 'curate' / 'Species_A' / 'tables'
+        curate_dir = out_dir / 'per_species' / 'Species_A' / 'tables'
         curate_dir.mkdir(parents=True)
         (curate_dir / 'Species_A_est_counts.tsv').write_text('target_id\tR1\nG1\t1\n')
-        (out_dir / 'csca').write_text('not a directory')
+        (out_dir / 'cross_species').write_text('not a directory')
         args = self._base_args(out_dir)
         args.orthogroup_table = str(tmp_path / 'orthogroup.tsv')
         (tmp_path / 'orthogroup.tsv').write_text('busco_id\tSpecies_A\nOG1\tgene1\n')
-        monkeypatch.setattr('amalgkit.csca.check_rscript', lambda: None)
-        monkeypatch.setattr('amalgkit.csca.check_ortholog_parameter_compatibility', lambda _args: None)
-        with pytest.raises(NotADirectoryError, match='csca path exists but is not a directory'):
-            csca_main(args)
+        monkeypatch.setattr('amalgkit.cross_species_filter.check_rscript', lambda: None)
+        monkeypatch.setattr('amalgkit.cross_species_filter.check_ortholog_parameter_compatibility', lambda _args: None)
+        with pytest.raises(NotADirectoryError, match='Cross-species path exists but is not a directory'):
+            run_cross_species_filter(args)
 
     def test_existing_output_requires_redo(self, tmp_path, monkeypatch):
         out_dir = tmp_path / 'out'
-        tables_dir = out_dir / 'curate' / 'Species_A' / 'tables'
+        tables_dir = out_dir / 'per_species' / 'Species_A' / 'tables'
         tables_dir.mkdir(parents=True)
         (tables_dir / 'Species_A_est_counts.tsv').write_text('target_id\tR1\nG1\t1\n')
-        existing_dir = out_dir / 'csca'
+        existing_dir = out_dir / 'cross_species'
         existing_dir.mkdir()
         orthogroup = tmp_path / 'orthogroup.tsv'
         orthogroup.write_text('busco_id\tSpecies_A\nOG1\tgene1\n')
         args = self._base_args(out_dir)
         args.orthogroup_table = str(orthogroup)
 
-        monkeypatch.setattr('amalgkit.csca.check_rscript', lambda: None)
+        monkeypatch.setattr('amalgkit.cross_species_filter.check_rscript', lambda: None)
 
         with pytest.raises(FileExistsError, match='Use --redo yes to overwrite'):
-            csca_main(args)
+            run_cross_species_filter(args)
 
     def test_raises_when_curate_dir_has_no_species_subdirs(self, tmp_path, monkeypatch):
         out_dir = tmp_path / 'out'
-        (out_dir / 'curate').mkdir(parents=True)
+        (out_dir / 'per_species').mkdir(parents=True)
         args = self._base_args(out_dir)
-        monkeypatch.setattr('amalgkit.csca.check_rscript', lambda: None)
-        monkeypatch.setattr('amalgkit.csca.check_ortholog_parameter_compatibility', lambda _args: None)
-        with pytest.raises(ValueError, match='No curated species directories were found'):
-            csca_main(args)
+        monkeypatch.setattr('amalgkit.cross_species_filter.check_rscript', lambda: None)
+        monkeypatch.setattr('amalgkit.cross_species_filter.check_ortholog_parameter_compatibility', lambda _args: None)
+        with pytest.raises(ValueError, match='No per-species directories were found'):
+            run_cross_species_filter(args)
 
     def test_raises_when_orthogroup_table_path_missing(self, tmp_path, monkeypatch):
         out_dir = tmp_path / 'out'
-        tables_dir = out_dir / 'curate' / 'Species_A' / 'tables'
+        tables_dir = out_dir / 'per_species' / 'Species_A' / 'tables'
         tables_dir.mkdir(parents=True)
         (tables_dir / 'Species_A_est_counts.tsv').write_text('target_id\tR1\nG1\t1\n')
         args = self._base_args(out_dir)
         args.orthogroup_table = str(tmp_path / 'missing.tsv')
-        monkeypatch.setattr('amalgkit.csca.check_rscript', lambda: None)
-        monkeypatch.setattr('amalgkit.csca.check_ortholog_parameter_compatibility', lambda _args: None)
+        monkeypatch.setattr('amalgkit.cross_species_filter.check_rscript', lambda: None)
+        monkeypatch.setattr('amalgkit.cross_species_filter.check_ortholog_parameter_compatibility', lambda _args: None)
 
         with pytest.raises(FileNotFoundError, match='Orthogroup table not found'):
-            csca_main(args)
+            run_cross_species_filter(args)
 
     def test_raises_when_orthogroup_table_path_is_directory(self, tmp_path, monkeypatch):
         out_dir = tmp_path / 'out'
-        tables_dir = out_dir / 'curate' / 'Species_A' / 'tables'
+        tables_dir = out_dir / 'per_species' / 'Species_A' / 'tables'
         tables_dir.mkdir(parents=True)
         (tables_dir / 'Species_A_est_counts.tsv').write_text('target_id\tR1\nG1\t1\n')
         og_dir = tmp_path / 'orthogroup_dir'
         og_dir.mkdir()
         args = self._base_args(out_dir)
         args.orthogroup_table = str(og_dir)
-        monkeypatch.setattr('amalgkit.csca.check_rscript', lambda: None)
-        monkeypatch.setattr('amalgkit.csca.check_ortholog_parameter_compatibility', lambda _args: None)
+        monkeypatch.setattr('amalgkit.cross_species_filter.check_rscript', lambda: None)
+        monkeypatch.setattr('amalgkit.cross_species_filter.check_ortholog_parameter_compatibility', lambda _args: None)
 
         with pytest.raises(IsADirectoryError, match='Orthogroup table path exists but is not a file'):
-            csca_main(args)
+            run_cross_species_filter(args)
 
     def test_restores_existing_output_when_staged_run_fails(self, tmp_path, monkeypatch):
         out_dir = tmp_path / 'out'
-        tables_dir = out_dir / 'curate' / 'Species_A' / 'tables'
+        tables_dir = out_dir / 'per_species' / 'Species_A' / 'tables'
         tables_dir.mkdir(parents=True)
         (tables_dir / 'Species_A_est_counts.tsv').write_text('target_id\tR1\nG1\t1\n')
-        existing_dir = out_dir / 'csca'
+        existing_dir = out_dir / 'cross_species'
         existing_dir.mkdir()
         (existing_dir / 'old.txt').write_text('old')
         orthogroup = tmp_path / 'orthogroup.tsv'
@@ -386,13 +386,13 @@ class TestCscaMain:
         args.orthogroup_table = str(orthogroup)
         args.redo = True
 
-        monkeypatch.setattr('amalgkit.csca.check_rscript', lambda: None)
+        monkeypatch.setattr('amalgkit.cross_species_filter.check_rscript', lambda: None)
         monkeypatch.setattr(
-            'amalgkit.csca.orthogroup2genecount',
+            'amalgkit.cross_species_filter.orthogroup2genecount',
             lambda **_kwargs: (_ for _ in ()).throw(RuntimeError('boom')),
         )
 
         with pytest.raises(RuntimeError, match='boom'):
-            csca_main(args)
+            run_cross_species_filter(args)
 
         assert (existing_dir / 'old.txt').read_text() == 'old'
