@@ -225,8 +225,8 @@ class TestMetadataMain:
         args = self._args(tmp_path / 'out')
         empty_metadata = Metadata.from_DataFrame(pandas.DataFrame(columns=Metadata.column_names))
 
-        monkeypatch.setattr('amalgkit.metadata.fetch_sra_xml', lambda search_term: ET.Element('EXPERIMENT_PACKAGE_SET'))
-        monkeypatch.setattr('amalgkit.metadata.Metadata.from_xml', lambda xml_root: empty_metadata)
+        monkeypatch.setattr('amalgkit.metadata.search_sra_record_ids', lambda search_term: [])
+        monkeypatch.setattr('amalgkit.metadata.Metadata.from_xml_roots', lambda xml_roots: empty_metadata)
         monkeypatch.setattr('amalgkit.metadata.Metadata.add_standard_rank_taxids', lambda self, args=None: None)
 
         metadata_main(args)
@@ -238,8 +238,8 @@ class TestMetadataMain:
         args = self._args(tmp_path / 'out')
         args.search_string = None
         monkeypatch.setattr(
-            'amalgkit.metadata.fetch_sra_xml',
-            lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError('fetch_sra_xml should not be called')),
+            'amalgkit.metadata.search_sra_record_ids',
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError('search_sra_record_ids should not be called')),
         )
 
         with pytest.raises(ValueError, match='--search_string is required'):
@@ -249,8 +249,8 @@ class TestMetadataMain:
         args = self._args(tmp_path / 'out')
         args.search_string = '   '
         monkeypatch.setattr(
-            'amalgkit.metadata.fetch_sra_xml',
-            lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError('fetch_sra_xml should not be called')),
+            'amalgkit.metadata.search_sra_record_ids',
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError('search_sra_record_ids should not be called')),
         )
 
         with pytest.raises(ValueError, match='--search_string is required'):

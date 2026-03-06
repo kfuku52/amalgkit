@@ -533,15 +533,17 @@ class Metadata:
         metadata.reorder(omit_misc=False)
         return metadata
 
-    def from_xml(xml_root):
+    def _normalize_xml_root(xml_root):
         if isinstance(xml_root, ET.ElementTree):
-            root = xml_root.getroot()
-        elif isinstance(xml_root, ET.Element):
-            root = xml_root
-        elif hasattr(xml_root, 'getroot'):
-            root = xml_root.getroot()
-        else:
-            raise TypeError("Unknown input type.")
+            return xml_root.getroot()
+        if isinstance(xml_root, ET.Element):
+            return xml_root
+        if hasattr(xml_root, 'getroot'):
+            return xml_root.getroot()
+        raise TypeError("Unknown input type.")
+
+    def from_xml_roots(xml_roots):
+        metadata = Metadata()
 
         def get_first_text(entry, path):
             element = entry.find(path)
@@ -571,103 +573,104 @@ class Metadata:
                 external_ids[namespace] = '' if text is None else str(text)
             return external_ids
 
+        blocked_tags = set(metadata.removed_metadata_columns)
         row_list = list()
         counter = 0
-        metadata = Metadata()
-        for entry in root.iter(tag="EXPERIMENT_PACKAGE"):
-            if counter % 1000 == 0:
-                now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                print('{}: Converting {:,}th sample from XML to DataFrame'.format(now, counter), flush=True)
-            external_ids = get_external_id_map(entry)
-            bioproject = external_ids.get('BioProject', '')
-            if bioproject == "":
-                labels = entry.findall('.//LABEL')
-                for label in labels:
-                    text = label.text
-                    if (text is not None) and text.startswith("PRJ"):
-                        bioproject = text
-                        break
-            is_single = entry.find('.//LIBRARY_LAYOUT/SINGLE') is not None
-            is_paired = entry.find('.//LIBRARY_LAYOUT/PAIRED') is not None
-            if is_single:
-                library_layout = "single"
-            elif is_paired:
-                library_layout = "paired"
-            else:
-                library_layout = ""
-            row = {
-                "bioproject": bioproject,
-                "scientific_name": get_first_text(entry, './SAMPLE/SAMPLE_NAME/SCIENTIFIC_NAME'),
-                "biosample": external_ids.get('BioSample', ''),
-                "experiment": get_first_text(entry, './EXPERIMENT/IDENTIFIERS/PRIMARY_ID'),
-                "run": get_first_text(entry, './RUN_SET/RUN/IDENTIFIERS/PRIMARY_ID'),
-                "sra_primary": get_first_text(entry, './SUBMISSION/IDENTIFIERS/PRIMARY_ID'),
-                "sra_sample": get_first_text(entry, './SAMPLE/IDENTIFIERS/PRIMARY_ID'),
-                "sra_study": get_first_text(entry, './EXPERIMENT/STUDY_REF/IDENTIFIERS/PRIMARY_ID'),
-                "published_date": get_first_attr(entry, './RUN_SET/RUN', 'published'),
-                "exp_title": get_first_text(entry, './EXPERIMENT/TITLE'),
-                "design": get_first_text(entry, './EXPERIMENT/DESIGN/DESIGN_DESCRIPTION'),
-                "lib_name": get_first_text(entry, './EXPERIMENT/DESIGN/LIBRARY_DESCRIPTOR/LIBRARY_NAME'),
-                "lib_strategy": get_first_text(entry, './EXPERIMENT/DESIGN/LIBRARY_DESCRIPTOR/LIBRARY_STRATEGY'),
-                "lib_source": get_first_text(entry, './EXPERIMENT/DESIGN/LIBRARY_DESCRIPTOR/LIBRARY_SOURCE'),
-                "lib_selection": get_first_text(entry, './EXPERIMENT/DESIGN/LIBRARY_DESCRIPTOR/LIBRARY_SELECTION'),
-                "lib_layout": library_layout,
-                "nominal_length": get_first_attr(
-                    entry,
-                    "./EXPERIMENT/DESIGN/LIBRARY_DESCRIPTOR/LIBRARY_LAYOUT/PAIRED",
-                    "NOMINAL_LENGTH",
-                ),
-                "nominal_sdev": get_first_attr(
-                    entry,
-                    "./EXPERIMENT/DESIGN/LIBRARY_DESCRIPTOR/LIBRARY_LAYOUT/PAIRED",
-                    "NOMINAL_SDEV",
-                ),
-                "spot_length": get_first_text(entry, './EXPERIMENT/DESIGN/SPOT_DESCRIPTOR/SPOT_DECODE_SPEC/SPOT_LENGTH'),
-                "read_index": get_first_text(entry, './EXPERIMENT/DESIGN/SPOT_DESCRIPTOR/SPOT_DECODE_SPEC/READ_SPEC/READ_INDEX'),
-                "read_class": get_first_text(entry, './EXPERIMENT/DESIGN/SPOT_DESCRIPTOR/SPOT_DECODE_SPEC/READ_SPEC/READ_CLASS'),
-                "read_type": get_first_text(entry, './EXPERIMENT/DESIGN/SPOT_DESCRIPTOR/SPOT_DECODE_SPEC/READ_SPEC/READ_TYPE'),
-                "base_coord": get_first_text(entry, './EXPERIMENT/DESIGN/SPOT_DESCRIPTOR/SPOT_DECODE_SPEC/READ_SPEC/BASE_COORD'),
-                "instrument": get_first_text(entry, './EXPERIMENT/PLATFORM/ILLUMINA/INSTRUMENT_MODEL'),
-                "center": get_first_attr(entry, './SUBMISSION', 'center_name'),
-                "submitter_id": get_first_text(entry, './SUBMISSION/IDENTIFIERS/SUBMITTER_ID'),
-                "study_title": get_first_text(entry, './STUDY/DESCRIPTOR/STUDY_TITLE'),
-                "pubmed_id": get_first_text(entry, './STUDY/STUDY_LINKS/STUDY_LINK/XREF_LINK/ID'),
-                "sample_title": get_first_text(entry, './SAMPLE/TITLE'),
-                "taxid": get_first_text(entry, './SAMPLE/SAMPLE_NAME/TAXON_ID'),
-                "sample_description": get_first_text(entry, './SAMPLE/DESCRIPTION'),
-                "total_spots": get_first_attr(entry, './RUN_SET/RUN', 'total_spots'),
-                "total_bases": get_first_attr(entry, './RUN_SET/RUN', 'total_bases'),
-                "size": get_first_attr(entry, './RUN_SET/RUN', 'size'),
-                "NCBI_Link": get_first_attr(
-                    entry,
-                    "./RUN_SET/RUN/SRAFiles/SRAFile[@supertype='Primary ETL']/Alternatives[@org='NCBI']",
-                    "url",
-                ),
-                "AWS_Link": get_first_attr(
-                    entry,
-                    "./RUN_SET/RUN/SRAFiles/SRAFile[@supertype='Primary ETL']/Alternatives[@org='AWS']",
-                    "url",
-                ),
-                "GCP_Link": get_first_attr(
-                    entry,
-                    "./RUN_SET/RUN/SRAFiles/SRAFile[@supertype='Primary ETL']/Alternatives[@org='GCP']",
-                    "url",
-                ),
-            }
-            blocked_tags = set(metadata.removed_metadata_columns)
-            sas = entry.findall('./SAMPLE/SAMPLE_ATTRIBUTES/SAMPLE_ATTRIBUTE')
-            for sa in sas:
-                tag = get_first_text(sa, './TAG')
-                if tag != "":
-                    tag = tag.lower()
-                    tag = re.sub(r" \(.*", "", tag)
-                    tag = re.sub(r" ", "_", tag)
-                    if (tag not in row) and (tag not in blocked_tags):
-                        value = get_first_text(sa, './VALUE')
-                        if value != "":
-                            row[tag] = value
-            row_list.append(row)
-            counter += 1
+        for xml_root in xml_roots:
+            root = Metadata._normalize_xml_root(xml_root)
+            for entry in root.iter(tag="EXPERIMENT_PACKAGE"):
+                if counter % 1000 == 0:
+                    now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    print('{}: Converting {:,}th sample from XML to DataFrame'.format(now, counter), flush=True)
+                external_ids = get_external_id_map(entry)
+                bioproject = external_ids.get('BioProject', '')
+                if bioproject == "":
+                    labels = entry.findall('.//LABEL')
+                    for label in labels:
+                        text = label.text
+                        if (text is not None) and text.startswith("PRJ"):
+                            bioproject = text
+                            break
+                is_single = entry.find('.//LIBRARY_LAYOUT/SINGLE') is not None
+                is_paired = entry.find('.//LIBRARY_LAYOUT/PAIRED') is not None
+                if is_single:
+                    library_layout = "single"
+                elif is_paired:
+                    library_layout = "paired"
+                else:
+                    library_layout = ""
+                row = {
+                    "bioproject": bioproject,
+                    "scientific_name": get_first_text(entry, './SAMPLE/SAMPLE_NAME/SCIENTIFIC_NAME'),
+                    "biosample": external_ids.get('BioSample', ''),
+                    "experiment": get_first_text(entry, './EXPERIMENT/IDENTIFIERS/PRIMARY_ID'),
+                    "run": get_first_text(entry, './RUN_SET/RUN/IDENTIFIERS/PRIMARY_ID'),
+                    "sra_primary": get_first_text(entry, './SUBMISSION/IDENTIFIERS/PRIMARY_ID'),
+                    "sra_sample": get_first_text(entry, './SAMPLE/IDENTIFIERS/PRIMARY_ID'),
+                    "sra_study": get_first_text(entry, './EXPERIMENT/STUDY_REF/IDENTIFIERS/PRIMARY_ID'),
+                    "published_date": get_first_attr(entry, './RUN_SET/RUN', 'published'),
+                    "exp_title": get_first_text(entry, './EXPERIMENT/TITLE'),
+                    "design": get_first_text(entry, './EXPERIMENT/DESIGN/DESIGN_DESCRIPTION'),
+                    "lib_name": get_first_text(entry, './EXPERIMENT/DESIGN/LIBRARY_DESCRIPTOR/LIBRARY_NAME'),
+                    "lib_strategy": get_first_text(entry, './EXPERIMENT/DESIGN/LIBRARY_DESCRIPTOR/LIBRARY_STRATEGY'),
+                    "lib_source": get_first_text(entry, './EXPERIMENT/DESIGN/LIBRARY_DESCRIPTOR/LIBRARY_SOURCE'),
+                    "lib_selection": get_first_text(entry, './EXPERIMENT/DESIGN/LIBRARY_DESCRIPTOR/LIBRARY_SELECTION'),
+                    "lib_layout": library_layout,
+                    "nominal_length": get_first_attr(
+                        entry,
+                        "./EXPERIMENT/DESIGN/LIBRARY_DESCRIPTOR/LIBRARY_LAYOUT/PAIRED",
+                        "NOMINAL_LENGTH",
+                    ),
+                    "nominal_sdev": get_first_attr(
+                        entry,
+                        "./EXPERIMENT/DESIGN/LIBRARY_DESCRIPTOR/LIBRARY_LAYOUT/PAIRED",
+                        "NOMINAL_SDEV",
+                    ),
+                    "spot_length": get_first_text(entry, './EXPERIMENT/DESIGN/SPOT_DESCRIPTOR/SPOT_DECODE_SPEC/SPOT_LENGTH'),
+                    "read_index": get_first_text(entry, './EXPERIMENT/DESIGN/SPOT_DESCRIPTOR/SPOT_DECODE_SPEC/READ_SPEC/READ_INDEX'),
+                    "read_class": get_first_text(entry, './EXPERIMENT/DESIGN/SPOT_DESCRIPTOR/SPOT_DECODE_SPEC/READ_SPEC/READ_CLASS'),
+                    "read_type": get_first_text(entry, './EXPERIMENT/DESIGN/SPOT_DESCRIPTOR/SPOT_DECODE_SPEC/READ_SPEC/READ_TYPE'),
+                    "base_coord": get_first_text(entry, './EXPERIMENT/DESIGN/SPOT_DESCRIPTOR/SPOT_DECODE_SPEC/READ_SPEC/BASE_COORD'),
+                    "instrument": get_first_text(entry, './EXPERIMENT/PLATFORM/ILLUMINA/INSTRUMENT_MODEL'),
+                    "center": get_first_attr(entry, './SUBMISSION', 'center_name'),
+                    "submitter_id": get_first_text(entry, './SUBMISSION/IDENTIFIERS/SUBMITTER_ID'),
+                    "study_title": get_first_text(entry, './STUDY/DESCRIPTOR/STUDY_TITLE'),
+                    "pubmed_id": get_first_text(entry, './STUDY/STUDY_LINKS/STUDY_LINK/XREF_LINK/ID'),
+                    "sample_title": get_first_text(entry, './SAMPLE/TITLE'),
+                    "taxid": get_first_text(entry, './SAMPLE/SAMPLE_NAME/TAXON_ID'),
+                    "sample_description": get_first_text(entry, './SAMPLE/DESCRIPTION'),
+                    "total_spots": get_first_attr(entry, './RUN_SET/RUN', 'total_spots'),
+                    "total_bases": get_first_attr(entry, './RUN_SET/RUN', 'total_bases'),
+                    "size": get_first_attr(entry, './RUN_SET/RUN', 'size'),
+                    "NCBI_Link": get_first_attr(
+                        entry,
+                        "./RUN_SET/RUN/SRAFiles/SRAFile[@supertype='Primary ETL']/Alternatives[@org='NCBI']",
+                        "url",
+                    ),
+                    "AWS_Link": get_first_attr(
+                        entry,
+                        "./RUN_SET/RUN/SRAFiles/SRAFile[@supertype='Primary ETL']/Alternatives[@org='AWS']",
+                        "url",
+                    ),
+                    "GCP_Link": get_first_attr(
+                        entry,
+                        "./RUN_SET/RUN/SRAFiles/SRAFile[@supertype='Primary ETL']/Alternatives[@org='GCP']",
+                        "url",
+                    ),
+                }
+                sas = entry.findall('./SAMPLE/SAMPLE_ATTRIBUTES/SAMPLE_ATTRIBUTE')
+                for sa in sas:
+                    tag = get_first_text(sa, './TAG')
+                    if tag != "":
+                        tag = tag.lower()
+                        tag = re.sub(r" \(.*", "", tag)
+                        tag = re.sub(r" ", "_", tag)
+                        if (tag not in row) and (tag not in blocked_tags):
+                            value = get_first_text(sa, './VALUE')
+                            if value != "":
+                                row[tag] = value
+                row_list.append(row)
+                counter += 1
         if len(row_list)==0:
             return metadata
         df = pandas.DataFrame.from_records(row_list)
@@ -677,28 +680,90 @@ class Metadata:
         metadata.reorder(omit_misc=False)
         return metadata
 
+    def from_xml(xml_root):
+        return Metadata.from_xml_roots([xml_root])
+
     def add_standard_rank_taxids(self, args=None):
         self._require_nullable_int_taxid()
         standard_ranks = ['domain', 'kingdom', 'phylum', 'class', 'order', 'family', 'genus', 'species']
         ncbi = get_ete_ncbitaxa(args=args)
-        lineage_taxid_row_list = []
-        lineage_failures = []
-        for taxid in self.df['taxid'].dropna().unique().tolist():
-            lineage_taxid_row = {'taxid': taxid}
-            for rank in standard_ranks:
-                lineage_taxid_row['taxid_' + rank] = numpy.nan
+        lineage_columns = ['taxid_' + rank for rank in standard_ranks]
+        unique_taxids = [int(taxid) for taxid in self.df['taxid'].dropna().unique().tolist()]
+        if len(unique_taxids) == 0:
+            for col in lineage_columns:
+                self.df.loc[:, col] = pandas.Series([pandas.NA] * len(self.df), dtype='Int64')
+            return
+
+        row_map = {
+            taxid: dict({'taxid': taxid}, **{col: numpy.nan for col in lineage_columns})
+            for taxid in unique_taxids
+        }
+        lineage_failures = {}
+        lineage_map = {}
+
+        missing_taxids = list(unique_taxids)
+        if hasattr(ncbi, 'get_lineage_translator'):
             try:
-                lineage = ncbi.get_lineage(taxid)
-                rank_dict = ncbi.get_rank(lineage)
-                for lineage_taxid, rank in rank_dict.items():
+                lineage_map = {
+                    int(taxid): [int(lineage_taxid) for lineage_taxid in lineage]
+                    for taxid, lineage in ncbi.get_lineage_translator(unique_taxids).items()
+                }
+                missing_taxids = [taxid for taxid in unique_taxids if taxid not in lineage_map]
+            except KeyboardInterrupt:
+                raise
+            except Exception:
+                lineage_map = {}
+                missing_taxids = list(unique_taxids)
+
+        for taxid in missing_taxids:
+            try:
+                lineage_map[taxid] = [int(lineage_taxid) for lineage_taxid in ncbi.get_lineage(taxid)]
+            except KeyboardInterrupt:
+                raise
+            except Exception as exc:
+                lineage_failures.setdefault(taxid, exc)
+
+        resolved_lineage_taxids = sorted(
+            {
+                lineage_taxid
+                for lineage in lineage_map.values()
+                for lineage_taxid in lineage
+            }
+        )
+        rank_dict = None
+        if len(resolved_lineage_taxids) > 0:
+            try:
+                rank_dict = ncbi.get_rank(resolved_lineage_taxids)
+            except KeyboardInterrupt:
+                raise
+            except Exception:
+                rank_dict = None
+
+        if rank_dict is not None:
+            for taxid, lineage in lineage_map.items():
+                lineage_taxid_row = row_map[taxid]
+                for lineage_taxid in lineage:
+                    rank = rank_dict.get(lineage_taxid)
                     if rank in standard_ranks:
                         lineage_taxid_row['taxid_' + rank] = lineage_taxid
-            except Exception as exc:
-                lineage_failures.append((taxid, exc))
-            lineage_taxid_row_list.append(lineage_taxid_row)
+        else:
+            for taxid, lineage in lineage_map.items():
+                lineage_taxid_row = row_map[taxid]
+                try:
+                    per_taxid_rank_dict = ncbi.get_rank(lineage)
+                except KeyboardInterrupt:
+                    raise
+                except Exception as exc:
+                    lineage_failures.setdefault(taxid, exc)
+                    continue
+                for lineage_taxid, rank in per_taxid_rank_dict.items():
+                    if rank in standard_ranks:
+                        lineage_taxid_row['taxid_' + rank] = lineage_taxid
+
+        lineage_taxid_row_list = [row_map[taxid] for taxid in unique_taxids]
         if len(lineage_failures) > 0:
             preview = ', '.join(
-                ['{} ({})'.format(taxid, exc.__class__.__name__) for taxid, exc in lineage_failures[:5]]
+                ['{} ({})'.format(taxid, exc.__class__.__name__) for taxid, exc in list(lineage_failures.items())[:5]]
             )
             if len(lineage_failures) > 5:
                 preview += ', ...'

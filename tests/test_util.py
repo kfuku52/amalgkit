@@ -2229,6 +2229,51 @@ class TestMetadataTaxidValidation:
         assert 'taxid_species' in metadata.df.columns
         assert metadata.df['taxid_species'].isna().all()
 
+    def test_add_standard_rank_taxids_batches_lineage_lookup_when_supported(self, monkeypatch):
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001', 'SRR002'],
+            'scientific_name': ['Homo sapiens', 'Mus musculus'],
+            'exclusion': ['no', 'no'],
+            'taxid': [9606, 10090],
+        }))
+        metadata.df['taxid'] = metadata.df['taxid'].astype('Int64')
+        captured = {'lineage_translator_calls': 0, 'rank_calls': 0}
+
+        class BatchNcbi:
+            def get_lineage_translator(self, taxids):
+                captured['lineage_translator_calls'] += 1
+                assert sorted(taxids) == [9606, 10090]
+                return {
+                    9606: [1, 2759, 9605, 9606],
+                    10090: [1, 2759, 10088, 10090],
+                }
+
+            def get_lineage(self, _taxid):
+                raise AssertionError('Per-taxid lineage lookup should not be used when batch API is available.')
+
+            def get_rank(self, taxids):
+                captured['rank_calls'] += 1
+                assert set(taxids) == {1, 2759, 9605, 9606, 10088, 10090}
+                return {
+                    1: 'domain',
+                    2759: 'kingdom',
+                    9605: 'genus',
+                    9606: 'species',
+                    10088: 'genus',
+                    10090: 'species',
+                }
+
+        monkeypatch.setattr('amalgkit.util.ete4.NCBITaxa', lambda: BatchNcbi())
+
+        metadata.add_standard_rank_taxids()
+
+        assert captured['lineage_translator_calls'] == 1
+        assert captured['rank_calls'] == 1
+        assert metadata.df.loc[0, 'taxid_species'] == 9606
+        assert metadata.df.loc[1, 'taxid_species'] == 10090
+        assert metadata.df.loc[0, 'taxid_genus'] == 9605
+        assert metadata.df.loc[1, 'taxid_genus'] == 10088
+
     def test_add_standard_rank_taxids_uses_download_dir_for_ete4_cache(self, tmp_path, monkeypatch):
         metadata = Metadata.from_DataFrame(pandas.DataFrame({
             'run': ['SRR001'],

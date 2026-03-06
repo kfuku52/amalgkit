@@ -73,29 +73,41 @@ def raise_if_xml_has_error(root):
     raise RuntimeError('Error found in Entrez XML response.')
 
 
-def fetch_sra_xml(search_term, retmax=1000):
+def search_sra_record_ids(search_term):
     sra_record = esearch_sra_with_retry(search_term)
     record_ids = sra_record["IdList"]
+    print('Number of SRA records: {:,}'.format(len(record_ids)))
+    return record_ids
+
+
+def iter_sra_xml_chunks(record_ids, retmax=1000):
     num_record = len(record_ids)
-    print('Number of SRA records: {:,}'.format(num_record))
     if num_record == 0:
-        return ET.Element('EXPERIMENT_PACKAGE_SET')
+        return
     start_time = time.time()
     print('{}: SRA XML retrieval started.'.format(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
-    root = None
     for start in range(0, num_record, retmax):
         end = min(start + retmax, num_record)
         now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         print('{}: Retrieving SRA XML: {:,}-{:,} of {:,} records'.format(now, start, end - 1, num_record), flush=True)
         chunk = fetch_sra_xml_chunk(record_ids, start, end, retmax, max_retry=10)
+        raise_if_xml_has_error(chunk)
+        yield chunk
+    elapsed_time = int(time.time() - start_time)
+    print('{}: SRA XML retrieval ended.'.format(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+    print('SRA XML retrieval time: {:,.1f} sec'.format(elapsed_time), flush=True)
+
+
+def fetch_sra_xml(search_term, retmax=1000):
+    record_ids = search_sra_record_ids(search_term)
+    if len(record_ids) == 0:
+        return ET.Element('EXPERIMENT_PACKAGE_SET')
+    root = None
+    for chunk in iter_sra_xml_chunks(record_ids=record_ids, retmax=retmax):
         if root is None:
             root = chunk
         else:
             root = merge_xml_chunk(root, chunk)
-    elapsed_time = int(time.time() - start_time)
-    print('{}: SRA XML retrieval ended.'.format(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
-    print('SRA XML retrieval time: {:,.1f} sec'.format(elapsed_time), flush=True)
-    raise_if_xml_has_error(root)
     return root
 
 def metadata_main(args):
@@ -126,8 +138,8 @@ def metadata_main(args):
     if search_term == '':
         raise ValueError('--search_string is required.')
     print('Entrez search term:', search_term)
-    root = fetch_sra_xml(search_term=search_term)
-    metadata = Metadata.from_xml(xml_root=root)
+    record_ids = search_sra_record_ids(search_term)
+    metadata = Metadata.from_xml_roots(iter_sra_xml_chunks(record_ids=record_ids))
     metadata.df['tissue'] = metadata.df['tissue'].astype(str)
     metadata.df.loc[(metadata.df['tissue']=='nan'), 'tissue'] = ''
     metadata.df.loc[:, 'sample_group'] = metadata.df.loc[:, 'tissue'].str.lower()
