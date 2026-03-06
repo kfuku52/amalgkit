@@ -1,7 +1,6 @@
 import pytest
 import pandas
 import numpy
-import time
 import gzip
 import subprocess
 import xml.etree.ElementTree as ET
@@ -10,6 +9,7 @@ import os
 import urllib.error
 from types import SimpleNamespace
 
+from amalgkit.command_context import GetfastqRuntimeContext
 from amalgkit.exceptions import AmalgkitExit
 from amalgkit.getfastq import (
     getfastq_search_term,
@@ -44,6 +44,7 @@ from amalgkit.getfastq import (
     run_rrna_filter,
     run_mmseqs_contam_filter,
     run_mmseqs_easy_taxonomy_single_fastq,
+    resolve_mmseqs_dbtype,
     update_metadata_after_rrna_filter,
     parse_fasterq_dump_written_spots,
     parse_fasterq_dump_written_reads,
@@ -513,8 +514,8 @@ class TestRunMmseqsContamFilter:
 
         monkeypatch.setattr('amalgkit.getfastq.ensure_mmseqs_contam_taxonomy_db_exists', lambda _args: '/tmp/mockdb')
 
-        def fake_run_mmseqs(args, input_path, target_db, result_prefix, tmp_dir):
-            _ = (args, target_db, tmp_dir)
+        def fake_run_mmseqs(args, input_path, target_db, result_prefix, tmp_dir, runtime_context=None):
+            _ = (args, target_db, tmp_dir, runtime_context)
             os.makedirs(os.path.dirname(result_prefix), exist_ok=True)
             lca_path = result_prefix + '_lca.tsv'
             if input_path.endswith('_1.fastq.gz'):
@@ -616,6 +617,25 @@ class TestRunMmseqsEasyTaxonomy:
             tmp_dir='/tmp/out/tmp',
         )
         assert '--search-type' not in observed['cmd']
+
+    def test_resolve_mmseqs_dbtype_uses_runtime_context_without_mutating_args(self, monkeypatch):
+        args = SimpleNamespace(mmseqs_exe='mmseqs')
+        runtime_context = GetfastqRuntimeContext()
+        calls = {'n': 0}
+
+        def fake_run(cmd, stdout=None, stderr=None):
+            calls['n'] += 1
+            return subprocess.CompletedProcess(cmd, 0, stdout=b'nucleotide\n', stderr=b'')
+
+        monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
+
+        first = resolve_mmseqs_dbtype(args, '/tmp/db', runtime_context=runtime_context)
+        second = resolve_mmseqs_dbtype(args, '/tmp/db', runtime_context=runtime_context)
+
+        assert first == 'nucleotide'
+        assert second == 'nucleotide'
+        assert calls['n'] == 1
+        assert not hasattr(args, '_mmseqs_dbtype_cache')
 
 
 class TestContamFilterDbPathResolution:
@@ -1389,7 +1409,6 @@ class TestGetLayout:
         """Wiki: auto layout prefers paired when multiple layouts exist."""
         class Args:
             layout = 'auto'
-        data = {'lib_layout': ['paired', 'single', 'paired']}
         m = Metadata.from_DataFrame(pandas.DataFrame({
             'run': ['R1', 'R2', 'R3'],
             'lib_layout': ['paired', 'single', 'paired'],
@@ -2444,6 +2463,35 @@ class TestFastpMetrics:
         assert out.loc[0, 'bp_fastp_in'] == 100000
         assert out.loc[0, 'bp_fastp_out'] == 90000
 
+    def test_write_fastp_stats_keeps_existing_file_when_atomic_write_fails(self, tmp_path, monkeypatch):
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001'],
+            'fastp_duplication_rate': [22.9565],
+            'fastp_insert_size_peak': [138.0],
+            'num_fastp_in': [1000],
+            'num_fastp_out': [900],
+            'bp_fastp_in': [100000],
+            'bp_fastp_out': [90000],
+        }))
+        sra_stat = {'sra_id': 'SRR001'}
+        out_path = tmp_path / 'fastp_stats.tsv'
+        out_path.write_text('old\n')
+        original_to_csv = pandas.DataFrame.to_csv
+
+        def fake_to_csv(self, path_or_buf=None, *args, **kwargs):
+            with open(path_or_buf, 'w') as handle:
+                handle.write('partial\n')
+            raise RuntimeError('boom')
+
+        monkeypatch.setattr(pandas.DataFrame, 'to_csv', fake_to_csv)
+
+        with pytest.raises(RuntimeError, match='boom'):
+            write_fastp_stats(sra_stat=sra_stat, metadata=metadata, output_dir=str(tmp_path))
+
+        assert out_path.read_text() == 'old\n'
+        assert list(tmp_path.glob('amalgkit_atomic_*')) == []
+        monkeypatch.setattr(pandas.DataFrame, 'to_csv', original_to_csv)
+
     def test_write_getfastq_stats_writes_tsv(self, tmp_path):
         metadata = Metadata.from_DataFrame(pandas.DataFrame({
             'run': ['SRR001'],
@@ -2477,6 +2525,46 @@ class TestFastpMetrics:
         assert out.loc[0, 'bp_discarded'] == 500
         assert out.loc[0, 'fastp_duplication_rate'] == pytest.approx(12.0)
         assert out.loc[0, 'fastp_insert_size_peak'] == pytest.approx(250.0)
+
+    def test_write_getfastq_stats_keeps_existing_file_when_atomic_write_fails(self, tmp_path, monkeypatch):
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001'],
+            'num_dumped': [10],
+            'num_rejected': [3],
+            'num_written': [7],
+            'num_fastp_in': [7],
+            'num_fastp_out': [6],
+            'num_rrna_in': [6],
+            'num_rrna_out': [5],
+            'bp_dumped': [1000],
+            'bp_rejected': [300],
+            'bp_written': [700],
+            'bp_fastp_in': [700],
+            'bp_fastp_out': [600],
+            'bp_rrna_in': [600],
+            'bp_rrna_out': [500],
+            'bp_discarded': [500],
+            'fastp_duplication_rate': [12.0],
+            'fastp_insert_size_peak': [250.0],
+        }))
+        sra_stat = {'sra_id': 'SRR001'}
+        out_path = tmp_path / 'getfastq_stats.tsv'
+        out_path.write_text('old\n')
+        original_to_csv = pandas.DataFrame.to_csv
+
+        def fake_to_csv(self, path_or_buf=None, *args, **kwargs):
+            with open(path_or_buf, 'w') as handle:
+                handle.write('partial\n')
+            raise RuntimeError('boom')
+
+        monkeypatch.setattr(pandas.DataFrame, 'to_csv', fake_to_csv)
+
+        with pytest.raises(RuntimeError, match='boom'):
+            write_getfastq_stats(sra_stat=sra_stat, metadata=metadata, output_dir=str(tmp_path))
+
+        assert out_path.read_text() == 'old\n'
+        assert list(tmp_path.glob('amalgkit_atomic_*')) == []
+        monkeypatch.setattr(pandas.DataFrame, 'to_csv', original_to_csv)
 
 
 class TestRunFastp:
@@ -4637,6 +4725,37 @@ class TestDownloadSraUrlSchemes:
 
 
 class TestSequenceExtractionPrivate:
+    def test_uses_run_id_for_private_symlink_names(self, tmp_path, monkeypatch):
+        read1_path = tmp_path / 'input_R1.fastq.gz'
+        read1_path.write_text('dummy')
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['Homo_sapiens_sample1'],
+            'read1_path': [str(read1_path)],
+            'read2_path': [numpy.nan],
+            'lib_layout': ['single'],
+            'total_spots': [10],
+            'total_bases': [1000],
+            'spot_length': [100],
+            'scientific_name': ['Homo sapiens'],
+            'exclusion': ['no'],
+        }))
+        sra_dir = tmp_path / 'work'
+        sra_dir.mkdir()
+        sra_stat = {
+            'sra_id': 'Homo_sapiens_sample1',
+            'layout': 'single',
+            'getfastq_sra_dir': str(sra_dir),
+        }
+        args = SimpleNamespace(fastp=False)
+
+        monkeypatch.setattr('amalgkit.getfastq.set_current_intermediate_extension', lambda *_args, **_kwargs: None)
+        monkeypatch.setattr('amalgkit.getfastq.get_or_detect_intermediate_extension', lambda *_args, **_kwargs: '.fastq.gz')
+        monkeypatch.setattr('amalgkit.getfastq.rename_fastq', lambda *_args, **_kwargs: None)
+
+        sequence_extraction_private(metadata=metadata, sra_stat=sra_stat, args=args)
+
+        assert (sra_dir / 'Homo_sapiens_sample1.fastq.gz').exists()
+
     def test_handles_missing_read2_path_without_type_error(self, tmp_path, monkeypatch):
         read1_path = tmp_path / 'input_R1.fastq.gz'
         read1_path.write_text('dummy')
@@ -4666,7 +4785,7 @@ class TestSequenceExtractionPrivate:
 
         sequence_extraction_private(metadata=metadata, sra_stat=sra_stat, args=args)
 
-        assert (sra_dir / 'input_R1.fastq.gz').exists()
+        assert (sra_dir / 'SRR001.fastq.gz').exists()
 
     def test_warns_when_private_path_is_directory(self, tmp_path, monkeypatch, capsys):
         read1_dir = tmp_path / 'read1_dir'
@@ -4716,7 +4835,7 @@ class TestSequenceExtractionPrivate:
         }))
         sra_dir = tmp_path / 'work'
         sra_dir.mkdir()
-        (sra_dir / 'input_R1.fastq.gz').mkdir()
+        (sra_dir / 'SRR001.fastq.gz').mkdir()
         sra_stat = {
             'sra_id': 'SRR001',
             'layout': 'single',
@@ -4808,9 +4927,15 @@ class TestGetfastqMainJobs:
             read_name='default',
         )
         processed = []
+        observed = {}
+        runtime_context_ids = []
 
-        def fake_process_getfastq_run(args, row_index, sra_id, run_row_df, g):
+        def fake_process_getfastq_run(args, row_index, sra_id, run_row_df, g, runtime_context=None):
+            assert isinstance(runtime_context, GetfastqRuntimeContext)
+            observed.setdefault('runtime_threads', args.threads)
+            observed.setdefault('runtime_jobs', args.internal_jobs)
             processed.append(sra_id)
+            runtime_context_ids.append(id(runtime_context))
             return {
                 'row_index': row_index,
                 'sra_id': sra_id,
@@ -4840,6 +4965,7 @@ class TestGetfastqMainJobs:
         getfastq_main(args)
 
         assert set(processed) == {'SRR001', 'SRR002'}
+        assert len(set(runtime_context_ids)) == 2
 
     def test_cpu_budget_caps_jobs_to_serial(self, tmp_path, monkeypatch):
         metadata = Metadata.from_DataFrame(pandas.DataFrame({
@@ -4863,8 +4989,12 @@ class TestGetfastqMainJobs:
             read_name='default',
         )
         processed = []
+        observed = {}
 
-        def fake_process_getfastq_run(args, row_index, sra_id, run_row_df, g):
+        def fake_process_getfastq_run(args, row_index, sra_id, run_row_df, g, runtime_context=None):
+            _ = runtime_context
+            observed.setdefault('runtime_threads', args.threads)
+            observed.setdefault('runtime_jobs', args.internal_jobs)
             processed.append(sra_id)
             return {
                 'row_index': row_index,
@@ -4899,7 +5029,10 @@ class TestGetfastqMainJobs:
         getfastq_main(args)
 
         assert set(processed) == {'SRR001', 'SRR002'}
-        assert args.threads == 1
+        assert observed['runtime_threads'] == 1
+        assert observed['runtime_jobs'] == 1
+        assert args.threads == 4
+        assert args.internal_jobs == 4
 
     def test_private_file_in_any_run_skips_second_round(self, tmp_path, monkeypatch):
         metadata = Metadata.from_DataFrame(pandas.DataFrame({
@@ -4922,7 +5055,8 @@ class TestGetfastqMainJobs:
             read_name='default',
         )
 
-        def fake_process_getfastq_run(args, row_index, sra_id, run_row_df, g):
+        def fake_process_getfastq_run(args, row_index, sra_id, run_row_df, g, runtime_context=None):
+            _ = runtime_context
             return {
                 'row_index': row_index,
                 'sra_id': sra_id,

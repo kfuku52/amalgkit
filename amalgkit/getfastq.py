@@ -5,9 +5,35 @@ import gzip
 import pandas
 import shlex
 
+from amalgkit.arg_utils import clone_namespace
+from amalgkit.command_context import GetfastqRuntimeContext
+from amalgkit.download_utils import acquire_exclusive_lock, get_ete_ncbitaxa, resolve_download_dir
 from amalgkit.exceptions import AmalgkitExit
+from amalgkit.fastq_utils import (
+    count_fastq_records_and_bases as shared_count_fastq_records_and_bases,
+    count_fastq_records as shared_count_fastq_records,
+    map_seqkit_stats_rows,
+    parse_seqkit_stats_row_records_and_bases as _parse_seqkit_stats_row_records_and_bases,
+)
+from amalgkit.metadata_utils import (
+    Metadata,
+    detect_layout_from_file,
+    get_metadata_row_index_by_run,
+    get_newest_intermediate_file_extension,
+    get_sra_stat,
+    load_metadata,
+    strtobool,
+)
+from amalgkit.parallel_utils import (
+    resolve_thread_worker_allocation,
+    resolve_worker_allocation,
+    run_tasks_with_optional_threads,
+)
+from amalgkit.output_utils import atomic_write_dataframe
+from amalgkit.prefix_utils import find_run_prefixed_entries
+from amalgkit.runtime_utils import get_getfastq_run_dir
 from amalgkit.sra import fetch_sra_xml as shared_fetch_sra_xml
-from amalgkit.util import *
+from amalgkit.subprocess_utils import probe_dependency_command, run_checked_command, run_logged_command
 
 import os
 import re
@@ -17,12 +43,12 @@ import sys
 import time
 import urllib.parse
 import urllib.request
+import xml.etree.ElementTree as ET  # noqa: F401
 
 IDENTICAL_PAIRED_RATIO_THRESHOLD = 0.99
 IDENTICAL_PAIRED_CHECKED_READS = 2000
 ID_LIST_METADATA_MAX_WORKERS = 4
 ID_LIST_VERBOSE_LIMIT = 20
-FASTQ_RECORD_COUNT_CHUNK_BYTES = 16 * 1024 * 1024
 RRNA_REFERENCE_SPECS = [
     {
         'label': 'SILVA SSU',
@@ -357,7 +383,17 @@ def concatenate_files_with_system_cat(infile_paths, outfile_path):
     if cat_exe is None:
         return False
     with open(outfile_path, 'wb') as out_handle:
-        cat_out = subprocess.run([cat_exe] + infile_paths, stdout=out_handle, stderr=subprocess.PIPE)
+        def cat_runner(command, stdout=None, stderr=None):
+            _ = stdout
+            return subprocess.run(command, stdout=out_handle, stderr=stderr)
+
+        cat_out, _stdout_txt, _stderr_txt = run_logged_command(
+            command=[cat_exe] + infile_paths,
+            runner=cat_runner,
+            print_command=False,
+            print_output=False,
+            not_found_label='cat',
+        )
     if cat_out.returncode == 0:
         return True
     if os.path.exists(outfile_path):
@@ -619,13 +655,14 @@ def download_with_curl(source_url, path_downloaded_sra, args, sra_source_name):
         '-o', tmp_path,
         source_url,
     ]
-    print('Command:', ' '.join(command))
-    out = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if should_print_getfastq_command_output(args):
-        print('curl stdout:')
-        print(out.stdout.decode('utf8', errors='replace'))
-        print('curl stderr:')
-        print(out.stderr.decode('utf8', errors='replace'))
+    out, _stdout_txt, _stderr_txt = run_logged_command(
+        command=command,
+        runner=subprocess.run,
+        print_command=True,
+        print_output=should_print_getfastq_command_output(args),
+        stdout_label='curl stdout:',
+        stderr_label='curl stderr:',
+    )
     if out.returncode != 0:
         if os.path.exists(tmp_path):
             os.remove(tmp_path)
@@ -747,18 +784,11 @@ def check_getfastq_dependency(args):
         sys.stderr.write('--prefetch_exe is obsolete and ignored.\n')
 
     def probe_command(command, label):
-        try:
-            out = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        except FileNotFoundError as exc:
-            raise FileNotFoundError('{} executable not found: {}'.format(label, command[0])) from exc
-        if out.returncode != 0:
-            raise RuntimeError(
-                '{} dependency probe failed with exit code {}: {}'.format(
-                    label,
-                    out.returncode,
-                    ' '.join(command),
-                )
-            )
+        out, _stdout_txt, _stderr_txt = probe_dependency_command(
+            command=command,
+            label=label,
+            runner=subprocess.run,
+        )
         return out
 
     fasterq_dump_exe = getattr(args, 'fasterq_dump_exe', 'fasterq-dump')
@@ -835,15 +865,15 @@ def run_seqkit_seq_command(input_paths, output_path, args, command_label, seqkit
         seqkit_threads = resolve_seqkit_threads(args)
     seqkit_threads = normalize_seqkit_threads(seqkit_threads)
     command = [seqkit_exe, 'seq', '-j', str(seqkit_threads), '-w', '0', '-o', output_path] + list(input_paths)
-    print('Command:', ' '.join(command))
-    out = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if should_print_getfastq_command_output(args):
-        print('{} stdout:'.format(command_label))
-        print(out.stdout.decode('utf8', errors='replace'))
-        print('{} stderr:'.format(command_label))
-        print(out.stderr.decode('utf8', errors='replace'))
-    if out.returncode != 0:
-        raise RuntimeError('{} failed.'.format(command_label))
+    out, _stdout_txt, _stderr_txt = run_checked_command(
+        command=command,
+        runner=subprocess.run,
+        print_command=True,
+        print_output=should_print_getfastq_command_output(args),
+        stdout_label='{} stdout:'.format(command_label),
+        stderr_label='{} stderr:'.format(command_label),
+        failure_message='{} failed.'.format(command_label),
+    )
     return out
 
 def run_seqkit_range_command(input_path, output_path, start, end, args, command_label, seqkit_threads=None):
@@ -867,15 +897,15 @@ def run_seqkit_range_command(input_path, output_path, start, end, args, command_
         '-o', output_path,
         input_path,
     ]
-    print('Command:', ' '.join(command))
-    out = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if should_print_getfastq_command_output(args):
-        print('{} stdout:'.format(command_label))
-        print(out.stdout.decode('utf8', errors='replace'))
-        print('{} stderr:'.format(command_label))
-        print(out.stderr.decode('utf8', errors='replace'))
-    if out.returncode != 0:
-        raise RuntimeError('{} failed.'.format(command_label))
+    out, _stdout_txt, _stderr_txt = run_checked_command(
+        command=command,
+        runner=subprocess.run,
+        print_command=True,
+        print_output=should_print_getfastq_command_output(args),
+        stdout_label='{} stdout:'.format(command_label),
+        stderr_label='{} stderr:'.format(command_label),
+        failure_message='{} failed.'.format(command_label),
+    )
     return out
 
 def run_seqkit_replace_command(input_path, output_path, suffix, args, command_label, seqkit_threads=None):
@@ -900,52 +930,16 @@ def run_seqkit_replace_command(input_path, output_path, suffix, args, command_la
         '-o', output_path,
         input_path,
     ]
-    print('Command:', ' '.join(command))
-    out = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if should_print_getfastq_command_output(args):
-        print('{} stdout:'.format(command_label))
-        print(out.stdout.decode('utf8', errors='replace'))
-        print('{} stderr:'.format(command_label))
-        print(out.stderr.decode('utf8', errors='replace'))
-    if out.returncode != 0:
-        raise RuntimeError('{} failed.'.format(command_label))
+    out, _stdout_txt, _stderr_txt = run_checked_command(
+        command=command,
+        runner=subprocess.run,
+        print_command=True,
+        print_output=should_print_getfastq_command_output(args),
+        stdout_label='{} stdout:'.format(command_label),
+        stderr_label='{} stderr:'.format(command_label),
+        failure_message='{} failed.'.format(command_label),
+    )
     return out
-
-def _parse_seqkit_stats_rows(stdout_txt):
-    lines = [line.rstrip('\n') for line in (stdout_txt or '').splitlines() if line.strip() != '']
-    if len(lines) < 2:
-        raise RuntimeError('seqkit stats output was empty.')
-    header_fields = lines[0].split('\t')
-    rows = []
-    for line in lines[1:]:
-        value_fields = line.split('\t')
-        row = {}
-        for idx, field_name in enumerate(header_fields):
-            row[field_name] = value_fields[idx] if idx < len(value_fields) else ''
-        rows.append(row)
-    if len(rows) == 0:
-        raise RuntimeError('seqkit stats output did not include data rows.')
-    return rows
-
-def _parse_seqkit_stats_numeric(row, key, path_fastq):
-    if key not in row:
-        raise RuntimeError('seqkit stats output is missing "{}" for {}'.format(key, path_fastq))
-    raw = str(row.get(key, '')).strip().replace(',', '')
-    if raw == '':
-        raise RuntimeError('seqkit stats output has an empty "{}" value for {}'.format(key, path_fastq))
-    try:
-        return int(float(raw))
-    except (TypeError, ValueError) as exc:
-        raise RuntimeError('Failed to parse seqkit stats "{}" for {}'.format(key, path_fastq)) from exc
-
-def _parse_seqkit_stats_row_records_and_bases(row, path_fastq):
-    num_records = _parse_seqkit_stats_numeric(row=row, key='num_seqs', path_fastq=path_fastq)
-    if ('sum_len' in row) and (str(row.get('sum_len', '')).strip() not in ['', 'NA', 'nan', 'NaN']):
-        num_bases = _parse_seqkit_stats_numeric(row=row, key='sum_len', path_fastq=path_fastq)
-    else:
-        avg_len = _parse_seqkit_stats_numeric(row=row, key='avg_len', path_fastq=path_fastq)
-        num_bases = int(num_records * avg_len)
-    return num_records, num_bases
 
 def scan_fastq_records_and_bases_with_seqkit_batch(path_fastq_paths, args, seqkit_threads=None):
     if path_fastq_paths is None:
@@ -972,37 +966,23 @@ def scan_fastq_records_and_bases_with_seqkit_batch(path_fastq_paths, args, seqki
         '-a',
         '-j', str(seqkit_threads),
     ] + list(deduplicated_paths)
-    print('Command:', ' '.join(command))
-    out = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if should_print_getfastq_command_output(args):
-        print('FASTQ stats scan with seqkit stdout:')
-        print(out.stdout.decode('utf8', errors='replace'))
-        print('FASTQ stats scan with seqkit stderr:')
-        print(out.stderr.decode('utf8', errors='replace'))
-    if out.returncode != 0:
-        stderr_txt = out.stderr.decode('utf8', errors='replace')
-        raise RuntimeError('FASTQ stats scan with seqkit failed (exit code {}): {}'.format(out.returncode, stderr_txt))
-    rows = _parse_seqkit_stats_rows(out.stdout.decode('utf8', errors='replace'))
-    stats_by_path = {}
-    fallback_idx = 0
-    fallback_paths = [os.path.abspath(path_fastq) for path_fastq in deduplicated_paths]
-    for row in rows:
-        row_path = None
-        for key in ['file', 'path', 'filename']:
-            raw_path = str(row.get(key, '')).strip()
-            if raw_path != '':
-                row_path = os.path.abspath(raw_path)
-                break
-        if (row_path is None) and (fallback_idx < len(fallback_paths)):
-            row_path = fallback_paths[fallback_idx]
-            fallback_idx += 1
-        if row_path is None:
-            continue
-        stats_by_path[row_path] = _parse_seqkit_stats_row_records_and_bases(row=row, path_fastq=row_path)
-    missing_paths = [path_fastq for path_fastq in fallback_paths if path_fastq not in stats_by_path]
-    if len(missing_paths) > 0:
-        raise RuntimeError('seqkit stats output did not include all requested FASTQ files: {}'.format(missing_paths))
-    return stats_by_path
+    out, stdout_txt, stderr_txt = run_checked_command(
+        command=command,
+        runner=subprocess.run,
+        print_command=True,
+        print_output=should_print_getfastq_command_output(args),
+        stdout_label='FASTQ stats scan with seqkit stdout:',
+        stderr_label='FASTQ stats scan with seqkit stderr:',
+        failure_message=lambda result, _stdout, stderr, _command_txt: (
+            'FASTQ stats scan with seqkit failed (exit code {}): {}'.format(result.returncode, stderr)
+        ),
+    )
+    return map_seqkit_stats_rows(
+        stdout_txt=stdout_txt,
+        requested_paths=deduplicated_paths,
+        row_parser=_parse_seqkit_stats_row_records_and_bases,
+        missing_message='seqkit stats output did not include all requested FASTQ files: {}',
+    )
 
 def compress_fastq_with_seqkit(
     path_fastq,
@@ -1029,38 +1009,10 @@ def compress_fastq_with_seqkit(
     os.remove(path_fastq)
 
 def count_fastq_records(path_fastq):
-    num_lines = 0
-    open_func = gzip.open if path_fastq.endswith('.gz') else open
-    with open_func(path_fastq, 'rb') as f:
-        while True:
-            chunk = f.read(FASTQ_RECORD_COUNT_CHUNK_BYTES)
-            if not chunk:
-                break
-            num_lines += chunk.count(b'\n')
-    if (num_lines % 4) != 0:
-        txt = 'FASTQ line count is not divisible by 4 and may be truncated: {}\n'
-        sys.stderr.write(txt.format(path_fastq))
-    return num_lines // 4
+    return shared_count_fastq_records(path_fastq, warning_writer=sys.stderr.write)
 
 def count_fastq_records_and_bases(path_fastq):
-    num_records = 0
-    num_bases = 0
-    open_func = gzip.open if path_fastq.endswith('.gz') else open
-    with open_func(path_fastq, 'rb') as fin:
-        while True:
-            line1 = fin.readline()
-            if line1 == b'':
-                break
-            line2 = fin.readline()
-            line3 = fin.readline()
-            line4 = fin.readline()
-            if (line2 == b'') or (line3 == b'') or (line4 == b''):
-                txt = 'FASTQ record seems truncated while counting bases: {}\n'
-                sys.stderr.write(txt.format(path_fastq))
-                break
-            num_records += 1
-            num_bases += len(line2.rstrip(b'\r\n'))
-    return num_records, num_bases
+    return shared_count_fastq_records_and_bases(path_fastq, warning_writer=sys.stderr.write)
 
 def summarize_layout_fastq_records_and_bases(layout, single_path=None, pair1_path=None, pair2_path=None, args=None):
     num_single, bp_single = (0, 0)
@@ -1194,35 +1146,55 @@ def resolve_mmseqs_exe(args):
     return exe
 
 
-def resolve_mmseqs_dbtype(args, target_db):
+def resolve_mmseqs_dbtype_cache(runtime_context=None):
+    if runtime_context is None:
+        return None
+    cache = getattr(runtime_context, 'mmseqs_dbtype_cache', None)
+    if not isinstance(cache, dict):
+        raise TypeError('runtime_context.mmseqs_dbtype_cache must be a dict.')
+    return cache
+
+
+def ensure_getfastq_runtime_context(runtime_context=None):
+    if runtime_context is None:
+        return GetfastqRuntimeContext()
+    if not isinstance(runtime_context, GetfastqRuntimeContext):
+        raise TypeError('runtime_context must be a GetfastqRuntimeContext instance.')
+    return runtime_context
+
+
+def resolve_mmseqs_dbtype(args, target_db, runtime_context=None):
     if target_db is None:
         return ''
     target_db = str(target_db).strip()
     if target_db == '':
         return ''
-    cache = getattr(args, '_mmseqs_dbtype_cache', None)
-    if not isinstance(cache, dict):
-        cache = {}
-        setattr(args, '_mmseqs_dbtype_cache', cache)
-    if target_db in cache:
+    cache = resolve_mmseqs_dbtype_cache(runtime_context=runtime_context)
+    if (cache is not None) and (target_db in cache):
         return cache[target_db]
     mmseqs_exe = resolve_mmseqs_exe(args)
-    out = subprocess.run([mmseqs_exe, 'dbtype', target_db], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if out.returncode != 0:
-        raise RuntimeError(
+    out, stdout_txt, stderr_txt = run_checked_command(
+        command=[mmseqs_exe, 'dbtype', target_db],
+        runner=subprocess.run,
+        print_command=False,
+        print_output=False,
+        failure_message=lambda result, _stdout, stderr, _command_txt: (
             'mmseqs dbtype failed (exit code {}) for DB {}: {}'.format(
-                out.returncode,
+                result.returncode,
                 target_db,
-                out.stderr.decode('utf8', errors='replace'),
+                stderr,
             )
-        )
-    dbtype_txt = out.stdout.decode('utf8', errors='replace').strip().lower()
-    cache[target_db] = dbtype_txt
+        ),
+    )
+    _ = out
+    dbtype_txt = stdout_txt.strip().lower()
+    if cache is not None:
+        cache[target_db] = dbtype_txt
     return dbtype_txt
 
 
-def resolve_mmseqs_easy_taxonomy_search_type(args, target_db):
-    dbtype_txt = resolve_mmseqs_dbtype(args=args, target_db=target_db)
+def resolve_mmseqs_easy_taxonomy_search_type(args, target_db, runtime_context=None):
+    dbtype_txt = resolve_mmseqs_dbtype(args=args, target_db=target_db, runtime_context=runtime_context)
     if 'nucleotide' in dbtype_txt:
         return '3'
     return None
@@ -1283,21 +1255,22 @@ def ensure_mmseqs_contam_taxonomy_db_exists(args):
             '--threads',
             str(max(1, int(getattr(args, 'threads', 1)))),
         ]
-        print('Downloading MMseqs taxonomy DB with command: {}'.format(' '.join(db_cmd)), flush=True)
-        out = subprocess.run(db_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        if should_print_getfastq_command_output(args):
-            print('mmseqs databases stdout:')
-            print(out.stdout.decode('utf8', errors='replace'))
-            print('mmseqs databases stderr:')
-            print(out.stderr.decode('utf8', errors='replace'))
-        if out.returncode != 0:
-            raise RuntimeError(
+        run_checked_command(
+            command=db_cmd,
+            runner=subprocess.run,
+            print_command=True,
+            command_prefix='Downloading MMseqs taxonomy DB with command',
+            print_output=should_print_getfastq_command_output(args),
+            stdout_label='mmseqs databases stdout:',
+            stderr_label='mmseqs databases stderr:',
+            failure_message=lambda result, _stdout, stderr, command_txt: (
                 'mmseqs databases failed (exit code {}). Command: {}\n{}'.format(
-                    out.returncode,
-                    ' '.join(db_cmd),
-                    out.stderr.decode('utf8', errors='replace'),
+                    result.returncode,
+                    command_txt,
+                    stderr,
                 )
-            )
+            ),
+        )
         if not os.path.exists(dbtype_path):
             raise FileNotFoundError('MMseqs taxonomy DB was not generated: {}'.format(dbtype_path))
         if not os.path.isfile(dbtype_path):
@@ -1410,21 +1383,22 @@ def ensure_mmseqs_rrna_reference_db_exists(args):
         remove_mmseqs_db_artifacts(db_prefix=db_path)
         mmseqs_exe = resolve_mmseqs_exe(args)
         command = [mmseqs_exe, 'createdb', combined_fasta, db_path]
-        print('Building MMseqs rRNA DB with command: {}'.format(' '.join(command)), flush=True)
-        out = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        if should_print_getfastq_command_output(args):
-            print('mmseqs createdb stdout:')
-            print(out.stdout.decode('utf8', errors='replace'))
-            print('mmseqs createdb stderr:')
-            print(out.stderr.decode('utf8', errors='replace'))
-        if out.returncode != 0:
-            raise RuntimeError(
+        run_checked_command(
+            command=command,
+            runner=subprocess.run,
+            print_command=True,
+            command_prefix='Building MMseqs rRNA DB with command',
+            print_output=should_print_getfastq_command_output(args),
+            stdout_label='mmseqs createdb stdout:',
+            stderr_label='mmseqs createdb stderr:',
+            failure_message=lambda result, _stdout, stderr, command_txt: (
                 'mmseqs createdb failed (exit code {}). Command: {}\n{}'.format(
-                    out.returncode,
-                    ' '.join(command),
-                    out.stderr.decode('utf8', errors='replace'),
+                    result.returncode,
+                    command_txt,
+                    stderr,
                 )
-            )
+            ),
+        )
         if not os.path.exists(dbtype_path):
             raise FileNotFoundError('MMseqs rRNA DB was not generated: {}'.format(dbtype_path))
         if not os.path.isfile(dbtype_path):
@@ -1700,13 +1674,15 @@ def build_fasterq_dump_command(args, sra_stat, path_downloaded_sra, size_check, 
 
 
 def execute_fasterq_dump_command(fasterq_dump_command, args, prefix='Command'):
-    print('{}: {}'.format(prefix, ' '.join(fasterq_dump_command)))
-    fqd_out = subprocess.run(fasterq_dump_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if should_print_getfastq_command_output(args):
-        print('fasterq-dump stdout:')
-        print(fqd_out.stdout.decode('utf8', errors='replace'))
-        print('fasterq-dump stderr:')
-        print(fqd_out.stderr.decode('utf8', errors='replace'))
+    fqd_out, _stdout_txt, _stderr_txt = run_logged_command(
+        command=fasterq_dump_command,
+        runner=subprocess.run,
+        print_command=True,
+        command_prefix=prefix,
+        print_output=should_print_getfastq_command_output(args),
+        stdout_label='fasterq-dump stdout:',
+        stderr_label='fasterq-dump stderr:',
+    )
     return fqd_out
 
 
@@ -2137,7 +2113,7 @@ def write_fastp_stats(sra_stat, metadata, output_dir):
         'bp_fastp_out': metadata.df.at[ind_sra, 'bp_fastp_out'],
     }])
     out_path = os.path.join(output_dir, 'fastp_stats.tsv')
-    out_df.to_csv(out_path, sep='\t', index=False)
+    atomic_write_dataframe(out_df, out_path, sep='\t', index=False)
 
 
 def write_getfastq_stats(sra_stat, metadata, output_dir):
@@ -2150,7 +2126,7 @@ def write_getfastq_stats(sra_stat, metadata, output_dir):
             row[col] = numpy.nan
     out_df = pandas.DataFrame([row])
     out_path = os.path.join(output_dir, 'getfastq_stats.tsv')
-    out_df.to_csv(out_path, sep='\t', index=False)
+    atomic_write_dataframe(out_df, out_path, sep='\t', index=False)
 
 
 def resolve_fastp_threads(num_threads):
@@ -2201,21 +2177,21 @@ def finalize_run_fastp_return(metadata, run_file_state, return_files=False, retu
 
 
 def execute_fastp_command(fp_command, fastp_print=False):
-    print('Command:', ' '.join(fp_command))
-    fp_out = subprocess.run(fp_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if fastp_print:
-        print('fastp stdout:')
-        print(fp_out.stdout.decode('utf8', errors='replace'))
-        print('fastp stderr:')
-        print(fp_out.stderr.decode('utf8', errors='replace'))
-    if fp_out.returncode != 0:
-        raise RuntimeError(
+    fp_out, _stdout_txt, _stderr_txt = run_checked_command(
+        command=fp_command,
+        runner=subprocess.run,
+        print_command=True,
+        print_output=fastp_print,
+        stdout_label='fastp stdout:',
+        stderr_label='fastp stderr:',
+        failure_message=lambda result, _stdout, stderr, command_txt: (
             'fastp did not finish safely (exit code {}). Command: {}\n{}'.format(
-                fp_out.returncode,
-                ' '.join(fp_command),
-                fp_out.stderr.decode('utf8', errors='replace'),
+                result.returncode,
+                command_txt,
+                stderr,
             )
-        )
+        ),
+    )
     return fp_out
 
 
@@ -2450,7 +2426,7 @@ def ensure_empty_workdir(path_dir):
     os.makedirs(path_dir, exist_ok=True)
     return path_dir
 
-def run_mmseqs_easy_taxonomy_single_fastq(args, input_path, target_db, result_prefix, tmp_dir):
+def run_mmseqs_easy_taxonomy_single_fastq(args, input_path, target_db, result_prefix, tmp_dir, runtime_context=None):
     mmseqs_exe = resolve_mmseqs_exe(args)
     command = [
         mmseqs_exe,
@@ -2464,24 +2440,28 @@ def run_mmseqs_easy_taxonomy_single_fastq(args, input_path, target_db, result_pr
         '--orf-filter',
         '0',
     ]
-    search_type = resolve_mmseqs_easy_taxonomy_search_type(args=args, target_db=target_db)
+    search_type = resolve_mmseqs_easy_taxonomy_search_type(
+        args=args,
+        target_db=target_db,
+        runtime_context=runtime_context,
+    )
     if search_type is not None:
         command.extend(['--search-type', str(search_type)])
-    print('Command:', ' '.join(command))
-    out = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if should_print_getfastq_command_output(args):
-        print('mmseqs easy-taxonomy stdout:')
-        print(out.stdout.decode('utf8', errors='replace'))
-        print('mmseqs easy-taxonomy stderr:')
-        print(out.stderr.decode('utf8', errors='replace'))
-    if out.returncode != 0:
-        raise RuntimeError(
+    run_checked_command(
+        command=command,
+        runner=subprocess.run,
+        print_command=True,
+        print_output=should_print_getfastq_command_output(args),
+        stdout_label='mmseqs easy-taxonomy stdout:',
+        stderr_label='mmseqs easy-taxonomy stderr:',
+        failure_message=lambda result, _stdout, stderr, command_txt: (
             'mmseqs easy-taxonomy failed (exit code {}). Command: {}\n{}'.format(
-                out.returncode,
-                ' '.join(command),
-                out.stderr.decode('utf8', errors='replace'),
+                result.returncode,
+                command_txt,
+                stderr,
             )
-        )
+        ),
+    )
     return result_prefix + '_lca.tsv'
 
 def run_mmseqs_easy_search_single_fastq(args, input_path, target_db, result_tsv, tmp_dir):
@@ -2500,21 +2480,21 @@ def run_mmseqs_easy_search_single_fastq(args, input_path, target_db, result_tsv,
         '--format-output',
         'query',
     ]
-    print('Command:', ' '.join(command))
-    out = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if should_print_getfastq_command_output(args):
-        print('mmseqs easy-search stdout:')
-        print(out.stdout.decode('utf8', errors='replace'))
-        print('mmseqs easy-search stderr:')
-        print(out.stderr.decode('utf8', errors='replace'))
-    if out.returncode != 0:
-        raise RuntimeError(
+    run_checked_command(
+        command=command,
+        runner=subprocess.run,
+        print_command=True,
+        print_output=should_print_getfastq_command_output(args),
+        stdout_label='mmseqs easy-search stdout:',
+        stderr_label='mmseqs easy-search stderr:',
+        failure_message=lambda result, _stdout, stderr, command_txt: (
             'mmseqs easy-search failed (exit code {}). Command: {}\n{}'.format(
-                out.returncode,
-                ' '.join(command),
-                out.stderr.decode('utf8', errors='replace'),
+                result.returncode,
+                command_txt,
+                stderr,
             )
-        )
+        ),
+    )
     return result_tsv
 
 def parse_mmseqs_search_matched_cores(result_tsv_path):
@@ -2749,6 +2729,7 @@ def run_mmseqs_contam_filter(
     args,
     output_dir,
     metadata,
+    runtime_context=None,
     files=None,
     file_state=None,
     known_input_counts=None,
@@ -2818,6 +2799,7 @@ def run_mmseqs_contam_filter(
             target_db=target_db,
             result_prefix=result_prefix,
             tmp_dir=tmp_dir,
+            runtime_context=runtime_context,
         )
         remove_cores.update(
             parse_mmseqs_lca_mismatched_cores(
@@ -3303,7 +3285,8 @@ def initialize_columns(metadata, g):
         metadata.df[col] = metadata.df[col].astype(float)
     return metadata
 
-def sequence_extraction(args, sra_stat, metadata, g, start, end):
+def sequence_extraction(args, sra_stat, metadata, g, start, end, runtime_context=None):
+    runtime_context = ensure_getfastq_runtime_context(runtime_context)
     sra_id = sra_stat['sra_id']
     ind_sra = sra_stat.get('metadata_idx', get_metadata_row_index_by_run(metadata, sra_id))
     prev_num_written = metadata.df.at[ind_sra, 'num_written']
@@ -3398,6 +3381,7 @@ def sequence_extraction(args, sra_stat, metadata, g, start, end):
                 args=args,
                 output_dir=sra_stat['getfastq_sra_dir'],
                 metadata=metadata,
+                runtime_context=runtime_context,
                 file_state=run_file_state,
                 return_file_state=True,
             )
@@ -3433,7 +3417,8 @@ def sequence_extraction(args, sra_stat, metadata, g, start, end):
     write_getfastq_stats(sra_stat=sra_stat, metadata=metadata, output_dir=sra_stat['getfastq_sra_dir'])
     return metadata
 
-def sequence_extraction_1st_round(args, sra_stat, metadata, g):
+def sequence_extraction_1st_round(args, sra_stat, metadata, g, runtime_context=None):
+    runtime_context = ensure_getfastq_runtime_context(runtime_context)
     offset = 10000
     ind_sra = sra_stat.get('metadata_idx', get_metadata_row_index_by_run(metadata, sra_stat['sra_id']))
     metadata.df.at[ind_sra, 'time_start_1st'] = time.time()
@@ -3441,7 +3426,7 @@ def sequence_extraction_1st_round(args, sra_stat, metadata, g):
     metadata.df.at[ind_sra, 'spot_length_amalgkit'] = sra_stat['spot_length']
     metadata.df.at[ind_sra,'spot_start_1st'] = start
     metadata.df.at[ind_sra,'spot_end_1st'] = end
-    metadata = sequence_extraction(args, sra_stat, metadata, g, start, end)
+    metadata = sequence_extraction(args, sra_stat, metadata, g, start, end, runtime_context=runtime_context)
     txt = 'Time elapsed for 1st-round sequence extraction: {}, {:,.1f} sec'
     print(txt.format(sra_stat['sra_id'], int(time.time() - g['start_time'])))
     print('\n--- getfastq 1st-round sequence generation report ---')
@@ -3457,7 +3442,8 @@ def sequence_extraction_1st_round(args, sra_stat, metadata, g):
     print('')
     return metadata
 
-def sequence_extraction_2nd_round(args, sra_stat, metadata, g):
+def sequence_extraction_2nd_round(args, sra_stat, metadata, g, runtime_context=None):
+    runtime_context = ensure_getfastq_runtime_context(runtime_context)
     print('Starting the 2nd-round sequence extraction.')
     ind_sra = sra_stat.get('metadata_idx', get_metadata_row_index_by_run(metadata, sra_stat['sra_id']))
     metadata.df.at[ind_sra,'time_start_2nd'] = time.time()
@@ -3478,7 +3464,7 @@ def sequence_extraction_2nd_round(args, sra_stat, metadata, g):
         return metadata
     else:
         rename_fastq(sra_stat, sra_stat['getfastq_sra_dir'], inext=ext_main, outext=ext_1st_tmp)
-    metadata = sequence_extraction(args, sra_stat, metadata, g, start, end)
+    metadata = sequence_extraction(args, sra_stat, metadata, g, start, end, runtime_context=runtime_context)
     if (layout == 'single'):
         subexts = ['']
     elif (layout == 'paired'):
@@ -3532,7 +3518,8 @@ def sequence_extraction_2nd_round(args, sra_stat, metadata, g):
     print('')
     return metadata
 
-def sequence_extraction_private(metadata, sra_stat, args):
+def sequence_extraction_private(metadata, sra_stat, args, runtime_context=None):
+    runtime_context = ensure_getfastq_runtime_context(runtime_context)
     ind_sra = sra_stat.get('metadata_idx', get_metadata_row_index_by_run(metadata, sra_stat['sra_id']))
     for col in ['read1_path','read2_path']:
         path_from_raw = metadata.df.at[ind_sra, col]
@@ -3543,10 +3530,10 @@ def sequence_extraction_private(metadata, sra_stat, args):
         if path_from == '' or path_from.lower() == 'nan':
             sys.stderr.write('Private fastq file path is missing in metadata column "{}".\n'.format(col))
             continue
-        path_to = os.path.join(sra_stat['getfastq_sra_dir'], os.path.basename(path_from))
-        path_to = path_to.replace('.fq', '.fastq')
-        if not path_to.endswith('.gz'):
-            path_to = path_to+'.gz' # .gz is necessary even if the original file is not compressed.
+        suffix = ''
+        if sra_stat['layout'] == 'paired':
+            suffix = '_1' if col == 'read1_path' else '_2'
+        path_to = os.path.join(sra_stat['getfastq_sra_dir'], sra_stat['sra_id'] + suffix + '.fastq.gz')
         if os.path.isfile(path_from):
             if os.path.lexists(path_to):
                 if os.path.isdir(path_to) and (not os.path.islink(path_to)):
@@ -3597,6 +3584,7 @@ def sequence_extraction_private(metadata, sra_stat, args):
                 args=args,
                 output_dir=sra_stat['getfastq_sra_dir'],
                 metadata=metadata,
+                runtime_context=runtime_context,
             )
             delta_num_out = metadata.df.at[ind_sra, 'num_contam_out'] - prev_num_contam_out
             delta_bp_out = metadata.df.at[ind_sra, 'bp_contam_out'] - prev_bp_contam_out
@@ -3689,7 +3677,8 @@ def initialize_global_params(args, metadata):
     print('Target size per SRA: {:,} bp'.format(g['num_bp_per_sra']))
     return g
 
-def process_getfastq_run(args, row_index, sra_id, run_row_df, g):
+def process_getfastq_run(args, row_index, sra_id, run_row_df, g, runtime_context=None):
+    runtime_context = ensure_getfastq_runtime_context(runtime_context)
     print('')
     print('Processing SRA ID: {}'.format(sra_id))
     run_metadata = Metadata.from_DataFrame(run_row_df)
@@ -3718,11 +3707,11 @@ def process_getfastq_run(args, row_index, sra_id, run_row_df, g):
         if run_metadata.df.at[0, 'private_file'] == 'yes':
             print('Processing {} as private data. --max_bp is disabled.'.format(sra_id), flush=True)
             flag_private_file = True
-            sequence_extraction_private(run_metadata, sra_stat, args)
+            sequence_extraction_private(run_metadata, sra_stat, args, runtime_context=runtime_context)
     if not flag_private_file:
         print('Processing {} as publicly available data from SRA.'.format(sra_id), flush=True)
         download_sra(run_metadata, sra_stat, args, sra_stat['getfastq_sra_dir'], overwrite=False)
-        run_metadata = sequence_extraction_1st_round(args, sra_stat, run_metadata, g)
+        run_metadata = sequence_extraction_1st_round(args, sra_stat, run_metadata, g, runtime_context=runtime_context)
     return {
         'row_index': row_index,
         'sra_id': sra_id,
@@ -3733,7 +3722,7 @@ def process_getfastq_run(args, row_index, sra_id, run_row_df, g):
     }
 
 
-def run_first_round_getfastq(args, metadata, run_rows, g, jobs):
+def run_first_round_getfastq(args, metadata, run_rows, g, jobs, runtime_context=None):
     run_results_by_id = dict()
     if (jobs == 1) or (len(run_rows) <= 1):
         for row_index, sra_id in run_rows:
@@ -3743,6 +3732,7 @@ def run_first_round_getfastq(args, metadata, run_rows, g, jobs):
                 sra_id=sra_id,
                 run_row_df=metadata.df.loc[[row_index], :].copy(),
                 g=g,
+                runtime_context=ensure_getfastq_runtime_context(runtime_context),
             )
         return run_results_by_id
 
@@ -3756,6 +3746,7 @@ def run_first_round_getfastq(args, metadata, run_rows, g, jobs):
             run_row[1],
             metadata.df.loc[[run_row[0]], :].copy(),
             g,
+            ensure_getfastq_runtime_context(runtime_context),
         ),
         max_workers=max_workers,
     )
@@ -3785,7 +3776,16 @@ def apply_first_round_getfastq_results(metadata, run_rows, run_results_by_id):
     return metadata, flag_private_file, flag_any_output_file_present, last_getfastq_sra_dir
 
 
-def maybe_run_getfastq_second_round(args, metadata, run_rows, g, flag_private_file, flag_any_output_file_present):
+def maybe_run_getfastq_second_round(
+    args,
+    metadata,
+    run_rows,
+    g,
+    flag_private_file,
+    flag_any_output_file_present,
+    runtime_context=None,
+):
+    runtime_context = ensure_getfastq_runtime_context(runtime_context)
     if flag_private_file or flag_any_output_file_present:
         return metadata
     g['rate_obtained_1st'] = metadata.df.loc[:, 'bp_amalgkit'].sum() / g['max_bp']
@@ -3799,7 +3799,13 @@ def maybe_run_getfastq_second_round(args, metadata, run_rows, g, flag_private_fi
             for _, sra_id in run_rows:
                 sra_stat = get_sra_stat(sra_id, metadata, g['num_bp_per_sra'])
                 sra_stat['getfastq_sra_dir'] = get_getfastq_run_dir(args, sra_id)
-                metadata = sequence_extraction_2nd_round(args, sra_stat, metadata, g)
+                metadata = sequence_extraction_2nd_round(
+                    args,
+                    sra_stat,
+                    metadata,
+                    g,
+                    runtime_context=runtime_context,
+                )
     else:
         print('Sufficient data were obtained in the 1st-round sequence extraction. Proceeding without the 2nd round.')
     g['rate_obtained_2nd'] = metadata.df.loc[:, 'bp_amalgkit'].sum() / g['max_bp']
@@ -3831,24 +3837,29 @@ def getfastq_main(args):
         context='getfastq:',
         disable_workers=(getattr(args, 'batch', None) is not None),
     )
-    args.threads = threads
-    args.internal_jobs = jobs
-    check_getfastq_dependency(args)
-    metadata = getfastq_metadata(args)
+    runtime_args = clone_namespace(args, threads=threads, internal_jobs=jobs)
+    check_getfastq_dependency(runtime_args)
+    metadata = getfastq_metadata(runtime_args)
     metadata = remove_experiment_without_run(metadata)
-    metadata = ensure_contam_filter_metadata_rank_taxids(metadata, args)
+    metadata = ensure_contam_filter_metadata_rank_taxids(metadata, runtime_args)
     metadata = check_metadata_validity(metadata)
-    g = initialize_global_params(args, metadata)
+    g = initialize_global_params(runtime_args, metadata)
     metadata = initialize_columns(metadata, g)
     run_rows = list(zip(metadata.df.index.tolist(), metadata.df['run'].tolist()))
-    run_results_by_id = run_first_round_getfastq(args=args, metadata=metadata, run_rows=run_rows, g=g, jobs=jobs)
+    run_results_by_id = run_first_round_getfastq(
+        args=runtime_args,
+        metadata=metadata,
+        run_rows=run_rows,
+        g=g,
+        jobs=jobs,
+    )
     metadata, flag_private_file, flag_any_output_file_present, last_getfastq_sra_dir = apply_first_round_getfastq_results(
         metadata=metadata,
         run_rows=run_rows,
         run_results_by_id=run_results_by_id,
     )
     metadata = maybe_run_getfastq_second_round(
-        args=args,
+        args=runtime_args,
         metadata=metadata,
         run_rows=run_rows,
         g=g,
@@ -3856,7 +3867,7 @@ def getfastq_main(args):
         flag_any_output_file_present=flag_any_output_file_present,
     )
     run_getfastq_postprocessing(
-        args=args,
+        args=runtime_args,
         metadata=metadata,
         last_getfastq_sra_dir=last_getfastq_sra_dir,
         flag_any_output_file_present=flag_any_output_file_present,

@@ -1,36 +1,44 @@
 import pandas as pd
 
-import gzip
 import os
 import re
 import subprocess
 import warnings
 
+from amalgkit.download_utils import get_ete_ncbitaxa
+from amalgkit.fastq_utils import (
+    count_fastq_lines,
+    map_seqkit_stats_rows,
+    open_fastq_binary,
+    open_fastq_text,
+    parse_seqkit_stats_row_num_reads_avg_len as parse_seqkit_stats_row,
+    parse_seqkit_stats_rows,
+    sequence_line_length as _sequence_line_length,
+    sample_fastq_reads,
+)
+from amalgkit.metadata_utils import Metadata, load_metadata
+from amalgkit.output_utils import atomic_write_dataframe
+from amalgkit.parallel_utils import (
+    is_auto_parallel_option,
+    resolve_detected_cpu_count,
+    run_tasks_with_optional_threads,
+    validate_positive_int_option,
+)
 from amalgkit.sanity import check_getfastq_outputs
-from amalgkit.util import *
+from amalgkit.subprocess_utils import run_logged_command
 
 FASTQ_EXTENSIONS = ('.fastq.gz', '.fq.gz', '.fastq', '.fq')
 FASTQ_MATE_SUFFIX_PATTERN = re.compile(r'^(.*)_([12])$')
 QUICK_MODE_SAMPLE_READS = 1000
 QUICK_MODE_PAIRED_COUNT_TOLERANCE_FRACTION = 0.05
 QUICK_MODE_PAIRED_COUNT_TOLERANCE_MIN_READS = 10
-FASTQ_LINECOUNT_CHUNK_SIZE = 16 * 1024 * 1024
 PRIVATE_FASTQ_METADATA_COLUMNS = [
     'scientific_name', 'sample_group', 'run', 'read1_path', 'read2_path', 'is_sampled',
     'is_qualified', 'exclusion', 'lib_layout', 'spot_length', 'total_spots', 'total_bases', 'size', 'private_file',
 ]
-
-def open_fastq_text(path_fastq):
-    path_fastq_lower = path_fastq.lower()
-    if path_fastq_lower.endswith(('.fq.gz', '.fastq.gz')):
-        return gzip.open(path_fastq, 'rt')
-    return open(path_fastq, 'rt')
-
-def open_fastq_binary(path_fastq):
-    path_fastq_lower = path_fastq.lower()
-    if path_fastq_lower.endswith(('.fq.gz', '.fastq.gz')):
-        return gzip.open(path_fastq, 'rb')
-    return open(path_fastq, 'rb')
+PRIVATE_FASTQ_SCIENTIFIC_NAME_PLACEHOLDER = 'Please add in format: Genus species'
+PRIVATE_FASTQ_SAMPLE_GROUP_PLACEHOLDER = 'Please add'
+STANDARD_TAXONOMIC_RANKS = ['domain', 'kingdom', 'phylum', 'class', 'order', 'family', 'genus', 'species']
 
 def parse_fastq_basename(basename):
     basename_lower = basename.lower()
@@ -43,24 +51,102 @@ def parse_fastq_basename(basename):
             return stem, None
     return None, None
 
+def get_relative_path_parts(root_dir, path_dir):
+    relative_dir = os.path.relpath(path_dir, root_dir)
+    if relative_dir in ('', '.'):
+        return []
+    return [part for part in relative_dir.split(os.sep) if part not in ('', '.')]
+
+def infer_scientific_name_from_relative_parts(relative_parts):
+    if len(relative_parts) == 0:
+        return ''
+    return normalize_scientific_name_for_lookup(relative_parts[0])
+
+def build_run_id_candidates(run_basename, relative_parts, duplicate_basename):
+    candidates = []
+    if not duplicate_basename:
+        return [run_basename]
+    if len(relative_parts) > 0:
+        candidates.append(relative_parts[0] + '_' + run_basename)
+        candidates.append('_'.join(relative_parts) + '_' + run_basename)
+    candidates.append(run_basename)
+    seen = set()
+    deduplicated = []
+    for candidate in candidates:
+        normalized = str(candidate).strip()
+        if normalized == '' or normalized in seen:
+            continue
+        seen.add(normalized)
+        deduplicated.append(normalized)
+    return deduplicated
+
+def assign_unique_run_ids(logical_run_records):
+    basename_counts = {}
+    for logical_key in logical_run_records.keys():
+        basename_counts[logical_key[1]] = basename_counts.get(logical_key[1], 0) + 1
+    assigned = {}
+    used = set()
+    sorted_keys = sorted(logical_run_records.keys(), key=lambda item: (item[1], item[0]))
+    for logical_key in sorted_keys:
+        relative_parts, run_basename = logical_key
+        candidates = build_run_id_candidates(
+            run_basename=run_basename,
+            relative_parts=list(relative_parts),
+            duplicate_basename=(basename_counts.get(run_basename, 0) > 1),
+        )
+        chosen = None
+        for candidate in candidates:
+            if candidate not in used:
+                chosen = candidate
+                break
+        if chosen is None:
+            base_candidate = candidates[0] if len(candidates) > 0 else run_basename
+            suffix = 2
+            chosen = base_candidate
+            while chosen in used:
+                chosen = '{}_{}'.format(base_candidate, suffix)
+                suffix += 1
+        assigned[logical_key] = chosen
+        used.add(chosen)
+    return assigned
 
 def scan_fastq_directory(fastq_dir):
-    grouped_files = {}
-    with os.scandir(fastq_dir) as entries:
-        for entry in entries:
-            if not entry.is_file():
+    logical_run_records = {}
+    for root, dirnames, filenames in os.walk(fastq_dir):
+        dirnames.sort()
+        relative_parts = get_relative_path_parts(fastq_dir, root)
+        scientific_name = infer_scientific_name_from_relative_parts(relative_parts)
+        for filename in sorted(filenames):
+            path_fastq = os.path.join(root, filename)
+            if not os.path.isfile(path_fastq):
                 continue
-            run_id, mate = parse_fastq_basename(entry.name)
-            if run_id is None:
+            run_basename, mate = parse_fastq_basename(filename)
+            if run_basename is None:
                 continue
-            run_id = str(run_id).strip()
-            if run_id == '':
+            run_basename = str(run_basename).strip()
+            if run_basename == '':
                 continue
-            grouped_files.setdefault(run_id, []).append({
-                'basename': entry.name,
-                'run': run_id,
+            logical_key = (tuple(relative_parts), run_basename)
+            logical_run_records.setdefault(logical_key, []).append({
+                'basename': filename,
+                'run_basename': run_basename,
                 'mate': mate,
-                'path': entry.path,
+                'path': path_fastq,
+                'relative_parts': list(relative_parts),
+                'scientific_name': scientific_name,
+            })
+    grouped_files = {}
+    assigned_run_ids = assign_unique_run_ids(logical_run_records)
+    for logical_key, records in logical_run_records.items():
+        run_id = assigned_run_ids[logical_key]
+        for record in records:
+            grouped_files.setdefault(run_id, []).append({
+                'basename': record['basename'],
+                'run': run_id,
+                'mate': record['mate'],
+                'path': record['path'],
+                'relative_parts': record['relative_parts'],
+                'scientific_name': record['scientific_name'],
             })
     return grouped_files
 
@@ -70,16 +156,6 @@ def write_fastq_head(path_fastq, path_out, max_lines=4000):
             if i >= max_lines:
                 break
             fout.write(line)
-
-def count_fastq_lines(path_fastq):
-    num_lines = 0
-    with open_fastq_binary(path_fastq) as f:
-        while True:
-            chunk = f.read(FASTQ_LINECOUNT_CHUNK_SIZE)
-            if not chunk:
-                break
-            num_lines += chunk.count(b'\n')
-    return num_lines
 
 def resolve_seqkit_exe_for_integrate(seqkit_exe):
     if seqkit_exe is None:
@@ -104,34 +180,8 @@ def is_decompressed_fastq_path(path_fastq):
         return False
     return None
 
-def parse_seqkit_stats_tsv_rows(stdout_txt):
-    lines = [line.rstrip('\n') for line in stdout_txt.splitlines() if line.strip() != '']
-    if len(lines) < 2:
-        raise RuntimeError('seqkit stats output was empty.')
-    header_fields = lines[0].split('\t')
-    rows = []
-    for line in lines[1:]:
-        value_fields = line.split('\t')
-        row = {}
-        for idx, field_name in enumerate(header_fields):
-            row[field_name] = value_fields[idx] if idx < len(value_fields) else ''
-        rows.append(row)
-    if len(rows) == 0:
-        raise RuntimeError('seqkit stats output did not contain data rows.')
-    return rows
-
-def parse_seqkit_stats_row(row, path_fastq):
-    if ('num_seqs' not in row) or ('avg_len' not in row):
-        raise RuntimeError('seqkit stats output was missing required fields for {}'.format(path_fastq))
-    try:
-        num_reads = int(float(row['num_seqs']))
-        avg_len = int(round(float(row['avg_len'])))
-    except (TypeError, ValueError) as exc:
-        raise RuntimeError('Failed to parse seqkit stats numeric fields for {}.'.format(path_fastq)) from exc
-    return num_reads, avg_len
-
 def parse_seqkit_stats_tsv_output(stdout_txt, path_fastq):
-    rows = parse_seqkit_stats_tsv_rows(stdout_txt=stdout_txt)
+    rows = parse_seqkit_stats_rows(stdout_txt=stdout_txt)
     if len(rows) != 1:
         raise RuntimeError(
             'seqkit stats returned {} rows for single FASTQ input {}.'.format(len(rows), path_fastq)
@@ -159,9 +209,14 @@ def scan_fastq_stats_with_seqkit_batch(path_fastq_paths, seqkit_exe='seqkit', se
         '-a',
         '-j', str(seqkit_threads),
     ] + list(deduplicated_paths)
-    out = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    out, stdout_txt, stderr_txt = run_logged_command(
+        command=command,
+        runner=subprocess.run,
+        print_command=False,
+        print_output=False,
+        not_found_label='seqkit',
+    )
     if out.returncode != 0:
-        stderr_txt = out.stderr.decode('utf8', errors='replace')
         raise RuntimeError(
             'seqkit stats failed (exit code {}) for {} input file(s): {}'.format(
                 out.returncode,
@@ -169,28 +224,12 @@ def scan_fastq_stats_with_seqkit_batch(path_fastq_paths, seqkit_exe='seqkit', se
                 stderr_txt.strip(),
             )
         )
-    stdout_txt = out.stdout.decode('utf8', errors='replace')
-    rows = parse_seqkit_stats_tsv_rows(stdout_txt=stdout_txt)
-    stats_by_path = {}
-    fallback_idx = 0
-    fallback_paths = [os.path.abspath(path_fastq) for path_fastq in deduplicated_paths]
-    for row in rows:
-        row_path = None
-        for key in ['file', 'path', 'filename']:
-            raw_path = str(row.get(key, '')).strip()
-            if raw_path != '':
-                row_path = os.path.abspath(raw_path)
-                break
-        if row_path is None and fallback_idx < len(fallback_paths):
-            row_path = fallback_paths[fallback_idx]
-            fallback_idx += 1
-        if row_path is None:
-            continue
-        stats_by_path[row_path] = parse_seqkit_stats_row(row=row, path_fastq=row_path)
-    missing_paths = [path_fastq for path_fastq in fallback_paths if path_fastq not in stats_by_path]
-    if len(missing_paths) > 0:
-        raise RuntimeError('seqkit stats output did not include all requested FASTQ paths: {}'.format(missing_paths))
-    return stats_by_path
+    return map_seqkit_stats_rows(
+        stdout_txt=stdout_txt,
+        requested_paths=deduplicated_paths,
+        row_parser=parse_seqkit_stats_row,
+        missing_message='seqkit stats output did not include all requested FASTQ paths: {}',
+    )
 
 def scan_fastq_stats_with_seqkit(path_fastq, seqkit_exe='seqkit', seqkit_threads=1):
     stats_by_path = scan_fastq_stats_with_seqkit_batch(
@@ -205,40 +244,6 @@ def estimate_total_spots_from_line_count(path_fastq):
     if (total_lines % 4) != 0:
         raise ValueError('Malformed FASTQ (line count not divisible by 4): {}'.format(path_fastq))
     return int(total_lines / 4)
-
-def _sequence_line_length(line_bytes):
-    seq_len = len(line_bytes)
-    if seq_len == 0:
-        return 0
-    if line_bytes.endswith(b'\n'):
-        seq_len -= 1
-        if (seq_len > 0) and line_bytes.endswith(b'\r\n'):
-            seq_len -= 1
-    return seq_len
-
-def sample_fastq_reads(path_fastq, max_reads=None):
-    num_reads = 0
-    total_bases = 0
-    total_record_chars = 0
-    reached_eof = True
-    with open_fastq_binary(path_fastq) as f:
-        while True:
-            line1 = f.readline()
-            if line1 == b'':
-                break
-            line2 = f.readline()
-            line3 = f.readline()
-            line4 = f.readline()
-            if (line2 == b'') or (line3 == b'') or (line4 == b''):
-                raise ValueError('Malformed FASTQ (record truncated): {}'.format(path_fastq))
-            num_reads += 1
-            total_bases += _sequence_line_length(line2)
-            total_record_chars += (len(line1) + len(line2) + len(line3) + len(line4))
-            if (max_reads is not None) and (num_reads >= max_reads):
-                reached_eof = (f.readline() == b'')
-                break
-    avg_len = int(total_bases / num_reads) if num_reads > 0 else 0
-    return num_reads, avg_len, total_record_chars, reached_eof
 
 def scan_fastq_reads(path_fastq, max_reads=None):
     num_reads, avg_len, _, _ = sample_fastq_reads(path_fastq, max_reads=max_reads)
@@ -457,14 +462,225 @@ def build_run_specs(grouped_files):
     for run_id in sorted(grouped_files.keys()):
         fastq_records = grouped_files[run_id]
         lib_layout, read1_path, read2_path = resolve_run_fastq_layout(run_id, fastq_records)
+        scientific_names = sorted({
+            normalize_scientific_name_for_lookup(record.get('scientific_name', ''))
+            for record in fastq_records
+            if normalize_scientific_name_for_lookup(record.get('scientific_name', '')) != ''
+        })
+        scientific_name = scientific_names[0] if len(scientific_names) > 0 else ''
         run_specs.append({
             'run': run_id,
             'num_files': len(fastq_records),
             'lib_layout': lib_layout,
             'read1_path': read1_path,
             'read2_path': read2_path,
+            'scientific_name': scientific_name,
         })
     return run_specs
+
+def normalize_text_value(value):
+    if pd.isna(value):
+        return ''
+    text = str(value).strip()
+    if text.lower() in ['', 'nan', 'none']:
+        return ''
+    return re.sub(r'\s+', ' ', text)
+
+def normalize_scientific_name_for_lookup(value):
+    normalized = normalize_text_value(value)
+    if normalized == '':
+        return ''
+    return normalize_text_value(normalized.replace('_', ' '))
+
+def is_missing_private_scientific_name(value):
+    normalized = normalize_scientific_name_for_lookup(value)
+    if normalized == '':
+        return True
+    return normalized.lower() == PRIVATE_FASTQ_SCIENTIFIC_NAME_PLACEHOLDER.lower()
+
+def is_resolvable_scientific_name(value):
+    normalized = normalize_scientific_name_for_lookup(value)
+    if normalized == '' or is_missing_private_scientific_name(normalized):
+        return False
+    tokens = [token for token in normalized.split(' ') if token != '']
+    if len(tokens) >= 2:
+        return True
+    return re.fullmatch(r'[A-Za-z][A-Za-z.-]*', tokens[0]) is not None
+
+def infer_default_private_scientific_name(existing_df):
+    if existing_df is None or 'scientific_name' not in existing_df.columns:
+        return ''
+    unique_names = []
+    seen = set()
+    for value in existing_df['scientific_name'].tolist():
+        normalized = normalize_scientific_name_for_lookup(value)
+        if not is_resolvable_scientific_name(normalized):
+            continue
+        key = normalize_scientific_name_for_lookup(normalized).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique_names.append(normalized)
+    if len(unique_names) == 1:
+        return unique_names[0]
+    return ''
+
+def build_lineage_taxid_df(taxid_series, ncbi):
+    rank_cols = ['taxid_' + rank for rank in STANDARD_TAXONOMIC_RANKS]
+    unique_taxids = [int(taxid) for taxid in taxid_series.dropna().unique().tolist()]
+    if len(unique_taxids) == 0:
+        return pd.DataFrame({'taxid': pd.Series(dtype='Int64'), **{col: pd.Series(dtype='Int64') for col in rank_cols}})
+
+    row_map = {
+        taxid: dict({'taxid': taxid}, **{col: pd.NA for col in rank_cols})
+        for taxid in unique_taxids
+    }
+    lineage_map = {}
+    lineage_failures = {}
+    missing_taxids = list(unique_taxids)
+    if hasattr(ncbi, 'get_lineage_translator'):
+        try:
+            lineage_map = {
+                int(taxid): [int(lineage_taxid) for lineage_taxid in lineage]
+                for taxid, lineage in ncbi.get_lineage_translator(unique_taxids).items()
+            }
+            missing_taxids = [taxid for taxid in unique_taxids if taxid not in lineage_map]
+        except KeyboardInterrupt:
+            raise
+        except Exception:
+            lineage_map = {}
+            missing_taxids = list(unique_taxids)
+    for taxid in missing_taxids:
+        try:
+            lineage_map[taxid] = [int(lineage_taxid) for lineage_taxid in ncbi.get_lineage(taxid)]
+        except KeyboardInterrupt:
+            raise
+        except Exception as exc:
+            lineage_failures.setdefault(taxid, exc)
+
+    resolved_lineage_taxids = sorted({
+        lineage_taxid
+        for lineage in lineage_map.values()
+        for lineage_taxid in lineage
+    })
+    rank_dict = None
+    if len(resolved_lineage_taxids) > 0:
+        try:
+            rank_dict = ncbi.get_rank(resolved_lineage_taxids)
+        except KeyboardInterrupt:
+            raise
+        except Exception:
+            rank_dict = None
+    if rank_dict is not None:
+        for taxid, lineage in lineage_map.items():
+            lineage_row = row_map[taxid]
+            for lineage_taxid in lineage:
+                rank = rank_dict.get(lineage_taxid)
+                if rank in STANDARD_TAXONOMIC_RANKS:
+                    lineage_row['taxid_' + rank] = int(lineage_taxid)
+    else:
+        for taxid, lineage in lineage_map.items():
+            lineage_row = row_map[taxid]
+            try:
+                per_taxid_rank_dict = ncbi.get_rank(lineage)
+            except KeyboardInterrupt:
+                raise
+            except Exception as exc:
+                lineage_failures.setdefault(taxid, exc)
+                continue
+            for lineage_taxid, rank in per_taxid_rank_dict.items():
+                if rank in STANDARD_TAXONOMIC_RANKS:
+                    lineage_row['taxid_' + rank] = int(lineage_taxid)
+
+    if len(lineage_failures) > 0:
+        preview = ', '.join(
+            ['{} ({})'.format(taxid, exc.__class__.__name__) for taxid, exc in list(lineage_failures.items())[:5]]
+        )
+        if len(lineage_failures) > 5:
+            preview += ', ...'
+        warnings.warn(
+            'Failed to resolve NCBI lineage for {} taxid(s): {}'.format(
+                len(lineage_failures),
+                preview,
+            )
+        )
+    lineage_taxid_df = pd.DataFrame([row_map[taxid] for taxid in unique_taxids])
+    lineage_taxid_df = lineage_taxid_df.reindex(columns=['taxid'] + rank_cols, fill_value=pd.NA)
+    return lineage_taxid_df.astype('Int64')
+
+def ensure_taxonomy_columns(df, args):
+    metadata = Metadata.from_DataFrame(df)
+    taxid_values = pd.to_numeric(metadata.df['taxid'], errors='coerce') if 'taxid' in metadata.df.columns else pd.Series(dtype='float64')
+    if len(taxid_values) == 0:
+        metadata.df['taxid'] = pd.Series([pd.NA] * metadata.df.shape[0], dtype='Int64')
+    else:
+        metadata.df['taxid'] = taxid_values.astype('Int64')
+
+    missing_taxid_mask = metadata.df['taxid'].isna()
+    name_to_rows = {}
+    for row_idx in metadata.df.index[missing_taxid_mask].tolist():
+        normalized_name = normalize_scientific_name_for_lookup(metadata.df.at[row_idx, 'scientific_name'])
+        if not is_resolvable_scientific_name(normalized_name):
+            continue
+        name_to_rows.setdefault(normalized_name, []).append(row_idx)
+
+    ncbi = None
+    if len(name_to_rows) > 0:
+        ncbi = get_ete_ncbitaxa(args=args)
+        unresolved_names = []
+        ambiguous_names = []
+        try:
+            translated = ncbi.get_name_translator(list(name_to_rows.keys()))
+        except KeyboardInterrupt:
+            raise
+        except Exception as exc:
+            warnings.warn('Failed to resolve taxid from scientific_name values. {}'.format(exc))
+            translated = {}
+        for normalized_name, row_indices in name_to_rows.items():
+            taxid_candidates = translated.get(normalized_name, [])
+            if len(taxid_candidates) == 0:
+                unresolved_names.append(normalized_name)
+                continue
+            chosen_taxid = int(taxid_candidates[0])
+            if len(taxid_candidates) > 1:
+                ambiguous_names.append('{} -> {}'.format(normalized_name, taxid_candidates))
+            metadata.df.loc[row_indices, 'taxid'] = chosen_taxid
+        metadata.df['taxid'] = pd.to_numeric(metadata.df['taxid'], errors='coerce').astype('Int64')
+        if len(unresolved_names) > 0:
+            preview = ', '.join(unresolved_names[:5])
+            if len(unresolved_names) > 5:
+                preview += ', ...'
+            warnings.warn('Could not resolve taxid for {} scientific_name value(s): {}'.format(len(unresolved_names), preview))
+        if len(ambiguous_names) > 0:
+            preview = ', '.join(ambiguous_names[:5])
+            if len(ambiguous_names) > 5:
+                preview += ', ...'
+            warnings.warn(
+                'Multiple taxids matched {} scientific_name value(s); using the first match: {}'.format(
+                    len(ambiguous_names),
+                    preview,
+                )
+            )
+
+    if metadata.df['taxid'].notna().any():
+        rank_cols = ['taxid_' + rank for rank in STANDARD_TAXONOMIC_RANKS]
+        if ncbi is None:
+            ncbi = get_ete_ncbitaxa(args=args)
+        lineage_taxid_df = build_lineage_taxid_df(metadata.df['taxid'], ncbi)
+        metadata.df = metadata.df.drop(columns=rank_cols, errors='ignore')
+        metadata.df = metadata.df.merge(lineage_taxid_df, on='taxid', how='left')
+    return metadata.df
+
+def finalize_private_fastq_metadata(tmp_metadata, args, existing_df=None):
+    metadata = Metadata.from_DataFrame(tmp_metadata)
+    if metadata.df.shape[0] == 0:
+        return metadata.df
+    metadata.df['data_available'] = 'yes'
+    default_scientific_name = infer_default_private_scientific_name(existing_df)
+    if default_scientific_name != '':
+        missing_name_mask = metadata.df['scientific_name'].apply(is_missing_private_scientific_name)
+        metadata.df.loc[missing_name_mask, 'scientific_name'] = default_scientific_name
+    return ensure_taxonomy_columns(metadata.df, args=args)
 
 def collect_seqkit_target_paths(run_specs, accurate_size):
     target_paths = []
@@ -571,9 +787,12 @@ def build_private_fastq_metadata_rows(run_specs, stats_by_run):
         if run_id not in stats_by_run:
             continue
         stats = stats_by_run[run_id]
+        scientific_name = normalize_scientific_name_for_lookup(run_spec.get('scientific_name', ''))
+        if scientific_name == '':
+            scientific_name = PRIVATE_FASTQ_SCIENTIFIC_NAME_PLACEHOLDER
         rows.append({
-            'scientific_name': 'Please add in format: Genus species',
-            'sample_group': 'Please add',
+            'scientific_name': scientific_name,
+            'sample_group': PRIVATE_FASTQ_SAMPLE_GROUP_PLACEHOLDER,
             'run': run_id,
             'read1_path': stats['read1_path'],
             'read2_path': stats['read2_path'],
@@ -590,7 +809,7 @@ def build_private_fastq_metadata_rows(run_specs, stats_by_run):
     return rows
 
 
-def get_fastq_stats(args):
+def get_fastq_stats(args, existing_df=None):
     print("Starting integration of fastq-file metadata...")
     if (getattr(args, 'fastq_dir', None) is None) or (str(args.fastq_dir).strip() == ''):
         raise ValueError('--fastq_dir is required.')
@@ -619,7 +838,13 @@ def get_fastq_stats(args):
     tmp_metadata = pd.DataFrame.from_records(rows, columns=PRIVATE_FASTQ_METADATA_COLUMNS)
     os.makedirs(metadata_dir, exist_ok=True)
     tmp_metadata = tmp_metadata.sort_values(by='run', axis=0, ascending=True).reset_index(drop=True)
-    tmp_metadata.to_csv(os.path.join(out_dir, 'metadata_private_fastq.tsv'), sep='\t', index=False)
+    tmp_metadata = finalize_private_fastq_metadata(tmp_metadata, args=args, existing_df=existing_df)
+    atomic_write_dataframe(
+        tmp_metadata,
+        os.path.join(out_dir, 'metadata_private_fastq.tsv'),
+        sep='\t',
+        index=False,
+    )
     return tmp_metadata
 
 def integrate_main(args):
@@ -651,8 +876,8 @@ def integrate_main(args):
         data_available, data_unavailable = check_getfastq_outputs(args, sra_ids, metadata, args.out_dir)
         metadata.df.loc[metadata.df['run'].isin(data_available), 'data_available'] = 'yes'
         metadata.df.loc[metadata.df['run'].isin(data_unavailable), 'data_available'] = 'no'
-        tmp_metadata = get_fastq_stats(args)
-        df = pd.concat([metadata.df, tmp_metadata])
+        tmp_metadata = get_fastq_stats(args, existing_df=metadata.df)
+        df = pd.concat([metadata.df, tmp_metadata], ignore_index=True, sort=False)
         merged_runs = df.loc[:, 'run'].fillna('').astype(str).str.strip()
         duplicate_mask = merged_runs.duplicated(keep=False)
         if duplicate_mask.any():
@@ -663,7 +888,13 @@ def integrate_main(args):
                 )
             )
         df['run'] = merged_runs
-        df.to_csv(os.path.join(args.out_dir, 'metadata', 'metadata_updated_for_private_fastq.tsv'), sep='\t', index=False)
+        df = ensure_taxonomy_columns(df, args=args)
+        atomic_write_dataframe(
+            df,
+            os.path.join(args.out_dir, 'metadata', 'metadata_updated_for_private_fastq.tsv'),
+            sep='\t',
+            index=False,
+        )
     else:
         print('Generating a new metadata table.')
         get_fastq_stats(args)
