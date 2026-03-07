@@ -1,6 +1,7 @@
 import errno
 import os
 import time
+import urllib.request
 from contextlib import contextmanager
 
 import ete4
@@ -8,6 +9,7 @@ import ete4
 
 DOWNLOAD_LOCK_POLL_SECONDS = 5
 DOWNLOAD_LOCK_TIMEOUT_SECONDS = 3600
+NCBI_TAXDUMP_URL = 'https://ftp.ncbi.nlm.nih.gov/pub/taxonomy/taxdump.tar.gz'
 
 
 def resolve_download_dir(args):
@@ -28,11 +30,15 @@ def resolve_ete_data_dir(args, resolve_download_dir_fn=None):
     return os.path.join(resolve_download_dir_fn(args), 'ete4')
 
 
-def _assert_lock_path_is_regular_file(lock_path, lock_label='Lock'):
-    if not os.path.lexists(lock_path):
+def _assert_regular_file_or_absent(path, label='Path'):
+    if not os.path.lexists(path):
         return
-    if os.path.islink(lock_path) or (not os.path.isfile(lock_path)):
-        raise IsADirectoryError('{} path exists but is not a file: {}'.format(lock_label, lock_path))
+    if os.path.islink(path) or (not os.path.isfile(path)):
+        raise IsADirectoryError('{} exists but is not a file: {}'.format(label, path))
+
+
+def _assert_lock_path_is_regular_file(lock_path, lock_label='Lock'):
+    _assert_regular_file_or_absent(lock_path, label='{} path'.format(lock_label))
 
 
 def _try_create_lock_file(lock_path):
@@ -171,11 +177,58 @@ def acquire_exclusive_lock(
         time.sleep(poll_seconds)
 
 
+def ensure_ete_taxdump_file(taxdump_path, urlretrieve_fn=None):
+    if urlretrieve_fn is None:
+        urlretrieve_fn = urllib.request.urlretrieve
+    taxdump_path = os.path.realpath(taxdump_path)
+    taxdump_dir = os.path.dirname(taxdump_path)
+    if taxdump_dir != '':
+        if os.path.exists(taxdump_dir) and (not os.path.isdir(taxdump_dir)):
+            raise NotADirectoryError(
+                'ETE4 taxdump parent path exists but is not a directory: {}'.format(taxdump_dir)
+            )
+        os.makedirs(taxdump_dir, exist_ok=True)
+    _assert_regular_file_or_absent(taxdump_path, label='ETE4 taxdump path')
+    if os.path.exists(taxdump_path):
+        return taxdump_path
+    tmp_path = taxdump_path + '.tmp'
+    if os.path.lexists(tmp_path):
+        _assert_regular_file_or_absent(tmp_path, label='ETE4 taxdump temporary path')
+        os.remove(tmp_path)
+    print('Downloading ETE4 taxonomy dump: {}'.format(NCBI_TAXDUMP_URL), flush=True)
+    try:
+        urlretrieve_fn(NCBI_TAXDUMP_URL, tmp_path)
+        os.replace(tmp_path, taxdump_path)
+    except Exception:
+        if os.path.lexists(tmp_path):
+            _assert_regular_file_or_absent(tmp_path, label='ETE4 taxdump temporary path')
+            os.remove(tmp_path)
+        raise
+    return taxdump_path
+
+
+def should_refresh_custom_ete_taxonomy_db(dbfile, is_taxadb_up_to_date_fn=None):
+    dbfile = os.path.realpath(dbfile)
+    _assert_regular_file_or_absent(dbfile, label='ETE4 taxonomy DB path')
+    if not os.path.exists(dbfile):
+        return True
+    if is_taxadb_up_to_date_fn is None:
+        is_taxadb_up_to_date_fn = getattr(ete4, 'is_taxadb_up_to_date', None)
+    if is_taxadb_up_to_date_fn is None:
+        return False
+    try:
+        return (not is_taxadb_up_to_date_fn(dbfile))
+    except Exception:
+        return True
+
+
 def get_ete_ncbitaxa(
     args=None,
     acquire_exclusive_lock_fn=None,
     ncbitaxa_cls=None,
     resolve_ete_data_dir_fn=None,
+    urlretrieve_fn=None,
+    is_taxadb_up_to_date_fn=None,
 ):
     if acquire_exclusive_lock_fn is None:
         acquire_exclusive_lock_fn = acquire_exclusive_lock
@@ -183,13 +236,27 @@ def get_ete_ncbitaxa(
         ncbitaxa_cls = ete4.NCBITaxa
     if resolve_ete_data_dir_fn is None:
         resolve_ete_data_dir_fn = resolve_ete_data_dir
+    if urlretrieve_fn is None:
+        urlretrieve_fn = urllib.request.urlretrieve
+    if is_taxadb_up_to_date_fn is None:
+        is_taxadb_up_to_date_fn = getattr(ete4, 'is_taxadb_up_to_date', None)
     if args is None:
         return ncbitaxa_cls()
     ete_data_dir = resolve_ete_data_dir_fn(args)
     os.makedirs(ete_data_dir, exist_ok=True)
     lock_path = os.path.join(ete_data_dir, '.ete4_taxonomy.lock')
+    dbfile = os.path.join(ete_data_dir, 'taxa.sqlite')
+    taxdump_file = os.path.join(ete_data_dir, 'taxdump.tar.gz')
     with acquire_exclusive_lock_fn(lock_path=lock_path, lock_label='ETE4 taxonomy DB'):
-        return ncbitaxa_cls(
-            dbfile=os.path.join(ete_data_dir, 'taxa.sqlite'),
-            taxdump_file=os.path.join(ete_data_dir, 'taxdump.tar.gz'),
-        )
+        kwargs = {'dbfile': dbfile}
+        if should_refresh_custom_ete_taxonomy_db(
+            dbfile=dbfile,
+            is_taxadb_up_to_date_fn=is_taxadb_up_to_date_fn,
+        ):
+            kwargs['taxdump_file'] = ensure_ete_taxdump_file(
+                taxdump_path=taxdump_file,
+                urlretrieve_fn=urlretrieve_fn,
+            )
+        else:
+            kwargs['update'] = False
+        return ncbitaxa_cls(**kwargs)

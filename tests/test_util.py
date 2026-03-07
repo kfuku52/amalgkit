@@ -24,6 +24,7 @@ from amalgkit.util import (
     get_newest_intermediate_file_extension,
     get_mapping_rate,
     get_getfastq_run_dir,
+    get_ete_ncbitaxa,
     generate_multisp_busco_table,
     cleanup_tmp_amalgkit_files,
     check_rscript,
@@ -2319,7 +2320,7 @@ class TestMetadataTaxidValidation:
             'taxid': [9606],
         }))
         metadata.df['taxid'] = metadata.df['taxid'].astype('Int64')
-        captured = {'lock_path': None}
+        captured = {'lock_path': None, 'urlretrieve': None}
 
         class DummyLock:
             def __init__(self, lock_path, lock_label='Lock', poll_seconds=5, timeout_seconds=3600):
@@ -2342,8 +2343,14 @@ class TestMetadataTaxidValidation:
             def get_rank(self, _lineage):
                 return {1: 'domain', 9606: 'species'}
 
+        def fake_urlretrieve(url, out_path):
+            captured['urlretrieve'] = (url, out_path)
+            with open(out_path, 'wb') as fout:
+                fout.write(b'taxdump')
+
         monkeypatch.setattr('amalgkit.download_utils.acquire_exclusive_lock', DummyLock)
         monkeypatch.setattr('amalgkit.download_utils.ete4.NCBITaxa', RecordingNcbi)
+        monkeypatch.setattr('amalgkit.download_utils.urllib.request.urlretrieve', fake_urlretrieve)
         args = SimpleNamespace(
             out_dir=str(tmp_path / 'out'),
             download_dir=str(tmp_path / 'shared_downloads'),
@@ -2354,6 +2361,53 @@ class TestMetadataTaxidValidation:
         assert captured['kwargs']['dbfile'] == os.path.join(expected_ete_dir, 'taxa.sqlite')
         assert captured['kwargs']['taxdump_file'] == os.path.join(expected_ete_dir, 'taxdump.tar.gz')
         assert os.path.isdir(expected_ete_dir)
+        assert os.path.isfile(os.path.join(expected_ete_dir, 'taxdump.tar.gz'))
+        assert captured['lock_path'] == os.path.join(expected_ete_dir, '.ete4_taxonomy.lock')
+        assert captured['urlretrieve'][0].endswith('/taxdump.tar.gz')
+        assert captured['urlretrieve'][1] == os.path.join(expected_ete_dir, 'taxdump.tar.gz.tmp')
+
+    def test_get_ete_ncbitaxa_reuses_existing_custom_db_without_taxdump_refresh(self, tmp_path, monkeypatch):
+        captured = {'lock_path': None}
+
+        class DummyLock:
+            def __init__(self, lock_path, lock_label='Lock', poll_seconds=5, timeout_seconds=3600):
+                _ = (lock_label, poll_seconds, timeout_seconds)
+                captured['lock_path'] = lock_path
+
+            def __enter__(self):
+                return None
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        class RecordingNcbi:
+            def __init__(self, **kwargs):
+                captured['kwargs'] = kwargs
+
+        def fail_urlretrieve(*_args, **_kwargs):
+            raise AssertionError('urlretrieve should not be called when a usable custom ETE DB already exists.')
+
+        args = SimpleNamespace(
+            out_dir=str(tmp_path / 'out'),
+            download_dir=str(tmp_path / 'shared_downloads'),
+        )
+        expected_ete_dir = os.path.join(os.path.realpath(args.download_dir), 'ete4')
+        os.makedirs(expected_ete_dir, exist_ok=True)
+        dbfile = os.path.join(expected_ete_dir, 'taxa.sqlite')
+        with open(dbfile, 'wb') as fout:
+            fout.write(b'sqlite')
+
+        monkeypatch.setattr('amalgkit.util.acquire_exclusive_lock', DummyLock)
+        monkeypatch.setattr('amalgkit.download_utils.ete4.NCBITaxa', RecordingNcbi)
+        monkeypatch.setattr('amalgkit.download_utils.ete4.is_taxadb_up_to_date', lambda path: path == dbfile)
+        monkeypatch.setattr('amalgkit.download_utils.urllib.request.urlretrieve', fail_urlretrieve)
+
+        result = get_ete_ncbitaxa(args=args)
+
+        assert isinstance(result, RecordingNcbi)
+        assert captured['kwargs']['dbfile'] == dbfile
+        assert captured['kwargs']['update'] is False
+        assert 'taxdump_file' not in captured['kwargs']
         assert captured['lock_path'] == os.path.join(expected_ete_dir, '.ete4_taxonomy.lock')
 
 
