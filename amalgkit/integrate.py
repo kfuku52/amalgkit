@@ -36,6 +36,7 @@ PRIVATE_FASTQ_METADATA_COLUMNS = [
     'scientific_name', 'sample_group', 'run', 'read1_path', 'read2_path', 'is_sampled',
     'is_qualified', 'exclusion', 'lib_layout', 'spot_length', 'total_spots', 'total_bases', 'size', 'private_file',
 ]
+PRIVATE_FASTQ_INTERNAL_COLUMNS = ['scientific_name_candidate']
 PRIVATE_FASTQ_SCIENTIFIC_NAME_PLACEHOLDER = 'Please add in format: Genus species'
 PRIVATE_FASTQ_SAMPLE_GROUP_PLACEHOLDER = 'Please add'
 STANDARD_TAXONOMIC_RANKS = ['domain', 'kingdom', 'phylum', 'class', 'order', 'family', 'genus', 'species']
@@ -57,10 +58,14 @@ def get_relative_path_parts(root_dir, path_dir):
         return []
     return [part for part in relative_dir.split(os.sep) if part not in ('', '.')]
 
-def infer_scientific_name_from_relative_parts(relative_parts):
-    if len(relative_parts) == 0:
+def infer_scientific_name_candidate(fastq_dir, relative_parts):
+    if len(relative_parts) > 0:
+        candidate = relative_parts[0]
+    else:
+        candidate = os.path.basename(os.path.realpath(fastq_dir))
+    if not is_folder_scientific_name_candidate(candidate):
         return ''
-    return normalize_scientific_name_for_lookup(relative_parts[0])
+    return normalize_scientific_name_for_lookup(candidate)
 
 def build_run_id_candidates(run_basename, relative_parts, duplicate_basename):
     candidates = []
@@ -115,7 +120,7 @@ def scan_fastq_directory(fastq_dir):
     for root, dirnames, filenames in os.walk(fastq_dir):
         dirnames.sort()
         relative_parts = get_relative_path_parts(fastq_dir, root)
-        scientific_name = infer_scientific_name_from_relative_parts(relative_parts)
+        scientific_name_candidate = infer_scientific_name_candidate(fastq_dir, relative_parts)
         for filename in sorted(filenames):
             path_fastq = os.path.join(root, filename)
             if not os.path.isfile(path_fastq):
@@ -133,7 +138,7 @@ def scan_fastq_directory(fastq_dir):
                 'mate': mate,
                 'path': path_fastq,
                 'relative_parts': list(relative_parts),
-                'scientific_name': scientific_name,
+                'scientific_name_candidate': scientific_name_candidate,
             })
     grouped_files = {}
     assigned_run_ids = assign_unique_run_ids(logical_run_records)
@@ -146,7 +151,7 @@ def scan_fastq_directory(fastq_dir):
                 'mate': record['mate'],
                 'path': record['path'],
                 'relative_parts': record['relative_parts'],
-                'scientific_name': record['scientific_name'],
+                'scientific_name_candidate': record['scientific_name_candidate'],
             })
     return grouped_files
 
@@ -462,19 +467,19 @@ def build_run_specs(grouped_files):
     for run_id in sorted(grouped_files.keys()):
         fastq_records = grouped_files[run_id]
         lib_layout, read1_path, read2_path = resolve_run_fastq_layout(run_id, fastq_records)
-        scientific_names = sorted({
-            normalize_scientific_name_for_lookup(record.get('scientific_name', ''))
+        scientific_name_candidates = sorted({
+            normalize_scientific_name_for_lookup(record.get('scientific_name_candidate', ''))
             for record in fastq_records
-            if normalize_scientific_name_for_lookup(record.get('scientific_name', '')) != ''
+            if normalize_scientific_name_for_lookup(record.get('scientific_name_candidate', '')) != ''
         })
-        scientific_name = scientific_names[0] if len(scientific_names) > 0 else ''
+        scientific_name_candidate = scientific_name_candidates[0] if len(scientific_name_candidates) > 0 else ''
         run_specs.append({
             'run': run_id,
             'num_files': len(fastq_records),
             'lib_layout': lib_layout,
             'read1_path': read1_path,
             'read2_path': read2_path,
-            'scientific_name': scientific_name,
+            'scientific_name_candidate': scientific_name_candidate,
         })
     return run_specs
 
@@ -492,6 +497,15 @@ def normalize_scientific_name_for_lookup(value):
         return ''
     return normalize_text_value(normalized.replace('_', ' '))
 
+def is_folder_scientific_name_candidate(value):
+    normalized = normalize_scientific_name_for_lookup(value)
+    if normalized == '':
+        return False
+    raw_text = normalize_text_value(value)
+    if ('_' not in str(value)) and (' ' not in raw_text):
+        return False
+    return is_resolvable_scientific_name(normalized)
+
 def is_missing_private_scientific_name(value):
     normalized = normalize_scientific_name_for_lookup(value)
     if normalized == '':
@@ -506,24 +520,6 @@ def is_resolvable_scientific_name(value):
     if len(tokens) >= 2:
         return True
     return re.fullmatch(r'[A-Za-z][A-Za-z.-]*', tokens[0]) is not None
-
-def infer_default_private_scientific_name(existing_df):
-    if existing_df is None or 'scientific_name' not in existing_df.columns:
-        return ''
-    unique_names = []
-    seen = set()
-    for value in existing_df['scientific_name'].tolist():
-        normalized = normalize_scientific_name_for_lookup(value)
-        if not is_resolvable_scientific_name(normalized):
-            continue
-        key = normalize_scientific_name_for_lookup(normalized).lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        unique_names.append(normalized)
-    if len(unique_names) == 1:
-        return unique_names[0]
-    return ''
 
 def build_lineage_taxid_df(taxid_series, ncbi):
     rank_cols = ['taxid_' + rank for rank in STANDARD_TAXONOMIC_RANKS]
@@ -615,20 +611,36 @@ def ensure_taxonomy_columns(df, args):
         metadata.df['taxid'] = pd.Series([pd.NA] * metadata.df.shape[0], dtype='Int64')
     else:
         metadata.df['taxid'] = taxid_values.astype('Int64')
+    if 'scientific_name_candidate' in metadata.df.columns:
+        metadata.df['scientific_name_candidate'] = metadata.df['scientific_name_candidate'].apply(
+            normalize_scientific_name_for_lookup
+        )
 
     missing_taxid_mask = metadata.df['taxid'].isna()
-    name_to_rows = {}
+    primary_name_to_rows = {}
+    candidate_rows = set()
     for row_idx in metadata.df.index[missing_taxid_mask].tolist():
         normalized_name = normalize_scientific_name_for_lookup(metadata.df.at[row_idx, 'scientific_name'])
-        if not is_resolvable_scientific_name(normalized_name):
+        if is_resolvable_scientific_name(normalized_name):
+            primary_name_to_rows.setdefault(normalized_name, []).append(row_idx)
             continue
-        name_to_rows.setdefault(normalized_name, []).append(row_idx)
+        normalized_candidate = ''
+        if 'scientific_name_candidate' in metadata.df.columns:
+            normalized_candidate = normalize_scientific_name_for_lookup(metadata.df.at[row_idx, 'scientific_name_candidate'])
+        if is_resolvable_scientific_name(normalized_candidate):
+            primary_name_to_rows.setdefault(normalized_candidate, []).append(row_idx)
+            candidate_rows.add(row_idx)
 
     ncbi = None
-    if len(name_to_rows) > 0:
-        ncbi = get_ete_ncbitaxa(args=args)
+    def resolve_taxids_for_name_map(name_to_rows, fill_rows=None):
+        nonlocal ncbi
         unresolved_names = []
         ambiguous_names = []
+        unresolved_rows = set()
+        if len(name_to_rows) == 0:
+            return unresolved_rows
+        if ncbi is None:
+            ncbi = get_ete_ncbitaxa(args=args)
         try:
             translated = ncbi.get_name_translator(list(name_to_rows.keys()))
         except KeyboardInterrupt:
@@ -640,11 +652,16 @@ def ensure_taxonomy_columns(df, args):
             taxid_candidates = translated.get(normalized_name, [])
             if len(taxid_candidates) == 0:
                 unresolved_names.append(normalized_name)
+                unresolved_rows.update(row_indices)
                 continue
             chosen_taxid = int(taxid_candidates[0])
             if len(taxid_candidates) > 1:
                 ambiguous_names.append('{} -> {}'.format(normalized_name, taxid_candidates))
             metadata.df.loc[row_indices, 'taxid'] = chosen_taxid
+            if fill_rows is not None:
+                for row_idx in row_indices:
+                    if row_idx in fill_rows and is_missing_private_scientific_name(metadata.df.at[row_idx, 'scientific_name']):
+                        metadata.df.at[row_idx, 'scientific_name'] = normalized_name
         metadata.df['taxid'] = pd.to_numeric(metadata.df['taxid'], errors='coerce').astype('Int64')
         if len(unresolved_names) > 0:
             preview = ', '.join(unresolved_names[:5])
@@ -661,6 +678,9 @@ def ensure_taxonomy_columns(df, args):
                     preview,
                 )
             )
+        return unresolved_rows
+
+    resolve_taxids_for_name_map(primary_name_to_rows, fill_rows=candidate_rows)
 
     if metadata.df['taxid'].notna().any():
         rank_cols = ['taxid_' + rank for rank in STANDARD_TAXONOMIC_RANKS]
@@ -669,17 +689,15 @@ def ensure_taxonomy_columns(df, args):
         lineage_taxid_df = build_lineage_taxid_df(metadata.df['taxid'], ncbi)
         metadata.df = metadata.df.drop(columns=rank_cols, errors='ignore')
         metadata.df = metadata.df.merge(lineage_taxid_df, on='taxid', how='left')
+    metadata.df = metadata.df.drop(columns=PRIVATE_FASTQ_INTERNAL_COLUMNS, errors='ignore')
     return metadata.df
 
 def finalize_private_fastq_metadata(tmp_metadata, args, existing_df=None):
     metadata = Metadata.from_DataFrame(tmp_metadata)
     if metadata.df.shape[0] == 0:
         return metadata.df
+    _ = existing_df
     metadata.df['data_available'] = 'yes'
-    default_scientific_name = infer_default_private_scientific_name(existing_df)
-    if default_scientific_name != '':
-        missing_name_mask = metadata.df['scientific_name'].apply(is_missing_private_scientific_name)
-        metadata.df.loc[missing_name_mask, 'scientific_name'] = default_scientific_name
     return ensure_taxonomy_columns(metadata.df, args=args)
 
 def collect_seqkit_target_paths(run_specs, accurate_size):
@@ -787,11 +805,10 @@ def build_private_fastq_metadata_rows(run_specs, stats_by_run):
         if run_id not in stats_by_run:
             continue
         stats = stats_by_run[run_id]
-        scientific_name = normalize_scientific_name_for_lookup(run_spec.get('scientific_name', ''))
-        if scientific_name == '':
-            scientific_name = PRIVATE_FASTQ_SCIENTIFIC_NAME_PLACEHOLDER
+        scientific_name_candidate = normalize_scientific_name_for_lookup(run_spec.get('scientific_name_candidate', ''))
         rows.append({
-            'scientific_name': scientific_name,
+            'scientific_name': PRIVATE_FASTQ_SCIENTIFIC_NAME_PLACEHOLDER,
+            'scientific_name_candidate': scientific_name_candidate,
             'sample_group': PRIVATE_FASTQ_SAMPLE_GROUP_PLACEHOLDER,
             'run': run_id,
             'read1_path': stats['read1_path'],
@@ -835,7 +852,8 @@ def get_fastq_stats(args, existing_df=None):
         seqkit_exe=getattr(args, 'seqkit_exe', 'seqkit'),
     )
     rows = build_private_fastq_metadata_rows(run_specs, stats_by_run)
-    tmp_metadata = pd.DataFrame.from_records(rows, columns=PRIVATE_FASTQ_METADATA_COLUMNS)
+    tmp_metadata = pd.DataFrame.from_records(rows)
+    tmp_metadata = tmp_metadata.reindex(columns=PRIVATE_FASTQ_METADATA_COLUMNS + PRIVATE_FASTQ_INTERNAL_COLUMNS)
     os.makedirs(metadata_dir, exist_ok=True)
     tmp_metadata = tmp_metadata.sort_values(by='run', axis=0, ascending=True).reset_index(drop=True)
     tmp_metadata = finalize_private_fastq_metadata(tmp_metadata, args=args, existing_df=existing_df)

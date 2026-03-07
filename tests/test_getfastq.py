@@ -62,6 +62,7 @@ from amalgkit.getfastq import (
     run_fasterq_dump,
     getfastq_main,
     check_getfastq_dependency,
+    ensure_contam_filter_metadata_rank_taxids,
     ensure_rrna_reference_files_exist,
     resolve_contam_filter_db_path,
     ensure_mmseqs_contam_taxonomy_db_exists,
@@ -564,6 +565,51 @@ class TestRunMmseqsContamFilter:
         assert metadata.df.loc[0, 'bp_contam_out'] == 16
         assert run_file_state.has('{}_1.contam.fastq.gz'.format(sra_id))
         assert run_file_state.has('{}_2.contam.fastq.gz'.format(sra_id))
+
+
+class TestEnsureContamFilterMetadataRankTaxids:
+    def test_rebuilds_required_rank_when_column_exists_but_value_is_missing(self, monkeypatch):
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['NuKS2-prey'],
+            'scientific_name': ['Arabidopsis thaliana'],
+            'taxid': [3702],
+            'taxid_domain': [2759],
+            'taxid_kingdom': [33090],
+            'taxid_phylum': [pandas.NA],
+            'taxid_class': [pandas.NA],
+            'taxid_order': [pandas.NA],
+            'taxid_family': [pandas.NA],
+            'taxid_genus': [pandas.NA],
+            'taxid_species': [pandas.NA],
+        }))
+        metadata.df['taxid'] = metadata.df['taxid'].astype('Int64')
+        for col in [col for col in metadata.df.columns if col.startswith('taxid_') and col != 'taxid']:
+            metadata.df[col] = pandas.to_numeric(metadata.df[col], errors='coerce').astype('Int64')
+
+        captured = {'called': 0}
+
+        def fake_add_standard_rank_taxids(self, args=None):
+            _ = args
+            captured['called'] += 1
+            self.df['taxid_domain'] = pandas.Series([2759], dtype='Int64')
+            self.df['taxid_kingdom'] = pandas.Series([33090], dtype='Int64')
+            self.df['taxid_phylum'] = pandas.Series([35493], dtype='Int64')
+            self.df['taxid_class'] = pandas.Series([3398], dtype='Int64')
+            self.df['taxid_order'] = pandas.Series([3699], dtype='Int64')
+            self.df['taxid_family'] = pandas.Series([3700], dtype='Int64')
+            self.df['taxid_genus'] = pandas.Series([3701], dtype='Int64')
+            self.df['taxid_species'] = pandas.Series([3702], dtype='Int64')
+
+        monkeypatch.setattr(Metadata, 'add_standard_rank_taxids', fake_add_standard_rank_taxids)
+
+        class Args:
+            contam_filter = True
+            contam_filter_rank = 'phylum'
+
+        out = ensure_contam_filter_metadata_rank_taxids(metadata, Args())
+
+        assert captured['called'] == 1
+        assert out.df.loc[0, 'taxid_phylum'] == 35493
 
 
 class TestRunMmseqsEasyTaxonomy:

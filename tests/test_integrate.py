@@ -155,7 +155,7 @@ class TestIntegrateGetFastqStats:
         assert set(df['lib_layout'].tolist()) == {'single'}
         assert all(df['read2_path'] == 'unavailable')
 
-    def test_infers_private_taxonomy_from_unique_existing_species(self, tmp_path, monkeypatch):
+    def test_does_not_infer_private_taxonomy_from_unique_existing_species(self, tmp_path, monkeypatch):
         fastq_dir = tmp_path / 'fq'
         out_dir = tmp_path / 'out'
         fastq_dir.mkdir()
@@ -170,10 +170,10 @@ class TestIntegrateGetFastqStats:
 
         df = get_fastq_stats(args, existing_df=existing_df)
 
-        assert df.loc[0, 'scientific_name'] == 'Homo sapiens'
-        assert int(df.loc[0, 'taxid']) == 9606
-        assert int(df.loc[0, 'taxid_species']) == 9606
-        assert int(df.loc[0, 'taxid_genus']) == 9605
+        assert df.loc[0, 'scientific_name'] == 'Please add in format: Genus species'
+        assert pandas.isna(df.loc[0, 'taxid'])
+        assert 'taxid_species' not in df.columns
+        assert 'taxid_genus' not in df.columns
         assert df.loc[0, 'data_available'] == 'yes'
 
     def test_recurses_nested_species_directories_and_qualifies_duplicate_run_ids(self, tmp_path, monkeypatch):
@@ -216,6 +216,60 @@ class TestIntegrateGetFastqStats:
         assert df.loc[0, 'run'] == 'sample2'
         assert df.loc[0, 'scientific_name'] == 'Homo sapiens'
         assert int(df.loc[0, 'taxid']) == 9606
+
+    def test_uses_fastq_dir_basename_for_direct_fastq_species_inference(self, tmp_path, monkeypatch):
+        fastq_dir = tmp_path / 'Arabidopsis_thaliana'
+        out_dir = tmp_path / 'out'
+        fastq_dir.mkdir()
+        out_dir.mkdir()
+        with gzip.open(str(fastq_dir / 'sample3.fq.gz'), 'wt') as fh:
+            fh.write('@r0\nAAAA\n+\nIIII\n')
+        monkeypatch.setattr(
+            'amalgkit.integrate.get_ete_ncbitaxa',
+            lambda args=None: self._fake_ncbi_for_species({'Arabidopsis thaliana': 3702}),
+        )
+        args = SimpleNamespace(fastq_dir=str(fastq_dir), accurate_size=True, out_dir=str(out_dir))
+
+        df = get_fastq_stats(args)
+
+        assert df.loc[0, 'run'] == 'sample3'
+        assert df.loc[0, 'scientific_name'] == 'Arabidopsis thaliana'
+        assert int(df.loc[0, 'taxid']) == 3702
+
+    def test_folder_candidate_is_used_even_when_existing_metadata_has_other_species(self, tmp_path, monkeypatch):
+        fastq_dir = tmp_path / 'Arabidopsis_thaliana'
+        out_dir = tmp_path / 'out'
+        fastq_dir.mkdir()
+        out_dir.mkdir()
+        self._write_one_read_fastq(str(fastq_dir / 'alpha.fastq'))
+        monkeypatch.setattr(
+            'amalgkit.integrate.get_ete_ncbitaxa',
+            lambda args=None: self._fake_ncbi_for_species({'Homo sapiens': 9606, 'Arabidopsis thaliana': 3702}),
+        )
+        args = SimpleNamespace(fastq_dir=str(fastq_dir), accurate_size=True, out_dir=str(out_dir))
+        existing_df = pandas.DataFrame({'scientific_name': ['Homo sapiens']})
+
+        df = get_fastq_stats(args, existing_df=existing_df)
+
+        assert df.loc[0, 'scientific_name'] == 'Arabidopsis thaliana'
+        assert int(df.loc[0, 'taxid']) == 3702
+
+    def test_unresolved_folder_candidate_keeps_placeholder_scientific_name(self, tmp_path, monkeypatch):
+        fastq_dir = tmp_path / 'Unknown_species'
+        out_dir = tmp_path / 'out'
+        fastq_dir.mkdir()
+        out_dir.mkdir()
+        self._write_one_read_fastq(str(fastq_dir / 'alpha.fastq'))
+        monkeypatch.setattr(
+            'amalgkit.integrate.get_ete_ncbitaxa',
+            lambda args=None: self._fake_ncbi_for_species({}),
+        )
+        args = SimpleNamespace(fastq_dir=str(fastq_dir), accurate_size=True, out_dir=str(out_dir))
+
+        df = get_fastq_stats(args)
+
+        assert df.loc[0, 'scientific_name'] == 'Please add in format: Genus species'
+        assert pandas.isna(df.loc[0, 'taxid'])
 
     def test_paired_mates_are_assigned_to_read1_read2(self, tmp_path):
         fastq_dir = tmp_path / 'fq'
@@ -493,7 +547,7 @@ class TestIntegrateMain:
         metadata_dir = tmp_path / 'metadata'
         metadata_dir.mkdir()
         (metadata_dir / 'metadata.tsv').write_text('dummy\n')
-        fastq_dir = tmp_path / 'fq'
+        fastq_dir = tmp_path / 'Arabidopsis_thaliana'
         fastq_dir.mkdir()
         TestIntegrateGetFastqStats._write_one_read_fastq(str(fastq_dir / 'alpha.fastq'))
         args = SimpleNamespace(

@@ -347,6 +347,7 @@ class Metadata:
         lineage_taxid_df = pandas.DataFrame(lineage_taxid_row_list)
         lineage_taxid_df = lineage_taxid_df.reindex(columns=['taxid'] + ['taxid_' + rank for rank in standard_ranks], fill_value=numpy.nan)
         lineage_taxid_df = lineage_taxid_df.astype('Int64')
+        self.df = self.df.drop(columns=lineage_columns, errors='ignore')
         self.df = self.df.merge(lineage_taxid_df, on='taxid', how='left')
 
     def resolve_scientific_names(self, args=None):

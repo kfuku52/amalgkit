@@ -2366,6 +2366,49 @@ class TestMetadataTaxidValidation:
         assert captured['urlretrieve'][0].endswith('/taxdump.tar.gz')
         assert captured['urlretrieve'][1] == os.path.join(expected_ete_dir, 'taxdump.tar.gz.tmp')
 
+    def test_add_standard_rank_taxids_replaces_existing_lineage_columns(self, monkeypatch):
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001'],
+            'scientific_name': ['Homo sapiens'],
+            'exclusion': ['no'],
+            'taxid': [9606],
+            'taxid_domain': [999],
+            'taxid_kingdom': [999],
+            'taxid_phylum': [pandas.NA],
+            'taxid_class': [pandas.NA],
+            'taxid_order': [pandas.NA],
+            'taxid_family': [pandas.NA],
+            'taxid_genus': [999],
+            'taxid_species': [999],
+        }))
+        metadata.df['taxid'] = metadata.df['taxid'].astype('Int64')
+        for col in [col for col in metadata.df.columns if col.startswith('taxid_') and col != 'taxid']:
+            metadata.df[col] = pandas.to_numeric(metadata.df[col], errors='coerce').astype('Int64')
+
+        class RecordingNcbi:
+            def get_lineage(self, _taxid):
+                return [1, 2759, 9605, 9606]
+
+            def get_rank(self, taxids):
+                assert set(taxids) == {1, 2759, 9605, 9606}
+                return {
+                    1: 'domain',
+                    2759: 'kingdom',
+                    9605: 'genus',
+                    9606: 'species',
+                }
+
+        monkeypatch.setattr('amalgkit.download_utils.ete4.NCBITaxa', lambda: RecordingNcbi())
+
+        metadata.add_standard_rank_taxids()
+
+        assert 'taxid_domain_x' not in metadata.df.columns
+        assert 'taxid_domain_y' not in metadata.df.columns
+        assert metadata.df.loc[0, 'taxid_domain'] == 1
+        assert metadata.df.loc[0, 'taxid_kingdom'] == 2759
+        assert metadata.df.loc[0, 'taxid_genus'] == 9605
+        assert metadata.df.loc[0, 'taxid_species'] == 9606
+
     def test_get_ete_ncbitaxa_reuses_existing_custom_db_without_taxdump_refresh(self, tmp_path, monkeypatch):
         captured = {'lock_path': None}
 

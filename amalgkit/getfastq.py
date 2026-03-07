@@ -3134,12 +3134,19 @@ def ensure_contam_filter_metadata_rank_taxids(metadata, args):
     metadata.df['taxid'] = pandas.to_numeric(metadata.df['taxid'], errors='coerce').astype('Int64')
     rank_cols = ['taxid_' + rank for rank in CONTAM_FILTER_SUPPORTED_RANKS]
     missing_rank_cols = [col for col in rank_cols if col not in metadata.df.columns]
-    if len(missing_rank_cols) > 0:
-        metadata.add_standard_rank_taxids(args=args)
-    else:
-        for col in rank_cols:
+    for col in rank_cols:
+        if col in metadata.df.columns:
             metadata.df[col] = pandas.to_numeric(metadata.df[col], errors='coerce').astype('Int64')
     required_col = 'taxid_' + rank_name
+    should_refresh_rank_taxids = (len(missing_rank_cols) > 0)
+    if (not should_refresh_rank_taxids) and (required_col in metadata.df.columns):
+        required_missing_mask = metadata.df['taxid'].notna() & metadata.df[required_col].isna()
+        should_refresh_rank_taxids = bool(required_missing_mask.any())
+    if should_refresh_rank_taxids:
+        metadata.add_standard_rank_taxids(args=args)
+        for col in rank_cols:
+            if col in metadata.df.columns:
+                metadata.df[col] = pandas.to_numeric(metadata.df[col], errors='coerce').astype('Int64')
     if required_col not in metadata.df.columns:
         raise ValueError('Failed to resolve metadata taxonomy rank column: {}'.format(required_col))
     missing_mask = metadata.df[required_col].isna()
