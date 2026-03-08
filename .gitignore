@@ -15,3 +15,6 @@ busco_downloads/
 
 # local pipeline scratch
 tests/test_pipeline/
+
+# local GitHub wiki repo metadata backup
+.wiki_git_metadata/
