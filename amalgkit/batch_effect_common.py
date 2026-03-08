@@ -34,6 +34,10 @@ class BatchEffectResult:
     resolved_sva_B: Optional[int] = None
     resolved_ruv_k: Optional[int] = None
     resolved_ruv_controls: Optional[int] = None
+    resolved_latent_k: Optional[int] = None
+    latent_family: Optional[str] = None
+    latent_iterations: Optional[int] = None
+    latent_objective: Optional[float] = None
     negative_values_before_clip: Optional[int] = None
     negative_values_after_clip: Optional[int] = None
     extra: Dict[str, Any] = field(default_factory=dict)
@@ -50,6 +54,10 @@ class BatchEffectResult:
             'resolved_sva_B': self.resolved_sva_B,
             'resolved_ruv_k': self.resolved_ruv_k,
             'resolved_ruv_controls': self.resolved_ruv_controls,
+            'resolved_latent_k': self.resolved_latent_k,
+            'latent_family': self.latent_family,
+            'latent_iterations': self.latent_iterations,
+            'latent_objective': self.latent_objective,
             'negative_values_before_clip': self.negative_values_before_clip,
             'negative_values_after_clip': self.negative_values_after_clip,
         }
@@ -74,6 +82,11 @@ def initialize_batch_info(run_ids=(), batch_effect_alg='no'):
         'ruv_selected_score': None,
         'ruv_selected_penalized_score': None,
         'ruv_penalty': None,
+        'resolved_latent_k': None,
+        'latent_family': None,
+        'latent_iterations': None,
+        'latent_objective': None,
+        'latent_converged': None,
         'skip_reason': 'not_run',
     }
 
@@ -178,6 +191,11 @@ def build_batch_effect_summary_dataframe(
                 'ruv_selected_score': _summary_scalar(_batch_info_value(batch_info, 'ruv_selected_score')),
                 'ruv_selected_penalized_score': _summary_scalar(_batch_info_value(batch_info, 'ruv_selected_penalized_score')),
                 'ruv_penalty': _summary_scalar(_batch_info_value(batch_info, 'ruv_penalty')),
+                'resolved_latent_k': _summary_scalar(_batch_info_value(batch_info, 'resolved_latent_k')),
+                'latent_family': _summary_scalar(_batch_info_value(batch_info, 'latent_family')),
+                'latent_iterations': _summary_scalar(_batch_info_value(batch_info, 'latent_iterations')),
+                'latent_objective': _summary_scalar(_batch_info_value(batch_info, 'latent_objective')),
+                'latent_converged': _summary_scalar(_batch_info_value(batch_info, 'latent_converged', 'stable')),
                 'corrected_run_count': int(len(corrected_runs)),
                 'corrected_runs': '|'.join(corrected_runs),
                 'uncorrected_run_count': int(len(uncorrected_runs)),

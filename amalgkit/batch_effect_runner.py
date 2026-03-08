@@ -14,6 +14,7 @@ from amalgkit.batch_effect_io import (
     write_backend_summary_json,
     write_expression_matrix_tsv,
 )
+from amalgkit.batch_effect_latent_glm import run_latent_glm_backend
 from amalgkit.batch_effect_ruvseq import run_ruvseq_backend
 from amalgkit.batch_effect_sva import run_sva_backend
 
@@ -43,6 +44,11 @@ def build_parser():
     parser.add_argument('--ruvseq_k_max', required=False, default='5')
     parser.add_argument('--ruvseq_control_top_n', required=False, default='1000')
     parser.add_argument('--ruvseq_min_controls', required=False, default='100')
+    parser.add_argument('--latent_family', required=False, default='nb')
+    parser.add_argument('--latent_k', required=False, default='auto')
+    parser.add_argument('--latent_k_max', required=False, default='5')
+    parser.add_argument('--latent_max_iter', required=False, default='200')
+    parser.add_argument('--latent_tol', required=False, default='1e-5')
     parser.add_argument('--random_seed', required=False, default='auto')
     return parser
 
@@ -148,6 +154,35 @@ def main(argv=None):
             write_expression_matrix_tsv(corrected_df, args.out_counts_tsv)
         if (args.out_sv_tsv is not None) and (w_df is not None):
             write_expression_matrix_tsv(w_df, args.out_sv_tsv)
+        if args.out_summary_json is not None:
+            write_backend_summary_json(summary, args.out_summary_json)
+        if args.out_summary_dcf is not None:
+            write_backend_summary_dcf(summary, args.out_summary_dcf)
+        return 0
+    if args.backend == 'latent_glm':
+        try:
+            corrected_df, latent_df, summary = run_latent_glm_backend(
+                counts_df=counts,
+                metadata_df=metadata,
+                family=args.latent_family,
+                k_setting=args.latent_k,
+                k_max=args.latent_k_max,
+                sample_group_column=args.sample_group_column,
+                max_iter=args.latent_max_iter,
+                tol=args.latent_tol,
+            )
+        except (ValueError, RuntimeError, numpy.linalg.LinAlgError) as exc:
+            return _write_failure_summary(
+                args=args,
+                counts=counts,
+                metadata=metadata,
+                exc=exc,
+                skip_reason='latent_glm_fit_failed',
+            )
+        if args.out_counts_tsv is not None:
+            write_expression_matrix_tsv(corrected_df, args.out_counts_tsv)
+        if (args.out_sv_tsv is not None) and (latent_df is not None):
+            write_expression_matrix_tsv(latent_df, args.out_sv_tsv)
         if args.out_summary_json is not None:
             write_backend_summary_json(summary, args.out_summary_json)
         if args.out_summary_dcf is not None:

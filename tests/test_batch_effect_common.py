@@ -40,6 +40,7 @@ def test_initialize_batch_info_matches_finalize_defaults():
     assert observed['skip_reason'] == 'not_run'
     assert observed['resolved_sva_nsv'] is None
     assert observed['resolved_ruv_k'] is None
+    assert observed['resolved_latent_k'] is None
 
 
 def test_annotate_metadata_with_batch_info_marks_corrected_runs():
@@ -155,3 +156,32 @@ def test_write_batch_effect_summary_tsv_writes_expected_file(tmp_path):
     assert out_path.exists()
     loaded = pandas.read_csv(out_path, sep='\t')
     pandas.testing.assert_frame_equal(loaded, out['summary_df'], check_dtype=False)
+
+
+def test_build_batch_effect_summary_dataframe_supports_latent_glm_fields():
+    batch_info = initialize_batch_info(run_ids=['RUN1', 'RUN2'], batch_effect_alg='latent_glm')
+    batch_info.update(
+        {
+            'batch_effect_alg_applied': 'latent_glm',
+            'corrected_runs': ['RUN1', 'RUN2'],
+            'uncorrected_runs': [],
+            'resolved_latent_k': 1,
+            'latent_family': 'nb',
+            'latent_iterations': 7,
+            'latent_objective': 0.125,
+            'latent_converged': True,
+            'skip_reason': '',
+        }
+    )
+    observed = build_batch_effect_summary_dataframe(
+        batch_info=batch_info,
+        scientific_name='Arabidopsis thaliana',
+        random_seed_value=99,
+    )
+    assert observed.loc[0, 'batch_effect_alg_requested'] == 'latent_glm'
+    assert observed.loc[0, 'batch_effect_alg_applied'] == 'latent_glm'
+    assert int(observed.loc[0, 'resolved_latent_k']) == 1
+    assert observed.loc[0, 'latent_family'] == 'nb'
+    assert int(observed.loc[0, 'latent_iterations']) == 7
+    assert float(observed.loc[0, 'latent_objective']) == 0.125
+    assert bool(observed.loc[0, 'latent_converged']) is True

@@ -249,3 +249,71 @@ def test_batch_effect_runner_module_entrypoint_executes_main(tmp_path):
     assert corrected_path.exists()
     assert summary_path.exists()
     assert sv_path.exists()
+
+
+def test_batch_effect_runner_writes_latent_glm_outputs(tmp_path, capsys, monkeypatch):
+    counts_path = tmp_path / 'counts.tsv'
+    metadata_path = tmp_path / 'metadata.tsv'
+    summary_path = tmp_path / 'summary.json'
+    corrected_path = tmp_path / 'corrected.tsv'
+    latent_path = tmp_path / 'latent.tsv'
+
+    pandas.DataFrame({
+        'target_id': ['G1', 'G2'],
+        'RUN1': [10.0, 20.0],
+        'RUN2': [30.0, 40.0],
+    }).to_csv(counts_path, sep='\t', index=False)
+    pandas.DataFrame({
+        'run': ['RUN1', 'RUN2'],
+        'sample_group': ['A', 'B'],
+        'bioproject': ['BP1', 'BP2'],
+    }).to_csv(metadata_path, sep='\t', index=False)
+
+    def fake_run_latent_glm_backend(counts_df, metadata_df, family, k_setting, k_max, sample_group_column, max_iter, tol):
+        assert family == 'poisson'
+        assert k_setting == '1'
+        assert str(k_max) == '4'
+        assert sample_group_column == 'sample_group'
+        assert str(max_iter) == '111'
+        assert str(tol) == '0.0001'
+        corrected = counts_df.copy()
+        corrected.loc[:, 'RUN1'] = [11.0, 21.0]
+        corrected.loc[:, 'RUN2'] = [31.0, 41.0]
+        latent_df = pandas.DataFrame({'latent_1': [0.1, -0.1]}, index=['RUN1', 'RUN2'])
+        summary = {
+            'backend': 'latent_glm',
+            'method': 'manual',
+            'skip_reason': '',
+            'resolved_latent_k': 1,
+            'latent_family': 'poisson',
+            'corrected_run_ids': ['RUN1', 'RUN2'],
+            'uncorrected_run_ids': [],
+        }
+        return corrected, latent_df, summary
+
+    monkeypatch.setattr(batch_effect_runner, 'run_latent_glm_backend', fake_run_latent_glm_backend)
+
+    code = batch_effect_runner.main([
+        '--backend', 'latent_glm',
+        '--counts_tsv', str(counts_path),
+        '--metadata_tsv', str(metadata_path),
+        '--out_summary_json', str(summary_path),
+        '--out_counts_tsv', str(corrected_path),
+        '--out_sv_tsv', str(latent_path),
+        '--latent_family', 'poisson',
+        '--latent_k', '1',
+        '--latent_k_max', '4',
+        '--latent_max_iter', '111',
+        '--latent_tol', '0.0001',
+    ])
+    captured = capsys.readouterr()
+
+    assert code == 0
+    assert captured.err == ''
+    payload = batch_effect_runner.read_backend_summary_json(summary_path)
+    assert payload['backend'] == 'latent_glm'
+    assert payload['resolved_latent_k'] == 1
+    corrected = pandas.read_csv(corrected_path, sep='\t', index_col=0)
+    assert corrected.loc['G1', 'RUN1'] == 11.0
+    latent_df = pandas.read_csv(latent_path, sep='\t', index_col=0)
+    assert list(latent_df.columns) == ['latent_1']

@@ -10,6 +10,7 @@ from amalgkit.batch_effect_common import (
     write_batch_effect_summary_tsv,
 )
 from amalgkit.batch_effect_combatseq import run_combatseq_backend
+from amalgkit.batch_effect_latent_glm import run_latent_glm_backend
 from amalgkit.batch_effect_ruvseq import run_ruvseq_backend
 from amalgkit.batch_effect_sva import run_sva_backend
 from amalgkit.filter_utils import _format_genus_species_label
@@ -44,6 +45,8 @@ def should_use_python_finalize_worker(args):
         return str(getattr(args, 'combatseq_backend', 'python')).lower() == 'python'
     if batch_effect_alg == 'ruvseq':
         return str(getattr(args, 'ruvseq_backend', 'python')).lower() == 'python'
+    if batch_effect_alg == 'latent_glm':
+        return True
     return False
 
 
@@ -180,7 +183,7 @@ def _apply_transformation_logic(counts_df, eff_length_df, transform_method, batc
     if batch_effect_alg in {'no', 'sva'}:
         bool_fpkm_tpm = step == 'before_batch'
         bool_log = step == 'before_batch'
-    elif batch_effect_alg in {'ruvseq', 'combatseq'}:
+    elif batch_effect_alg in {'ruvseq', 'combatseq', 'latent_glm'}:
         bool_fpkm_tpm = step in {'before_batch_plot', 'after_batch'}
         bool_log = step in {'before_batch_plot', 'after_batch'}
     else:
@@ -311,6 +314,26 @@ def _run_batch_effect_step(counts_df, metadata_df, eff_length_df, args):
         batch_info['skip_reason'] = summary.get('skip_reason', '')
         batch_info['corrected_runs'] = summary.get('corrected_run_ids', [])
         sv_info = w_df
+        corrected_full = pandas.concat([corrected.loc[:, run_all], counts_nonexpressed.loc[:, run_all]], axis=0)
+    elif batch_effect_alg == 'latent_glm':
+        corrected, latent_df, summary = run_latent_glm_backend(
+            counts_df=counts_expressed,
+            metadata_df=metadata_sorted,
+            family=str(getattr(args, 'latent_family', 'nb')),
+            k_setting=str(getattr(args, 'latent_k', 'auto')),
+            k_max=int(getattr(args, 'latent_k_max', 5)),
+            sample_group_column='sample_group',
+            max_iter=int(getattr(args, 'latent_max_iter', 200)),
+            tol=float(getattr(args, 'latent_tol', 1e-5)),
+        )
+        batch_info['resolved_latent_k'] = summary.get('resolved_latent_k')
+        batch_info['latent_family'] = summary.get('latent_family')
+        batch_info['latent_iterations'] = summary.get('latent_iterations')
+        batch_info['latent_objective'] = summary.get('latent_objective')
+        batch_info['latent_converged'] = summary.get('latent_converged', summary.get('stable'))
+        batch_info['skip_reason'] = summary.get('skip_reason', '')
+        batch_info['corrected_runs'] = summary.get('corrected_run_ids', [])
+        sv_info = latent_df
         corrected_full = pandas.concat([corrected.loc[:, run_all], counts_nonexpressed.loc[:, run_all]], axis=0)
     else:
         raise ValueError('Unsupported batch effect algorithm for Python finalize worker: {}'.format(batch_effect_alg))
@@ -592,7 +615,7 @@ def run_finalize_python_worker(args, metadata, species_tag, input_dir):
     out = _run_batch_effect_step(tc, sra, eff_length_species, args)
     tc_batch_corrected = out['tc']
     batch_info_current = out['batch_info']
-    if str(getattr(args, 'batch_effect_alg', 'no')).lower() in {'sva', 'combatseq', 'ruvseq'}:
+    if str(getattr(args, 'batch_effect_alg', 'no')).lower() in {'sva', 'combatseq', 'ruvseq', 'latent_glm'}:
         save_quick_state_comparison_plot(
             tc_before=tc_tmp,
             tc_after=tc_batch_corrected,

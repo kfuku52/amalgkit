@@ -57,6 +57,21 @@ def _write_finalize_fixture(tmp_path, sample_groups, bioprojects, species='Final
     }
 
 
+def _inject_latent_batch_signal(input_dir, species_tag):
+    counts_path = input_dir / species_tag / '{}_est_counts.tsv'.format(species_tag)
+    counts_df = pandas.read_csv(counts_path, sep='\t')
+    run_columns = [column for column in counts_df.columns if column != 'target_id']
+    values = {
+        'RUN01': [120, 118, 122, 119, 12, 14, 15, 13, 80, 82, 78, 81] + [10 + i for i in range(38)],
+        'RUN02': [121, 117, 123, 120, 13, 15, 14, 12, 32, 30, 34, 31] + [10 + i for i in range(38)],
+        'RUN03': [14, 13, 12, 11, 131, 129, 133, 130, 79, 83, 77, 80] + [50 + i for i in range(38)],
+        'RUN04': [13, 12, 11, 10, 132, 130, 134, 131, 33, 31, 35, 32] + [50 + i for i in range(38)],
+    }
+    for run_id in run_columns:
+        counts_df.loc[:, run_id] = values[run_id]
+    counts_df.to_csv(counts_path, sep='\t', index=False)
+
+
 def _build_finalize_args(tmp_path, **overrides):
     data = {
         'out_dir': str(tmp_path / 'out'),
@@ -267,3 +282,32 @@ def test_finalize_python_ruvseq_single_group_design_failure(tmp_path):
     assert str(summary_df.loc[0, 'skip_reason']) == 'ruvseq_design_failed'
     assert pandas.isna(summary_df.loc[0, 'resolved_ruv_k'])
     assert corrected_tc.shape[1] == 4
+
+
+def test_finalize_python_latent_glm_runs_end_to_end_and_stays_nonnegative(tmp_path):
+    fixture = _write_finalize_fixture(
+        tmp_path=tmp_path,
+        sample_groups=['A', 'A', 'B', 'B'],
+        bioprojects=['BP1', 'BP2', 'BP1', 'BP2'],
+        species='Latentglm example',
+    )
+    _inject_latent_batch_signal(tmp_path / 'input', fixture['species_tag'])
+    out_dir = _run_finalize_python(
+        tmp_path=tmp_path,
+        fixture=fixture,
+        batch_effect_alg='latent_glm',
+        latent_family='nb',
+        latent_k='1',
+        latent_k_max=3,
+        latent_max_iter=50,
+        latent_tol=1e-6,
+    )
+
+    summary_df = _read_batch_summary(out_dir, fixture['species_tag'], batch_effect_alg='latent_glm')
+    metadata_df = _read_species_metadata(out_dir, fixture['species_tag'])
+    corrected_tc = _read_corrected_tc(out_dir, fixture['species_tag'], batch_effect_alg='latent_glm')
+    assert int(summary_df.loc[0, 'resolved_latent_k']) == 1
+    assert summary_df.loc[0, 'latent_family'] == 'nb'
+    assert int(summary_df.loc[0, 'corrected_run_count']) == 4
+    assert set(metadata_df['batch_corrected'].astype(str)) == {'yes'}
+    assert (corrected_tc.to_numpy(dtype=float) >= 0.0).all()

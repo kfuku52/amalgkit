@@ -57,6 +57,21 @@ def _write_species_input_fixture(tmp_path, species='Finalizus example', sample_g
     }
 
 
+def _inject_latent_batch_signal(input_dir, species_tag):
+    counts_path = os.path.join(input_dir, species_tag, '{}_est_counts.tsv'.format(species_tag))
+    counts_df = pandas.read_csv(counts_path, sep='\t')
+    run_columns = [column for column in counts_df.columns if column != 'target_id']
+    values = {
+        'RUN01': [120, 118, 122, 119, 12, 14, 15, 13, 80, 82, 78, 81, 10, 11, 12, 13, 14, 15, 16, 17],
+        'RUN02': [121, 117, 123, 120, 13, 15, 14, 12, 32, 30, 34, 31, 10, 11, 12, 13, 14, 15, 16, 17],
+        'RUN03': [14, 13, 12, 11, 131, 129, 133, 130, 79, 83, 77, 80, 18, 17, 16, 15, 14, 13, 12, 11],
+        'RUN04': [13, 12, 11, 10, 132, 130, 134, 131, 33, 31, 35, 32, 18, 17, 16, 15, 14, 13, 12, 11],
+    }
+    for run_id in run_columns:
+        counts_df.loc[:, run_id] = values[run_id]
+    counts_df.to_csv(counts_path, sep='\t', index=False)
+
+
 def _build_args(tmp_path):
     return SimpleNamespace(
         out_dir=str(tmp_path / 'out'),
@@ -150,3 +165,32 @@ def test_generate_per_species_tables_uses_python_finalize_worker_for_disable_aut
     assert (plots_dir / '{}.batch_compare.sva.pdf'.format(species_tag)).is_file()
     assert (plots_dir / '{}.tau_hist.sva.pdf'.format(species_tag)).is_file()
     assert {'target_id', 'tau', 'highest', 'order'}.issubset(set(tau_df.columns))
+
+
+def test_generate_per_species_tables_supports_python_finalize_worker_for_latent_glm(tmp_path):
+    fixture = _write_species_input_fixture(tmp_path)
+    _inject_latent_batch_signal(fixture['input_dir'], fixture['species_tag'])
+    args = _build_args(tmp_path)
+    args.disable_auto_outlier_filter = True
+    args.batch_effect_alg = 'latent_glm'
+    args.latent_family = 'nb'
+    args.latent_k = '1'
+    args.latent_k_max = 3
+    args.latent_max_iter = 50
+    args.latent_tol = 1e-6
+
+    per_species_tables_module.generate_per_species_tables(
+        args,
+        context=PerSpeciesTableContext(metadata=fixture['metadata'], input_dir=fixture['input_dir']),
+    )
+
+    species_tag = fixture['species_tag']
+    tables_dir = tmp_path / 'out' / 'per_species' / species_tag / 'tables'
+    plots_dir = tmp_path / 'out' / 'per_species' / species_tag / 'plots'
+    summary_df = pandas.read_csv(tables_dir / '{}.latent_glm.batch_effect_summary.tsv'.format(species_tag), sep='\t')
+    corrected_df = pandas.read_csv(tables_dir / '{}.latent_glm.tc.tsv'.format(species_tag), sep='\t', index_col=0)
+    assert int(summary_df.loc[0, 'resolved_latent_k']) == 1
+    assert summary_df.loc[0, 'latent_family'] == 'nb'
+    assert (corrected_df.to_numpy(dtype=float) >= 0.0).all()
+    assert (plots_dir / '{}.batch_compare.latent_glm.pdf'.format(species_tag)).is_file()
+    assert (plots_dir / '{}.tau_hist.latent_glm.pdf'.format(species_tag)).is_file()
