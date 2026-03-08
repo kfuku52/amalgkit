@@ -1,4 +1,6 @@
 *.pyc
+*.pyo
+__pycache__/
 /data
 test_out/
 

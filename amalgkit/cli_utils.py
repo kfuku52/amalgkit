@@ -19,16 +19,12 @@ DEPENDENCY_SPECS = [
 EXTERNAL_TOOL_SPECS = [
     ('cat', 'cat', [['--version']]),
     ('seqkit', 'seqkit', [['version'], ['--help']]),
-    ('R', 'R', [['--version']]),
-    ('Rscript', 'Rscript', [['--version']]),
     ('kallisto', 'kallisto', [['version'], ['-h']]),
     ('fasterq-dump', 'fasterq-dump', [['--version'], ['-h']]),
     ('fastp', 'fastp', [['--version'], ['-h']]),
     ('busco', 'busco', [['--version'], ['-h']]),
     ('compleasm', 'compleasm', [['--version'], ['-h']]),
 ]
-
-R_PACKAGE_SPECS = ['ggplot2', 'edgeR', 'Rtsne', 'RUVSeq', 'sva']
 SEMVER_PATTERN = re.compile(r'\b\d+\.\d+(?:\.\d+)*(?:[-+][0-9A-Za-z_.-]+)?\b')
 RUNTIME_BANNER_COMMANDS = {
     'metadata',
@@ -153,44 +149,6 @@ def resolve_external_tool_status(executable_name, version_commands):
     return 'FOUND ({}; version unavailable)'.format(tool_path)
 
 
-def resolve_r_package_versions(packages):
-    versions = {pkg: 'UNKNOWN' for pkg in packages}
-    rscript_path = shutil.which('Rscript')
-    if rscript_path is None:
-        return {pkg: 'MISSING (Rscript not found)' for pkg in packages}
-    expr = (
-        'pkgs <- c({}); '
-        'for (pkg in pkgs) {{ '
-        'if (requireNamespace(pkg, quietly=TRUE)) {{ '
-        'cat(pkg, "\\t", as.character(utils::packageVersion(pkg)), "\\n", sep=""); '
-        '}} else {{ '
-        'cat(pkg, "\\tMISSING\\n", sep=""); '
-        '}} '
-        '}}'
-    ).format(','.join(['"{}"'.format(pkg) for pkg in packages]))
-    returncode, stdout_txt, stderr_txt, exc = run_command_capture([rscript_path, '-e', expr])
-    if exc is not None:
-        return {pkg: 'UNKNOWN ({})'.format(exc.__class__.__name__) for pkg in packages}
-    for line in stdout_txt.splitlines():
-        line = line.strip()
-        if '\t' not in line:
-            continue
-        pkg_name, pkg_version = line.split('\t', 1)
-        pkg_name = pkg_name.strip()
-        pkg_version = pkg_version.strip()
-        if pkg_name in versions:
-            versions[pkg_name] = pkg_version if pkg_version != '' else 'UNKNOWN'
-    if returncode != 0:
-        error_line = next(iter(iter_nonempty_lines(stderr_txt)), '')
-        fallback = 'ERROR (exit code {})'.format(returncode)
-        if error_line != '':
-            fallback = '{}: {}'.format(fallback, error_line)
-        for pkg in packages:
-            if versions[pkg] == 'UNKNOWN':
-                versions[pkg] = fallback
-    return versions
-
-
 def print_runtime_banner(argv):
     print('AMALGKIT version: {}'.format(__version__))
     print('AMALGKIT command: {}'.format(' '.join(argv)))
@@ -211,9 +169,6 @@ def print_runtime_banner(argv):
                 resolve_external_tool_status(executable_name, version_commands),
             )
         )
-    r_package_versions = resolve_r_package_versions(R_PACKAGE_SPECS)
-    for package_name in R_PACKAGE_SPECS:
-        print('AMALGKIT R package {}: {}'.format(package_name, r_package_versions[package_name]))
 
 
 def resolve_active_command(argv):

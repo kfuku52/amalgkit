@@ -2,7 +2,6 @@ import datetime
 import os
 import re
 import shutil
-import subprocess
 import sys
 from types import SimpleNamespace
 
@@ -12,9 +11,10 @@ from amalgkit.arg_utils import clone_namespace
 from amalgkit.command_context import PerSpeciesTableContext
 from amalgkit.metadata_utils import load_metadata
 from amalgkit.parallel_utils import resolve_worker_allocation, run_tasks_with_optional_threads
-from amalgkit.r_config import temporary_r_config
-from amalgkit.runtime_utils import check_rscript
-from amalgkit.subprocess_utils import run_logged_command
+from amalgkit.per_species_python import (
+    run_per_species_python_worker,
+    should_use_python_per_species_worker,
+)
 
 
 def validate_per_species_metadata_columns(metadata, required_columns, context):
@@ -76,138 +76,22 @@ def register_exit_status(per_species_dir, sp, exit_status, failed_species):
         failed_species.add(sp)
         sys.stderr.write('Per-species table generation failed for species: {}\n'.format(sp))
 
-def run_per_species_r_script(args, metadata, sp, input_dir):
-    dist_method = args.dist_method
-    mr_cut = args.mapping_rate
-    correlation_threshold = args.correlation_threshold
-    intermediate = args.plot_intermediate
-    sample_group = get_sample_group(args, metadata)
-    outlier_method = getattr(args, 'outlier_method', 'legacy')
-    margin_threshold = float(getattr(args, 'margin_threshold', 0.0))
-    robust_z_threshold = float(getattr(args, 'robust_z_threshold', -2.5))
-    disable_auto_outlier_filter = bool(getattr(args, 'disable_auto_outlier_filter', False))
-    dir_amalgkit_script = os.path.dirname(os.path.realpath(__file__))
-    requested_script = str(getattr(args, 'r_script_name', 'prepare_tables.r'))
-    if os.path.isabs(requested_script):
-        r_script_path = requested_script
-    else:
-        r_script_path = os.path.join(dir_amalgkit_script, requested_script)
-    r_script_name = os.path.basename(r_script_path)
-    if not os.path.isfile(r_script_path):
-        raise FileNotFoundError('R script not found: {}'.format(r_script_path))
-    r_util_path = os.path.join(dir_amalgkit_script, 'util.r')
-    metadata_arg = getattr(args, 'metadata', 'inferred')
-    if metadata_arg != 'inferred':
-        metadata_input_path = os.path.realpath(metadata_arg)
-    else:
-        metadata_input_path = os.path.join(input_dir, 'metadata.tsv')
-    if not os.path.exists(metadata_input_path):
-        raise FileNotFoundError('Metadata file not found for per-species R script: {}'.format(metadata_input_path))
-    if not os.path.isfile(metadata_input_path):
-        raise IsADirectoryError('Metadata path exists but is not a file: {}'.format(metadata_input_path))
-    input_dir_abs = os.path.abspath(input_dir)
-    len_file = os.path.join(input_dir_abs, sp, sp + '_eff_length.tsv')
-    count_file_candidates = [
-        os.path.join(input_dir_abs, sp, sp + '_cstmm_counts.tsv'),
-        os.path.join(input_dir_abs, sp, sp + '_est_counts.tsv'),
-    ]
-    existing_count_files = [path for path in count_file_candidates if os.path.isfile(path)]
-    if len(existing_count_files) >= 1:
-        count_file = existing_count_files[0]
-    else:
-        count_file = count_file_candidates[0]
-    has_count_file = os.path.isfile(count_file)
-    has_len_file = os.path.isfile(len_file)
-    if has_count_file and has_len_file:
-        print("Both counts and effective length files found: {}".format(sp), flush=True)
-    else:
-        if not has_count_file:
-            for expected_count_file in count_file_candidates:
-                if os.path.exists(expected_count_file) and (not os.path.isfile(expected_count_file)):
-                    sys.stderr.write('Count path exists but is not a file: {}\n'.format(expected_count_file))
-                elif not os.path.exists(expected_count_file):
-                    sys.stderr.write('Expected but undetected PATH of the count file: {}\n'.format(expected_count_file))
-        if not has_len_file:
-            if os.path.exists(len_file) and (not os.path.isfile(len_file)):
-                sys.stderr.write('Effective length path exists but is not a file: {}\n'.format(len_file))
-            else:
-                sys.stderr.write('Expected but undetected PATH of the effective length file: {}\n'.format(len_file))
-        sys.stderr.write('Skipping {}\n'.format(sp))
-        print('Skipping {}'.format(sp), flush=True)
-        return 1
-    print("Starting Rscript ({}) to generate per-species {} tables.".format(r_script_name, args.norm), flush=True)
-    config_map = {
-        'est_counts_path': count_file,
-        'metadata_path': metadata_input_path,
-        'out_dir': os.path.realpath(args.out_dir),
-        'eff_length_path': len_file,
-        'dist_method': dist_method,
-        'mapping_rate_cutoff': mr_cut,
-        'min_dif': 0,
-        'plot_intermediate': int(intermediate),
-        'selected_sample_groups': sample_group,
-        'sample_group_colors': args.sample_group_color,
-        'transform_method': str(args.norm),
-        'one_outlier_per_iteration': int(args.one_outlier_per_iter),
-        'correlation_threshold': correlation_threshold,
-        'batch_effect_alg': str(getattr(args, 'batch_effect_alg', 'no')),
-        'clip_negative': int(getattr(args, 'clip_negative', True)),
-        'maintain_zero': int(getattr(args, 'maintain_zero', True)),
-        'r_util_path': os.path.realpath(r_util_path),
-        'skip_curation_flag': int(getattr(args, 'skip_curation', False)),
-        'outlier_method': str(outlier_method),
-        'robust_margin_threshold': str(margin_threshold),
-        'robust_z_threshold': str(robust_z_threshold),
-        'disable_auto_outlier_filter_flag': int(disable_auto_outlier_filter),
-    }
-    if r_script_name == 'wsfilter.r':
-        config_map['batch_effect_alg'] = 'no'
-        config_map['clip_negative'] = 1
-        config_map['maintain_zero'] = 1
-        config_map['skip_curation_flag'] = 0
-        config_map['outlier_method'] = 'robust_margin'
-        config_map['disable_auto_outlier_filter_flag'] = 0
-    elif r_script_name == 'finalize.r':
-        ruvseq_control_genes = str(getattr(args, 'ruvseq_control_genes', 'auto'))
-        ruvseq_k = str(getattr(args, 'ruvseq_k', 'auto'))
-        ruvseq_k_max = int(getattr(args, 'ruvseq_k_max', 5))
-        ruvseq_control_top_n = int(getattr(args, 'ruvseq_control_top_n', 1000))
-        ruvseq_min_controls = int(getattr(args, 'ruvseq_min_controls', 100))
-        random_seed = str(getattr(args, 'seed', 'auto'))
-        sva_nsv = str(getattr(args, 'sva_nsv', 'auto'))
-        sva_B = str(getattr(args, 'sva_B', 'auto'))
-        sva_B_auto_max = int(getattr(args, 'sva_B_auto_max', 100))
-        config_map['mapping_rate_cutoff'] = 0
-        config_map['plot_intermediate'] = 0
-        config_map['one_outlier_per_iteration'] = 0
-        config_map['correlation_threshold'] = 0.3
-        config_map['skip_curation_flag'] = 0
-        config_map['outlier_method'] = 'legacy'
-        config_map['robust_margin_threshold'] = 0
-        config_map['robust_z_threshold'] = -2.5
-        config_map['disable_auto_outlier_filter_flag'] = 1
-        config_map['ruvseq_control_mode'] = ruvseq_control_genes
-        config_map['ruvseq_k_setting'] = ruvseq_k
-        config_map['ruvseq_k_max'] = ruvseq_k_max
-        config_map['ruvseq_control_top_n'] = ruvseq_control_top_n
-        config_map['ruvseq_min_controls'] = ruvseq_min_controls
-        config_map['random_seed_setting'] = random_seed
-        config_map['sva_nsv_setting'] = sva_nsv
-        config_map['sva_B_setting'] = sva_B
-        config_map['sva_B_auto_max'] = sva_B_auto_max
-    elif r_script_name == 'prepare_tables.r':
-        pass
-    else:
-        raise ValueError('Unsupported R script for per-species table pipeline: {}'.format(r_script_name))
-    with temporary_r_config(config_map, prefix='amalgkit_per_species_r_') as config_path:
-        r_result, _stdout_txt, _stderr_txt = run_logged_command(
-            command=['Rscript', r_script_path, config_path],
-            runner=subprocess.run,
-            command_prefix='Rscript command',
-            print_output=False,
-            not_found_label='Rscript',
+
+def run_per_species_job(args, metadata, sp, input_dir):
+    if should_use_python_per_species_worker(args):
+        python_exit_status = run_per_species_python_worker(
+            args=args,
+            metadata=metadata,
+            species_tag=sp,
+            input_dir=input_dir,
         )
-    return r_result.returncode
+        if python_exit_status is not None:
+            return python_exit_status
+    raise NotImplementedError(
+        'No Python per-species worker is available for {}'.format(
+            str(getattr(args, 'worker_mode', 'prepare_tables'))
+        )
+    )
 
 
 def resolve_per_species_execution_context(args, context=None):
@@ -319,7 +203,7 @@ def run_per_species_jobs(args, metadata, input_dir, per_species_dir, pending_spe
     if (species_jobs == 1) or (len(pending_species) <= 1):
         for species in pending_species:
             print('Starting: {}'.format(species), flush=True)
-            exit_status = run_per_species_r_script(args, metadata, species, input_dir)
+            exit_status = run_per_species_job(args, metadata, species, input_dir)
             register_exit_status(
                 per_species_dir=per_species_dir,
                 sp=species,
@@ -338,7 +222,7 @@ def run_per_species_jobs(args, metadata, input_dir, per_species_dir, pending_spe
     )
     exit_status_by_species, failures = run_tasks_with_optional_threads(
         task_items=pending_species,
-        task_fn=lambda species: run_per_species_r_script(args, metadata, species, input_dir),
+        task_fn=lambda species: run_per_species_job(args, metadata, species, input_dir),
         max_workers=max_workers,
     )
     for species, exc in failures:
@@ -363,7 +247,6 @@ def generate_per_species_tables(args, context=None):
         disable_workers=(getattr(args, 'batch', None) is not None),
     )
     runtime_args = clone_namespace(args, internal_jobs=species_jobs)
-    check_rscript()
     out_dir = os.path.realpath(runtime_args.out_dir)
     if os.path.exists(out_dir) and (not os.path.isdir(out_dir)):
         raise NotADirectoryError('Output path exists but is not a directory: {}'.format(out_dir))

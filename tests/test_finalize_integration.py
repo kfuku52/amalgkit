@@ -1,219 +1,269 @@
-import shutil
-import subprocess
-from pathlib import Path
+from types import SimpleNamespace
 
 import pandas
 import pytest
-from amalgkit.r_config import temporary_r_config
+
+from amalgkit.command_context import PerSpeciesTableContext
+from amalgkit.per_species_tables import generate_per_species_tables
+from amalgkit.util import Metadata
 
 
-REQUIRED_R_PACKAGES = [
-    'Rtsne',
-    'ggplot2',
-    'sva',
-]
-
-
-def _has_rscript_and_required_packages():
-    if shutil.which('Rscript') is None:
-        return False
-    quoted = ','.join(['"{}"'.format(p) for p in REQUIRED_R_PACKAGES])
-    expr = (
-        'pkgs <- c({}); '
-        'ok <- all(vapply(pkgs, requireNamespace, logical(1), quietly=TRUE)); '
-        'quit(status=ifelse(ok, 0, 1))'
-    ).format(quoted)
-    out = subprocess.run(['Rscript', '-e', expr], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    return out.returncode == 0
-
-
-@pytest.fixture(scope='module')
-def require_finalize_r_runtime():
-    if not _has_rscript_and_required_packages():
-        pytest.skip('Rscript or required R packages are not available for finalize integration tests.')
-
-
-def _repo_root():
-    return Path(__file__).resolve().parents[1]
-
-
-def _write_finalize_fixture(tmp_path, sample_groups, bioprojects, species='Finalizus example'):
+def _write_finalize_fixture(tmp_path, sample_groups, bioprojects, species='Finalizus example', include_optional_columns=True):
     runs = ['RUN{:02d}'.format(i + 1) for i in range(len(sample_groups))]
     genes = ['G{:03d}'.format(i + 1) for i in range(50)]
-    metadata = pandas.DataFrame({
-        'run': runs,
-        'scientific_name': [species] * len(runs),
-        'sample_group': sample_groups,
-        'bioproject': bioprojects,
-        'exclusion': ['no'] * len(runs),
-        'mapping_rate': [100.0] * len(runs),
-        'lib_layout': ['PAIRED'] * len(runs),
-        'lib_selection': ['cDNA'] * len(runs),
-        'instrument': ['Illumina'] * len(runs),
-        'total_spots': [1_000_000 + i * 10_000 for i in range(len(runs))],
-        'total_bases': [150_000_000 + i * 1_000_000 for i in range(len(runs))],
-    })
-    metadata_path = tmp_path / 'metadata.tsv'
-    metadata.to_csv(metadata_path, sep='\t', index=False)
+    species_tag = species.replace(' ', '_')
 
-    counts = pandas.DataFrame({'target_id': genes})
+    input_dir = tmp_path / 'input'
+    species_dir = input_dir / species_tag
+    species_dir.mkdir(parents=True, exist_ok=True)
+
+    metadata_df = pandas.DataFrame(
+        {
+            'run': runs,
+            'scientific_name': [species] * len(runs),
+            'sample_group': sample_groups,
+            'bioproject': bioprojects,
+            'exclusion': ['no'] * len(runs),
+            'mapping_rate': [100.0] * len(runs),
+        }
+    )
+    if include_optional_columns:
+        metadata_df['lib_layout'] = ['PAIRED'] * len(runs)
+        metadata_df['lib_selection'] = ['cDNA'] * len(runs)
+        metadata_df['instrument'] = ['Illumina'] * len(runs)
+        metadata_df['total_spots'] = [1_000_000 + i * 10_000 for i in range(len(runs))]
+        metadata_df['total_bases'] = [150_000_000 + i * 1_000_000 for i in range(len(runs))]
+    metadata = Metadata.from_DataFrame(metadata_df)
+
+    counts_df = pandas.DataFrame({'target_id': genes})
     for run_id, sample_group in zip(runs, sample_groups):
         if sample_group == 'A':
             values = [100 + i for i in range(25)] + [5 + i for i in range(25)]
         else:
             values = [5 + i for i in range(25)] + [100 + i for i in range(25)]
-        counts[run_id] = values
-    count_path = tmp_path / 'counts.tsv'
-    counts.to_csv(count_path, sep='\t', index=False)
-
-    eff_length = pandas.DataFrame({'target_id': genes})
+        counts_df[run_id] = values
+    eff_length_df = pandas.DataFrame({'target_id': genes})
     for run in runs:
-        eff_length[run] = 1000
-    eff_length_path = tmp_path / 'eff_length.tsv'
-    eff_length.to_csv(eff_length_path, sep='\t', index=False)
+        eff_length_df[run] = 1000
 
+    counts_df.to_csv(species_dir / '{}_est_counts.tsv'.format(species_tag), sep='\t', index=False)
+    eff_length_df.to_csv(species_dir / '{}_eff_length.tsv'.format(species_tag), sep='\t', index=False)
     return {
+        'metadata': metadata,
+        'input_dir': str(input_dir),
         'species': species,
-        'species_tag': species.replace(' ', '_'),
-        'metadata_path': metadata_path,
-        'count_path': count_path,
-        'eff_length_path': eff_length_path,
+        'species_tag': species_tag,
         'sample_groups': sample_groups,
     }
 
 
-def _run_finalize_r(tmp_path, fixture, sva_nsv='auto', sva_B='auto', sva_B_auto_max='80', seed='7'):
-    repo = _repo_root()
-    out_dir = tmp_path / 'out'
-    out_dir.mkdir(parents=True, exist_ok=True)
-    selected_sample_groups = '|'.join(sorted(set(fixture['sample_groups'])))
-    config_map = {
-        'est_counts_path': str(fixture['count_path']),
-        'metadata_path': str(fixture['metadata_path']),
-        'out_dir': str(out_dir),
-        'eff_length_path': str(fixture['eff_length_path']),
+def _build_finalize_args(tmp_path, **overrides):
+    data = {
+        'out_dir': str(tmp_path / 'out'),
+        'redo': False,
+        'metadata': 'inferred',
+        'input_dir': 'inferred',
+        'sample_group': None,
+        'sample_group_color': 'DEFAULT',
+        'batch': None,
+        'threads': 'auto',
+        'internal_jobs': 1,
+        'internal_cpu_budget': 'auto',
         'dist_method': 'pearson',
-        'mapping_rate_cutoff': '0',
-        'min_dif': '0',
-        'plot_intermediate': '0',
-        'selected_sample_groups': selected_sample_groups,
-        'sample_group_colors': 'DEFAULT',
-        'transform_method': 'log2p1-fpkm',
-        'one_outlier_per_iteration': '0',
-        'correlation_threshold': '0.3',
+        'mapping_rate': 0.0,
+        'correlation_threshold': 0.3,
+        'plot_intermediate': False,
+        'one_outlier_per_iter': False,
+        'norm': 'log2p1-fpkm',
+        'clip_negative': True,
+        'maintain_zero': True,
         'batch_effect_alg': 'sva',
-        'clip_negative': '1',
-        'maintain_zero': '1',
-        'r_util_path': str(repo / 'amalgkit' / 'util.r'),
-        'skip_curation_flag': '0',
-        'outlier_method': 'legacy',
-        'robust_margin_threshold': '0',
-        'robust_z_threshold': '-2.5',
-        'disable_auto_outlier_filter_flag': '1',
-        'ruvseq_control_mode': 'auto',
-        'ruvseq_k_setting': 'auto',
-        'ruvseq_k_max': '5',
-        'ruvseq_control_top_n': '1000',
-        'ruvseq_min_controls': '100',
-        'random_seed_setting': str(seed),
-        'sva_nsv_setting': str(sva_nsv),
-        'sva_B_setting': str(sva_B),
-        'sva_B_auto_max': str(sva_B_auto_max),
+        'skip_curation': False,
+        'disable_auto_outlier_filter': True,
+        'worker_mode': 'finalize',
+        'ruvseq_control_genes': 'auto',
+        'ruvseq_k': 'auto',
+        'ruvseq_k_max': 5,
+        'ruvseq_control_top_n': 1000,
+        'ruvseq_min_controls': 100,
+        'seed': '7',
+        'sva_nsv': 'auto',
+        'sva_B': 'auto',
+        'sva_B_auto_max': 80,
+        'sva_backend': 'python',
+        'combatseq_backend': 'python',
+        'ruvseq_backend': 'python',
+        'python_executable': 'python',
+        'latent_family': 'nb',
+        'latent_k': 'auto',
+        'latent_k_max': 5,
+        'latent_max_iter': 200,
+        'latent_tol': 1e-5,
     }
-    with temporary_r_config(config_map, prefix='test_finalize_r_') as config_path:
-        cmd = ['Rscript', str(repo / 'amalgkit' / 'finalize.r'), config_path]
-        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-    return proc, out_dir
+    data.update(overrides)
+    return SimpleNamespace(**data)
 
 
-def _read_batch_summary(out_dir, species_tag):
-    path = out_dir / 'per_species' / species_tag / 'tables' / '{}.sva.batch_effect_summary.tsv'.format(species_tag)
-    assert path.exists()
+def _run_finalize_python(tmp_path, fixture, **overrides):
+    args = _build_finalize_args(tmp_path, **overrides)
+    generate_per_species_tables(
+        args,
+        context=PerSpeciesTableContext(metadata=fixture['metadata'], input_dir=fixture['input_dir']),
+    )
+    out_dir = tmp_path / 'out'
+    return out_dir
+
+
+def _read_batch_summary(out_dir, species_tag, batch_effect_alg='sva'):
+    path = out_dir / 'per_species' / species_tag / 'tables' / '{}.{}.batch_effect_summary.tsv'.format(species_tag, batch_effect_alg)
     return pandas.read_csv(path, sep='\t')
 
 
 def _read_species_metadata(out_dir, species_tag):
     path = out_dir / 'per_species' / species_tag / 'tables' / '{}.metadata.tsv'.format(species_tag)
-    assert path.exists()
     return pandas.read_csv(path, sep='\t')
 
 
-def test_finalize_r_handles_confounded_design_and_writes_batch_summary(require_finalize_r_runtime, tmp_path):
+def _read_corrected_tc(out_dir, species_tag, batch_effect_alg='sva'):
+    path = out_dir / 'per_species' / species_tag / 'tables' / '{}.{}.tc.tsv'.format(species_tag, batch_effect_alg)
+    return pandas.read_csv(path, sep='\t', index_col=0)
+
+
+def test_finalize_python_sva_handles_confounded_design_and_writes_batch_summary(tmp_path):
     fixture = _write_finalize_fixture(
         tmp_path=tmp_path,
         sample_groups=['A', 'A', 'B', 'B'],
-        bioprojects=['BP1', 'BP1', 'BP2', 'BP2'],  # perfectly confounded with sample_group
+        bioprojects=['BP1', 'BP1', 'BP2', 'BP2'],
         species='Confoundus example',
     )
-    proc, out_dir = _run_finalize_r(tmp_path=tmp_path, fixture=fixture, sva_nsv='auto', sva_B='auto')
-    assert proc.returncode == 0, proc.stdout
+    out_dir = _run_finalize_python(tmp_path=tmp_path, fixture=fixture, sva_nsv='auto', sva_B='auto')
 
     summary_df = _read_batch_summary(out_dir, fixture['species_tag'])
-    assert {'resolved_sva_nsv', 'resolved_sva_B', 'skip_reason', 'corrected_run_count'}.issubset(set(summary_df.columns))
     metadata_df = _read_species_metadata(out_dir, fixture['species_tag'])
+    assert {'resolved_sva_nsv', 'resolved_sva_B', 'skip_reason', 'corrected_run_count'}.issubset(set(summary_df.columns))
     assert {'batch_corrected', 'batch_alg_used'}.issubset(set(metadata_df.columns))
 
 
-def test_finalize_r_single_sample_group_does_not_crash_and_marks_uncorrected(require_finalize_r_runtime, tmp_path):
+def test_finalize_python_sva_single_sample_group_marks_uncorrected(tmp_path):
     fixture = _write_finalize_fixture(
         tmp_path=tmp_path,
         sample_groups=['A', 'A', 'A', 'A'],
         bioprojects=['BP1', 'BP1', 'BP2', 'BP2'],
         species='Singlesamplegroup example',
     )
-    proc, out_dir = _run_finalize_r(tmp_path=tmp_path, fixture=fixture, sva_nsv='auto', sva_B='auto')
-    assert proc.returncode == 0, proc.stdout
+    out_dir = _run_finalize_python(tmp_path=tmp_path, fixture=fixture, sva_nsv='auto', sva_B='auto')
 
     summary_df = _read_batch_summary(out_dir, fixture['species_tag'])
+    metadata_df = _read_species_metadata(out_dir, fixture['species_tag'])
     assert summary_df.loc[0, 'corrected_run_count'] == 0
     assert str(summary_df.loc[0, 'skip_reason']) != ''
-    metadata_df = _read_species_metadata(out_dir, fixture['species_tag'])
     assert set(metadata_df['batch_corrected'].astype(str)) == {'no'}
 
 
-def test_finalize_r_accepts_explicit_nsv_zero(require_finalize_r_runtime, tmp_path):
+def test_finalize_python_sva_accepts_explicit_nsv_zero(tmp_path):
     fixture = _write_finalize_fixture(
         tmp_path=tmp_path,
         sample_groups=['A', 'A', 'B', 'B'],
         bioprojects=['BP1', 'BP1', 'BP2', 'BP2'],
         species='Nsvzero example',
     )
-    proc, out_dir = _run_finalize_r(tmp_path=tmp_path, fixture=fixture, sva_nsv='0', sva_B='auto')
-    assert proc.returncode == 0, proc.stdout
+    out_dir = _run_finalize_python(tmp_path=tmp_path, fixture=fixture, sva_nsv='0', sva_B='5')
 
     summary_df = _read_batch_summary(out_dir, fixture['species_tag'])
+    metadata_df = _read_species_metadata(out_dir, fixture['species_tag'])
     assert int(summary_df.loc[0, 'resolved_sva_nsv']) == 0
     assert summary_df.loc[0, 'skip_reason'] == 'sva_nsv_zero'
+    assert set(metadata_df['batch_corrected'].astype(str)) == {'no'}
 
 
-def test_finalize_r_clamps_large_manual_nsv(require_finalize_r_runtime, tmp_path):
+def test_finalize_python_sva_supports_positive_manual_nsv(tmp_path):
     fixture = _write_finalize_fixture(
         tmp_path=tmp_path,
         sample_groups=['A', 'A', 'B', 'B'],
         bioprojects=['BP1', 'BP1', 'BP2', 'BP2'],
-        species='Clampnsv example',
+        species='Pythonmanualpositive example',
     )
-    proc, out_dir = _run_finalize_r(tmp_path=tmp_path, fixture=fixture, sva_nsv='99', sva_B='20')
-    assert proc.returncode == 0, proc.stdout
+    out_dir = _run_finalize_python(tmp_path=tmp_path, fixture=fixture, sva_nsv='1', sva_B='5')
 
     summary_df = _read_batch_summary(out_dir, fixture['species_tag'])
-    assert int(summary_df.loc[0, 'resolved_sva_nsv']) < 99
+    metadata_df = _read_species_metadata(out_dir, fixture['species_tag'])
+    corrected_tc = _read_corrected_tc(out_dir, fixture['species_tag'])
+    assert int(summary_df.loc[0, 'resolved_sva_nsv']) == 1
+    assert int(summary_df.loc[0, 'resolved_sva_B']) == 5
+    assert int(summary_df.loc[0, 'corrected_run_count']) == 4
+    assert set(metadata_df['batch_corrected'].astype(str)) == {'yes'}
+    assert corrected_tc.shape[1] == 4
 
 
-def test_finalize_r_sva_plots_work_when_optional_metadata_columns_missing(require_finalize_r_runtime, tmp_path):
+def test_finalize_python_sva_plots_work_when_optional_metadata_columns_missing(tmp_path):
     fixture = _write_finalize_fixture(
         tmp_path=tmp_path,
         sample_groups=['A', 'A', 'B', 'B'],
         bioprojects=['BP1', 'BP1', 'BP2', 'BP2'],
         species='Missingcolumns example',
+        include_optional_columns=False,
     )
-    metadata = pandas.read_csv(fixture['metadata_path'], sep='\t')
-    metadata = metadata.drop(columns=['lib_layout', 'lib_selection', 'instrument', 'total_spots', 'total_bases'])
-    metadata.to_csv(fixture['metadata_path'], sep='\t', index=False)
+    out_dir = _run_finalize_python(tmp_path=tmp_path, fixture=fixture, sva_nsv='1', sva_B='5')
 
-    proc, out_dir = _run_finalize_r(tmp_path=tmp_path, fixture=fixture, sva_nsv='auto', sva_B='auto')
-    assert proc.returncode == 0, proc.stdout
+    plot_dir = out_dir / 'per_species' / fixture['species_tag'] / 'plots'
+    assert (plot_dir / '{}.batch_compare.sva.pdf'.format(fixture['species_tag'])).exists()
 
-    species_tag = fixture['species_tag']
-    plot_dir = out_dir / 'per_species' / species_tag / 'plots'
-    assert (plot_dir / '{}.batch_compare.sva.pdf'.format(species_tag)).exists()
+
+def test_finalize_python_combatseq_runs_end_to_end(tmp_path):
+    pytest.importorskip('inmoose.pycombat')
+    fixture = _write_finalize_fixture(
+        tmp_path=tmp_path,
+        sample_groups=['A', 'B', 'A', 'B'],
+        bioprojects=['BP1', 'BP1', 'BP2', 'BP2'],
+        species='Combatseq example',
+    )
+    out_dir = _run_finalize_python(tmp_path=tmp_path, fixture=fixture, batch_effect_alg='combatseq')
+
+    summary_df = _read_batch_summary(out_dir, fixture['species_tag'], batch_effect_alg='combatseq')
+    corrected_tc = _read_corrected_tc(out_dir, fixture['species_tag'], batch_effect_alg='combatseq')
+    assert int(summary_df.loc[0, 'corrected_run_count']) == 4
+    assert corrected_tc.shape[1] == 4
+
+
+def test_finalize_python_ruvseq_runs_end_to_end(tmp_path):
+    fixture = _write_finalize_fixture(
+        tmp_path=tmp_path,
+        sample_groups=['A', 'A', 'B', 'B'],
+        bioprojects=['BP1', 'BP2', 'BP1', 'BP2'],
+        species='Pythonruvseq example',
+    )
+    out_dir = _run_finalize_python(
+        tmp_path=tmp_path,
+        fixture=fixture,
+        batch_effect_alg='ruvseq',
+        ruvseq_k='1',
+    )
+
+    summary_df = _read_batch_summary(out_dir, fixture['species_tag'], batch_effect_alg='ruvseq')
+    metadata_df = _read_species_metadata(out_dir, fixture['species_tag'])
+    corrected_tc = _read_corrected_tc(out_dir, fixture['species_tag'], batch_effect_alg='ruvseq')
+    assert int(summary_df.loc[0, 'resolved_ruv_k']) == 1
+    assert int(summary_df.loc[0, 'corrected_run_count']) == 4
+    assert set(metadata_df['batch_corrected'].astype(str)) == {'yes'}
+    assert corrected_tc.shape[1] == 4
+
+
+def test_finalize_python_ruvseq_single_group_design_failure(tmp_path):
+    fixture = _write_finalize_fixture(
+        tmp_path=tmp_path,
+        sample_groups=['A', 'A', 'A', 'A'],
+        bioprojects=['BP1', 'BP2', 'BP1', 'BP2'],
+        species='Ruvseq single-group example',
+    )
+    out_dir = _run_finalize_python(
+        tmp_path=tmp_path,
+        fixture=fixture,
+        batch_effect_alg='ruvseq',
+        ruvseq_k='auto',
+    )
+
+    summary_df = _read_batch_summary(out_dir, fixture['species_tag'], batch_effect_alg='ruvseq')
+    corrected_tc = _read_corrected_tc(out_dir, fixture['species_tag'], batch_effect_alg='ruvseq')
+    assert str(summary_df.loc[0, 'skip_reason']) == 'ruvseq_design_failed'
+    assert pandas.isna(summary_df.loc[0, 'resolved_ruv_k'])
+    assert corrected_tc.shape[1] == 4

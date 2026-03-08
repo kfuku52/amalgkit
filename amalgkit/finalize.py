@@ -1,6 +1,7 @@
 import os
 import shutil
 import tempfile
+import sys
 from types import SimpleNamespace
 
 from amalgkit.command_context import PerSpeciesTableContext
@@ -19,7 +20,7 @@ def _build_per_species_args(args, input_dir, tmp_out_dir):
     data = vars(args).copy()
     data['out_dir'] = tmp_out_dir
     data['input_dir'] = input_dir
-    data['r_script_name'] = 'finalize.r'
+    data['worker_mode'] = 'finalize'
     data.setdefault('dist_method', 'pearson')
     data.setdefault('mapping_rate', 0.0)
     data.setdefault('correlation_threshold', 0.30)
@@ -33,6 +34,7 @@ def _build_per_species_args(args, input_dir, tmp_out_dir):
     data.setdefault('internal_jobs', 'auto')
     data.setdefault('internal_cpu_budget', 'auto')
     data.setdefault('sample_group_color', 'DEFAULT')
+    data.setdefault('disable_auto_outlier_filter', True)
     data.setdefault('ruvseq_control_genes', 'auto')
     data.setdefault('ruvseq_k', 'auto')
     data.setdefault('ruvseq_k_max', 5)
@@ -42,6 +44,15 @@ def _build_per_species_args(args, input_dir, tmp_out_dir):
     data.setdefault('sva_nsv', 'auto')
     data.setdefault('sva_B', 'auto')
     data.setdefault('sva_B_auto_max', 100)
+    data.setdefault('sva_backend', 'python')
+    data.setdefault('combatseq_backend', 'python')
+    data.setdefault('ruvseq_backend', 'python')
+    data.setdefault('python_executable', sys.executable)
+    data.setdefault('latent_family', 'nb')
+    data.setdefault('latent_k', 'auto')
+    data.setdefault('latent_k_max', 5)
+    data.setdefault('latent_max_iter', 200)
+    data.setdefault('latent_tol', 1e-5)
     return SimpleNamespace(**data)
 
 
@@ -124,11 +135,9 @@ def finalize_main(args):
             )
             copy_per_species_pdfs(per_species_dir=per_species_dir, dst_dir=stage_dir)
             merged_metadata.to_csv(os.path.join(stage_dir, 'metadata.tsv'), sep='\t', index=False)
-            r_util_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'util.r')
             save_exclusion_plot_pdf(
                 df_metadata=merged_metadata,
                 out_pdf_path=os.path.join(stage_dir, 'finalize_exclusion.pdf'),
-                r_util_path=r_util_path,
                 y_label='Sample count',
                 font_size=8,
             )

@@ -1,16 +1,14 @@
-import subprocess
 import os
 import sys
 
+from amalgkit.cstmm_python import run_cstmm_python_multi_species, run_cstmm_python_single_species
 from amalgkit.filter_utils import staged_output_dir
 from amalgkit.orthology_utils import (
     check_ortholog_parameter_compatibility,
     generate_multisp_busco_table,
     orthogroup2genecount,
 )
-from amalgkit.r_config import temporary_r_config
-from amalgkit.runtime_utils import check_rscript, cleanup_tmp_amalgkit_files
-from amalgkit.subprocess_utils import run_logged_check_call
+from amalgkit.runtime_utils import cleanup_tmp_amalgkit_files
 
 def resolve_species_count_file(sciname_path):
     sciname_count_files = []
@@ -65,15 +63,12 @@ def cstmm_main(args):
     dir_cstmm = os.path.join(dir_out, 'cstmm')
     if os.path.exists(dir_cstmm) and (not os.path.isdir(dir_cstmm)):
         raise NotADirectoryError('cstmm path exists but is not a directory: {}'.format(dir_cstmm))
-    check_rscript()
+    tmm_backend = 'python'
     if args.dir_count=='inferred':
         dir_count = os.path.join(dir_out, 'merge')
     else:
         dir_count = os.path.realpath(args.dir_count)
     count_files = get_count_files(dir_count)
-    dir_amalgkit_script = os.path.dirname(os.path.realpath(__file__))
-    r_cstmm_path = os.path.join(dir_amalgkit_script, 'cstmm.r')
-    r_util_path = os.path.join(dir_amalgkit_script, 'util.r')
     with staged_output_dir(
         dir_cstmm,
         redo=bool(getattr(args, 'redo', False)),
@@ -110,21 +105,18 @@ def cstmm_main(args):
             file_genecount = os.path.join(stage_dir, 'cstmm_orthogroup_genecount.tsv')
             spp = filepath2spp(count_files)
             orthogroup2genecount(file_orthogroup=file_orthogroup_table, file_genecount=file_genecount, spp=spp)
-        config_map = {
-            'dir_count': dir_count,
-            'file_orthogroup_table': file_orthogroup_table,
-            'file_genecount': file_genecount,
-            'dir_cstmm': stage_dir,
-            'mode_tmm': mode_tmm,
-            'r_util_path': r_util_path,
-        }
-        with temporary_r_config(config_map, prefix='amalgkit_cstmm_r_') as config_path:
-            r_command = ['Rscript', r_cstmm_path, config_path]
-            print('', flush=True)
-            run_logged_check_call(
-                command=r_command,
-                runner=subprocess.check_call,
-                command_prefix='Starting R script',
-                not_found_label='Rscript',
+        if mode_tmm == 'single_species':
+            species_name = filepath2spp(count_files)[0]
+            run_cstmm_python_single_species(
+                dir_count=dir_count,
+                dir_cstmm=stage_dir,
+                species_name=species_name,
+            )
+        else:
+            run_cstmm_python_multi_species(
+                dir_count=dir_count,
+                dir_cstmm=stage_dir,
+                file_genecount=file_genecount,
+                file_orthogroup_table=file_orthogroup_table,
             )
     cleanup_tmp_amalgkit_files(work_dir='.')

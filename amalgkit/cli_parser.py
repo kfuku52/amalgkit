@@ -254,6 +254,8 @@ def build_parser(command_handlers, command_names, version):
     pcs.add_argument('--dir_count', metavar='PATH', default='inferred', type=str, required=False, action='store',
                      help='default=%(default)s: AMALGKIT subfolder PATH to per-species transcript abundance data as produced by `amalgkit merge`. '
                           '"inferred" = out_dir/merge')
+    pcs.add_argument('--tmm_backend', metavar='python', default='python', choices=['python'], type=str, required=False, action='store',
+                     help='default=%(default)s: Backend used for cstmm.')
     pcs.set_defaults(handler=command_handlers['cstmm'])
 
     pws_help = 'Within-species outlier filtering. Outputs metadata.tsv + excluded.tsv + species PDFs (no plots/). See `amalgkit wsfilter -h`'
@@ -310,8 +312,8 @@ def build_parser(command_handlers, command_names, version):
     pfi.add_argument('--norm', metavar='(logn|log2|lognp1|log2p1|none)-(fpkm|tpm|none)',
                      default='log2p1-fpkm', type=str, required=False, action='store',
                      help='default=%(default)s: Expression transformation before optional batch correction.')
-    pfi.add_argument('--batch_effect_alg', metavar='(no|sva|ruvseq|combatseq)',
-                     choices=['no', 'sva', 'ruvseq', 'combatseq'],
+    pfi.add_argument('--batch_effect_alg', metavar='(no|sva|ruvseq|combatseq|latent_glm)',
+                     choices=['no', 'sva', 'ruvseq', 'combatseq', 'latent_glm'],
                      default='no', type=str, required=False, action='store',
                      help='default=%(default)s: Batch-effect removal algorithm for finalized output tables.')
     pfi.add_argument('--clip_negative', metavar='yes|no', default='yes', type=strtobool, required=False, action='store',
@@ -337,6 +339,26 @@ def build_parser(command_handlers, command_names, version):
                      help='default=%(default)s: Number of permutation iterations used by SVA. "auto" chooses B from sample size.')
     pfi.add_argument('--sva_B_auto_max', metavar='INT', default=100, type=int, required=False, action='store',
                      help='default=%(default)s: Upper bound for auto-selected SVA permutation iterations.')
+    pfi.add_argument('--sva_backend', metavar='python', choices=['python'],
+                     default='python', type=str, required=False, action='store',
+                     help='default=%(default)s: Backend used for --batch_effect_alg sva.')
+    pfi.add_argument('--combatseq_backend', metavar='python', choices=['python'],
+                     default='python', type=str, required=False, action='store',
+                     help='default=%(default)s: Backend used for --batch_effect_alg combatseq.')
+    pfi.add_argument('--ruvseq_backend', metavar='python', choices=['python'],
+                     default='python', type=str, required=False, action='store',
+                     help='default=%(default)s: Backend used for --batch_effect_alg ruvseq.')
+    pfi.add_argument('--latent_family', metavar='poisson|nb', choices=['poisson', 'nb'],
+                     default='nb', type=str, required=False, action='store',
+                     help='default=%(default)s: Likelihood family for --batch_effect_alg latent_glm.')
+    pfi.add_argument('--latent_k', metavar='INT|auto', default='auto', type=nonnegative_int_or_auto, required=False, action='store',
+                     help='default=%(default)s: Number of latent factors for latent_glm. "auto" selects k from model diagnostics.')
+    pfi.add_argument('--latent_k_max', metavar='INT', default=5, type=int, required=False, action='store',
+                     help='default=%(default)s: Maximum k considered when --latent_k auto.')
+    pfi.add_argument('--latent_max_iter', metavar='INT', default=200, type=int, required=False, action='store',
+                     help='default=%(default)s: Maximum number of optimization iterations for latent_glm.')
+    pfi.add_argument('--latent_tol', metavar='FLOAT', default=1e-5, type=float, required=False, action='store',
+                     help='default=%(default)s: Convergence tolerance for latent_glm.')
     pfi.set_defaults(handler=command_handlers['finalize'])
 
     psa_help = 'Checking the integrity of AMALGKIT input and output files. See `amalgkit sanity -h`'

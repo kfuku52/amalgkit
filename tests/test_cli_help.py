@@ -52,6 +52,11 @@ def test_help_topic_finalize_exits_zero():
     assert '--seed' in merged
     assert '--sva_nsv' in merged
     assert '--sva_b' in merged
+    assert '--sva_backend' in merged
+    assert '--combatseq_backend' in merged
+    assert '--ruvseq_backend' in merged
+    assert '--latent_family' in merged
+    assert 'latent_glm' in merged
 
 
 def test_help_topic_cstmm_includes_redo():
@@ -59,6 +64,7 @@ def test_help_topic_cstmm_includes_redo():
     assert out.returncode == 0
     merged = (out.stdout + '\n' + out.stderr).lower()
     assert '--redo' in merged
+    assert '--tmm_backend' in merged
 
 
 def test_help_topic_csca_is_rejected():

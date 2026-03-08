@@ -2,9 +2,9 @@ import pandas
 import numpy
 
 import os
-import subprocess
 import warnings
 from amalgkit.filter_utils import staged_output_dir
+from amalgkit.merge_plots import generate_merge_plots
 from amalgkit.metadata_utils import load_metadata, write_updated_metadata
 from amalgkit.parallel_utils import (
     is_auto_parallel_option,
@@ -12,9 +12,6 @@ from amalgkit.parallel_utils import (
     run_tasks_with_optional_threads,
     validate_positive_int_option,
 )
-from amalgkit.r_config import temporary_r_config
-from amalgkit.runtime_utils import check_rscript
-from amalgkit.subprocess_utils import run_logged_check_call
 
 FASTP_STATS_COLUMNS = ['fastp_duplication_rate', 'fastp_insert_size_peak']
 GETFASTQ_STAGE_COLUMNS = [
@@ -373,27 +370,15 @@ def run_merge_species_jobs(metadata, quant_dir, merge_dir, run_abundance_paths, 
         raise FileNotFoundError('No quant abundance file was detected for any species.')
 
 
-def run_merge_plot_rscript(merge_dir, path_metadata_merge):
-    script_dir = os.path.dirname(os.path.realpath(__file__))
-    r_merge_path = os.path.join(script_dir, 'merge.r')
-    r_util_path = os.path.join(script_dir, 'util.r')
-    config_map = {
-        'dir_merge': merge_dir,
-        'file_metadata': path_metadata_merge,
-        'r_util_path': r_util_path,
-    }
-    with temporary_r_config(config_map, prefix='amalgkit_merge_r_') as config_path:
-        r_command = ['Rscript', r_merge_path, config_path]
-        run_logged_check_call(
-            command=r_command,
-            runner=subprocess.check_call,
-            command_prefix='Starting R script for plot generation',
-            not_found_label='Rscript',
-        )
+def generate_merge_plot_pdfs(merge_dir, path_metadata_merge):
+    generate_merge_plots(
+        merge_dir=os.path.realpath(merge_dir),
+        metadata_path=os.path.realpath(path_metadata_merge),
+        font_size=8,
+    )
 
 
 def merge_main(args):
-    check_rscript()
     species_jobs, _ = resolve_worker_allocation(
         requested_workers=getattr(args, 'internal_jobs', 'auto'),
         requested_threads=getattr(args, 'threads', 'auto'),
@@ -438,4 +423,4 @@ def merge_main(args):
         metadata = merge_fastp_stats_into_metadata(metadata, out_dir, max_workers=postprocess_workers)
         path_metadata_merge = os.path.join(stage_dir, 'metadata.tsv')
         write_updated_metadata(metadata, path_metadata_merge, args, max_workers=postprocess_workers)
-        run_merge_plot_rscript(merge_dir=stage_dir, path_metadata_merge=path_metadata_merge)
+        generate_merge_plot_pdfs(merge_dir=stage_dir, path_metadata_merge=path_metadata_merge)

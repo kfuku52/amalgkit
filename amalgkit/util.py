@@ -2,7 +2,6 @@ import pandas
 import ete4
 
 import os
-import subprocess
 from amalgkit.download_utils import (
     acquire_exclusive_lock as _acquire_exclusive_lock,
     get_ete_ncbitaxa as _get_ete_ncbitaxa,
@@ -51,7 +50,6 @@ from amalgkit.runtime_utils import (
     check_config_dir as _check_config_dir,
     cleanup_tmp_amalgkit_files as _cleanup_tmp_amalgkit_files,
     get_getfastq_run_dir as _get_getfastq_run_dir,
-    check_rscript as _check_rscript,
 )
 
 Metadata = _Metadata
@@ -131,10 +129,6 @@ def write_updated_metadata(metadata, outpath, args, max_workers='auto'):
         max_workers=max_workers,
         get_mapping_rate_fn=get_mapping_rate,
     )
-
-def check_rscript():
-    return _check_rscript(runner=subprocess.run)
-
 
 orthogroup2genecount = _orthogroup2genecount
 check_ortholog_parameter_compatibility = _check_ortholog_parameter_compatibility

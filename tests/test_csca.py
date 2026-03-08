@@ -273,7 +273,6 @@ class TestCscaMain:
 
     def test_raises_clear_error_when_curate_dir_missing(self, tmp_path, monkeypatch):
         args = self._base_args(tmp_path / 'out')
-        monkeypatch.setattr('amalgkit.cross_species_filter.check_rscript', lambda: None)
         monkeypatch.setattr('amalgkit.cross_species_filter.check_ortholog_parameter_compatibility', lambda _args: None)
         with pytest.raises(FileNotFoundError, match='Per-species table output directory not found'):
             run_cross_species_filter(args)
@@ -281,7 +280,6 @@ class TestCscaMain:
     def test_blank_orthogroup_table_raises_parameter_error(self, tmp_path, monkeypatch):
         args = self._base_args(tmp_path / 'out')
         args.orthogroup_table = '   '
-        monkeypatch.setattr('amalgkit.cross_species_filter.check_rscript', lambda: None)
         with pytest.raises(ValueError, match='One of --orthogroup_table and --dir_busco should be specified'):
             run_cross_species_filter(args)
 
@@ -289,7 +287,6 @@ class TestCscaMain:
         out_path = tmp_path / 'out_path'
         out_path.write_text('not a directory')
         args = self._base_args(out_path)
-        monkeypatch.setattr('amalgkit.cross_species_filter.check_rscript', lambda: None)
         monkeypatch.setattr('amalgkit.cross_species_filter.check_ortholog_parameter_compatibility', lambda _args: None)
         with pytest.raises(NotADirectoryError, match='Output path exists but is not a directory'):
             run_cross_species_filter(args)
@@ -299,7 +296,6 @@ class TestCscaMain:
         out_dir.mkdir()
         (out_dir / 'per_species').write_text('not a directory')
         args = self._base_args(out_dir)
-        monkeypatch.setattr('amalgkit.cross_species_filter.check_rscript', lambda: None)
         monkeypatch.setattr('amalgkit.cross_species_filter.check_ortholog_parameter_compatibility', lambda _args: None)
         with pytest.raises(NotADirectoryError, match='Per-species output path exists but is not a directory'):
             run_cross_species_filter(args)
@@ -313,7 +309,6 @@ class TestCscaMain:
         args = self._base_args(out_dir)
         args.orthogroup_table = str(tmp_path / 'orthogroup.tsv')
         (tmp_path / 'orthogroup.tsv').write_text('busco_id\tSpecies_A\nOG1\tgene1\n')
-        monkeypatch.setattr('amalgkit.cross_species_filter.check_rscript', lambda: None)
         monkeypatch.setattr('amalgkit.cross_species_filter.check_ortholog_parameter_compatibility', lambda _args: None)
         with pytest.raises(NotADirectoryError, match='Cross-species path exists but is not a directory'):
             run_cross_species_filter(args)
@@ -330,8 +325,6 @@ class TestCscaMain:
         args = self._base_args(out_dir)
         args.orthogroup_table = str(orthogroup)
 
-        monkeypatch.setattr('amalgkit.cross_species_filter.check_rscript', lambda: None)
-
         with pytest.raises(FileExistsError, match='Use --redo yes to overwrite'):
             run_cross_species_filter(args)
 
@@ -339,7 +332,6 @@ class TestCscaMain:
         out_dir = tmp_path / 'out'
         (out_dir / 'per_species').mkdir(parents=True)
         args = self._base_args(out_dir)
-        monkeypatch.setattr('amalgkit.cross_species_filter.check_rscript', lambda: None)
         monkeypatch.setattr('amalgkit.cross_species_filter.check_ortholog_parameter_compatibility', lambda _args: None)
         with pytest.raises(ValueError, match='No per-species directories were found'):
             run_cross_species_filter(args)
@@ -351,7 +343,6 @@ class TestCscaMain:
         (tables_dir / 'Species_A_est_counts.tsv').write_text('target_id\tR1\nG1\t1\n')
         args = self._base_args(out_dir)
         args.orthogroup_table = str(tmp_path / 'missing.tsv')
-        monkeypatch.setattr('amalgkit.cross_species_filter.check_rscript', lambda: None)
         monkeypatch.setattr('amalgkit.cross_species_filter.check_ortholog_parameter_compatibility', lambda _args: None)
 
         with pytest.raises(FileNotFoundError, match='Orthogroup table not found'):
@@ -366,7 +357,6 @@ class TestCscaMain:
         og_dir.mkdir()
         args = self._base_args(out_dir)
         args.orthogroup_table = str(og_dir)
-        monkeypatch.setattr('amalgkit.cross_species_filter.check_rscript', lambda: None)
         monkeypatch.setattr('amalgkit.cross_species_filter.check_ortholog_parameter_compatibility', lambda _args: None)
 
         with pytest.raises(IsADirectoryError, match='Orthogroup table path exists but is not a file'):
@@ -386,7 +376,6 @@ class TestCscaMain:
         args.orthogroup_table = str(orthogroup)
         args.redo = True
 
-        monkeypatch.setattr('amalgkit.cross_species_filter.check_rscript', lambda: None)
         monkeypatch.setattr(
             'amalgkit.cross_species_filter.orthogroup2genecount',
             lambda **_kwargs: (_ for _ in ()).throw(RuntimeError('boom')),

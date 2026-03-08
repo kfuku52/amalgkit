@@ -63,7 +63,7 @@ def _build_prepare_per_species_args(args, input_dir, tmp_out_dir):
     data['out_dir'] = tmp_out_dir
     data['input_dir'] = input_dir
     data['batch_effect_alg'] = 'no'
-    data['r_script_name'] = 'prepare_tables.r'
+    data['worker_mode'] = 'prepare_tables'
     data['skip_curation'] = True
     data['disable_auto_outlier_filter'] = True
     data['outlier_method'] = 'legacy'
@@ -214,11 +214,9 @@ def csfilter_main(args):
                 df_metadata=merged_metadata,
                 out_path=os.path.join(stage_dir, 'excluded.tsv'),
             )
-            r_util_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'util.r')
             save_exclusion_plot_pdf(
                 df_metadata=merged_metadata,
                 out_pdf_path=os.path.join(stage_dir, 'csfilter_exclusion.pdf'),
-                r_util_path=r_util_path,
                 y_label='Sample count',
                 font_size=8,
             )

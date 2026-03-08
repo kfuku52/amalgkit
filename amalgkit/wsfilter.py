@@ -19,7 +19,7 @@ def _build_per_species_args(args, input_dir, tmp_out_dir):
     data = vars(args).copy()
     data['out_dir'] = tmp_out_dir
     data['input_dir'] = input_dir
-    data['r_script_name'] = 'wsfilter.r'
+    data['worker_mode'] = 'wsfilter'
     data.setdefault('margin_threshold', 0.0)
     data.setdefault('robust_z_threshold', -2.5)
     data.setdefault('dist_method', 'pearson')
@@ -91,11 +91,9 @@ def wsfilter_main(args):
                 df_metadata=merged_metadata,
                 out_path=os.path.join(stage_dir, 'excluded.tsv'),
             )
-            r_util_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'util.r')
             save_exclusion_plot_pdf(
                 df_metadata=merged_metadata,
                 out_pdf_path=os.path.join(stage_dir, 'wsfilter_exclusion.pdf'),
-                r_util_path=r_util_path,
                 y_label='Sample count',
                 font_size=8,
             )

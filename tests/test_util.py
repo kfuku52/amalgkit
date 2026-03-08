@@ -27,7 +27,6 @@ from amalgkit.util import (
     get_ete_ncbitaxa,
     generate_multisp_busco_table,
     cleanup_tmp_amalgkit_files,
-    check_rscript,
     run_tasks_with_optional_threads,
     validate_positive_int_option,
     resolve_cpu_budget,
@@ -808,32 +807,6 @@ class TestCleanupTmpAmalgkitFiles:
 
         assert not disappearing.exists()
         assert not stable.exists()
-
-
-class TestCheckRscript:
-    def test_exits_when_rscript_missing(self, monkeypatch):
-        monkeypatch.setattr(
-            'amalgkit.util.subprocess.run',
-            lambda *_args, **_kwargs: (_ for _ in ()).throw(FileNotFoundError('Rscript')),
-        )
-        with pytest.raises(FileNotFoundError, match='R \\(Rscript\\) is not installed'):
-            check_rscript()
-
-    def test_exits_when_rscript_probe_returns_nonzero(self, monkeypatch):
-        monkeypatch.setattr(
-            'amalgkit.util.subprocess.run',
-            lambda *_args, **_kwargs: SimpleNamespace(returncode=127, stdout=b'', stderr=b''),
-        )
-        with pytest.raises(RuntimeError, match='Rscript dependency probe failed'):
-            check_rscript()
-
-    def test_passes_when_rscript_probe_returns_zero(self, monkeypatch):
-        monkeypatch.setattr(
-            'amalgkit.util.subprocess.run',
-            lambda *_args, **_kwargs: SimpleNamespace(returncode=0, stdout=b'', stderr=b''),
-        )
-        check_rscript()
-
 
 class TestGetSraStat:
     def test_basic_stats(self, sample_metadata):

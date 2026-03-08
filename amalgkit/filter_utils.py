@@ -1,14 +1,11 @@
 import os
 import re
 import shutil
-import subprocess
 import tempfile
 import warnings
 from contextlib import contextmanager
 
 import pandas
-
-from amalgkit.subprocess_utils import run_logged_command
 
 
 def merge_metadata_by_run(source_df, update_df):
@@ -215,48 +212,98 @@ def copy_root_pdfs_to_species_dirs(src_dir, dst_dir, species_list):
             shutil.copy2(src_path, os.path.join(dst_species_dir, dst_name))
 
 
-def save_exclusion_plot_pdf(df_metadata, out_pdf_path, r_util_path, y_label='Sample count', font_size=8):
+def _format_genus_species_label(value):
+    tokens = str(value).replace('_', ' ').split()
+    if len(tokens) >= 2:
+        return '{}\n{}'.format(tokens[0], ' '.join(tokens[1:]))
+    if len(tokens) == 1:
+        return tokens[0]
+    return ''
+
+
+def save_exclusion_plot_pdf(df_metadata, out_pdf_path, y_label='Sample count', font_size=8):
     os.makedirs(os.path.dirname(os.path.realpath(out_pdf_path)), exist_ok=True)
-    tmp_path = None
+    if ('scientific_name' not in df_metadata.columns) or ('exclusion' not in df_metadata.columns):
+        warnings.warn('Missing scientific_name/exclusion columns. Skipping exclusion plot: {}'.format(out_pdf_path))
+        return
+    df_plot = df_metadata.loc[:, ['scientific_name', 'exclusion']].copy()
+    df_plot['scientific_name'] = df_plot['scientific_name'].fillna('').astype(str).str.strip()
+    df_plot['exclusion'] = df_plot['exclusion'].fillna('').astype(str).str.strip()
+    df_plot = df_plot.loc[
+        (df_plot['scientific_name'] != '') &
+        (df_plot['exclusion'] != ''),
+        :
+    ]
+    if df_plot.empty:
+        warnings.warn('No valid scientific_name/exclusion rows. Skipping exclusion plot: {}'.format(out_pdf_path))
+        return
+
     try:
-        with tempfile.NamedTemporaryFile(prefix='amalgkit_exclusion_', suffix='.tsv', delete=False, mode='w') as handle:
-            tmp_path = handle.name
-            df_metadata.to_csv(handle, sep='\t', index=False)
-        r_expr = (
-            "args <- commandArgs(trailingOnly = TRUE); "
-            "suppressWarnings(suppressPackageStartupMessages(library(ggplot2, quietly = TRUE))); "
-            "source(args[1]); "
-            "df <- read.table(args[2], sep='\\t', header=TRUE, quote='', fill=TRUE, "
-            "comment.char='', stringsAsFactors=FALSE, check.names=FALSE); "
-            "save_exclusion_plot(df=df, out_path=args[3], font_size=as.numeric(args[4]), y_label=args[5]);"
+        import matplotlib
+        matplotlib.use('Agg', force=True)
+        from matplotlib import pyplot
+    except ImportError as exc:
+        warnings.warn('matplotlib is required to generate exclusion plot {}: {}'.format(out_pdf_path, exc))
+        return
+
+    species_order = df_plot.loc[:, 'scientific_name'].drop_duplicates().tolist()
+    exclusion_order = df_plot.loc[:, 'exclusion'].drop_duplicates().tolist()
+    summary = (
+        df_plot.groupby(['scientific_name', 'exclusion'], sort=False)
+        .size()
+        .rename('count')
+        .reset_index()
+    )
+    pivot = (
+        summary.pivot(index='scientific_name', columns='exclusion', values='count')
+        .reindex(index=species_order, columns=exclusion_order)
+        .fillna(0.0)
+    )
+
+    plot_width = max(3.6, 0.11 * len(species_order))
+    figure, axis = pyplot.subplots(figsize=(plot_width, 3.6))
+    x_positions = list(range(len(species_order)))
+    bottoms = [0.0] * len(species_order)
+    cmap = pyplot.get_cmap('tab20')
+    for idx, exclusion_value in enumerate(exclusion_order):
+        heights = pivot.loc[:, exclusion_value].astype(float).tolist()
+        axis.bar(
+            x_positions,
+            heights,
+            bottom=bottoms,
+            label=str(exclusion_value),
+            color=cmap(idx % max(1, cmap.N)),
+            width=0.8,
         )
-        run, _stdout_txt, stderr_txt = run_logged_command(
-            command=[
-                'Rscript',
-                '-e',
-                r_expr,
-                os.path.realpath(r_util_path),
-                os.path.realpath(tmp_path),
-                os.path.realpath(out_pdf_path),
-                str(font_size),
-                str(y_label),
-            ],
-            runner=subprocess.run,
-            print_command=False,
-            print_output=False,
-            not_found_label='Rscript',
+        bottoms = [bottom + height for bottom, height in zip(bottoms, heights)]
+
+    axis.set_xlim(-0.5, max(len(species_order) - 0.5, 0.5))
+    axis.set_ylabel(str(y_label), fontsize=float(font_size))
+    axis.set_xlabel('')
+    axis.set_xticks(x_positions)
+    axis.set_xticklabels(
+        [_format_genus_species_label(value) for value in species_order],
+        rotation=90,
+        ha='center',
+        fontsize=float(font_size),
+    )
+    axis.tick_params(axis='y', labelsize=float(font_size))
+    axis.spines['top'].set_visible(False)
+    axis.spines['right'].set_visible(False)
+    axis.set_facecolor('white')
+    axis.grid(axis='y', color='#d0d0d0', linewidth=0.6)
+    if exclusion_order:
+        axis.legend(
+            title='',
+            loc='upper center',
+            bbox_to_anchor=(0.5, -0.22),
+            ncol=max(1, min(4, len(exclusion_order))),
+            frameon=False,
+            fontsize=float(font_size),
         )
-        if run.returncode != 0:
-            warnings.warn(
-                'Failed to generate exclusion plot {} (exit code {}): {}'.format(
-                    out_pdf_path,
-                    run.returncode,
-                    stderr_txt.strip().splitlines()[-1] if stderr_txt.strip() else 'no stderr output',
-                )
-            )
-    finally:
-        if (tmp_path is not None) and os.path.isfile(tmp_path):
-            os.remove(tmp_path)
+    figure.tight_layout()
+    figure.savefig(os.path.realpath(out_pdf_path), format='pdf', bbox_inches='tight')
+    pyplot.close(figure)
 
 
 def infer_latest_filter_metadata(out_dir):

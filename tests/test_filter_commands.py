@@ -8,6 +8,7 @@ from amalgkit.util import Metadata
 from amalgkit import wsfilter as wsfilter_module
 from amalgkit import csfilter as csfilter_module
 from amalgkit import finalize as finalize_module
+from amalgkit import per_species_tables as per_species_tables_module
 
 
 def _base_metadata():
@@ -78,8 +79,8 @@ def test_wsfilter_outputs_metadata_excluded_and_species_pdfs(tmp_path, monkeypat
 
     monkeypatch.setattr(wsfilter_module, 'resolve_per_species_input', fake_resolve_per_species_input)
     monkeypatch.setattr(wsfilter_module, 'generate_per_species_tables', fake_generate_per_species_tables)
-    def fake_exclusion_plot(df_metadata, out_pdf_path, r_util_path, y_label='Sample count', font_size=8):
-        _ = (df_metadata, r_util_path, y_label, font_size)
+    def fake_exclusion_plot(df_metadata, out_pdf_path, y_label='Sample count', font_size=8):
+        _ = (df_metadata, y_label, font_size)
         os.makedirs(os.path.dirname(out_pdf_path), exist_ok=True)
         with open(out_pdf_path, 'wb') as handle:
             handle.write(b'%PDF-1.4\n')
@@ -125,8 +126,8 @@ def test_wsfilter_uses_latest_filter_metadata_when_inferred(tmp_path, monkeypatc
 
     monkeypatch.setattr(wsfilter_module, 'resolve_per_species_input', fake_resolve_per_species_input)
     monkeypatch.setattr(wsfilter_module, 'generate_per_species_tables', fake_generate_per_species_tables)
-    def fake_exclusion_plot(df_metadata, out_pdf_path, r_util_path, y_label='Sample count', font_size=8):
-        _ = (df_metadata, r_util_path, y_label, font_size)
+    def fake_exclusion_plot(df_metadata, out_pdf_path, y_label='Sample count', font_size=8):
+        _ = (df_metadata, y_label, font_size)
         os.makedirs(os.path.dirname(out_pdf_path), exist_ok=True)
         with open(out_pdf_path, 'wb') as handle:
             handle.write(b'%PDF-1.4\n')
@@ -171,8 +172,8 @@ def test_csfilter_outputs_metadata_excluded_and_root_pdfs(tmp_path, monkeypatch)
     monkeypatch.setattr(csfilter_module, 'resolve_per_species_input', fake_resolve_per_species_input)
     monkeypatch.setattr(csfilter_module, 'generate_per_species_tables', fake_generate_per_species_tables)
     monkeypatch.setattr(csfilter_module, 'run_cross_species_filter', fake_run_cross_species_filter)
-    def fake_exclusion_plot(df_metadata, out_pdf_path, r_util_path, y_label='Sample count', font_size=8):
-        _ = (df_metadata, r_util_path, y_label, font_size)
+    def fake_exclusion_plot(df_metadata, out_pdf_path, y_label='Sample count', font_size=8):
+        _ = (df_metadata, y_label, font_size)
         os.makedirs(os.path.dirname(out_pdf_path), exist_ok=True)
         with open(out_pdf_path, 'wb') as handle:
             handle.write(b'%PDF-1.4\n')
@@ -210,6 +211,14 @@ def test_csfilter_outputs_metadata_excluded_and_root_pdfs(tmp_path, monkeypatch)
 def test_finalize_outputs_tables_and_merged_metadata(tmp_path, monkeypatch):
     args = _base_args(tmp_path)
     args.batch_effect_alg = 'sva'
+    args.sva_backend = 'python'
+    args.combatseq_backend = 'python'
+    args.ruvseq_backend = 'python'
+    args.latent_family = 'poisson'
+    args.latent_k = 2
+    args.latent_k_max = 6
+    args.latent_max_iter = 111
+    args.latent_tol = 1e-4
     metadata = _base_metadata()
     captured = {}
 
@@ -218,6 +227,14 @@ def test_finalize_outputs_tables_and_merged_metadata(tmp_path, monkeypatch):
 
     def fake_generate_per_species_tables(per_species_args, context=None):
         captured['seed'] = getattr(per_species_args, 'seed')
+        captured['sva_backend'] = getattr(per_species_args, 'sva_backend')
+        captured['combatseq_backend'] = getattr(per_species_args, 'combatseq_backend')
+        captured['ruvseq_backend'] = getattr(per_species_args, 'ruvseq_backend')
+        captured['latent_family'] = getattr(per_species_args, 'latent_family')
+        captured['latent_k'] = getattr(per_species_args, 'latent_k')
+        captured['latent_k_max'] = getattr(per_species_args, 'latent_k_max')
+        captured['latent_max_iter'] = getattr(per_species_args, 'latent_max_iter')
+        captured['latent_tol'] = getattr(per_species_args, 'latent_tol')
         captured['context'] = context
         tables_dir = os.path.join(per_species_args.out_dir, 'per_species', 'Species_A', 'tables')
         plots_dir = os.path.join(per_species_args.out_dir, 'per_species', 'Species_A', 'plots')
@@ -255,8 +272,8 @@ def test_finalize_outputs_tables_and_merged_metadata(tmp_path, monkeypatch):
 
     monkeypatch.setattr(finalize_module, 'resolve_per_species_input', fake_resolve_per_species_input)
     monkeypatch.setattr(finalize_module, 'generate_per_species_tables', fake_generate_per_species_tables)
-    def fake_exclusion_plot(df_metadata, out_pdf_path, r_util_path, y_label='Sample count', font_size=8):
-        _ = (df_metadata, r_util_path, y_label, font_size)
+    def fake_exclusion_plot(df_metadata, out_pdf_path, y_label='Sample count', font_size=8):
+        _ = (df_metadata, y_label, font_size)
         os.makedirs(os.path.dirname(out_pdf_path), exist_ok=True)
         with open(out_pdf_path, 'wb') as handle:
             handle.write(b'%PDF-1.4\n')
@@ -269,6 +286,14 @@ def test_finalize_outputs_tables_and_merged_metadata(tmp_path, monkeypatch):
     assert out_metadata.loc[out_metadata['run'] == 'R1', 'batch_corrected'].iloc[0] == 'yes'
     assert out_metadata.loc[out_metadata['run'] == 'R1', 'batch_alg_used'].iloc[0] == 'sva'
     assert captured['seed'] == 'auto'
+    assert captured['sva_backend'] == 'python'
+    assert captured['combatseq_backend'] == 'python'
+    assert captured['ruvseq_backend'] == 'python'
+    assert captured['latent_family'] == 'poisson'
+    assert captured['latent_k'] == 2
+    assert captured['latent_k_max'] == 6
+    assert captured['latent_max_iter'] == 111
+    assert captured['latent_tol'] == 1e-4
     assert (tmp_path / 'out' / 'finalize' / 'finalize_exclusion.pdf').is_file()
     assert (tmp_path / 'out' / 'finalize' / 'Species_A' / 'Species_A_expression_uncorrected.tsv').is_file()
     assert (tmp_path / 'out' / 'finalize' / 'Species_A' / 'Species_A_expression.tsv').is_file()
@@ -278,3 +303,85 @@ def test_finalize_outputs_tables_and_merged_metadata(tmp_path, monkeypatch):
     assert isinstance(captured['context'], PerSpeciesTableContext)
     assert captured['context'].metadata is metadata
     assert captured['context'].input_dir == str(tmp_path / 'input')
+
+
+def test_finalize_main_runs_without_rscript_for_supported_python_worker(tmp_path, monkeypatch):
+    species = 'Species A'
+    species_tag = 'Species_A'
+    input_dir = tmp_path / 'input'
+    species_dir = input_dir / species_tag
+    species_dir.mkdir(parents=True, exist_ok=True)
+
+    metadata_path = tmp_path / 'metadata.tsv'
+    metadata_df = pandas.DataFrame(
+        {
+            'run': ['R1', 'R2', 'R3', 'R4'],
+            'scientific_name': [species] * 4,
+            'sample_group': ['leaf', 'leaf', 'root', 'root'],
+            'bioproject': ['BP1', 'BP1', 'BP2', 'BP2'],
+            'exclusion': ['no'] * 4,
+            'mapping_rate': [100.0] * 4,
+            'instrument': ['Illumina'] * 4,
+            'lib_layout': ['PAIRED'] * 4,
+            'lib_selection': ['cDNA'] * 4,
+            'total_spots': [1_000_000] * 4,
+            'total_bases': [150_000_000] * 4,
+        }
+    )
+    metadata_df.to_csv(metadata_path, sep='\t', index=False)
+
+    counts_df = pandas.DataFrame(
+        {
+            'target_id': ['G1', 'G2', 'G3', 'G4'],
+            'R1': [10, 20, 5, 0],
+            'R2': [11, 19, 5, 0],
+            'R3': [5, 3, 20, 0],
+            'R4': [6, 4, 21, 0],
+        }
+    )
+    eff_length_df = pandas.DataFrame(
+        {
+            'target_id': ['G1', 'G2', 'G3', 'G4'],
+            'R1': [1000, 1000, 1000, 1000],
+            'R2': [1000, 1000, 1000, 1000],
+            'R3': [1000, 1000, 1000, 1000],
+            'R4': [1000, 1000, 1000, 1000],
+        }
+    )
+    counts_df.to_csv(species_dir / '{}_est_counts.tsv'.format(species_tag), sep='\t', index=False)
+    eff_length_df.to_csv(species_dir / '{}_eff_length.tsv'.format(species_tag), sep='\t', index=False)
+
+    args = _base_args(tmp_path)
+    args.metadata = str(metadata_path)
+    args.input_dir = str(input_dir)
+    args.batch_effect_alg = 'sva'
+    args.sva_backend = 'python'
+    args.combatseq_backend = 'python'
+    args.ruvseq_backend = 'python'
+    args.sva_nsv = '0'
+    args.sva_B = '5'
+    args.sva_B_auto_max = 100
+    args.seed = 'auto'
+    args.ruvseq_control_genes = 'auto'
+    args.ruvseq_k = 'auto'
+    args.ruvseq_k_max = 5
+    args.ruvseq_control_top_n = 1000
+    args.ruvseq_min_controls = 100
+    args.disable_auto_outlier_filter = True
+    args.python_executable = 'python'
+    args.latent_family = 'nb'
+    args.latent_k = 'auto'
+    args.latent_k_max = 5
+    args.latent_max_iter = 200
+    args.latent_tol = 1e-5
+
+    finalize_module.finalize_main(args)
+
+    out_root = tmp_path / 'out' / 'finalize' / species_tag
+    out_metadata = pandas.read_csv(tmp_path / 'out' / 'finalize' / 'metadata.tsv', sep='\t')
+    assert set(out_metadata['batch_corrected'].astype(str)) == {'no'}
+    assert set(out_metadata['batch_alg_used'].astype(str)) == {'no'}
+    assert (out_root / '{}_expression_uncorrected.tsv'.format(species_tag)).is_file()
+    assert (out_root / '{}_expression.tsv'.format(species_tag)).is_file()
+    assert (out_root / '{}_batch_effect_summary.tsv'.format(species_tag)).is_file()
+    assert (out_root / '{}_batch_compare_sva.pdf'.format(species_tag)).is_file()

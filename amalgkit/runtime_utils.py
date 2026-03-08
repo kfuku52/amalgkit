@@ -1,20 +1,6 @@
 import os
 import shutil
-import subprocess
 import sys
-
-from amalgkit.subprocess_utils import probe_dependency_command
-
-
-def check_rscript(runner=subprocess.run):
-    try:
-        probe_dependency_command(
-            command=['Rscript', '--help'],
-            label='Rscript',
-            runner=runner,
-        )
-    except FileNotFoundError as exc:
-        raise FileNotFoundError('R (Rscript) is not installed.') from exc
 
 
 def check_config_dir(dir_path, mode):
