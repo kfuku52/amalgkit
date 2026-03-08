@@ -81,3 +81,15 @@ def test_dataset_list_skips_runtime_banner():
     assert 'available datasets:' in out.stdout.lower()
     assert 'amalgkit dependency' not in out.stdout.lower()
     assert 'amalgkit tool' not in out.stdout.lower()
+
+
+def test_help_topic_getfastq_mentions_filter_runtime_costs():
+    out = run_cli('help', 'getfastq')
+    assert out.returncode == 0
+    merged = ' '.join((out.stdout + '\n' + out.stderr).lower().split())
+    assert '2-8 gb ram' in merged
+    assert '32-128 gb ram' in merged
+    assert 'default=superkingdom' in merged
+    assert 'domain" is accepted as an alias for "superkingdom"' in merged
+    assert 'first run also builds the silva db' in merged
+    assert 'first run also downloads/builds the db' in merged

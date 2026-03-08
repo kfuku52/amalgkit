@@ -63,8 +63,16 @@ RRNA_REFERENCE_SPECS = [
         'fasta_filename': 'silva_lsu.fasta',
     },
 ]
-CONTAM_FILTER_SUPPORTED_RANKS = ['domain', 'kingdom', 'phylum', 'class', 'order', 'family', 'genus', 'species']
+CONTAM_FILTER_SUPPORTED_RANKS = ['superkingdom', 'kingdom', 'phylum', 'class', 'order', 'family', 'genus', 'species']
+CONTAM_FILTER_RANK_ALIASES = {'domain': 'superkingdom'}
 CONTAM_FILTER_DEFAULT_DB_NAME = 'UniRef90'
+FILTER_ORDER_SUPPORTED_FILTERS = ['fastp', 'rrna', 'contam']
+GETFASTQ_DURATION_COLUMNS = [
+    'sec_fasterq_dump',
+    'sec_fastp',
+    'sec_rrna_filter',
+    'sec_contam_filter',
+]
 GETFASTQ_STATS_COLUMNS = [
     'num_dumped',
     'num_rejected',
@@ -85,6 +93,10 @@ GETFASTQ_STATS_COLUMNS = [
     'bp_contam_in',
     'bp_contam_out',
     'bp_discarded',
+    'sec_fasterq_dump',
+    'sec_fastp',
+    'sec_rrna_filter',
+    'sec_contam_filter',
     'fastp_duplication_rate',
     'fastp_insert_size_peak',
 ]
@@ -101,6 +113,48 @@ def get_or_detect_intermediate_extension(sra_stat, work_dir, files=None, file_st
 
 def set_current_intermediate_extension(sra_stat, ext):
     sra_stat['current_ext'] = ext
+
+
+def _coerce_nonnegative_float(value):
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    if not numpy.isfinite(numeric):
+        return 0.0
+    return max(0.0, numeric)
+
+
+def accumulate_stage_duration(metadata, sra_stat, column_name, elapsed_seconds):
+    ind_sra = sra_stat.get('metadata_idx', get_metadata_row_index_by_run(metadata, sra_stat['sra_id']))
+    if column_name not in metadata.df.columns:
+        metadata.df.loc[:, column_name] = 0.0
+    current_value = _coerce_nonnegative_float(metadata.df.at[ind_sra, column_name])
+    metadata.df.at[ind_sra, column_name] = current_value + _coerce_nonnegative_float(elapsed_seconds)
+    return metadata
+
+
+def sum_metadata_numeric_column(df, column_name):
+    if column_name not in df.columns:
+        return 0.0
+    values = pandas.to_numeric(df.loc[:, column_name], errors='coerce').fillna(0.0)
+    return float(values.sum())
+
+
+def get_metadata_numeric_column_values(df, column_name):
+    if column_name not in df.columns:
+        return numpy.zeros(df.shape[0], dtype=float)
+    series = pandas.to_numeric(df.loc[:, column_name], errors='coerce').fillna(0.0)
+    return series.to_numpy(dtype=float)
+
+
+def format_duration_seconds(seconds):
+    seconds = _coerce_nonnegative_float(seconds)
+    if seconds >= 3600.0:
+        return '{:,.1f} sec ({:,.2f} h)'.format(seconds, seconds / 3600.0)
+    if seconds >= 60.0:
+        return '{:,.1f} sec ({:,.2f} min)'.format(seconds, seconds / 60.0)
+    return '{:,.1f} sec'.format(seconds)
 
 def append_file_binary(src_path, dst_path, chunk_size=8 * 1024 * 1024):
     if chunk_size is None:
@@ -1074,45 +1128,80 @@ def is_contam_filter_enabled(args):
     return bool(raw)
 
 def resolve_contam_filter_rank(args):
-    raw_rank = getattr(args, 'contam_filter_rank', 'phylum')
+    raw_rank = getattr(args, 'contam_filter_rank', 'superkingdom')
     if raw_rank is None:
-        rank = 'phylum'
+        rank = 'superkingdom'
     else:
         rank = str(raw_rank).strip().lower()
+    rank = CONTAM_FILTER_RANK_ALIASES.get(rank, rank)
     if rank not in CONTAM_FILTER_SUPPORTED_RANKS:
         raise ValueError(
-            '--contam_filter_rank must be one of: {}.'.format(', '.join(CONTAM_FILTER_SUPPORTED_RANKS))
+            '--contam_filter_rank must be one of: {}. Alias accepted: domain -> superkingdom.'.format(
+                ', '.join(CONTAM_FILTER_SUPPORTED_RANKS)
+            )
         )
     return rank
 
+def get_contam_filter_metadata_rank_columns(rank_name):
+    canonical_rank = CONTAM_FILTER_RANK_ALIASES.get(rank_name, rank_name)
+    if canonical_rank == 'superkingdom':
+        return ['taxid_superkingdom', 'taxid_domain']
+    return ['taxid_' + canonical_rank]
+
 def resolve_filter_order(args):
-    raw_order = getattr(args, 'filter_order', 'fastp_first')
+    raw_order = getattr(args, 'filter_order', 'fastp,rrna,contam')
     if raw_order is None:
-        return 'fastp_first'
+        return list(FILTER_ORDER_SUPPORTED_FILTERS)
     order = str(raw_order).strip().lower()
     if order == '':
-        return 'fastp_first'
-    if order in ['fastp_first', 'rrna_first']:
-        return order
-    raise ValueError('--filter_order must be "fastp_first" or "rrna_first".')
+        return list(FILTER_ORDER_SUPPORTED_FILTERS)
+    order_tokens = [token for token in re.split(r'[\s,>]+', order) if token != '']
+    if len(order_tokens) == 0:
+        return list(FILTER_ORDER_SUPPORTED_FILTERS)
+    duplicated_tokens = [token for token in order_tokens if order_tokens.count(token) > 1]
+    if len(duplicated_tokens) > 0:
+        duplicated_tokens = list(dict.fromkeys(duplicated_tokens))
+        raise ValueError(
+            '--filter_order contains duplicate filter name(s): {}.'.format(', '.join(duplicated_tokens))
+        )
+    invalid_tokens = [token for token in order_tokens if token not in FILTER_ORDER_SUPPORTED_FILTERS]
+    if len(invalid_tokens) > 0:
+        raise ValueError(
+            '--filter_order supports only: {}.'.format(', '.join(FILTER_ORDER_SUPPORTED_FILTERS))
+        )
+    return order_tokens
 
 def get_filter_execution_order(args):
     fastp_enabled = bool(getattr(args, 'fastp', False))
     rrna_enabled = is_rrna_filter_enabled(args)
     contam_enabled = is_contam_filter_enabled(args)
-    filter_order = []
-    if fastp_enabled and rrna_enabled:
-        if resolve_filter_order(args) == 'rrna_first':
-            filter_order = ['rrna', 'fastp']
-        else:
-            filter_order = ['fastp', 'rrna']
-    elif rrna_enabled:
-        filter_order = ['rrna']
-    elif fastp_enabled:
-        filter_order = ['fastp']
+    enabled_filters = []
+    if fastp_enabled:
+        enabled_filters.append('fastp')
+    if rrna_enabled:
+        enabled_filters.append('rrna')
     if contam_enabled:
-        filter_order.append('contam')
-    return filter_order
+        enabled_filters.append('contam')
+    if len(enabled_filters) == 0:
+        return []
+    requested_order = resolve_filter_order(args)
+    requested_set = set(requested_order)
+    enabled_set = set(enabled_filters)
+    if requested_set == set(FILTER_ORDER_SUPPORTED_FILTERS):
+        return [filter_name for filter_name in requested_order if filter_name in enabled_set]
+    if requested_set == enabled_set:
+        return list(requested_order)
+    missing_enabled = [filter_name for filter_name in enabled_filters if filter_name not in requested_set]
+    extra_disabled = [filter_name for filter_name in requested_order if filter_name not in enabled_set]
+    message = '--filter_order must list either all filters ({}) or exactly the enabled filters ({}).'.format(
+        ', '.join(FILTER_ORDER_SUPPORTED_FILTERS),
+        ', '.join(enabled_filters),
+    )
+    if len(missing_enabled) > 0:
+        message += ' Missing enabled filter(s): {}.'.format(', '.join(missing_enabled))
+    if len(extra_disabled) > 0:
+        message += ' Listed but disabled: {}.'.format(', '.join(extra_disabled))
+    raise ValueError(message)
 
 def resolve_bp_amalgkit_source_column(args):
     filter_order = get_filter_execution_order(args)
@@ -1786,6 +1875,7 @@ def update_extraction_counts(metadata, ind_sra, written_spots, dumped_spots, spo
 
 
 def run_fasterq_dump(sra_stat, args, metadata, start, end, return_files=False, return_file_state=False):
+    started_at = time.perf_counter()
     path_downloaded_sra = os.path.join(sra_stat['getfastq_sra_dir'], sra_stat['sra_id'] + '.sra')
     start, end = normalize_requested_spot_range(start=start, end=end)
     is_partial_range = not is_full_requested_spot_range(sra_stat=sra_stat, start=start, end=end)
@@ -1872,6 +1962,12 @@ def run_fasterq_dump(sra_stat, args, metadata, start, end, return_files=False, r
     if isinstance(updated_file_state, RunFileState):
         run_file_state = updated_file_state
     metadata.df.at[ind_sra,'layout_amalgkit'] = sra_stat['layout']
+    metadata = accumulate_stage_duration(
+        metadata=metadata,
+        sra_stat=sra_stat,
+        column_name='sec_fasterq_dump',
+        elapsed_seconds=(time.perf_counter() - started_at),
+    )
     if return_file_state:
         return metadata, sra_stat, run_file_state
     if return_files:
@@ -1898,7 +1994,7 @@ def remove_unpaired_files(sra_stat, files=None, file_state=None, return_file_sta
     )
     if (sra_stat['layout']=='paired'):
         # Order is important in this list. More downstream should come first.
-        extensions = ['.amalgkit.fastq.gz', '.rename.fastq.gz', '.contam.fastq.gz', '.rrna.fastq.gz', '.fastp.fastq.gz', '.fastq.gz', '.fastq']
+        extensions = ['.amalgkit.fastq.gz', '.rename.fastq.gz', '.contam-filtered.fastq.gz', '.rrna-filtered.fastq.gz', '.fastp.fastq.gz', '.fastq.gz', '.fastq']
         for ext in extensions:
             single_filename = sra_stat['sra_id'] + ext
             if run_file_state.has(single_filename):
@@ -2228,6 +2324,7 @@ def run_fastp(
     return_files=False,
     return_file_state=False,
 ):
+    started_at = time.perf_counter()
     run_file_state = None
     if (files is not None) or isinstance(file_state, RunFileState):
         run_file_state = _resolve_run_file_state(work_dir=output_dir, files=files, file_state=file_state)
@@ -2257,6 +2354,12 @@ def run_fastp(
                 run_file_state.discard(input_name)
     fp_stderr = fp_out.stderr.decode('utf8', errors='replace')
     metadata = update_metadata_after_fastp(metadata, sra_stat, output_dir, fp_stderr)
+    metadata = accumulate_stage_duration(
+        metadata=metadata,
+        sra_stat=sra_stat,
+        column_name='sec_fastp',
+        elapsed_seconds=(time.perf_counter() - started_at),
+    )
     set_current_intermediate_extension(sra_stat, outext)
     return finalize_run_fastp_return(
         metadata=metadata,
@@ -2574,18 +2677,19 @@ def run_mmseqs_rrna_filter(
             return_files=return_files,
             return_file_state=return_file_state,
         )
+    started_at = time.perf_counter()
     run_file_state = _resolve_run_file_state(work_dir=output_dir, files=files, file_state=file_state)
     inext = get_or_detect_intermediate_extension(sra_stat, work_dir=output_dir, file_state=run_file_state)
     sra_id = sra_stat['sra_id']
     layout = sra_stat['layout']
     if layout == 'single':
         input_names = [sra_id + inext]
-        output_name_by_suffix = {'': sra_id + '.rrna.fastq.gz'}
+        output_name_by_suffix = {'': sra_id + '.rrna-filtered.fastq.gz'}
     elif layout == 'paired':
         input_names = [sra_id + '_1' + inext, sra_id + '_2' + inext]
         output_name_by_suffix = {
-            '_1': sra_id + '_1.rrna.fastq.gz',
-            '_2': sra_id + '_2.rrna.fastq.gz',
+            '_1': sra_id + '_1.rrna-filtered.fastq.gz',
+            '_2': sra_id + '_2.rrna-filtered.fastq.gz',
         }
     else:
         raise ValueError('Unsupported library layout for MMseqs rRNA filtering: {}'.format(layout))
@@ -2664,13 +2768,19 @@ def run_mmseqs_rrna_filter(
         known_input_counts=effective_input_counts,
         known_output_counts=known_output_counts,
     )
+    metadata = accumulate_stage_duration(
+        metadata=metadata,
+        sra_stat=sra_stat,
+        column_name='sec_rrna_filter',
+        elapsed_seconds=(time.perf_counter() - started_at),
+    )
     if bool(getattr(args, 'remove_tmp', False)):
         remove_intermediate_files(sra_stat, ext=inext, work_dir=output_dir)
         for input_name in input_names:
             run_file_state.discard(input_name)
         if os.path.isdir(mmseqs_root):
             shutil.rmtree(mmseqs_root)
-    set_current_intermediate_extension(sra_stat, '.rrna.fastq.gz')
+    set_current_intermediate_extension(sra_stat, '.rrna-filtered.fastq.gz')
     return finalize_run_fastp_return(
         metadata=metadata,
         run_file_state=run_file_state,
@@ -2702,25 +2812,36 @@ def run_rrna_filter(
     )
 
 def resolve_run_target_rank_taxid(metadata, sra_stat, rank_name):
-    rank_col = 'taxid_' + rank_name
-    if rank_col not in metadata.df.columns:
-        raise ValueError('Column "{}" is required in metadata for contaminant filtering.'.format(rank_col))
+    rank_cols = get_contam_filter_metadata_rank_columns(rank_name)
+    present_rank_cols = [col for col in rank_cols if col in metadata.df.columns]
+    expected_cols = ', '.join(rank_cols)
+    if len(present_rank_cols) == 0:
+        raise ValueError(
+            'One of the columns "{}" is required in metadata for contaminant filtering.'.format(expected_cols)
+        )
     ind_sra = sra_stat.get('metadata_idx', get_metadata_row_index_by_run(metadata, sra_stat['sra_id']))
-    raw_taxid = metadata.df.at[ind_sra, rank_col]
+    raw_taxid = pandas.NA
+    selected_rank_col = present_rank_cols[0]
+    for rank_col in present_rank_cols:
+        candidate_taxid = metadata.df.at[ind_sra, rank_col]
+        if not pandas.isna(candidate_taxid):
+            raw_taxid = candidate_taxid
+            selected_rank_col = rank_col
+            break
     if pandas.isna(raw_taxid):
         raise ValueError(
             'Missing metadata {} for run {}. Disable --contam_filter or use metadata with taxid lineage.'.format(
-                rank_col,
+                expected_cols,
                 sra_stat['sra_id'],
             )
         )
     try:
         target_rank_taxid = int(raw_taxid)
     except (TypeError, ValueError) as exc:
-        raise ValueError('Invalid {} value for run {}: {}'.format(rank_col, sra_stat['sra_id'], raw_taxid)) from exc
+        raise ValueError('Invalid {} value for run {}: {}'.format(selected_rank_col, sra_stat['sra_id'], raw_taxid)) from exc
     if target_rank_taxid <= 0:
         raise ValueError(
-            'Invalid metadata {} value for run {}: {}'.format(rank_col, sra_stat['sra_id'], raw_taxid)
+            'Invalid metadata {} value for run {}: {}'.format(selected_rank_col, sra_stat['sra_id'], raw_taxid)
         )
     return ind_sra, target_rank_taxid
 
@@ -2745,6 +2866,7 @@ def run_mmseqs_contam_filter(
             return_files=return_files,
             return_file_state=return_file_state,
         )
+    started_at = time.perf_counter()
     run_file_state = _resolve_run_file_state(work_dir=output_dir, files=files, file_state=file_state)
     inext = get_or_detect_intermediate_extension(sra_stat, work_dir=output_dir, file_state=run_file_state)
     sra_id = sra_stat['sra_id']
@@ -2758,12 +2880,12 @@ def run_mmseqs_contam_filter(
     target_db = ensure_mmseqs_contam_taxonomy_db_exists(args)
     if layout == 'single':
         input_names = [sra_id + inext]
-        output_name_by_suffix = {'': sra_id + '.contam.fastq.gz'}
+        output_name_by_suffix = {'': sra_id + '.contam-filtered.fastq.gz'}
     elif layout == 'paired':
         input_names = [sra_id + '_1' + inext, sra_id + '_2' + inext]
         output_name_by_suffix = {
-            '_1': sra_id + '_1.contam.fastq.gz',
-            '_2': sra_id + '_2.contam.fastq.gz',
+            '_1': sra_id + '_1.contam-filtered.fastq.gz',
+            '_2': sra_id + '_2.contam-filtered.fastq.gz',
         }
     else:
         raise ValueError('Unsupported library layout for contaminant filtering: {}'.format(layout))
@@ -2837,6 +2959,12 @@ def run_mmseqs_contam_filter(
     metadata.df.at[ind_sra, 'num_contam_out'] += int(num_out)
     metadata.df.at[ind_sra, 'bp_contam_in'] += int(bp_in)
     metadata.df.at[ind_sra, 'bp_contam_out'] += int(bp_out)
+    metadata = accumulate_stage_duration(
+        metadata=metadata,
+        sra_stat=sra_stat,
+        column_name='sec_contam_filter',
+        elapsed_seconds=(time.perf_counter() - started_at),
+    )
 
     if bool(getattr(args, 'remove_tmp', False)):
         remove_intermediate_files(sra_stat, ext=inext, work_dir=output_dir)
@@ -2844,7 +2972,7 @@ def run_mmseqs_contam_filter(
             run_file_state.discard(input_name)
         if os.path.isdir(mmseqs_root):
             shutil.rmtree(mmseqs_root)
-    set_current_intermediate_extension(sra_stat, '.contam.fastq.gz')
+    set_current_intermediate_extension(sra_stat, '.contam-filtered.fastq.gz')
     return finalize_run_fastp_return(
         metadata=metadata,
         run_file_state=run_file_state,
@@ -3062,6 +3190,7 @@ def print_read_stats(args, metadata, g, sra_stat=None, individual=False):
     rrna_filter = is_rrna_filter_enabled(args)
     contam_filter = is_contam_filter_enabled(args)
     rrna_label = 'MMseqs2 rRNA filter'
+    duration_specs = [('sec_fasterq_dump', 'fasterq-dump wall time')]
     if sra_stat is None:
         df = metadata.df
         print('Target size (--max_bp): {:,} bp'.format(g['max_bp']))
@@ -3080,6 +3209,14 @@ def print_read_stats(args, metadata, g, sra_stat=None, individual=False):
     if contam_filter:
         print('Sum of contaminant-filter input reads: {:,} bp'.format(df['bp_contam_in'].sum()))
         print('Sum of contaminant-filter output reads: {:,} bp'.format(df['bp_contam_out'].sum()))
+    if args.fastp:
+        duration_specs.append(('sec_fastp', 'fastp wall time'))
+    if rrna_filter:
+        duration_specs.append(('sec_rrna_filter', '{} wall time'.format(rrna_label)))
+    if contam_filter:
+        duration_specs.append(('sec_contam_filter', 'contaminant-filter wall time'))
+    for column_name, label in duration_specs:
+        print('Sum of {}: {}'.format(label, format_duration_seconds(sum_metadata_numeric_column(df, column_name))))
     if individual:
         print('Individual SRA IDs:', ' '.join(df['run'].values))
         read_types = list()
@@ -3101,6 +3238,9 @@ def print_read_stats(args, metadata, g, sra_stat=None, individual=False):
                 values = ['{:,}'.format(s) for s in df[key].values]
                 txt = ' '.join(values)
                 print('Individual {} (bp): {}'.format(rt, txt))
+        for column_name, label in duration_specs:
+            values = ['{:.1f}'.format(seconds) for seconds in get_metadata_numeric_column_values(df, column_name)]
+            print('Individual {} (sec): {}'.format(label, ' '.join(values)))
     print('')
 
 
@@ -3132,24 +3272,48 @@ def ensure_contam_filter_metadata_rank_taxids(metadata, args):
             'Use metadata generated by `amalgkit metadata` or provide taxid values.'
         )
     metadata.df['taxid'] = pandas.to_numeric(metadata.df['taxid'], errors='coerce').astype('Int64')
-    rank_cols = ['taxid_' + rank for rank in CONTAM_FILTER_SUPPORTED_RANKS]
-    missing_rank_cols = [col for col in rank_cols if col not in metadata.df.columns]
+    rank_cols_by_rank = {
+        supported_rank: get_contam_filter_metadata_rank_columns(supported_rank)
+        for supported_rank in CONTAM_FILTER_SUPPORTED_RANKS
+    }
+    rank_cols = list(dict.fromkeys([
+        col
+        for column_group in rank_cols_by_rank.values()
+        for col in column_group
+    ]))
+    missing_rank_names = [
+        supported_rank
+        for supported_rank, column_group in rank_cols_by_rank.items()
+        if not any(col in metadata.df.columns for col in column_group)
+    ]
     for col in rank_cols:
         if col in metadata.df.columns:
             metadata.df[col] = pandas.to_numeric(metadata.df[col], errors='coerce').astype('Int64')
-    required_col = 'taxid_' + rank_name
-    should_refresh_rank_taxids = (len(missing_rank_cols) > 0)
-    if (not should_refresh_rank_taxids) and (required_col in metadata.df.columns):
-        required_missing_mask = metadata.df['taxid'].notna() & metadata.df[required_col].isna()
+
+    required_cols = get_contam_filter_metadata_rank_columns(rank_name)
+
+    def get_required_missing_mask():
+        available_required_cols = [col for col in required_cols if col in metadata.df.columns]
+        if len(available_required_cols) == 0:
+            return metadata.df['taxid'].notna()
+        has_required_taxid = pandas.Series(False, index=metadata.df.index)
+        for col in available_required_cols:
+            has_required_taxid = has_required_taxid | metadata.df[col].notna()
+        return metadata.df['taxid'].notna() & (~has_required_taxid)
+
+    should_refresh_rank_taxids = (len(missing_rank_names) > 0)
+    if not should_refresh_rank_taxids:
+        required_missing_mask = get_required_missing_mask()
         should_refresh_rank_taxids = bool(required_missing_mask.any())
     if should_refresh_rank_taxids:
         metadata.add_standard_rank_taxids(args=args)
         for col in rank_cols:
             if col in metadata.df.columns:
                 metadata.df[col] = pandas.to_numeric(metadata.df[col], errors='coerce').astype('Int64')
-    if required_col not in metadata.df.columns:
-        raise ValueError('Failed to resolve metadata taxonomy rank column: {}'.format(required_col))
-    missing_mask = metadata.df[required_col].isna()
+    available_required_cols = [col for col in required_cols if col in metadata.df.columns]
+    if len(available_required_cols) == 0:
+        raise ValueError('Failed to resolve metadata taxonomy rank column: {}'.format(' / '.join(required_cols)))
+    missing_mask = get_required_missing_mask()
     if missing_mask.any():
         run_values = metadata.df.loc[missing_mask, 'run'].fillna('').astype(str).tolist() if 'run' in metadata.df.columns else []
         run_values = [run_id for run_id in run_values if run_id.strip() != '']
@@ -3268,6 +3432,7 @@ def collect_valid_run_ids(run_values, unique=False):
 
 def initialize_columns(metadata, g):
     time_keys = ['time_start_1st', 'time_end_1st', 'time_start_2nd', 'time_end_2nd',]
+    duration_keys = list(GETFASTQ_DURATION_COLUMNS)
     spot_keys = ['spot_start_1st', 'spot_end_1st', 'spot_start_2nd', 'spot_end_2nd',]
     keys = (['num_dumped', 'num_rejected', 'num_written', 'num_fastp_in', 'num_fastp_out',
              'num_rrna_in', 'num_rrna_out', 'num_contam_in', 'num_contam_out', 'bp_amalgkit',
@@ -3275,12 +3440,14 @@ def initialize_columns(metadata, g):
              'bp_rrna_in', 'bp_rrna_out', 'bp_contam_in', 'bp_contam_out', 'bp_discarded', 'spot_length_amalgkit',
              'bp_still_available', 'bp_specified_for_extraction','rate_obtained','layout_amalgkit',
              'fastp_duplication_rate', 'fastp_insert_size_peak',]
-            + time_keys + spot_keys)
+            + time_keys + duration_keys + spot_keys)
     for key in keys:
         if key=='layout_amalgkit':
             metadata.df.loc[:,key] = ''
         elif key in ['rate_obtained', 'fastp_duplication_rate', 'fastp_insert_size_peak']:
             metadata.df.loc[:, key] = numpy.nan
+        elif key in (time_keys + duration_keys):
+            metadata.df.loc[:, key] = 0.0
         else:
             metadata.df.loc[:,key] = 0
     metadata.df.loc[:, 'bp_until_target_size'] = g['num_bp_per_sra']
@@ -3288,7 +3455,7 @@ def initialize_columns(metadata, g):
     for col in cols:
         if any([ dtype in str(metadata.df[col].dtype) for dtype in ['str','object'] ]):
             metadata.df[col] = metadata.df.loc[:,col].astype(str).str.replace('^$', 'nan', regex=True).astype(float)
-    for col in time_keys:
+    for col in (time_keys + duration_keys):
         metadata.df[col] = metadata.df[col].astype(float)
     return metadata
 

@@ -136,17 +136,23 @@ def build_parser(command_handlers, command_names, version):
                      help='default=%(default)s: Options to be passed to fastp. Do not include --length_required option here. '
                           'It can be specified throught --min_read_length in amalgkit. ')
     pge.add_argument('--rrna_filter', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
-                     help='default=%(default)s: Remove rRNA reads using MMseqs2 before final FASTQ output.')
-    pge.add_argument('--filter_order', metavar='fastp_first|rrna_first',
-                     choices=['fastp_first', 'rrna_first'],
-                     default='fastp_first', type=str, required=False, action='store',
-                     help='default=%(default)s: Order of optional filtering when both --fastp and --rrna_filter are enabled.')
+                     help='default=%(default)s: Remove rRNA reads using MMseqs2 before final FASTQ output. '
+                          'Typical cost: minutes to tens of minutes per SRA, ~2-8 GB RAM; first run also builds '
+                          'the SILVA DB.')
+    pge.add_argument('--filter_order', metavar='ORDER',
+                     default='fastp,rrna,contam', type=str, required=False, action='store',
+                     help='default=%(default)s: Order of optional filters. Use comma or ">" separators, for example '
+                          '"fastp,rrna,contam" or "rrna,contam,fastp". You may list all filters or only the enabled '
+                          'ones.')
     pge.add_argument('--contam_filter', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
-                     help='default=%(default)s: Remove contaminant reads using MMseqs2 taxonomy (unclassified reads are retained).')
-    pge.add_argument('--contam_filter_rank', metavar='species|genus|family|order|class|phylum|kingdom|domain',
-                     choices=['species', 'genus', 'family', 'order', 'class', 'phylum', 'kingdom', 'domain'],
-                     default='phylum', type=str, required=False, action='store',
-                     help='default=%(default)s: Taxonomic rank used for contaminant filtering against metadata taxid lineage.')
+                     help='default=%(default)s: Remove contaminant reads using MMseqs2 taxonomy (unclassified reads '
+                          'are retained). Typical cost with UniRef90: tens of minutes to hours per SRA, ~32-128 GB '
+                          'RAM; first run also downloads/builds the DB.')
+    pge.add_argument('--contam_filter_rank', metavar='species|genus|family|order|class|phylum|kingdom|superkingdom',
+                     choices=['species', 'genus', 'family', 'order', 'class', 'phylum', 'kingdom', 'superkingdom', 'domain'],
+                     default='superkingdom', type=str, required=False, action='store',
+                     help='default=%(default)s: Taxonomic rank used for contaminant filtering against metadata taxid lineage. '
+                          '"domain" is accepted as an alias for "superkingdom".')
     pge.add_argument('--contam_filter_db_name', metavar='STR', default='UniRef90', type=str, required=False, action='store',
                      help='default=%(default)s: MMseqs2 downloadable DB name used for contaminant filtering (passed to `mmseqs databases`).')
     pge.add_argument('--contam_filter_db', metavar='PATH|inferred', default='inferred', type=str, required=False, action='store',

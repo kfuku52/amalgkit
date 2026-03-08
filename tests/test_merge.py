@@ -57,6 +57,10 @@ class TestMergeFastpStatsIntoMetadata:
             'bp_rejected': 300,
             'bp_written': 700,
             'bp_discarded': 500,
+            'sec_fasterq_dump': 1.5,
+            'sec_fastp': 2.5,
+            'sec_rrna_filter': 3.5,
+            'sec_contam_filter': 4.5,
             'fastp_duplication_rate': 12.5,
             'fastp_insert_size_peak': 250.0,
         }]).to_csv(srr001_dir / 'getfastq_stats.tsv', sep='\t', index=False)
@@ -68,6 +72,10 @@ class TestMergeFastpStatsIntoMetadata:
         assert metadata.df.loc[0, 'bp_dumped'] == 1000
         assert metadata.df.loc[0, 'bp_rejected'] == 300
         assert metadata.df.loc[0, 'bp_discarded'] == 500
+        assert metadata.df.loc[0, 'sec_fasterq_dump'] == 1.5
+        assert metadata.df.loc[0, 'sec_fastp'] == 2.5
+        assert metadata.df.loc[0, 'sec_rrna_filter'] == 3.5
+        assert metadata.df.loc[0, 'sec_contam_filter'] == 4.5
         assert metadata.df.loc[0, 'fastp_duplication_rate'] == 12.5
         assert metadata.df.loc[0, 'fastp_insert_size_peak'] == 250.0
 
@@ -122,8 +130,12 @@ class TestMergeFastpStatsIntoMetadata:
         assert 'fastp_insert_size_peak' in metadata.df.columns
         assert 'num_rejected' in metadata.df.columns
         assert 'bp_rejected' in metadata.df.columns
+        assert 'sec_fasterq_dump' in metadata.df.columns
+        assert 'sec_fastp' in metadata.df.columns
         assert numpy.isnan(metadata.df.loc[0, 'fastp_duplication_rate'])
         assert numpy.isnan(metadata.df.loc[0, 'fastp_insert_size_peak'])
+        assert numpy.isnan(metadata.df.loc[0, 'sec_fasterq_dump'])
+        assert numpy.isnan(metadata.df.loc[0, 'sec_fastp'])
 
     def test_rejects_getfastq_file_path(self, tmp_path):
         metadata = Metadata.from_DataFrame(pandas.DataFrame({
