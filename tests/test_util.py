@@ -2409,6 +2409,51 @@ class TestMetadataTaxidValidation:
         assert metadata.df.loc[0, 'taxid_genus'] == 9605
         assert metadata.df.loc[0, 'taxid_species'] == 9606
 
+    def test_get_ete_ncbitaxa_bootstraps_fresh_custom_download_dir(self, tmp_path, monkeypatch):
+        captured = {'lock_path': None, 'urlretrieve': None}
+
+        class DummyLock:
+            def __init__(self, lock_path, lock_label='Lock', poll_seconds=5, timeout_seconds=3600):
+                _ = (lock_label, poll_seconds, timeout_seconds)
+                captured['lock_path'] = lock_path
+
+            def __enter__(self):
+                return None
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        class RecordingNcbi:
+            def __init__(self, **kwargs):
+                captured['kwargs'] = kwargs
+
+        def fake_urlretrieve(url, out_path):
+            captured['urlretrieve'] = (url, out_path)
+            with open(out_path, 'wb') as fout:
+                fout.write(b'taxdump')
+
+        args = SimpleNamespace(
+            out_dir=str(tmp_path / 'out'),
+            download_dir=str(tmp_path / 'fresh_downloads'),
+        )
+        expected_ete_dir = os.path.join(os.path.realpath(args.download_dir), 'ete4')
+
+        assert not os.path.exists(args.download_dir)
+        monkeypatch.setattr('amalgkit.util.acquire_exclusive_lock', DummyLock)
+        monkeypatch.setattr('amalgkit.download_utils.ete4.NCBITaxa', RecordingNcbi)
+        monkeypatch.setattr('amalgkit.download_utils.urllib.request.urlretrieve', fake_urlretrieve)
+
+        result = get_ete_ncbitaxa(args=args)
+
+        assert isinstance(result, RecordingNcbi)
+        assert os.path.isdir(expected_ete_dir)
+        assert captured['kwargs']['dbfile'] == os.path.join(expected_ete_dir, 'taxa.sqlite')
+        assert captured['kwargs']['taxdump_file'] == os.path.join(expected_ete_dir, 'taxdump.tar.gz')
+        assert os.path.isfile(os.path.join(expected_ete_dir, 'taxdump.tar.gz'))
+        assert captured['lock_path'] == os.path.join(expected_ete_dir, '.ete4_taxonomy.lock')
+        assert captured['urlretrieve'][0].endswith('/taxdump.tar.gz')
+        assert captured['urlretrieve'][1] == os.path.join(expected_ete_dir, 'taxdump.tar.gz.tmp')
+
     def test_get_ete_ncbitaxa_reuses_existing_custom_db_without_taxdump_refresh(self, tmp_path, monkeypatch):
         captured = {'lock_path': None}
 
