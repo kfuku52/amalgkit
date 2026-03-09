@@ -113,6 +113,7 @@ def resolve_thread_worker_allocation(
     worker_option_name='internal_jobs',
     context='',
     disable_workers=False,
+    task_count=None,
 ):
     budget = resolve_total_core_budget(
         requested_threads=requested_threads,
@@ -149,6 +150,20 @@ def resolve_thread_worker_allocation(
                 ),
                 flush=True,
             )
+        if task_count is not None:
+            task_limit = max(1, int(task_count))
+            if effective_workers > task_limit:
+                print(
+                    '{} reducing --{} from {} to {} to fit task count {}.'.format(
+                        context if context else 'CPU budget:',
+                        worker_option_name,
+                        effective_workers,
+                        task_limit,
+                        task_limit,
+                    ),
+                    flush=True,
+                )
+                effective_workers = task_limit
         effective_threads = max(1, budget // effective_workers)
     print(
         '{} effective parallelism: {} x {} = {} core(s) max.'.format(

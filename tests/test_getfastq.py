@@ -58,6 +58,7 @@ from amalgkit.getfastq import (
     should_compress_fasterq_output_before_filters,
     normalize_fasterq_size_check,
     get_filter_execution_order,
+    process_getfastq_run,
     resolve_contam_filter_rank,
     resolve_run_target_rank_taxid,
     count_fastq_records_and_bases,
@@ -463,7 +464,7 @@ class TestRunMmseqsRrnaFilter:
                 out.write('+\n')
                 out.write('I' * len(seq) + '\n')
 
-    def test_paired_strict_pair_removal(self, tmp_path, monkeypatch):
+    def test_paired_strict_pair_removal(self, tmp_path, monkeypatch, capsys):
         sra_id = 'SRR001'
         in1 = tmp_path / '{}_1.fastq.gz'.format(sra_id)
         in2 = tmp_path / '{}_2.fastq.gz'.format(sra_id)
@@ -509,7 +510,7 @@ class TestRunMmseqsRrnaFilter:
             return result_tsv
 
         monkeypatch.setattr('amalgkit.getfastq.run_mmseqs_easy_search_single_fastq', fake_run_mmseqs_search)
-        perf_counter_values = iter([10.0, 12.5])
+        perf_counter_values = iter([10.0, 11.0, 15.0, 16.0, 19.5, 20.0])
         monkeypatch.setattr('amalgkit.getfastq.time.perf_counter', lambda: next(perf_counter_values))
 
         metadata, run_file_state = run_mmseqs_rrna_filter(
@@ -531,9 +532,15 @@ class TestRunMmseqsRrnaFilter:
         assert metadata.df.loc[0, 'num_rrna_out'] == 2
         assert metadata.df.loc[0, 'bp_rrna_in'] == 24
         assert metadata.df.loc[0, 'bp_rrna_out'] == 16
-        assert metadata.df.loc[0, 'sec_rrna_filter'] == pytest.approx(2.5)
+        assert metadata.df.loc[0, 'sec_rrna_search'] == pytest.approx(4.0)
+        assert metadata.df.loc[0, 'sec_rrna_rewrite'] == pytest.approx(3.5)
+        assert metadata.df.loc[0, 'sec_rrna_filter'] == pytest.approx(10.0)
         assert run_file_state.has('{}_1.rrna-filtered.fastq.gz'.format(sra_id))
         assert run_file_state.has('{}_2.rrna-filtered.fastq.gz'.format(sra_id))
+        out = capsys.readouterr().out
+        assert 'Time elapsed for MMseqs rRNA search ({}):'.format(sra_id) in out
+        assert 'Time elapsed for rRNA FASTQ rewrite ({}):'.format(sra_id) in out
+        assert 'Time elapsed for MMseqs rRNA filter ({}):'.format(sra_id) in out
 
 
 class TestRrnaFilterDispatch:
@@ -566,7 +573,7 @@ class TestRunMmseqsContamFilter:
                 out.write('+\n')
                 out.write('I' * len(seq) + '\n')
 
-    def test_paired_strict_pair_removal_and_unclassified_keep(self, tmp_path, monkeypatch):
+    def test_paired_strict_pair_removal_and_unclassified_keep(self, tmp_path, monkeypatch, capsys):
         sra_id = 'SRR001'
         in1 = tmp_path / '{}_1.fastq.gz'.format(sra_id)
         in2 = tmp_path / '{}_2.fastq.gz'.format(sra_id)
@@ -631,7 +638,7 @@ class TestRunMmseqsContamFilter:
         )
         monkeypatch.setattr('amalgkit.getfastq.run_mmseqs_easy_taxonomy_single_fastq', fake_run_mmseqs)
         monkeypatch.setattr('amalgkit.getfastq.get_ete_ncbitaxa', lambda args=None: object())
-        perf_counter_values = iter([20.0, 24.5])
+        perf_counter_values = iter([20.0, 21.0, 23.5, 24.5])
         monkeypatch.setattr('amalgkit.getfastq.time.perf_counter', lambda: next(perf_counter_values))
 
         metadata, run_file_state = run_mmseqs_contam_filter(
@@ -653,9 +660,13 @@ class TestRunMmseqsContamFilter:
         assert metadata.df.loc[0, 'num_contam_out'] == 2
         assert metadata.df.loc[0, 'bp_contam_in'] == 24
         assert metadata.df.loc[0, 'bp_contam_out'] == 16
+        assert metadata.df.loc[0, 'sec_ete_taxonomy'] == pytest.approx(2.5)
         assert metadata.df.loc[0, 'sec_contam_filter'] == pytest.approx(4.5)
         assert run_file_state.has('{}_1.contam-filtered.fastq.gz'.format(sra_id))
         assert run_file_state.has('{}_2.contam-filtered.fastq.gz'.format(sra_id))
+        out = capsys.readouterr().out
+        assert 'Time elapsed for ETE taxonomy initialization ({}):'.format(sra_id) in out
+        assert 'Time elapsed for contaminant filter ({}):'.format(sra_id) in out
 
 
 class TestEnsureContamFilterMetadataRankTaxids:
@@ -2422,18 +2433,26 @@ class TestInitializeColumns:
         assert 'bp_rrna_in' in m.df.columns
         assert 'bp_rrna_out' in m.df.columns
         assert 'spot_length_amalgkit' in m.df.columns
+        assert 'sec_sra_download' in m.df.columns
         assert 'sec_fasterq_dump' in m.df.columns
         assert 'sec_fastp' in m.df.columns
         assert 'sec_rrna_filter' in m.df.columns
+        assert 'sec_rrna_search' in m.df.columns
+        assert 'sec_rrna_rewrite' in m.df.columns
         assert 'sec_contam_filter' in m.df.columns
+        assert 'sec_ete_taxonomy' in m.df.columns
         assert m.df.loc[0, 'bp_until_target_size'] == 1000000
         assert m.df.loc[0, 'bp_dumped'] == 0
         assert m.df.loc[0, 'spot_length_amalgkit'] == 0
         assert m.df.loc[0, 'layout_amalgkit'] == ''
+        assert m.df.loc[0, 'sec_sra_download'] == 0.0
         assert m.df.loc[0, 'sec_fasterq_dump'] == 0.0
         assert m.df.loc[0, 'sec_fastp'] == 0.0
         assert m.df.loc[0, 'sec_rrna_filter'] == 0.0
+        assert m.df.loc[0, 'sec_rrna_search'] == 0.0
+        assert m.df.loc[0, 'sec_rrna_rewrite'] == 0.0
         assert m.df.loc[0, 'sec_contam_filter'] == 0.0
+        assert m.df.loc[0, 'sec_ete_taxonomy'] == 0.0
         assert numpy.isnan(m.df.loc[0, 'fastp_duplication_rate'])
         assert numpy.isnan(m.df.loc[0, 'fastp_insert_size_peak'])
 
@@ -2690,10 +2709,14 @@ class TestFastpMetrics:
             'bp_rrna_in': [600],
             'bp_rrna_out': [500],
             'bp_discarded': [500],
+            'sec_sra_download': [0.75],
             'sec_fasterq_dump': [1.25],
             'sec_fastp': [2.5],
             'sec_rrna_filter': [3.75],
+            'sec_rrna_search': [3.0],
+            'sec_rrna_rewrite': [0.75],
             'sec_contam_filter': [4.5],
+            'sec_ete_taxonomy': [1.5],
             'fastp_duplication_rate': [12.0],
             'fastp_insert_size_peak': [250.0],
         }))
@@ -2707,10 +2730,14 @@ class TestFastpMetrics:
         assert out.loc[0, 'num_rejected'] == 3
         assert out.loc[0, 'bp_rejected'] == 300
         assert out.loc[0, 'bp_discarded'] == 500
+        assert out.loc[0, 'sec_sra_download'] == pytest.approx(0.75)
         assert out.loc[0, 'sec_fasterq_dump'] == pytest.approx(1.25)
         assert out.loc[0, 'sec_fastp'] == pytest.approx(2.5)
         assert out.loc[0, 'sec_rrna_filter'] == pytest.approx(3.75)
+        assert out.loc[0, 'sec_rrna_search'] == pytest.approx(3.0)
+        assert out.loc[0, 'sec_rrna_rewrite'] == pytest.approx(0.75)
         assert out.loc[0, 'sec_contam_filter'] == pytest.approx(4.5)
+        assert out.loc[0, 'sec_ete_taxonomy'] == pytest.approx(1.5)
         assert out.loc[0, 'fastp_duplication_rate'] == pytest.approx(12.0)
         assert out.loc[0, 'fastp_insert_size_peak'] == pytest.approx(250.0)
 
@@ -2732,10 +2759,14 @@ class TestFastpMetrics:
             'bp_rrna_in': [600],
             'bp_rrna_out': [500],
             'bp_discarded': [500],
+            'sec_sra_download': [0.75],
             'sec_fasterq_dump': [1.25],
             'sec_fastp': [2.5],
             'sec_rrna_filter': [3.75],
+            'sec_rrna_search': [3.0],
+            'sec_rrna_rewrite': [0.75],
             'sec_contam_filter': [4.5],
+            'sec_ete_taxonomy': [1.5],
             'fastp_duplication_rate': [12.0],
             'fastp_insert_size_peak': [250.0],
         }))
@@ -2772,22 +2803,78 @@ class TestPrintReadStats:
             'bp_rrna_out': [700, 350],
             'bp_contam_in': [700, 350],
             'bp_contam_out': [650, 300],
+            'sec_sra_download': [0.5, 1.0],
             'sec_fasterq_dump': [1.5, 2.0],
             'sec_fastp': [3.0, 4.0],
             'sec_rrna_filter': [5.0, 6.0],
+            'sec_rrna_search': [4.0, 5.0],
+            'sec_rrna_rewrite': [1.0, 1.0],
             'sec_contam_filter': [7.0, 8.0],
+            'sec_ete_taxonomy': [0.75, 1.25],
         }))
         args = SimpleNamespace(fastp=True, rrna_filter=True, contam_filter=True)
 
         print_read_stats(args=args, metadata=metadata, g={'max_bp': 10000}, sra_stat=None, individual=True)
 
         out = capsys.readouterr().out
+        assert 'Sum of SRA download wall time: 1.5 sec' in out
         assert 'Sum of fasterq-dump wall time: 3.5 sec' in out
         assert 'Sum of fastp wall time: 7.0 sec' in out
         assert 'Sum of MMseqs2 rRNA filter wall time: 11.0 sec' in out
+        assert 'Sum of MMseqs rRNA search wall time: 9.0 sec' in out
+        assert 'Sum of rRNA FASTQ rewrite wall time: 2.0 sec' in out
         assert 'Sum of contaminant-filter wall time: 15.0 sec' in out
+        assert 'Sum of ETE taxonomy wall time: 2.0 sec' in out
+        assert 'Individual SRA download wall time (sec): 0.5 1.0' in out
         assert 'Individual fasterq-dump wall time (sec): 1.5 2.0' in out
         assert 'Individual fastp wall time (sec): 3.0 4.0' in out
+        assert 'Individual MMseqs rRNA search wall time (sec): 4.0 5.0' in out
+        assert 'Individual rRNA FASTQ rewrite wall time (sec): 1.0 1.0' in out
+
+
+class TestProcessGetfastqRun:
+    def test_tracks_sra_download_wall_time(self, tmp_path, monkeypatch, capsys):
+        args = SimpleNamespace(redo=False)
+        run_row_df = pandas.DataFrame({
+            'run': ['SRR001'],
+            'total_bases': [1000],
+        })
+        g = {'num_bp_per_sra': 500}
+        run_dir = tmp_path / 'SRR001'
+        run_dir.mkdir()
+
+        monkeypatch.setattr(
+            'amalgkit.getfastq.get_sra_stat',
+            lambda sra_id, _metadata, _num_bp_per_sra: {
+                'sra_id': sra_id,
+                'layout': 'single',
+                'total_spot': 10,
+                'spot_length': 100,
+            },
+        )
+        monkeypatch.setattr('amalgkit.getfastq.get_getfastq_run_dir', lambda _args, _sra_id: str(run_dir))
+        monkeypatch.setattr('amalgkit.getfastq.remove_old_intermediate_files', lambda **_kwargs: None)
+        monkeypatch.setattr('amalgkit.getfastq.download_sra', lambda *_args, **_kwargs: None)
+        monkeypatch.setattr(
+            'amalgkit.getfastq.sequence_extraction_1st_round',
+            lambda _args, _sra_stat, metadata, _g, runtime_context=None: metadata,
+        )
+        perf_counter_values = iter([10.0, 12.5])
+        monkeypatch.setattr('amalgkit.getfastq.time.perf_counter', lambda: next(perf_counter_values))
+
+        out = process_getfastq_run(
+            args=args,
+            row_index=0,
+            sra_id='SRR001',
+            run_row_df=run_row_df,
+            g=g,
+        )
+
+        assert out['flag_private_file'] is False
+        assert out['flag_any_output_file_present'] is False
+        assert out['row']['sec_sra_download'] == pytest.approx(2.5)
+        stdout = capsys.readouterr().out
+        assert 'Time elapsed for SRA download (SRR001):' in stdout
 
 
 class TestRunFastp:
@@ -2812,7 +2899,7 @@ class TestRunFastp:
             with open(out_path, 'wb') as fout:
                 fout.write(b'@r0\nAAAA\n+\nIIII\n')
 
-    def test_uses_configured_fastp_exe_and_shlex_parsing(self, tmp_path, monkeypatch):
+    def test_uses_configured_fastp_exe_and_shlex_parsing(self, tmp_path, monkeypatch, capsys):
         metadata = self._build_metadata()
         sra_stat = {'sra_id': 'SRR001', 'layout': 'single'}
         captured = {}
@@ -2860,6 +2947,8 @@ class TestRunFastp:
         assert metadata.df.loc[0, 'bp_fastp_in'] == 100
         assert metadata.df.loc[0, 'bp_fastp_out'] == 80
         assert metadata.df.loc[0, 'sec_fastp'] == pytest.approx(1.75)
+        out = capsys.readouterr().out
+        assert 'Time elapsed for fastp (SRR001):' in out
 
     def test_raises_when_fastp_exits_nonzero(self, tmp_path, monkeypatch):
         metadata = self._build_metadata()
@@ -3431,7 +3520,7 @@ class TestSraRecovery:
         remove_sra_path(str(dir_path))
         assert not dir_path.exists()
 
-    def test_run_fasterq_dump_retries_once_after_redownload(self, tmp_path, monkeypatch):
+    def test_run_fasterq_dump_retries_once_after_redownload(self, tmp_path, monkeypatch, capsys):
         sra_id = 'SRR001'
         sra_path = tmp_path / '{}.sra'.format(sra_id)
         sra_path.mkdir()
@@ -3477,6 +3566,8 @@ class TestSraRecovery:
         assert metadata.df.loc[0, 'bp_dumped'] == 1000
         assert metadata.df.loc[0, 'bp_rejected'] == 600
         assert sra_stat_out['layout'] == 'paired'
+        out = capsys.readouterr().out
+        assert 'Time elapsed for SRA re-download (SRR001):' in out
 
     def test_run_fasterq_dump_exits_when_retry_fails(self, tmp_path, monkeypatch):
         sra_id = 'SRR001'
@@ -3511,7 +3602,7 @@ class TestSraRecovery:
         assert run_calls['count'] == 2
         assert redownload_calls == [True]
 
-    def test_run_fasterq_dump_no_redownload_when_first_attempt_succeeds(self, tmp_path, monkeypatch):
+    def test_run_fasterq_dump_no_redownload_when_first_attempt_succeeds(self, tmp_path, monkeypatch, capsys):
         sra_id = 'SRR001'
         metadata = self._metadata_for_extraction(sra_id)
         sra_stat = {
@@ -3548,6 +3639,8 @@ class TestSraRecovery:
         assert metadata.df.loc[0, 'bp_written'] == 500
         assert metadata.df.loc[0, 'bp_dumped'] == 1000
         assert metadata.df.loc[0, 'sec_fasterq_dump'] == pytest.approx(3.25)
+        out = capsys.readouterr().out
+        assert 'Time elapsed for fasterq-dump (SRR001):' in out
 
     def test_run_fasterq_dump_uses_reported_spots_without_recount_for_partial_range(self, tmp_path, monkeypatch):
         sra_id = 'SRR001'
@@ -5276,6 +5369,69 @@ class TestGetfastqMainJobs:
         args = SimpleNamespace(internal_jobs=0)
         with pytest.raises(ValueError, match='--internal_jobs must be > 0'):
             getfastq_main(args)
+
+    def test_auto_jobs_cap_to_single_run_and_preserve_threads(self, tmp_path, monkeypatch):
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001'],
+            'lib_layout': ['single'],
+            'total_spots': [10],
+            'total_bases': [1000],
+            'spot_length': [100],
+            'scientific_name': ['sp1'],
+            'exclusion': ['no'],
+        }))
+        args = SimpleNamespace(
+            threads=2,
+            internal_jobs='auto',
+            redo=False,
+            out_dir=str(tmp_path),
+            remove_sra=False,
+            tol=1,
+            fastp=False,
+            read_name='default',
+        )
+        observed = {}
+
+        def fake_check_dependency(runtime_args):
+            observed['checked_threads'] = runtime_args.threads
+            observed['checked_jobs'] = runtime_args.internal_jobs
+
+        def fake_process_getfastq_run(args, row_index, sra_id, run_row_df, g, runtime_context=None):
+            _ = (row_index, g, runtime_context)
+            observed['runtime_threads'] = args.threads
+            observed['runtime_jobs'] = args.internal_jobs
+            return {
+                'row_index': 0,
+                'sra_id': sra_id,
+                'row': run_row_df.iloc[0].copy(),
+                'flag_any_output_file_present': True,
+                'flag_private_file': False,
+                'getfastq_sra_dir': os.path.join(args.out_dir, 'getfastq', sra_id),
+            }
+
+        monkeypatch.setattr('amalgkit.getfastq.check_getfastq_dependency', fake_check_dependency)
+        monkeypatch.setattr('amalgkit.getfastq.getfastq_metadata', lambda _args: metadata)
+        monkeypatch.setattr('amalgkit.getfastq.remove_experiment_without_run', lambda m: m)
+        monkeypatch.setattr('amalgkit.getfastq.check_metadata_validity', lambda m: m)
+        monkeypatch.setattr(
+            'amalgkit.getfastq.initialize_global_params',
+            lambda _args, _metadata: {
+                'start_time': 0.0,
+                'max_bp': 1000,
+                'num_sra': 1,
+                'num_bp_per_sra': 1000,
+                'total_sra_bp': 1000,
+            },
+        )
+        monkeypatch.setattr('amalgkit.getfastq.initialize_columns', lambda m, _g: m)
+        monkeypatch.setattr('amalgkit.getfastq.process_getfastq_run', fake_process_getfastq_run)
+
+        getfastq_main(args)
+
+        assert observed['checked_threads'] == 2
+        assert observed['checked_jobs'] == 1
+        assert observed['runtime_threads'] == 2
+        assert observed['runtime_jobs'] == 1
 
     def test_parallel_jobs_process_all_runs(self, tmp_path, monkeypatch):
         metadata = Metadata.from_DataFrame(pandas.DataFrame({

@@ -39,6 +39,7 @@ def build_parser(command_handlers, command_names, version):
     pp_internal_jobs.add_argument('--internal_jobs', metavar='INT|auto', default='auto', type=int_or_auto, required=False, action='store',
                      help='default=%(default)s: Advanced override for internal parallel workers. '
                           'In auto mode, worker count is derived from --threads. '
+                          'The effective worker count is capped by the number of tasks to process. '
                           'When --batch is set, this is forced to 1.')
     pp_cpu_budget = argparse.ArgumentParser(add_help=False)
     pp_cpu_budget.add_argument('--internal_cpu_budget', metavar='INT|auto', default='auto', type=nonnegative_int_or_auto, required=False, action='store',

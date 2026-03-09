@@ -25,9 +25,11 @@ from amalgkit.metadata_utils import (
     strtobool,
 )
 from amalgkit.parallel_utils import (
+    is_auto_parallel_option,
     resolve_thread_worker_allocation,
     resolve_worker_allocation,
     run_tasks_with_optional_threads,
+    validate_positive_int_option,
 )
 from amalgkit.output_utils import atomic_write_dataframe
 from amalgkit.prefix_utils import find_run_prefixed_entries
@@ -68,10 +70,14 @@ CONTAM_FILTER_RANK_ALIASES = {'domain': 'superkingdom'}
 CONTAM_FILTER_DEFAULT_DB_NAME = 'UniRef90'
 FILTER_ORDER_SUPPORTED_FILTERS = ['fastp', 'rrna', 'contam']
 GETFASTQ_DURATION_COLUMNS = [
+    'sec_sra_download',
     'sec_fasterq_dump',
     'sec_fastp',
     'sec_rrna_filter',
+    'sec_rrna_search',
+    'sec_rrna_rewrite',
     'sec_contam_filter',
+    'sec_ete_taxonomy',
 ]
 GETFASTQ_STATS_COLUMNS = [
     'num_dumped',
@@ -93,10 +99,14 @@ GETFASTQ_STATS_COLUMNS = [
     'bp_contam_in',
     'bp_contam_out',
     'bp_discarded',
+    'sec_sra_download',
     'sec_fasterq_dump',
     'sec_fastp',
     'sec_rrna_filter',
+    'sec_rrna_search',
+    'sec_rrna_rewrite',
     'sec_contam_filter',
+    'sec_ete_taxonomy',
     'fastp_duplication_rate',
     'fastp_insert_size_peak',
 ]
@@ -155,6 +165,28 @@ def format_duration_seconds(seconds):
     if seconds >= 60.0:
         return '{:,.1f} sec ({:,.2f} min)'.format(seconds, seconds / 60.0)
     return '{:,.1f} sec'.format(seconds)
+
+
+def print_stage_duration(stage_label, elapsed_seconds, sra_id=None):
+    if sra_id is None:
+        target_label = stage_label
+    else:
+        target_label = '{} ({})'.format(stage_label, sra_id)
+    print(
+        'Time elapsed for {}: {}'.format(target_label, format_duration_seconds(elapsed_seconds)),
+        flush=True,
+    )
+
+
+def accumulate_and_print_stage_duration(metadata, sra_stat, column_name, elapsed_seconds, stage_label):
+    metadata = accumulate_stage_duration(
+        metadata=metadata,
+        sra_stat=sra_stat,
+        column_name=column_name,
+        elapsed_seconds=elapsed_seconds,
+    )
+    print_stage_duration(stage_label=stage_label, elapsed_seconds=elapsed_seconds, sra_id=sra_stat.get('sra_id'))
+    return metadata
 
 def append_file_binary(src_path, dst_path, chunk_size=8 * 1024 * 1024):
     if chunk_size is None:
@@ -863,11 +895,15 @@ def check_getfastq_dependency(args):
         ensure_shared_download_dir_exists(resolve_shared_download_dir(args))
         mmseqs_exe = resolve_mmseqs_exe(args)
         probe_command([mmseqs_exe, '--help'], 'mmseqs')
+        started_at = time.perf_counter()
         ensure_mmseqs_rrna_reference_db_exists(args)
+        print_stage_duration('ensuring MMseqs rRNA DB', time.perf_counter() - started_at)
     if is_contam_filter_enabled(args):
         mmseqs_exe = resolve_mmseqs_exe(args)
         probe_command([mmseqs_exe, '--help'], 'mmseqs')
+        started_at = time.perf_counter()
         ensure_mmseqs_contam_taxonomy_db_exists(args)
+        print_stage_duration('ensuring MMseqs contaminant DB', time.perf_counter() - started_at)
     return None
 
 def remove_sra_path(path_downloaded_sra):
@@ -1782,7 +1818,15 @@ def run_fasterq_dump_with_retry(fasterq_dump_command, path_downloaded_sra, metad
 
     sys.stderr.write("fasterq-dump did not finish safely. Removing the cached SRA file and retrying once.\n")
     remove_sra_path(path_downloaded_sra)
+    redownload_started_at = time.perf_counter()
     download_sra(metadata=metadata, sra_stat=sra_stat, args=args, work_dir=sra_stat['getfastq_sra_dir'], overwrite=True)
+    accumulate_and_print_stage_duration(
+        metadata=metadata,
+        sra_stat=sra_stat,
+        column_name='sec_sra_download',
+        elapsed_seconds=(time.perf_counter() - redownload_started_at),
+        stage_label='SRA re-download',
+    )
     fqd_out = execute_fasterq_dump_command(fasterq_dump_command, args, prefix='Retry command')
     if fqd_out.returncode != 0:
         sys.stderr.write("fasterq-dump did not finish safely after re-download.\n")
@@ -1962,11 +2006,12 @@ def run_fasterq_dump(sra_stat, args, metadata, start, end, return_files=False, r
     if isinstance(updated_file_state, RunFileState):
         run_file_state = updated_file_state
     metadata.df.at[ind_sra,'layout_amalgkit'] = sra_stat['layout']
-    metadata = accumulate_stage_duration(
+    metadata = accumulate_and_print_stage_duration(
         metadata=metadata,
         sra_stat=sra_stat,
         column_name='sec_fasterq_dump',
         elapsed_seconds=(time.perf_counter() - started_at),
+        stage_label='fasterq-dump',
     )
     if return_file_state:
         return metadata, sra_stat, run_file_state
@@ -2354,11 +2399,12 @@ def run_fastp(
                 run_file_state.discard(input_name)
     fp_stderr = fp_out.stderr.decode('utf8', errors='replace')
     metadata = update_metadata_after_fastp(metadata, sra_stat, output_dir, fp_stderr)
-    metadata = accumulate_stage_duration(
+    metadata = accumulate_and_print_stage_duration(
         metadata=metadata,
         sra_stat=sra_stat,
         column_name='sec_fastp',
         elapsed_seconds=(time.perf_counter() - started_at),
+        stage_label='fastp',
     )
     set_current_intermediate_extension(sra_stat, outext)
     return finalize_run_fastp_return(
@@ -2711,6 +2757,7 @@ def run_mmseqs_rrna_filter(
     mmseqs_root = os.path.join(output_dir, 'mmseqs_rrna_work')
     ensure_empty_workdir(mmseqs_root)
     remove_cores = set()
+    search_started_at = time.perf_counter()
     for suffix, input_path in input_path_by_suffix.items():
         query_tag = '{}{}'.format(sra_id, suffix)
         query_root = os.path.join(mmseqs_root, query_tag)
@@ -2726,9 +2773,17 @@ def run_mmseqs_rrna_filter(
             tmp_dir=tmp_dir,
         )
         remove_cores.update(parse_mmseqs_search_matched_cores(result_tsv_path=result_path))
+    metadata = accumulate_and_print_stage_duration(
+        metadata=metadata,
+        sra_stat=sra_stat,
+        column_name='sec_rrna_search',
+        elapsed_seconds=(time.perf_counter() - search_started_at),
+        stage_label='MMseqs rRNA search',
+    )
 
     output_path_by_suffix = {}
     counts_by_suffix = {}
+    rewrite_started_at = time.perf_counter()
     for suffix, input_path in input_path_by_suffix.items():
         output_name = output_name_by_suffix[suffix]
         output_path = os.path.join(output_dir, output_name)
@@ -2740,6 +2795,13 @@ def run_mmseqs_rrna_filter(
         output_path_by_suffix[suffix] = output_path
         counts_by_suffix[suffix] = (num_in, num_out, bp_in, bp_out)
         run_file_state.add(output_name)
+    metadata = accumulate_and_print_stage_duration(
+        metadata=metadata,
+        sra_stat=sra_stat,
+        column_name='sec_rrna_rewrite',
+        elapsed_seconds=(time.perf_counter() - rewrite_started_at),
+        stage_label='rRNA FASTQ rewrite',
+    )
 
     if layout == 'single':
         num_in, num_out, bp_in, bp_out = counts_by_suffix['']
@@ -2768,11 +2830,12 @@ def run_mmseqs_rrna_filter(
         known_input_counts=effective_input_counts,
         known_output_counts=known_output_counts,
     )
-    metadata = accumulate_stage_duration(
+    metadata = accumulate_and_print_stage_duration(
         metadata=metadata,
         sra_stat=sra_stat,
         column_name='sec_rrna_filter',
         elapsed_seconds=(time.perf_counter() - started_at),
+        stage_label='MMseqs rRNA filter',
     )
     if bool(getattr(args, 'remove_tmp', False)):
         remove_intermediate_files(sra_stat, ext=inext, work_dir=output_dir)
@@ -2905,7 +2968,15 @@ def run_mmseqs_contam_filter(
 
     mmseqs_root = os.path.join(output_dir, 'mmseqs_contam_work')
     ensure_empty_workdir(mmseqs_root)
+    ete_started_at = time.perf_counter()
     ncbi = get_ete_ncbitaxa(args=args)
+    metadata = accumulate_and_print_stage_duration(
+        metadata=metadata,
+        sra_stat=sra_stat,
+        column_name='sec_ete_taxonomy',
+        elapsed_seconds=(time.perf_counter() - ete_started_at),
+        stage_label='ETE taxonomy initialization',
+    )
     rank_cache = {}
     remove_cores = set()
     for suffix, input_path in input_path_by_suffix.items():
@@ -2959,11 +3030,12 @@ def run_mmseqs_contam_filter(
     metadata.df.at[ind_sra, 'num_contam_out'] += int(num_out)
     metadata.df.at[ind_sra, 'bp_contam_in'] += int(bp_in)
     metadata.df.at[ind_sra, 'bp_contam_out'] += int(bp_out)
-    metadata = accumulate_stage_duration(
+    metadata = accumulate_and_print_stage_duration(
         metadata=metadata,
         sra_stat=sra_stat,
         column_name='sec_contam_filter',
         elapsed_seconds=(time.perf_counter() - started_at),
+        stage_label='contaminant filter',
     )
 
     if bool(getattr(args, 'remove_tmp', False)):
@@ -3190,7 +3262,10 @@ def print_read_stats(args, metadata, g, sra_stat=None, individual=False):
     rrna_filter = is_rrna_filter_enabled(args)
     contam_filter = is_contam_filter_enabled(args)
     rrna_label = 'MMseqs2 rRNA filter'
-    duration_specs = [('sec_fasterq_dump', 'fasterq-dump wall time')]
+    duration_specs = [
+        ('sec_sra_download', 'SRA download wall time'),
+        ('sec_fasterq_dump', 'fasterq-dump wall time'),
+    ]
     if sra_stat is None:
         df = metadata.df
         print('Target size (--max_bp): {:,} bp'.format(g['max_bp']))
@@ -3213,8 +3288,11 @@ def print_read_stats(args, metadata, g, sra_stat=None, individual=False):
         duration_specs.append(('sec_fastp', 'fastp wall time'))
     if rrna_filter:
         duration_specs.append(('sec_rrna_filter', '{} wall time'.format(rrna_label)))
+        duration_specs.append(('sec_rrna_search', 'MMseqs rRNA search wall time'))
+        duration_specs.append(('sec_rrna_rewrite', 'rRNA FASTQ rewrite wall time'))
     if contam_filter:
         duration_specs.append(('sec_contam_filter', 'contaminant-filter wall time'))
+        duration_specs.append(('sec_ete_taxonomy', 'ETE taxonomy wall time'))
     for column_name, label in duration_specs:
         print('Sum of {}: {}'.format(label, format_duration_seconds(sum_metadata_numeric_column(df, column_name))))
     if individual:
@@ -3306,7 +3384,9 @@ def ensure_contam_filter_metadata_rank_taxids(metadata, args):
         required_missing_mask = get_required_missing_mask()
         should_refresh_rank_taxids = bool(required_missing_mask.any())
     if should_refresh_rank_taxids:
+        started_at = time.perf_counter()
         metadata.add_standard_rank_taxids(args=args)
+        print_stage_duration('preparing metadata taxonomy ranks', time.perf_counter() - started_at)
         for col in rank_cols:
             if col in metadata.df.columns:
                 metadata.df[col] = pandas.to_numeric(metadata.df[col], errors='coerce').astype('Int64')
@@ -3884,7 +3964,15 @@ def process_getfastq_run(args, row_index, sra_id, run_row_df, g, runtime_context
             sequence_extraction_private(run_metadata, sra_stat, args, runtime_context=runtime_context)
     if not flag_private_file:
         print('Processing {} as publicly available data from SRA.'.format(sra_id), flush=True)
+        download_started_at = time.perf_counter()
         download_sra(run_metadata, sra_stat, args, sra_stat['getfastq_sra_dir'], overwrite=False)
+        run_metadata = accumulate_and_print_stage_duration(
+            metadata=run_metadata,
+            sra_stat=sra_stat,
+            column_name='sec_sra_download',
+            elapsed_seconds=(time.perf_counter() - download_started_at),
+            stage_label='SRA download',
+        )
         run_metadata = sequence_extraction_1st_round(args, sra_stat, run_metadata, g, runtime_context=runtime_context)
     return {
         'row_index': row_index,
@@ -4003,6 +4091,14 @@ def run_getfastq_postprocessing(args, metadata, last_getfastq_sra_dir, flag_any_
 
 
 def getfastq_main(args):
+    if not is_auto_parallel_option(getattr(args, 'threads', 'auto')):
+        validate_positive_int_option(getattr(args, 'threads', 'auto'), 'threads')
+    if not is_auto_parallel_option(getattr(args, 'internal_jobs', 'auto')):
+        validate_positive_int_option(getattr(args, 'internal_jobs', 'auto'), 'internal_jobs')
+    metadata_args = clone_namespace(args)
+    metadata = getfastq_metadata(metadata_args)
+    metadata = remove_experiment_without_run(metadata)
+    run_rows = list(zip(metadata.df.index.tolist(), metadata.df['run'].tolist()))
     threads, jobs, _ = resolve_thread_worker_allocation(
         requested_threads=getattr(args, 'threads', 'auto'),
         requested_workers=getattr(args, 'internal_jobs', 'auto'),
@@ -4010,16 +4106,14 @@ def getfastq_main(args):
         worker_option_name='internal_jobs',
         context='getfastq:',
         disable_workers=(getattr(args, 'batch', None) is not None),
+        task_count=len(run_rows),
     )
     runtime_args = clone_namespace(args, threads=threads, internal_jobs=jobs)
     check_getfastq_dependency(runtime_args)
-    metadata = getfastq_metadata(runtime_args)
-    metadata = remove_experiment_without_run(metadata)
     metadata = ensure_contam_filter_metadata_rank_taxids(metadata, runtime_args)
     metadata = check_metadata_validity(metadata)
     g = initialize_global_params(runtime_args, metadata)
     metadata = initialize_columns(metadata, g)
-    run_rows = list(zip(metadata.df.index.tolist(), metadata.df['run'].tolist()))
     run_results_by_id = run_first_round_getfastq(
         args=runtime_args,
         metadata=metadata,

@@ -30,10 +30,14 @@ GETFASTQ_STAGE_COLUMNS = [
     'bp_rrna_in',
     'bp_rrna_out',
     'bp_discarded',
+    'sec_sra_download',
     'sec_fasterq_dump',
     'sec_fastp',
     'sec_rrna_filter',
+    'sec_rrna_search',
+    'sec_rrna_rewrite',
     'sec_contam_filter',
+    'sec_ete_taxonomy',
 ]
 GETFASTQ_MERGE_COLUMNS = FASTP_STATS_COLUMNS + GETFASTQ_STAGE_COLUMNS
 MERGE_QUANT_READ_MAX_WORKERS = 4
