@@ -4,6 +4,7 @@ from amalgkit.cli_utils import (
     build_help_command_handler,
     int_or_auto,
     nonnegative_int_or_auto,
+    positive_float_or_auto,
     strtobool,
 )
 
@@ -140,6 +141,10 @@ def build_parser(command_handlers, command_names, version):
                      help='default=%(default)s: Remove rRNA reads using MMseqs2 before final FASTQ output. '
                           'Typical cost: minutes to tens of minutes per SRA, ~2-8 GB RAM; first run also builds '
                           'the SILVA DB.')
+    pge.add_argument('--rrna_filter_sensitivity', metavar='FLOAT|auto', default='auto', type=positive_float_or_auto,
+                     required=False, action='store',
+                     help='default=%(default)s: MMseqs2 sensitivity (-s) for rRNA filtering. '
+                          '"auto" keeps the MMseqs2 default; lower values are faster but less sensitive.')
     pge.add_argument('--filter_order', metavar='ORDER',
                      default='fastp,rrna,contam', type=str, required=False, action='store',
                      help='default=%(default)s: Order of optional filters. Use comma or ">" separators, for example '
@@ -158,6 +163,10 @@ def build_parser(command_handlers, command_names, version):
                      help='default=%(default)s: MMseqs2 downloadable DB name used for contaminant filtering (passed to `mmseqs databases`).')
     pge.add_argument('--contam_filter_db', metavar='PATH|inferred', default='inferred', type=str, required=False, action='store',
                      help='default=%(default)s: MMseqs2 taxonomy DB prefix path. "inferred" = out_dir/downloads/mmseqs_<db_name>.')
+    pge.add_argument('--contam_filter_sensitivity', metavar='FLOAT|auto', default='auto', type=positive_float_or_auto,
+                     required=False, action='store',
+                     help='default=%(default)s: MMseqs2 sensitivity (-s) for contaminant filtering. '
+                          '"auto" keeps the MMseqs2 default; lower values are faster but less sensitive.')
     pge.add_argument('--mmseqs_exe', metavar='PATH', default='mmseqs', type=str, required=False, action='store',
                      help='default=%(default)s: PATH to mmseqs executable used for contaminant filtering.')
     pge.add_argument('--remove_sra', metavar='yes|no', default='yes', type=strtobool, required=False, action='store',

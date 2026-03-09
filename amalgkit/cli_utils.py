@@ -211,6 +211,15 @@ def nonnegative_int_or_auto(val):
     return int_val
 
 
+def positive_float_or_auto(val):
+    if isinstance(val, str) and (val.strip().lower() == 'auto'):
+        return 'auto'
+    float_val = float(val)
+    if float_val <= 0:
+        raise ValueError('must be > 0 or "auto"')
+    return float_val
+
+
 def build_timed_command_handler(command_name, module_name, function_name):
     def command(args):
         sys.stdout.write('amalgkit {}: start\n'.format(command_name))

@@ -45,8 +45,11 @@ from amalgkit.getfastq import (
     run_rrna_filter,
     run_mmseqs_contam_filter,
     run_mmseqs_easy_taxonomy_single_fastq,
+    run_mmseqs_easy_search_single_fastq,
     resolve_mmseqs_dbtype,
     update_metadata_after_rrna_filter,
+    build_mmseqs_query_input,
+    append_mmseqs_sensitivity_option,
     parse_fasterq_dump_written_spots,
     parse_fasterq_dump_written_reads,
     infer_written_spots_from_written_reads,
@@ -498,13 +501,25 @@ class TestRunMmseqsRrnaFilter:
 
         monkeypatch.setattr('amalgkit.getfastq.ensure_mmseqs_rrna_reference_db_exists', lambda _args: '/tmp/mock_rrna_db')
 
+        observed = {'input_paths': []}
+
         def fake_run_mmseqs_search(args, input_path, target_db, result_tsv, tmp_dir):
             _ = (args, target_db, tmp_dir)
+            observed['input_paths'].append(input_path)
             os.makedirs(os.path.dirname(result_tsv), exist_ok=True)
-            if input_path.endswith('_1.fastq.gz'):
-                lines = ['rB/1', 'rB/1']
-            else:
-                lines = ['rB/2']
+            lines = []
+            with gzip.open(input_path, 'rt') as fin:
+                while True:
+                    header = fin.readline()
+                    if header == '':
+                        break
+                    seq = fin.readline()
+                    plus = fin.readline()
+                    qual = fin.readline()
+                    _ = (seq, plus, qual)
+                    read_id = header.strip().lstrip('@')
+                    if read_id.startswith('rB/'):
+                        lines.append(read_id)
             with open(result_tsv, 'wt') as fout:
                 fout.write('\n'.join(lines) + '\n')
             return result_tsv
@@ -535,6 +550,8 @@ class TestRunMmseqsRrnaFilter:
         assert metadata.df.loc[0, 'sec_rrna_search'] == pytest.approx(4.0)
         assert metadata.df.loc[0, 'sec_rrna_rewrite'] == pytest.approx(3.5)
         assert metadata.df.loc[0, 'sec_rrna_filter'] == pytest.approx(10.0)
+        assert len(observed['input_paths']) == 1
+        assert observed['input_paths'][0].endswith('_combined.fastq.gz')
         assert run_file_state.has('{}_1.rrna-filtered.fastq.gz'.format(sra_id))
         assert run_file_state.has('{}_2.rrna-filtered.fastq.gz'.format(sra_id))
         out = capsys.readouterr().out
@@ -610,23 +627,32 @@ class TestRunMmseqsContamFilter:
 
         monkeypatch.setattr('amalgkit.getfastq.ensure_mmseqs_contam_taxonomy_db_exists', lambda _args: '/tmp/mockdb')
 
+        observed = {'input_paths': []}
+
         def fake_run_mmseqs(args, input_path, target_db, result_prefix, tmp_dir, runtime_context=None):
             _ = (args, target_db, tmp_dir, runtime_context)
+            observed['input_paths'].append(input_path)
             os.makedirs(os.path.dirname(result_prefix), exist_ok=True)
             lca_path = result_prefix + '_lca.tsv'
-            if input_path.endswith('_1.fastq.gz'):
-                # rA -> match, rB -> mismatch, rC -> unclassified(keep)
-                lines = [
-                    'rA/1\t11\tphylum\tmatch',
-                    'rB/1\t22\tphylum\tmismatch',
-                    'rC/1\t0\tno rank\tunclassified',
-                ]
-            else:
-                lines = [
-                    'rA/2\t11\tphylum\tmatch',
-                    'rB/2\t11\tphylum\tmatch',
-                    'rC/2\t0\tno rank\tunclassified',
-                ]
+            lines = []
+            with gzip.open(input_path, 'rt') as fin:
+                while True:
+                    header = fin.readline()
+                    if header == '':
+                        break
+                    seq = fin.readline()
+                    plus = fin.readline()
+                    qual = fin.readline()
+                    _ = (seq, plus, qual)
+                    read_id = header.strip().lstrip('@')
+                    if read_id == 'rA/1' or read_id == 'rA/2':
+                        lines.append('{}\t11\tphylum\tmatch'.format(read_id))
+                    elif read_id == 'rB/1':
+                        lines.append('{}\t22\tphylum\tmismatch'.format(read_id))
+                    elif read_id == 'rB/2':
+                        lines.append('{}\t11\tphylum\tmatch'.format(read_id))
+                    elif read_id == 'rC/1' or read_id == 'rC/2':
+                        lines.append('{}\t0\tno rank\tunclassified'.format(read_id))
             with open(lca_path, 'wt') as fout:
                 fout.write('\n'.join(lines) + '\n')
             return lca_path
@@ -662,11 +688,35 @@ class TestRunMmseqsContamFilter:
         assert metadata.df.loc[0, 'bp_contam_out'] == 16
         assert metadata.df.loc[0, 'sec_ete_taxonomy'] == pytest.approx(2.5)
         assert metadata.df.loc[0, 'sec_contam_filter'] == pytest.approx(4.5)
+        assert len(observed['input_paths']) == 1
+        assert observed['input_paths'][0].endswith('_combined.fastq.gz')
         assert run_file_state.has('{}_1.contam-filtered.fastq.gz'.format(sra_id))
         assert run_file_state.has('{}_2.contam-filtered.fastq.gz'.format(sra_id))
         out = capsys.readouterr().out
         assert 'Time elapsed for ETE taxonomy initialization ({}):'.format(sra_id) in out
         assert 'Time elapsed for contaminant filter ({}):'.format(sra_id) in out
+
+
+class TestBuildMmseqsQueryInput:
+    def test_concatenates_paired_gzip_queries_once(self, tmp_path):
+        query_root = tmp_path / 'mmseqs'
+        query_root.mkdir()
+        in1 = tmp_path / 'SRR001_1.fastq.gz'
+        in2 = tmp_path / 'SRR001_2.fastq.gz'
+        with gzip.open(in1, 'wt') as out:
+            out.write('@rA/1\nAAAA\n+\nIIII\n')
+        with gzip.open(in2, 'wt') as out:
+            out.write('@rA/2\nTTTT\n+\nIIII\n')
+
+        combined_path = build_mmseqs_query_input(
+            query_root=str(query_root),
+            query_tag='SRR001',
+            input_path_by_suffix={'_1': str(in1), '_2': str(in2)},
+        )
+
+        assert combined_path.endswith('_combined.fastq.gz')
+        with gzip.open(combined_path, 'rt') as fin:
+            assert fin.read() == '@rA/1\nAAAA\n+\nIIII\n@rA/2\nTTTT\n+\nIIII\n'
 
 
 class TestEnsureContamFilterMetadataRankTaxids:
@@ -755,6 +805,7 @@ class TestRunMmseqsEasyTaxonomy:
             mmseqs_exe = 'mmseqs'
             threads = 2
             dump_print = False
+            contam_filter_sensitivity = 'auto'
 
         observed = {'cmd': None}
 
@@ -776,12 +827,14 @@ class TestRunMmseqsEasyTaxonomy:
         assert out_path == '/tmp/out/result_lca.tsv'
         assert '--search-type' in observed['cmd']
         assert observed['cmd'][observed['cmd'].index('--search-type') + 1] == '3'
+        assert '-s' not in observed['cmd']
 
     def test_omits_search_type_for_aminoacid_db(self, monkeypatch):
         class Args:
             mmseqs_exe = 'mmseqs'
             threads = 2
             dump_print = False
+            contam_filter_sensitivity = 2.5
 
         observed = {'cmd': None}
 
@@ -800,6 +853,74 @@ class TestRunMmseqsEasyTaxonomy:
             tmp_dir='/tmp/out/tmp',
         )
         assert '--search-type' not in observed['cmd']
+        assert '-s' in observed['cmd']
+        assert observed['cmd'][observed['cmd'].index('-s') + 1] == '2.5'
+
+
+class TestRunMmseqsEasySearch:
+    def test_appends_rrna_sensitivity_when_configured(self, monkeypatch):
+        args = SimpleNamespace(
+            mmseqs_exe='mmseqs',
+            threads=2,
+            dump_print=False,
+            rrna_filter_sensitivity=1.5,
+        )
+        observed = {'cmd': None}
+
+        def fake_run(cmd, stdout=None, stderr=None):
+            observed['cmd'] = cmd
+            return subprocess.CompletedProcess(cmd, 0, stdout=b'', stderr=b'')
+
+        monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
+
+        run_mmseqs_easy_search_single_fastq(
+            args=args,
+            input_path='/tmp/in.fastq.gz',
+            target_db='/tmp/db',
+            result_tsv='/tmp/out.tsv',
+            tmp_dir='/tmp/tmp',
+        )
+
+        assert observed['cmd'][0:2] == ['mmseqs', 'easy-search']
+        assert '-s' in observed['cmd']
+        assert observed['cmd'][observed['cmd'].index('-s') + 1] == '1.5'
+
+    def test_omits_rrna_sensitivity_when_auto(self, monkeypatch):
+        args = SimpleNamespace(
+            mmseqs_exe='mmseqs',
+            threads=2,
+            dump_print=False,
+            rrna_filter_sensitivity='auto',
+        )
+        observed = {'cmd': None}
+
+        def fake_run(cmd, stdout=None, stderr=None):
+            observed['cmd'] = cmd
+            return subprocess.CompletedProcess(cmd, 0, stdout=b'', stderr=b'')
+
+        monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
+
+        run_mmseqs_easy_search_single_fastq(
+            args=args,
+            input_path='/tmp/in.fastq.gz',
+            target_db='/tmp/db',
+            result_tsv='/tmp/out.tsv',
+            tmp_dir='/tmp/tmp',
+        )
+
+        assert '-s' not in observed['cmd']
+
+
+class TestAppendMmseqsSensitivityOption:
+    def test_leaves_command_unchanged_for_auto(self):
+        command = ['mmseqs', 'easy-search']
+        out = append_mmseqs_sensitivity_option(command[:], 'auto')
+        assert out == ['mmseqs', 'easy-search']
+
+    def test_appends_float_for_numeric_value(self):
+        command = ['mmseqs', 'easy-search']
+        out = append_mmseqs_sensitivity_option(command[:], 4.0)
+        assert out == ['mmseqs', 'easy-search', '-s', '4']
 
     def test_resolve_mmseqs_dbtype_uses_runtime_context_without_mutating_args(self, monkeypatch):
         args = SimpleNamespace(mmseqs_exe='mmseqs')

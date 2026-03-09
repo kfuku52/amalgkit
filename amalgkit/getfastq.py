@@ -2578,6 +2578,33 @@ def ensure_empty_workdir(path_dir):
     os.makedirs(path_dir, exist_ok=True)
     return path_dir
 
+def build_mmseqs_query_input(query_root, query_tag, input_path_by_suffix):
+    ordered_input_paths = [input_path_by_suffix[suffix] for suffix in sorted(input_path_by_suffix.keys())]
+    if len(ordered_input_paths) <= 1:
+        return ordered_input_paths[0]
+    compressed_flags = {str(path).endswith('.gz') for path in ordered_input_paths}
+    if len(compressed_flags) != 1:
+        raise ValueError('MMseqs query inputs must be consistently compressed or uncompressed.')
+    ext = '.fastq.gz' if compressed_flags.pop() else '.fastq'
+    combined_path = os.path.join(query_root, query_tag + '_combined' + ext)
+    if os.path.exists(combined_path):
+        if not os.path.isfile(combined_path):
+            raise IsADirectoryError('MMseqs combined query path exists but is not a file: {}'.format(combined_path))
+        os.remove(combined_path)
+    for input_path in ordered_input_paths:
+        append_file_binary(input_path, combined_path)
+    return combined_path
+
+
+def append_mmseqs_sensitivity_option(command, raw_value):
+    if is_auto_parallel_option(raw_value):
+        return command
+    sensitivity = float(raw_value)
+    if sensitivity <= 0.0:
+        raise ValueError('MMseqs sensitivity must be > 0.')
+    command.extend(['-s', '{:g}'.format(sensitivity)])
+    return command
+
 def run_mmseqs_easy_taxonomy_single_fastq(args, input_path, target_db, result_prefix, tmp_dir, runtime_context=None):
     mmseqs_exe = resolve_mmseqs_exe(args)
     command = [
@@ -2592,6 +2619,10 @@ def run_mmseqs_easy_taxonomy_single_fastq(args, input_path, target_db, result_pr
         '--orf-filter',
         '0',
     ]
+    command = append_mmseqs_sensitivity_option(
+        command=command,
+        raw_value=getattr(args, 'contam_filter_sensitivity', 'auto'),
+    )
     search_type = resolve_mmseqs_easy_taxonomy_search_type(
         args=args,
         target_db=target_db,
@@ -2632,6 +2663,10 @@ def run_mmseqs_easy_search_single_fastq(args, input_path, target_db, result_tsv,
         '--format-output',
         'query',
     ]
+    command = append_mmseqs_sensitivity_option(
+        command=command,
+        raw_value=getattr(args, 'rrna_filter_sensitivity', 'auto'),
+    )
     run_checked_command(
         command=command,
         runner=subprocess.run,
@@ -2761,21 +2796,24 @@ def run_mmseqs_rrna_filter(
     ensure_empty_workdir(mmseqs_root)
     remove_cores = set()
     search_started_at = time.perf_counter()
-    for suffix, input_path in input_path_by_suffix.items():
-        query_tag = '{}{}'.format(sra_id, suffix)
-        query_root = os.path.join(mmseqs_root, query_tag)
-        result_tsv = os.path.join(query_root, 'result.tsv')
-        tmp_dir = os.path.join(query_root, 'tmp')
-        os.makedirs(query_root, exist_ok=True)
-        os.makedirs(tmp_dir, exist_ok=True)
-        result_path = run_mmseqs_easy_search_single_fastq(
-            args=args,
-            input_path=input_path,
-            target_db=target_db,
-            result_tsv=result_tsv,
-            tmp_dir=tmp_dir,
-        )
-        remove_cores.update(parse_mmseqs_search_matched_cores(result_tsv_path=result_path))
+    query_root = os.path.join(mmseqs_root, sra_id)
+    result_tsv = os.path.join(query_root, 'result.tsv')
+    tmp_dir = os.path.join(query_root, 'tmp')
+    os.makedirs(query_root, exist_ok=True)
+    os.makedirs(tmp_dir, exist_ok=True)
+    query_input_path = build_mmseqs_query_input(
+        query_root=query_root,
+        query_tag=sra_id,
+        input_path_by_suffix=input_path_by_suffix,
+    )
+    result_path = run_mmseqs_easy_search_single_fastq(
+        args=args,
+        input_path=query_input_path,
+        target_db=target_db,
+        result_tsv=result_tsv,
+        tmp_dir=tmp_dir,
+    )
+    remove_cores.update(parse_mmseqs_search_matched_cores(result_tsv_path=result_path))
     metadata = accumulate_and_print_stage_duration(
         metadata=metadata,
         sra_stat=sra_stat,
@@ -2982,30 +3020,33 @@ def run_mmseqs_contam_filter(
     )
     rank_cache = {}
     remove_cores = set()
-    for suffix, input_path in input_path_by_suffix.items():
-        query_tag = '{}{}'.format(sra_id, suffix)
-        query_root = os.path.join(mmseqs_root, query_tag)
-        result_prefix = os.path.join(query_root, 'result')
-        tmp_dir = os.path.join(query_root, 'tmp')
-        os.makedirs(query_root, exist_ok=True)
-        os.makedirs(tmp_dir, exist_ok=True)
-        lca_tsv = run_mmseqs_easy_taxonomy_single_fastq(
-            args=args,
-            input_path=input_path,
-            target_db=target_db,
-            result_prefix=result_prefix,
-            tmp_dir=tmp_dir,
-            runtime_context=runtime_context,
+    query_root = os.path.join(mmseqs_root, sra_id)
+    result_prefix = os.path.join(query_root, 'result')
+    tmp_dir = os.path.join(query_root, 'tmp')
+    os.makedirs(query_root, exist_ok=True)
+    os.makedirs(tmp_dir, exist_ok=True)
+    query_input_path = build_mmseqs_query_input(
+        query_root=query_root,
+        query_tag=sra_id,
+        input_path_by_suffix=input_path_by_suffix,
+    )
+    lca_tsv = run_mmseqs_easy_taxonomy_single_fastq(
+        args=args,
+        input_path=query_input_path,
+        target_db=target_db,
+        result_prefix=result_prefix,
+        tmp_dir=tmp_dir,
+        runtime_context=runtime_context,
+    )
+    remove_cores.update(
+        parse_mmseqs_lca_mismatched_cores(
+            lca_tsv_path=lca_tsv,
+            target_rank=rank_name,
+            target_rank_taxid=target_rank_taxid,
+            ncbi=ncbi,
+            rank_cache=rank_cache,
         )
-        remove_cores.update(
-            parse_mmseqs_lca_mismatched_cores(
-                lca_tsv_path=lca_tsv,
-                target_rank=rank_name,
-                target_rank_taxid=target_rank_taxid,
-                ncbi=ncbi,
-                rank_cache=rank_cache,
-            )
-        )
+    )
     output_path_by_suffix = {}
     counts_by_suffix = {}
     for suffix, input_path in input_path_by_suffix.items():
