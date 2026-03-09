@@ -391,7 +391,7 @@ def build_parser(command_handlers, command_names, version):
     psa.set_defaults(handler=command_handlers['sanity'])
 
     pin_help = 'Appending local fastq info to a metadata table. See `amalgkit integrate -h`'
-    pin = subparsers.add_parser('integrate', help=pin_help, parents=[pp_out, pp_meta, pp_threads])
+    pin = subparsers.add_parser('integrate', help=pin_help, parents=[pp_out, pp_meta, pp_threads, pp_download])
     pin.add_argument('--fastq_dir', metavar='PATH', default=None, type=str, required=False, action='store',
                      help='default=%(default)s: PATH to input directory where fastq files are stored. '
                           'Nested subdirectories are scanned recursively. The first subdirectory below --fastq_dir '
