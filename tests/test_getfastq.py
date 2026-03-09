@@ -50,6 +50,7 @@ from amalgkit.getfastq import (
     update_metadata_after_rrna_filter,
     build_mmseqs_query_input,
     append_mmseqs_sensitivity_option,
+    append_mmseqs_positive_int_option,
     parse_fasterq_dump_written_spots,
     parse_fasterq_dump_written_reads,
     infer_written_spots_from_written_reads,
@@ -828,6 +829,8 @@ class TestRunMmseqsEasyTaxonomy:
         assert '--search-type' in observed['cmd']
         assert observed['cmd'][observed['cmd'].index('--search-type') + 1] == '3'
         assert '-s' not in observed['cmd']
+        assert '--report-mode' in observed['cmd']
+        assert observed['cmd'][observed['cmd'].index('--report-mode') + 1] == '2'
 
     def test_omits_search_type_for_aminoacid_db(self, monkeypatch):
         class Args:
@@ -835,6 +838,7 @@ class TestRunMmseqsEasyTaxonomy:
             threads = 2
             dump_print = False
             contam_filter_sensitivity = 2.5
+            contam_filter_max_seqs = 'auto'
 
         observed = {'cmd': None}
 
@@ -855,6 +859,36 @@ class TestRunMmseqsEasyTaxonomy:
         assert '--search-type' not in observed['cmd']
         assert '-s' in observed['cmd']
         assert observed['cmd'][observed['cmd'].index('-s') + 1] == '2.5'
+        assert '--report-mode' in observed['cmd']
+        assert observed['cmd'][observed['cmd'].index('--report-mode') + 1] == '2'
+
+    def test_appends_contam_max_seqs_when_configured(self, monkeypatch):
+        class Args:
+            mmseqs_exe = 'mmseqs'
+            threads = 2
+            dump_print = False
+            contam_filter_sensitivity = 'auto'
+            contam_filter_max_seqs = 20
+
+        observed = {'cmd': None}
+
+        def fake_run(cmd, stdout=None, stderr=None):
+            observed['cmd'] = cmd
+            return subprocess.CompletedProcess(cmd, 0, stdout=b'', stderr=b'')
+
+        monkeypatch.setattr('amalgkit.getfastq.resolve_mmseqs_easy_taxonomy_search_type', lambda **_kwargs: None)
+        monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
+
+        run_mmseqs_easy_taxonomy_single_fastq(
+            args=Args(),
+            input_path='/tmp/in.fastq.gz',
+            target_db='/tmp/db',
+            result_prefix='/tmp/out/result',
+            tmp_dir='/tmp/out/tmp',
+        )
+
+        assert '--max-seqs' in observed['cmd']
+        assert observed['cmd'][observed['cmd'].index('--max-seqs') + 1] == '20'
 
 
 class TestRunMmseqsEasySearch:
@@ -864,6 +898,7 @@ class TestRunMmseqsEasySearch:
             threads=2,
             dump_print=False,
             rrna_filter_sensitivity=1.5,
+            rrna_filter_max_seqs='auto',
         )
         observed = {'cmd': None}
 
@@ -884,6 +919,8 @@ class TestRunMmseqsEasySearch:
         assert observed['cmd'][0:2] == ['mmseqs', 'easy-search']
         assert '-s' in observed['cmd']
         assert observed['cmd'][observed['cmd'].index('-s') + 1] == '1.5'
+        assert '--max-accept' in observed['cmd']
+        assert observed['cmd'][observed['cmd'].index('--max-accept') + 1] == '1'
 
     def test_omits_rrna_sensitivity_when_auto(self, monkeypatch):
         args = SimpleNamespace(
@@ -891,6 +928,7 @@ class TestRunMmseqsEasySearch:
             threads=2,
             dump_print=False,
             rrna_filter_sensitivity='auto',
+            rrna_filter_max_seqs='auto',
         )
         observed = {'cmd': None}
 
@@ -909,6 +947,35 @@ class TestRunMmseqsEasySearch:
         )
 
         assert '-s' not in observed['cmd']
+        assert '--max-accept' in observed['cmd']
+        assert observed['cmd'][observed['cmd'].index('--max-accept') + 1] == '1'
+
+    def test_appends_rrna_max_seqs_when_configured(self, monkeypatch):
+        args = SimpleNamespace(
+            mmseqs_exe='mmseqs',
+            threads=2,
+            dump_print=False,
+            rrna_filter_sensitivity='auto',
+            rrna_filter_max_seqs=20,
+        )
+        observed = {'cmd': None}
+
+        def fake_run(cmd, stdout=None, stderr=None):
+            observed['cmd'] = cmd
+            return subprocess.CompletedProcess(cmd, 0, stdout=b'', stderr=b'')
+
+        monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
+
+        run_mmseqs_easy_search_single_fastq(
+            args=args,
+            input_path='/tmp/in.fastq.gz',
+            target_db='/tmp/db',
+            result_tsv='/tmp/out.tsv',
+            tmp_dir='/tmp/tmp',
+        )
+
+        assert '--max-seqs' in observed['cmd']
+        assert observed['cmd'][observed['cmd'].index('--max-seqs') + 1] == '20'
 
 
 class TestAppendMmseqsSensitivityOption:
@@ -921,6 +988,18 @@ class TestAppendMmseqsSensitivityOption:
         command = ['mmseqs', 'easy-search']
         out = append_mmseqs_sensitivity_option(command[:], 4.0)
         assert out == ['mmseqs', 'easy-search', '-s', '4']
+
+
+class TestAppendMmseqsPositiveIntOption:
+    def test_leaves_command_unchanged_for_auto(self):
+        command = ['mmseqs', 'easy-search']
+        out = append_mmseqs_positive_int_option(command[:], '--max-seqs', 'auto')
+        assert out == ['mmseqs', 'easy-search']
+
+    def test_appends_integer_for_numeric_value(self):
+        command = ['mmseqs', 'easy-search']
+        out = append_mmseqs_positive_int_option(command[:], '--max-seqs', 20)
+        assert out == ['mmseqs', 'easy-search', '--max-seqs', '20']
 
     def test_resolve_mmseqs_dbtype_uses_runtime_context_without_mutating_args(self, monkeypatch):
         args = SimpleNamespace(mmseqs_exe='mmseqs')

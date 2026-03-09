@@ -2605,6 +2605,16 @@ def append_mmseqs_sensitivity_option(command, raw_value):
     command.extend(['-s', '{:g}'.format(sensitivity)])
     return command
 
+
+def append_mmseqs_positive_int_option(command, option_name, raw_value):
+    if is_auto_parallel_option(raw_value):
+        return command
+    int_value = int(raw_value)
+    if int_value <= 0:
+        raise ValueError('MMseqs option {} must be > 0.'.format(option_name))
+    command.extend([option_name, str(int_value)])
+    return command
+
 def run_mmseqs_easy_taxonomy_single_fastq(args, input_path, target_db, result_prefix, tmp_dir, runtime_context=None):
     mmseqs_exe = resolve_mmseqs_exe(args)
     command = [
@@ -2623,6 +2633,11 @@ def run_mmseqs_easy_taxonomy_single_fastq(args, input_path, target_db, result_pr
         command=command,
         raw_value=getattr(args, 'contam_filter_sensitivity', 'auto'),
     )
+    command = append_mmseqs_positive_int_option(
+        command=command,
+        option_name='--max-seqs',
+        raw_value=getattr(args, 'contam_filter_max_seqs', 'auto'),
+    )
     search_type = resolve_mmseqs_easy_taxonomy_search_type(
         args=args,
         target_db=target_db,
@@ -2630,6 +2645,7 @@ def run_mmseqs_easy_taxonomy_single_fastq(args, input_path, target_db, result_pr
     )
     if search_type is not None:
         command.extend(['--search-type', str(search_type)])
+    command.extend(['--report-mode', '2'])
     run_checked_command(
         command=command,
         runner=subprocess.run,
@@ -2667,6 +2683,12 @@ def run_mmseqs_easy_search_single_fastq(args, input_path, target_db, result_tsv,
         command=command,
         raw_value=getattr(args, 'rrna_filter_sensitivity', 'auto'),
     )
+    command = append_mmseqs_positive_int_option(
+        command=command,
+        option_name='--max-seqs',
+        raw_value=getattr(args, 'rrna_filter_max_seqs', 'auto'),
+    )
+    command.extend(['--max-accept', '1'])
     run_checked_command(
         command=command,
         runner=subprocess.run,

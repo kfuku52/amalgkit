@@ -94,7 +94,11 @@ def test_help_topic_getfastq_mentions_filter_runtime_costs():
     assert out.returncode == 0
     merged = ' '.join((out.stdout + '\n' + out.stderr).lower().split())
     assert '--rrna_filter_sensitivity' in merged
+    assert '--rrna_filter_max_seqs' in merged
+    assert 'default=1.0' in merged
+    assert 'default=20' in merged
     assert '--contam_filter_sensitivity' in merged
+    assert '--contam_filter_max_seqs' in merged
     assert '2-8 gb ram' in merged
     assert '32-128 gb ram' in merged
     assert 'default=superkingdom' in merged
