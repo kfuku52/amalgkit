@@ -109,6 +109,9 @@ GETFASTQ_STATS_COLUMNS = [
     'sec_ete_taxonomy',
     'fastp_duplication_rate',
     'fastp_insert_size_peak',
+    'percent_fastp_filtered',
+    'percent_rrna_filtered',
+    'percent_contam_filtered',
 ]
 
 def get_or_detect_intermediate_extension(sra_stat, work_dir, files=None, file_state=None):
@@ -2242,19 +2245,17 @@ def update_fastp_metrics(metadata, ind_sra, current_num_in, duplication_rate, in
             weighted_mean = ((previous_value * previous_num_in) + (current_value * current_num_in)) / total_num_in
             metadata.df.at[ind_sra, metric_key] = weighted_mean
 
+def calculate_filtered_percent(input_bp, output_bp):
+    input_bp = _coerce_nonnegative_float(input_bp)
+    output_bp = _coerce_nonnegative_float(output_bp)
+    if input_bp <= 0.0:
+        return numpy.nan
+    filtered_bp = max(0.0, input_bp - output_bp)
+    return (filtered_bp / input_bp) * 100.0
+
+
 def write_fastp_stats(sra_stat, metadata, output_dir):
-    ind_sra = sra_stat.get('metadata_idx', get_metadata_row_index_by_run(metadata, sra_stat['sra_id']))
-    out_df = pandas.DataFrame([{
-        'run': sra_stat['sra_id'],
-        'fastp_duplication_rate': metadata.df.at[ind_sra, 'fastp_duplication_rate'],
-        'fastp_insert_size_peak': metadata.df.at[ind_sra, 'fastp_insert_size_peak'],
-        'num_fastp_in': metadata.df.at[ind_sra, 'num_fastp_in'],
-        'num_fastp_out': metadata.df.at[ind_sra, 'num_fastp_out'],
-        'bp_fastp_in': metadata.df.at[ind_sra, 'bp_fastp_in'],
-        'bp_fastp_out': metadata.df.at[ind_sra, 'bp_fastp_out'],
-    }])
-    out_path = os.path.join(output_dir, 'fastp_stats.tsv')
-    atomic_write_dataframe(out_df, out_path, sep='\t', index=False)
+    write_getfastq_stats(sra_stat=sra_stat, metadata=metadata, output_dir=output_dir)
 
 
 def write_getfastq_stats(sra_stat, metadata, output_dir):
@@ -2265,6 +2266,9 @@ def write_getfastq_stats(sra_stat, metadata, output_dir):
             row[col] = metadata.df.at[ind_sra, col]
         else:
             row[col] = numpy.nan
+    row['percent_fastp_filtered'] = calculate_filtered_percent(row.get('bp_fastp_in'), row.get('bp_fastp_out'))
+    row['percent_rrna_filtered'] = calculate_filtered_percent(row.get('bp_rrna_in'), row.get('bp_rrna_out'))
+    row['percent_contam_filtered'] = calculate_filtered_percent(row.get('bp_contam_in'), row.get('bp_contam_out'))
     out_df = pandas.DataFrame([row])
     out_path = os.path.join(output_dir, 'getfastq_stats.tsv')
     atomic_write_dataframe(out_df, out_path, sep='\t', index=False)
@@ -2345,7 +2349,7 @@ def ensure_fastp_output_files(output_dir, output_names):
             raise IsADirectoryError('fastp output path exists but is not a file: {}'.format(output_path))
 
 
-def update_metadata_after_fastp(metadata, sra_stat, output_dir, fp_stderr):
+def update_metadata_after_fastp(metadata, sra_stat, fp_stderr):
     num_in, num_out, bp_in, bp_out = parse_fastp_summary_counts(fp_stderr)
     ind_sra = sra_stat.get('metadata_idx', get_metadata_row_index_by_run(metadata, sra_stat['sra_id']))
     current_num_in = sum(num_in)
@@ -2355,7 +2359,6 @@ def update_metadata_after_fastp(metadata, sra_stat, output_dir, fp_stderr):
     metadata.df.at[ind_sra, 'num_fastp_out'] += sum(num_out)
     metadata.df.at[ind_sra, 'bp_fastp_in'] += sum(bp_in)
     metadata.df.at[ind_sra, 'bp_fastp_out'] += sum(bp_out)
-    write_fastp_stats(sra_stat, metadata, output_dir)
     return metadata
 
 
@@ -2398,7 +2401,7 @@ def run_fastp(
             for input_name in input_names:
                 run_file_state.discard(input_name)
     fp_stderr = fp_out.stderr.decode('utf8', errors='replace')
-    metadata = update_metadata_after_fastp(metadata, sra_stat, output_dir, fp_stderr)
+    metadata = update_metadata_after_fastp(metadata, sra_stat, fp_stderr)
     metadata = accumulate_and_print_stage_duration(
         metadata=metadata,
         sra_stat=sra_stat,

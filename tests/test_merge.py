@@ -68,6 +68,9 @@ class TestMergeFastpStatsIntoMetadata:
             'sec_ete_taxonomy': 1.25,
             'fastp_duplication_rate': 12.5,
             'fastp_insert_size_peak': 250.0,
+            'percent_fastp_filtered': 14.2857,
+            'percent_rrna_filtered': 16.6667,
+            'percent_contam_filtered': 10.0,
         }]).to_csv(srr001_dir / 'getfastq_stats.tsv', sep='\t', index=False)
 
         metadata = merge_fastp_stats_into_metadata(metadata, str(tmp_path))
@@ -87,6 +90,9 @@ class TestMergeFastpStatsIntoMetadata:
         assert metadata.df.loc[0, 'sec_ete_taxonomy'] == 1.25
         assert metadata.df.loc[0, 'fastp_duplication_rate'] == 12.5
         assert metadata.df.loc[0, 'fastp_insert_size_peak'] == 250.0
+        assert metadata.df.loc[0, 'percent_fastp_filtered'] == pytest.approx(14.2857)
+        assert metadata.df.loc[0, 'percent_rrna_filtered'] == pytest.approx(16.6667)
+        assert metadata.df.loc[0, 'percent_contam_filtered'] == pytest.approx(10.0)
 
     def test_rejects_metadata_without_run_column(self, tmp_path):
         metadata = Metadata.from_DataFrame(pandas.DataFrame({
@@ -145,6 +151,9 @@ class TestMergeFastpStatsIntoMetadata:
         assert 'sec_rrna_search' in metadata.df.columns
         assert 'sec_rrna_rewrite' in metadata.df.columns
         assert 'sec_ete_taxonomy' in metadata.df.columns
+        assert 'percent_fastp_filtered' in metadata.df.columns
+        assert 'percent_rrna_filtered' in metadata.df.columns
+        assert 'percent_contam_filtered' in metadata.df.columns
         assert numpy.isnan(metadata.df.loc[0, 'fastp_duplication_rate'])
         assert numpy.isnan(metadata.df.loc[0, 'fastp_insert_size_peak'])
         assert numpy.isnan(metadata.df.loc[0, 'sec_sra_download'])
@@ -153,6 +162,9 @@ class TestMergeFastpStatsIntoMetadata:
         assert numpy.isnan(metadata.df.loc[0, 'sec_rrna_search'])
         assert numpy.isnan(metadata.df.loc[0, 'sec_rrna_rewrite'])
         assert numpy.isnan(metadata.df.loc[0, 'sec_ete_taxonomy'])
+        assert numpy.isnan(metadata.df.loc[0, 'percent_fastp_filtered'])
+        assert numpy.isnan(metadata.df.loc[0, 'percent_rrna_filtered'])
+        assert numpy.isnan(metadata.df.loc[0, 'percent_contam_filtered'])
 
     def test_rejects_getfastq_file_path(self, tmp_path):
         metadata = Metadata.from_DataFrame(pandas.DataFrame({

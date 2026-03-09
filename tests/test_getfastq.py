@@ -2639,7 +2639,7 @@ class TestFastpMetrics:
         assert metadata.df.loc[0, 'fastp_duplication_rate'] == pytest.approx(33.0)
         assert metadata.df.loc[0, 'fastp_insert_size_peak'] == pytest.approx(222.0)
 
-    def test_write_fastp_stats_writes_tsv(self, tmp_path):
+    def test_write_fastp_stats_writes_getfastq_stats_only(self, tmp_path):
         metadata = Metadata.from_DataFrame(pandas.DataFrame({
             'run': ['SRR001'],
             'fastp_duplication_rate': [22.9565],
@@ -2651,8 +2651,9 @@ class TestFastpMetrics:
         }))
         sra_stat = {'sra_id': 'SRR001'}
         write_fastp_stats(sra_stat=sra_stat, metadata=metadata, output_dir=str(tmp_path))
-        out_path = tmp_path / 'fastp_stats.tsv'
+        out_path = tmp_path / 'getfastq_stats.tsv'
         assert out_path.exists()
+        assert not (tmp_path / 'fastp_stats.tsv').exists()
         out = pandas.read_csv(out_path, sep='\t')
         assert out.loc[0, 'run'] == 'SRR001'
         assert out.loc[0, 'fastp_duplication_rate'] == pytest.approx(22.9565)
@@ -2661,35 +2662,6 @@ class TestFastpMetrics:
         assert out.loc[0, 'num_fastp_out'] == 900
         assert out.loc[0, 'bp_fastp_in'] == 100000
         assert out.loc[0, 'bp_fastp_out'] == 90000
-
-    def test_write_fastp_stats_keeps_existing_file_when_atomic_write_fails(self, tmp_path, monkeypatch):
-        metadata = Metadata.from_DataFrame(pandas.DataFrame({
-            'run': ['SRR001'],
-            'fastp_duplication_rate': [22.9565],
-            'fastp_insert_size_peak': [138.0],
-            'num_fastp_in': [1000],
-            'num_fastp_out': [900],
-            'bp_fastp_in': [100000],
-            'bp_fastp_out': [90000],
-        }))
-        sra_stat = {'sra_id': 'SRR001'}
-        out_path = tmp_path / 'fastp_stats.tsv'
-        out_path.write_text('old\n')
-        original_to_csv = pandas.DataFrame.to_csv
-
-        def fake_to_csv(self, path_or_buf=None, *args, **kwargs):
-            with open(path_or_buf, 'w') as handle:
-                handle.write('partial\n')
-            raise RuntimeError('boom')
-
-        monkeypatch.setattr(pandas.DataFrame, 'to_csv', fake_to_csv)
-
-        with pytest.raises(RuntimeError, match='boom'):
-            write_fastp_stats(sra_stat=sra_stat, metadata=metadata, output_dir=str(tmp_path))
-
-        assert out_path.read_text() == 'old\n'
-        assert list(tmp_path.glob('amalgkit_atomic_*')) == []
-        monkeypatch.setattr(pandas.DataFrame, 'to_csv', original_to_csv)
 
     def test_write_getfastq_stats_writes_tsv(self, tmp_path):
         metadata = Metadata.from_DataFrame(pandas.DataFrame({
@@ -2701,6 +2673,8 @@ class TestFastpMetrics:
             'num_fastp_out': [6],
             'num_rrna_in': [6],
             'num_rrna_out': [5],
+            'num_contam_in': [5],
+            'num_contam_out': [4],
             'bp_dumped': [1000],
             'bp_rejected': [300],
             'bp_written': [700],
@@ -2708,6 +2682,8 @@ class TestFastpMetrics:
             'bp_fastp_out': [600],
             'bp_rrna_in': [600],
             'bp_rrna_out': [500],
+            'bp_contam_in': [500],
+            'bp_contam_out': [450],
             'bp_discarded': [500],
             'sec_sra_download': [0.75],
             'sec_fasterq_dump': [1.25],
@@ -2740,6 +2716,9 @@ class TestFastpMetrics:
         assert out.loc[0, 'sec_ete_taxonomy'] == pytest.approx(1.5)
         assert out.loc[0, 'fastp_duplication_rate'] == pytest.approx(12.0)
         assert out.loc[0, 'fastp_insert_size_peak'] == pytest.approx(250.0)
+        assert out.loc[0, 'percent_fastp_filtered'] == pytest.approx((100.0 / 700.0) * 100.0)
+        assert out.loc[0, 'percent_rrna_filtered'] == pytest.approx((100.0 / 600.0) * 100.0)
+        assert out.loc[0, 'percent_contam_filtered'] == pytest.approx(10.0)
 
     def test_write_getfastq_stats_keeps_existing_file_when_atomic_write_fails(self, tmp_path, monkeypatch):
         metadata = Metadata.from_DataFrame(pandas.DataFrame({
@@ -2947,6 +2926,8 @@ class TestRunFastp:
         assert metadata.df.loc[0, 'bp_fastp_in'] == 100
         assert metadata.df.loc[0, 'bp_fastp_out'] == 80
         assert metadata.df.loc[0, 'sec_fastp'] == pytest.approx(1.75)
+        assert not (tmp_path / 'fastp_stats.tsv').exists()
+        assert not (tmp_path / 'getfastq_stats.tsv').exists()
         out = capsys.readouterr().out
         assert 'Time elapsed for fastp (SRR001):' in out
 

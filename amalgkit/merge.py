@@ -14,6 +14,11 @@ from amalgkit.parallel_utils import (
 )
 
 FASTP_STATS_COLUMNS = ['fastp_duplication_rate', 'fastp_insert_size_peak']
+GETFASTQ_PERCENT_COLUMNS = [
+    'percent_fastp_filtered',
+    'percent_rrna_filtered',
+    'percent_contam_filtered',
+]
 GETFASTQ_STAGE_COLUMNS = [
     'num_dumped',
     'num_rejected',
@@ -39,7 +44,7 @@ GETFASTQ_STAGE_COLUMNS = [
     'sec_contam_filter',
     'sec_ete_taxonomy',
 ]
-GETFASTQ_MERGE_COLUMNS = FASTP_STATS_COLUMNS + GETFASTQ_STAGE_COLUMNS
+GETFASTQ_MERGE_COLUMNS = FASTP_STATS_COLUMNS + GETFASTQ_PERCENT_COLUMNS + GETFASTQ_STAGE_COLUMNS
 MERGE_QUANT_READ_MAX_WORKERS = 4
 
 
