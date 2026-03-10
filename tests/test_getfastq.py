@@ -1030,7 +1030,7 @@ class TestContamFilterDbPathResolution:
             contam_filter_db_name='UniRef90',
         )
         observed = resolve_contam_filter_db_path(args)
-        expected = os.path.join(os.path.realpath(str(tmp_path / 'out')), 'downloads', 'mmseqs_uniref90')
+        expected = os.path.join(os.path.realpath(str(tmp_path / 'out')), 'downloads', 'mmseqs2', 'UniRef90_DB')
         assert observed == expected
 
     def test_inferred_db_path_uses_custom_download_dir(self, tmp_path):
@@ -1042,7 +1042,7 @@ class TestContamFilterDbPathResolution:
             contam_filter_db_name='UniRef90',
         )
         observed = resolve_contam_filter_db_path(args)
-        expected = os.path.join(os.path.realpath(str(custom_download_dir)), 'mmseqs_uniref90')
+        expected = os.path.join(os.path.realpath(str(custom_download_dir)), 'mmseqs2', 'UniRef90_DB')
         assert observed == expected
 
     def test_mmseqs_db_download_uses_lock_file(self, tmp_path, monkeypatch):
@@ -1073,6 +1073,8 @@ class TestContamFilterDbPathResolution:
             _ = (stdout, stderr)
             captured['cmd'] = cmd
             db_path = cmd[3]
+            with open(db_path, 'wt') as fout:
+                fout.write('mockdb')
             with open(db_path + '.dbtype', 'wt') as fout:
                 fout.write('mock')
             return subprocess.CompletedProcess(cmd, 0, stdout=b'', stderr=b'')
@@ -1082,7 +1084,36 @@ class TestContamFilterDbPathResolution:
 
         db_path = ensure_mmseqs_contam_taxonomy_db_exists(args)
         assert captured['cmd'] is not None
-        assert captured['lock_path'] == db_path + '.download.lock'
+        assert captured['lock_path'] == os.path.join(os.path.dirname(db_path), 'locks', 'uniref90.lock')
+        assert captured['cmd'][4] == os.path.dirname(db_path)
+        assert os.path.isfile(db_path + '.ready')
+
+    def test_mmseqs_db_existing_without_ready_marker_reuses_db(self, tmp_path, monkeypatch):
+        out_dir = tmp_path / 'out'
+        args = SimpleNamespace(
+            out_dir=str(out_dir),
+            download_dir='inferred',
+            contam_filter_db='inferred',
+            contam_filter_db_name='UniRef90',
+            mmseqs_exe='mmseqs',
+            threads=1,
+            dump_print=False,
+        )
+        db_path = resolve_contam_filter_db_path(args)
+        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+        with open(db_path, 'wt') as fout:
+            fout.write('mockdb')
+        with open(db_path + '.dbtype', 'wt') as fout:
+            fout.write('mock')
+
+        def fail_run(*_args, **_kwargs):
+            raise AssertionError('subprocess.run should not be called when the shared MMseqs DB already exists.')
+
+        monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fail_run)
+
+        observed = ensure_mmseqs_contam_taxonomy_db_exists(args)
+        assert observed == db_path
+        assert os.path.isfile(db_path + '.ready')
 
 class TestGetfastqXmlRetrieval:
     class _DummyTree:
@@ -6040,8 +6071,9 @@ class TestRrnaReferenceDownload:
         refs_first = ensure_rrna_reference_files_exist(args)
         assert len(refs_first) == 2
         for ref_path in refs_first:
-            assert ref_path.startswith(os.path.join(str(out_dir), 'downloads'))
+            assert ref_path.startswith(os.path.join(str(out_dir), 'downloads', 'silva'))
             assert os.path.exists(ref_path)
+        assert os.path.isfile(out_dir / 'downloads' / 'silva' / 'silva.ready')
         assert calls['n'] == 2
 
         refs_second = ensure_rrna_reference_files_exist(args)
@@ -6079,9 +6111,10 @@ class TestRrnaReferenceDownload:
         refs = ensure_rrna_reference_files_exist(args)
         assert len(refs) == 2
         for ref_path in refs:
-            assert ref_path.startswith(str(custom_dir))
+            assert ref_path.startswith(str(custom_dir / 'silva'))
             assert os.path.exists(ref_path)
-        assert captured['lock_path'] == os.path.join(str(custom_dir), '.rrna_refs.download.lock')
+        assert os.path.isfile(custom_dir / 'silva' / 'silva.ready')
+        assert captured['lock_path'] == os.path.join(str(custom_dir), 'locks', 'silva_refs.lock')
 
 
 class TestMmseqsRrnaDbPreparation:
@@ -6100,11 +6133,11 @@ class TestMmseqsRrnaDbPreparation:
             def __exit__(self, exc_type, exc, tb):
                 return False
 
-        ref1 = custom_dir / 'silva_ssu.fasta'
-        ref2 = custom_dir / 'silva_lsu.fasta'
+        ref1 = custom_dir / 'silva' / 'silva_ssu.fasta'
+        ref2 = custom_dir / 'silva' / 'silva_lsu.fasta'
 
         def fake_prepare_refs(_args):
-            os.makedirs(str(custom_dir), exist_ok=True)
+            os.makedirs(str(custom_dir / 'silva'), exist_ok=True)
             ref1.write_text('>ssu\nACGT\n')
             ref2.write_text('>lsu\nTGCA\n')
             return [str(ref1), str(ref2)]
@@ -6112,6 +6145,8 @@ class TestMmseqsRrnaDbPreparation:
         def fake_run(cmd, stdout=None, stderr=None):
             _ = (stdout, stderr)
             captured['createdb_cmd'] = cmd
+            with open(cmd[3], 'wt') as fout:
+                fout.write('mmseqsdb')
             with open(cmd[3] + '.dbtype', 'wt') as fout:
                 fout.write('nucleotide')
             return subprocess.CompletedProcess(cmd, 0, stdout=b'', stderr=b'')
@@ -6127,10 +6162,14 @@ class TestMmseqsRrnaDbPreparation:
             dump_print=False,
         )
         db_path = ensure_mmseqs_rrna_reference_db_exists(args)
-        assert captured['lock_path'] == db_path + '.build.lock'
+        assert captured['lock_path'] == os.path.join(str(custom_dir), 'mmseqs2', 'locks', 'silva.lock')
         assert captured['createdb_cmd'][0:2] == ['mmseqs', 'createdb']
+        assert captured['createdb_cmd'][2] == os.path.join(str(custom_dir), 'silva', 'silva_refs.fasta')
         assert captured['createdb_cmd'][3] == db_path
+        assert db_path == os.path.join(str(custom_dir), 'mmseqs2', 'SILVA_DB')
         assert os.path.isfile(db_path + '.dbtype')
+        assert os.path.isfile(db_path)
+        assert os.path.isfile(db_path + '.ready')
 
 
 class TestFasterqSeqkitCompression:

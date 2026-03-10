@@ -166,7 +166,7 @@ def build_parser(command_handlers, command_names, version):
     pge.add_argument('--contam_filter_db_name', metavar='STR', default='UniRef90', type=str, required=False, action='store',
                      help='default=%(default)s: MMseqs2 downloadable DB name used for contaminant filtering (passed to `mmseqs databases`).')
     pge.add_argument('--contam_filter_db', metavar='PATH|inferred', default='inferred', type=str, required=False, action='store',
-                     help='default=%(default)s: MMseqs2 taxonomy DB prefix path. "inferred" = out_dir/downloads/mmseqs_<db_name>.')
+                     help='default=%(default)s: MMseqs2 taxonomy DB prefix path. "inferred" = out_dir/downloads/mmseqs2/<db_name>_DB.')
     pge.add_argument('--contam_filter_sensitivity', metavar='FLOAT|auto', default='auto', type=positive_float_or_auto,
                      required=False, action='store',
                      help='default=%(default)s: MMseqs2 sensitivity (-s) for contaminant filtering. '

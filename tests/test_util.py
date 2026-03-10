@@ -2287,7 +2287,7 @@ class TestMetadataTaxidValidation:
         assert metadata.df.loc[0, 'taxid_genus'] == 9605
         assert metadata.df.loc[1, 'taxid_genus'] == 10088
 
-    def test_add_standard_rank_taxids_uses_download_dir_for_ete4_cache(self, tmp_path, monkeypatch):
+    def test_add_standard_rank_taxids_uses_download_dir_for_shared_ete_taxonomy_cache(self, tmp_path, monkeypatch):
         metadata = Metadata.from_DataFrame(pandas.DataFrame({
             'run': ['SRR001'],
             'scientific_name': ['Homo sapiens'],
@@ -2332,12 +2332,14 @@ class TestMetadataTaxidValidation:
         )
         metadata.add_standard_rank_taxids(args=args)
 
-        expected_ete_dir = os.path.join(os.path.realpath(args.download_dir), 'ete4')
+        expected_download_dir = os.path.realpath(args.download_dir)
+        expected_ete_dir = os.path.join(expected_download_dir, 'ete_taxonomy')
+        expected_lock_path = os.path.join(expected_download_dir, 'locks', 'ete_taxonomy.lock')
         assert captured['kwargs']['dbfile'] == os.path.join(expected_ete_dir, 'taxa.sqlite')
         assert captured['kwargs']['taxdump_file'] == os.path.join(expected_ete_dir, 'taxdump.tar.gz')
         assert os.path.isdir(expected_ete_dir)
         assert os.path.isfile(os.path.join(expected_ete_dir, 'taxdump.tar.gz'))
-        assert captured['lock_path'] == os.path.join(expected_ete_dir, '.ete4_taxonomy.lock')
+        assert captured['lock_path'] == expected_lock_path
         assert captured['urlretrieve'][0].endswith('/taxdump.tar.gz')
         assert captured['urlretrieve'][1] == os.path.join(expected_ete_dir, 'taxdump.tar.gz.tmp')
 
@@ -2411,7 +2413,9 @@ class TestMetadataTaxidValidation:
             out_dir=str(tmp_path / 'out'),
             download_dir=str(tmp_path / 'fresh_downloads'),
         )
-        expected_ete_dir = os.path.join(os.path.realpath(args.download_dir), 'ete4')
+        expected_download_dir = os.path.realpath(args.download_dir)
+        expected_ete_dir = os.path.join(expected_download_dir, 'ete_taxonomy')
+        expected_lock_path = os.path.join(expected_download_dir, 'locks', 'ete_taxonomy.lock')
 
         assert not os.path.exists(args.download_dir)
         monkeypatch.setattr('amalgkit.util.acquire_exclusive_lock', DummyLock)
@@ -2425,7 +2429,7 @@ class TestMetadataTaxidValidation:
         assert captured['kwargs']['dbfile'] == os.path.join(expected_ete_dir, 'taxa.sqlite')
         assert captured['kwargs']['taxdump_file'] == os.path.join(expected_ete_dir, 'taxdump.tar.gz')
         assert os.path.isfile(os.path.join(expected_ete_dir, 'taxdump.tar.gz'))
-        assert captured['lock_path'] == os.path.join(expected_ete_dir, '.ete4_taxonomy.lock')
+        assert captured['lock_path'] == expected_lock_path
         assert captured['urlretrieve'][0].endswith('/taxdump.tar.gz')
         assert captured['urlretrieve'][1] == os.path.join(expected_ete_dir, 'taxdump.tar.gz.tmp')
 
@@ -2454,7 +2458,9 @@ class TestMetadataTaxidValidation:
             out_dir=str(tmp_path / 'out'),
             download_dir=str(tmp_path / 'shared_downloads'),
         )
-        expected_ete_dir = os.path.join(os.path.realpath(args.download_dir), 'ete4')
+        expected_download_dir = os.path.realpath(args.download_dir)
+        expected_ete_dir = os.path.join(expected_download_dir, 'ete_taxonomy')
+        expected_lock_path = os.path.join(expected_download_dir, 'locks', 'ete_taxonomy.lock')
         os.makedirs(expected_ete_dir, exist_ok=True)
         dbfile = os.path.join(expected_ete_dir, 'taxa.sqlite')
         with open(dbfile, 'wb') as fout:
@@ -2471,7 +2477,7 @@ class TestMetadataTaxidValidation:
         assert captured['kwargs']['dbfile'] == dbfile
         assert captured['kwargs']['update'] is False
         assert 'taxdump_file' not in captured['kwargs']
-        assert captured['lock_path'] == os.path.join(expected_ete_dir, '.ete4_taxonomy.lock')
+        assert captured['lock_path'] == expected_lock_path
 
 
 class TestDownloadLockRecovery:

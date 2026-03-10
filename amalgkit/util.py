@@ -7,6 +7,7 @@ from amalgkit.download_utils import (
     get_ete_ncbitaxa as _get_ete_ncbitaxa,
     resolve_download_dir as _resolve_download_dir,
     resolve_ete_data_dir as _resolve_ete_data_dir,
+    resolve_ete_lock_path as _resolve_ete_lock_path,
 )
 from amalgkit.metadata_utils import (
     Metadata as _Metadata,
@@ -80,6 +81,10 @@ def resolve_ete_data_dir(args):
     return _resolve_ete_data_dir(args, resolve_download_dir_fn=resolve_download_dir)
 
 
+def resolve_ete_lock_path(args):
+    return _resolve_ete_lock_path(args, resolve_download_dir_fn=resolve_download_dir)
+
+
 acquire_exclusive_lock = _acquire_exclusive_lock
 
 
@@ -89,6 +94,7 @@ def get_ete_ncbitaxa(args=None):
         acquire_exclusive_lock_fn=acquire_exclusive_lock,
         ncbitaxa_cls=ete4.NCBITaxa,
         resolve_ete_data_dir_fn=resolve_ete_data_dir,
+        resolve_ete_lock_path_fn=resolve_ete_lock_path,
     )
 
 def read_config_file(file_name, dir_path):

@@ -327,7 +327,7 @@ def split_busco_extra_args(extra_args):
 
 def build_busco_analysis_command(fasta_path, sci_name, output_root, args, extra_args):
     out_name = sci_name.replace(' ', '_')
-    download_path = resolve_download_dir(args)
+    download_path = resolve_busco_download_path(args)
     analysis_extra_args, _ = split_busco_extra_args(extra_args)
     cmd = [
         args.busco_exe,
@@ -348,7 +348,7 @@ def build_busco_analysis_command(fasta_path, sci_name, output_root, args, extra_
 
 def build_busco_download_command(args, extra_args):
     _, download_extra_args = split_busco_extra_args(extra_args)
-    download_path = resolve_download_dir(args)
+    download_path = resolve_busco_download_path(args)
     cmd = [args.busco_exe]
     cmd.extend(download_extra_args)
     cmd.extend([
@@ -363,6 +363,18 @@ def _sanitize_lock_suffix(text):
     if normalized == '':
         return 'lineage'
     return normalized
+
+
+def resolve_busco_download_path(args):
+    return os.path.join(resolve_download_dir(args), 'busco_downloads')
+
+
+def resolve_busco_download_lock_path(args, lineage):
+    return os.path.join(
+        resolve_download_dir(args),
+        'locks',
+        'busco_{}.lock'.format(_sanitize_lock_suffix(lineage)),
+    )
 
 
 def _dir_has_entries(path_dir):
@@ -399,7 +411,13 @@ def has_busco_lineage_cache(download_path, lineage):
 
 def run_busco(fasta_path, sci_name, output_root, args, extra_args):
     out_name = sci_name.replace(' ', '_')
-    download_path = resolve_download_dir(args)
+    download_root = resolve_download_dir(args)
+    if os.path.exists(download_root) and (not os.path.isdir(download_root)):
+        raise NotADirectoryError(
+            'BUSCO download path exists but is not a directory: {}'.format(download_root)
+        )
+    os.makedirs(download_root, exist_ok=True)
+    download_path = resolve_busco_download_path(args)
     if os.path.exists(download_path) and (not os.path.isdir(download_path)):
         raise NotADirectoryError(
             'BUSCO download path exists but is not a directory: {}'.format(download_path)
@@ -416,8 +434,7 @@ def run_busco(fasta_path, sci_name, output_root, args, extra_args):
         run_command(analysis_cmd)
         return os.path.join(output_root, out_name)
 
-    lock_filename = '.busco_{}.download.lock'.format(_sanitize_lock_suffix(args.lineage))
-    lock_path = os.path.join(download_path, lock_filename)
+    lock_path = resolve_busco_download_lock_path(args, args.lineage)
     with acquire_exclusive_lock(lock_path=lock_path, lock_label='BUSCO lineage download'):
         if not has_busco_lineage_cache(download_path=download_path, lineage=args.lineage):
             run_command(build_busco_download_command(args=args, extra_args=extra_args))

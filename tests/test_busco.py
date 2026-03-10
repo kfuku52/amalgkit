@@ -490,9 +490,10 @@ def test_run_busco_places_downloads_under_out_dir(tmp_path, monkeypatch):
     analysis_cmd = captured['cmds'][0]
     assert '--download_path' in analysis_cmd
     idx = analysis_cmd.index('--download_path')
-    assert analysis_cmd[idx + 1] == os.path.join(str(out_dir), 'downloads')
+    assert analysis_cmd[idx + 1] == os.path.join(str(out_dir), 'downloads', 'busco_downloads')
     assert '--offline' in analysis_cmd
     assert (out_dir / 'downloads').exists()
+    assert (out_dir / 'downloads' / 'busco_downloads').exists()
 
 
 def test_run_busco_rejects_download_path_that_is_file(tmp_path):
@@ -550,9 +551,10 @@ def test_run_busco_uses_custom_download_dir(tmp_path, monkeypatch):
     assert len(captured['cmds']) == 1
     analysis_cmd = captured['cmds'][0]
     idx = analysis_cmd.index('--download_path')
-    assert analysis_cmd[idx + 1] == str(custom_download_dir)
+    assert analysis_cmd[idx + 1] == str(custom_download_dir / 'busco_downloads')
     assert '--offline' in analysis_cmd
     assert custom_download_dir.exists()
+    assert (custom_download_dir / 'busco_downloads').exists()
 
 
 def test_run_busco_uses_download_lock_when_lineage_cache_missing(tmp_path, monkeypatch):
@@ -603,10 +605,15 @@ def test_run_busco_uses_download_lock_when_lineage_cache_missing(tmp_path, monke
     download_cmd, analysis_cmd = captured['cmds']
     assert '--download' in download_cmd
     assert download_cmd[download_cmd.index('--download') + 1] == 'eukaryota_odb12'
+    assert download_cmd[download_cmd.index('--download_path') + 1] == os.path.join(
+        str(out_dir),
+        'downloads',
+        'busco_downloads',
+    )
     assert '-i' not in download_cmd
     assert '-o' not in download_cmd
     assert '--offline' in analysis_cmd
-    assert captured['lock_path'] == os.path.join(str(out_dir), 'downloads', '.busco_eukaryota_odb12.download.lock')
+    assert captured['lock_path'] == os.path.join(str(out_dir), 'downloads', 'locks', 'busco_eukaryota_odb12.lock')
 
 
 def test_run_busco_skips_download_lock_when_lineage_cache_exists(tmp_path, monkeypatch):

@@ -1264,6 +1264,22 @@ def ensure_shared_download_dir_exists(download_dir):
     os.makedirs(download_dir, exist_ok=True)
     return download_dir
 
+def resolve_silva_download_dir(args):
+    return os.path.join(resolve_shared_download_dir(args), 'silva')
+
+def resolve_silva_lock_path(args):
+    return os.path.join(resolve_shared_download_dir(args), 'locks', 'silva_refs.lock')
+
+def resolve_silva_ready_path(args):
+    return os.path.join(resolve_silva_download_dir(args), 'silva.ready')
+
+def write_ready_marker(path):
+    parent = os.path.dirname(path)
+    if parent != '':
+        os.makedirs(parent, exist_ok=True)
+    with open(path, 'wt') as fout:
+        fout.write('ready\n')
+
 def resolve_mmseqs_exe(args):
     raw = getattr(args, 'mmseqs_exe', 'mmseqs')
     if raw is None:
@@ -1343,7 +1359,7 @@ def resolve_contam_filter_db_path(args):
     normalized = str(raw).strip()
     if normalized.lower() in ['', 'inferred']:
         db_name = resolve_contam_filter_db_name(args).replace('/', '_')
-        return os.path.join(resolve_shared_download_dir(args), 'mmseqs_{}'.format(db_name.lower()))
+        return os.path.join(resolve_shared_download_dir(args), 'mmseqs2', '{}_DB'.format(db_name))
     return os.path.realpath(normalized)
 
 def ensure_contam_filter_db_parent_dir_exists(db_path):
@@ -1355,23 +1371,39 @@ def ensure_contam_filter_db_parent_dir_exists(db_path):
     os.makedirs(parent, exist_ok=True)
     return parent
 
+def resolve_mmseqs_db_ready_path(db_path):
+    return db_path + '.ready'
+
+def resolve_mmseqs_db_lock_path(db_path):
+    parent = ensure_contam_filter_db_parent_dir_exists(db_path=db_path)
+    db_name = os.path.basename(db_path)
+    if db_name.endswith('_DB'):
+        db_name = db_name[:-3]
+    lock_name = '{}.lock'.format(db_name.lower())
+    return os.path.join(parent, 'locks', lock_name)
+
 def ensure_mmseqs_contam_taxonomy_db_exists(args):
     db_path = resolve_contam_filter_db_path(args)
     dbtype_path = db_path + '.dbtype'
-    if os.path.exists(dbtype_path):
-        if not os.path.isfile(dbtype_path):
-            raise IsADirectoryError('MMseqs taxonomy DB path exists but is not a file: {}'.format(dbtype_path))
+    ready_path = resolve_mmseqs_db_ready_path(db_path)
+    if os.path.exists(db_path) and (not os.path.isfile(db_path)):
+        raise IsADirectoryError('MMseqs taxonomy DB path exists but is not a file: {}'.format(db_path))
+    if os.path.exists(dbtype_path) and (not os.path.isfile(dbtype_path)):
+        raise IsADirectoryError('MMseqs taxonomy DB path exists but is not a file: {}'.format(dbtype_path))
+    if os.path.exists(db_path) and os.path.exists(dbtype_path) and os.path.exists(ready_path):
         return db_path
-    lock_path = db_path + '.download.lock'
+    lock_path = resolve_mmseqs_db_lock_path(db_path)
     with acquire_exclusive_lock(lock_path=lock_path, lock_label='MMseqs taxonomy DB download'):
-        if os.path.exists(dbtype_path):
-            if not os.path.isfile(dbtype_path):
-                raise IsADirectoryError('MMseqs taxonomy DB path exists but is not a file: {}'.format(dbtype_path))
+        if os.path.exists(db_path) and (not os.path.isfile(db_path)):
+            raise IsADirectoryError('MMseqs taxonomy DB path exists but is not a file: {}'.format(db_path))
+        if os.path.exists(dbtype_path) and (not os.path.isfile(dbtype_path)):
+            raise IsADirectoryError('MMseqs taxonomy DB path exists but is not a file: {}'.format(dbtype_path))
+        if os.path.exists(db_path) and os.path.exists(dbtype_path) and os.path.exists(ready_path):
             return db_path
-        ensure_contam_filter_db_parent_dir_exists(db_path=db_path)
-        download_dir = ensure_shared_download_dir_exists(resolve_shared_download_dir(args))
-        tmp_dir = os.path.join(download_dir, 'mmseqs_databases_tmp')
-        os.makedirs(tmp_dir, exist_ok=True)
+        db_dir = ensure_contam_filter_db_parent_dir_exists(db_path=db_path)
+        if os.path.exists(db_path) and os.path.exists(dbtype_path) and (not os.path.exists(ready_path)):
+            write_ready_marker(ready_path)
+            return db_path
         mmseqs_exe = resolve_mmseqs_exe(args)
         db_name = resolve_contam_filter_db_name(args)
         db_cmd = [
@@ -1379,7 +1411,7 @@ def ensure_mmseqs_contam_taxonomy_db_exists(args):
             'databases',
             db_name,
             db_path,
-            tmp_dir,
+            db_dir,
             '--threads',
             str(max(1, int(getattr(args, 'threads', 1)))),
         ]
@@ -1399,10 +1431,15 @@ def ensure_mmseqs_contam_taxonomy_db_exists(args):
                 )
             ),
         )
+        if not os.path.exists(db_path):
+            raise FileNotFoundError('MMseqs taxonomy DB was not generated: {}'.format(db_path))
+        if not os.path.isfile(db_path):
+            raise IsADirectoryError('MMseqs taxonomy DB path exists but is not a file: {}'.format(db_path))
         if not os.path.exists(dbtype_path):
             raise FileNotFoundError('MMseqs taxonomy DB was not generated: {}'.format(dbtype_path))
         if not os.path.isfile(dbtype_path):
             raise IsADirectoryError('MMseqs taxonomy DB path exists but is not a file: {}'.format(dbtype_path))
+        write_ready_marker(ready_path)
     return db_path
 
 def download_rrna_reference_gz(url, gz_path, label):
@@ -1431,13 +1468,20 @@ def expand_rrna_reference_gz(gz_path, fasta_path):
     os.replace(tmp_path, fasta_path)
 
 def ensure_rrna_reference_files_exist(args):
-    download_dir = ensure_shared_download_dir_exists(resolve_shared_download_dir(args))
-    lock_path = os.path.join(download_dir, '.rrna_refs.download.lock')
+    silva_dir = ensure_shared_download_dir_exists(resolve_silva_download_dir(args))
+    ready_path = resolve_silva_ready_path(args)
+    expected_refs = [
+        os.path.join(silva_dir, ref_spec['fasta_filename'])
+        for ref_spec in RRNA_REFERENCE_SPECS
+    ]
+    if all(os.path.isfile(ref_path) for ref_path in expected_refs) and os.path.exists(ready_path):
+        return expected_refs
+    lock_path = resolve_silva_lock_path(args)
     with acquire_exclusive_lock(lock_path=lock_path, lock_label='rRNA reference download'):
         refs = []
         for ref_spec in RRNA_REFERENCE_SPECS:
-            fasta_path = os.path.join(download_dir, ref_spec['fasta_filename'])
-            gz_path = os.path.join(download_dir, ref_spec['gz_filename'])
+            fasta_path = os.path.join(silva_dir, ref_spec['fasta_filename'])
+            gz_path = os.path.join(silva_dir, ref_spec['gz_filename'])
             if os.path.exists(fasta_path):
                 if not os.path.isfile(fasta_path):
                     raise IsADirectoryError('rRNA reference path exists but is not a file: {}'.format(fasta_path))
@@ -1454,11 +1498,12 @@ def ensure_rrna_reference_files_exist(args):
             print('Expanding rRNA reference: {}'.format(gz_path), flush=True)
             expand_rrna_reference_gz(gz_path=gz_path, fasta_path=fasta_path)
             refs.append(fasta_path)
+        write_ready_marker(ready_path)
         return refs
 
 def resolve_mmseqs_rrna_reference_db_path(args):
     download_dir = resolve_shared_download_dir(args)
-    return os.path.join(download_dir, 'mmseqs_rrna_silva')
+    return os.path.join(download_dir, 'mmseqs2', 'SILVA_DB')
 
 def write_mmseqs_rrna_reference_fasta(rrna_refs, fasta_path):
     tmp_path = fasta_path + '.tmp.{}'.format(time.time_ns())
@@ -1492,21 +1537,28 @@ def remove_mmseqs_db_artifacts(db_prefix):
                 os.remove(path)
 
 def ensure_mmseqs_rrna_reference_db_exists(args):
-    download_dir = ensure_shared_download_dir_exists(resolve_shared_download_dir(args))
     db_path = resolve_mmseqs_rrna_reference_db_path(args)
     dbtype_path = db_path + '.dbtype'
-    if os.path.exists(dbtype_path):
-        if not os.path.isfile(dbtype_path):
-            raise IsADirectoryError('MMseqs rRNA DB path exists but is not a file: {}'.format(dbtype_path))
+    ready_path = resolve_mmseqs_db_ready_path(db_path)
+    if os.path.exists(db_path) and (not os.path.isfile(db_path)):
+        raise IsADirectoryError('MMseqs rRNA DB path exists but is not a file: {}'.format(db_path))
+    if os.path.exists(dbtype_path) and (not os.path.isfile(dbtype_path)):
+        raise IsADirectoryError('MMseqs rRNA DB path exists but is not a file: {}'.format(dbtype_path))
+    if os.path.exists(db_path) and os.path.exists(dbtype_path) and os.path.exists(ready_path):
         return db_path
-    lock_path = db_path + '.build.lock'
+    lock_path = resolve_mmseqs_db_lock_path(db_path)
     with acquire_exclusive_lock(lock_path=lock_path, lock_label='MMseqs rRNA DB build'):
-        if os.path.exists(dbtype_path):
-            if not os.path.isfile(dbtype_path):
-                raise IsADirectoryError('MMseqs rRNA DB path exists but is not a file: {}'.format(dbtype_path))
+        if os.path.exists(db_path) and (not os.path.isfile(db_path)):
+            raise IsADirectoryError('MMseqs rRNA DB path exists but is not a file: {}'.format(db_path))
+        if os.path.exists(dbtype_path) and (not os.path.isfile(dbtype_path)):
+            raise IsADirectoryError('MMseqs rRNA DB path exists but is not a file: {}'.format(dbtype_path))
+        if os.path.exists(db_path) and os.path.exists(dbtype_path) and os.path.exists(ready_path):
+            return db_path
+        if os.path.exists(db_path) and os.path.exists(dbtype_path) and (not os.path.exists(ready_path)):
+            write_ready_marker(ready_path)
             return db_path
         rrna_refs = ensure_rrna_reference_files_exist(args)
-        combined_fasta = os.path.join(download_dir, 'mmseqs_rrna_silva_refs.fasta')
+        combined_fasta = os.path.join(resolve_silva_download_dir(args), 'silva_refs.fasta')
         write_mmseqs_rrna_reference_fasta(rrna_refs=rrna_refs, fasta_path=combined_fasta)
         remove_mmseqs_db_artifacts(db_prefix=db_path)
         mmseqs_exe = resolve_mmseqs_exe(args)
@@ -1527,10 +1579,15 @@ def ensure_mmseqs_rrna_reference_db_exists(args):
                 )
             ),
         )
+        if not os.path.exists(db_path):
+            raise FileNotFoundError('MMseqs rRNA DB was not generated: {}'.format(db_path))
+        if not os.path.isfile(db_path):
+            raise IsADirectoryError('MMseqs rRNA DB path exists but is not a file: {}'.format(db_path))
         if not os.path.exists(dbtype_path):
             raise FileNotFoundError('MMseqs rRNA DB was not generated: {}'.format(dbtype_path))
         if not os.path.isfile(dbtype_path):
             raise IsADirectoryError('MMseqs rRNA DB path exists but is not a file: {}'.format(dbtype_path))
+        write_ready_marker(ready_path)
     return db_path
 
 def estimate_num_written_spots_from_fastq(sra_stat, files=None, file_state=None):

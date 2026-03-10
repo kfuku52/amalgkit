@@ -32,7 +32,13 @@ def resolve_download_dir(args):
 def resolve_ete_data_dir(args, resolve_download_dir_fn=None):
     if resolve_download_dir_fn is None:
         resolve_download_dir_fn = resolve_download_dir
-    return os.path.join(resolve_download_dir_fn(args), 'ete4')
+    return os.path.join(resolve_download_dir_fn(args), 'ete_taxonomy')
+
+
+def resolve_ete_lock_path(args, resolve_download_dir_fn=None):
+    if resolve_download_dir_fn is None:
+        resolve_download_dir_fn = resolve_download_dir
+    return os.path.join(resolve_download_dir_fn(args), 'locks', 'ete_taxonomy.lock')
 
 
 def _assert_regular_file_or_absent(path, label='Path'):
@@ -369,6 +375,7 @@ def get_ete_ncbitaxa(
     acquire_exclusive_lock_fn=None,
     ncbitaxa_cls=None,
     resolve_ete_data_dir_fn=None,
+    resolve_ete_lock_path_fn=None,
     urlretrieve_fn=None,
     is_taxadb_up_to_date_fn=None,
 ):
@@ -378,6 +385,8 @@ def get_ete_ncbitaxa(
         ncbitaxa_cls = ete4.NCBITaxa
     if resolve_ete_data_dir_fn is None:
         resolve_ete_data_dir_fn = resolve_ete_data_dir
+    if resolve_ete_lock_path_fn is None:
+        resolve_ete_lock_path_fn = resolve_ete_lock_path
     if urlretrieve_fn is None:
         urlretrieve_fn = urllib.request.urlretrieve
     if is_taxadb_up_to_date_fn is None:
@@ -386,7 +395,10 @@ def get_ete_ncbitaxa(
         return ncbitaxa_cls()
     ete_data_dir = resolve_ete_data_dir_fn(args)
     os.makedirs(ete_data_dir, exist_ok=True)
-    lock_path = os.path.join(ete_data_dir, '.ete4_taxonomy.lock')
+    lock_path = resolve_ete_lock_path_fn(args)
+    lock_dir = os.path.dirname(lock_path)
+    if lock_dir != '':
+        os.makedirs(lock_dir, exist_ok=True)
     dbfile = os.path.join(ete_data_dir, 'taxa.sqlite')
     taxdump_file = os.path.join(ete_data_dir, 'taxdump.tar.gz')
     with acquire_exclusive_lock_fn(lock_path=lock_path, lock_label='ETE4 taxonomy DB'):
