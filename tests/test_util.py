@@ -1,5 +1,7 @@
 import json
 import os
+import socket
+import time
 import warnings
 import pytest
 import pandas
@@ -2473,25 +2475,41 @@ class TestMetadataTaxidValidation:
 
 
 class TestDownloadLockRecovery:
-    def test_acquire_exclusive_lock_reclaims_stale_pid_lock(self, tmp_path, monkeypatch):
+    def test_acquire_exclusive_lock_reclaims_stale_same_host_lock(self, tmp_path, monkeypatch):
         lock_path = tmp_path / 'download.lock'
-        lock_path.write_text('999999\n')
+        lock_path.write_text(json.dumps({
+            'format': 'amalgkit-lock-v2',
+            'hostname': socket.gethostname(),
+            'boot_id': 'boot-1',
+            'pid': 999999,
+            'created_at': time.time(),
+        }) + '\n')
 
         def fake_kill(_pid, _sig):
             raise ProcessLookupError()
 
+        monkeypatch.setattr('amalgkit.download_utils._resolve_local_boot_id', lambda: 'boot-1')
         monkeypatch.setattr('amalgkit.util.os.kill', fake_kill)
 
         with acquire_exclusive_lock(str(lock_path), lock_label='test lock', poll_seconds=1, timeout_seconds=2):
             assert lock_path.exists()
-            assert lock_path.read_text().strip() == str(os.getpid())
+            metadata = json.loads(lock_path.read_text())
+            assert metadata['pid'] == os.getpid()
+            assert metadata['hostname'] == socket.gethostname()
 
         assert not lock_path.exists()
 
-    def test_acquire_exclusive_lock_times_out_when_owner_pid_is_alive(self, tmp_path, monkeypatch):
+    def test_acquire_exclusive_lock_times_out_when_same_host_owner_pid_is_alive(self, tmp_path, monkeypatch):
         lock_path = tmp_path / 'download.lock'
-        lock_path.write_text('12345\n')
+        lock_path.write_text(json.dumps({
+            'format': 'amalgkit-lock-v2',
+            'hostname': socket.gethostname(),
+            'boot_id': 'boot-2',
+            'pid': 12345,
+            'created_at': time.time(),
+        }) + '\n')
 
+        monkeypatch.setattr('amalgkit.download_utils._resolve_local_boot_id', lambda: 'boot-2')
         monkeypatch.setattr('amalgkit.util.os.kill', lambda _pid, _sig: None)
 
         with pytest.raises(TimeoutError, match='Timed out'):
@@ -2499,3 +2517,52 @@ class TestDownloadLockRecovery:
                 pass
 
         assert lock_path.exists()
+
+    def test_acquire_exclusive_lock_reclaims_stale_cross_host_lock_after_heartbeat_timeout(self, tmp_path, monkeypatch):
+        lock_path = tmp_path / 'download.lock'
+        lock_path.write_text(json.dumps({
+            'format': 'amalgkit-lock-v2',
+            'hostname': 'remote-node-01',
+            'boot_id': 'remote-boot',
+            'pid': 321,
+            'created_at': time.time() - 30,
+        }) + '\n')
+        stale_at = time.time() - 10
+        os.utime(lock_path, (stale_at, stale_at))
+
+        monkeypatch.setattr('amalgkit.download_utils.DOWNLOAD_LOCK_STALE_SECONDS', 1)
+
+        with acquire_exclusive_lock(str(lock_path), lock_label='test lock', poll_seconds=1, timeout_seconds=2):
+            metadata = json.loads(lock_path.read_text())
+            assert metadata['pid'] == os.getpid()
+
+        assert not lock_path.exists()
+
+    def test_acquire_exclusive_lock_waits_for_fresh_cross_host_lock(self, tmp_path, monkeypatch):
+        lock_path = tmp_path / 'download.lock'
+        lock_path.write_text(json.dumps({
+            'format': 'amalgkit-lock-v2',
+            'hostname': 'remote-node-02',
+            'boot_id': 'remote-boot',
+            'pid': 654,
+            'created_at': time.time(),
+        }) + '\n')
+
+        monkeypatch.setattr('amalgkit.download_utils.DOWNLOAD_LOCK_STALE_SECONDS', 60)
+
+        with pytest.raises(TimeoutError, match='Timed out'):
+            with acquire_exclusive_lock(str(lock_path), lock_label='test lock', poll_seconds=1, timeout_seconds=1):
+                pass
+
+        assert lock_path.exists()
+
+    def test_acquire_exclusive_lock_updates_lock_heartbeat(self, tmp_path, monkeypatch):
+        lock_path = tmp_path / 'download.lock'
+
+        monkeypatch.setattr('amalgkit.download_utils.DOWNLOAD_LOCK_HEARTBEAT_SECONDS', 0.05)
+
+        with acquire_exclusive_lock(str(lock_path), lock_label='test lock', poll_seconds=1, timeout_seconds=2):
+            first_mtime = os.stat(lock_path).st_mtime_ns
+            time.sleep(0.2)
+            second_mtime = os.stat(lock_path).st_mtime_ns
+            assert second_mtime > first_mtime

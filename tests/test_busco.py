@@ -470,11 +470,12 @@ def test_run_busco_places_downloads_under_out_dir(tmp_path, monkeypatch):
         redo=False,
         out_dir=str(out_dir),
     )
-    captured = {}
+    captured = {'cmds': []}
 
     def fake_run_command(cmd):
-        captured['cmd'] = cmd
+        captured['cmds'].append(cmd)
 
+    monkeypatch.setattr('amalgkit.busco.has_busco_lineage_cache', lambda **_kwargs: True)
     monkeypatch.setattr('amalgkit.busco.run_command', fake_run_command)
     output_dir = run_busco(
         fasta_path='/tmp/input.fa',
@@ -485,9 +486,12 @@ def test_run_busco_places_downloads_under_out_dir(tmp_path, monkeypatch):
     )
 
     assert output_dir == os.path.join(str(busco_root), 'Species_A')
-    assert '--download_path' in captured['cmd']
-    idx = captured['cmd'].index('--download_path')
-    assert captured['cmd'][idx + 1] == os.path.join(str(out_dir), 'downloads')
+    assert len(captured['cmds']) == 1
+    analysis_cmd = captured['cmds'][0]
+    assert '--download_path' in analysis_cmd
+    idx = analysis_cmd.index('--download_path')
+    assert analysis_cmd[idx + 1] == os.path.join(str(out_dir), 'downloads')
+    assert '--offline' in analysis_cmd
     assert (out_dir / 'downloads').exists()
 
 
@@ -528,11 +532,12 @@ def test_run_busco_uses_custom_download_dir(tmp_path, monkeypatch):
         out_dir=str(out_dir),
         download_dir=str(custom_download_dir),
     )
-    captured = {}
+    captured = {'cmds': []}
 
     def fake_run_command(cmd):
-        captured['cmd'] = cmd
+        captured['cmds'].append(cmd)
 
+    monkeypatch.setattr('amalgkit.busco.has_busco_lineage_cache', lambda **_kwargs: True)
     monkeypatch.setattr('amalgkit.busco.run_command', fake_run_command)
     _ = run_busco(
         fasta_path='/tmp/input.fa',
@@ -542,8 +547,11 @@ def test_run_busco_uses_custom_download_dir(tmp_path, monkeypatch):
         extra_args=[],
     )
 
-    idx = captured['cmd'].index('--download_path')
-    assert captured['cmd'][idx + 1] == str(custom_download_dir)
+    assert len(captured['cmds']) == 1
+    analysis_cmd = captured['cmds'][0]
+    idx = analysis_cmd.index('--download_path')
+    assert analysis_cmd[idx + 1] == str(custom_download_dir)
+    assert '--offline' in analysis_cmd
     assert custom_download_dir.exists()
 
 
@@ -559,7 +567,8 @@ def test_run_busco_uses_download_lock_when_lineage_cache_missing(tmp_path, monke
         redo=False,
         out_dir=str(out_dir),
     )
-    captured = {'lock_path': None, 'run_calls': 0}
+    captured = {'lock_path': None, 'cmds': []}
+    state = {'cache_ready': False}
 
     class DummyLock:
         def __init__(self, lock_path, lock_label='Lock', poll_seconds=5, timeout_seconds=3600):
@@ -572,9 +581,17 @@ def test_run_busco_uses_download_lock_when_lineage_cache_missing(tmp_path, monke
         def __exit__(self, exc_type, exc, tb):
             return False
 
-    monkeypatch.setattr('amalgkit.busco.has_busco_lineage_cache', lambda **_kwargs: False)
+    def fake_has_busco_lineage_cache(**_kwargs):
+        return state['cache_ready']
+
+    def fake_run_command(cmd):
+        captured['cmds'].append(cmd)
+        if '--download' in cmd:
+            state['cache_ready'] = True
+
+    monkeypatch.setattr('amalgkit.busco.has_busco_lineage_cache', fake_has_busco_lineage_cache)
     monkeypatch.setattr('amalgkit.busco.acquire_exclusive_lock', DummyLock)
-    monkeypatch.setattr('amalgkit.busco.run_command', lambda _cmd: captured.__setitem__('run_calls', captured['run_calls'] + 1))
+    monkeypatch.setattr('amalgkit.busco.run_command', fake_run_command)
     run_busco(
         fasta_path='/tmp/input.fa',
         sci_name='Species A',
@@ -582,7 +599,13 @@ def test_run_busco_uses_download_lock_when_lineage_cache_missing(tmp_path, monke
         args=args,
         extra_args=[],
     )
-    assert captured['run_calls'] == 1
+    assert len(captured['cmds']) == 2
+    download_cmd, analysis_cmd = captured['cmds']
+    assert '--download' in download_cmd
+    assert download_cmd[download_cmd.index('--download') + 1] == 'eukaryota_odb12'
+    assert '-i' not in download_cmd
+    assert '-o' not in download_cmd
+    assert '--offline' in analysis_cmd
     assert captured['lock_path'] == os.path.join(str(out_dir), 'downloads', '.busco_eukaryota_odb12.download.lock')
 
 
@@ -612,7 +635,8 @@ def test_run_busco_skips_download_lock_when_lineage_cache_exists(tmp_path, monke
 
     monkeypatch.setattr('amalgkit.busco.has_busco_lineage_cache', lambda **_kwargs: True)
     monkeypatch.setattr('amalgkit.busco.acquire_exclusive_lock', FailingLock)
-    monkeypatch.setattr('amalgkit.busco.run_command', lambda _cmd: captured.__setitem__('run_calls', captured['run_calls'] + 1))
+    captured_cmds = []
+    monkeypatch.setattr('amalgkit.busco.run_command', lambda cmd: captured_cmds.append(cmd))
     run_busco(
         fasta_path='/tmp/input.fa',
         sci_name='Species A',
@@ -620,8 +644,67 @@ def test_run_busco_skips_download_lock_when_lineage_cache_exists(tmp_path, monke
         args=args,
         extra_args=[],
     )
-    assert captured['run_calls'] == 1
+    assert len(captured_cmds) == 1
+    assert '--offline' in captured_cmds[0]
     assert captured['lock_used'] is False
+
+
+def test_run_busco_filters_extra_args_between_download_and_analysis(tmp_path, monkeypatch):
+    out_dir = tmp_path / 'out'
+    busco_root = out_dir / 'busco'
+    out_dir.mkdir()
+    busco_root.mkdir()
+    args = SimpleNamespace(
+        busco_exe='busco',
+        lineage='eukaryota_odb12',
+        threads=4,
+        redo=False,
+        out_dir=str(out_dir),
+    )
+    captured = {'cmds': []}
+    state = {'cache_ready': False}
+
+    class DummyLock:
+        def __init__(self, *args, **kwargs):
+            _ = (args, kwargs)
+
+        def __enter__(self):
+            return None
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    def fake_has_busco_lineage_cache(**_kwargs):
+        return state['cache_ready']
+
+    def fake_run_command(cmd):
+        captured['cmds'].append(cmd)
+        if '--download' in cmd:
+            state['cache_ready'] = True
+
+    monkeypatch.setattr('amalgkit.busco.has_busco_lineage_cache', fake_has_busco_lineage_cache)
+    monkeypatch.setattr('amalgkit.busco.acquire_exclusive_lock', DummyLock)
+    monkeypatch.setattr('amalgkit.busco.run_command', fake_run_command)
+    run_busco(
+        fasta_path='/tmp/input.fa',
+        sci_name='Species A',
+        output_root=str(busco_root),
+        args=args,
+        extra_args=[
+            '--datasets_version', 'odb10',
+            '--download_base_url', 'https://example.invalid/busco',
+            '--miniprot',
+            '--offline',
+        ],
+    )
+
+    download_cmd, analysis_cmd = captured['cmds']
+    assert '--datasets_version' in download_cmd
+    assert '--download_base_url' in download_cmd
+    assert '--miniprot' not in download_cmd
+    assert '--offline' not in download_cmd
+    assert '--miniprot' in analysis_cmd
+    assert analysis_cmd.count('--offline') == 1
 
 
 def test_busco_main_rejects_nonpositive_species_jobs(tmp_path):

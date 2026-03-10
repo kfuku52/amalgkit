@@ -1,5 +1,8 @@
 import errno
+import json
 import os
+import socket
+import threading
 import time
 import urllib.request
 from contextlib import contextmanager
@@ -9,6 +12,8 @@ import ete4
 
 DOWNLOAD_LOCK_POLL_SECONDS = 5
 DOWNLOAD_LOCK_TIMEOUT_SECONDS = 3600
+DOWNLOAD_LOCK_HEARTBEAT_SECONDS = 60
+DOWNLOAD_LOCK_STALE_SECONDS = 900
 NCBI_TAXDUMP_URL = 'https://ftp.ncbi.nlm.nih.gov/pub/taxonomy/taxdump.tar.gz'
 
 
@@ -41,6 +46,79 @@ def _assert_lock_path_is_regular_file(lock_path, lock_label='Lock'):
     _assert_regular_file_or_absent(lock_path, label='{} path'.format(lock_label))
 
 
+def _resolve_local_boot_id():
+    boot_id_path = '/proc/sys/kernel/random/boot_id'
+    if not os.path.isfile(boot_id_path):
+        return None
+    try:
+        with open(boot_id_path) as handle:
+            boot_id = handle.readline().strip()
+    except OSError:
+        return None
+    if boot_id == '':
+        return None
+    return boot_id
+
+
+def _build_lock_metadata():
+    return {
+        'format': 'amalgkit-lock-v2',
+        'pid': os.getpid(),
+        'hostname': socket.gethostname(),
+        'boot_id': _resolve_local_boot_id(),
+        'created_at': time.time(),
+    }
+
+
+def _serialize_lock_metadata(metadata):
+    return json.dumps(metadata, sort_keys=True) + '\n'
+
+
+def _read_lock_metadata(lock_path):
+    try:
+        with open(lock_path) as lock_handle:
+            raw = lock_handle.read().strip()
+    except OSError:
+        return None
+    if raw == '':
+        return None
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        parsed = None
+    if isinstance(parsed, dict):
+        return parsed
+    first_line = raw.splitlines()[0].strip()
+    try:
+        pid = int(first_line)
+    except ValueError:
+        return None
+    if pid <= 0:
+        return None
+    return {
+        'format': 'legacy-pid',
+        'pid': pid,
+    }
+
+
+def _describe_lock_owner(metadata):
+    if not isinstance(metadata, dict):
+        return 'owner=unknown'
+    parts = []
+    hostname = metadata.get('hostname')
+    pid = metadata.get('pid')
+    created_at = metadata.get('created_at')
+    if hostname:
+        parts.append('host={}'.format(hostname))
+    if pid:
+        parts.append('pid={}'.format(pid))
+    if isinstance(created_at, (float, int)):
+        parts.append('created_at={:.0f}'.format(created_at))
+    if len(parts) == 0:
+        return 'owner=unknown'
+    return ', '.join(parts)
+
+
 def _try_create_lock_file(lock_path):
     _assert_lock_path_is_regular_file(lock_path)
     try:
@@ -48,21 +126,20 @@ def _try_create_lock_file(lock_path):
     except FileExistsError:
         return False
     with os.fdopen(fd, 'w') as lock_handle:
-        lock_handle.write('{}\n'.format(os.getpid()))
+        lock_handle.write(_serialize_lock_metadata(_build_lock_metadata()))
     return True
 
 
 def _read_lock_owner_pid(lock_path):
-    try:
-        with open(lock_path) as lock_handle:
-            first_line = lock_handle.readline().strip()
-    except OSError:
+    metadata = _read_lock_metadata(lock_path)
+    if not isinstance(metadata, dict):
         return None
-    if first_line == '':
+    pid = metadata.get('pid')
+    if pid is None:
         return None
     try:
-        pid = int(first_line)
-    except ValueError:
+        pid = int(pid)
+    except (TypeError, ValueError):
         return None
     if pid <= 0:
         return None
@@ -83,7 +160,54 @@ def _is_process_alive(pid):
     return True
 
 
-def _break_stale_lock_if_needed(lock_path, lock_label='Lock'):
+def _is_same_host_lock_owner(metadata):
+    if not isinstance(metadata, dict):
+        return False
+    owner_host = metadata.get('hostname')
+    local_host = socket.gethostname()
+    if (owner_host is None) or (owner_host != local_host):
+        return False
+    owner_boot_id = metadata.get('boot_id')
+    local_boot_id = _resolve_local_boot_id()
+    if owner_boot_id and local_boot_id:
+        return owner_boot_id == local_boot_id
+    return False
+
+
+def _stale_lock_heartbeat_expired(stat_result, stale_seconds):
+    if stale_seconds <= 0:
+        return False
+    heartbeat_age = time.time() - stat_result.st_mtime
+    return heartbeat_age > stale_seconds
+
+
+def _start_lock_heartbeat(lock_path, interval_seconds):
+    interval_seconds = float(interval_seconds)
+    if interval_seconds <= 0:
+        raise ValueError('interval_seconds must be > 0.')
+    stop_event = threading.Event()
+
+    def heartbeat():
+        while True:
+            if stop_event.wait(interval_seconds):
+                return
+            try:
+                os.utime(lock_path, None)
+            except FileNotFoundError:
+                return
+            except OSError:
+                return
+
+    thread = threading.Thread(
+        target=heartbeat,
+        name='amalgkit-lock-heartbeat',
+        daemon=True,
+    )
+    thread.start()
+    return stop_event, thread
+
+
+def _break_stale_lock_if_needed(lock_path, lock_label='Lock', stale_seconds=DOWNLOAD_LOCK_STALE_SECONDS):
     if not os.path.lexists(lock_path):
         return False
     _assert_lock_path_is_regular_file(lock_path, lock_label=lock_label)
@@ -91,13 +215,19 @@ def _break_stale_lock_if_needed(lock_path, lock_label='Lock'):
         stat_before = os.stat(lock_path)
     except FileNotFoundError:
         return False
+    metadata = _read_lock_metadata(lock_path)
     owner_pid = _read_lock_owner_pid(lock_path)
-    if owner_pid is None:
-        stale_reason = 'missing/invalid owner PID'
-    elif _is_process_alive(owner_pid):
+    stale_reason = None
+    if _is_same_host_lock_owner(metadata) and (owner_pid is not None):
+        if not _is_process_alive(owner_pid):
+            stale_reason = 'same-host owner PID {} is not running'.format(owner_pid)
+    elif _stale_lock_heartbeat_expired(stat_before, stale_seconds):
+        stale_reason = 'heartbeat expired after {:.0f} sec ({})'.format(
+            time.time() - stat_before.st_mtime,
+            _describe_lock_owner(metadata),
+        )
+    if stale_reason is None:
         return False
-    else:
-        stale_reason = 'owner PID {} is not running'.format(owner_pid)
     try:
         stat_now = os.stat(lock_path)
     except FileNotFoundError:
@@ -146,22 +276,34 @@ def acquire_exclusive_lock(
     has_reported_wait = False
     while True:
         if _try_create_lock_file(lock_path):
+            heartbeat_stop, heartbeat_thread = _start_lock_heartbeat(
+                lock_path=lock_path,
+                interval_seconds=DOWNLOAD_LOCK_HEARTBEAT_SECONDS,
+            )
             try:
                 yield
             finally:
+                heartbeat_stop.set()
+                heartbeat_thread.join(timeout=max(1.0, float(DOWNLOAD_LOCK_HEARTBEAT_SECONDS)))
                 if os.path.lexists(lock_path):
                     _assert_lock_path_is_regular_file(lock_path, lock_label=lock_label)
                     os.remove(lock_path)
             return
         _assert_lock_path_is_regular_file(lock_path, lock_label=lock_label)
-        if _break_stale_lock_if_needed(lock_path=lock_path, lock_label=lock_label):
+        if _break_stale_lock_if_needed(
+            lock_path=lock_path,
+            lock_label=lock_label,
+            stale_seconds=DOWNLOAD_LOCK_STALE_SECONDS,
+        ):
             continue
         elapsed = time.time() - wait_start
         if not has_reported_wait:
+            owner_metadata = _read_lock_metadata(lock_path)
             print(
-                'Another process holds {}. Waiting for lock release: {}'.format(
+                'Another process holds {}. Waiting for lock release: {} ({})'.format(
                     lock_label,
                     lock_path,
+                    _describe_lock_owner(owner_metadata),
                 ),
                 flush=True,
             )

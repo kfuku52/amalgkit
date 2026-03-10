@@ -28,6 +28,47 @@ REQUIRED_COLUMNS = [
 
 
 FASTA_SUFFIXES = ('.fa', '.fasta', '.fa.gz', '.fasta.gz')
+BUSCO_OPTION_VALUE_ARITY = {
+    '-i': 1,
+    '--in': 1,
+    '-o': 1,
+    '--out': 1,
+    '-m': 1,
+    '--mode': 1,
+    '-l': 1,
+    '--lineage_dataset': 1,
+    '-c': 1,
+    '--cpu': 1,
+    '--out_path': 1,
+    '--download_path': 1,
+    '--download': 1,
+    '--download_base_url': 1,
+    '--datasets_version': 1,
+    '--config': 1,
+}
+BUSCO_ANALYSIS_RESERVED_OPTIONS = {
+    '-i',
+    '--in',
+    '-o',
+    '--out',
+    '-m',
+    '--mode',
+    '-l',
+    '--lineage_dataset',
+    '-c',
+    '--cpu',
+    '--out_path',
+    '--download_path',
+    '--download',
+    '--offline',
+}
+BUSCO_DOWNLOAD_FORWARD_OPTIONS = {
+    '--config',
+    '--datasets_version',
+    '--download_base_url',
+    '-q',
+    '--quiet',
+}
 
 
 def validate_busco_metadata_columns(metadata, required_columns):
@@ -255,6 +296,68 @@ def run_command(cmd):
         print_output=True,
     )
 
+
+def _consume_busco_extra_arg(extra_args, start_index):
+    token = extra_args[start_index]
+    if not token.startswith('-'):
+        return [token], None
+    option_name = token.split('=', 1)[0]
+    if '=' in token:
+        return [token], option_name
+    arity = BUSCO_OPTION_VALUE_ARITY.get(option_name, 0)
+    end_index = min(len(extra_args), start_index + 1 + arity)
+    return extra_args[start_index:end_index], option_name
+
+
+def split_busco_extra_args(extra_args):
+    analysis_args = []
+    download_args = []
+    index = 0
+    while index < len(extra_args):
+        tokens, option_name = _consume_busco_extra_arg(extra_args, index)
+        if option_name in BUSCO_DOWNLOAD_FORWARD_OPTIONS:
+            download_args.extend(tokens)
+        if option_name is None:
+            analysis_args.extend(tokens)
+        elif option_name not in BUSCO_ANALYSIS_RESERVED_OPTIONS:
+            analysis_args.extend(tokens)
+        index += len(tokens)
+    return analysis_args, download_args
+
+
+def build_busco_analysis_command(fasta_path, sci_name, output_root, args, extra_args):
+    out_name = sci_name.replace(' ', '_')
+    download_path = resolve_download_dir(args)
+    analysis_extra_args, _ = split_busco_extra_args(extra_args)
+    cmd = [
+        args.busco_exe,
+        '-i', fasta_path,
+        '-o', out_name,
+        '-l', args.lineage,
+        '-m', 'transcriptome',
+        '--out_path', output_root,
+        '--download_path', download_path,
+        '--cpu', str(args.threads),
+    ]
+    if args.redo:
+        cmd.append('--force')
+    cmd.extend(analysis_extra_args)
+    cmd.append('--offline')
+    return cmd
+
+
+def build_busco_download_command(args, extra_args):
+    _, download_extra_args = split_busco_extra_args(extra_args)
+    download_path = resolve_download_dir(args)
+    cmd = [args.busco_exe]
+    cmd.extend(download_extra_args)
+    cmd.extend([
+        '--download_path', download_path,
+        '--download', args.lineage,
+    ])
+    return cmd
+
+
 def _sanitize_lock_suffix(text):
     normalized = re.sub(r'[^A-Za-z0-9._-]+', '_', str(text).strip())
     if normalized == '':
@@ -302,34 +405,23 @@ def run_busco(fasta_path, sci_name, output_root, args, extra_args):
             'BUSCO download path exists but is not a directory: {}'.format(download_path)
         )
     os.makedirs(download_path, exist_ok=True)
-    cmd = [
-        args.busco_exe,
-        '-i', fasta_path,
-        '-o', out_name,
-        '-l', args.lineage,
-        '-m', 'transcriptome',
-        '--out_path', output_root,
-        '--download_path', download_path,
-        '--cpu', str(args.threads),
-    ]
-    if args.redo:
-        cmd.append('--force')
-    cmd.extend(extra_args)
+    analysis_cmd = build_busco_analysis_command(
+        fasta_path=fasta_path,
+        sci_name=sci_name,
+        output_root=output_root,
+        args=args,
+        extra_args=extra_args,
+    )
     if has_busco_lineage_cache(download_path=download_path, lineage=args.lineage):
-        run_command(cmd)
+        run_command(analysis_cmd)
         return os.path.join(output_root, out_name)
 
     lock_filename = '.busco_{}.download.lock'.format(_sanitize_lock_suffix(args.lineage))
     lock_path = os.path.join(download_path, lock_filename)
-    cache_ready_from_other_process = False
     with acquire_exclusive_lock(lock_path=lock_path, lock_label='BUSCO lineage download'):
-        if has_busco_lineage_cache(download_path=download_path, lineage=args.lineage):
-            cache_ready_from_other_process = True
-        else:
-            run_command(cmd)
-            return os.path.join(output_root, out_name)
-    if cache_ready_from_other_process:
-        run_command(cmd)
+        if not has_busco_lineage_cache(download_path=download_path, lineage=args.lineage):
+            run_command(build_busco_download_command(args=args, extra_args=extra_args))
+    run_command(analysis_cmd)
     return os.path.join(output_root, out_name)
 
 
