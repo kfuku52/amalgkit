@@ -29,9 +29,6 @@ def _copy_csfilter_pdf_outputs(src_dir, dst_dir):
         # cross_species_exclusion.pdf duplicates csfilter_exclusion.pdf generated in Python.
         if name == 'cross_species_exclusion.pdf':
             continue
-        # group_cor_scatter is intentionally suppressed in csfilter output.
-        if name == 'cross_species_group_cor_scatter.pdf':
-            continue
         if name == 'cross_species_csfilter_scatter.pdf':
             dst_name = 'csfilter_outlier_scatter.pdf'
         elif name.startswith('cross_species_'):

@@ -168,6 +168,13 @@ def test_csfilter_outputs_metadata_excluded_and_root_pdfs(tmp_path, monkeypatch)
         }).to_csv(os.path.join(cross_species_dir, 'metadata.tsv'), sep='\t', index=False)
         with open(os.path.join(cross_species_dir, 'cross_species_overview.pdf'), 'wb') as handle:
             handle.write(b'%PDF-1.4\n')
+        for name in [
+            'cross_species_group_cor_scatter.pdf',
+            'cross_species_sample_number_heatmap.pdf',
+            'cross_species_unaveraged_pca_PC34_uncorrected.pdf',
+        ]:
+            with open(os.path.join(cross_species_dir, name), 'wb') as handle:
+                handle.write(b'%PDF-1.4\n')
 
     monkeypatch.setattr(csfilter_module, 'resolve_per_species_input', fake_resolve_per_species_input)
     monkeypatch.setattr(csfilter_module, 'generate_per_species_tables', fake_generate_per_species_tables)
@@ -194,6 +201,9 @@ def test_csfilter_outputs_metadata_excluded_and_root_pdfs(tmp_path, monkeypatch)
     assert 'cs_margin_corrected' not in out_excluded.columns
     assert (tmp_path / 'out' / 'csfilter' / 'csfilter_exclusion.pdf').is_file()
     assert (tmp_path / 'out' / 'csfilter' / 'csfilter_overview.pdf').is_file()
+    assert (tmp_path / 'out' / 'csfilter' / 'csfilter_group_cor_scatter.pdf').is_file()
+    assert (tmp_path / 'out' / 'csfilter' / 'csfilter_sample_number_heatmap.pdf').is_file()
+    assert (tmp_path / 'out' / 'csfilter' / 'csfilter_unaveraged_pca_PC34_uncorrected.pdf').is_file()
     assert not (tmp_path / 'out' / 'csfilter' / 'Species_A').exists()
     assert not (tmp_path / 'out' / 'csfilter' / 'plots').exists()
     assert not (tmp_path / 'out' / 'csfilter' / 'tables').exists()

@@ -368,6 +368,159 @@ def _apply_csfilter_outlier_flags(df_metadata, outlier_method='none', margin_thr
     return out
 
 
+def _sample_group_color_map(values):
+    groups = [str(value) for value in values]
+    unique_groups = list(dict.fromkeys(groups))
+    cmap = plt.get_cmap('tab20')
+    return {group: cmap(idx % max(1, cmap.N)) for idx, group in enumerate(unique_groups)}
+
+
+def _save_sample_number_heatmap_pdf(df_metadata, out_pdf_path):
+    required_cols = {'scientific_name', 'sample_group', 'exclusion'}
+    if not required_cols.issubset(df_metadata.columns):
+        return None
+    plot_df = df_metadata.loc[:, ['scientific_name', 'sample_group', 'exclusion']].copy()
+    plot_df.loc[:, 'scientific_name'] = plot_df['scientific_name'].fillna('').astype(str).str.strip()
+    plot_df.loc[:, 'sample_group'] = plot_df['sample_group'].fillna('').astype(str).str.strip()
+    plot_df.loc[:, 'exclusion'] = plot_df['exclusion'].fillna('').astype(str).str.strip().str.lower()
+    plot_df = plot_df.loc[(plot_df['scientific_name'] != '') & (plot_df['sample_group'] != ''), :].copy()
+    if plot_df.shape[0] == 0:
+        return None
+    species_order = list(dict.fromkeys(plot_df['scientific_name'].tolist()))
+    sample_group_order = list(dict.fromkeys(plot_df['sample_group'].tolist()))
+    kept = plot_df.loc[plot_df['exclusion'].eq('no'), ['scientific_name', 'sample_group']].copy()
+    count_df = (
+        kept.groupby(['scientific_name', 'sample_group'], sort=False)
+        .size()
+        .rename('count')
+        .reset_index()
+        .pivot(index='scientific_name', columns='sample_group', values='count')
+        .reindex(index=species_order, columns=sample_group_order)
+        .fillna(0.0)
+    )
+    values = numpy.log2(count_df.to_numpy(dtype=float) + 1.0)
+    fig_width = max(4.8, 0.6 * len(sample_group_order))
+    fig_height = max(4.8, 0.24 * len(species_order))
+    os.makedirs(os.path.dirname(os.path.realpath(out_pdf_path)), exist_ok=True)
+    fig, ax = plt.subplots(figsize=(fig_width, fig_height))
+    image = ax.imshow(values, cmap='viridis', aspect='auto')
+    ax.set_xticks(range(len(sample_group_order)))
+    ax.set_xticklabels(sample_group_order, rotation=90, fontsize=7)
+    ax.set_yticks(range(len(species_order)))
+    ax.set_yticklabels(species_order, fontsize=7)
+    ax.set_xlabel('sample_group', fontsize=8)
+    ax.set_ylabel('scientific_name', fontsize=8)
+    for row_idx in range(count_df.shape[0]):
+        for col_idx in range(count_df.shape[1]):
+            count_value = int(count_df.iat[row_idx, col_idx])
+            text_color = 'white' if values[row_idx, col_idx] > 0.8 else 'black'
+            ax.text(col_idx, row_idx, str(count_value), ha='center', va='center', fontsize=6, color=text_color)
+    colorbar = fig.colorbar(image, ax=ax, fraction=0.046, pad=0.04)
+    colorbar.set_label('log2(sample count + 1)', fontsize=8)
+    colorbar.ax.tick_params(labelsize=7)
+    fig.tight_layout()
+    fig.savefig(out_pdf_path)
+    plt.close(fig)
+    return out_pdf_path
+
+
+def _save_group_cor_scatter_plot(df_metadata, out_pdf_path):
+    required_cols = {
+        'within_group_cor_uncorrected',
+        'within_group_cor_corrected',
+        'max_nongroup_cor_uncorrected',
+        'max_nongroup_cor_corrected',
+    }
+    if not required_cols.issubset(df_metadata.columns):
+        return None
+    plot_df = df_metadata.copy()
+    for column in required_cols:
+        plot_df.loc[:, column] = pandas.to_numeric(plot_df[column], errors='coerce')
+    denominator_within = plot_df['within_group_cor_uncorrected'].replace(0.0, numpy.nan)
+    denominator_nongroup = plot_df['max_nongroup_cor_uncorrected'].replace(0.0, numpy.nan)
+    plot_df.loc[:, 'corrected_per_uncorrected_group_cor'] = (
+        plot_df['within_group_cor_corrected'] / denominator_within
+    ).clip(lower=0.5, upper=2.0)
+    plot_df.loc[:, 'corrected_per_uncorrected_max_nongroup_cor'] = (
+        plot_df['max_nongroup_cor_corrected'] / denominator_nongroup
+    ).clip(lower=0.5, upper=2.0)
+    os.makedirs(os.path.dirname(os.path.realpath(out_pdf_path)), exist_ok=True)
+    fig, axes = plt.subplots(2, 3, figsize=(10.8, 7.2))
+
+    def _draw_panel(ax, x_col, y_col, title, x_limits, y_limits, diagonal=True):
+        panel_df = plot_df.loc[
+            pandas.to_numeric(plot_df.get(x_col), errors='coerce').notna()
+            & pandas.to_numeric(plot_df.get(y_col), errors='coerce').notna(),
+            :,
+        ].copy()
+        if panel_df.shape[0] == 0:
+            ax.text(0.5, 0.5, 'No finite data', ha='center', va='center', fontsize=8)
+            ax.set_axis_off()
+            return
+        ax.scatter(
+            panel_df[x_col].to_numpy(dtype=float),
+            panel_df[y_col].to_numpy(dtype=float),
+            s=18.0,
+            color='#5a5a5a',
+            edgecolors='black',
+            linewidths=0.2,
+            alpha=0.5,
+        )
+        if diagonal:
+            ax.plot(x_limits, y_limits, linestyle='--', linewidth=0.8, color='#1f77b4')
+        ax.set_xlim(x_limits)
+        ax.set_ylim(y_limits)
+        ax.set_title(title, fontsize=8)
+        ax.tick_params(axis='both', labelsize=7)
+        ax.grid(color='#d0d0d0', linewidth=0.5)
+
+    _draw_panel(
+        axes[0, 0],
+        x_col='max_nongroup_cor_uncorrected',
+        y_col='within_group_cor_uncorrected',
+        title='Uncorrected margin',
+        x_limits=(0.0, 1.0),
+        y_limits=(0.0, 1.0),
+    )
+    _draw_panel(
+        axes[0, 1],
+        x_col='max_nongroup_cor_corrected',
+        y_col='within_group_cor_corrected',
+        title='Corrected margin',
+        x_limits=(0.0, 1.0),
+        y_limits=(0.0, 1.0),
+    )
+    _draw_panel(
+        axes[0, 2],
+        x_col='within_group_cor_uncorrected',
+        y_col='within_group_cor_corrected',
+        title='Within-group correlation',
+        x_limits=(0.0, 1.0),
+        y_limits=(0.0, 1.0),
+    )
+    _draw_panel(
+        axes[1, 0],
+        x_col='max_nongroup_cor_uncorrected',
+        y_col='max_nongroup_cor_corrected',
+        title='Non-group correlation',
+        x_limits=(0.0, 1.0),
+        y_limits=(0.0, 1.0),
+    )
+    _draw_panel(
+        axes[1, 1],
+        x_col='corrected_per_uncorrected_max_nongroup_cor',
+        y_col='corrected_per_uncorrected_group_cor',
+        title='Corrected / uncorrected',
+        x_limits=(0.5, 2.0),
+        y_limits=(0.5, 2.0),
+    )
+    axes[1, 2].set_axis_off()
+    fig.tight_layout()
+    fig.savefig(out_pdf_path)
+    plt.close(fig)
+    return out_pdf_path
+
+
 def _save_csfilter_scatter_plot(df_metadata, out_pdf_path):
     required_cols = {'within_group_cor_corrected', 'max_nongroup_cor_corrected'}
     if not required_cols.issubset(df_metadata.columns):
@@ -384,9 +537,7 @@ def _save_csfilter_scatter_plot(df_metadata, out_pdf_path):
     os.makedirs(os.path.dirname(os.path.realpath(out_pdf_path)), exist_ok=True)
     fig, ax = plt.subplots(figsize=(4.8, 4.0))
     groups = plot_df['sample_group'].fillna('').astype(str).tolist()
-    unique_groups = list(dict.fromkeys(groups))
-    cmap = plt.get_cmap('tab20')
-    color_map = {group: cmap(idx % max(1, cmap.N)) for idx, group in enumerate(unique_groups)}
+    color_map = _sample_group_color_map(groups)
     colors = [color_map[group] for group in groups]
     is_outlier = plot_df.get('cs_outlier_candidate', pandas.Series(False, index=plot_df.index)).fillna(False).astype(bool).to_numpy()
     ax.scatter(
@@ -453,34 +604,36 @@ def _save_heatmap_pdf(matrix_df, out_pdf_path):
     return out_pdf_path
 
 
-def _save_pca_pdf(df_metadata, out_pdf_path):
-    required_cols = {'PC1_corrected', 'PC2_corrected'}
+def _save_pca_pdf(df_metadata, out_pdf_path, suffix='corrected', pcs=(1, 2)):
+    pcx, pcy = int(pcs[0]), int(pcs[1])
+    x_col = 'PC{}_{}'.format(pcx, suffix)
+    y_col = 'PC{}_{}'.format(pcy, suffix)
+    required_cols = {x_col, y_col}
     if not required_cols.issubset(df_metadata.columns):
         return None
     plot_df = df_metadata.copy()
-    plot_df.loc[:, 'PC1_corrected'] = pandas.to_numeric(plot_df['PC1_corrected'], errors='coerce')
-    plot_df.loc[:, 'PC2_corrected'] = pandas.to_numeric(plot_df['PC2_corrected'], errors='coerce')
-    plot_df = plot_df.loc[plot_df['PC1_corrected'].notna() & plot_df['PC2_corrected'].notna(), :].copy()
+    plot_df.loc[:, x_col] = pandas.to_numeric(plot_df[x_col], errors='coerce')
+    plot_df.loc[:, y_col] = pandas.to_numeric(plot_df[y_col], errors='coerce')
+    plot_df = plot_df.loc[plot_df[x_col].notna() & plot_df[y_col].notna(), :].copy()
     if plot_df.shape[0] == 0:
         return None
     os.makedirs(os.path.dirname(os.path.realpath(out_pdf_path)), exist_ok=True)
     fig, ax = plt.subplots(figsize=(4.8, 4.0))
     groups = plot_df['sample_group'].fillna('').astype(str).tolist()
-    unique_groups = list(dict.fromkeys(groups))
-    cmap = plt.get_cmap('tab20')
-    color_map = {group: cmap(idx % max(1, cmap.N)) for idx, group in enumerate(unique_groups)}
+    color_map = _sample_group_color_map(groups)
     colors = [color_map[group] for group in groups]
     ax.scatter(
-        plot_df['PC1_corrected'].to_numpy(dtype=float),
-        plot_df['PC2_corrected'].to_numpy(dtype=float),
+        plot_df[x_col].to_numpy(dtype=float),
+        plot_df[y_col].to_numpy(dtype=float),
         c=colors,
         s=35.0,
         edgecolors='black',
         linewidths=0.4,
         alpha=0.85,
     )
-    ax.set_xlabel('PC1', fontsize=8)
-    ax.set_ylabel('PC2', fontsize=8)
+    ax.set_xlabel('PC{}'.format(pcx), fontsize=8)
+    ax.set_ylabel('PC{}'.format(pcy), fontsize=8)
+    ax.set_title('{} PCA'.format(str(suffix).capitalize()), fontsize=8)
     ax.tick_params(axis='both', labelsize=8)
     ax.grid(color='#d0d0d0', linewidth=0.6)
     fig.tight_layout()
@@ -638,11 +791,17 @@ def run_cross_species_filter(args, context=None):
             robust_z_threshold=float(getattr(args, 'robust_z_threshold', -2.5)),
         )
         df_metadata.to_csv(os.path.join(stage_dir, 'metadata.tsv'), sep='\t', index=False)
+        _save_sample_number_heatmap_pdf(df_metadata, os.path.join(stage_dir, 'cross_species_sample_number_heatmap.pdf'))
+        _save_group_cor_scatter_plot(df_metadata, os.path.join(stage_dir, 'cross_species_group_cor_scatter.pdf'))
         _save_overview_pdf(orthologs['corrected'], df_metadata, os.path.join(stage_dir, 'cross_species_overview.pdf'))
         _save_csfilter_scatter_plot(df_metadata, os.path.join(stage_dir, 'cross_species_csfilter_scatter.pdf'))
         _save_heatmap_pdf(orthologs['corrected'], os.path.join(stage_dir, 'cross_species_heatmap.pdf'))
         _save_within_group_histogram(df_metadata, os.path.join(stage_dir, 'cross_species_within_group_cor.pdf'))
-        _save_pca_pdf(df_metadata, os.path.join(stage_dir, 'cross_species_unaveraged_pca_PC12.pdf'))
+        _save_pca_pdf(df_metadata, os.path.join(stage_dir, 'cross_species_unaveraged_pca_PC12.pdf'), suffix='corrected', pcs=(1, 2))
+        _save_pca_pdf(df_metadata, os.path.join(stage_dir, 'cross_species_unaveraged_pca_PC12_uncorrected.pdf'), suffix='uncorrected', pcs=(1, 2))
+        _save_pca_pdf(df_metadata, os.path.join(stage_dir, 'cross_species_unaveraged_pca_PC12_corrected.pdf'), suffix='corrected', pcs=(1, 2))
+        _save_pca_pdf(df_metadata, os.path.join(stage_dir, 'cross_species_unaveraged_pca_PC34_uncorrected.pdf'), suffix='uncorrected', pcs=(3, 4))
+        _save_pca_pdf(df_metadata, os.path.join(stage_dir, 'cross_species_unaveraged_pca_PC34_corrected.pdf'), suffix='corrected', pcs=(3, 4))
         save_exclusion_plot_pdf(
             df_metadata=df_metadata,
             out_pdf_path=os.path.join(stage_dir, 'cross_species_exclusion.pdf'),

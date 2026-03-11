@@ -369,10 +369,31 @@ def _compute_corr_matrix(counts_df, dist_method):
     return matrix
 
 
-def _compute_mds_coordinates(corr_df):
+def _compute_distance_matrix(corr_df):
     dist = 1.0 - corr_df.to_numpy(dtype=float)
     dist = (dist + dist.T) / 2.0
     numpy.fill_diagonal(dist, 0.0)
+    return dist
+
+
+def _compute_pca_coordinates(corr_df):
+    matrix = corr_df.to_numpy(dtype=float)
+    n = matrix.shape[0]
+    if n <= 1:
+        return numpy.zeros((n, 2), dtype=float)
+    eigvals, eigvecs = numpy.linalg.eigh(matrix)
+    order = numpy.argsort(eigvals)[::-1]
+    eigvals = eigvals[order]
+    eigvecs = eigvecs[:, order]
+    coords = numpy.zeros((n, 2), dtype=float)
+    for idx in range(min(2, n)):
+        value = max(0.0, float(eigvals[idx]))
+        coords[:, idx] = eigvecs[:, idx] * numpy.sqrt(value)
+    return coords
+
+
+def _compute_mds_coordinates(corr_df):
+    dist = _compute_distance_matrix(corr_df)
     n = dist.shape[0]
     if n <= 1:
         return numpy.zeros((n, 2), dtype=float)
@@ -402,6 +423,48 @@ def _sample_group_color_map(sample_groups):
     for idx, group in enumerate(unique_groups):
         colors[group] = palette(idx % max(1, palette.N))
     return colors
+
+
+def _draw_embedding_panel(ax, coords, colors, labels, title, font_size, x_label, y_label):
+    if coords.shape[0] == 0:
+        ax.text(0.5, 0.5, 'No samples', ha='center', va='center', fontsize=font_size)
+        ax.set_axis_off()
+        return
+    ax.scatter(coords[:, 0], coords[:, 1], c=colors, s=50)
+    for idx, label in enumerate(labels):
+        ax.text(coords[idx, 0], coords[idx, 1], str(label), fontsize=max(4, font_size - 2))
+    ax.set_title(title, fontsize=font_size)
+    ax.set_xlabel(x_label, fontsize=font_size)
+    ax.set_ylabel(y_label, fontsize=font_size)
+    ax.tick_params(axis='both', labelsize=font_size)
+
+
+def _draw_dendrogram_panel(ax, corr_df, labels, font_size, title):
+    if corr_df.shape[0] <= 1:
+        ax.text(0.5, 0.5, 'No dendrogram data', ha='center', va='center', fontsize=font_size)
+        ax.set_axis_off()
+        return
+    try:
+        from scipy.cluster.hierarchy import dendrogram, linkage
+        from scipy.spatial.distance import squareform
+    except ImportError:
+        ax.text(0.5, 0.5, 'SciPy not available', ha='center', va='center', fontsize=font_size)
+        ax.set_axis_off()
+        return
+    dist = _compute_distance_matrix(corr_df)
+    condensed = squareform(dist, checks=False)
+    linkage_matrix = linkage(condensed, method='average')
+    dendrogram(
+        linkage_matrix,
+        labels=labels,
+        ax=ax,
+        leaf_rotation=90,
+        leaf_font_size=max(4, font_size - 2),
+        color_threshold=None,
+    )
+    ax.set_title(title, fontsize=font_size)
+    ax.set_ylabel('Distance', fontsize=font_size)
+    ax.tick_params(axis='y', labelsize=font_size)
 
 
 def save_quick_state_comparison_plot(
@@ -439,6 +502,8 @@ def save_quick_state_comparison_plot(
 
     corr_before = _compute_corr_matrix(before, dist_method)
     corr_after = _compute_corr_matrix(after, dist_method)
+    pca_before = _compute_pca_coordinates(corr_before)
+    pca_after = _compute_pca_coordinates(corr_after)
     coords_before = _compute_mds_coordinates(corr_before)
     coords_after = _compute_mds_coordinates(corr_after)
     tau_before = sample_group_to_tau(
@@ -455,7 +520,7 @@ def save_quick_state_comparison_plot(
     colors = [color_map[str(group)] for group in metadata.loc[:, 'sample_group'].astype(str)]
     labels = [_format_genus_species_label(str(run_id)).replace('\n', ' ') for run_id in before.columns]
 
-    fig, axes = pyplot.subplots(3, 2, figsize=(12.0, 12.0))
+    fig, axes = pyplot.subplots(5, 2, figsize=(12.0, 20.0))
     heatmaps = [
         (corr_before, axes[0, 0], 'Before {}'.format(batch_effect_alg)),
         (corr_after, axes[0, 1], 'After {}'.format(batch_effect_alg)),
@@ -469,22 +534,30 @@ def save_quick_state_comparison_plot(
         ax.set_yticklabels(labels, fontsize=max(4, font_size - 2))
         fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
 
+    pca_panels = [
+        (pca_before, axes[1, 0], 'PCA before'),
+        (pca_after, axes[1, 1], 'PCA after'),
+    ]
+    for coords, ax, title in pca_panels:
+        _draw_embedding_panel(ax, coords, colors, before.columns.tolist(), title, font_size, 'PC1', 'PC2')
+
     scatter_panels = [
-        (coords_before, axes[1, 0], 'MDS before'),
-        (coords_after, axes[1, 1], 'MDS after'),
+        (coords_before, axes[2, 0], 'MDS before'),
+        (coords_after, axes[2, 1], 'MDS after'),
     ]
     for coords, ax, title in scatter_panels:
-        ax.scatter(coords[:, 0], coords[:, 1], c=colors, s=50)
-        for idx, run_id in enumerate(before.columns):
-            ax.text(coords[idx, 0], coords[idx, 1], str(run_id), fontsize=max(4, font_size - 2))
-        ax.set_title(title, fontsize=font_size)
-        ax.set_xlabel('Axis 1', fontsize=font_size)
-        ax.set_ylabel('Axis 2', fontsize=font_size)
-        ax.tick_params(axis='both', labelsize=font_size)
+        _draw_embedding_panel(ax, coords, colors, before.columns.tolist(), title, font_size, 'Axis 1', 'Axis 2')
+
+    dendrogram_panels = [
+        (corr_before, axes[3, 0], 'Dendrogram before'),
+        (corr_after, axes[3, 1], 'Dendrogram after'),
+    ]
+    for corr_df, ax, title in dendrogram_panels:
+        _draw_dendrogram_panel(ax, corr_df, labels, font_size, title)
 
     hist_panels = [
-        (tau_before, axes[2, 0], 'Tau before'),
-        (tau_after, axes[2, 1], 'Tau after'),
+        (tau_before, axes[4, 0], 'Tau before'),
+        (tau_after, axes[4, 1], 'Tau after'),
     ]
     breaks = numpy.arange(0.0, 1.000001, 0.05)
     for tau_df, ax, title in hist_panels:

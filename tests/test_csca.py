@@ -271,6 +271,75 @@ class TestCscaMain:
             redo=False,
         )
 
+    @staticmethod
+    def _write_cross_species_fixture(out_dir):
+        species_specs = [
+            {
+                'species_tag': 'Species_A',
+                'scientific_name': 'Species A',
+                'runs': ['A_leaf', 'A_root'],
+                'groups': ['leaf', 'root'],
+                'uncorrected': pandas.DataFrame(
+                    {
+                        'A_leaf': [10.0, 9.0, 2.0, 1.0],
+                        'A_root': [2.0, 1.0, 10.0, 9.0],
+                    },
+                    index=['A1', 'A2', 'A3', 'A4'],
+                ),
+                'corrected': pandas.DataFrame(
+                    {
+                        'A_leaf': [9.5, 8.5, 2.5, 1.5],
+                        'A_root': [2.5, 1.5, 9.5, 8.5],
+                    },
+                    index=['A1', 'A2', 'A3', 'A4'],
+                ),
+            },
+            {
+                'species_tag': 'Species_B',
+                'scientific_name': 'Species B',
+                'runs': ['B_leaf', 'B_root'],
+                'groups': ['leaf', 'root'],
+                'uncorrected': pandas.DataFrame(
+                    {
+                        'B_leaf': [8.0, 7.0, 3.0, 2.0],
+                        'B_root': [3.0, 2.0, 8.0, 7.0],
+                    },
+                    index=['B1', 'B2', 'B3', 'B4'],
+                ),
+                'corrected': pandas.DataFrame(
+                    {
+                        'B_leaf': [8.5, 7.5, 2.5, 1.5],
+                        'B_root': [2.5, 1.5, 8.5, 7.5],
+                    },
+                    index=['B1', 'B2', 'B3', 'B4'],
+                ),
+            },
+        ]
+        per_species_dir = out_dir / 'per_species'
+        for spec in species_specs:
+            tables_dir = per_species_dir / spec['species_tag'] / 'tables'
+            tables_dir.mkdir(parents=True)
+            metadata_df = pandas.DataFrame(
+                {
+                    'run': spec['runs'],
+                    'scientific_name': [spec['scientific_name']] * len(spec['runs']),
+                    'sample_group': spec['groups'],
+                    'exclusion': ['no'] * len(spec['runs']),
+                }
+            )
+            metadata_df.to_csv(tables_dir / f"{spec['species_tag']}.metadata.tsv", sep='\t', index=False)
+            spec['uncorrected'].to_csv(tables_dir / f"{spec['species_tag']}.uncorrected.tc.tsv", sep='\t', index_label='target_id')
+            spec['corrected'].to_csv(tables_dir / f"{spec['species_tag']}.no.tc.tsv", sep='\t', index_label='target_id')
+        orthogroup_path = out_dir.parent / 'orthogroup.tsv'
+        pandas.DataFrame(
+            {
+                'busco_id': ['OG1', 'OG2', 'OG3', 'OG4'],
+                'Species_A': ['A1', 'A2', 'A3', 'A4'],
+                'Species_B': ['B1', 'B2', 'B3', 'B4'],
+            }
+        ).to_csv(orthogroup_path, sep='\t', index=False)
+        return orthogroup_path
+
     def test_raises_clear_error_when_curate_dir_missing(self, tmp_path, monkeypatch):
         args = self._base_args(tmp_path / 'out')
         monkeypatch.setattr('amalgkit.cross_species_filter.check_ortholog_parameter_compatibility', lambda _args: None)
@@ -385,3 +454,23 @@ class TestCscaMain:
             run_cross_species_filter(args)
 
         assert (existing_dir / 'old.txt').read_text() == 'old'
+
+    def test_run_cross_species_filter_writes_restored_plot_outputs(self, tmp_path):
+        out_dir = tmp_path / 'out'
+        orthogroup_path = self._write_cross_species_fixture(out_dir)
+        args = self._base_args(out_dir)
+        args.sample_group = 'leaf,root'
+        args.orthogroup_table = str(orthogroup_path)
+        args.missing_strategy = 'row_mean'
+
+        run_cross_species_filter(args)
+
+        cross_species_dir = out_dir / 'cross_species'
+        assert (cross_species_dir / 'metadata.tsv').is_file()
+        assert (cross_species_dir / 'cross_species_sample_number_heatmap.pdf').is_file()
+        assert (cross_species_dir / 'cross_species_group_cor_scatter.pdf').is_file()
+        assert (cross_species_dir / 'cross_species_unaveraged_pca_PC12.pdf').is_file()
+        assert (cross_species_dir / 'cross_species_unaveraged_pca_PC12_uncorrected.pdf').is_file()
+        assert (cross_species_dir / 'cross_species_unaveraged_pca_PC12_corrected.pdf').is_file()
+        assert (cross_species_dir / 'cross_species_unaveraged_pca_PC34_uncorrected.pdf').is_file()
+        assert (cross_species_dir / 'cross_species_unaveraged_pca_PC34_corrected.pdf').is_file()
