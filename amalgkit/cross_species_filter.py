@@ -1258,35 +1258,35 @@ def run_cross_species_filter(args, context=None):
         _save_csfilter_scatter_plot(df_metadata, os.path.join(stage_dir, 'cross_species_csfilter_scatter.pdf'))
         _save_heatmap_pdf(orthologs['corrected'], os.path.join(stage_dir, 'cross_species_heatmap.pdf'))
         _save_within_group_histogram(df_metadata, os.path.join(stage_dir, 'cross_species_within_group_cor.pdf'))
-        _save_pca_pdf(df_metadata, os.path.join(stage_dir, 'cross_species_unaveraged_pca_PC12_uncorrected.pdf'), suffix='uncorrected', pcs=(1, 2))
-        _save_pca_pdf(df_metadata, os.path.join(stage_dir, 'cross_species_unaveraged_pca_PC12_corrected.pdf'), suffix='corrected', pcs=(1, 2))
-        _save_pca_pdf(df_metadata, os.path.join(stage_dir, 'cross_species_unaveraged_pca_PC34_uncorrected.pdf'), suffix='uncorrected', pcs=(3, 4))
-        _save_pca_pdf(df_metadata, os.path.join(stage_dir, 'cross_species_unaveraged_pca_PC34_corrected.pdf'), suffix='corrected', pcs=(3, 4))
+        _save_pca_pdf(df_metadata, os.path.join(stage_dir, 'cross_species_run_pca_pc12_pre_correction.pdf'), suffix='uncorrected', pcs=(1, 2))
+        _save_pca_pdf(df_metadata, os.path.join(stage_dir, 'cross_species_run_pca_pc12_post_correction.pdf'), suffix='corrected', pcs=(1, 2))
+        _save_pca_pdf(df_metadata, os.path.join(stage_dir, 'cross_species_run_pca_pc34_pre_correction.pdf'), suffix='uncorrected', pcs=(3, 4))
+        _save_pca_pdf(df_metadata, os.path.join(stage_dir, 'cross_species_run_pca_pc34_post_correction.pdf'), suffix='corrected', pcs=(3, 4))
         _save_unaveraged_tsne_pdf(
             df_metadata,
             orthologs['uncorrected'],
-            os.path.join(stage_dir, 'cross_species_unaveraged_tsne_uncorrected.pdf'),
+            os.path.join(stage_dir, 'cross_species_run_tsne_pre_correction.pdf'),
             missing_strategy=str(getattr(args, 'missing_strategy', 'em_pca')),
             correction_label='Uncorrected',
         )
         _save_unaveraged_tsne_pdf(
             df_metadata,
             orthologs['corrected'],
-            os.path.join(stage_dir, 'cross_species_unaveraged_tsne_corrected.pdf'),
+            os.path.join(stage_dir, 'cross_species_run_tsne_post_correction.pdf'),
             missing_strategy=str(getattr(args, 'missing_strategy', 'em_pca')),
             correction_label='Corrected',
         )
-        _save_averaged_heatmap_pdf(averaged_inputs, os.path.join(stage_dir, 'cross_species_SVA_heatmap.pdf'))
-        _save_averaged_dendrogram_pdf(averaged_inputs, os.path.join(stage_dir, 'cross_species_SVA_dendrogram.pdf'))
+        _save_averaged_heatmap_pdf(averaged_inputs, os.path.join(stage_dir, 'cross_species_group_mean_correlation_heatmap.pdf'))
+        _save_averaged_dendrogram_pdf(averaged_inputs, os.path.join(stage_dir, 'cross_species_group_mean_dendrogram.pdf'))
         _save_averaged_summary_pdf(
             averaged_inputs,
-            os.path.join(stage_dir, 'cross_species_averaged_summary.pdf'),
+            os.path.join(stage_dir, 'cross_species_group_mean_summary.pdf'),
             missing_strategy=str(getattr(args, 'missing_strategy', 'em_pca')),
         )
-        _save_averaged_boxplot_pdf(averaged_inputs, os.path.join(stage_dir, 'cross_species_boxplot.pdf'))
+        _save_averaged_boxplot_pdf(averaged_inputs, os.path.join(stage_dir, 'cross_species_group_mean_correlation_boxplot.pdf'))
         _save_averaged_tsne_pdf(
             averaged_inputs,
-            os.path.join(stage_dir, 'cross_species_averaged_tsne.pdf'),
+            os.path.join(stage_dir, 'cross_species_group_mean_tsne.pdf'),
             missing_strategy=str(getattr(args, 'missing_strategy', 'em_pca')),
         )
         _save_delta_pcc_plot(

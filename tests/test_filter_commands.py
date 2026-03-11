@@ -171,9 +171,9 @@ def test_csfilter_outputs_metadata_excluded_and_root_pdfs(tmp_path, monkeypatch)
         for name in [
             'cross_species_group_cor_scatter.pdf',
             'cross_species_sample_number_heatmap.pdf',
-            'cross_species_SVA_heatmap.pdf',
-            'cross_species_averaged_summary.pdf',
-            'cross_species_unaveraged_pca_PC34_uncorrected.pdf',
+            'cross_species_group_mean_correlation_heatmap.pdf',
+            'cross_species_group_mean_summary.pdf',
+            'cross_species_run_pca_pc34_pre_correction.pdf',
         ]:
             with open(os.path.join(cross_species_dir, name), 'wb') as handle:
                 handle.write(b'%PDF-1.4\n')
@@ -205,9 +205,9 @@ def test_csfilter_outputs_metadata_excluded_and_root_pdfs(tmp_path, monkeypatch)
     assert (tmp_path / 'out' / 'csfilter' / 'csfilter_overview.pdf').is_file()
     assert (tmp_path / 'out' / 'csfilter' / 'csfilter_group_cor_scatter.pdf').is_file()
     assert (tmp_path / 'out' / 'csfilter' / 'csfilter_sample_number_heatmap.pdf').is_file()
-    assert (tmp_path / 'out' / 'csfilter' / 'csfilter_SVA_heatmap.pdf').is_file()
-    assert (tmp_path / 'out' / 'csfilter' / 'csfilter_averaged_summary.pdf').is_file()
-    assert (tmp_path / 'out' / 'csfilter' / 'csfilter_unaveraged_pca_PC34_uncorrected.pdf').is_file()
+    assert (tmp_path / 'out' / 'csfilter' / 'csfilter_group_mean_correlation_heatmap.pdf').is_file()
+    assert (tmp_path / 'out' / 'csfilter' / 'csfilter_group_mean_summary.pdf').is_file()
+    assert (tmp_path / 'out' / 'csfilter' / 'csfilter_run_pca_pc34_pre_correction.pdf').is_file()
     assert not (tmp_path / 'out' / 'csfilter' / 'Species_A').exists()
     assert not (tmp_path / 'out' / 'csfilter' / 'plots').exists()
     assert not (tmp_path / 'out' / 'csfilter' / 'tables').exists()
