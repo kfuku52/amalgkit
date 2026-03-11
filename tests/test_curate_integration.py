@@ -140,19 +140,27 @@ def test_prepare_tables_python_writes_round_and_final_summaries(tmp_path):
     tau_path = tables_dir / '{}.no.tau.tsv'.format(species_tag)
     corr_path = tables_dir / '{}.no.correlation_statistics.tsv'.format(species_tag)
     batch_path = tables_dir / '{}.no.batch_effect_summary.tsv'.format(species_tag)
+    plots_dir = tmp_path / 'out' / 'per_species' / species_tag / 'plots'
 
     assert round_path.exists()
     assert final_path.exists()
     assert tau_path.exists()
     assert corr_path.exists()
     assert batch_path.exists()
+    assert (plots_dir / '{}.0.original.pdf'.format(species_tag)).exists()
+    assert (plots_dir / '{}.1.mapping_cutoff.pdf'.format(species_tag)).exists()
+    assert any(plots_dir.glob('{}.?.correlation_cutoff.pdf'.format(species_tag))) or any(
+        plots_dir.glob('{}.??.correlation_cutoff.pdf'.format(species_tag))
+    )
 
     round_df = pandas.read_csv(round_path, sep='\t')
     final_df = pandas.read_csv(final_path, sep='\t')
+    corr_df = pandas.read_csv(corr_path, sep='\t', index_col=0)
     assert {'step', 'round', 'num_runs_before', 'num_runs_after', 'num_runs_removed', 'removed_runs'}.issubset(set(round_df.columns))
     assert final_df.loc[0, 'num_runs_after_sample_group_filter'] == 4
     assert final_df.loc[0, 'num_runs_final_kept'] + final_df.loc[0, 'num_runs_final_excluded'] == 4
     assert final_df.loc[0, 'total_runtime_sec'] >= 0
+    assert corr_df.shape[0] >= 3
 
 
 def test_prepare_tables_python_handles_sample_group_drop_with_default_colors(tmp_path):

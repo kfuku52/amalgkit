@@ -6,6 +6,7 @@ from amalgkit.per_species_outputs import (
     initialize_correlation_statistics,
     intersect_counts_and_metadata,
     save_correlation_statistics,
+    save_state_overview_pdf,
     save_tau_histogram_pdf,
     write_table_with_index_name,
 )
@@ -157,3 +158,36 @@ def test_save_tau_histogram_pdf_writes_pdf(tmp_path):
     assert out_path.stat().st_size > 0
     assert result['num_total_genes'] == 4
     assert result['num_no_expression'] == 1
+
+
+def test_save_state_overview_pdf_writes_pdf(tmp_path):
+    counts_df = pandas.DataFrame(
+        {
+            'RUN1': [1.0, 2.0, 3.0, 4.0],
+            'RUN2': [1.2, 2.2, 3.2, 4.2],
+            'RUN3': [4.0, 3.0, 2.0, 1.0],
+            'RUN4': [4.1, 3.1, 2.1, 1.1],
+        },
+        index=['G1', 'G2', 'G3', 'G4'],
+    )
+    metadata_df = pandas.DataFrame(
+        {
+            'run': ['RUN1', 'RUN2', 'RUN3', 'RUN4'],
+            'sample_group': ['root', 'root', 'leaf', 'leaf'],
+            'bioproject': ['BP1', 'BP2', 'BP1', 'BP2'],
+            'exclusion': ['no', 'no', 'no', 'no'],
+        }
+    )
+    out_path = tmp_path / 'state_overview.pdf'
+    observed = save_state_overview_pdf(
+        counts_df=counts_df,
+        metadata_df=metadata_df,
+        selected_sample_groups=['root', 'leaf'],
+        out_pdf_path=str(out_path),
+        dist_method='pearson',
+        transform_method='log2p1-fpkm',
+        font_size=8,
+    )
+    assert observed == str(out_path)
+    assert out_path.exists()
+    assert out_path.stat().st_size > 0

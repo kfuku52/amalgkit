@@ -4,6 +4,7 @@ import re
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
 import numpy
 import pandas
 
@@ -327,6 +328,33 @@ def _compute_pca_coordinates(matrix_df, missing_strategy):
     return out
 
 
+def _compute_mds_coordinates(matrix_df, missing_strategy):
+    out = pandas.DataFrame(index=matrix_df.columns, columns=['MDS1', 'MDS2'], dtype=float)
+    if matrix_df.shape[1] <= 1:
+        return out
+    filled = _resolve_matrix_for_embedding(matrix_df, missing_strategy=missing_strategy)
+    if filled.shape[0] == 0:
+        return out
+    corr = filled.corr(method='pearson').fillna(0.0).to_numpy(dtype=float)
+    dist = 1.0 - corr
+    dist = (dist + dist.T) / 2.0
+    numpy.fill_diagonal(dist, 0.0)
+    n = dist.shape[0]
+    centering = numpy.eye(n) - (numpy.ones((n, n), dtype=float) / float(n))
+    gram = -0.5 * centering.dot(dist ** 2).dot(centering)
+    eigvals, eigvecs = numpy.linalg.eigh(gram)
+    order = numpy.argsort(eigvals)[::-1]
+    eigvals = eigvals[order]
+    eigvecs = eigvecs[:, order]
+    coords = numpy.zeros((n, 2), dtype=float)
+    for idx in range(min(2, eigvecs.shape[1])):
+        value = max(float(eigvals[idx]), 0.0)
+        coords[:, idx] = eigvecs[:, idx] * numpy.sqrt(value)
+    out.loc[filled.columns, 'MDS1'] = coords[:, 0]
+    out.loc[filled.columns, 'MDS2'] = coords[:, 1]
+    return out
+
+
 def _assign_pca_to_metadata(df_metadata, pca_df, suffix):
     out = df_metadata.copy()
     sample_ids = out['species_tag'].astype(str) + '_' + out['run'].astype(str)
@@ -373,6 +401,13 @@ def _sample_group_color_map(values):
     unique_groups = list(dict.fromkeys(groups))
     cmap = plt.get_cmap('tab20')
     return {group: cmap(idx % max(1, cmap.N)) for idx, group in enumerate(unique_groups)}
+
+
+def _species_color_map(values):
+    species_values = [str(value) for value in values]
+    unique_species = list(dict.fromkeys(species_values))
+    cmap = plt.get_cmap('tab20b')
+    return {species: cmap(idx % max(1, cmap.N)) for idx, species in enumerate(unique_species)}
 
 
 def _save_sample_number_heatmap_pdf(df_metadata, out_pdf_path):
@@ -642,6 +677,431 @@ def _save_pca_pdf(df_metadata, out_pdf_path, suffix='corrected', pcs=(1, 2)):
     return out_pdf_path
 
 
+def _resolve_tsne_perplexity(num_samples):
+    if int(num_samples) < 4:
+        return None
+    max_perplexity = int((int(num_samples) - 1) // 3)
+    if max_perplexity < 1:
+        return None
+    return min(30, max_perplexity)
+
+
+def _compute_tsne_coordinates(matrix_df, missing_strategy):
+    out = pandas.DataFrame(index=matrix_df.columns, columns=['TSNE1', 'TSNE2'], dtype=float)
+    if matrix_df.shape[1] < 4:
+        return out
+    filled = _resolve_matrix_for_embedding(matrix_df, missing_strategy=missing_strategy)
+    if filled.shape[0] == 0 or filled.shape[1] < 4:
+        return out
+    perplexity = _resolve_tsne_perplexity(filled.shape[1])
+    if perplexity is None:
+        return out
+    try:
+        from sklearn.manifold import TSNE
+    except ImportError:
+        return out
+    try:
+        coords = TSNE(
+            n_components=2,
+            perplexity=float(perplexity),
+            random_state=1,
+            init='pca',
+            learning_rate='auto',
+            method='exact',
+        ).fit_transform(filled.T.to_numpy(dtype=float))
+    except ValueError:
+        return out
+    out.loc[filled.columns, 'TSNE1'] = coords[:, 0]
+    out.loc[filled.columns, 'TSNE2'] = coords[:, 1]
+    return out
+
+
+def _build_averaged_cross_species_inputs(df_metadata, orthologs):
+    kept = df_metadata.loc[df_metadata['exclusion'].eq('no'), :].copy()
+    kept.loc[:, 'sample_id'] = kept['species_tag'].astype(str) + '_' + kept['run'].astype(str)
+    if kept.shape[0] == 0:
+        empty_labels = pandas.DataFrame(
+            columns=['averaged_id', 'species_tag', 'scientific_name', 'sample_group', 'num_run', 'num_bp']
+        )
+        return {'labels': empty_labels, 'uncorrected': pandas.DataFrame(), 'corrected': pandas.DataFrame()}
+    group_columns = ['species_tag', 'scientific_name', 'sample_group']
+    agg = {'run': 'nunique'}
+    if 'bioproject' in kept.columns:
+        agg['bioproject'] = 'nunique'
+    label_df = (
+        kept.groupby(group_columns, sort=False)
+        .agg(agg)
+        .reset_index()
+        .rename(columns={'run': 'num_run', 'bioproject': 'num_bp'})
+    )
+    if 'num_bp' not in label_df.columns:
+        label_df.loc[:, 'num_bp'] = 0
+    label_df = label_df.sort_values(by=['sample_group', 'scientific_name'], kind='mergesort').reset_index(drop=True)
+    label_df.loc[:, 'averaged_id'] = (
+        label_df['species_tag'].astype(str) + '_' + label_df['sample_group'].astype(str)
+    )
+    matrix_map = {'labels': label_df.copy()}
+    for correction in ['uncorrected', 'corrected']:
+        matrix = orthologs.get(correction, pandas.DataFrame()).copy()
+        averaged = pandas.DataFrame(index=matrix.index, dtype=float)
+        for row in label_df.itertuples(index=False):
+            sample_ids = kept.loc[
+                kept['species_tag'].astype(str).eq(str(row.species_tag))
+                & kept['sample_group'].astype(str).eq(str(row.sample_group)),
+                'sample_id',
+            ].astype(str).tolist()
+            sample_ids = [sample_id for sample_id in sample_ids if sample_id in matrix.columns]
+            if len(sample_ids) == 0:
+                continue
+            if len(sample_ids) == 1:
+                averaged.loc[:, row.averaged_id] = pandas.to_numeric(matrix.loc[:, sample_ids[0]], errors='coerce')
+            else:
+                averaged.loc[:, row.averaged_id] = matrix.loc[:, sample_ids].apply(pandas.to_numeric, errors='coerce').mean(axis=1, skipna=True)
+        available = [column for column in label_df['averaged_id'].tolist() if column in averaged.columns]
+        matrix_map[correction] = averaged.loc[:, available].copy() if len(available) > 0 else pandas.DataFrame(index=matrix.index)
+    available_ids = [
+        averaged_id
+        for averaged_id in label_df['averaged_id'].tolist()
+        if averaged_id in matrix_map['uncorrected'].columns or averaged_id in matrix_map['corrected'].columns
+    ]
+    matrix_map['labels'] = label_df.loc[label_df['averaged_id'].isin(available_ids), :].reset_index(drop=True)
+    for correction in ['uncorrected', 'corrected']:
+        if matrix_map[correction].shape[1] > 0:
+            matrix_map[correction] = matrix_map[correction].loc[:, available_ids].copy()
+    return matrix_map
+
+
+def _averaged_plot_labels(label_df):
+    labels = []
+    for row in label_df.itertuples(index=False):
+        labels.append('{}\n{}'.format(str(row.scientific_name), str(row.sample_group)))
+    return labels
+
+
+def _plot_corr_heatmap(ax, matrix_df, labels, title):
+    if matrix_df.shape[1] == 0:
+        ax.text(0.5, 0.5, 'No heatmap data', ha='center', va='center', fontsize=8)
+        ax.set_axis_off()
+        return None
+    corr = _resolve_matrix_for_embedding(matrix_df, missing_strategy='row_mean').corr(method='pearson').fillna(0.0)
+    image = ax.imshow(corr.to_numpy(dtype=float), vmin=-1.0, vmax=1.0, cmap='coolwarm', aspect='auto')
+    ax.set_title(title, fontsize=8)
+    ax.set_xticks(range(len(labels)))
+    ax.set_xticklabels(labels, rotation=90, fontsize=6)
+    ax.set_yticks(range(len(labels)))
+    ax.set_yticklabels(labels, fontsize=6)
+    return image
+
+
+def _scatter_embedding_panel(ax, plot_df, x_col, y_col, title, font_size=8, label_column='scientific_name'):
+    plot_df = plot_df.copy()
+    plot_df.loc[:, x_col] = pandas.to_numeric(plot_df.loc[:, x_col], errors='coerce')
+    plot_df.loc[:, y_col] = pandas.to_numeric(plot_df.loc[:, y_col], errors='coerce')
+    plot_df = plot_df.loc[plot_df[x_col].notna() & plot_df[y_col].notna(), :].copy()
+    if plot_df.shape[0] == 0:
+        ax.text(0.5, 0.5, 'No finite coordinates', ha='center', va='center', fontsize=font_size)
+        ax.set_axis_off()
+        return
+    group_colors = _sample_group_color_map(plot_df['sample_group'].fillna('').astype(str).tolist())
+    color_values = [group_colors[str(group)] for group in plot_df['sample_group'].fillna('').astype(str)]
+    ax.scatter(
+        plot_df[x_col].to_numpy(dtype=float),
+        plot_df[y_col].to_numpy(dtype=float),
+        c=color_values,
+        s=36.0,
+        edgecolors='black',
+        linewidths=0.4,
+        alpha=0.85,
+    )
+    if label_column in plot_df.columns:
+        for row in plot_df.itertuples(index=False):
+            ax.text(
+                float(getattr(row, x_col)),
+                float(getattr(row, y_col)),
+                str(getattr(row, label_column)),
+                fontsize=max(4, font_size - 2),
+            )
+    ax.set_title(title, fontsize=font_size)
+    ax.set_xlabel(x_col, fontsize=font_size)
+    ax.set_ylabel(y_col, fontsize=font_size)
+    ax.tick_params(axis='both', labelsize=font_size)
+    ax.grid(color='#d0d0d0', linewidth=0.6)
+
+
+def _draw_dendrogram(ax, matrix_df, labels, title):
+    if matrix_df.shape[1] <= 1:
+        ax.text(0.5, 0.5, 'No dendrogram data', ha='center', va='center', fontsize=8)
+        ax.set_axis_off()
+        return
+    try:
+        from scipy.cluster.hierarchy import dendrogram, linkage
+        from scipy.spatial.distance import squareform
+    except ImportError:
+        ax.text(0.5, 0.5, 'SciPy not available', ha='center', va='center', fontsize=8)
+        ax.set_axis_off()
+        return
+    corr = _resolve_matrix_for_embedding(matrix_df, missing_strategy='row_mean').corr(method='pearson').fillna(0.0)
+    dist = 1.0 - corr.to_numpy(dtype=float)
+    dist = (dist + dist.T) / 2.0
+    numpy.fill_diagonal(dist, 0.0)
+    condensed = squareform(dist, checks=False)
+    linkage_matrix = linkage(condensed, method='average')
+    dendrogram(
+        linkage_matrix,
+        labels=labels,
+        ax=ax,
+        leaf_rotation=90,
+        leaf_font_size=6,
+        color_threshold=None,
+    )
+    ax.set_title(title, fontsize=8)
+    ax.set_ylabel('Distance', fontsize=8)
+    ax.tick_params(axis='y', labelsize=7)
+
+
+def _save_averaged_heatmap_pdf(averaged_inputs, out_pdf_path):
+    label_df = averaged_inputs['labels']
+    labels = _averaged_plot_labels(label_df)
+    os.makedirs(os.path.dirname(os.path.realpath(out_pdf_path)), exist_ok=True)
+    fig, axes = plt.subplots(1, 2, figsize=(10.8, 4.8))
+    image = _plot_corr_heatmap(axes[0], averaged_inputs['uncorrected'], labels, 'Uncorrected')
+    image = _plot_corr_heatmap(axes[1], averaged_inputs['corrected'], labels, 'Corrected')
+    if image is not None:
+        fig.colorbar(image, ax=axes, fraction=0.025, pad=0.04)
+    fig.tight_layout()
+    fig.savefig(out_pdf_path)
+    plt.close(fig)
+    return out_pdf_path
+
+
+def _save_averaged_dendrogram_pdf(averaged_inputs, out_pdf_path):
+    label_df = averaged_inputs['labels']
+    labels = _averaged_plot_labels(label_df)
+    os.makedirs(os.path.dirname(os.path.realpath(out_pdf_path)), exist_ok=True)
+    fig, axes = plt.subplots(2, 1, figsize=(10.8, 6.4))
+    _draw_dendrogram(axes[0], averaged_inputs['uncorrected'], labels, 'Uncorrected')
+    _draw_dendrogram(axes[1], averaged_inputs['corrected'], labels, 'Corrected')
+    fig.tight_layout()
+    fig.savefig(out_pdf_path)
+    plt.close(fig)
+    return out_pdf_path
+
+
+def _save_averaged_boxplot_pdf(averaged_inputs, out_pdf_path):
+    label_df = averaged_inputs['labels']
+    if label_df.shape[0] == 0:
+        return None
+    os.makedirs(os.path.dirname(os.path.realpath(out_pdf_path)), exist_ok=True)
+    fig, axes = plt.subplots(1, 2, figsize=(10.8, 4.0))
+    pair_mask = numpy.triu(numpy.ones((label_df.shape[0], label_df.shape[0]), dtype=bool), k=1)
+    is_same_species = numpy.equal.outer(
+        label_df['scientific_name'].astype(str).to_numpy(),
+        label_df['scientific_name'].astype(str).to_numpy(),
+    )
+    is_same_group = numpy.equal.outer(
+        label_df['sample_group'].astype(str).to_numpy(),
+        label_df['sample_group'].astype(str).to_numpy(),
+    )
+    labels = ['bw\nbw', 'bw\nwi', 'wi\nbw', 'wi\nwi']
+    categories = [
+        (~is_same_species) & (~is_same_group),
+        is_same_species & (~is_same_group),
+        (~is_same_species) & is_same_group,
+        is_same_species & is_same_group,
+    ]
+    for ax, correction in zip(axes, ['uncorrected', 'corrected']):
+        matrix_df = averaged_inputs[correction]
+        if matrix_df.shape[1] == 0:
+            ax.text(0.5, 0.5, 'No boxplot data', ha='center', va='center', fontsize=8)
+            ax.set_axis_off()
+            continue
+        corr = _resolve_matrix_for_embedding(matrix_df, missing_strategy='row_mean').corr(method='pearson').fillna(0.0).to_numpy(dtype=float)
+        values = []
+        for mask in categories:
+            group_vals = corr[pair_mask & mask]
+            group_vals = group_vals[numpy.isfinite(group_vals)]
+            values.append(group_vals.tolist())
+        nonempty = [group for group in values if len(group) > 0]
+        if len(nonempty) == 0:
+            ax.text(0.5, 0.5, 'No finite boxplot data', ha='center', va='center', fontsize=8)
+            ax.set_axis_off()
+            continue
+        ax.boxplot(values, patch_artist=True, widths=0.6)
+        ax.set_xticks(range(1, 5))
+        ax.set_xticklabels(labels, fontsize=8)
+        ax.set_ylim(0.0, 1.0)
+        ax.set_ylabel("Pearson's correlation", fontsize=8)
+        ax.set_title(str(correction).capitalize(), fontsize=8)
+        ax.tick_params(axis='both', labelsize=8)
+    fig.tight_layout()
+    fig.savefig(out_pdf_path)
+    plt.close(fig)
+    return out_pdf_path
+
+
+def _save_unaveraged_tsne_pdf(df_metadata, matrix_df, out_pdf_path, missing_strategy, correction_label):
+    coords = _compute_tsne_coordinates(matrix_df, missing_strategy=missing_strategy)
+    if coords.shape[0] == 0:
+        return None
+    plot_df = df_metadata.copy()
+    sample_ids = plot_df['species_tag'].astype(str) + '_' + plot_df['run'].astype(str)
+    plot_df.loc[:, 'TSNE1'] = sample_ids.map(coords['TSNE1'])
+    plot_df.loc[:, 'TSNE2'] = sample_ids.map(coords['TSNE2'])
+    os.makedirs(os.path.dirname(os.path.realpath(out_pdf_path)), exist_ok=True)
+    fig, ax = plt.subplots(figsize=(4.8, 4.0))
+    _scatter_embedding_panel(ax, plot_df, 'TSNE1', 'TSNE2', '{} t-SNE'.format(correction_label), font_size=8, label_column='run')
+    fig.tight_layout()
+    fig.savefig(out_pdf_path)
+    plt.close(fig)
+    return out_pdf_path
+
+
+def _save_averaged_tsne_pdf(averaged_inputs, out_pdf_path, missing_strategy):
+    label_df = averaged_inputs['labels'].copy()
+    coords = _compute_tsne_coordinates(averaged_inputs['corrected'], missing_strategy=missing_strategy)
+    if coords.shape[0] == 0 or label_df.shape[0] == 0:
+        return None
+    label_df.loc[:, 'TSNE1'] = label_df['averaged_id'].map(coords['TSNE1'])
+    label_df.loc[:, 'TSNE2'] = label_df['averaged_id'].map(coords['TSNE2'])
+    os.makedirs(os.path.dirname(os.path.realpath(out_pdf_path)), exist_ok=True)
+    fig, ax = plt.subplots(figsize=(4.8, 4.0))
+    _scatter_embedding_panel(ax, label_df, 'TSNE1', 'TSNE2', 'Corrected averaged t-SNE', font_size=8)
+    fig.tight_layout()
+    fig.savefig(out_pdf_path)
+    plt.close(fig)
+    return out_pdf_path
+
+
+def _save_averaged_summary_pdf(averaged_inputs, out_pdf_path, missing_strategy):
+    label_df = averaged_inputs['labels'].copy()
+    if label_df.shape[0] == 0:
+        return None
+    os.makedirs(os.path.dirname(os.path.realpath(out_pdf_path)), exist_ok=True)
+    fig, axes = plt.subplots(4, 2, figsize=(10.8, 12.8))
+    for col_idx, correction in enumerate(['uncorrected', 'corrected']):
+        matrix_df = averaged_inputs[correction]
+        if matrix_df.shape[1] == 0:
+            for row_idx in range(3):
+                axes[row_idx, col_idx].text(0.5, 0.5, 'No data', ha='center', va='center', fontsize=8)
+                axes[row_idx, col_idx].set_axis_off()
+            continue
+        pca_df = _compute_pca_coordinates(matrix_df, missing_strategy=missing_strategy)
+        tsne_df = _compute_tsne_coordinates(matrix_df, missing_strategy=missing_strategy)
+        mds_coords = _compute_mds_coordinates(matrix_df, missing_strategy=missing_strategy)
+        plot_df = label_df.copy()
+        plot_df.loc[:, 'PC1'] = plot_df['averaged_id'].map(pca_df['PC1'])
+        plot_df.loc[:, 'PC2'] = plot_df['averaged_id'].map(pca_df['PC2'])
+        plot_df.loc[:, 'TSNE1'] = plot_df['averaged_id'].map(tsne_df['TSNE1'])
+        plot_df.loc[:, 'TSNE2'] = plot_df['averaged_id'].map(tsne_df['TSNE2'])
+        plot_df.loc[:, 'MDS1'] = plot_df['averaged_id'].map(mds_coords['MDS1'])
+        plot_df.loc[:, 'MDS2'] = plot_df['averaged_id'].map(mds_coords['MDS2'])
+        _scatter_embedding_panel(axes[0, col_idx], plot_df, 'PC1', 'PC2', '{} PCA'.format(correction), font_size=8)
+        _scatter_embedding_panel(axes[1, col_idx], plot_df, 'TSNE1', 'TSNE2', '{} t-SNE'.format(correction), font_size=8)
+        _scatter_embedding_panel(axes[2, col_idx], plot_df, 'MDS1', 'MDS2', '{} MDS'.format(correction), font_size=8)
+    legend_ax = axes[3, 0]
+    legend_ax.set_axis_off()
+    sample_group_colors = _sample_group_color_map(label_df['sample_group'].astype(str).tolist())
+    legend_handles = [
+        Line2D([0], [0], marker='o', color='w', label=str(group), markerfacecolor=color, markeredgecolor='black', markersize=8)
+        for group, color in sample_group_colors.items()
+    ]
+    if len(legend_handles) > 0:
+        legend_ax.legend(handles=legend_handles, title='Sample group', frameon=False, loc='center')
+    note_ax = axes[3, 1]
+    note_ax.set_axis_off()
+    note_ax.text(
+        0.0,
+        1.0,
+        'Species are annotated directly on each panel.\nAveraged profiles use kept samples only.',
+        ha='left',
+        va='top',
+        fontsize=8,
+    )
+    fig.tight_layout()
+    fig.savefig(out_pdf_path)
+    plt.close(fig)
+    return out_pdf_path
+
+
+def _save_delta_pcc_plot(input_table_dir, out_pdf_path):
+    stat_paths = []
+    for name in sorted(os.listdir(input_table_dir)):
+        if name.endswith('.correlation_statistics.tsv'):
+            path = os.path.join(input_table_dir, name)
+            if os.path.isfile(path):
+                stat_paths.append(path)
+    if len(stat_paths) == 0:
+        return None
+    delta_rows = []
+    mean_cols = ['bwbw_mean', 'bwwi_mean', 'wiwi_mean', 'wibw_mean']
+    for path in stat_paths:
+        df = pandas.read_csv(path, sep='\t', index_col=0)
+        if not set(mean_cols).issubset(df.columns) or df.shape[0] == 0:
+            continue
+        first_row = pandas.to_numeric(df.iloc[0].loc[mean_cols], errors='coerce')
+        last_row = pandas.to_numeric(df.iloc[-1].loc[mean_cols], errors='coerce')
+        delta_rows.append(
+            {
+                'delta_bwbw_wibw_uncorrected': abs(first_row['bwbw_mean'] - first_row['wibw_mean']),
+                'delta_bwbw_wibw_corrected': abs(last_row['bwbw_mean'] - last_row['wibw_mean']),
+                'delta_wiwi_bwwi_uncorrected': abs(first_row['bwwi_mean'] - first_row['wiwi_mean']),
+                'delta_wiwi_bwwi_corrected': abs(last_row['bwwi_mean'] - last_row['wiwi_mean']),
+            }
+        )
+    if len(delta_rows) == 0:
+        return None
+    delta_df = pandas.DataFrame(delta_rows).dropna(how='all')
+    if delta_df.shape[0] == 0:
+        return None
+    os.makedirs(os.path.dirname(os.path.realpath(out_pdf_path)), exist_ok=True)
+    fig, ax = plt.subplots(figsize=(4.8, 4.8))
+    columns = [
+        'delta_bwbw_wibw_uncorrected',
+        'delta_bwbw_wibw_corrected',
+        'delta_wiwi_bwwi_uncorrected',
+        'delta_wiwi_bwwi_corrected',
+    ]
+    ax.boxplot(
+        [pandas.to_numeric(delta_df[column], errors='coerce').dropna().to_numpy(dtype=float) for column in columns],
+        patch_artist=True,
+        widths=0.6,
+    )
+    ax.set_xticks([1, 2, 3, 4])
+    ax.set_xticklabels(['uncorr.\n', 'corr.\n', 'uncorr.\n', 'corr.\n'], fontsize=8)
+    ax.set_ylabel('Delta mean PCC', fontsize=8)
+    ax.tick_params(axis='y', labelsize=8)
+    ax.text(1.5, -0.08, 'between\nsample group', ha='center', va='top', fontsize=8, transform=ax.get_xaxis_transform())
+    ax.text(3.5, -0.08, 'within\nsample group', ha='center', va='top', fontsize=8, transform=ax.get_xaxis_transform())
+    if delta_df.shape[0] > 2:
+        try:
+            from scipy.stats import ttest_rel
+        except ImportError:
+            ttest_rel = None
+        if ttest_rel is not None:
+            p_left = ttest_rel(
+                pandas.to_numeric(delta_df['delta_bwbw_wibw_uncorrected'], errors='coerce'),
+                pandas.to_numeric(delta_df['delta_bwbw_wibw_corrected'], errors='coerce'),
+                nan_policy='omit',
+            ).pvalue
+            p_right = ttest_rel(
+                pandas.to_numeric(delta_df['delta_wiwi_bwwi_uncorrected'], errors='coerce'),
+                pandas.to_numeric(delta_df['delta_wiwi_bwwi_corrected'], errors='coerce'),
+                nan_policy='omit',
+            ).pvalue
+            ymax = numpy.nanmax([
+                pandas.to_numeric(delta_df[column], errors='coerce').max()
+                for column in columns
+            ])
+            if numpy.isfinite(ymax):
+                ax.text(1.5, ymax * 1.05, 'p={:.3g}'.format(float(p_left)), ha='center', va='bottom', fontsize=8)
+                ax.text(3.5, ymax * 1.05, 'p={:.3g}'.format(float(p_right)), ha='center', va='bottom', fontsize=8)
+                ax.set_ylim(top=ymax * 1.2)
+    fig.tight_layout()
+    fig.savefig(out_pdf_path)
+    plt.close(fig)
+    return out_pdf_path
+
+
 def _save_overview_pdf(matrix_df, df_metadata, out_pdf_path):
     os.makedirs(os.path.dirname(os.path.realpath(out_pdf_path)), exist_ok=True)
     fig, axes = plt.subplots(2, 2, figsize=(9.6, 7.2))
@@ -790,6 +1250,7 @@ def run_cross_species_filter(args, context=None):
             margin_threshold=float(getattr(args, 'margin_threshold', 0.0)),
             robust_z_threshold=float(getattr(args, 'robust_z_threshold', -2.5)),
         )
+        averaged_inputs = _build_averaged_cross_species_inputs(df_metadata, orthologs)
         df_metadata.to_csv(os.path.join(stage_dir, 'metadata.tsv'), sep='\t', index=False)
         _save_sample_number_heatmap_pdf(df_metadata, os.path.join(stage_dir, 'cross_species_sample_number_heatmap.pdf'))
         _save_group_cor_scatter_plot(df_metadata, os.path.join(stage_dir, 'cross_species_group_cor_scatter.pdf'))
@@ -802,6 +1263,37 @@ def run_cross_species_filter(args, context=None):
         _save_pca_pdf(df_metadata, os.path.join(stage_dir, 'cross_species_unaveraged_pca_PC12_corrected.pdf'), suffix='corrected', pcs=(1, 2))
         _save_pca_pdf(df_metadata, os.path.join(stage_dir, 'cross_species_unaveraged_pca_PC34_uncorrected.pdf'), suffix='uncorrected', pcs=(3, 4))
         _save_pca_pdf(df_metadata, os.path.join(stage_dir, 'cross_species_unaveraged_pca_PC34_corrected.pdf'), suffix='corrected', pcs=(3, 4))
+        _save_unaveraged_tsne_pdf(
+            df_metadata,
+            orthologs['uncorrected'],
+            os.path.join(stage_dir, 'cross_species_unaveraged_tsne_uncorrected.pdf'),
+            missing_strategy=str(getattr(args, 'missing_strategy', 'em_pca')),
+            correction_label='Uncorrected',
+        )
+        _save_unaveraged_tsne_pdf(
+            df_metadata,
+            orthologs['corrected'],
+            os.path.join(stage_dir, 'cross_species_unaveraged_tsne_corrected.pdf'),
+            missing_strategy=str(getattr(args, 'missing_strategy', 'em_pca')),
+            correction_label='Corrected',
+        )
+        _save_averaged_heatmap_pdf(averaged_inputs, os.path.join(stage_dir, 'cross_species_SVA_heatmap.pdf'))
+        _save_averaged_dendrogram_pdf(averaged_inputs, os.path.join(stage_dir, 'cross_species_SVA_dendrogram.pdf'))
+        _save_averaged_summary_pdf(
+            averaged_inputs,
+            os.path.join(stage_dir, 'cross_species_averaged_summary.pdf'),
+            missing_strategy=str(getattr(args, 'missing_strategy', 'em_pca')),
+        )
+        _save_averaged_boxplot_pdf(averaged_inputs, os.path.join(stage_dir, 'cross_species_boxplot.pdf'))
+        _save_averaged_tsne_pdf(
+            averaged_inputs,
+            os.path.join(stage_dir, 'cross_species_averaged_tsne.pdf'),
+            missing_strategy=str(getattr(args, 'missing_strategy', 'em_pca')),
+        )
+        _save_delta_pcc_plot(
+            input_table_dir=input_table_dir,
+            out_pdf_path=os.path.join(stage_dir, 'cross_species_delta_pcc_boxplot.pdf'),
+        )
         save_exclusion_plot_pdf(
             df_metadata=df_metadata,
             out_pdf_path=os.path.join(stage_dir, 'cross_species_exclusion.pdf'),

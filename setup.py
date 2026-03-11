@@ -35,6 +35,7 @@ setup(
         'scipy',
         'matplotlib',
         'statsmodels',
+        'scikit-learn',
         'inmoose',
         'biopython',
         'ete4',

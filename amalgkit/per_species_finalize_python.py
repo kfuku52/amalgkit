@@ -10,6 +10,7 @@ from amalgkit.batch_effect_common import (
     write_batch_effect_summary_tsv,
 )
 from amalgkit.batch_effect_combatseq import run_combatseq_backend
+from amalgkit.batch_effect_ruvseq import compute_factor_r2
 from amalgkit.batch_effect_latent_glm import run_latent_glm_backend
 from amalgkit.batch_effect_ruvseq import run_ruvseq_backend
 from amalgkit.batch_effect_sva import run_sva_backend
@@ -410,6 +411,32 @@ def _compute_mds_coordinates(corr_df):
     return coords
 
 
+def _compute_tsne_coordinates(counts_df):
+    num_samples = counts_df.shape[1]
+    coords = numpy.full((num_samples, 2), numpy.nan, dtype=float)
+    if num_samples < 4:
+        return coords
+    max_perplexity = int((int(num_samples) - 1) // 3)
+    if max_perplexity < 1:
+        return coords
+    try:
+        from sklearn.manifold import TSNE
+    except ImportError:
+        return coords
+    try:
+        coords = TSNE(
+            n_components=2,
+            perplexity=float(min(30, max_perplexity)),
+            random_state=1,
+            init='pca',
+            learning_rate='auto',
+            method='exact',
+        ).fit_transform(counts_df.transpose().to_numpy(dtype=float))
+    except ValueError:
+        return numpy.full((num_samples, 2), numpy.nan, dtype=float)
+    return coords
+
+
 def _sample_group_color_map(sample_groups):
     try:
         import matplotlib
@@ -467,6 +494,77 @@ def _draw_dendrogram_panel(ax, corr_df, labels, font_size, title):
     ax.tick_params(axis='y', labelsize=font_size)
 
 
+def _compute_numeric_r2(values, covariate):
+    y = pandas.to_numeric(pandas.Series(values), errors='coerce').to_numpy(dtype=float)
+    x = pandas.to_numeric(pandas.Series(covariate), errors='coerce').to_numpy(dtype=float)
+    valid = numpy.isfinite(y) & numpy.isfinite(x)
+    if valid.sum() < 2:
+        return numpy.nan
+    y = y[valid]
+    x = x[valid]
+    if (numpy.nanmax(x) - numpy.nanmin(x)) <= 0:
+        return numpy.nan
+    design = numpy.column_stack([numpy.ones((x.shape[0],), dtype=float), x])
+    beta, _, _, _ = numpy.linalg.lstsq(design, y, rcond=None)
+    fitted = design @ beta
+    rss = float(numpy.sum((y - fitted) ** 2))
+    sst = float(numpy.sum((y - numpy.mean(y)) ** 2))
+    if (not numpy.isfinite(sst)) or (sst <= 0):
+        return numpy.nan
+    return float(1.0 - (rss / sst))
+
+
+def _compute_sva_summary_table(sv_df, metadata_df):
+    if (sv_df is None) or (sv_df.shape[1] == 0):
+        return pandas.DataFrame()
+    aligned = metadata_df.copy().set_index('run', drop=False)
+    aligned = aligned.loc[[run_id for run_id in sv_df.index if run_id in aligned.index], :].copy()
+    if aligned.shape[0] == 0:
+        return pandas.DataFrame()
+    sv_aligned = sv_df.loc[aligned.index, :].copy()
+    covariates = []
+    if 'sample_group' in aligned.columns:
+        covariates.append(('Sample group', 'factor', aligned['sample_group']))
+    if 'bioproject' in aligned.columns:
+        covariates.append(('BioProject', 'factor', aligned['bioproject']))
+    if 'mapping_rate' in aligned.columns:
+        covariates.append(('Mapping rate', 'numeric', aligned['mapping_rate']))
+    if 'total_spots' in aligned.columns:
+        covariates.append(('Log10 total reads', 'numeric', numpy.log10(pandas.to_numeric(aligned['total_spots'], errors='coerce'))))
+    if 'total_bases' in aligned.columns:
+        covariates.append(('Log10 total bases', 'numeric', numpy.log10(pandas.to_numeric(aligned['total_bases'], errors='coerce'))))
+    if 'tmm_normalization_factor' in aligned.columns:
+        covariates.append(('TMM normalization factor', 'numeric', aligned['tmm_normalization_factor']))
+    rows = []
+    index = []
+    for label, mode, covariate in covariates:
+        stats = []
+        for sv_name in sv_aligned.columns:
+            sv_values = pandas.to_numeric(sv_aligned.loc[:, sv_name], errors='coerce')
+            if mode == 'factor':
+                stats.append(compute_factor_r2(sv_values, covariate))
+            else:
+                stats.append(_compute_numeric_r2(sv_values, covariate))
+        rows.append(stats)
+        index.append(label)
+    return pandas.DataFrame(rows, index=index, columns=sv_aligned.columns, dtype=float)
+
+
+def _draw_sva_summary_panel(ax, sv_df, metadata_df, font_size, title):
+    summary_df = _compute_sva_summary_table(sv_df=sv_df, metadata_df=metadata_df)
+    if summary_df.shape[0] == 0:
+        ax.text(0.5, 0.5, 'No SV summary data', ha='center', va='center', fontsize=font_size)
+        ax.set_axis_off()
+        return
+    image = ax.imshow(summary_df.to_numpy(dtype=float), vmin=0.0, vmax=1.0, cmap='viridis', aspect='auto')
+    ax.set_title(title, fontsize=font_size)
+    ax.set_xticks(range(summary_df.shape[1]))
+    ax.set_xticklabels(summary_df.columns.tolist(), rotation=90, fontsize=max(4, font_size - 2))
+    ax.set_yticks(range(summary_df.shape[0]))
+    ax.set_yticklabels(summary_df.index.tolist(), fontsize=max(4, font_size - 2))
+    ax.figure.colorbar(image, ax=ax, fraction=0.046, pad=0.04)
+
+
 def save_quick_state_comparison_plot(
     tc_before,
     tc_after,
@@ -476,6 +574,7 @@ def save_quick_state_comparison_plot(
     selected_sample_groups,
     transform_method,
     batch_effect_alg,
+    sv_info=None,
     font_size=8,
 ):
     if (tc_before.shape[1] <= 1) or (tc_after.shape[1] <= 1):
@@ -506,6 +605,8 @@ def save_quick_state_comparison_plot(
     pca_after = _compute_pca_coordinates(corr_after)
     coords_before = _compute_mds_coordinates(corr_before)
     coords_after = _compute_mds_coordinates(corr_after)
+    tsne_before = _compute_tsne_coordinates(before)
+    tsne_after = _compute_tsne_coordinates(after)
     tau_before = sample_group_to_tau(
         tc_sample_group_df=sample_group_mean(before, metadata, selected_sample_groups)['tc_ave'],
         rich_annotation=False,
@@ -520,7 +621,7 @@ def save_quick_state_comparison_plot(
     colors = [color_map[str(group)] for group in metadata.loc[:, 'sample_group'].astype(str)]
     labels = [_format_genus_species_label(str(run_id)).replace('\n', ' ') for run_id in before.columns]
 
-    fig, axes = pyplot.subplots(5, 2, figsize=(12.0, 20.0))
+    fig, axes = pyplot.subplots(7, 2, figsize=(12.0, 26.0))
     heatmaps = [
         (corr_before, axes[0, 0], 'Before {}'.format(batch_effect_alg)),
         (corr_after, axes[0, 1], 'After {}'.format(batch_effect_alg)),
@@ -548,16 +649,23 @@ def save_quick_state_comparison_plot(
     for coords, ax, title in scatter_panels:
         _draw_embedding_panel(ax, coords, colors, before.columns.tolist(), title, font_size, 'Axis 1', 'Axis 2')
 
+    tsne_panels = [
+        (tsne_before, axes[3, 0], 't-SNE before'),
+        (tsne_after, axes[3, 1], 't-SNE after'),
+    ]
+    for coords, ax, title in tsne_panels:
+        _draw_embedding_panel(ax, coords, colors, before.columns.tolist(), title, font_size, 't-SNE 1', 't-SNE 2')
+
     dendrogram_panels = [
-        (corr_before, axes[3, 0], 'Dendrogram before'),
-        (corr_after, axes[3, 1], 'Dendrogram after'),
+        (corr_before, axes[4, 0], 'Dendrogram before'),
+        (corr_after, axes[4, 1], 'Dendrogram after'),
     ]
     for corr_df, ax, title in dendrogram_panels:
         _draw_dendrogram_panel(ax, corr_df, labels, font_size, title)
 
     hist_panels = [
-        (tau_before, axes[4, 0], 'Tau before'),
-        (tau_after, axes[4, 1], 'Tau after'),
+        (tau_before, axes[5, 0], 'Tau before'),
+        (tau_after, axes[5, 1], 'Tau after'),
     ]
     breaks = numpy.arange(0.0, 1.000001, 0.05)
     for tau_df, ax, title in hist_panels:
@@ -567,6 +675,21 @@ def save_quick_state_comparison_plot(
         ax.set_xlabel('Tau', fontsize=font_size)
         ax.set_ylabel('Gene count', fontsize=font_size)
         ax.tick_params(axis='both', labelsize=font_size)
+
+    if str(batch_effect_alg).lower() == 'sva':
+        _draw_sva_summary_panel(axes[6, 0], sv_info, metadata, font_size, 'SV summary')
+    else:
+        axes[6, 0].text(0.5, 0.5, 'No SV summary for {}'.format(batch_effect_alg), ha='center', va='center', fontsize=font_size)
+        axes[6, 0].set_axis_off()
+    axes[6, 1].set_axis_off()
+    axes[6, 1].text(
+        0.0,
+        1.0,
+        'Sample groups are encoded by fill color.\nBioProjects are encoded by edge color.',
+        ha='left',
+        va='top',
+        fontsize=font_size,
+    )
 
     fig.tight_layout()
     os.makedirs(os.path.dirname(os.path.realpath(out_pdf_path)), exist_ok=True)
@@ -698,6 +821,7 @@ def run_finalize_python_worker(args, metadata, species_tag, input_dir):
             selected_sample_groups=selected_sample_groups,
             transform_method=str(getattr(args, 'norm', 'log2p1-fpkm')),
             batch_effect_alg=str(getattr(args, 'batch_effect_alg', 'no')),
+            sv_info=out.get('sva'),
             font_size=8,
         )
     if bool(getattr(args, 'maintain_zero', True)):

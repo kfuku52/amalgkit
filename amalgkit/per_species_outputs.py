@@ -1,6 +1,10 @@
 import os
 import warnings
 
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
 import numpy
 import pandas
 
@@ -207,11 +211,310 @@ def save_tau_histogram_pdf(
     }
 
 
+def _plot_corr_method(dist_method):
+    return str(dist_method) if str(dist_method) in {'pearson', 'spearman', 'kendall'} else 'pearson'
+
+
+def _compute_corr_matrix(counts_df, dist_method):
+    corr_df = counts_df.corr(method=_plot_corr_method(dist_method))
+    return corr_df.fillna(0.0)
+
+
+def _compute_distance_matrix(corr_df):
+    dist = 1.0 - corr_df.to_numpy(dtype=float)
+    dist = (dist + dist.T) / 2.0
+    numpy.fill_diagonal(dist, 0.0)
+    return dist
+
+
+def _compute_pca_coords(corr_df):
+    matrix = corr_df.to_numpy(dtype=float)
+    n = matrix.shape[0]
+    coords = numpy.zeros((n, 2), dtype=float)
+    if n <= 1:
+        return coords
+    eigvals, eigvecs = numpy.linalg.eigh(matrix)
+    order = numpy.argsort(eigvals)[::-1]
+    eigvals = eigvals[order]
+    eigvecs = eigvecs[:, order]
+    for idx in range(min(2, eigvecs.shape[1])):
+        value = max(float(eigvals[idx]), 0.0)
+        coords[:, idx] = eigvecs[:, idx] * numpy.sqrt(value)
+    return coords
+
+
+def _compute_mds_coords(corr_df):
+    dist = _compute_distance_matrix(corr_df)
+    n = dist.shape[0]
+    coords = numpy.zeros((n, 2), dtype=float)
+    if n <= 1:
+        return coords
+    centering = numpy.eye(n) - (numpy.ones((n, n), dtype=float) / float(n))
+    gram = -0.5 * centering.dot(dist ** 2).dot(centering)
+    eigvals, eigvecs = numpy.linalg.eigh(gram)
+    order = numpy.argsort(eigvals)[::-1]
+    eigvals = eigvals[order]
+    eigvecs = eigvecs[:, order]
+    for idx in range(min(2, eigvecs.shape[1])):
+        value = max(float(eigvals[idx]), 0.0)
+        coords[:, idx] = eigvecs[:, idx] * numpy.sqrt(value)
+    return coords
+
+
+def _resolve_tsne_perplexity(num_samples):
+    if int(num_samples) < 4:
+        return None
+    max_perplexity = int((int(num_samples) - 1) // 3)
+    if max_perplexity < 1:
+        return None
+    return min(30, max_perplexity)
+
+
+def _compute_tsne_coords(counts_df):
+    num_samples = counts_df.shape[1]
+    coords = numpy.full((num_samples, 2), numpy.nan, dtype=float)
+    perplexity = _resolve_tsne_perplexity(num_samples)
+    if perplexity is None:
+        return coords
+    try:
+        from sklearn.manifold import TSNE
+    except ImportError:
+        return coords
+    try:
+        coords = TSNE(
+            n_components=2,
+            perplexity=float(perplexity),
+            random_state=1,
+            init='pca',
+            learning_rate='auto',
+            method='exact',
+        ).fit_transform(counts_df.T.to_numpy(dtype=float))
+    except ValueError:
+        return numpy.full((num_samples, 2), numpy.nan, dtype=float)
+    return coords
+
+
+def _sample_group_color_map(sample_groups):
+    groups = [str(value) for value in sample_groups]
+    unique_groups = list(dict.fromkeys(groups))
+    cmap = plt.get_cmap('tab20')
+    return {group: cmap(idx % max(1, cmap.N)) for idx, group in enumerate(unique_groups)}
+
+
+def _bioproject_color_map(bioprojects):
+    values = [str(value) for value in bioprojects]
+    unique_values = list(dict.fromkeys(values))
+    cmap = plt.get_cmap('tab20b')
+    return {value: cmap(idx % max(1, cmap.N)) for idx, value in enumerate(unique_values)}
+
+
+def _draw_embedding_panel(ax, coords, metadata_df, title, x_label, y_label, font_size=8):
+    if coords.shape[0] == 0 or numpy.isfinite(coords).sum() == 0:
+        ax.text(0.5, 0.5, 'No finite coordinates', ha='center', va='center', fontsize=font_size)
+        ax.set_axis_off()
+        return
+    group_colors = _sample_group_color_map(metadata_df.loc[:, 'sample_group'].fillna('').astype(str).tolist())
+    bp_colors = _bioproject_color_map(metadata_df.loc[:, 'bioproject'].fillna('').astype(str).tolist())
+    facecolors = [group_colors[str(value)] for value in metadata_df.loc[:, 'sample_group'].fillna('').astype(str)]
+    edgecolors = [bp_colors[str(value)] for value in metadata_df.loc[:, 'bioproject'].fillna('').astype(str)]
+    ax.scatter(
+        coords[:, 0],
+        coords[:, 1],
+        c=facecolors,
+        edgecolors=edgecolors,
+        s=50.0,
+        linewidths=0.8,
+        alpha=0.9,
+    )
+    ax.set_title(title, fontsize=font_size)
+    ax.set_xlabel(x_label, fontsize=font_size)
+    ax.set_ylabel(y_label, fontsize=font_size)
+    ax.tick_params(axis='both', labelsize=font_size)
+
+
+def _draw_dendrogram_panel(ax, corr_df, metadata_df, font_size=8):
+    if corr_df.shape[0] <= 1:
+        ax.text(0.5, 0.5, 'No dendrogram data', ha='center', va='center', fontsize=font_size)
+        ax.set_axis_off()
+        return
+    try:
+        from scipy.cluster.hierarchy import dendrogram, linkage
+        from scipy.spatial.distance import squareform
+    except ImportError:
+        ax.text(0.5, 0.5, 'SciPy not available', ha='center', va='center', fontsize=font_size)
+        ax.set_axis_off()
+        return
+    dist = _compute_distance_matrix(corr_df)
+    condensed = squareform(dist, checks=False)
+    linkage_matrix = linkage(condensed, method='average')
+    labels = metadata_df.loc[:, 'run'].astype(str).tolist()
+    dendrogram(
+        linkage_matrix,
+        labels=labels,
+        ax=ax,
+        leaf_rotation=90,
+        leaf_font_size=max(4, font_size - 2),
+        color_threshold=None,
+    )
+    ax.set_ylabel('Distance', fontsize=font_size)
+    ax.tick_params(axis='y', labelsize=font_size)
+
+
+def _draw_boxplot_panel(ax, corr_df, metadata_df, font_size=8):
+    is_same_bp = numpy.equal.outer(
+        metadata_df.loc[:, 'bioproject'].astype(str).to_numpy(),
+        metadata_df.loc[:, 'bioproject'].astype(str).to_numpy(),
+    )
+    is_same_group = numpy.equal.outer(
+        metadata_df.loc[:, 'sample_group'].astype(str).to_numpy(),
+        metadata_df.loc[:, 'sample_group'].astype(str).to_numpy(),
+    )
+    pair_mask = numpy.triu(numpy.ones(corr_df.shape, dtype=bool), k=1)
+    corr = corr_df.to_numpy(dtype=float)
+    values = [
+        corr[pair_mask & (~is_same_bp) & (~is_same_group)],
+        corr[pair_mask & is_same_bp & (~is_same_group)],
+        corr[pair_mask & (~is_same_bp) & is_same_group],
+        corr[pair_mask & is_same_bp & is_same_group],
+    ]
+    values = [numpy.asarray(group, dtype=float)[numpy.isfinite(group)] for group in values]
+    ax.boxplot(values, patch_artist=True, widths=0.6)
+    ax.set_xticks([1, 2, 3, 4])
+    ax.set_xticklabels(['bw\nbw', 'bw\nwi', 'wi\nbw', 'wi\nwi'], fontsize=font_size)
+    ax.set_ylabel("Pearson's correlation", fontsize=font_size)
+    ax.tick_params(axis='y', labelsize=font_size)
+
+
+def _draw_expression_histogram_panel(ax, counts_df, metadata_df, selected_sample_groups, transform_method, font_size=8):
+    tc_sample_group = sample_group_mean(
+        counts_df=counts_df,
+        metadata_df=metadata_df,
+        selected_sample_groups=selected_sample_groups,
+        balance_bp=False,
+    )['tc_ave']
+    xmax = pandas.to_numeric(tc_sample_group.max(axis=1), errors='coerce').clip(lower=0, upper=15).dropna().to_numpy(dtype=float)
+    ax.hist(xmax, bins=numpy.arange(0.0, 16.0, 1.0), color='gray', edgecolor='black', linewidth=0.5)
+    ax.set_xlabel('Max expression ({})'.format(transform_method), fontsize=font_size)
+    ax.set_ylabel('Gene count', fontsize=font_size)
+    ax.tick_params(axis='both', labelsize=font_size)
+
+
+def _draw_tau_histogram_panel(ax, counts_df, metadata_df, selected_sample_groups, transform_method, font_size=8):
+    tc_sample_group = sample_group_mean(
+        counts_df=counts_df,
+        metadata_df=metadata_df,
+        selected_sample_groups=selected_sample_groups,
+        balance_bp=False,
+    )['tc_ave']
+    df_tau = sample_group_to_tau(
+        tc_sample_group_df=tc_sample_group,
+        rich_annotation=False,
+        transform_method=transform_method,
+    )
+    tau_values = pandas.to_numeric(df_tau.loc[:, 'tau'], errors='coerce').dropna().to_numpy(dtype=float)
+    counts_hist, _bins, _patches = ax.hist(
+        tau_values,
+        bins=numpy.arange(0.0, 1.000001, 0.05),
+        color='gray',
+        edgecolor='black',
+        linewidth=0.5,
+    )
+    ax.set_xlabel('Tau', fontsize=font_size)
+    ax.set_ylabel('Gene count', fontsize=font_size)
+    ax.tick_params(axis='both', labelsize=font_size)
+    num_noexp = int(df_tau.loc[:, 'tau'].isna().sum())
+    num_all = int(df_tau.shape[0])
+    ymax = float(numpy.nanmax(counts_hist)) if counts_hist.size > 0 else 1.0
+    ax.text(0.01, ymax * 0.85, 'Excluded due to\nno expression:\n{}/{} genes'.format(num_noexp, num_all), fontsize=font_size, va='top')
+
+
+def _draw_legend_panel(ax, metadata_df, font_size=8):
+    ax.set_axis_off()
+    sample_group_colors = _sample_group_color_map(metadata_df.loc[:, 'sample_group'].fillna('').astype(str).tolist())
+    bp_colors = _bioproject_color_map(metadata_df.loc[:, 'bioproject'].fillna('').astype(str).tolist())
+    handles = [Line2D([], [], linestyle='none', label='Sample group')]
+    handles.extend(
+        Line2D([0], [0], marker='o', color='w', label=str(group), markerfacecolor=color, markeredgecolor='black', markersize=7)
+        for group, color in sample_group_colors.items()
+    )
+    handles.append(Line2D([], [], linestyle='none', label='BioProject'))
+    handles.extend(
+        Line2D([0], [0], marker='o', color='white', label=str(bp), markerfacecolor='white', markeredgecolor=color, markersize=7)
+        for bp, color in bp_colors.items()
+    )
+    ax.legend(handles=handles, frameon=False, loc='center', fontsize=font_size, ncol=2)
+
+
+def save_state_overview_pdf(
+    counts_df,
+    metadata_df,
+    selected_sample_groups,
+    out_pdf_path,
+    dist_method='pearson',
+    transform_method='log2p1-fpkm',
+    font_size=8,
+):
+    out = intersect_counts_and_metadata(counts_df=counts_df, metadata_df=metadata_df)
+    counts = out['tc']
+    metadata = out['sra'].copy()
+    if counts.shape[1] <= 1:
+        return None
+    run_order = [run_id for run_id in metadata.loc[:, 'run'].astype(str).tolist() if run_id in counts.columns]
+    counts = counts.loc[:, run_order].copy()
+    metadata = metadata.set_index('run', drop=False).loc[run_order, :].reset_index(drop=True)
+    corr_df = _compute_corr_matrix(counts, dist_method=dist_method)
+    pca_coords = _compute_pca_coords(corr_df)
+    mds_coords = _compute_mds_coords(corr_df)
+    tsne_coords = _compute_tsne_coords(counts)
+
+    os.makedirs(os.path.dirname(os.path.realpath(out_pdf_path)), exist_ok=True)
+    fig, axes = plt.subplots(5, 2, figsize=(12.0, 18.0))
+    _draw_dendrogram_panel(axes[0, 0], corr_df, metadata, font_size=font_size)
+    axes[0, 0].set_title('Dendrogram', fontsize=font_size)
+    image = axes[0, 1].imshow(corr_df.to_numpy(dtype=float), vmin=-1.0, vmax=1.0, cmap='coolwarm')
+    axes[0, 1].set_title('Sample correlation', fontsize=font_size)
+    axes[0, 1].set_xticks(range(len(run_order)))
+    axes[0, 1].set_xticklabels(run_order, rotation=90, fontsize=max(4, font_size - 2))
+    axes[0, 1].set_yticks(range(len(run_order)))
+    axes[0, 1].set_yticklabels(run_order, fontsize=max(4, font_size - 2))
+    fig.colorbar(image, ax=axes[0, 1], fraction=0.046, pad=0.04)
+    _draw_embedding_panel(axes[1, 0], pca_coords, metadata, 'PCA', 'PC1', 'PC2', font_size=font_size)
+    _draw_embedding_panel(axes[1, 1], mds_coords, metadata, 'MDS', 'Axis 1', 'Axis 2', font_size=font_size)
+    _draw_embedding_panel(axes[2, 0], tsne_coords, metadata, 't-SNE', 't-SNE 1', 't-SNE 2', font_size=font_size)
+    _draw_boxplot_panel(axes[2, 1], corr_df, metadata, font_size=font_size)
+    axes[2, 1].set_title('Correlation boxplot', fontsize=font_size)
+    _draw_expression_histogram_panel(
+        axes[3, 0],
+        counts,
+        metadata,
+        selected_sample_groups=selected_sample_groups,
+        transform_method=transform_method,
+        font_size=font_size,
+    )
+    axes[3, 0].set_title('Expression histogram', fontsize=font_size)
+    _draw_tau_histogram_panel(
+        axes[3, 1],
+        counts,
+        metadata,
+        selected_sample_groups=selected_sample_groups,
+        transform_method=transform_method,
+        font_size=font_size,
+    )
+    axes[3, 1].set_title('Tau histogram', fontsize=font_size)
+    _draw_legend_panel(axes[4, 0], metadata, font_size=font_size)
+    axes[4, 1].set_axis_off()
+    fig.tight_layout()
+    fig.savefig(out_pdf_path)
+    plt.close(fig)
+    return out_pdf_path
+
+
 __all__ = [
     'CORRELATION_STAT_COLUMNS',
     'initialize_correlation_statistics',
     'intersect_counts_and_metadata',
     'save_correlation_statistics',
+    'save_state_overview_pdf',
     'save_tau_histogram_pdf',
     'write_table_with_index_name',
 ]

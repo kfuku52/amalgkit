@@ -324,12 +324,34 @@ class TestCscaMain:
                     'run': spec['runs'],
                     'scientific_name': [spec['scientific_name']] * len(spec['runs']),
                     'sample_group': spec['groups'],
+                    'bioproject': ['BP1', 'BP2'],
                     'exclusion': ['no'] * len(spec['runs']),
                 }
             )
             metadata_df.to_csv(tables_dir / f"{spec['species_tag']}.metadata.tsv", sep='\t', index=False)
             spec['uncorrected'].to_csv(tables_dir / f"{spec['species_tag']}.uncorrected.tc.tsv", sep='\t', index_label='target_id')
             spec['corrected'].to_csv(tables_dir / f"{spec['species_tag']}.no.tc.tsv", sep='\t', index_label='target_id')
+            pandas.DataFrame(
+                {
+                    'bwbw_n': [1, 1],
+                    'bwbw_mean': [0.30, 0.55],
+                    'bwbw_median': [0.30, 0.55],
+                    'bwbw_variance': [0.0, 0.0],
+                    'wibw_n': [1, 1],
+                    'wibw_mean': [0.10, 0.20],
+                    'wibw_median': [0.10, 0.20],
+                    'wibw_variance': [0.0, 0.0],
+                    'bwwi_n': [1, 1],
+                    'bwwi_mean': [0.40, 0.62],
+                    'bwwi_median': [0.40, 0.62],
+                    'bwwi_variance': [0.0, 0.0],
+                    'wiwi_n': [1, 1],
+                    'wiwi_mean': [0.18, 0.22],
+                    'wiwi_median': [0.18, 0.22],
+                    'wiwi_variance': [0.0, 0.0],
+                },
+                index=['round_0', 'round_1'],
+            ).to_csv(tables_dir / f"{spec['species_tag']}.no.correlation_statistics.tsv", sep='\t')
         orthogroup_path = out_dir.parent / 'orthogroup.tsv'
         pandas.DataFrame(
             {
@@ -474,3 +496,11 @@ class TestCscaMain:
         assert (cross_species_dir / 'cross_species_unaveraged_pca_PC12_corrected.pdf').is_file()
         assert (cross_species_dir / 'cross_species_unaveraged_pca_PC34_uncorrected.pdf').is_file()
         assert (cross_species_dir / 'cross_species_unaveraged_pca_PC34_corrected.pdf').is_file()
+        assert (cross_species_dir / 'cross_species_unaveraged_tsne_uncorrected.pdf').is_file()
+        assert (cross_species_dir / 'cross_species_unaveraged_tsne_corrected.pdf').is_file()
+        assert (cross_species_dir / 'cross_species_SVA_heatmap.pdf').is_file()
+        assert (cross_species_dir / 'cross_species_SVA_dendrogram.pdf').is_file()
+        assert (cross_species_dir / 'cross_species_averaged_summary.pdf').is_file()
+        assert (cross_species_dir / 'cross_species_boxplot.pdf').is_file()
+        assert (cross_species_dir / 'cross_species_averaged_tsne.pdf').is_file()
+        assert (cross_species_dir / 'cross_species_delta_pcc_boxplot.pdf').is_file()

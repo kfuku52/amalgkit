@@ -38,6 +38,7 @@ from amalgkit.per_species_finalize_python import (
 from amalgkit.per_species_outputs import (
     initialize_correlation_statistics,
     save_correlation_statistics,
+    save_state_overview_pdf,
     save_tau_histogram_pdf,
     write_table_with_index_name,
 )
@@ -241,6 +242,7 @@ def _write_prepare_outputs(
     sra_out,
     selected_sample_groups,
     round_summary,
+    correlation_statistics,
     num_total_runs_species,
     num_runs_after_sample_group_filter,
 ):
@@ -275,13 +277,6 @@ def _write_prepare_outputs(
         df=tau_df,
         file_path=os.path.join(dir_tsv, '{}.{}.tau.tsv'.format(species_tag, batch_effect_alg)),
         index_name='target_id',
-    )
-    correlation_statistics = save_correlation_statistics(
-        counts_df=tc_final,
-        metadata_df=sra_out,
-        dist_method=str(getattr(args, 'dist_method', 'pearson')),
-        round_value=0,
-        correlation_statistics=initialize_correlation_statistics(),
     )
     correlation_statistics.to_csv(
         os.path.join(dir_tsv, '{}.{}.correlation_statistics.tsv'.format(species_tag, batch_effect_alg)),
@@ -353,6 +348,23 @@ def _run_prepare_or_wsfilter_python_worker(args, metadata, species_tag, input_di
     tc = sorted_out['tc']
     sra = sorted_out['sra']
     eff_length_species = _exclude_inappropriate_sample_from_eff_length(eff_length_df, tc)
+    tc_original = _apply_transformation_logic(tc, eff_length_species, args.norm, 'no', 'before_batch', sra)
+    correlation_statistics = save_correlation_statistics(
+        counts_df=tc_original,
+        metadata_df=sra,
+        dist_method=str(getattr(args, 'dist_method', 'pearson')),
+        round_value=0,
+        correlation_statistics=initialize_correlation_statistics(),
+    )
+    save_state_overview_pdf(
+        counts_df=tc_original,
+        metadata_df=sra,
+        selected_sample_groups=selected_sample_groups,
+        out_pdf_path=os.path.join(dir_pdf, '{}.0.original.pdf'.format(species_tag)),
+        dist_method=str(getattr(args, 'dist_method', 'pearson')),
+        transform_method=str(getattr(args, 'norm', 'log2p1-fpkm')),
+        font_size=8,
+    )
 
     tc, sra, mapping_excluded_runs = _filter_low_mapping_rate(
         tc=tc,
@@ -361,6 +373,22 @@ def _run_prepare_or_wsfilter_python_worker(args, metadata, species_tag, input_di
     )
     tc = _apply_transformation_logic(tc, eff_length_species, args.norm, 'no', 'before_batch', sra)
     tc_before_filter = tc.copy()
+    correlation_statistics = save_correlation_statistics(
+        counts_df=tc_before_filter,
+        metadata_df=sra,
+        dist_method=str(getattr(args, 'dist_method', 'pearson')),
+        round_value=1,
+        correlation_statistics=correlation_statistics,
+    )
+    save_state_overview_pdf(
+        counts_df=tc_before_filter,
+        metadata_df=sra,
+        selected_sample_groups=selected_sample_groups,
+        out_pdf_path=os.path.join(dir_pdf, '{}.1.mapping_cutoff.pdf'.format(species_tag)),
+        dist_method=str(getattr(args, 'dist_method', 'pearson')),
+        transform_method=str(getattr(args, 'norm', 'log2p1-fpkm')),
+        font_size=8,
+    )
 
     round_summary = initialize_round_summary()
     if len(mapping_excluded_runs) > 0:
@@ -396,6 +424,7 @@ def _run_prepare_or_wsfilter_python_worker(args, metadata, species_tag, input_di
             sra_out=sra_out,
             selected_sample_groups=selected_sample_groups,
             round_summary=round_summary,
+            correlation_statistics=correlation_statistics,
             num_total_runs_species=num_total_runs_species,
             num_runs_after_sample_group_filter=num_runs_after_sample_group_filter,
         )
@@ -421,6 +450,24 @@ def _run_prepare_or_wsfilter_python_worker(args, metadata, species_tag, input_di
             runs_before=current_tc.columns,
             runs_after=next_tc.columns,
         )
+        round_value = round_index + 2
+        if (len(excluded_runs) == 0) or bool(getattr(args, 'plot_intermediate', False)):
+            correlation_statistics = save_correlation_statistics(
+                counts_df=next_tc,
+                metadata_df=next_sra,
+                dist_method=str(getattr(args, 'dist_method', 'pearson')),
+                round_value=round_value,
+                correlation_statistics=correlation_statistics,
+            )
+            save_state_overview_pdf(
+                counts_df=next_tc,
+                metadata_df=next_sra,
+                selected_sample_groups=selected_sample_groups,
+                out_pdf_path=os.path.join(dir_pdf, '{}.{}.correlation_cutoff.pdf'.format(species_tag, round_value)),
+                dist_method=str(getattr(args, 'dist_method', 'pearson')),
+                transform_method=str(getattr(args, 'norm', 'log2p1-fpkm')),
+                font_size=8,
+            )
         current_tc = next_tc
         current_sra = next_sra
         round_index += 1
@@ -445,6 +492,7 @@ def _run_prepare_or_wsfilter_python_worker(args, metadata, species_tag, input_di
         sra_out=sra_out,
         selected_sample_groups=selected_sample_groups,
         round_summary=round_summary,
+        correlation_statistics=correlation_statistics,
         num_total_runs_species=num_total_runs_species,
         num_runs_after_sample_group_filter=num_runs_after_sample_group_filter,
     )
