@@ -11,8 +11,10 @@ from amalgkit.fastq_utils import (
     map_seqkit_stats_rows,
     open_fastq_binary,
     open_fastq_text,
+    parse_seqkit_stats_row_records_and_bases,
     parse_seqkit_stats_row_num_reads_avg_len as parse_seqkit_stats_row,
     parse_seqkit_stats_rows,
+    round_half_up,
     sequence_line_length as _sequence_line_length,
     sample_fastq_reads,
 )
@@ -244,6 +246,77 @@ def scan_fastq_stats_with_seqkit(path_fastq, seqkit_exe='seqkit', seqkit_threads
     )
     return stats_by_path[os.path.abspath(path_fastq)]
 
+
+def parse_seqkit_stats_row_detailed(row, path_fastq):
+    num_reads, avg_len = parse_seqkit_stats_row(row=row, path_fastq=path_fastq)
+    num_reads_for_bases, num_bases = parse_seqkit_stats_row_records_and_bases(row=row, path_fastq=path_fastq)
+    if num_reads_for_bases != num_reads:
+        raise RuntimeError(
+            'seqkit stats returned inconsistent read counts for {} (avg_len={}, sum_len={}).'.format(
+                path_fastq,
+                num_reads,
+                num_reads_for_bases,
+            )
+        )
+    return {
+        'num_reads': num_reads,
+        'avg_len': avg_len,
+        'num_bases': num_bases,
+    }
+
+
+def scan_fastq_stats_with_seqkit_batch_detailed(path_fastq_paths, seqkit_exe='seqkit', seqkit_threads=1):
+    if path_fastq_paths is None:
+        return {}
+    deduplicated_paths = []
+    seen = set()
+    for path_fastq in path_fastq_paths:
+        normalized_path = os.path.abspath(path_fastq)
+        if normalized_path in seen:
+            continue
+        seen.add(normalized_path)
+        deduplicated_paths.append(path_fastq)
+    if len(deduplicated_paths) == 0:
+        return {}
+    seqkit_exe = resolve_seqkit_exe_for_integrate(seqkit_exe)
+    seqkit_threads = resolve_seqkit_threads_for_integrate(seqkit_threads)
+    command = [
+        seqkit_exe, 'stats',
+        '-T',
+        '-a',
+        '-j', str(seqkit_threads),
+    ] + list(deduplicated_paths)
+    out, stdout_txt, stderr_txt = run_logged_command(
+        command=command,
+        runner=subprocess.run,
+        print_command=False,
+        print_output=False,
+        not_found_label='seqkit',
+    )
+    if out.returncode != 0:
+        raise RuntimeError(
+            'seqkit stats failed (exit code {}) for {} input file(s): {}'.format(
+                out.returncode,
+                len(deduplicated_paths),
+                stderr_txt.strip(),
+            )
+        )
+    return map_seqkit_stats_rows(
+        stdout_txt=stdout_txt,
+        requested_paths=deduplicated_paths,
+        row_parser=parse_seqkit_stats_row_detailed,
+        missing_message='seqkit stats output did not include all requested FASTQ paths: {}',
+    )
+
+
+def scan_fastq_stats_with_seqkit_detailed(path_fastq, seqkit_exe='seqkit', seqkit_threads=1):
+    stats_by_path = scan_fastq_stats_with_seqkit_batch_detailed(
+        path_fastq_paths=[path_fastq],
+        seqkit_exe=seqkit_exe,
+        seqkit_threads=seqkit_threads,
+    )
+    return stats_by_path[os.path.abspath(path_fastq)]
+
 def estimate_total_spots_from_line_count(path_fastq):
     total_lines = count_fastq_lines(path_fastq)
     if (total_lines % 4) != 0:
@@ -290,10 +363,11 @@ def is_approximately_equal_count(count_a, count_b, tolerance_fraction, tolerance
     tolerance = max(int(tolerance_min), int(round(max_count * float(tolerance_fraction))))
     return diff <= tolerance
 
-def scan_fastq_stats(path_fastq, max_reads_for_average=None):
+def _scan_fastq_stats_internal(path_fastq, max_reads_for_average=None):
     total_reads = 0
     sampled_reads = 0
     sampled_bases = 0
+    total_bases = 0
     with open_fastq_binary(path_fastq) as f:
         while True:
             line1 = f.readline()
@@ -305,11 +379,36 @@ def scan_fastq_stats(path_fastq, max_reads_for_average=None):
             if (line2 == b'') or (line3 == b'') or (line4 == b''):
                 raise ValueError('Malformed FASTQ (record truncated): {}'.format(path_fastq))
             total_reads += 1
+            seq_len = _sequence_line_length(line2)
+            total_bases += seq_len
             if (max_reads_for_average is None) or (sampled_reads < max_reads_for_average):
                 sampled_reads += 1
-                sampled_bases += _sequence_line_length(line2)
-    average_length = int(sampled_bases / sampled_reads) if sampled_reads > 0 else 0
+                sampled_bases += seq_len
+    average_length = round_half_up(sampled_bases / sampled_reads) if sampled_reads > 0 else 0
+    return {
+        'num_reads': total_reads,
+        'avg_len': average_length,
+        'sampled_reads': sampled_reads,
+        'num_bases': total_bases,
+    }
+
+
+def scan_fastq_stats(path_fastq, max_reads_for_average=None):
+    stats = _scan_fastq_stats_internal(
+        path_fastq=path_fastq,
+        max_reads_for_average=max_reads_for_average,
+    )
+    total_reads = stats['num_reads']
+    average_length = stats['avg_len']
+    sampled_reads = stats['sampled_reads']
     return total_reads, average_length, sampled_reads
+
+
+def scan_fastq_stats_detailed(path_fastq, max_reads_for_average=None):
+    return _scan_fastq_stats_internal(
+        path_fastq=path_fastq,
+        max_reads_for_average=max_reads_for_average,
+    )
 
 
 def resolve_run_fastq_layout(run_id, fastq_records):
@@ -352,23 +451,29 @@ def scan_run_fastq_stats(run_spec, accurate_size, seqkit_exe='seqkit', seqkit_th
         return None
 
     quick_gzip_mode = (not accurate_size) and (not is_decompressed)
+    read1_num_bases = None
     if accurate_size or is_decompressed:
         print('--accurate_size set to yes. Running accurate sequence scan with seqkit stats.')
         read1_stats = None
         if isinstance(seqkit_stats_cache, dict):
             read1_stats = seqkit_stats_cache.get(os.path.abspath(read1_path), None)
         if read1_stats is not None:
-            total_spots, avg_len_read1 = read1_stats
+            total_spots = read1_stats['num_reads']
+            avg_len_read1 = read1_stats['avg_len']
+            read1_num_bases = read1_stats['num_bases']
         else:
             try:
-                total_spots, avg_len_read1 = scan_fastq_stats_with_seqkit(
+                read1_stats = scan_fastq_stats_with_seqkit_detailed(
                     path_fastq=read1_path,
                     seqkit_exe=seqkit_exe,
                     seqkit_threads=seqkit_threads,
                 )
             except Exception as exc:
                 warnings.warn('seqkit stats failed for {}. Falling back to Python FASTQ parser. {}'.format(read1_path, exc))
-                total_spots, avg_len_read1, _ = scan_fastq_stats(path_fastq=read1_path, max_reads_for_average=None)
+                read1_stats = scan_fastq_stats_detailed(path_fastq=read1_path, max_reads_for_average=None)
+            total_spots = read1_stats['num_reads']
+            avg_len_read1 = read1_stats['avg_len']
+            read1_num_bases = read1_stats['num_bases']
     else:
         print('--accurate_size set to no. Running quick sequence scan (first 1,000 reads + gzip size estimate).')
         sampled_reads, avg_len_read1, sampled_record_chars, reached_eof_read1 = sample_fastq_reads(
@@ -389,6 +494,7 @@ def scan_run_fastq_stats(run_spec, accurate_size, seqkit_exe='seqkit', seqkit_th
         raise ValueError('No reads detected in FASTQ file: {}'.format(read1_path))
 
     avg_len_read2 = avg_len_read1
+    read2_num_bases = None
     if lib_layout == 'paired':
         if quick_gzip_mode:
             sampled_reads_read2, avg_len_read2, sampled_record_chars_read2, reached_eof_read2 = sample_fastq_reads(
@@ -425,17 +531,22 @@ def scan_run_fastq_stats(run_spec, accurate_size, seqkit_exe='seqkit', seqkit_th
             if isinstance(seqkit_stats_cache, dict):
                 read2_stats = seqkit_stats_cache.get(os.path.abspath(read2_path), None)
             if read2_stats is not None:
-                read2_spots, avg_len_read2 = read2_stats
+                read2_spots = read2_stats['num_reads']
+                avg_len_read2 = read2_stats['avg_len']
+                read2_num_bases = read2_stats['num_bases']
             else:
                 try:
-                    read2_spots, avg_len_read2 = scan_fastq_stats_with_seqkit(
+                    read2_stats = scan_fastq_stats_with_seqkit_detailed(
                         path_fastq=read2_path,
                         seqkit_exe=seqkit_exe,
                         seqkit_threads=seqkit_threads,
                     )
                 except Exception as exc:
                     warnings.warn('seqkit stats failed for {}. Falling back to Python FASTQ parser. {}'.format(read2_path, exc))
-                    read2_spots, avg_len_read2, _ = scan_fastq_stats(path_fastq=read2_path, max_reads_for_average=None)
+                    read2_stats = scan_fastq_stats_detailed(path_fastq=read2_path, max_reads_for_average=None)
+                read2_spots = read2_stats['num_reads']
+                avg_len_read2 = read2_stats['avg_len']
+                read2_num_bases = read2_stats['num_bases']
             if read2_spots <= 0:
                 raise ValueError('No reads detected in FASTQ file: {}'.format(read2_path))
             if read2_spots != total_spots:
@@ -445,18 +556,24 @@ def scan_run_fastq_stats(run_spec, accurate_size, seqkit_exe='seqkit', seqkit_th
                     )
                 )
 
-    total_bases = total_spots * int(avg_len_read1)
+    if read1_num_bases is None:
+        read1_num_bases = total_spots * int(avg_len_read1)
+    total_bases = read1_num_bases
     total_size = os.path.getsize(read1_path)
+    spot_length = int(avg_len_read1)
     if lib_layout == 'paired':
-        total_bases = total_spots * (int(avg_len_read1) + int(avg_len_read2))
+        if read2_num_bases is None:
+            read2_num_bases = total_spots * int(avg_len_read2)
+        total_bases = read1_num_bases + read2_num_bases
         total_size += os.path.getsize(read2_path)
+        spot_length = int(avg_len_read1) + int(avg_len_read2)
     return {
         'run': run_id,
         'read1_path': os.path.abspath(read1_path),
         'read2_path': os.path.abspath(read2_path) if read2_path != 'unavailable' else 'unavailable',
         'lib_layout': lib_layout,
         'total_spots': total_spots,
-        'spot_length': int(avg_len_read1),
+        'spot_length': spot_length,
         'size': total_size,
         'total_bases': total_bases,
     }
@@ -725,7 +842,7 @@ def build_seqkit_stats_cache_for_runs(run_specs, accurate_size, seqkit_exe='seqk
     target_paths = collect_seqkit_target_paths(run_specs=run_specs, accurate_size=accurate_size)
     if len(target_paths) == 0:
         return {}
-    return scan_fastq_stats_with_seqkit_batch(
+    return scan_fastq_stats_with_seqkit_batch_detailed(
         path_fastq_paths=target_paths,
         seqkit_exe=seqkit_exe,
         seqkit_threads=seqkit_threads,

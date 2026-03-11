@@ -1,8 +1,13 @@
 import gzip
+import math
 import os
 
 
 DEFAULT_FASTQ_CHUNK_SIZE = 16 * 1024 * 1024
+
+
+def round_half_up(value):
+    return int(math.floor(float(value) + 0.5))
 
 
 def is_gzip_fastq_path(path_fastq):
@@ -65,7 +70,7 @@ def sample_fastq_reads(path_fastq, max_reads=None):
             if (max_reads is not None) and (num_reads >= max_reads):
                 reached_eof = (handle.readline() == b'')
                 break
-    avg_len = int(total_bases / num_reads) if num_reads > 0 else 0
+    avg_len = round_half_up(total_bases / num_reads) if num_reads > 0 else 0
     return num_reads, avg_len, total_record_chars, reached_eof
 
 
@@ -130,7 +135,7 @@ def parse_seqkit_stats_row_num_reads_avg_len(row, path_fastq):
         raise RuntimeError('seqkit stats output was missing required fields for {}'.format(path_fastq))
     try:
         num_reads = int(float(row['num_seqs']))
-        avg_len = int(round(float(row['avg_len'])))
+        avg_len = round_half_up(row['avg_len'])
     except (TypeError, ValueError) as exc:
         raise RuntimeError('Failed to parse seqkit stats numeric fields for {}.'.format(path_fastq)) from exc
     return num_reads, avg_len
@@ -141,7 +146,12 @@ def parse_seqkit_stats_row_records_and_bases(row, path_fastq):
     if ('sum_len' in row) and (str(row.get('sum_len', '')).strip() not in ['', 'NA', 'nan', 'NaN']):
         num_bases = parse_seqkit_stats_numeric(row=row, key='sum_len', path_fastq=path_fastq)
     else:
-        avg_len = parse_seqkit_stats_numeric(row=row, key='avg_len', path_fastq=path_fastq)
+        if 'avg_len' not in row:
+            raise RuntimeError('seqkit stats output is missing "avg_len" for {}'.format(path_fastq))
+        try:
+            avg_len = round_half_up(row['avg_len'])
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError('Failed to parse seqkit stats "avg_len" for {}'.format(path_fastq)) from exc
         num_bases = int(num_records * avg_len)
     return num_records, num_bases
 

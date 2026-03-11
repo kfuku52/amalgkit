@@ -306,8 +306,112 @@ class TestIntegrateGetFastqStats:
 
         assert df.shape[0] == 1
         assert int(df.loc[0, 'total_spots']) == 1
-        assert int(df.loc[0, 'spot_length']) == 4
+        assert int(df.loc[0, 'spot_length']) == 6
         assert int(df.loc[0, 'total_bases']) == 6
+
+    def test_accurate_mode_uses_seqkit_sum_len_for_single_total_bases(self, tmp_path, monkeypatch):
+        fastq_dir = tmp_path / 'fq'
+        out_dir = tmp_path / 'out'
+        fastq_dir.mkdir()
+        out_dir.mkdir()
+        self._write_one_read_fastq(str(fastq_dir / 'single.fastq'))
+
+        def fake_run(cmd, stdout=None, stderr=None):
+            input_paths = cmd[cmd.index('-j') + 2:]
+            rows = ['file\tformat\ttype\tnum_seqs\tsum_len\tavg_len']
+            for path_fastq in input_paths:
+                rows.append('{}\tFASTQ\tDNA\t2\t3\t1.5'.format(os.path.abspath(path_fastq)))
+            return subprocess.CompletedProcess(
+                cmd,
+                0,
+                stdout=('\n'.join(rows) + '\n').encode('utf8'),
+                stderr=b'',
+            )
+
+        monkeypatch.setattr('amalgkit.integrate.subprocess.run', fake_run)
+        args = SimpleNamespace(
+            fastq_dir=str(fastq_dir),
+            accurate_size=True,
+            out_dir=str(out_dir),
+            seqkit_exe='seqkit',
+        )
+
+        df = get_fastq_stats(args)
+
+        assert df.shape[0] == 1
+        assert int(df.loc[0, 'spot_length']) == 2
+        assert int(df.loc[0, 'total_spots']) == 2
+        assert int(df.loc[0, 'total_bases']) == 3
+
+    def test_accurate_mode_uses_seqkit_sum_len_for_paired_total_bases(self, tmp_path, monkeypatch):
+        fastq_dir = tmp_path / 'fq'
+        out_dir = tmp_path / 'out'
+        fastq_dir.mkdir()
+        out_dir.mkdir()
+        self._write_one_read_fastq(str(fastq_dir / 'paired_1.fastq'))
+        self._write_one_read_fastq(str(fastq_dir / 'paired_2.fastq'))
+
+        def fake_run(cmd, stdout=None, stderr=None):
+            input_paths = cmd[cmd.index('-j') + 2:]
+            rows = ['file\tformat\ttype\tnum_seqs\tsum_len\tavg_len']
+            for path_fastq in input_paths:
+                abs_path = os.path.abspath(path_fastq)
+                if abs_path.endswith('_1.fastq'):
+                    rows.append('{}\tFASTQ\tDNA\t2\t3\t1.5'.format(abs_path))
+                else:
+                    rows.append('{}\tFASTQ\tDNA\t2\t5\t2.5'.format(abs_path))
+            return subprocess.CompletedProcess(
+                cmd,
+                0,
+                stdout=('\n'.join(rows) + '\n').encode('utf8'),
+                stderr=b'',
+            )
+
+        monkeypatch.setattr('amalgkit.integrate.subprocess.run', fake_run)
+        args = SimpleNamespace(
+            fastq_dir=str(fastq_dir),
+            accurate_size=True,
+            out_dir=str(out_dir),
+            seqkit_exe='seqkit',
+        )
+
+        df = get_fastq_stats(args)
+
+        assert df.shape[0] == 1
+        assert int(df.loc[0, 'spot_length']) == 5
+        assert int(df.loc[0, 'total_spots']) == 2
+        assert int(df.loc[0, 'total_bases']) == 8
+
+    def test_accurate_mode_python_fallback_rounds_average_and_keeps_exact_bases(self, tmp_path, monkeypatch):
+        fastq_dir = tmp_path / 'fq'
+        out_dir = tmp_path / 'out'
+        fastq_dir.mkdir()
+        out_dir.mkdir()
+        with open(str(fastq_dir / 'fallback.fastq'), 'wt') as fh:
+            fh.write('@r0\nA\n+\nI\n')
+            fh.write('@r1\nAA\n+\nII\n')
+
+        monkeypatch.setattr(
+            'amalgkit.integrate.scan_fastq_stats_with_seqkit_batch_detailed',
+            lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError('seqkit unavailable')),
+        )
+        monkeypatch.setattr(
+            'amalgkit.integrate.scan_fastq_stats_with_seqkit_detailed',
+            lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError('seqkit unavailable')),
+        )
+        args = SimpleNamespace(
+            fastq_dir=str(fastq_dir),
+            accurate_size=True,
+            out_dir=str(out_dir),
+            seqkit_exe='seqkit',
+        )
+
+        df = get_fastq_stats(args)
+
+        assert df.shape[0] == 1
+        assert int(df.loc[0, 'spot_length']) == 2
+        assert int(df.loc[0, 'total_spots']) == 2
+        assert int(df.loc[0, 'total_bases']) == 3
 
     def test_raises_when_only_read2_file_is_present(self, tmp_path):
         fastq_dir = tmp_path / 'fq'
