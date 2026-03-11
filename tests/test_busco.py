@@ -360,6 +360,21 @@ def test_collect_species_rejects_missing_scientific_name_column(tmp_path):
         collect_species(args, metadata)
 
 
+def test_collect_species_rejects_placeholder_scientific_name_in_metadata(tmp_path):
+    out_dir = tmp_path / "out"
+    fasta_dir = out_dir / "fasta"
+    fasta_dir.mkdir(parents=True)
+    metadata = Metadata.from_DataFrame(pandas.DataFrame({
+        'scientific_name': ['Please add in format: Genus species'],
+        'run': ['R1'],
+        'exclusion': ['no'],
+    }))
+    args = SimpleNamespace(out_dir=str(out_dir), fasta_dir='inferred', fasta=None)
+
+    with pytest.raises(ValueError, match='Placeholder scientific_name from amalgkit integrate was found in metadata'):
+        collect_species(args, metadata)
+
+
 def test_collect_species_with_explicit_fasta_strips_species_name(tmp_path):
     fasta_path = tmp_path / "input.fa"
     fasta_path.write_text(">a\nAAAA\n")
@@ -374,6 +389,20 @@ def test_collect_species_with_explicit_fasta_strips_species_name(tmp_path):
 
     assert species == ['Species A']
     assert fasta_map == {'Species A': os.path.realpath(str(fasta_path))}
+
+
+def test_collect_species_with_explicit_fasta_rejects_placeholder_species(tmp_path):
+    fasta_path = tmp_path / "input.fa"
+    fasta_path.write_text(">a\nAAAA\n")
+    args = SimpleNamespace(
+        out_dir=str(tmp_path),
+        fasta_dir='inferred',
+        fasta=str(fasta_path),
+        species='Please add in format: Genus species',
+    )
+
+    with pytest.raises(ValueError, match='Placeholder scientific_name from amalgkit integrate cannot be used for busco'):
+        collect_species(args, metadata=None)
 
 
 def test_collect_species_with_explicit_fasta_rejects_blank_species(tmp_path):

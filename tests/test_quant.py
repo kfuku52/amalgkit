@@ -473,6 +473,19 @@ class TestQuantEdgeCases:
         with pytest.raises(ValueError, match='Missing scientific_name in metadata for run\\(s\\): SRR001'):
             build_quant_tasks(metadata)
 
+    def test_build_quant_tasks_rejects_placeholder_scientific_name(self):
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001'],
+            'scientific_name': ['Please add in format: Genus species'],
+            'exclusion': ['no'],
+            'nominal_length': [200],
+        }))
+        with pytest.raises(
+            ValueError,
+            match='Placeholder scientific_name from amalgkit integrate was found for run\\(s\\): SRR001',
+        ):
+            build_quant_tasks(metadata)
+
     def test_build_quant_tasks_rejects_missing_run_id(self):
         metadata = Metadata.from_DataFrame(pandas.DataFrame({
             'run': [float('nan')],

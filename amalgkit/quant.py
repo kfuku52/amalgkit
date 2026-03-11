@@ -13,6 +13,7 @@ from amalgkit.metadata_utils import (
     get_metadata_row_index_by_run,
     get_newest_intermediate_file_extension,
     get_sra_stat,
+    is_private_fastq_scientific_name_placeholder,
     load_metadata,
 )
 from amalgkit.parallel_utils import (
@@ -646,6 +647,7 @@ def build_quant_tasks(metadata):
     metadata.df['run'] = runs
     metadata.df['scientific_name'] = species
     missing_species_runs = []
+    placeholder_species_runs = []
     missing_run_count = 0
     duplicate_runs = []
     seen_runs = set()
@@ -657,6 +659,9 @@ def build_quant_tasks(metadata):
         if sci_name == '':
             missing_species_runs.append(run_id)
             continue
+        if is_private_fastq_scientific_name_placeholder(sci_name):
+            placeholder_species_runs.append(run_id)
+            continue
         if run_id in seen_runs:
             duplicate_runs.append(run_id)
             continue
@@ -666,6 +671,13 @@ def build_quant_tasks(metadata):
         raise ValueError('Missing run ID in metadata for {:,} row(s).'.format(missing_run_count))
     if len(missing_species_runs) > 0:
         raise ValueError('Missing scientific_name in metadata for run(s): {}'.format(', '.join(missing_species_runs)))
+    if len(placeholder_species_runs) > 0:
+        raise ValueError(
+            'Placeholder scientific_name from amalgkit integrate was found for run(s): {}. '
+            'Edit the "scientific_name" column before running quant.'.format(
+                ', '.join(placeholder_species_runs)
+            )
+        )
     if len(duplicate_runs) > 0:
         duplicate_runs = list(dict.fromkeys(duplicate_runs))
         raise ValueError('Duplicate run ID in metadata for run(s): {}'.format(', '.join(duplicate_runs)))

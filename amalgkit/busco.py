@@ -10,7 +10,10 @@ import pandas
 from amalgkit.arg_utils import clone_namespace
 from amalgkit.download_utils import acquire_exclusive_lock, resolve_download_dir
 from amalgkit.filter_utils import staged_output_dir
-from amalgkit.metadata_utils import load_metadata
+from amalgkit.metadata_utils import (
+    is_private_fastq_scientific_name_placeholder,
+    load_metadata,
+)
 from amalgkit.parallel_utils import resolve_thread_worker_allocation, run_tasks_with_optional_threads
 from amalgkit.prefix_utils import find_species_prefixed_entries
 from amalgkit.subprocess_utils import run_checked_command
@@ -466,6 +469,11 @@ def collect_species(args, metadata):
         species_name = str(args.species).strip()
         if species_name == '':
             raise ValueError('--species must not be empty when --fasta is provided.')
+        if is_private_fastq_scientific_name_placeholder(species_name):
+            raise ValueError(
+                'Placeholder scientific_name from amalgkit integrate cannot be used for busco. '
+                'Edit --species before running busco.'
+            )
         fasta_path = os.path.realpath(args.fasta)
         if not os.path.exists(fasta_path):
             raise FileNotFoundError('FASTA file not found: {}'.format(fasta_path))
@@ -488,6 +496,11 @@ def collect_species(args, metadata):
         normalized = str(species_name).strip()
         if normalized == '':
             continue
+        if is_private_fastq_scientific_name_placeholder(normalized):
+            raise ValueError(
+                'Placeholder scientific_name from amalgkit integrate was found in metadata. '
+                'Edit the "scientific_name" column before running busco.'
+            )
         species.append(normalized)
     # Preserve order while de-duplicating.
     species = list(dict.fromkeys(species))

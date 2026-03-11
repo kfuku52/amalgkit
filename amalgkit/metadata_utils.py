@@ -18,6 +18,8 @@ from amalgkit.parallel_utils import (
     validate_positive_int_option,
 )
 
+PRIVATE_FASTQ_SCIENTIFIC_NAME_PLACEHOLDER = 'Please add in format: Genus species'
+
 
 def strtobool(val):
     val = val.lower()
@@ -56,6 +58,22 @@ def parse_bool_flags(values, column_name='value', default=''):
             )
         )
     return numpy.array(parsed, dtype=bool)
+
+
+def normalize_scientific_name_text(value):
+    if pandas.isna(value):
+        return ''
+    text = str(value).strip()
+    if text.lower() in ['', 'nan', 'none']:
+        return ''
+    return re.sub(r'\s+', ' ', text)
+
+
+def is_private_fastq_scientific_name_placeholder(value):
+    normalized = normalize_scientific_name_text(value)
+    if normalized == '':
+        return False
+    return normalized.lower() == PRIVATE_FASTQ_SCIENTIFIC_NAME_PLACEHOLDER.lower()
 
 
 class Metadata:
