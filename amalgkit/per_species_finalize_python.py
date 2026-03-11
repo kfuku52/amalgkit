@@ -817,7 +817,7 @@ def run_finalize_python_worker(args, metadata, species_tag, input_dir):
             tc_after=tc_batch_corrected,
             metadata_df=sra,
             dist_method=str(getattr(args, 'dist_method', 'pearson')),
-            out_pdf_path=os.path.join(dir_pdf, '{}.batch_compare.{}.pdf'.format(species_tag, args.batch_effect_alg)),
+            out_pdf_path=os.path.join(dir_pdf, '{}.before_after.{}.pdf'.format(species_tag, args.batch_effect_alg)),
             selected_sample_groups=selected_sample_groups,
             transform_method=str(getattr(args, 'norm', 'log2p1-fpkm')),
             batch_effect_alg=str(getattr(args, 'batch_effect_alg', 'no')),

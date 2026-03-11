@@ -491,7 +491,6 @@ class TestCscaMain:
         assert (cross_species_dir / 'metadata.tsv').is_file()
         assert (cross_species_dir / 'cross_species_sample_number_heatmap.pdf').is_file()
         assert (cross_species_dir / 'cross_species_group_cor_scatter.pdf').is_file()
-        assert (cross_species_dir / 'cross_species_unaveraged_pca_PC12.pdf').is_file()
         assert (cross_species_dir / 'cross_species_unaveraged_pca_PC12_uncorrected.pdf').is_file()
         assert (cross_species_dir / 'cross_species_unaveraged_pca_PC12_corrected.pdf').is_file()
         assert (cross_species_dir / 'cross_species_unaveraged_pca_PC34_uncorrected.pdf').is_file()

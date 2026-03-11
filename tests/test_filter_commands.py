@@ -281,7 +281,7 @@ def test_finalize_outputs_tables_and_merged_metadata(tmp_path, monkeypatch):
             sep='\t',
             index=False,
         )
-        with open(os.path.join(plots_dir, 'Species_A.batch_compare.sva.pdf'), 'wb') as handle:
+        with open(os.path.join(plots_dir, 'Species_A.before_after.sva.pdf'), 'wb') as handle:
             handle.write(b'%PDF-1.4\n')
 
     monkeypatch.setattr(finalize_module, 'resolve_per_species_input', fake_resolve_per_species_input)
@@ -312,7 +312,7 @@ def test_finalize_outputs_tables_and_merged_metadata(tmp_path, monkeypatch):
     assert (tmp_path / 'out' / 'finalize' / 'Species_A' / 'Species_A_expression_uncorrected.tsv').is_file()
     assert (tmp_path / 'out' / 'finalize' / 'Species_A' / 'Species_A_expression.tsv').is_file()
     assert (tmp_path / 'out' / 'finalize' / 'Species_A' / 'Species_A_batch_effect_summary.tsv').is_file()
-    assert (tmp_path / 'out' / 'finalize' / 'Species_A' / 'Species_A_batch_compare_sva.pdf').is_file()
+    assert (tmp_path / 'out' / 'finalize' / 'Species_A' / 'Species_A_before_after_sva.pdf').is_file()
     assert not (tmp_path / 'out' / 'finalize' / 'Species_A' / 'tables').exists()
     assert isinstance(captured['context'], PerSpeciesTableContext)
     assert captured['context'].metadata is metadata
@@ -398,4 +398,4 @@ def test_finalize_main_runs_without_rscript_for_supported_python_worker(tmp_path
     assert (out_root / '{}_expression_uncorrected.tsv'.format(species_tag)).is_file()
     assert (out_root / '{}_expression.tsv'.format(species_tag)).is_file()
     assert (out_root / '{}_batch_effect_summary.tsv'.format(species_tag)).is_file()
-    assert (out_root / '{}_batch_compare_sva.pdf'.format(species_tag)).is_file()
+    assert (out_root / '{}_before_after_sva.pdf'.format(species_tag)).is_file()

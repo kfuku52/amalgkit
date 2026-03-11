@@ -221,7 +221,7 @@ def test_finalize_python_sva_plots_work_when_optional_metadata_columns_missing(t
     out_dir = _run_finalize_python(tmp_path=tmp_path, fixture=fixture, sva_nsv='1', sva_B='5')
 
     plot_dir = out_dir / 'per_species' / fixture['species_tag'] / 'plots'
-    assert (plot_dir / '{}.batch_compare.sva.pdf'.format(fixture['species_tag'])).exists()
+    assert (plot_dir / '{}.before_after.sva.pdf'.format(fixture['species_tag'])).exists()
 
 
 def test_finalize_python_combatseq_runs_end_to_end(tmp_path):

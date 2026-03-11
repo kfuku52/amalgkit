@@ -1258,7 +1258,6 @@ def run_cross_species_filter(args, context=None):
         _save_csfilter_scatter_plot(df_metadata, os.path.join(stage_dir, 'cross_species_csfilter_scatter.pdf'))
         _save_heatmap_pdf(orthologs['corrected'], os.path.join(stage_dir, 'cross_species_heatmap.pdf'))
         _save_within_group_histogram(df_metadata, os.path.join(stage_dir, 'cross_species_within_group_cor.pdf'))
-        _save_pca_pdf(df_metadata, os.path.join(stage_dir, 'cross_species_unaveraged_pca_PC12.pdf'), suffix='corrected', pcs=(1, 2))
         _save_pca_pdf(df_metadata, os.path.join(stage_dir, 'cross_species_unaveraged_pca_PC12_uncorrected.pdf'), suffix='uncorrected', pcs=(1, 2))
         _save_pca_pdf(df_metadata, os.path.join(stage_dir, 'cross_species_unaveraged_pca_PC12_corrected.pdf'), suffix='corrected', pcs=(1, 2))
         _save_pca_pdf(df_metadata, os.path.join(stage_dir, 'cross_species_unaveraged_pca_PC34_uncorrected.pdf'), suffix='uncorrected', pcs=(3, 4))

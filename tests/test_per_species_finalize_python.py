@@ -162,7 +162,7 @@ def test_generate_per_species_tables_uses_python_finalize_worker_for_disable_aut
     assert summary_df.loc[0, 'skip_reason'] == 'sva_nsv_zero'
     assert set(metadata_df['batch_corrected'].astype(str)) == {'no'}
     assert (tables_dir / '{}.sva.correlation_statistics.tsv'.format(species_tag)).exists()
-    assert (plots_dir / '{}.batch_compare.sva.pdf'.format(species_tag)).is_file()
+    assert (plots_dir / '{}.before_after.sva.pdf'.format(species_tag)).is_file()
     assert (plots_dir / '{}.tau_hist.sva.pdf'.format(species_tag)).is_file()
     assert {'target_id', 'tau', 'highest', 'order'}.issubset(set(tau_df.columns))
 
@@ -192,5 +192,5 @@ def test_generate_per_species_tables_supports_python_finalize_worker_for_latent_
     assert int(summary_df.loc[0, 'resolved_latent_k']) == 1
     assert summary_df.loc[0, 'latent_family'] == 'nb'
     assert (corrected_df.to_numpy(dtype=float) >= 0.0).all()
-    assert (plots_dir / '{}.batch_compare.latent_glm.pdf'.format(species_tag)).is_file()
+    assert (plots_dir / '{}.before_after.latent_glm.pdf'.format(species_tag)).is_file()
     assert (plots_dir / '{}.tau_hist.latent_glm.pdf'.format(species_tag)).is_file()
