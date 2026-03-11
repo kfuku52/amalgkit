@@ -194,7 +194,3 @@ Top level:
 ```bash
 amalgkit sanity --out_dir ./ --all
 ```
-
-## Legacy note
-
-Older AMALGKIT documentation may refer to `curate` and `csca`. Current releases use the split workflow documented above.

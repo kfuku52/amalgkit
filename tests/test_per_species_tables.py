@@ -17,7 +17,7 @@ from amalgkit.util import Metadata
 
 
 # ---------------------------------------------------------------------------
-# get_sample_group (wiki: curate extracts sample groups from args or metadata)
+# get_sample_group (per-species tables resolve sample groups from args or metadata)
 # ---------------------------------------------------------------------------
 
 class TestGetSampleGroup:
@@ -73,7 +73,7 @@ class TestGetSampleGroup:
         assert result == 'brain'
 
     def test_empty_sample_group_exits(self):
-        """Wiki: curate exits with error if sample_group is empty."""
+        """Per-species table generation errors when sample_group is empty."""
         class Args:
             sample_group = None
             metadata = 'metadata.tsv'
@@ -97,7 +97,7 @@ class TestGetSampleGroup:
             get_sample_group(Args(), m)
 
 
-class TestResolveCurateInput:
+class TestResolvePerSpeciesInput:
     @staticmethod
     def _args(out_dir, input_dir):
         class Args:
@@ -153,26 +153,26 @@ class TestResolveCurateInput:
             resolve_per_species_input(args)
 
 
-class TestCollectPendingSpeciesForCurate:
+class TestCollectPendingSpeciesForTables:
     def test_redo_replaces_species_symlink(self, tmp_path):
-        curate_dir = tmp_path / 'per_species'
-        curate_dir.mkdir()
+        per_species_dir = tmp_path / 'per_species'
+        per_species_dir.mkdir()
         species = 'Species_A'
         real_species_dir = tmp_path / 'real_species_dir'
         real_species_dir.mkdir()
         (real_species_dir / 'keep.txt').write_text('keep')
-        os.symlink(real_species_dir, curate_dir / species)
-        write_completion_flag(str(curate_dir), species)
+        os.symlink(real_species_dir, per_species_dir / species)
+        write_completion_flag(str(per_species_dir), species)
 
         args = SimpleNamespace(redo=True)
-        pending = collect_pending_species_for_tables(args, str(curate_dir), [species])
+        pending = collect_pending_species_for_tables(args, str(per_species_dir), [species])
 
         assert pending == [species]
-        assert not os.path.lexists(str(curate_dir / species))
+        assert not os.path.lexists(str(per_species_dir / species))
         assert os.path.exists(str(real_species_dir / 'keep.txt'))
 
 
-class TestCurateMain:
+class TestPerSpeciesTableGeneration:
     @staticmethod
     def _args(out_dir):
         class Args:
@@ -209,11 +209,11 @@ class TestCurateMain:
 
         monkeypatch.setattr('amalgkit.per_species_tables.load_metadata', lambda *_args, **_kwargs: metadata)
 
-        def fake_run_curate(args, metadata, sp, input_dir):
+        def fake_run_per_species_job(args, metadata, sp, input_dir):
             os.makedirs(os.path.join(args.out_dir, 'per_species', sp), exist_ok=True)
             return 0
 
-        monkeypatch.setattr('amalgkit.per_species_tables.run_per_species_job', fake_run_curate)
+        monkeypatch.setattr('amalgkit.per_species_tables.run_per_species_job', fake_run_per_species_job)
         generate_per_species_tables(args)
         assert (out_dir / 'per_species' / 'Species_A' / 'per_species_completion_flag.txt').exists()
         assert (out_dir / 'per_species' / 'Species_B' / 'per_species_completion_flag.txt').exists()
@@ -234,11 +234,11 @@ class TestCurateMain:
             lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError('resolve_per_species_input should not be called')),
         )
 
-        def fake_run_curate(args, metadata, sp, input_dir):
+        def fake_run_per_species_job(args, metadata, sp, input_dir):
             os.makedirs(os.path.join(args.out_dir, 'per_species', sp), exist_ok=True)
             return 0
 
-        monkeypatch.setattr('amalgkit.per_species_tables.run_per_species_job', fake_run_curate)
+        monkeypatch.setattr('amalgkit.per_species_tables.run_per_species_job', fake_run_per_species_job)
 
         generate_per_species_tables(
             args,
@@ -259,11 +259,11 @@ class TestCurateMain:
 
         monkeypatch.setattr('amalgkit.per_species_tables.load_metadata', lambda *_args, **_kwargs: metadata)
 
-        def fake_run_curate(args, metadata, sp, input_dir):
+        def fake_run_per_species_job(args, metadata, sp, input_dir):
             os.makedirs(os.path.join(args.out_dir, 'per_species', sp), exist_ok=True)
             return 1 if sp == 'Species_A' else 0
 
-        monkeypatch.setattr('amalgkit.per_species_tables.run_per_species_job', fake_run_curate)
+        monkeypatch.setattr('amalgkit.per_species_tables.run_per_species_job', fake_run_per_species_job)
         with pytest.raises(RuntimeError, match='Per-species table generation failed for 1/2 species'):
             generate_per_species_tables(args)
         assert not (out_dir / 'per_species' / 'Species_A' / 'per_species_completion_flag.txt').exists()
@@ -308,11 +308,11 @@ class TestCurateMain:
 
         monkeypatch.setattr('amalgkit.per_species_tables.resolve_per_species_input', lambda _args: (metadata, str(input_dir)))
 
-        def fake_run_curate(args, metadata, sp, input_dir):
+        def fake_run_per_species_job(args, metadata, sp, input_dir):
             os.makedirs(os.path.join(args.out_dir, 'per_species', sp), exist_ok=True)
             return 0
 
-        monkeypatch.setattr('amalgkit.per_species_tables.run_per_species_job', fake_run_curate)
+        monkeypatch.setattr('amalgkit.per_species_tables.run_per_species_job', fake_run_per_species_job)
 
         generate_per_species_tables(args)
         assert (out_dir / 'per_species' / 'Species_A' / 'per_species_completion_flag.txt').exists()
@@ -334,11 +334,11 @@ class TestCurateMain:
 
         monkeypatch.setattr('amalgkit.per_species_tables.resolve_per_species_input', lambda _args: (metadata, str(input_dir)))
 
-        def fake_run_curate(args, metadata, sp, input_dir):
+        def fake_run_per_species_job(args, metadata, sp, input_dir):
             os.makedirs(os.path.join(args.out_dir, 'per_species', sp), exist_ok=True)
             return 0
 
-        monkeypatch.setattr('amalgkit.per_species_tables.run_per_species_job', fake_run_curate)
+        monkeypatch.setattr('amalgkit.per_species_tables.run_per_species_job', fake_run_per_species_job)
 
         generate_per_species_tables(args)
         assert (out_dir / 'per_species' / 'Species_A' / 'per_species_completion_flag.txt').exists()
@@ -356,11 +356,11 @@ class TestCurateMain:
 
         monkeypatch.setattr('amalgkit.per_species_tables.load_metadata', lambda *_args, **_kwargs: metadata)
 
-        def fake_run_curate(args, metadata, sp, input_dir):
+        def fake_run_per_species_job(args, metadata, sp, input_dir):
             os.makedirs(os.path.join(args.out_dir, 'per_species', sp), exist_ok=True)
             return 0
 
-        monkeypatch.setattr('amalgkit.per_species_tables.run_per_species_job', fake_run_curate)
+        monkeypatch.setattr('amalgkit.per_species_tables.run_per_species_job', fake_run_per_species_job)
         generate_per_species_tables(args)
 
         assert (out_dir / 'per_species' / 'Species_A' / 'per_species_completion_flag.txt').exists()
@@ -381,7 +381,7 @@ class TestCurateMain:
 
         monkeypatch.setattr('amalgkit.per_species_tables.load_metadata', lambda *_args, **_kwargs: metadata)
 
-        def fake_run_curate(args, metadata, sp, input_dir):
+        def fake_run_per_species_job(args, metadata, sp, input_dir):
             processed.append(sp)
             os.makedirs(os.path.join(args.out_dir, 'per_species', sp), exist_ok=True)
             return 0
@@ -389,7 +389,7 @@ class TestCurateMain:
         def fail_if_called(*_args, **_kwargs):
             raise AssertionError('run_tasks_with_optional_threads should not be used when --internal_cpu_budget caps internal_jobs to 1.')
 
-        monkeypatch.setattr('amalgkit.per_species_tables.run_per_species_job', fake_run_curate)
+        monkeypatch.setattr('amalgkit.per_species_tables.run_per_species_job', fake_run_per_species_job)
         monkeypatch.setattr('amalgkit.per_species_tables.run_tasks_with_optional_threads', fail_if_called)
 
         generate_per_species_tables(args)
@@ -415,7 +415,7 @@ class TestCurateMain:
         with pytest.raises(NotADirectoryError, match='Output path exists but is not a directory'):
             generate_per_species_tables(args)
 
-    def test_rejects_curate_path_file(self, tmp_path, monkeypatch):
+    def test_rejects_per_species_path_file(self, tmp_path, monkeypatch):
         out_dir = tmp_path / 'out'
         out_dir.mkdir()
         (out_dir / 'per_species').write_text('not a directory')

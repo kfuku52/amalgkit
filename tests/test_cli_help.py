@@ -67,14 +67,14 @@ def test_help_topic_cstmm_includes_redo():
     assert '--tmm_backend' in merged
 
 
-def test_help_topic_csca_is_rejected():
+def test_help_rejects_legacy_csca_command():
     out = run_cli('help', 'csca')
     assert out.returncode != 0
     merged = (out.stdout + '\n' + out.stderr).lower()
     assert 'invalid choice' in merged
 
 
-def test_help_topic_curate_is_rejected():
+def test_help_rejects_legacy_curate_command():
     out = run_cli('help', 'curate')
     assert out.returncode != 0
     merged = (out.stdout + '\n' + out.stderr).lower()

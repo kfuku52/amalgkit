@@ -1575,7 +1575,7 @@ class TestLoadMetadata:
         assert m.df.shape[0] == 1
         assert m.df.iloc[0]['run'] == 'R1'
 
-    def test_curate_batch_ignores_missing_species_names(self, tmp_path):
+    def test_species_batch_ignores_missing_species_names(self, tmp_path):
         path = tmp_path / 'metadata.tsv'
         pandas.DataFrame({
             'run': ['R1', 'R2', 'R3'],
@@ -1593,7 +1593,7 @@ class TestLoadMetadata:
         assert m.df.shape[0] == 1
         assert m.df.iloc[0]['scientific_name'] == 'Sp1'
 
-    def test_curate_batch_raises_when_no_valid_species(self, tmp_path):
+    def test_species_batch_raises_when_no_valid_species(self, tmp_path):
         path = tmp_path / 'metadata.tsv'
         pandas.DataFrame({
             'run': ['R1', 'R2'],

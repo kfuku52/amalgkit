@@ -9,7 +9,7 @@ AMALGKIT is a Python-only toolkit for transcriptome amalgamation across studies 
 ## Active commands
 
 - [`amalgkit dataset`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-dataset): extract bundled test datasets
-- [`amalgkit metadata`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-metadata): retrieve and curate SRA metadata
+- [`amalgkit metadata`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-metadata): retrieve and organize SRA metadata
 - [`amalgkit integrate`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-integrate): add local FASTQ files to metadata
 - [`amalgkit config`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-config): create config templates for sample selection
 - [`amalgkit select`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-select): mark samples for downstream analysis
@@ -38,10 +38,3 @@ amalgkit finalize
 ```
 
 `finalize` supports Python backends for `no`, `sva`, `ruvseq`, `combatseq`, and `latent_glm`.
-
-## Legacy pages
-
-The pages below are kept only as historical reference for older workflows. They are not exposed by the current CLI.
-
-- [`amalgkit curate` (legacy)](https://github.com/kfuku52/amalgkit/wiki/amalgkit-curate)
-- [`amalgkit csca` (legacy)](https://github.com/kfuku52/amalgkit/wiki/amalgkit-csca)

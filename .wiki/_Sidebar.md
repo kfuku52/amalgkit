@@ -18,7 +18,3 @@
   * [amalgkit csfilter](./amalgkit-csfilter)
   * [amalgkit finalize](./amalgkit-finalize)
   * [amalgkit sanity](./amalgkit-sanity)
-
-* Legacy reference
-  * [amalgkit curate](./amalgkit-curate)
-  * [amalgkit csca](./amalgkit-csca)
