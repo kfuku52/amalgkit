@@ -15,6 +15,11 @@ from amalgkit.arg_utils import clone_namespace
 from amalgkit.exceptions import AmalgkitExit
 from amalgkit.metadata_utils import Metadata
 from amalgkit.output_utils import atomic_output_path, sanitize_dataframe_for_tsv
+from amalgkit.parallel_utils import (
+    is_auto_parallel_option,
+    resolve_worker_allocation,
+    run_tasks_with_optional_threads,
+)
 from amalgkit.sra import (
     esearch_sra_with_retry as _esearch_sra_with_retry,
     fetch_sra_xml as _fetch_sra_xml,
@@ -36,6 +41,7 @@ DEFAULT_ORGAN_TERMS = {
     'leaf': ['leaf'],
     'root': ['root'],
 }
+METADATA_AUTO_MAX_SPECIES_JOBS = 4
 
 
 def merge_xml_chunk(root, chunk):
@@ -582,6 +588,32 @@ def _build_species_queries(species_name, mode, title_terms, organ_terms):
     raise ValueError('Unknown metadata mode: {}'.format(mode))
 
 
+def _resolve_metadata_species_jobs(args, task_count):
+    species_jobs, _ = resolve_worker_allocation(
+        requested_workers=getattr(args, 'internal_jobs', 'auto'),
+        requested_threads=getattr(args, 'threads', 'auto'),
+        internal_cpu_budget=getattr(args, 'internal_cpu_budget', 'auto'),
+        worker_option_name='internal_jobs',
+        context='metadata:',
+    )
+    if is_auto_parallel_option(getattr(args, 'internal_jobs', 'auto')):
+        capped_jobs = min(species_jobs, METADATA_AUTO_MAX_SPECIES_JOBS)
+        if capped_jobs < species_jobs:
+            print(
+                'metadata: capping auto --internal_jobs from {} to {} to avoid overloading Entrez.'.format(
+                    species_jobs,
+                    capped_jobs,
+                ),
+                flush=True,
+            )
+        species_jobs = capped_jobs
+    if species_jobs > int(task_count):
+        species_jobs = int(task_count)
+    if species_jobs <= 0:
+        species_jobs = 1
+    return species_jobs
+
+
 def _merge_metadata_results(query_results):
     if len(query_results) == 0:
         return Metadata()
@@ -658,6 +690,57 @@ def _write_species_merged_metadata(args, species_name, species_dir, species_toke
     print('  merged_rows={}'.format(merged_metadata.df.shape[0]), flush=True)
 
 
+def _run_species_batch_task(
+    task,
+    args,
+    species_count,
+    mode,
+    organ_terms,
+    metadata_specieswise_dir,
+):
+    index, species_name = task
+    print('[{}/{}] {}'.format(index, species_count, species_name), flush=True)
+    species_token = _sanitize_species_token(species_name)
+    species_dir = _ensure_directory(
+        os.path.join(metadata_specieswise_dir, species_token),
+        'species metadata path',
+    )
+    query_results = []
+    for query_label, search_string in _build_species_queries(
+        species_name=species_name,
+        mode=mode,
+        title_terms=getattr(args, 'title_terms', 'flower,leaf,root'),
+        organ_terms=organ_terms,
+    ):
+        query_out_dir = os.path.join(species_dir, query_label)
+        query_args = clone_namespace(
+            args,
+            out_dir=query_out_dir,
+            search_string=search_string,
+            species_tsv=None,
+        )
+        query_results.append(
+            _run_single_query(
+                args=query_args,
+                out_dir=query_out_dir,
+                search_string=search_string,
+                species_name=species_name,
+                query_label=query_label,
+                mode=mode,
+                allow_cached=True,
+            )
+        )
+    if getattr(args, 'merge', True):
+        _write_species_merged_metadata(
+            args=args,
+            species_name=species_name,
+            species_dir=species_dir,
+            species_token=species_token,
+            query_results=query_results,
+        )
+    return species_name
+
+
 def _run_species_batch(args):
     species_list = _load_species_list(
         species_tsv=getattr(args, 'species_tsv', None),
@@ -671,46 +754,49 @@ def _run_species_batch(args):
         os.path.join(args.out_dir, 'metadata_specieswise'),
         'metadata_specieswise path',
     )
-    for index, species_name in enumerate(species_list, start=1):
-        print('[{}/{}] {}'.format(index, len(species_list), species_name), flush=True)
-        species_token = _sanitize_species_token(species_name)
-        species_dir = _ensure_directory(
-            os.path.join(metadata_specieswise_dir, species_token),
-            'species metadata path',
-        )
-        query_results = []
-        for query_label, search_string in _build_species_queries(
-            species_name=species_name,
-            mode=mode,
-            title_terms=getattr(args, 'title_terms', 'flower,leaf,root'),
-            organ_terms=organ_terms,
-        ):
-            query_out_dir = os.path.join(species_dir, query_label)
-            query_args = clone_namespace(
-                args,
-                out_dir=query_out_dir,
-                search_string=search_string,
-                species_tsv=None,
-            )
-            query_results.append(
-                _run_single_query(
-                    args=query_args,
-                    out_dir=query_out_dir,
-                    search_string=search_string,
-                    species_name=species_name,
-                    query_label=query_label,
-                    mode=mode,
-                    allow_cached=True,
-                )
-            )
-        if getattr(args, 'merge', True):
-            _write_species_merged_metadata(
+    task_items = list(enumerate(species_list, start=1))
+    species_jobs = _resolve_metadata_species_jobs(args=args, task_count=len(task_items))
+    if (species_jobs == 1) or (len(task_items) <= 1):
+        for task in task_items:
+            _run_species_batch_task(
+                task=task,
                 args=args,
-                species_name=species_name,
-                species_dir=species_dir,
-                species_token=species_token,
-                query_results=query_results,
+                species_count=len(species_list),
+                mode=mode,
+                organ_terms=organ_terms,
+                metadata_specieswise_dir=metadata_specieswise_dir,
             )
+        return
+    print(
+        'metadata: running {:,} species queries with {:,} parallel job(s).'.format(
+            len(task_items),
+            species_jobs,
+        ),
+        flush=True,
+    )
+    _, failures = run_tasks_with_optional_threads(
+        task_items=task_items,
+        task_fn=lambda task: _run_species_batch_task(
+            task=task,
+            args=args,
+            species_count=len(species_list),
+            mode=mode,
+            organ_terms=organ_terms,
+            metadata_specieswise_dir=metadata_specieswise_dir,
+        ),
+        max_workers=species_jobs,
+    )
+    if failures:
+        details = '; '.join(
+            ['{}: {}'.format(task[1] if isinstance(task, tuple) and len(task) >= 2 else task, err) for task, err in failures]
+        )
+        raise RuntimeError(
+            'metadata batch failed for {}/{} species. {}'.format(
+                len(failures),
+                len(task_items),
+                details,
+            )
+        )
 
 
 def metadata_main(args):

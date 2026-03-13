@@ -3,6 +3,7 @@ import json
 import os
 import re
 import sys
+import threading
 import warnings
 import xml.etree.ElementTree as ET
 
@@ -19,6 +20,10 @@ from amalgkit.parallel_utils import (
 )
 
 PRIVATE_FASTQ_SCIENTIFIC_NAME_PLACEHOLDER = 'Please add in format: Genus species'
+_TAXONOMY_LOOKUP_CACHE_LOCK = threading.Lock()
+_LINEAGE_BY_TAXID_CACHE = {}
+_RANK_BY_TAXID_CACHE = {}
+_SCIENTIFIC_NAME_BY_TAXID_CACHE = {}
 
 
 def strtobool(val):
@@ -74,6 +79,25 @@ def is_private_fastq_scientific_name_placeholder(value):
     if normalized == '':
         return False
     return normalized.lower() == PRIVATE_FASTQ_SCIENTIFIC_NAME_PLACEHOLDER.lower()
+
+
+def _taxonomy_cache_namespace(ncbi):
+    return getattr(ncbi, '_amalgkit_cache_key', ('object', id(ncbi)))
+
+
+def _get_cached_taxonomy_entries(cache_store, namespace, taxids):
+    with _TAXONOMY_LOOKUP_CACHE_LOCK:
+        namespace_cache = cache_store.setdefault(namespace, {})
+        found = {taxid: namespace_cache[taxid] for taxid in taxids if taxid in namespace_cache}
+    missing = [taxid for taxid in taxids if taxid not in found]
+    return found, missing
+
+
+def _update_cached_taxonomy_entries(cache_store, namespace, mapping):
+    if len(mapping) == 0:
+        return
+    with _TAXONOMY_LOOKUP_CACHE_LOCK:
+        cache_store.setdefault(namespace, {}).update(mapping)
 
 
 class Metadata:
@@ -332,6 +356,7 @@ class Metadata:
         self._require_nullable_int_taxid()
         standard_ranks = ['domain', 'kingdom', 'phylum', 'class', 'order', 'family', 'genus', 'species']
         ncbi = get_ete_ncbitaxa(args=args)
+        cache_namespace = _taxonomy_cache_namespace(ncbi)
         lineage_columns = ['taxid_' + rank for rank in standard_ranks]
         unique_taxids = [int(taxid) for taxid in self.df['taxid'].dropna().unique().tolist()]
         if len(unique_taxids) == 0:
@@ -344,25 +369,40 @@ class Metadata:
             for taxid in unique_taxids
         }
         lineage_failures = {}
-        lineage_map = {}
+        lineage_map, missing_taxids = _get_cached_taxonomy_entries(
+            cache_store=_LINEAGE_BY_TAXID_CACHE,
+            namespace=cache_namespace,
+            taxids=unique_taxids,
+        )
 
-        missing_taxids = list(unique_taxids)
-        if hasattr(ncbi, 'get_lineage_translator'):
+        translated_lineages = {}
+        if (len(missing_taxids) > 0) and hasattr(ncbi, 'get_lineage_translator'):
             try:
-                lineage_map = {
+                translated_lineages = {
                     int(taxid): [int(lineage_taxid) for lineage_taxid in lineage]
-                    for taxid, lineage in ncbi.get_lineage_translator(unique_taxids).items()
+                    for taxid, lineage in ncbi.get_lineage_translator(missing_taxids).items()
                 }
-                missing_taxids = [taxid for taxid in unique_taxids if taxid not in lineage_map]
+                if len(translated_lineages) > 0:
+                    lineage_map.update(translated_lineages)
+                    _update_cached_taxonomy_entries(
+                        cache_store=_LINEAGE_BY_TAXID_CACHE,
+                        namespace=cache_namespace,
+                        mapping=translated_lineages,
+                    )
+                missing_taxids = [taxid for taxid in missing_taxids if taxid not in translated_lineages]
             except KeyboardInterrupt:
                 raise
             except Exception:
-                lineage_map = {}
-                missing_taxids = list(unique_taxids)
+                translated_lineages = {}
 
         for taxid in missing_taxids:
             try:
                 lineage_map[taxid] = [int(lineage_taxid) for lineage_taxid in ncbi.get_lineage(taxid)]
+                _update_cached_taxonomy_entries(
+                    cache_store=_LINEAGE_BY_TAXID_CACHE,
+                    namespace=cache_namespace,
+                    mapping={taxid: lineage_map[taxid]},
+                )
             except KeyboardInterrupt:
                 raise
             except Exception as exc:
@@ -377,12 +417,30 @@ class Metadata:
         )
         rank_dict = None
         if len(resolved_lineage_taxids) > 0:
-            try:
-                rank_dict = ncbi.get_rank(resolved_lineage_taxids)
-            except KeyboardInterrupt:
-                raise
-            except Exception:
-                rank_dict = None
+            rank_dict, missing_rank_taxids = _get_cached_taxonomy_entries(
+                cache_store=_RANK_BY_TAXID_CACHE,
+                namespace=cache_namespace,
+                taxids=resolved_lineage_taxids,
+            )
+            if len(missing_rank_taxids) > 0:
+                try:
+                    fetched_rank_dict = ncbi.get_rank(missing_rank_taxids)
+                    if fetched_rank_dict is None:
+                        fetched_rank_dict = {}
+                    fetched_rank_dict = {
+                        int(lineage_taxid): rank
+                        for lineage_taxid, rank in fetched_rank_dict.items()
+                    }
+                    _update_cached_taxonomy_entries(
+                        cache_store=_RANK_BY_TAXID_CACHE,
+                        namespace=cache_namespace,
+                        mapping=fetched_rank_dict,
+                    )
+                    rank_dict.update(fetched_rank_dict)
+                except KeyboardInterrupt:
+                    raise
+                except Exception:
+                    rank_dict = None
 
         if rank_dict is not None:
             for taxid, lineage in lineage_map.items():
@@ -428,7 +486,22 @@ class Metadata:
         self._require_nullable_int_taxid()
         self.df['scientific_name_original'] = self.df['scientific_name']
         ncbi = get_ete_ncbitaxa(args=args)
-        taxid2sciname = ncbi.get_taxid_translator(self.df['taxid'].dropna().unique().tolist())
+        cache_namespace = _taxonomy_cache_namespace(ncbi)
+        unique_taxids = [int(taxid) for taxid in self.df['taxid'].dropna().unique().tolist()]
+        taxid2sciname, missing_taxids = _get_cached_taxonomy_entries(
+            cache_store=_SCIENTIFIC_NAME_BY_TAXID_CACHE,
+            namespace=cache_namespace,
+            taxids=unique_taxids,
+        )
+        if len(missing_taxids) > 0:
+            fetched = ncbi.get_taxid_translator(missing_taxids)
+            fetched = {int(taxid): name for taxid, name in fetched.items()}
+            _update_cached_taxonomy_entries(
+                cache_store=_SCIENTIFIC_NAME_BY_TAXID_CACHE,
+                namespace=cache_namespace,
+                mapping=fetched,
+            )
+            taxid2sciname.update(fetched)
         self.df['scientific_name'] = self.df['taxid'].map(taxid2sciname).fillna(self.df['scientific_name_original'])
 
     def _require_nullable_int_taxid(self):

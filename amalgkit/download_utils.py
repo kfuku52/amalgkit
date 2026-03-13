@@ -15,6 +15,15 @@ DOWNLOAD_LOCK_TIMEOUT_SECONDS = 3600
 DOWNLOAD_LOCK_HEARTBEAT_SECONDS = 60
 DOWNLOAD_LOCK_STALE_SECONDS = 900
 NCBI_TAXDUMP_URL = 'https://ftp.ncbi.nlm.nih.gov/pub/taxonomy/taxdump.tar.gz'
+_ETE_NCBITAXA_THREAD_LOCAL = threading.local()
+
+
+def _get_thread_local_ete_ncbitaxa_cache():
+    cache = getattr(_ETE_NCBITAXA_THREAD_LOCAL, 'cache', None)
+    if cache is None:
+        cache = {}
+        _ETE_NCBITAXA_THREAD_LOCAL.cache = cache
+    return cache
 
 
 def resolve_download_dir(args):
@@ -392,15 +401,28 @@ def get_ete_ncbitaxa(
     if is_taxadb_up_to_date_fn is None:
         is_taxadb_up_to_date_fn = getattr(ete4, 'is_taxadb_up_to_date', None)
     if args is None:
-        return ncbitaxa_cls()
+        cache_key = ('default', id(ncbitaxa_cls))
+        cache = _get_thread_local_ete_ncbitaxa_cache()
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
+        ncbi = ncbitaxa_cls()
+        setattr(ncbi, '_amalgkit_cache_key', cache_key)
+        cache[cache_key] = ncbi
+        return ncbi
     ete_data_dir = resolve_ete_data_dir_fn(args)
     os.makedirs(ete_data_dir, exist_ok=True)
     lock_path = resolve_ete_lock_path_fn(args)
     lock_dir = os.path.dirname(lock_path)
     if lock_dir != '':
         os.makedirs(lock_dir, exist_ok=True)
-    dbfile = os.path.join(ete_data_dir, 'taxa.sqlite')
-    taxdump_file = os.path.join(ete_data_dir, 'taxdump.tar.gz')
+    dbfile = os.path.realpath(os.path.join(ete_data_dir, 'taxa.sqlite'))
+    taxdump_file = os.path.realpath(os.path.join(ete_data_dir, 'taxdump.tar.gz'))
+    cache_key = ('custom', id(ncbitaxa_cls), dbfile)
+    cache = _get_thread_local_ete_ncbitaxa_cache()
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
     with acquire_exclusive_lock_fn(lock_path=lock_path, lock_label='ETE4 taxonomy DB'):
         kwargs = {'dbfile': dbfile}
         if should_refresh_custom_ete_taxonomy_db(
@@ -413,4 +435,7 @@ def get_ete_ncbitaxa(
             )
         else:
             kwargs['update'] = False
-        return ncbitaxa_cls(**kwargs)
+        ncbi = ncbitaxa_cls(**kwargs)
+        setattr(ncbi, '_amalgkit_cache_key', cache_key)
+        cache[cache_key] = ncbi
+        return ncbi

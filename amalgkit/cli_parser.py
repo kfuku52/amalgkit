@@ -62,7 +62,7 @@ def build_parser(command_handlers, command_names, version):
                           'By default, all colors are automatically assigned.')
 
     pme_help = 'NCBI SRA metadata retrieval and curation. See `amalgkit metadata -h`'
-    pme = subparsers.add_parser('metadata', help=pme_help, parents=[pp_out, pp_redo, pp_download])
+    pme = subparsers.add_parser('metadata', help=pme_help, parents=[pp_out, pp_redo, pp_download, pp_threads, pp_internal_jobs, pp_cpu_budget])
     pme.add_argument('--search_string', metavar='STR', default=None, type=str, required=False, action='store',
                      help='default=%(default)s: Entrez search string for one metadata query. '
                           'Required unless --species_tsv is used. See https://www.ncbi.nlm.nih.gov/books/NBK25499/ for details. '

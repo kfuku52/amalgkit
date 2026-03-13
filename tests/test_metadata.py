@@ -186,6 +186,9 @@ class TestMetadataMain:
             species_limit=None,
             merge=True,
             resolve_names=False,
+            threads='auto',
+            internal_jobs='auto',
+            internal_cpu_budget='auto',
         )
 
     def test_rejects_out_dir_file_path(self, tmp_path):
@@ -493,6 +496,150 @@ class TestMetadataMain:
         merged_info = json.loads(alpha_merged_info.read_text(encoding='utf-8'))
         assert merged_info['kind'] == 'merged'
         assert merged_info['source_query_labels'] == ['base']
+
+    def test_species_batch_mode_uses_parallel_workers(self, tmp_path, monkeypatch):
+        out_dir = tmp_path / 'out'
+        args = self._args(out_dir)
+        args.search_string = None
+        args.species_tsv = str(tmp_path / 'species.tsv')
+        args.internal_jobs = 2
+        args.threads = 2
+        pandas.DataFrame(
+            [
+                {'scientific_name': 'Species alpha'},
+                {'scientific_name': 'Species beta'},
+            ]
+        ).to_csv(args.species_tsv, sep='\t', index=False)
+
+        observed = {
+            'max_workers': None,
+            'species': [],
+            'merged': [],
+        }
+
+        def fake_run_single_query(args, out_dir=None, search_string=None, species_name=None, query_label=None, mode='single', allow_cached=False):
+            _ = (args, out_dir, search_string, query_label, mode, allow_cached)
+            observed['species'].append(species_name)
+            token = species_name.split()[-1].upper()
+            metadata = Metadata.from_DataFrame(
+                pandas.DataFrame(
+                    [
+                        {
+                            'scientific_name': species_name,
+                            'sample_group': 'leaf',
+                            'tissue': 'leaf',
+                            'bioproject': 'PRJNA_' + token,
+                            'biosample': 'SAMN_' + token,
+                            'experiment': 'SRX_' + token,
+                            'run': 'SRR_' + token,
+                            'sample_title': species_name + ' leaf sample',
+                            'taxid': '1001',
+                        }
+                    ],
+                    columns=Metadata.column_names,
+                )
+            )
+            return {
+                'metadata': metadata,
+                'paths': {
+                    'query_info_path': str(tmp_path / (species_name.replace(' ', '_') + '.query_info.json')),
+                    'metadata_path': str(tmp_path / (species_name.replace(' ', '_') + '.metadata.tsv')),
+                },
+                'query_info': {
+                    'record_id_count': 1,
+                    'missing_run_drop_count': 0,
+                },
+                'query_label': 'base',
+            }
+
+        def fake_write_species_merged_metadata(args, species_name, species_dir, species_token, query_results):
+            _ = (args, species_dir, species_token, query_results)
+            observed['merged'].append(species_name)
+
+        def fake_run_tasks(task_items, task_fn, max_workers=1):
+            observed['max_workers'] = max_workers
+            results = {}
+            failures = []
+            for task in task_items:
+                results[task] = task_fn(task)
+            return results, failures
+
+        monkeypatch.setattr('amalgkit.metadata._run_single_query', fake_run_single_query)
+        monkeypatch.setattr('amalgkit.metadata._write_species_merged_metadata', fake_write_species_merged_metadata)
+        monkeypatch.setattr('amalgkit.metadata.run_tasks_with_optional_threads', fake_run_tasks)
+
+        metadata_main(args)
+
+        assert observed['max_workers'] == 2
+        assert set(observed['species']) == {'Species alpha', 'Species beta'}
+        assert set(observed['merged']) == {'Species alpha', 'Species beta'}
+
+    def test_species_batch_mode_cpu_budget_caps_parallel_workers_to_serial(self, tmp_path, monkeypatch):
+        out_dir = tmp_path / 'out'
+        args = self._args(out_dir)
+        args.search_string = None
+        args.species_tsv = str(tmp_path / 'species.tsv')
+        args.internal_jobs = 4
+        args.threads = 4
+        args.internal_cpu_budget = 1
+        pandas.DataFrame(
+            [
+                {'scientific_name': 'Species alpha'},
+                {'scientific_name': 'Species beta'},
+            ]
+        ).to_csv(args.species_tsv, sep='\t', index=False)
+
+        observed = {
+            'species': [],
+            'merged': [],
+        }
+
+        def fake_run_single_query(args, out_dir=None, search_string=None, species_name=None, query_label=None, mode='single', allow_cached=False):
+            _ = (args, out_dir, search_string, query_label, mode, allow_cached)
+            observed['species'].append(species_name)
+            metadata = Metadata.from_DataFrame(
+                pandas.DataFrame(
+                    [
+                        {
+                            'scientific_name': species_name,
+                            'sample_group': 'leaf',
+                            'tissue': 'leaf',
+                            'experiment': 'SRX1',
+                            'run': 'SRR1_' + species_name.split()[-1].upper(),
+                            'taxid': '1001',
+                        }
+                    ],
+                    columns=Metadata.column_names,
+                )
+            )
+            return {
+                'metadata': metadata,
+                'paths': {
+                    'query_info_path': str(tmp_path / (species_name.replace(' ', '_') + '.query_info.json')),
+                    'metadata_path': str(tmp_path / (species_name.replace(' ', '_') + '.metadata.tsv')),
+                },
+                'query_info': {
+                    'record_id_count': 1,
+                    'missing_run_drop_count': 0,
+                },
+                'query_label': 'base',
+            }
+
+        def fake_write_species_merged_metadata(args, species_name, species_dir, species_token, query_results):
+            _ = (args, species_dir, species_token, query_results)
+            observed['merged'].append(species_name)
+
+        def fail_if_called(*_args, **_kwargs):
+            raise AssertionError('run_tasks_with_optional_threads should not be used when --internal_cpu_budget caps internal_jobs to 1.')
+
+        monkeypatch.setattr('amalgkit.metadata._run_single_query', fake_run_single_query)
+        monkeypatch.setattr('amalgkit.metadata._write_species_merged_metadata', fake_write_species_merged_metadata)
+        monkeypatch.setattr('amalgkit.metadata.run_tasks_with_optional_threads', fail_if_called)
+
+        metadata_main(args)
+
+        assert observed['species'] == ['Species alpha', 'Species beta']
+        assert observed['merged'] == ['Species alpha', 'Species beta']
 
 
 class TestMetadataFromXmlRoots:

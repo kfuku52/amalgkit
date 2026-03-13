@@ -2287,6 +2287,50 @@ class TestMetadataTaxidValidation:
         assert metadata.df.loc[0, 'taxid_genus'] == 9605
         assert metadata.df.loc[1, 'taxid_genus'] == 10088
 
+    def test_add_standard_rank_taxids_reuses_cached_lineage_and_rank_results(self, monkeypatch):
+        metadata1 = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001'],
+            'scientific_name': ['Homo sapiens'],
+            'exclusion': ['no'],
+            'taxid': [9606],
+        }))
+        metadata2 = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR002'],
+            'scientific_name': ['Homo sapiens'],
+            'exclusion': ['no'],
+            'taxid': [9606],
+        }))
+        metadata1.df['taxid'] = metadata1.df['taxid'].astype('Int64')
+        metadata2.df['taxid'] = metadata2.df['taxid'].astype('Int64')
+        captured = {'lineage_translator_calls': 0, 'rank_calls': 0}
+
+        class BatchNcbi:
+            def get_lineage_translator(self, taxids):
+                captured['lineage_translator_calls'] += 1
+                assert list(taxids) == [9606]
+                return {9606: [1, 2759, 9605, 9606]}
+
+            def get_lineage(self, _taxid):
+                raise AssertionError('Per-taxid lineage lookup should not be needed.')
+
+            def get_rank(self, taxids):
+                captured['rank_calls'] += 1
+                assert set(taxids) == {1, 2759, 9605, 9606}
+                return {
+                    1: 'domain',
+                    2759: 'kingdom',
+                    9605: 'genus',
+                    9606: 'species',
+                }
+
+        monkeypatch.setattr('amalgkit.download_utils.ete4.NCBITaxa', lambda: BatchNcbi())
+
+        metadata1.add_standard_rank_taxids()
+        metadata2.add_standard_rank_taxids()
+
+        assert captured['lineage_translator_calls'] == 1
+        assert captured['rank_calls'] == 1
+
     def test_add_standard_rank_taxids_uses_download_dir_for_shared_ete_taxonomy_cache(self, tmp_path, monkeypatch):
         metadata = Metadata.from_DataFrame(pandas.DataFrame({
             'run': ['SRR001'],
@@ -2386,6 +2430,38 @@ class TestMetadataTaxidValidation:
         assert metadata.df.loc[0, 'taxid_genus'] == 9605
         assert metadata.df.loc[0, 'taxid_species'] == 9606
 
+    def test_resolve_scientific_names_reuses_cached_translator_results(self, monkeypatch):
+        metadata1 = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001'],
+            'scientific_name': ['H. sapiens'],
+            'exclusion': ['no'],
+            'taxid': [9606],
+        }))
+        metadata2 = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR002'],
+            'scientific_name': ['human'],
+            'exclusion': ['no'],
+            'taxid': [9606],
+        }))
+        metadata1.df['taxid'] = metadata1.df['taxid'].astype('Int64')
+        metadata2.df['taxid'] = metadata2.df['taxid'].astype('Int64')
+        captured = {'translator_calls': 0}
+
+        class RecordingNcbi:
+            def get_taxid_translator(self, taxids):
+                captured['translator_calls'] += 1
+                assert list(taxids) == [9606]
+                return {9606: 'Homo sapiens'}
+
+        monkeypatch.setattr('amalgkit.download_utils.ete4.NCBITaxa', lambda: RecordingNcbi())
+
+        metadata1.resolve_scientific_names()
+        metadata2.resolve_scientific_names()
+
+        assert captured['translator_calls'] == 1
+        assert metadata1.df.loc[0, 'scientific_name'] == 'Homo sapiens'
+        assert metadata2.df.loc[0, 'scientific_name'] == 'Homo sapiens'
+
     def test_get_ete_ncbitaxa_bootstraps_fresh_custom_download_dir(self, tmp_path, monkeypatch):
         captured = {'lock_path': None, 'urlretrieve': None}
 
@@ -2478,6 +2554,47 @@ class TestMetadataTaxidValidation:
         assert captured['kwargs']['update'] is False
         assert 'taxdump_file' not in captured['kwargs']
         assert captured['lock_path'] == expected_lock_path
+
+    def test_get_ete_ncbitaxa_caches_instances_per_custom_db(self, tmp_path, monkeypatch):
+        captured = {'init_calls': 0, 'lock_calls': 0}
+
+        class DummyLock:
+            def __init__(self, lock_path, lock_label='Lock', poll_seconds=5, timeout_seconds=3600):
+                _ = (lock_path, lock_label, poll_seconds, timeout_seconds)
+
+            def __enter__(self):
+                captured['lock_calls'] += 1
+                return None
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        class RecordingNcbi:
+            def __init__(self, **kwargs):
+                captured['init_calls'] += 1
+                captured.setdefault('kwargs', kwargs)
+
+        args = SimpleNamespace(
+            out_dir=str(tmp_path / 'out'),
+            download_dir=str(tmp_path / 'shared_downloads'),
+        )
+        expected_download_dir = os.path.realpath(args.download_dir)
+        expected_ete_dir = os.path.join(expected_download_dir, 'ete_taxonomy')
+        dbfile = os.path.join(expected_ete_dir, 'taxa.sqlite')
+        os.makedirs(expected_ete_dir, exist_ok=True)
+        with open(dbfile, 'wb') as fout:
+            fout.write(b'sqlite')
+
+        monkeypatch.setattr('amalgkit.util.acquire_exclusive_lock', DummyLock)
+        monkeypatch.setattr('amalgkit.download_utils.ete4.NCBITaxa', RecordingNcbi)
+        monkeypatch.setattr('amalgkit.download_utils.ete4.is_taxadb_up_to_date', lambda path: path == dbfile)
+
+        first = get_ete_ncbitaxa(args=args)
+        second = get_ete_ncbitaxa(args=args)
+
+        assert first is second
+        assert captured['init_calls'] == 1
+        assert captured['lock_calls'] == 1
 
 
 class TestDownloadLockRecovery:
