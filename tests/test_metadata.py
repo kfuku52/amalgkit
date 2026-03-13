@@ -1,4 +1,5 @@
 import xml.etree.ElementTree as ET
+import json
 
 import pytest
 import pandas
@@ -178,6 +179,12 @@ class TestMetadataMain:
             out_dir=str(out_dir),
             redo=False,
             search_string='dummy',
+            species_tsv=None,
+            mode='base',
+            title_terms='flower,leaf,root',
+            organ_terms_tsv=None,
+            species_limit=None,
+            merge=True,
             resolve_names=False,
         )
 
@@ -275,3 +282,283 @@ class TestMetadataMain:
 
         with pytest.raises(ValueError, match='--search_string is required'):
             metadata_main(args)
+
+    def test_writes_tsv_safe_metadata_when_text_contains_carriage_returns(self, tmp_path, monkeypatch):
+        args = self._args(tmp_path / 'out')
+        metadata = Metadata.from_DataFrame(
+            pandas.DataFrame(
+                [
+                    {
+                        'scientific_name': 'Musa acuminata AAA Group',
+                        'sample_group': 'root',
+                        'tissue': 'root',
+                        'biosample': 'SAMN000001',
+                        'experiment': 'SRX000001',
+                        'run': 'SRR000001',
+                        'sample_title': 'banana root sample',
+                        'sample_description': 'Line 1\rLine 2\nLine 3\tTabbed',
+                        'taxid': '4641',
+                    }
+                ],
+                columns=Metadata.column_names,
+            )
+        )
+        monkeypatch.setattr('amalgkit.metadata.search_sra_record_ids', lambda _search_term: ['ID1'])
+        monkeypatch.setattr('amalgkit.metadata.Metadata.from_xml_roots', lambda _xml_roots: metadata)
+        monkeypatch.setattr('amalgkit.metadata.Metadata.add_standard_rank_taxids', lambda self, args=None: None)
+
+        metadata_main(args)
+
+        metadata_path = tmp_path / 'out' / 'metadata' / 'metadata.tsv'
+        raw = metadata_path.read_bytes()
+        assert b'\r' not in raw
+
+        df = pandas.read_csv(metadata_path, sep='\t')
+        assert df.shape[0] == 1
+        assert df.loc[0, 'run'] == 'SRR000001'
+        assert df.loc[0, 'sample_description'] == 'Line 1 Line 2 Line 3 Tabbed'
+
+    def test_writes_query_info_and_summary_sidecars(self, tmp_path, monkeypatch):
+        args = self._args(tmp_path / 'out')
+        metadata = Metadata.from_DataFrame(
+            pandas.DataFrame(
+                [
+                    {
+                        'scientific_name': 'Arabidopsis thaliana',
+                        'sample_group': 'leaf',
+                        'tissue': 'leaf',
+                        'bioproject': 'PRJNA1',
+                        'biosample': 'SAMN1',
+                        'experiment': 'SRX1',
+                        'run': 'SRR1',
+                        'sample_title': 'leaf sample',
+                        'source_name': 'rosette leaf',
+                        'taxid': '3702',
+                    }
+                ],
+                columns=Metadata.column_names,
+            )
+        )
+        monkeypatch.setattr('amalgkit.metadata.search_sra_record_ids', lambda _search_term: ['ID1'])
+        monkeypatch.setattr('amalgkit.metadata.Metadata.from_xml_roots', lambda _xml_roots: metadata)
+        monkeypatch.setattr('amalgkit.metadata.Metadata.add_standard_rank_taxids', lambda self, args=None: None)
+
+        metadata_main(args)
+
+        query_info_path = tmp_path / 'out' / 'metadata' / 'metadata.query_info.json'
+        summary_path = tmp_path / 'out' / 'metadata' / 'metadata.summary.tsv'
+        assert query_info_path.exists()
+        assert summary_path.exists()
+        query_info = json.loads(query_info_path.read_text(encoding='utf-8'))
+        assert query_info['search_string'] == 'dummy'
+        assert query_info['record_id_count'] == 1
+        assert query_info['metadata_row_count'] == 1
+
+        summary = pandas.read_csv(summary_path, sep='\t')
+        row_count = summary.loc[summary['name'] == 'row_count', 'value'].iloc[0]
+        assert row_count == '1'
+
+    def test_rejects_missing_run_id_in_generated_metadata(self, tmp_path, monkeypatch):
+        args = self._args(tmp_path / 'out')
+        metadata = Metadata.from_DataFrame(
+            pandas.DataFrame(
+                [
+                    {
+                        'scientific_name': 'Arabidopsis thaliana',
+                        'sample_group': 'leaf',
+                        'tissue': 'leaf',
+                        'experiment': 'SRX1',
+                        'run': '',
+                        'taxid': '3702',
+                    }
+                ],
+                columns=Metadata.column_names,
+            )
+        )
+        monkeypatch.setattr('amalgkit.metadata.search_sra_record_ids', lambda _search_term: ['ID1'])
+        monkeypatch.setattr('amalgkit.metadata.Metadata.from_xml_roots', lambda _xml_roots: metadata)
+        monkeypatch.setattr('amalgkit.metadata.Metadata.add_standard_rank_taxids', lambda self, args=None: None)
+
+        with pytest.raises(ValueError, match='Missing run ID'):
+            metadata_main(args)
+
+    def test_rejects_duplicate_run_id_in_generated_metadata(self, tmp_path, monkeypatch):
+        args = self._args(tmp_path / 'out')
+        metadata = Metadata.from_DataFrame(
+            pandas.DataFrame(
+                [
+                    {
+                        'scientific_name': 'Arabidopsis thaliana',
+                        'sample_group': 'leaf',
+                        'tissue': 'leaf',
+                        'experiment': 'SRX1',
+                        'run': 'SRR1',
+                        'taxid': '3702',
+                    },
+                    {
+                        'scientific_name': 'Arabidopsis thaliana',
+                        'sample_group': 'root',
+                        'tissue': 'root',
+                        'experiment': 'SRX2',
+                        'run': 'SRR1',
+                        'taxid': '3702',
+                    },
+                ],
+                columns=Metadata.column_names,
+            )
+        )
+        monkeypatch.setattr('amalgkit.metadata.search_sra_record_ids', lambda _search_term: ['ID1'])
+        monkeypatch.setattr('amalgkit.metadata.Metadata.from_xml_roots', lambda _xml_roots: metadata)
+        monkeypatch.setattr('amalgkit.metadata.Metadata.add_standard_rank_taxids', lambda self, args=None: None)
+
+        with pytest.raises(ValueError, match='Duplicate run ID'):
+            metadata_main(args)
+
+    def test_species_batch_mode_writes_query_and_merged_outputs(self, tmp_path, monkeypatch):
+        out_dir = tmp_path / 'out'
+        args = self._args(out_dir)
+        args.search_string = None
+        args.species_tsv = str(tmp_path / 'species.tsv')
+        pandas.DataFrame(
+            [
+                {'scientific_name': 'Species alpha'},
+                {'scientific_name': 'Species beta'},
+            ]
+        ).to_csv(args.species_tsv, sep='\t', index=False)
+
+        monkeypatch.setattr('amalgkit.metadata.search_sra_record_ids', lambda search_term: [search_term])
+        monkeypatch.setattr(
+            'amalgkit.metadata.iter_sra_xml_chunks',
+            lambda record_ids, retmax=1000: iter([{'search_term': record_ids[0]}]),
+        )
+
+        def fake_from_xml_roots(xml_roots):
+            payload = list(xml_roots)[0]
+            search_term = payload['search_term']
+            species_name = 'Species alpha' if 'Species alpha' in search_term else 'Species beta'
+            run_id = 'SRR_ALPHA' if species_name == 'Species alpha' else 'SRR_BETA'
+            taxid = '1001' if species_name == 'Species alpha' else '1002'
+            return Metadata.from_DataFrame(
+                pandas.DataFrame(
+                    [
+                        {
+                            'scientific_name': species_name,
+                            'sample_group': 'leaf',
+                            'tissue': 'leaf',
+                            'bioproject': 'PRJNA_' + species_name.split()[-1].upper(),
+                            'biosample': 'SAMN_' + species_name.split()[-1].upper(),
+                            'experiment': 'SRX_' + species_name.split()[-1].upper(),
+                            'run': run_id,
+                            'sample_title': species_name + ' leaf sample',
+                            'taxid': taxid,
+                        }
+                    ],
+                    columns=Metadata.column_names,
+                )
+            )
+
+        monkeypatch.setattr('amalgkit.metadata.Metadata.from_xml_roots', fake_from_xml_roots)
+        monkeypatch.setattr('amalgkit.metadata.Metadata.add_standard_rank_taxids', lambda self, args=None: None)
+
+        metadata_main(args)
+
+        alpha_query = out_dir / 'metadata_specieswise' / 'Species_alpha' / 'base' / 'metadata' / 'metadata.tsv'
+        alpha_merged = out_dir / 'metadata_specieswise' / 'Species_alpha' / 'Species_alpha.metadata.tsv'
+        alpha_merged_info = out_dir / 'metadata_specieswise' / 'Species_alpha' / 'Species_alpha.query_info.json'
+        beta_query = out_dir / 'metadata_specieswise' / 'Species_beta' / 'base' / 'metadata' / 'metadata.tsv'
+        assert alpha_query.exists()
+        assert alpha_merged.exists()
+        assert alpha_merged_info.exists()
+        assert beta_query.exists()
+        merged_info = json.loads(alpha_merged_info.read_text(encoding='utf-8'))
+        assert merged_info['kind'] == 'merged'
+        assert merged_info['source_query_labels'] == ['base']
+
+
+class TestMetadataFromXmlRoots:
+    def test_preserves_colliding_sample_attributes(self):
+        xml_root = ET.fromstring(
+            '''
+            <EXPERIMENT_PACKAGE_SET>
+              <EXPERIMENT_PACKAGE>
+                <SUBMISSION center_name="center">
+                  <IDENTIFIERS>
+                    <PRIMARY_ID>SRA000001</PRIMARY_ID>
+                    <SUBMITTER_ID>submitter</SUBMITTER_ID>
+                  </IDENTIFIERS>
+                </SUBMISSION>
+                <STUDY>
+                  <DESCRIPTOR>
+                    <STUDY_TITLE>study title</STUDY_TITLE>
+                  </DESCRIPTOR>
+                </STUDY>
+                <SAMPLE>
+                  <IDENTIFIERS>
+                    <PRIMARY_ID>SRS000001</PRIMARY_ID>
+                  </IDENTIFIERS>
+                  <TITLE>sample title</TITLE>
+                  <DESCRIPTION>sample description</DESCRIPTION>
+                  <SAMPLE_NAME>
+                    <SCIENTIFIC_NAME>Arabidopsis thaliana</SCIENTIFIC_NAME>
+                    <TAXON_ID>3702</TAXON_ID>
+                  </SAMPLE_NAME>
+                  <SAMPLE_ATTRIBUTES>
+                    <SAMPLE_ATTRIBUTE>
+                      <TAG>tissue</TAG>
+                      <VALUE>leaf</VALUE>
+                    </SAMPLE_ATTRIBUTE>
+                    <SAMPLE_ATTRIBUTE>
+                      <TAG>leaf</TAG>
+                      <VALUE>foliage</VALUE>
+                    </SAMPLE_ATTRIBUTE>
+                    <SAMPLE_ATTRIBUTE>
+                      <TAG>leaf</TAG>
+                      <VALUE>leaf blade</VALUE>
+                    </SAMPLE_ATTRIBUTE>
+                  </SAMPLE_ATTRIBUTES>
+                </SAMPLE>
+                <EXPERIMENT>
+                  <IDENTIFIERS>
+                    <PRIMARY_ID>SRX000001</PRIMARY_ID>
+                  </IDENTIFIERS>
+                  <TITLE>experiment title</TITLE>
+                  <STUDY_REF>
+                    <IDENTIFIERS>
+                      <PRIMARY_ID>SRP000001</PRIMARY_ID>
+                    </IDENTIFIERS>
+                  </STUDY_REF>
+                  <DESIGN>
+                    <DESIGN_DESCRIPTION>design</DESIGN_DESCRIPTION>
+                    <LIBRARY_DESCRIPTOR>
+                      <LIBRARY_NAME>lib</LIBRARY_NAME>
+                      <LIBRARY_STRATEGY>RNA-Seq</LIBRARY_STRATEGY>
+                      <LIBRARY_SOURCE>TRANSCRIPTOMIC</LIBRARY_SOURCE>
+                      <LIBRARY_SELECTION>cDNA</LIBRARY_SELECTION>
+                      <LIBRARY_LAYOUT>
+                        <SINGLE />
+                      </LIBRARY_LAYOUT>
+                    </LIBRARY_DESCRIPTOR>
+                  </DESIGN>
+                  <PLATFORM>
+                    <ILLUMINA>
+                      <INSTRUMENT_MODEL>NovaSeq</INSTRUMENT_MODEL>
+                    </ILLUMINA>
+                  </PLATFORM>
+                </EXPERIMENT>
+                <RUN_SET>
+                  <RUN published="2024-01-01" total_spots="100" total_bases="10000" size="1000">
+                    <IDENTIFIERS>
+                      <PRIMARY_ID>SRR000001</PRIMARY_ID>
+                    </IDENTIFIERS>
+                  </RUN>
+                </RUN_SET>
+              </EXPERIMENT_PACKAGE>
+            </EXPERIMENT_PACKAGE_SET>
+            '''
+        )
+
+        metadata = Metadata.from_xml_roots([xml_root])
+
+        assert metadata.df.loc[0, 'sample_attribute_tissue'] == 'leaf'
+        assert metadata.df.loc[0, 'leaf'] == 'foliage | leaf blade'
+        assert metadata.sample_attribute_collision_count >= 2

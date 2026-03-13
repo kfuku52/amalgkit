@@ -1,6 +1,12 @@
 import os
+import re
 import tempfile
 from contextlib import contextmanager
+
+import pandas
+
+
+_DELIMITED_TEXT_UNSAFE_PATTERN = re.compile(r'[\r\n\t]+')
 
 
 @contextmanager
@@ -30,5 +36,26 @@ def atomic_output_path(outpath, prefix='amalgkit_atomic_', suffix=None):
 
 
 def atomic_write_dataframe(df, outpath, **to_csv_kwargs):
+    sep = to_csv_kwargs.get('sep', ',')
+    df_to_write = df
+    if sep == '\t':
+        df_to_write = sanitize_dataframe_for_tsv(df)
     with atomic_output_path(outpath=outpath, suffix='.tsv') as tmp_path:
-        df.to_csv(tmp_path, **to_csv_kwargs)
+        df_to_write.to_csv(tmp_path, **to_csv_kwargs)
+
+
+def sanitize_delimited_text_cell(value):
+    if not isinstance(value, str):
+        return value
+    if value == '':
+        return value
+    sanitized = _DELIMITED_TEXT_UNSAFE_PATTERN.sub(' ', value)
+    return sanitized.strip()
+
+
+def sanitize_dataframe_for_tsv(df):
+    sanitized = df.copy()
+    text_columns = sanitized.select_dtypes(include=['object', 'string']).columns
+    for column in text_columns:
+        sanitized[column] = sanitized[column].map(sanitize_delimited_text_cell)
+    return sanitized

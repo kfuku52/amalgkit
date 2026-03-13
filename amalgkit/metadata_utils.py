@@ -93,6 +93,8 @@ class Metadata:
     def __init__(self, column_names=column_names):
         self.config_dir = ''
         self.df = pandas.DataFrame(index=[], columns=column_names)
+        self.sample_attribute_collision_count = 0
+        self.sample_attribute_collision_examples = []
 
     def reorder(self, omit_misc=False, column_names=column_names):
         is_empty = (self.df.shape[0] == 0)
@@ -162,7 +164,37 @@ class Metadata:
                 external_ids[namespace] = '' if text is None else str(text)
             return external_ids
 
+        def normalize_sample_attribute_tag(tag):
+            normalized = str(tag).strip().lower()
+            normalized = re.sub(r" \(.*", "", normalized)
+            normalized = re.sub(r"\s+", "_", normalized)
+            normalized = re.sub(r"[^0-9a-zA-Z_]+", "_", normalized)
+            normalized = re.sub(r"_+", "_", normalized)
+            return normalized.strip('_')
+
+        def append_unique_text(existing_value, new_value):
+            if existing_value == "":
+                return new_value
+            existing_parts = [part.strip() for part in str(existing_value).split(' | ') if part.strip() != ""]
+            if new_value in existing_parts:
+                return existing_value
+            return existing_value + ' | ' + new_value
+
+        def record_sample_attribute_collision(normalized_tag, target_tag, existing_value, new_value):
+            metadata.sample_attribute_collision_count += 1
+            if len(metadata.sample_attribute_collision_examples) >= 10:
+                return
+            metadata.sample_attribute_collision_examples.append(
+                {
+                    'normalized_tag': normalized_tag,
+                    'target_tag': target_tag,
+                    'existing_value': existing_value,
+                    'new_value': new_value,
+                }
+            )
+
         blocked_tags = set(metadata.removed_metadata_columns)
+        core_column_tags = set(metadata.column_names)
         row_list = list()
         counter = 0
         for xml_root in xml_roots:
@@ -250,14 +282,38 @@ class Metadata:
                 sas = entry.findall('./SAMPLE/SAMPLE_ATTRIBUTES/SAMPLE_ATTRIBUTE')
                 for sa in sas:
                     tag = get_first_text(sa, './TAG')
-                    if tag != "":
-                        tag = tag.lower()
-                        tag = re.sub(r" \(.*", "", tag)
-                        tag = re.sub(r" ", "_", tag)
-                        if (tag not in row) and (tag not in blocked_tags):
-                            value = get_first_text(sa, './VALUE')
-                            if value != "":
-                                row[tag] = value
+                    if tag == "":
+                        continue
+                    normalized_tag = normalize_sample_attribute_tag(tag)
+                    if normalized_tag == "":
+                        continue
+                    value = get_first_text(sa, './VALUE')
+                    if value == "":
+                        continue
+                    if (normalized_tag in blocked_tags) or (normalized_tag in core_column_tags):
+                        target_tag = 'sample_attribute_' + normalized_tag
+                    else:
+                        target_tag = normalized_tag
+                    existing_value = str(row.get(target_tag, ''))
+                    if existing_value != "":
+                        updated_value = append_unique_text(existing_value, value)
+                        if updated_value != existing_value:
+                            record_sample_attribute_collision(
+                                normalized_tag=normalized_tag,
+                                target_tag=target_tag,
+                                existing_value=existing_value,
+                                new_value=value,
+                            )
+                        row[target_tag] = updated_value
+                        continue
+                    if target_tag != normalized_tag:
+                        record_sample_attribute_collision(
+                            normalized_tag=normalized_tag,
+                            target_tag=target_tag,
+                            existing_value=str(row.get(normalized_tag, '')),
+                            new_value=value,
+                        )
+                    row[target_tag] = value
                 row_list.append(row)
                 counter += 1
         if len(row_list) == 0:

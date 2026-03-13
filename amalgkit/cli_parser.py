@@ -63,10 +63,26 @@ def build_parser(command_handlers, command_names, version):
 
     pme_help = 'NCBI SRA metadata retrieval and curation. See `amalgkit metadata -h`'
     pme = subparsers.add_parser('metadata', help=pme_help, parents=[pp_out, pp_redo, pp_download])
-    pme.add_argument('--search_string', metavar='PATH', default=None, type=str, required=True, action='store',
-                     help='default=%(default)s: Entrez search string. See https://www.ncbi.nlm.nih.gov/books/NBK25499/ for details. '
+    pme.add_argument('--search_string', metavar='STR', default=None, type=str, required=False, action='store',
+                     help='default=%(default)s: Entrez search string for one metadata query. '
+                          'Required unless --species_tsv is used. See https://www.ncbi.nlm.nih.gov/books/NBK25499/ for details. '
                           'The search string is used to identify SRA entries that can be found at https://www.ncbi.nlm.nih.gov/sra/ using the same string. '
                           'Example: "Cephalotus follicularis"[Organism] AND "Illumina"[Platform] AND "RNA-seq"[Strategy]')
+    pme.add_argument('--species_tsv', metavar='PATH', default=None, type=str, required=False, action='store',
+                     help='default=%(default)s: TSV with a scientific_name column. '
+                          'When provided, amalgkit metadata runs species-wise batch queries and writes outputs to out_dir/metadata_specieswise/.')
+    pme.add_argument('--mode', metavar='base|title_union|title_split', default='base', type=str, required=False, action='store',
+                     choices=['base', 'title_union', 'title_split'],
+                     help='default=%(default)s: Query construction mode for --species_tsv batch execution.')
+    pme.add_argument('--title_terms', metavar='flower,leaf,root', default='flower,leaf,root', type=str, required=False, action='store',
+                     help='default=%(default)s: Comma-separated title terms used by --mode title_union/title_split when --organ_terms_tsv is not set.')
+    pme.add_argument('--organ_terms_tsv', metavar='PATH', default=None, type=str, required=False, action='store',
+                     help='default=%(default)s: Optional TSV with columns sample_group and title_terms. '
+                          'title_terms must be semicolon-separated. Used by --species_tsv with --mode title_union/title_split.')
+    pme.add_argument('--species_limit', metavar='INT', default=None, type=int, required=False, action='store',
+                     help='default=%(default)s: Optional maximum number of species to process from --species_tsv.')
+    pme.add_argument('--merge', metavar='yes|no', default='yes', type=strtobool, required=False, action='store',
+                     help='default=%(default)s: In --species_tsv mode, merge per-query metadata files into one species-level metadata table.')
     pme.add_argument('--entrez_email', metavar='aaa@bbb.com', default='', type=str, required=False, action='store',
                      help='default=%(default)s: Your email address. See https://www.ncbi.nlm.nih.gov/books/NBK25497/')
     pme.add_argument('--resolve_names', metavar='yes|no', default='yes', type=strtobool, required=False, action='store',
