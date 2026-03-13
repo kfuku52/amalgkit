@@ -16,6 +16,7 @@ DOWNLOAD_LOCK_HEARTBEAT_SECONDS = 60
 DOWNLOAD_LOCK_STALE_SECONDS = 900
 NCBI_TAXDUMP_URL = 'https://ftp.ncbi.nlm.nih.gov/pub/taxonomy/taxdump.tar.gz'
 _ETE_NCBITAXA_THREAD_LOCAL = threading.local()
+_ETE_NCBITAXA_INIT_LOCK = threading.Lock()
 
 
 def _get_thread_local_ete_ncbitaxa_cache():
@@ -406,7 +407,8 @@ def get_ete_ncbitaxa(
         cached = cache.get(cache_key)
         if cached is not None:
             return cached
-        ncbi = ncbitaxa_cls()
+        with _ETE_NCBITAXA_INIT_LOCK:
+            ncbi = ncbitaxa_cls()
         setattr(ncbi, '_amalgkit_cache_key', cache_key)
         cache[cache_key] = ncbi
         return ncbi
@@ -435,7 +437,8 @@ def get_ete_ncbitaxa(
             )
         else:
             kwargs['update'] = False
-        ncbi = ncbitaxa_cls(**kwargs)
+        with _ETE_NCBITAXA_INIT_LOCK:
+            ncbi = ncbitaxa_cls(**kwargs)
         setattr(ncbi, '_amalgkit_cache_key', cache_key)
         cache[cache_key] = ncbi
         return ncbi

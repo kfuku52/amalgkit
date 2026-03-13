@@ -1,6 +1,7 @@
 import json
 import os
 import socket
+import threading
 import time
 import warnings
 import pytest
@@ -2595,6 +2596,53 @@ class TestMetadataTaxidValidation:
         assert first is second
         assert captured['init_calls'] == 1
         assert captured['lock_calls'] == 1
+
+    def test_get_ete_ncbitaxa_serializes_custom_constructor_across_threads(self, tmp_path, monkeypatch):
+        captured = {'active': 0, 'max_active': 0, 'init_calls': 0}
+        state_lock = threading.Lock()
+
+        class DummyLock:
+            def __init__(self, lock_path, lock_label='Lock', poll_seconds=5, timeout_seconds=3600):
+                _ = (lock_path, lock_label, poll_seconds, timeout_seconds)
+
+            def __enter__(self):
+                return None
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        class RecordingNcbi:
+            def __init__(self, **kwargs):
+                _ = kwargs
+                with state_lock:
+                    captured['active'] += 1
+                    captured['max_active'] = max(captured['max_active'], captured['active'])
+                    captured['init_calls'] += 1
+                    current_active = captured['active']
+                if current_active > 1:
+                    raise RuntimeError('constructor entered concurrently')
+                time.sleep(0.05)
+                with state_lock:
+                    captured['active'] -= 1
+
+        monkeypatch.setattr('amalgkit.util.acquire_exclusive_lock', DummyLock)
+        monkeypatch.setattr('amalgkit.download_utils.ete4.NCBITaxa', RecordingNcbi)
+        monkeypatch.setattr('amalgkit.download_utils.should_refresh_custom_ete_taxonomy_db', lambda *args, **kwargs: False)
+
+        args_by_label = {
+            'first': SimpleNamespace(out_dir=str(tmp_path / 'out1'), download_dir=str(tmp_path / 'shared1')),
+            'second': SimpleNamespace(out_dir=str(tmp_path / 'out2'), download_dir=str(tmp_path / 'shared2')),
+        }
+        results, failures = run_tasks_with_optional_threads(
+            task_items=list(args_by_label),
+            task_fn=lambda label: get_ete_ncbitaxa(args=args_by_label[label]),
+            max_workers=2,
+        )
+
+        assert failures == []
+        assert len(results) == 2
+        assert captured['init_calls'] == 2
+        assert captured['max_active'] == 1
 
 
 class TestDownloadLockRecovery:
