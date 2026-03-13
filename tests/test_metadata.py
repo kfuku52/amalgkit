@@ -358,7 +358,7 @@ class TestMetadataMain:
         row_count = summary.loc[summary['name'] == 'row_count', 'value'].iloc[0]
         assert row_count == '1'
 
-    def test_rejects_missing_run_id_in_generated_metadata(self, tmp_path, monkeypatch):
+    def test_drops_missing_run_id_rows_in_generated_metadata(self, tmp_path, monkeypatch):
         args = self._args(tmp_path / 'out')
         metadata = Metadata.from_DataFrame(
             pandas.DataFrame(
@@ -368,7 +368,17 @@ class TestMetadataMain:
                         'sample_group': 'leaf',
                         'tissue': 'leaf',
                         'experiment': 'SRX1',
+                        'run': 'SRR1',
+                        'sample_title': 'leaf sample',
+                        'taxid': '3702',
+                    },
+                    {
+                        'scientific_name': 'Arabidopsis thaliana',
+                        'sample_group': 'leaf',
+                        'tissue': 'leaf',
+                        'experiment': 'SRX2',
                         'run': '',
+                        'sample_title': 'broken sample',
                         'taxid': '3702',
                     }
                 ],
@@ -379,8 +389,18 @@ class TestMetadataMain:
         monkeypatch.setattr('amalgkit.metadata.Metadata.from_xml_roots', lambda _xml_roots: metadata)
         monkeypatch.setattr('amalgkit.metadata.Metadata.add_standard_rank_taxids', lambda self, args=None: None)
 
-        with pytest.raises(ValueError, match='Missing run ID'):
-            metadata_main(args)
+        metadata_main(args)
+
+        metadata_path = tmp_path / 'out' / 'metadata' / 'metadata.tsv'
+        query_info_path = tmp_path / 'out' / 'metadata' / 'metadata.query_info.json'
+
+        df = pandas.read_csv(metadata_path, sep='\t')
+        assert df.shape[0] == 1
+        assert df.loc[0, 'run'] == 'SRR1'
+
+        query_info = json.loads(query_info_path.read_text(encoding='utf-8'))
+        assert query_info['missing_run_drop_count'] == 1
+        assert query_info['missing_run_drop_examples'][0]['sample_title'] == 'broken sample'
 
     def test_rejects_duplicate_run_id_in_generated_metadata(self, tmp_path, monkeypatch):
         args = self._args(tmp_path / 'out')

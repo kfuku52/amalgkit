@@ -161,9 +161,57 @@ def _validate_metadata_dataframe(df, context='metadata'):
     return validated
 
 
-def _write_metadata_tsv_with_validation(df, outpath, context):
+def _drop_rows_missing_run(df, context='metadata'):
+    if not isinstance(df, pandas.DataFrame):
+        raise TypeError('Expected pandas.DataFrame for {}.'.format(context))
+    if 'run' not in df.columns:
+        return df.copy(), {
+            'missing_run_drop_count': 0,
+            'missing_run_drop_examples': [],
+        }
+    cleaned = df.copy()
+    cleaned['run'] = cleaned['run'].fillna('').astype(str).str.strip()
+    missing_mask = (cleaned['run'] == '')
+    missing_count = int(missing_mask.sum())
+    examples = []
+    if missing_count > 0:
+        example_columns = [
+            col for col in ['scientific_name', 'biosample', 'experiment', 'sample_title']
+            if col in cleaned.columns
+        ]
+        for _, row in cleaned.loc[missing_mask, example_columns].head(10).iterrows():
+            example = {}
+            for col in example_columns:
+                value = row[col]
+                if pandas.isna(value):
+                    value = ''
+                example[col] = str(value).strip()
+            examples.append(example)
+        sys.stderr.write(
+            'Warning: Dropping {} metadata row(s) without run ID [{}].\n'.format(
+                missing_count,
+                context,
+            )
+        )
+        cleaned = cleaned.loc[~missing_mask, :].reset_index(drop=True)
+    return cleaned, {
+        'missing_run_drop_count': missing_count,
+        'missing_run_drop_examples': examples,
+    }
+
+
+def _write_metadata_tsv_with_validation(df, outpath, context, source_metadata=None):
     validated = _validate_metadata_dataframe(df=df, context=context)
     metadata = Metadata.from_DataFrame(validated)
+    if source_metadata is not None:
+        for attr_name in [
+            'missing_run_drop_count',
+            'missing_run_drop_examples',
+            'sample_attribute_collision_count',
+            'sample_attribute_collision_examples',
+        ]:
+            if hasattr(source_metadata, attr_name):
+                setattr(metadata, attr_name, getattr(source_metadata, attr_name))
     sanitized = sanitize_dataframe_for_tsv(metadata.df)
     with atomic_output_path(outpath=outpath, suffix='.tsv') as tmp_path:
         sanitized.to_csv(tmp_path, sep='\t', index=False)
@@ -257,6 +305,18 @@ def _build_query_info(
     payload = {}
     if isinstance(previous_info, dict):
         payload.update(previous_info)
+    missing_run_drop_count = payload.get('missing_run_drop_count')
+    missing_run_drop_examples = payload.get('missing_run_drop_examples')
+    metadata_missing_run_drop_count = getattr(metadata, 'missing_run_drop_count', None)
+    metadata_missing_run_drop_examples = getattr(metadata, 'missing_run_drop_examples', None)
+    if (not used_cached_metadata) or (missing_run_drop_count is None):
+        missing_run_drop_count = metadata_missing_run_drop_count
+    elif metadata_missing_run_drop_count not in [None, 0]:
+        missing_run_drop_count = metadata_missing_run_drop_count
+    if (not used_cached_metadata) or (missing_run_drop_examples is None):
+        missing_run_drop_examples = metadata_missing_run_drop_examples
+    elif metadata_missing_run_drop_examples not in [None, []]:
+        missing_run_drop_examples = metadata_missing_run_drop_examples
     collision_count = payload.get('sample_attribute_collision_count')
     collision_examples = payload.get('sample_attribute_collision_examples')
     metadata_collision_count = getattr(metadata, 'sample_attribute_collision_count', None)
@@ -289,6 +349,8 @@ def _build_query_info(
             'metadata_path': _realpath_or_empty(metadata_path),
             'summary_path': _realpath_or_empty(summary_path),
             'query_info_path': _realpath_or_empty(query_info_path),
+            'missing_run_drop_count': 0 if missing_run_drop_count in [None, ''] else int(missing_run_drop_count),
+            'missing_run_drop_examples': [] if missing_run_drop_examples in [None, ''] else missing_run_drop_examples,
             'sample_attribute_collision_count': collision_count,
             'sample_attribute_collision_examples': collision_examples,
         }
@@ -338,6 +400,12 @@ def _prepare_single_metadata(metadata, args):
     if getattr(args, 'resolve_names', False):
         metadata.resolve_scientific_names(args=args)
     metadata.reorder(omit_misc=False)
+    metadata.df, missing_run_stats = _drop_rows_missing_run(
+        df=metadata.df,
+        context='metadata generation',
+    )
+    metadata.missing_run_drop_count = missing_run_stats['missing_run_drop_count']
+    metadata.missing_run_drop_examples = missing_run_stats['missing_run_drop_examples']
     metadata.df = _validate_metadata_dataframe(df=metadata.df, context='metadata generation')
     return metadata
 
@@ -384,6 +452,7 @@ def _run_single_query(
             df=metadata.df,
             outpath=metadata_path,
             context='metadata {}'.format(species_name if species_name else search_term),
+            source_metadata=metadata,
         )
 
     summary_df = _build_metadata_summary(metadata.df)
@@ -536,6 +605,7 @@ def _write_species_merged_metadata(args, species_name, species_dir, species_toke
         df=merged_metadata.df,
         outpath=merged_path,
         context='merged metadata {}'.format(species_name),
+        source_metadata=merged_metadata,
     )
     merged_summary = _build_metadata_summary(merged_metadata.df)
     _write_tsv_atomic(merged_summary, merged_summary_path)
@@ -547,6 +617,20 @@ def _write_species_merged_metadata(args, species_name, species_dir, species_toke
             if info.get('record_id_count') is not None
         ]
     )
+    source_missing_run_drop_total = sum(
+        [
+            int(info.get('missing_run_drop_count', 0))
+            for info in source_query_infos
+        ]
+    )
+    source_missing_run_drop_examples = []
+    for info in source_query_infos:
+        for example in info.get('missing_run_drop_examples', []):
+            if len(source_missing_run_drop_examples) >= 10:
+                break
+            source_missing_run_drop_examples.append(example)
+        if len(source_missing_run_drop_examples) >= 10:
+            break
     merged_query_info = _build_query_info(
         args=args,
         metadata=merged_metadata,
@@ -566,6 +650,8 @@ def _write_species_merged_metadata(args, species_name, species_dir, species_toke
             'source_query_info_paths': [result['paths']['query_info_path'] for result in query_results],
             'source_metadata_paths': [result['paths']['metadata_path'] for result in query_results],
             'source_record_id_count_total': source_record_id_total,
+            'missing_run_drop_count': source_missing_run_drop_total,
+            'missing_run_drop_examples': source_missing_run_drop_examples,
         },
     )
     _write_json_atomic(merged_query_info, merged_query_info_path)
