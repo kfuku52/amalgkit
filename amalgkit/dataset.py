@@ -24,9 +24,7 @@ DATASETS = {
                 'Schizosaccharomyces_pombe_busco.tsv',
             ],
             'config': [
-                'control_term.config',
-                'exclude_keyword.config',
-                'group_attribute.config',
+                'select_rules.tsv',
             ],
         },
     },

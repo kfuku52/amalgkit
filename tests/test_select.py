@@ -9,12 +9,55 @@ from pathlib import Path
 
 from amalgkit.select import (
     apply_select_filters,
+    classify_select_text,
+    prepare_select_metadata,
+    read_select_rules,
     write_select_outputs,
-    resolve_select_config_dir,
+    resolve_select_rules_tsv,
     filter_metadata_by_sample_group,
     select_main,
 )
 from amalgkit.util import Metadata
+
+SELECT_RULE_COLUMNS = [
+    'rule_id',
+    'enabled',
+    'stage',
+    'priority',
+    'columns',
+    'pattern',
+    'action',
+    'target_column',
+    'outcome',
+    'scope_column',
+    'scope_mode',
+    'stop_on_match',
+    'note',
+]
+
+
+def write_select_rules(path, rows):
+    defaults = {
+        'rule_id': '',
+        'enabled': 'yes',
+        'stage': '',
+        'priority': '0',
+        'columns': '',
+        'pattern': '',
+        'action': '',
+        'target_column': '',
+        'outcome': '',
+        'scope_column': '',
+        'scope_mode': '',
+        'stop_on_match': 'yes',
+        'note': '',
+    }
+    normalized_rows = []
+    for row in rows:
+        normalized = defaults.copy()
+        normalized.update(row)
+        normalized_rows.append(normalized)
+    pandas.DataFrame(normalized_rows, columns=SELECT_RULE_COLUMNS).to_csv(path, sep='\t', index=False)
 
 
 # ---------------------------------------------------------------------------
@@ -136,13 +179,13 @@ class TestWriteSelectOutputs:
 
 
 class TestSelectHelpers:
-    def test_resolve_select_config_dir_inferred(self):
-        args = SimpleNamespace(out_dir='/tmp/out', config_dir='inferred')
-        assert resolve_select_config_dir(args) == '/tmp/out/config'
+    def test_resolve_select_rules_tsv_inferred(self):
+        args = SimpleNamespace(out_dir='/tmp/out', select_rules_tsv='inferred')
+        assert resolve_select_rules_tsv(args) == os.path.realpath('/tmp/out/select_rules.tsv')
 
-    def test_resolve_select_config_dir_explicit(self):
-        args = SimpleNamespace(out_dir='/tmp/out', config_dir='/tmp/custom')
-        assert resolve_select_config_dir(args) == '/tmp/custom'
+    def test_resolve_select_rules_tsv_explicit(self):
+        args = SimpleNamespace(out_dir='/tmp/out', select_rules_tsv='/tmp/custom.tsv')
+        assert resolve_select_rules_tsv(args) == os.path.realpath('/tmp/custom.tsv')
 
     def test_filter_metadata_by_sample_group(self):
         metadata = Metadata.from_DataFrame(pandas.DataFrame({
@@ -214,11 +257,91 @@ class TestSelectHelpers:
         with pytest.raises(ValueError, match='Column \"sample_group\" is required'):
             filter_metadata_by_sample_group(metadata, 'brain')
 
+    @pytest.mark.parametrize(
+        ('text', 'expected_status', 'expected_organ'),
+        [
+            ('flower', 'organ', 'flower'),
+            ('petal', 'review', ''),
+            ('corolla', 'review', ''),
+            ('anther', 'review', ''),
+            ('ovary', 'review', ''),
+            ('pistil', 'review', ''),
+            ('flower bud', 'review', ''),
+            ('petiole', 'review', ''),
+            ('root hair', 'review', ''),
+            ('hairy root', 'organ', 'root'),
+        ],
+    )
+    def test_classify_select_text_respects_whole_organ_policy(self, tmp_path, text, expected_status, expected_organ):
+        rules_path = tmp_path / 'select_rules.tsv'
+        write_select_rules(rules_path, [
+            {
+                'rule_id': 'review_hairy_root_culture',
+                'stage': 'normalize',
+                'priority': '10',
+                'columns': 'sample_group',
+                'pattern': r'\bhairy root culture\b',
+                'action': 'assign',
+                'outcome': 'review',
+            },
+            {
+                'rule_id': 'review_suborgan',
+                'stage': 'normalize',
+                'priority': '20',
+                'columns': 'sample_group',
+                'pattern': r'\b(?:petal|corolla|anther|ovary|pistil|flower[\s_-]?bud|petiole|root hair)\b',
+                'action': 'assign',
+                'outcome': 'review',
+            },
+            {
+                'rule_id': 'root_hairy_root',
+                'stage': 'normalize',
+                'priority': '100',
+                'columns': 'sample_group',
+                'pattern': r'\bhairy root\b',
+                'action': 'assign',
+                'outcome': 'root',
+            },
+            {
+                'rule_id': 'flower_whole',
+                'stage': 'normalize',
+                'priority': '110',
+                'columns': 'sample_group',
+                'pattern': r'\bflower\b',
+                'action': 'assign',
+                'outcome': 'flower',
+            },
+        ])
+        normalize_rules = [rule for rule in read_select_rules(str(rules_path)) if rule['stage'] == 'normalize']
+        result = classify_select_text(text, normalize_rules)
+        assert result['status'] == expected_status
+        assert result['organ'] == expected_organ
 
-class TestApplySelectFilters:
-    def test_preserves_grouped_source_columns_until_keyword_filters_finish(self, tmp_path):
-        (tmp_path / 'group_attribute.config').write_text('sample_group\tsample_attribute\n')
-        (tmp_path / 'exclude_keyword.config').write_text('sample_attribute\tbad_tissue\tcancer\n')
+
+class TestSelectRuleApplication:
+    def test_prepare_and_filter_metadata_applies_single_file_rules(self, tmp_path):
+        rules_path = tmp_path / 'select_rules.tsv'
+        write_select_rules(rules_path, [
+            {
+                'rule_id': 'aggregate_sample_attribute',
+                'stage': 'aggregate',
+                'priority': '10',
+                'columns': 'sample_attribute',
+                'action': 'append',
+                'target_column': 'sample_group',
+            },
+            {
+                'rule_id': 'exclude_cancer',
+                'stage': 'exclude',
+                'priority': '20',
+                'columns': 'sample_attribute',
+                'pattern': 'cancer',
+                'action': 'exclude',
+                'target_column': 'exclusion',
+                'outcome': 'bad_tissue',
+            },
+        ])
+        select_rules = read_select_rules(str(rules_path))
         metadata = Metadata.from_DataFrame(pandas.DataFrame({
             'run': ['SRR001'],
             'scientific_name': ['Species A'],
@@ -236,16 +359,27 @@ class TestApplySelectFilters:
             max_sample=10,
         )
 
-        out = apply_select_filters(metadata, args, str(tmp_path))
+        metadata = prepare_select_metadata(metadata, select_rules)
+        out = apply_select_filters(metadata, args, select_rules)
 
         assert out.df.loc[0, 'exclusion'] == 'bad_tissue'
-        assert out.df.loc[0, 'sample_group'] == 'cancer[sample_attribute]'
-        assert 'sample_attribute' not in out.df.columns
+        assert out.df.loc[0, 'sample_group'] == 'cancer'
+        assert 'sample_attribute' in out.df.columns
 
     def test_preserves_taxid_and_extra_columns_after_filtering(self, tmp_path):
-        (tmp_path / 'group_attribute.config').write_text('')
-        (tmp_path / 'exclude_keyword.config').write_text('')
-        (tmp_path / 'control_term.config').write_text('')
+        rules_path = tmp_path / 'select_rules.tsv'
+        write_select_rules(rules_path, [
+            {
+                'rule_id': 'leaf_whole',
+                'stage': 'normalize',
+                'priority': '10',
+                'columns': 'sample_attribute_tissue,sample_group',
+                'pattern': r'\bleaf\b',
+                'action': 'assign',
+                'outcome': 'leaf',
+            },
+        ])
+        select_rules = read_select_rules(str(rules_path))
         metadata = Metadata.from_DataFrame(pandas.DataFrame({
             'run': ['SRR001'],
             'scientific_name': ['Species A'],
@@ -265,7 +399,8 @@ class TestApplySelectFilters:
             max_sample=10,
         )
 
-        out = apply_select_filters(metadata, args, str(tmp_path))
+        metadata = prepare_select_metadata(metadata, select_rules)
+        out = apply_select_filters(metadata, args, select_rules)
 
         assert 'taxid_species' in out.df.columns
         assert out.df.loc[0, 'taxid_species'] == 12345
@@ -281,7 +416,7 @@ class TestSelectMain:
         out_path.write_text('not a directory')
         args = SimpleNamespace(
             out_dir=str(out_path),
-            config_dir='inferred',
+            select_rules_tsv='inferred',
             metadata='inferred',
             sample_group=None,
             min_nspots=0,
@@ -290,8 +425,8 @@ class TestSelectMain:
             max_sample=1,
         )
         monkeypatch.setattr(
-            'amalgkit.select.check_config_dir',
-            lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError('check_config_dir should not be called')),
+            'amalgkit.select.read_select_rules',
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError('read_select_rules should not be called')),
         )
 
         with pytest.raises(NotADirectoryError, match='Output path exists but is not a directory'):
@@ -301,7 +436,7 @@ class TestSelectMain:
         raw_out_dir = str(tmp_path / 'nested' / '..' / 'out')
         args = SimpleNamespace(
             out_dir=raw_out_dir,
-            config_dir='inferred',
+            select_rules_tsv='inferred',
             metadata='inferred',
             sample_group=None,
             min_nspots=0,
@@ -320,35 +455,39 @@ class TestSelectMain:
         }))
         observed = {}
 
-        def fake_check_config_dir(dir_path, mode):
-            observed['config_dir'] = dir_path
-            observed['config_mode'] = mode
+        def fake_read_select_rules(path_select_rules):
+            observed['select_rules_tsv'] = path_select_rules
+            return [{'stage': 'normalize', 'columns': ['sample_group'], 'regex': None}]
 
         def fake_load_metadata(runtime_args):
             observed['load_out_dir'] = runtime_args.out_dir
             return metadata
 
+        def fake_prepare_select_metadata(current_metadata, select_rules):
+            observed['prepare_rules'] = select_rules
+            return current_metadata
+
         def fake_apply_select_filters(current_metadata, runtime_args, dir_config):
             observed['filter_out_dir'] = runtime_args.out_dir
-            observed['filter_config_dir'] = dir_config
+            observed['filter_rules'] = dir_config
             return current_metadata
 
         def fake_write_select_outputs(**kwargs):
             observed['write_table'] = kwargs['path_metadata_table']
 
-        monkeypatch.setattr('amalgkit.select.check_config_dir', fake_check_config_dir)
+        monkeypatch.setattr('amalgkit.select.read_select_rules', fake_read_select_rules)
         monkeypatch.setattr('amalgkit.select.load_metadata', fake_load_metadata)
+        monkeypatch.setattr('amalgkit.select.prepare_select_metadata', fake_prepare_select_metadata)
         monkeypatch.setattr('amalgkit.select.apply_select_filters', fake_apply_select_filters)
         monkeypatch.setattr('amalgkit.select.write_select_outputs', fake_write_select_outputs)
 
         select_main(args)
 
         normalized_out_dir = os.path.realpath(raw_out_dir)
-        assert observed['config_dir'] == os.path.join(normalized_out_dir, 'config')
-        assert observed['config_mode'] == 'select'
+        assert observed['select_rules_tsv'] == os.path.join(normalized_out_dir, 'select_rules.tsv')
         assert observed['load_out_dir'] == normalized_out_dir
         assert observed['filter_out_dir'] == normalized_out_dir
-        assert observed['filter_config_dir'] == os.path.join(normalized_out_dir, 'config')
+        assert observed['prepare_rules'] == observed['filter_rules']
         assert observed['write_table'] == os.path.join(normalized_out_dir, 'metadata', 'metadata.tsv')
         assert args.out_dir == raw_out_dir
 
@@ -358,10 +497,36 @@ class TestSelectBatchMain:
         metadata_specieswise_dir = tmp_path / 'metadata_specieswise'
         metadata_specieswise_dir.mkdir()
         species_tsv = tmp_path / 'species.tsv'
-        config_dir = tmp_path / 'config'
-        config_dir.mkdir()
-        for filename in ['group_attribute.config', 'exclude_keyword.config', 'control_term.config']:
-            (config_dir / filename).write_text('')
+        rules_path = tmp_path / 'select_rules.tsv'
+        write_select_rules(rules_path, [
+            {
+                'rule_id': 'flower_whole',
+                'stage': 'normalize',
+                'priority': '10',
+                'columns': 'sample_attribute_tissue,sample_group',
+                'pattern': r'\bflower\b',
+                'action': 'assign',
+                'outcome': 'flower',
+            },
+            {
+                'rule_id': 'leaf_whole',
+                'stage': 'normalize',
+                'priority': '20',
+                'columns': 'sample_attribute_tissue,sample_group',
+                'pattern': r'\bleaf\b',
+                'action': 'assign',
+                'outcome': 'leaf',
+            },
+            {
+                'rule_id': 'root_whole',
+                'stage': 'normalize',
+                'priority': '30',
+                'columns': 'sample_attribute_tissue,sample_group',
+                'pattern': r'\broot\b',
+                'action': 'assign',
+                'outcome': 'root',
+            },
+        ])
 
         species_rows = pandas.DataFrame({
             'scientific_name': ['Species alpha', 'Species beta'],
@@ -407,7 +572,7 @@ class TestSelectBatchMain:
         out_dir = tmp_path / 'select_batch'
         args = SimpleNamespace(
             out_dir=str(out_dir),
-            config_dir=str(config_dir),
+            select_rules_tsv=str(rules_path),
             metadata='inferred',
             sample_group='flower,leaf,root',
             min_nspots=0,

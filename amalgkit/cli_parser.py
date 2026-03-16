@@ -113,8 +113,8 @@ def build_parser(command_handlers, command_names, version, prog=None):
     pse.add_argument('--batch_label', metavar='STR|inferred', default='inferred', type=str, required=False, action='store',
                      help='default=%(default)s: Label written to batch manifests in --species_tsv mode. '
                           '"inferred" = basename(out_dir).')
-    pse.add_argument('--config_dir', metavar='PATH', default='inferred', type=str, required=False, action='store',
-                     help='default=%(default)s: PATH to the config directory. "inferred" = out_dir/config')
+    pse.add_argument('--select_rules_tsv', metavar='PATH|inferred', default='inferred', type=str, required=False, action='store',
+                     help='default=%(default)s: PATH to select_rules.tsv. "inferred" = out_dir/select_rules.tsv')
     pse.add_argument('--min_nspots', metavar='INT', default=5000000, type=int, required=False, action='store',
                      help='default=%(default)s: Minimum number of RNA-seq reads per sample.')
     pse.add_argument('--max_sample', metavar='INT', default=99999, type=int, required=False, action='store',
@@ -471,13 +471,12 @@ def build_parser(command_handlers, command_names, version, prog=None):
     pco = subparsers.add_parser('config', help=pco_help, parents=[pp_out])
     pco.add_argument('--config', metavar='base|test|plantae|vertebrate', default='base', type=str, required=False, action='store',
                      help='default=%(default)s: Name of config dataset to be exported. Options: '
-                          '"base": a minimal set of .config files for the purpose of creating custom config files. '
-                          '"base_all": a complete set of near-empty .config files. '
-                          '"test": short animal set for testing amalgkit metadtata. '
-                          '"vertebrate" preconfigured set of config files for vertebrate animal data.'
-                          '"plantae": preconfigured set of config files for plant data.')
+                          '"base": a minimal select_rules.tsv for custom editing. '
+                          '"test": short set for testing amalgkit select. '
+                          '"vertebrate": preconfigured select_rules.tsv for vertebrate data. '
+                          '"plantae": preconfigured select_rules.tsv for plant data.')
     pco.add_argument('--overwrite', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
-                     help='default=%(default)s: allow to overwrite config files in out_dir/config/config_name/ .')
+                     help='default=%(default)s: allow to overwrite out_dir/select_rules.tsv .')
     pco.set_defaults(handler=command_handlers['config'])
 
     pda_help = 'Extracting bundled test datasets. See `amalgkit dataset -h`'

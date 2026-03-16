@@ -9,7 +9,6 @@ from amalgkit.arg_utils import clone_namespace
 from amalgkit.filter_utils import staged_output_dir
 from amalgkit.metadata_utils import Metadata, load_metadata
 from amalgkit.output_utils import atomic_write_dataframe
-from amalgkit.runtime_utils import check_config_dir
 
 SELECT_PRIORITY_COLUMNS = [
     'sample_attribute_tissue',
@@ -32,41 +31,214 @@ SELECT_IGNORE_VALUES = {
     'unknown',
 }
 
-SELECT_ORGAN_PATTERNS = {
-    'flower': re.compile(
-        r"\b(?:flower|flowers|floral|petal|petals|corolla|corollas|anther|anthers|ovary|ovaries|nectary|nectaries|"
-        r"style|styles|stigma|stigmata|pistil|pistils|pistillate|stamen|stamens|catkin|catkins|"
-        r"inflorescence|inflorescences|flower[\s_-]?bud|flower[\s_-]?buds)\b",
-        re.IGNORECASE,
-    ),
-    'leaf': re.compile(
-        r"\b(?:leaf|leaves|foliar|foliage|petiole|petioles|blade|lamina|trifoliate|leave)\b",
-        re.IGNORECASE,
-    ),
-    'root': re.compile(
-        r"\b(?:root|roots|radicle|radicles|root[\s_-]?tip|root[\s_-]?tips|primary root|root hair)\b",
-        re.IGNORECASE,
-    ),
+SELECT_RULES_FILENAME = 'select_rules.tsv'
+SELECT_RULES_REQUIRED_COLUMNS = [
+    'rule_id',
+    'enabled',
+    'stage',
+    'priority',
+    'columns',
+    'pattern',
+    'action',
+    'target_column',
+    'outcome',
+    'scope_column',
+    'scope_mode',
+    'stop_on_match',
+    'note',
+]
+SELECT_STAGE_ORDER = {
+    'aggregate': 0,
+    'normalize': 1,
+    'exclude': 2,
+    'control': 3,
 }
-
-SELECT_REVIEW_PATTERN = re.compile(
-    r"\b(?:hairy root|hairy roots|hairy root culture|nodule|nodules|shoot|shoots|stem|stems|meristem|"
-    r"whole plant|whole seedling|seedling|pseudostem|axillary bud|vegetative bud|hypocotyl|internode|"
-    r"callus|embryo|embryos|cotyledon|cotyledons|pith|aerial part|aerial parts|young shoot|young shoots|"
-    r"rootstock|inflorescence meristem|inflorescence bud)\b",
-    re.IGNORECASE,
-)
-
-SELECT_NONTARGET_PATTERN = re.compile(
-    r"\b(?:fruit|fruits|receptacle|receptacles|flesh|pulp|seed|seeds|testa|pod|pods|silique|ovule|ovules)\b",
-    re.IGNORECASE,
-)
+SELECT_NORMALIZE_ORGANS = {'flower', 'leaf', 'root'}
+SELECT_NORMALIZE_STATUSES = {'review', 'mixed', 'non_target'}
+SELECT_DEFAULT_SCOPE_COLUMN = 'bioproject'
+SELECT_DEFAULT_SCOPE_MODE = 'mark_other_rows_in_scope'
+SELECT_DEFAULT_TARGET_COLUMN = 'exclusion'
 
 
-def resolve_select_config_dir(args):
-    if args.config_dir == 'inferred':
-        return os.path.join(args.out_dir, 'config')
-    return args.config_dir
+def resolve_select_rules_tsv(args, out_dir=None):
+    base_out_dir = os.path.realpath(args.out_dir if out_dir is None else out_dir)
+    if getattr(args, 'select_rules_tsv', 'inferred') == 'inferred':
+        return os.path.join(base_out_dir, SELECT_RULES_FILENAME)
+    return os.path.realpath(args.select_rules_tsv)
+
+
+def parse_select_rule_bool(value, field_name, rule_id):
+    normalized = str(value).strip().lower()
+    if normalized in {'yes', 'true', '1'}:
+        return True
+    if normalized in {'no', 'false', '0'}:
+        return False
+    raise ValueError(
+        'Invalid {} value in select rule "{}": {} (expected yes/no).'.format(
+            field_name,
+            rule_id,
+            value,
+        )
+    )
+
+
+def parse_select_rule_priority(value, rule_id):
+    normalized = str(value).strip()
+    if normalized == '':
+        return 0
+    try:
+        return int(normalized)
+    except ValueError as exc:
+        raise ValueError(
+            'Invalid priority in select rule "{}": {}'.format(rule_id, value)
+        ) from exc
+
+
+def parse_select_rule_columns(value):
+    return [token.strip() for token in str(value).split(',') if token.strip() != '']
+
+
+def compile_select_rule_pattern(pattern, rule_id):
+    try:
+        return re.compile(str(pattern), re.IGNORECASE)
+    except re.error as exc:
+        raise ValueError(
+            'Invalid regex pattern in select rule "{}": {}'.format(rule_id, pattern)
+        ) from exc
+
+
+def read_select_rules(select_rules_tsv):
+    if not os.path.exists(select_rules_tsv):
+        raise FileNotFoundError('select rules file not found: {}'.format(select_rules_tsv))
+    if not os.path.isfile(select_rules_tsv):
+        raise IsADirectoryError('select rules path exists but is not a file: {}'.format(select_rules_tsv))
+    rules_df = pandas.read_csv(
+        select_rules_tsv,
+        sep='\t',
+        dtype=str,
+        keep_default_na=False,
+        comment='#',
+    ).fillna('')
+    missing_columns = [col for col in SELECT_RULES_REQUIRED_COLUMNS if col not in rules_df.columns]
+    if len(missing_columns) > 0:
+        raise ValueError(
+            'select_rules.tsv is missing required column(s): {}'.format(', '.join(missing_columns))
+        )
+    rules_df = rules_df.loc[:, SELECT_RULES_REQUIRED_COLUMNS].copy(deep=True)
+    for col in SELECT_RULES_REQUIRED_COLUMNS:
+        rules_df[col] = rules_df[col].astype(str).str.strip()
+    if rules_df.shape[0] == 0:
+        raise ValueError('select_rules.tsv does not contain any rules.')
+    empty_rule_ids = rules_df['rule_id'] == ''
+    if empty_rule_ids.any():
+        empty_rows = (rules_df.index[empty_rule_ids] + 2).astype(str).tolist()
+        raise ValueError(
+            'select_rules.tsv contains empty rule_id values on row(s): {}'.format(', '.join(empty_rows))
+        )
+    if rules_df['rule_id'].duplicated().any():
+        duplicated = sorted(rules_df.loc[rules_df['rule_id'].duplicated(), 'rule_id'].unique().tolist())
+        raise ValueError('Duplicate rule_id detected in select_rules.tsv: {}'.format(', '.join(duplicated)))
+    rules = []
+    for _, row in rules_df.iterrows():
+        rule_id = row['rule_id']
+        enabled = parse_select_rule_bool(row['enabled'] if row['enabled'] != '' else 'yes', 'enabled', rule_id)
+        if not enabled:
+            continue
+        stage = row['stage'].lower()
+        if stage not in SELECT_STAGE_ORDER:
+            raise ValueError(
+                'Unsupported stage in select rule "{}": {}'.format(rule_id, row['stage'])
+            )
+        priority = parse_select_rule_priority(row['priority'], rule_id)
+        columns = parse_select_rule_columns(row['columns'])
+        action = row['action'].lower()
+        target_column = row['target_column']
+        outcome = row['outcome']
+        scope_column = row['scope_column'] if row['scope_column'] != '' else SELECT_DEFAULT_SCOPE_COLUMN
+        scope_mode = row['scope_mode'] if row['scope_mode'] != '' else SELECT_DEFAULT_SCOPE_MODE
+        stop_on_match = parse_select_rule_bool(
+            row['stop_on_match'] if row['stop_on_match'] != '' else 'yes',
+            'stop_on_match',
+            rule_id,
+        )
+        if stage == 'aggregate':
+            if action != 'append':
+                raise ValueError(
+                    'Aggregate select rule "{}" must use action=append.'.format(rule_id)
+                )
+            if len(columns) == 0:
+                raise ValueError(
+                    'Aggregate select rule "{}" must define at least one source column.'.format(rule_id)
+                )
+            if target_column == '':
+                raise ValueError(
+                    'Aggregate select rule "{}" must define target_column.'.format(rule_id)
+                )
+            compiled_pattern = None
+        else:
+            if len(columns) == 0:
+                raise ValueError(
+                    'Select rule "{}" must define at least one column.'.format(rule_id)
+                )
+            if row['pattern'] == '':
+                raise ValueError(
+                    'Select rule "{}" must define pattern.'.format(rule_id)
+                )
+            compiled_pattern = compile_select_rule_pattern(row['pattern'], rule_id)
+        if stage == 'normalize':
+            if action != 'assign':
+                raise ValueError(
+                    'Normalize select rule "{}" must use action=assign.'.format(rule_id)
+                )
+            if outcome not in (SELECT_NORMALIZE_ORGANS | SELECT_NORMALIZE_STATUSES):
+                raise ValueError(
+                    'Normalize select rule "{}" has unsupported outcome: {}'.format(rule_id, outcome)
+                )
+        elif stage == 'exclude':
+            if action != 'exclude':
+                raise ValueError(
+                    'Exclude select rule "{}" must use action=exclude.'.format(rule_id)
+                )
+            if outcome == '':
+                raise ValueError(
+                    'Exclude select rule "{}" must define outcome.'.format(rule_id)
+                )
+            if target_column == '':
+                target_column = SELECT_DEFAULT_TARGET_COLUMN
+        elif stage == 'control':
+            if action != 'mark_non_control':
+                raise ValueError(
+                    'Control select rule "{}" must use action=mark_non_control.'.format(rule_id)
+                )
+            if target_column == '':
+                target_column = SELECT_DEFAULT_TARGET_COLUMN
+            if outcome == '':
+                outcome = 'non_control'
+            if scope_mode != SELECT_DEFAULT_SCOPE_MODE:
+                raise ValueError(
+                    'Control select rule "{}" has unsupported scope_mode: {}'.format(rule_id, scope_mode)
+                )
+        rules.append({
+            'rule_id': rule_id,
+            'stage': stage,
+            'priority': priority,
+            'columns': columns,
+            'pattern': row['pattern'],
+            'regex': compiled_pattern,
+            'action': action,
+            'target_column': target_column,
+            'outcome': outcome,
+            'scope_column': scope_column,
+            'scope_mode': scope_mode,
+            'stop_on_match': stop_on_match,
+            'note': row['note'],
+        })
+    if len(rules) == 0:
+        raise ValueError('select_rules.tsv does not contain any enabled rules.')
+    return sorted(
+        rules,
+        key=lambda rule: (SELECT_STAGE_ORDER[rule['stage']], rule['priority'], rule['rule_id']),
+    )
 
 
 def resolve_select_metadata_specieswise_dir(args, out_dir):
@@ -107,16 +279,253 @@ def filter_metadata_by_sample_group(metadata, sample_group_arg):
     return metadata
 
 
-def apply_select_filters(metadata, args, dir_config):
+def ensure_select_target_column(df, target_column):
+    if target_column not in df.columns:
+        df[target_column] = 'no' if target_column == 'exclusion' else ''
+    return df
+
+
+def apply_select_aggregate_rules(df, select_rules):
+    aggregate_rules = [rule for rule in select_rules if rule['stage'] == 'aggregate']
+    out_df = df.copy(deep=True)
+    for rule in aggregate_rules:
+        target_column = rule['target_column']
+        out_df = ensure_select_target_column(out_df, target_column)
+        for source_column in rule['columns']:
+            if source_column not in out_df.columns:
+                continue
+            source_series = out_df[source_column].fillna('').astype(str).str.strip()
+            if not (source_series != '').any():
+                continue
+            target_series = out_df[target_column].fillna('').astype(str).str.strip()
+            is_source_nonempty = source_series != ''
+            is_target_empty = target_series == ''
+            fill_mask = is_source_nonempty & is_target_empty
+            append_mask = is_source_nonempty & (~is_target_empty)
+            out_df.loc[fill_mask, target_column] = source_series.loc[fill_mask]
+            out_df.loc[append_mask, target_column] = (
+                target_series.loc[append_mask] + '; ' + source_series.loc[append_mask]
+            )
+    return out_df
+
+
+def build_select_normalization_columns(normalize_rules):
+    columns = []
+    for rule in normalize_rules:
+        for column in rule['columns']:
+            if column not in columns:
+                columns.append(column)
+    if 'sample_group' not in columns:
+        columns.insert(0, 'sample_group')
+    return columns
+
+
+def classify_select_text(text, normalize_rules):
+    normalized = normalize_select_value(text)
+    if normalized.lower() in SELECT_IGNORE_VALUES:
+        return {'status': 'empty', 'organ': '', 'text': normalized, 'rule_id': ''}
+    for rule in normalize_rules:
+        if not rule['regex'].search(normalized):
+            continue
+        if rule['outcome'] in SELECT_NORMALIZE_ORGANS:
+            return {
+                'status': 'organ',
+                'organ': rule['outcome'],
+                'text': normalized,
+                'rule_id': rule['rule_id'],
+            }
+        return {
+            'status': rule['outcome'],
+            'organ': '',
+            'text': normalized,
+            'rule_id': rule['rule_id'],
+        }
+    return {'status': 'unknown', 'organ': '', 'text': normalized, 'rule_id': ''}
+
+
+def normalize_select_row(row, normalize_rules, normalization_columns):
+    original_sample_group = normalize_select_value(row.get('sample_group', ''))
+    result = {
+        'sample_group_original': original_sample_group,
+        'sample_group_normalization_status': 'unchanged',
+        'sample_group_normalization_source': '',
+        'sample_group_normalization_text': '',
+        'sample_group_normalization_rule_id': '',
+    }
+    updated_sample_group = original_sample_group
+    fallback_source = ''
+    fallback_text = ''
+    for rule in normalize_rules:
+        for column in rule['columns']:
+            if column not in row.index:
+                continue
+            classification = classify_select_text(row[column], [rule])
+            status = classification['status']
+            if status == 'empty':
+                continue
+            if (fallback_text == '') and (status == 'unknown'):
+                fallback_source = column
+                fallback_text = classification['text']
+            if status == 'unknown':
+                continue
+            result['sample_group_normalization_status'] = status
+            result['sample_group_normalization_source'] = column
+            result['sample_group_normalization_text'] = classification['text']
+            result['sample_group_normalization_rule_id'] = classification['rule_id']
+            if status == 'organ':
+                updated_sample_group = classification['organ']
+            if rule['stop_on_match']:
+                return updated_sample_group, result
+    if fallback_text == '':
+        for column in normalization_columns:
+            if column not in row.index:
+                continue
+            fallback_value = normalize_select_value(row[column])
+            if fallback_value.lower() in SELECT_IGNORE_VALUES:
+                continue
+            fallback_source = column
+            fallback_text = fallback_value
+            break
+    if fallback_text != '':
+        result['sample_group_normalization_status'] = 'unknown'
+        result['sample_group_normalization_source'] = fallback_source
+        result['sample_group_normalization_text'] = fallback_text
+    return updated_sample_group, result
+
+
+def normalize_select_metadata_frame(df, select_rules):
+    normalize_rules = [rule for rule in select_rules if rule['stage'] == 'normalize']
+    normalization_columns = build_select_normalization_columns(normalize_rules)
+    out_df = df.copy(deep=True)
+    if 'sample_group' not in out_df.columns:
+        out_df['sample_group'] = ''
+    normalized_groups = []
+    statuses = []
+    sources = []
+    source_texts = []
+    original_groups = []
+    rule_ids = []
+    for _, row in out_df.iterrows():
+        updated_sample_group, result = normalize_select_row(
+            row=row,
+            normalize_rules=normalize_rules,
+            normalization_columns=normalization_columns,
+        )
+        normalized_groups.append(updated_sample_group)
+        statuses.append(result['sample_group_normalization_status'])
+        sources.append(result['sample_group_normalization_source'])
+        source_texts.append(result['sample_group_normalization_text'])
+        original_groups.append(result['sample_group_original'])
+        rule_ids.append(result['sample_group_normalization_rule_id'])
+    out_df['sample_group_original'] = original_groups
+    out_df['sample_group'] = normalized_groups
+    out_df['sample_group_normalization_status'] = statuses
+    out_df['sample_group_normalization_source'] = sources
+    out_df['sample_group_normalization_text'] = source_texts
+    out_df['sample_group_normalization_rule_id'] = rule_ids
+    return out_df
+
+
+def prepare_select_metadata(metadata, select_rules):
+    metadata.remove_specialchars()
+    metadata.df = apply_select_aggregate_rules(metadata.df, select_rules)
+    metadata.df = normalize_select_metadata_frame(metadata.df, select_rules)
+    return metadata
+
+
+def build_select_rule_match_mask(df, rule):
+    matched = pandas.Series(False, index=df.index)
+    for column in rule['columns']:
+        if column not in df.columns:
+            continue
+        text_col = df[column].fillna('').astype(str)
+        matched = matched | text_col.str.contains(rule['pattern'], regex=True, case=False).fillna(False)
+    return matched
+
+
+def resolve_select_rule_write_mask(df, target_column, candidate_mask, stop_on_match):
+    if not stop_on_match:
+        return candidate_mask
+    current_values = df[target_column].fillna('').astype(str).str.strip().str.lower()
+    return candidate_mask & current_values.isin({'', 'no'})
+
+
+def apply_select_exclude_rules(metadata, select_rules):
+    exclude_rules = [rule for rule in select_rules if rule['stage'] == 'exclude']
+    if len(exclude_rules) == 0:
+        return metadata
+    print('{}: Marking SRAs with select exclude rules'.format(datetime.datetime.now()), flush=True)
+    metadata.df = ensure_select_target_column(metadata.df, SELECT_DEFAULT_TARGET_COLUMN)
+    for rule in exclude_rules:
+        target_column = rule['target_column'] if rule['target_column'] != '' else SELECT_DEFAULT_TARGET_COLUMN
+        metadata.df = ensure_select_target_column(metadata.df, target_column)
+        matched = build_select_rule_match_mask(metadata.df, rule)
+        write_mask = resolve_select_rule_write_mask(metadata.df, target_column, matched, rule['stop_on_match'])
+        metadata.df.loc[write_mask, target_column] = rule['outcome']
+        print(
+            '{}: Applying exclude rule "{}": matched {:,}, wrote {:,}'.format(
+                datetime.datetime.now(),
+                rule['rule_id'],
+                int(matched.sum()),
+                int(write_mask.sum()),
+            ),
+            flush=True,
+        )
+    return metadata
+
+
+def apply_select_control_rules(metadata, select_rules):
+    control_rules = [rule for rule in select_rules if rule['stage'] == 'control']
+    if len(control_rules) == 0:
+        return metadata
+    print('{}: Marking SRAs with select control rules'.format(datetime.datetime.now()), flush=True)
+    metadata.df = ensure_select_target_column(metadata.df, SELECT_DEFAULT_TARGET_COLUMN)
+    for rule in control_rules:
+        scope_column = rule['scope_column'] if rule['scope_column'] != '' else SELECT_DEFAULT_SCOPE_COLUMN
+        if scope_column not in metadata.df.columns:
+            print(
+                '{}: Skipping control rule "{}" because scope column "{}" is missing'.format(
+                    datetime.datetime.now(),
+                    rule['rule_id'],
+                    scope_column,
+                ),
+                flush=True,
+            )
+            continue
+        target_column = rule['target_column'] if rule['target_column'] != '' else SELECT_DEFAULT_TARGET_COLUMN
+        metadata.df = ensure_select_target_column(metadata.df, target_column)
+        matched = build_select_rule_match_mask(metadata.df, rule)
+        scope_values = metadata.df.loc[matched, scope_column].fillna('').astype(str).str.strip()
+        num_control = 0
+        num_treatment = 0
+        for scope_value in scope_values.unique().tolist():
+            if scope_value == '':
+                continue
+            is_scope = metadata.df.loc[:, scope_column].fillna('').astype(str).str.strip() == scope_value
+            candidate_mask = is_scope & (~matched)
+            write_mask = resolve_select_rule_write_mask(metadata.df, target_column, candidate_mask, rule['stop_on_match'])
+            metadata.df.loc[write_mask, target_column] = rule['outcome']
+            num_control += int((is_scope & matched).sum())
+            num_treatment += int(write_mask.sum())
+        print(
+            '{}: Applying control rule "{}" within "{}": control {:,}, marked {:,}'.format(
+                datetime.datetime.now(),
+                rule['rule_id'],
+                scope_column,
+                num_control,
+                num_treatment,
+            ),
+            flush=True,
+        )
+    return metadata
+
+
+def apply_select_filters(metadata, args, select_rules):
     metadata.nspot_cutoff(args.min_nspots)
     metadata.mark_missing_rank(args.mark_missing_rank)
     metadata.mark_redundant_biosample(args.mark_redundant_biosamples)
-    metadata.remove_specialchars()
-    dropped_group_columns = metadata.group_attributes(dir_config, drop_source_columns=False)
-    metadata.mark_exclude_keywords(dir_config)
-    metadata.mark_treatment_terms(dir_config)
-    if len(dropped_group_columns) > 0:
-        metadata.df = metadata.df.drop(columns=[col for col in dropped_group_columns if col in metadata.df.columns])
+    metadata = apply_select_exclude_rules(metadata, select_rules)
+    metadata = apply_select_control_rules(metadata, select_rules)
     metadata.label_sampled_data(args.max_sample)
     metadata.reorder(omit_misc=False)
     return metadata
@@ -156,84 +565,6 @@ def normalize_select_value(value):
     text = text.replace('_', ' ')
     text = re.sub(r'\s+', ' ', text).strip()
     return text
-
-
-def classify_select_text(text):
-    normalized = normalize_select_value(text)
-    if normalized.lower() in SELECT_IGNORE_VALUES:
-        return {'status': 'empty', 'organ': '', 'text': normalized}
-    organ_hits = [
-        organ
-        for organ, pattern in SELECT_ORGAN_PATTERNS.items()
-        if pattern.search(normalized)
-    ]
-    if len(organ_hits) > 1:
-        return {'status': 'mixed', 'organ': '', 'text': normalized}
-    if SELECT_REVIEW_PATTERN.search(normalized):
-        return {'status': 'review', 'organ': '', 'text': normalized}
-    if len(organ_hits) == 1:
-        return {'status': 'organ', 'organ': organ_hits[0], 'text': normalized}
-    if SELECT_NONTARGET_PATTERN.search(normalized):
-        return {'status': 'non_target', 'organ': '', 'text': normalized}
-    return {'status': 'unknown', 'organ': '', 'text': normalized}
-
-
-def normalize_select_row(row):
-    original_sample_group = normalize_select_value(row.get('sample_group', ''))
-    result = {
-        'sample_group_original': original_sample_group,
-        'sample_group_normalization_status': 'unchanged',
-        'sample_group_normalization_source': '',
-        'sample_group_normalization_text': '',
-    }
-    updated_sample_group = original_sample_group
-    fallback_classification = None
-    fallback_source = ''
-    for column in SELECT_PRIORITY_COLUMNS:
-        if column not in row.index:
-            continue
-        classification = classify_select_text(row[column])
-        status = classification['status']
-        if status == 'empty':
-            continue
-        if status == 'unknown':
-            if fallback_classification is None:
-                fallback_classification = classification
-                fallback_source = column
-            continue
-        result['sample_group_normalization_status'] = status
-        result['sample_group_normalization_source'] = column
-        result['sample_group_normalization_text'] = classification['text']
-        if status == 'organ':
-            updated_sample_group = classification['organ']
-        return updated_sample_group, result
-    if fallback_classification is not None:
-        result['sample_group_normalization_status'] = fallback_classification['status']
-        result['sample_group_normalization_source'] = fallback_source
-        result['sample_group_normalization_text'] = fallback_classification['text']
-    return updated_sample_group, result
-
-
-def normalize_select_metadata_frame(df):
-    normalized_groups = []
-    statuses = []
-    sources = []
-    source_texts = []
-    original_groups = []
-    for _, row in df.iterrows():
-        updated_sample_group, result = normalize_select_row(row)
-        normalized_groups.append(updated_sample_group)
-        statuses.append(result['sample_group_normalization_status'])
-        sources.append(result['sample_group_normalization_source'])
-        source_texts.append(result['sample_group_normalization_text'])
-        original_groups.append(result['sample_group_original'])
-    out_df = df.copy(deep=True)
-    out_df['sample_group_original'] = original_groups
-    out_df['sample_group'] = normalized_groups
-    out_df['sample_group_normalization_status'] = statuses
-    out_df['sample_group_normalization_source'] = sources
-    out_df['sample_group_normalization_text'] = source_texts
-    return out_df
 
 
 def summarize_select_normalization(species_name, species_token, df, workspace_dir, metadata_path):
@@ -363,8 +694,8 @@ def load_select_species_table(path_species_tsv):
 def select_batch_main(args):
     out_dir = os.path.realpath(args.out_dir)
     os.makedirs(out_dir, exist_ok=True)
-    dir_config = resolve_select_config_dir(args)
-    check_config_dir(dir_path=dir_config, mode='select')
+    select_rules_tsv = resolve_select_rules_tsv(args, out_dir=out_dir)
+    select_rules = read_select_rules(select_rules_tsv)
     metadata_specieswise_dir = resolve_select_metadata_specieswise_dir(args, out_dir)
     if not os.path.isdir(metadata_specieswise_dir):
         raise FileNotFoundError(
@@ -397,7 +728,9 @@ def select_batch_main(args):
             keep_default_na=False,
             low_memory=False,
         ).fillna('')
-        normalized_df = normalize_select_metadata_frame(merged_df)
+        metadata = Metadata.from_DataFrame(merged_df)
+        metadata = prepare_select_metadata(metadata, select_rules)
+        normalized_df = metadata.df.copy(deep=True)
         species_out_dir = os.path.join(out_dir, species_token)
         metadata_dir = os.path.join(species_out_dir, 'metadata')
         normalized_metadata_path = os.path.join(metadata_dir, 'metadata.tsv')
@@ -411,10 +744,9 @@ def select_batch_main(args):
             )
         )
         runtime_args = clone_namespace(args, out_dir=species_out_dir)
-        metadata = Metadata.from_DataFrame(normalized_df)
         metadata_original_df = metadata.df.copy(deep=True)
         metadata = filter_metadata_by_sample_group(metadata, runtime_args.sample_group)
-        metadata = apply_select_filters(metadata, runtime_args, dir_config)
+        metadata = apply_select_filters(metadata, runtime_args, select_rules)
         path_metadata_original = os.path.join(metadata_dir, 'metadata_original.tsv')
         path_metadata_table = os.path.join(metadata_dir, 'metadata.tsv')
         write_select_outputs(
@@ -491,15 +823,16 @@ def select_main(args):
         select_batch_main(runtime_args)
         return
     metadata_dir = os.path.join(out_dir, 'metadata')
-    dir_config = resolve_select_config_dir(runtime_args)
-    check_config_dir(dir_path=dir_config, mode='select')
+    select_rules_tsv = resolve_select_rules_tsv(runtime_args, out_dir=out_dir)
+    select_rules = read_select_rules(select_rules_tsv)
     path_metadata_table = os.path.join(metadata_dir, 'metadata.tsv')
     path_metadata_original = os.path.join(metadata_dir, 'metadata_original.tsv')
 
     metadata = load_metadata(runtime_args)
+    metadata = prepare_select_metadata(metadata, select_rules)
     metadata_original_df = metadata.df.copy(deep=True)
     metadata = filter_metadata_by_sample_group(metadata, runtime_args.sample_group)
-    metadata = apply_select_filters(metadata, runtime_args, dir_config)
+    metadata = apply_select_filters(metadata, runtime_args, select_rules)
     write_select_outputs(
         path_metadata_original=path_metadata_original,
         path_metadata_table=path_metadata_table,

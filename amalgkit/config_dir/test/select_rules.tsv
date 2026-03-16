@@ -1,0 +1,651 @@
+rule_id	enabled	stage	priority	columns	pattern	action	target_column	outcome	scope_column	scope_mode	stop_on_match	note
+aggregate_age_arrayexpress_developmentalstage_1	yes	aggregate	100	arrayexpress-developmentalstage		append	age				yes	legacy aggregate arrayexpress-developmentalstage -> age
+aggregate_age_agedays_2	yes	aggregate	101	agedays		append	age				yes	legacy aggregate agedays -> age
+aggregate_age_age_classification_3	yes	aggregate	102	age_classification		append	age				yes	legacy aggregate age_classification -> age
+aggregate_age_age_description_4	yes	aggregate	103	age_description		append	age				yes	legacy aggregate age_description -> age
+aggregate_age_age_in_years_5	yes	aggregate	104	age_in_years		append	age				yes	legacy aggregate age_in_years -> age
+aggregate_age_agecat_6	yes	aggregate	105	agecat		append	age				yes	legacy aggregate agecat -> age
+aggregate_age_dev_stage_7	yes	aggregate	106	dev_stage		append	age				yes	legacy aggregate dev_stage -> age
+aggregate_age_ages_8	yes	aggregate	107	ages		append	age				yes	legacy aggregate ages -> age
+aggregate_age_development_satge_9	yes	aggregate	108	development_satge		append	age				yes	legacy aggregate development_satge -> age
+aggregate_age_development_stage_10	yes	aggregate	109	development_stage		append	age				yes	legacy aggregate development_stage -> age
+aggregate_age_developmental_stage_11	yes	aggregate	110	developmental_stage		append	age				yes	legacy aggregate developmental_stage -> age
+aggregate_age_developmentalstage_12	yes	aggregate	111	developmentalstage		append	age				yes	legacy aggregate developmentalstage -> age
+aggregate_age_differentiation_stages_13	yes	aggregate	112	differentiation_stages		append	age				yes	legacy aggregate differentiation_stages -> age
+aggregate_age_embryonic_day_14	yes	aggregate	113	embryonic_day		append	age				yes	legacy aggregate embryonic_day -> age
+aggregate_age_embryonic_stage_15	yes	aggregate	114	embryonic_stage		append	age				yes	legacy aggregate embryonic_stage -> age
+aggregate_age_female_age_16	yes	aggregate	115	female_age		append	age				yes	legacy aggregate female_age -> age
+aggregate_age_sample_comment_17	yes	aggregate	116	sample_comment		append	age				yes	legacy aggregate sample_comment -> age
+aggregate_age_stage_18	yes	aggregate	117	stage		append	age				yes	legacy aggregate stage -> age
+aggregate_age_age_at_collection_19	yes	aggregate	118	age_at_collection		append	age				yes	legacy aggregate age_at_collection -> age
+aggregate_age_age_classification_20	yes	aggregate	119	age_classification		append	age				yes	legacy aggregate age_classification -> age
+aggregate_age_age_description_21	yes	aggregate	120	age_description		append	age				yes	legacy aggregate age_description -> age
+aggregate_age_age_in_years_22	yes	aggregate	121	age_in_years		append	age				yes	legacy aggregate age_in_years -> age
+aggregate_age_age_of_collection_23	yes	aggregate	122	age_of_collection		append	age				yes	legacy aggregate age_of_collection -> age
+aggregate_age_age_of_fly_in_days_post_eclosion_24	yes	aggregate	123	age_of_fly_in_days_post_eclosion		append	age				yes	legacy aggregate age_of_fly_in_days_post_eclosion -> age
+aggregate_age_agecat_25	yes	aggregate	124	agecat		append	age				yes	legacy aggregate agecat -> age
+aggregate_age_agedays_26	yes	aggregate	125	agedays		append	age				yes	legacy aggregate agedays -> age
+aggregate_age_age_category_27	yes	aggregate	126	age{category}		append	age				yes	legacy aggregate age{category} -> age
+aggregate_age_animal_age_at_collection_28	yes	aggregate	127	animal_age_at_collection		append	age				yes	legacy aggregate animal_age_at_collection -> age
+aggregate_age_day_29	yes	aggregate	128	day		append	age				yes	legacy aggregate day -> age
+aggregate_age_arrayexpress_timepoint_30	yes	aggregate	129	arrayexpress-timepoint		append	age				yes	legacy aggregate arrayexpress-timepoint -> age
+aggregate_age_avg_age_after_second_6_months_of_open_access_31	yes	aggregate	130	avg_age_after_second_6_months_of_open_access		append	age				yes	legacy aggregate avg_age_after_second_6_months_of_open_access -> age
+aggregate_age_collection_timing_in_reference_to_e_lineage_32	yes	aggregate	131	collection_timing_in_reference_to_e_lineage		append	age				yes	legacy aggregate collection_timing_in_reference_to_e_lineage -> age
+aggregate_age_day_relative_to_weaning_33	yes	aggregate	132	day_relative_to_weaning		append	age				yes	legacy aggregate day_relative_to_weaning -> age
+aggregate_age_dev_stage_34	yes	aggregate	133	dev-stage		append	age				yes	legacy aggregate dev-stage -> age
+aggregate_age_developmental_time_35	yes	aggregate	134	developmental_time		append	age				yes	legacy aggregate developmental_time -> age
+aggregate_age_duration_36	yes	aggregate	135	duration		append	age				yes	legacy aggregate duration -> age
+aggregate_age_embryo_stage_37	yes	aggregate	136	embryo_stage		append	age				yes	legacy aggregate embryo_stage -> age
+aggregate_age_female_birth_date_38	yes	aggregate	137	female_birth_date		append	age				yes	legacy aggregate female_birth_date -> age
+aggregate_age_gestational_age_39	yes	aggregate	138	gestational_age		append	age				yes	legacy aggregate gestational_age -> age
+aggregate_age_gestational_age_at_sample_collection_40	yes	aggregate	139	gestational_age_at_sample_collection		append	age				yes	legacy aggregate gestational_age_at_sample_collection -> age
+aggregate_age_hotta_stage_41	yes	aggregate	140	hotta_stage		append	age				yes	legacy aggregate hotta_stage -> age
+aggregate_age_male_age_42	yes	aggregate	141	male_age		append	age				yes	legacy aggregate male_age -> age
+aggregate_age_male_birth_date_43	yes	aggregate	142	male_birth_date		append	age				yes	legacy aggregate male_birth_date -> age
+aggregate_age_male_collection_date_44	yes	aggregate	143	male_collection_date		append	age				yes	legacy aggregate male_collection_date -> age
+aggregate_age_male_death_date_45	yes	aggregate	144	male_death_date		append	age				yes	legacy aggregate male_death_date -> age
+aggregate_age_timepoint_46	yes	aggregate	145	timepoint		append	age				yes	legacy aggregate timepoint -> age
+aggregate_age_trimester_47	yes	aggregate	146	trimester		append	age				yes	legacy aggregate trimester -> age
+aggregate_age_birth_date_48	yes	aggregate	147	birth_date		append	age				yes	legacy aggregate birth_date -> age
+aggregate_age_collection_date_49	yes	aggregate	148	collection_date		append	age				yes	legacy aggregate collection_date -> age
+aggregate_age_death_date_50	yes	aggregate	149	death_date		append	age				yes	legacy aggregate death_date -> age
+aggregate_age_female_collection_date_51	yes	aggregate	150	female_collection_date		append	age				yes	legacy aggregate female_collection_date -> age
+aggregate_age_female_death_date_52	yes	aggregate	151	female_death_date		append	age				yes	legacy aggregate female_death_date -> age
+aggregate_age_geo_loc_name_53	yes	aggregate	152	geo_loc_name		append	age				yes	legacy aggregate geo_loc_name -> age
+aggregate_age_sample_date_54	yes	aggregate	153	sample_date		append	age				yes	legacy aggregate sample_date -> age
+aggregate_age_sampling_date_55	yes	aggregate	154	sampling_date		append	age				yes	legacy aggregate sampling_date -> age
+aggregate_age_specimen_collection_date_56	yes	aggregate	155	specimen_collection_date		append	age				yes	legacy aggregate specimen_collection_date -> age
+aggregate_age_time_blastomeres_57	yes	aggregate	156	time_-_blastomeres		append	age				yes	legacy aggregate time_-_blastomeres -> age
+aggregate_age_animal_length_58	yes	aggregate	157	animal_length		append	age				yes	legacy aggregate animal_length -> age
+aggregate_age_date_59	yes	aggregate	158	date		append	age				yes	legacy aggregate date -> age
+aggregate_age_developemental_stage_60	yes	aggregate	159	developemental_stage		append	age				yes	legacy aggregate developemental_stage -> age
+aggregate_age_colection_date_61	yes	aggregate	160	colection_date		append	age				yes	legacy aggregate colection_date -> age
+aggregate_bioproject_bioproject_id_62	yes	aggregate	161	bioproject_id		append	bioproject				yes	legacy aggregate bioproject_id -> bioproject
+aggregate_bioproject_bioprojectid_63	yes	aggregate	162	bioprojectid		append	bioproject				yes	legacy aggregate bioprojectid -> bioproject
+aggregate_protocol_extract_protocol_64	yes	aggregate	163	extract_protocol		append	protocol				yes	legacy aggregate extract_protocol -> protocol
+aggregate_protocol_female_sample_collection_protocol_65	yes	aggregate	164	female_sample_collection_protocol		append	protocol				yes	legacy aggregate female_sample_collection_protocol -> protocol
+aggregate_protocol_protocol_66	yes	aggregate	165	protocol		append	protocol				yes	legacy aggregate protocol -> protocol
+aggregate_protocol_sample_extraction_method_67	yes	aggregate	166	sample_extraction_method		append	protocol				yes	legacy aggregate sample_extraction_method -> protocol
+aggregate_protocol_experimental_protocol_68	yes	aggregate	167	experimental_protocol		append	protocol				yes	legacy aggregate experimental_protocol -> protocol
+aggregate_protocol_chemical_treatment_of_isolated_rna_69	yes	aggregate	168	chemical_treatment_of_isolated_rna		append	protocol				yes	legacy aggregate chemical_treatment_of_isolated_rna -> protocol
+aggregate_protocol_amplification_70	yes	aggregate	169	amplification		append	protocol				yes	legacy aggregate amplification -> protocol
+aggregate_protocol_assay_71	yes	aggregate	170	assay		append	protocol				yes	legacy aggregate assay -> protocol
+aggregate_protocol_experiment_target_72	yes	aggregate	171	experiment_target		append	protocol				yes	legacy aggregate experiment_target -> protocol
+aggregate_protocol_extraction_protocol_73	yes	aggregate	172	extraction_protocol		append	protocol				yes	legacy aggregate extraction_protocol -> protocol
+aggregate_protocol_fixation_74	yes	aggregate	173	fixation		append	protocol				yes	legacy aggregate fixation -> protocol
+aggregate_protocol_fraction_75	yes	aggregate	174	fraction		append	protocol				yes	legacy aggregate fraction -> protocol
+aggregate_protocol_library_selection_76	yes	aggregate	175	library_selection		append	protocol				yes	legacy aggregate library_selection -> protocol
+aggregate_protocol_library_source_77	yes	aggregate	176	library_source		append	protocol				yes	legacy aggregate library_source -> protocol
+aggregate_protocol_library_strategy_78	yes	aggregate	177	library_strategy		append	protocol				yes	legacy aggregate library_strategy -> protocol
+aggregate_protocol_library_type_79	yes	aggregate	178	library_type		append	protocol				yes	legacy aggregate library_type -> protocol
+aggregate_protocol_libraryprotocol_80	yes	aggregate	179	libraryprotocol		append	protocol				yes	legacy aggregate libraryprotocol -> protocol
+aggregate_protocol_lysis_buffer_ion_concentrations_81	yes	aggregate	180	lysis_buffer_ion_concentrations		append	protocol				yes	legacy aggregate lysis_buffer_ion_concentrations -> protocol
+aggregate_protocol_lysis_strategy_82	yes	aggregate	181	lysis_strategy		append	protocol				yes	legacy aggregate lysis_strategy -> protocol
+aggregate_protocol_male_sample_collection_protocol_83	yes	aggregate	182	male_sample_collection_protocol		append	protocol				yes	legacy aggregate male_sample_collection_protocol -> protocol
+aggregate_protocol_meoh_fixed_84	yes	aggregate	183	meoh-fixed		append	protocol				yes	legacy aggregate meoh-fixed -> protocol
+aggregate_protocol_molecule_subtype_85	yes	aggregate	184	molecule_subtype		append	protocol				yes	legacy aggregate molecule_subtype -> protocol
+aggregate_protocol_prep_type_86	yes	aggregate	185	prep_type		append	protocol				yes	legacy aggregate prep_type -> protocol
+aggregate_protocol_preperation_kit_87	yes	aggregate	186	preperation_kit		append	protocol				yes	legacy aggregate preperation_kit -> protocol
+aggregate_protocol_purification_protocol_88	yes	aggregate	187	purification_protocol		append	protocol				yes	legacy aggregate purification_protocol -> protocol
+aggregate_protocol_rin_89	yes	aggregate	188	rin		append	protocol				yes	legacy aggregate rin -> protocol
+aggregate_protocol_rna_fraction_90	yes	aggregate	189	rna_fraction		append	protocol				yes	legacy aggregate rna_fraction -> protocol
+aggregate_protocol_rna_rin_values_after_globin_depletion_91	yes	aggregate	190	rna_rin_values_after_globin_depletion		append	protocol				yes	legacy aggregate rna_rin_values_after_globin_depletion -> protocol
+aggregate_protocol_rna_rin_values_before_globin_depletion_92	yes	aggregate	191	rna_rin_values_before_globin_depletion		append	protocol				yes	legacy aggregate rna_rin_values_before_globin_depletion -> protocol
+aggregate_protocol_rna_subtype_93	yes	aggregate	192	rna_subtype		append	protocol				yes	legacy aggregate rna_subtype -> protocol
+aggregate_protocol_sample_material_94	yes	aggregate	193	sample_material		append	protocol				yes	legacy aggregate sample_material -> protocol
+aggregate_protocol_sample_storage_95	yes	aggregate	194	sample_storage		append	protocol				yes	legacy aggregate sample_storage -> protocol
+aggregate_protocol_sample_storage_processing_96	yes	aggregate	195	sample_storage_processing		append	protocol				yes	legacy aggregate sample_storage_processing -> protocol
+aggregate_protocol_small_rna_classes_97	yes	aggregate	196	small_rna_classes		append	protocol				yes	legacy aggregate small_rna_classes -> protocol
+aggregate_protocol_specimen_collection_protocol_98	yes	aggregate	197	specimen_collection_protocol		append	protocol				yes	legacy aggregate specimen_collection_protocol -> protocol
+aggregate_protocol_specimen_with_known_storage_state_99	yes	aggregate	198	specimen_with_known_storage_state		append	protocol				yes	legacy aggregate specimen_with_known_storage_state -> protocol
+aggregate_protocol_tissue_state_100	yes	aggregate	199	tissue_state		append	protocol				yes	legacy aggregate tissue_state -> protocol
+aggregate_protocol_store_cond_101	yes	aggregate	200	store_cond		append	protocol				yes	legacy aggregate store_cond -> protocol
+aggregate_protocol_datatype_description_102	yes	aggregate	201	datatype_description		append	protocol				yes	legacy aggregate datatype_description -> protocol
+aggregate_protocol_datatype_103	yes	aggregate	202	datatype		append	protocol				yes	legacy aggregate datatype -> protocol
+aggregate_protocol_monosome_enrichment_strategy_104	yes	aggregate	203	monosome_enrichment_strategy		append	protocol				yes	legacy aggregate monosome_enrichment_strategy -> protocol
+aggregate_protocol_rna_concentration_after_globin_depletion_105	yes	aggregate	204	rna_concentration_after_globin_depletion		append	protocol				yes	legacy aggregate rna_concentration_after_globin_depletion -> protocol
+aggregate_protocol_rna_concentration_before_globin_depletion_106	yes	aggregate	205	rna_concentration_before_globin_depletion		append	protocol				yes	legacy aggregate rna_concentration_before_globin_depletion -> protocol
+aggregate_protocol_rna_input_107	yes	aggregate	206	rna_input		append	protocol				yes	legacy aggregate rna_input -> protocol
+aggregate_protocol_sequencing_type_108	yes	aggregate	207	sequencing_type		append	protocol				yes	legacy aggregate sequencing_type -> protocol
+aggregate_protocol_date_run_109	yes	aggregate	208	date_run		append	protocol				yes	legacy aggregate date_run -> protocol
+aggregate_protocol_instrument_model_110	yes	aggregate	209	instrument_model		append	protocol				yes	legacy aggregate instrument_model -> protocol
+aggregate_protocol_ngs_platform_111	yes	aggregate	210	ngs_platform		append	protocol				yes	legacy aggregate ngs_platform -> protocol
+aggregate_protocol_paired_end_seq_112	yes	aggregate	211	paired_end_seq?		append	protocol				yes	legacy aggregate paired_end_seq? -> protocol
+aggregate_protocol_paired_or_single_end_113	yes	aggregate	212	paired_or_single-end		append	protocol				yes	legacy aggregate paired_or_single-end -> protocol
+aggregate_protocol_pe_read_length_114	yes	aggregate	213	pe_read_length		append	protocol				yes	legacy aggregate pe_read_length -> protocol
+aggregate_protocol_platform_115	yes	aggregate	214	platform		append	protocol				yes	legacy aggregate platform -> protocol
+aggregate_protocol_quality_116	yes	aggregate	215	quality		append	protocol				yes	legacy aggregate quality -> protocol
+aggregate_protocol_route_117	yes	aggregate	216	route		append	protocol				yes	legacy aggregate route -> protocol
+aggregate_protocol_read_len_orig_118	yes	aggregate	217	read_len_orig		append	protocol				yes	legacy aggregate read_len_orig -> protocol
+aggregate_protocol_readtype_119	yes	aggregate	218	readtype		append	protocol				yes	legacy aggregate readtype -> protocol
+aggregate_protocol_readtype_description_120	yes	aggregate	219	readtype_description		append	protocol				yes	legacy aggregate readtype_description -> protocol
+aggregate_protocol_sequencer_121	yes	aggregate	220	sequencer		append	protocol				yes	legacy aggregate sequencer -> protocol
+aggregate_protocol_sequencing_method_122	yes	aggregate	221	sequencing_method		append	protocol				yes	legacy aggregate sequencing_method -> protocol
+aggregate_protocol_extraction_123	yes	aggregate	222	extraction		append	protocol				yes	legacy aggregate extraction -> protocol
+aggregate_protocol_indrops_version_124	yes	aggregate	223	indrops_version		append	protocol				yes	legacy aggregate indrops_version -> protocol
+aggregate_protocol_minimum_counts_per_cell_threshold_used_to_remove_background_barcodes_125	yes	aggregate	224	minimum_counts_per_cell_threshold_used_to_remove_background_barcodes		append	protocol				yes	legacy aggregate minimum_counts_per_cell_threshold_used_to_remove_background_barcodes -> protocol
+aggregate_protocol_minimum_reads_per_cell_during_initial_processing_126	yes	aggregate	225	minimum_reads_per_cell_during_initial_processing		append	protocol				yes	legacy aggregate minimum_reads_per_cell_during_initial_processing -> protocol
+aggregate_protocol_spike_in_127	yes	aggregate	226	spike-in		append	protocol				yes	legacy aggregate spike-in -> protocol
+aggregate_nominal_length_mean_insert_size_128	yes	aggregate	227	mean_insert_size		append	nominal_length				yes	legacy aggregate mean_insert_size -> nominal_length
+aggregate_genotype_arrayexpress_genotype_129	yes	aggregate	228	arrayexpress-genotype		append	genotype				yes	legacy aggregate arrayexpress-genotype -> genotype
+aggregate_genotype_arrayexpress_phenotype_130	yes	aggregate	229	arrayexpress-phenotype		append	genotype				yes	legacy aggregate arrayexpress-phenotype -> genotype
+aggregate_genotype_arrayexpress_rnai_131	yes	aggregate	230	arrayexpress-rnai		append	genotype				yes	legacy aggregate arrayexpress-rnai -> genotype
+aggregate_genotype_background_strain_132	yes	aggregate	231	background_strain		append	genotype				yes	legacy aggregate background_strain -> genotype
+aggregate_genotype_breed_133	yes	aggregate	232	breed		append	genotype				yes	legacy aggregate breed -> genotype
+aggregate_genotype_cultivar_134	yes	aggregate	233	cultivar		append	genotype				yes	legacy aggregate cultivar -> genotype
+aggregate_genotype_chicken_line_135	yes	aggregate	234	chicken_line		append	genotype				yes	legacy aggregate chicken_line -> genotype
+aggregate_genotype_ecotype_136	yes	aggregate	235	ecotype		append	genotype				yes	legacy aggregate ecotype -> genotype
+aggregate_genotype_full_genotype_137	yes	aggregate	236	full_genotype		append	genotype				yes	legacy aggregate full_genotype -> genotype
+aggregate_genotype_genetic_background_138	yes	aggregate	237	genetic_background		append	genotype				yes	legacy aggregate genetic_background -> genotype
+aggregate_genotype_genetic_line_139	yes	aggregate	238	genetic_line		append	genotype				yes	legacy aggregate genetic_line -> genotype
+aggregate_genotype_genetic_modification_140	yes	aggregate	239	genetic_modification		append	genotype				yes	legacy aggregate genetic_modification -> genotype
+aggregate_genotype_genotype_variaion_141	yes	aggregate	240	genotype/variaion		append	genotype				yes	legacy aggregate genotype/variaion -> genotype
+aggregate_genotype_genotype_variation_142	yes	aggregate	241	genotype/variation		append	genotype				yes	legacy aggregate genotype/variation -> genotype
+aggregate_genotype_germline_knock_down_143	yes	aggregate	242	germline_knock-down		append	genotype				yes	legacy aggregate germline_knock-down -> genotype
+aggregate_genotype_germline_knockdown_and_other_transgenes_144	yes	aggregate	243	germline_knockdown_and_other_transgenes		append	genotype				yes	legacy aggregate germline_knockdown_and_other_transgenes -> genotype
+aggregate_genotype_isolate_145	yes	aggregate	244	isolate		append	genotype				yes	legacy aggregate isolate -> genotype
+aggregate_genotype_line_146	yes	aggregate	245	line		append	genotype				yes	legacy aggregate line -> genotype
+aggregate_genotype_phenotype_147	yes	aggregate	246	phenotype		append	genotype				yes	legacy aggregate phenotype -> genotype
+aggregate_genotype_ploidy_148	yes	aggregate	247	ploidy		append	genotype				yes	legacy aggregate ploidy -> genotype
+aggregate_genotype_population_149	yes	aggregate	248	population		append	genotype				yes	legacy aggregate population -> genotype
+aggregate_genotype_snp_allelic_state_150	yes	aggregate	249	snp_allelic_state		append	genotype				yes	legacy aggregate snp_allelic_state -> genotype
+aggregate_genotype_strain_151	yes	aggregate	250	strain		append	genotype				yes	legacy aggregate strain -> genotype
+aggregate_genotype_strain_background_152	yes	aggregate	251	strain/background		append	genotype				yes	legacy aggregate strain/background -> genotype
+aggregate_genotype_strain_origin_153	yes	aggregate	252	strain_origin		append	genotype				yes	legacy aggregate strain_origin -> genotype
+aggregate_genotype_strains_154	yes	aggregate	253	strains		append	genotype				yes	legacy aggregate strains -> genotype
+aggregate_genotype_sub_species_155	yes	aggregate	254	sub_species		append	genotype				yes	legacy aggregate sub_species -> genotype
+aggregate_genotype_subspecies_156	yes	aggregate	255	subspecies		append	genotype				yes	legacy aggregate subspecies -> genotype
+aggregate_genotype_variety_157	yes	aggregate	256	variety		append	genotype				yes	legacy aggregate variety -> genotype
+aggregate_genotype_breed_name_158	yes	aggregate	257	breed_name		append	genotype				yes	legacy aggregate breed_name -> genotype
+aggregate_genotype_arrayexpress_strainorline_159	yes	aggregate	258	arrayexpress-strainorline		append	genotype				yes	legacy aggregate arrayexpress-strainorline -> genotype
+aggregate_genotype_breed_line_160	yes	aggregate	259	breed/line		append	genotype				yes	legacy aggregate breed/line -> genotype
+aggregate_genotype_breed_type_161	yes	aggregate	260	breed_type		append	genotype				yes	legacy aggregate breed_type -> genotype
+aggregate_genotype_breeding_history_162	yes	aggregate	261	breeding_history		append	genotype				yes	legacy aggregate breeding_history -> genotype
+aggregate_genotype_breeds_163	yes	aggregate	262	breeds		append	genotype				yes	legacy aggregate breeds -> genotype
+aggregate_genotype_chicken_breed_164	yes	aggregate	263	chicken_breed		append	genotype				yes	legacy aggregate chicken_breed -> genotype
+aggregate_genotype_clonality_165	yes	aggregate	264	clonality		append	genotype				yes	legacy aggregate clonality -> genotype
+aggregate_genotype_marker_166	yes	aggregate	265	marker		append	genotype				yes	legacy aggregate marker -> genotype
+aggregate_genotype_dstim_knockdown_status_167	yes	aggregate	266	dstim_knockdown_status		append	genotype				yes	legacy aggregate dstim_knockdown_status -> genotype
+aggregate_genotype_environmental_history_168	yes	aggregate	267	environmental_history		append	genotype				yes	legacy aggregate environmental_history -> genotype
+aggregate_genotype_fly_line_169	yes	aggregate	268	fly_line		append	genotype				yes	legacy aggregate fly_line -> genotype
+aggregate_genotype_origin_170	yes	aggregate	269	origin		append	genotype				yes	legacy aggregate origin -> genotype
+aggregate_genotype_phenotype_variation_171	yes	aggregate	270	phenotype/variation		append	genotype				yes	legacy aggregate phenotype/variation -> genotype
+aggregate_genotype_pig_breed_172	yes	aggregate	271	pig_breed		append	genotype				yes	legacy aggregate pig_breed -> genotype
+aggregate_genotype_pig_type_173	yes	aggregate	272	pig_type		append	genotype				yes	legacy aggregate pig_type -> genotype
+aggregate_genotype_propagation_174	yes	aggregate	273	propagation		append	genotype				yes	legacy aggregate propagation -> genotype
+aggregate_genotype_reporter_construct_175	yes	aggregate	274	reporter_construct		append	genotype				yes	legacy aggregate reporter_construct -> genotype
+aggregate_genotype_rhesus_monkey_origin_176	yes	aggregate	275	rhesus_monkey_origin		append	genotype				yes	legacy aggregate rhesus_monkey_origin -> genotype
+aggregate_genotype_rna_interference_177	yes	aggregate	276	rna_interference		append	genotype				yes	legacy aggregate rna_interference -> genotype
+aggregate_genotype_strain_background_178	yes	aggregate	277	strain_background		append	genotype				yes	legacy aggregate strain_background -> genotype
+aggregate_genotype_strain_description_179	yes	aggregate	278	strain_description		append	genotype				yes	legacy aggregate strain_description -> genotype
+aggregate_genotype_strain_prrsv_180	yes	aggregate	279	strain_prrsv		append	genotype				yes	legacy aggregate strain_prrsv -> genotype
+aggregate_genotype_strainorline_181	yes	aggregate	280	strainorline		append	genotype				yes	legacy aggregate strainorline -> genotype
+aggregate_genotype_transfecting_vector_182	yes	aggregate	281	transfecting_vector		append	genotype				yes	legacy aggregate transfecting_vector -> genotype
+aggregate_genotype_transgenic_strain_183	yes	aggregate	282	transgenic_strain		append	genotype				yes	legacy aggregate transgenic_strain -> genotype
+aggregate_genotype_virus_group_184	yes	aggregate	283	virus_group		append	genotype				yes	legacy aggregate virus_group -> genotype
+aggregate_genotype_arrayexpress_species_185	yes	aggregate	284	arrayexpress-species		append	genotype				yes	legacy aggregate arrayexpress-species -> genotype
+aggregate_genotype_parental_strain_186	yes	aggregate	285	parental_strain		append	genotype				yes	legacy aggregate parental_strain -> genotype
+aggregate_genotype_tax_id_187	yes	aggregate	286	tax_id		append	genotype				yes	legacy aggregate tax_id -> genotype
+aggregate_genotype_transgene_188	yes	aggregate	287	transgene		append	genotype				yes	legacy aggregate transgene -> genotype
+aggregate_genotype_genotype_phenotype_189	yes	aggregate	288	genotype/phenotype		append	genotype				yes	legacy aggregate genotype/phenotype -> genotype
+aggregate_genotype_cross_190	yes	aggregate	289	cross		append	genotype				yes	legacy aggregate cross -> genotype
+aggregate_genotype_dad_191	yes	aggregate	290	dad		append	genotype				yes	legacy aggregate dad -> genotype
+aggregate_genotype_driver_192	yes	aggregate	291	driver		append	genotype				yes	legacy aggregate driver -> genotype
+aggregate_genotype_qtl_genotype_haplotype_193	yes	aggregate	292	qtl_genotype/haplotype		append	genotype				yes	legacy aggregate qtl_genotype/haplotype -> genotype
+aggregate_sex_arrayexpress_sex_194	yes	aggregate	293	arrayexpress-sex		append	sex				yes	legacy aggregate arrayexpress-sex -> sex
+aggregate_sex_gender_195	yes	aggregate	294	gender		append	sex				yes	legacy aggregate gender -> sex
+aggregate_sex_host_sex_196	yes	aggregate	295	host_sex		append	sex				yes	legacy aggregate host_sex -> sex
+aggregate_sex_cell_sex_197	yes	aggregate	296	cell_sex		append	sex				yes	legacy aggregate cell_sex -> sex
+aggregate_sex_gender_type_198	yes	aggregate	297	gender_type		append	sex				yes	legacy aggregate gender_type -> sex
+aggregate_sex_obsolete_sex_199	yes	aggregate	298	obsolete_sex		append	sex				yes	legacy aggregate obsolete_sex -> sex
+aggregate_sex_both_sexes_pooled_200	yes	aggregate	299	both_sexes_pooled		append	sex				yes	legacy aggregate both_sexes_pooled -> sex
+aggregate_tissue_arrayexpress_organismpart_201	yes	aggregate	300	arrayexpress-organismpart		append	tissue				yes	legacy aggregate arrayexpress-organismpart -> tissue
+aggregate_tissue_bio_material_202	yes	aggregate	301	bio_material		append	tissue				yes	legacy aggregate bio_material -> tissue
+aggregate_tissue_body_site_203	yes	aggregate	302	body_site		append	tissue				yes	legacy aggregate body_site -> tissue
+aggregate_tissue_biopsy_site_204	yes	aggregate	303	biopsy_site		append	tissue				yes	legacy aggregate biopsy_site -> tissue
+aggregate_tissue_brain_region_205	yes	aggregate	304	brain_region		append	tissue				yes	legacy aggregate brain_region -> tissue
+aggregate_tissue_description_206	yes	aggregate	305	description		append	tissue				yes	legacy aggregate description -> tissue
+aggregate_tissue_experiment_set_207	yes	aggregate	306	experiment_set		append	tissue				yes	legacy aggregate experiment_set -> tissue
+aggregate_tissue_explant_208	yes	aggregate	307	explant		append	tissue				yes	legacy aggregate explant -> tissue
+aggregate_tissue_isolation_source_209	yes	aggregate	308	isolation-source		append	tissue				yes	legacy aggregate isolation-source -> tissue
+aggregate_tissue_isolation_source_210	yes	aggregate	309	isolation_source		append	tissue				yes	legacy aggregate isolation_source -> tissue
+aggregate_tissue_label_211	yes	aggregate	310	label		append	tissue				yes	legacy aggregate label -> tissue
+aggregate_tissue_mixedtissues_212	yes	aggregate	311	mixedtissues		append	tissue				yes	legacy aggregate mixedtissues -> tissue
+aggregate_tissue_muscle_type_213	yes	aggregate	312	muscle_type		append	tissue				yes	legacy aggregate muscle_type -> tissue
+aggregate_tissue_organ_tissue_214	yes	aggregate	313	organ/tissue		append	tissue				yes	legacy aggregate organ/tissue -> tissue
+aggregate_tissue_organ_part_215	yes	aggregate	314	organ_part		append	tissue				yes	legacy aggregate organ_part -> tissue
+aggregate_tissue_organism_part_216	yes	aggregate	315	organism_part		append	tissue				yes	legacy aggregate organism_part -> tissue
+aggregate_tissue_organismpart_217	yes	aggregate	316	organismpart		append	tissue				yes	legacy aggregate organismpart -> tissue
+aggregate_tissue_oviduct_218	yes	aggregate	317	oviduct		append	tissue				yes	legacy aggregate oviduct -> tissue
+aggregate_tissue_region_219	yes	aggregate	318	region		append	tissue				yes	legacy aggregate region -> tissue
+aggregate_tissue_sample_name_220	yes	aggregate	319	sample_name		append	tissue				yes	legacy aggregate sample_name -> tissue
+aggregate_tissue_sample_origin_221	yes	aggregate	320	sample_origin		append	tissue				yes	legacy aggregate sample_origin -> tissue
+aggregate_tissue_sampling_position_222	yes	aggregate	321	sampling_position		append	tissue				yes	legacy aggregate sampling_position -> tissue
+aggregate_tissue_source_name_223	yes	aggregate	322	source_name		append	tissue				yes	legacy aggregate source_name -> tissue
+aggregate_tissue_tag_224	yes	aggregate	323	tag		append	tissue				yes	legacy aggregate tag -> tissue
+aggregate_tissue_tissue_type_225	yes	aggregate	324	tissue-type		append	tissue				yes	legacy aggregate tissue-type -> tissue
+aggregate_tissue_tissue_cell_226	yes	aggregate	325	tissue/cell		append	tissue				yes	legacy aggregate tissue/cell -> tissue
+aggregate_tissue_tissue_cell_type_227	yes	aggregate	326	tissue/cell_type		append	tissue				yes	legacy aggregate tissue/cell_type -> tissue
+aggregate_tissue_tissue_location_228	yes	aggregate	327	tissue_location		append	tissue				yes	legacy aggregate tissue_location -> tissue
+aggregate_tissue_tissue_or_dev_stage_229	yes	aggregate	328	tissue_or_dev_stage		append	tissue				yes	legacy aggregate tissue_or_dev_stage -> tissue
+aggregate_tissue_tissue_origin_230	yes	aggregate	329	tissue_origin		append	tissue				yes	legacy aggregate tissue_origin -> tissue
+aggregate_tissue_tissue_source_231	yes	aggregate	330	tissue_source		append	tissue				yes	legacy aggregate tissue_source -> tissue
+aggregate_tissue_tissue_type_232	yes	aggregate	331	tissue_type		append	tissue				yes	legacy aggregate tissue_type -> tissue
+aggregate_tissue_title_233	yes	aggregate	332	title		append	tissue				yes	legacy aggregate title -> tissue
+aggregate_tissue_arrayexpress_organismpart_234	yes	aggregate	333	arrayexpress-organismpart		append	tissue				yes	legacy aggregate arrayexpress-organismpart -> tissue
+aggregate_tissue_organism_part_235	yes	aggregate	334	organism_part		append	tissue				yes	legacy aggregate organism_part -> tissue
+aggregate_tissue_embryo_region_236	yes	aggregate	335	embryo_region		append	tissue				yes	legacy aggregate embryo_region -> tissue
+aggregate_tissue_organsim_part_237	yes	aggregate	336	organsim_part		append	tissue				yes	legacy aggregate organsim_part -> tissue
+aggregate_tissue_tissue_cells_238	yes	aggregate	337	tissue_/_cells		append	tissue				yes	legacy aggregate tissue_/_cells -> tissue
+aggregate_tissue_tissue_lib_239	yes	aggregate	338	tissue_lib		append	tissue				yes	legacy aggregate tissue_lib -> tissue
+aggregate_tissue_tissue_region_240	yes	aggregate	339	tissue_region		append	tissue				yes	legacy aggregate tissue_region -> tissue
+aggregate_treatment_agent_241	yes	aggregate	340	agent		append	treatment				yes	legacy aggregate agent -> treatment
+aggregate_treatment_arrayexpress_diseasestate_242	yes	aggregate	341	arrayexpress-diseasestate		append	treatment				yes	legacy aggregate arrayexpress-diseasestate -> treatment
+aggregate_treatment_arrayexpress_growthcondition_243	yes	aggregate	342	arrayexpress-growthcondition		append	treatment				yes	legacy aggregate arrayexpress-growthcondition -> treatment
+aggregate_treatment_arrayexpress_immunoprecipitate_244	yes	aggregate	343	arrayexpress-immunoprecipitate		append	treatment				yes	legacy aggregate arrayexpress-immunoprecipitate -> treatment
+aggregate_treatment_behavior_245	yes	aggregate	344	behavior		append	treatment				yes	legacy aggregate behavior -> treatment
+aggregate_treatment_biopsy_day_246	yes	aggregate	345	biopsy_day		append	treatment				yes	legacy aggregate biopsy_day -> treatment
+aggregate_treatment_challenged_with_247	yes	aggregate	346	challenged_with		append	treatment				yes	legacy aggregate challenged_with -> treatment
+aggregate_treatment_chemical_treatment_of_isolated_rna_248	yes	aggregate	347	chemical_treatment_of_isolated_rna		append	treatment				yes	legacy aggregate chemical_treatment_of_isolated_rna -> treatment
+aggregate_treatment_diet_249	yes	aggregate	348	diet		append	treatment				yes	legacy aggregate diet -> treatment
+aggregate_treatment_diet_fed_250	yes	aggregate	349	diet_fed		append	treatment				yes	legacy aggregate diet_fed -> treatment
+aggregate_treatment_dietary_group_251	yes	aggregate	350	dietary_group		append	treatment				yes	legacy aggregate dietary_group -> treatment
+aggregate_treatment_disease_252	yes	aggregate	351	disease		append	treatment				yes	legacy aggregate disease -> treatment
+aggregate_treatment_disease_status_253	yes	aggregate	352	disease_status		append	treatment				yes	legacy aggregate disease_status -> treatment
+aggregate_treatment_domestication_254	yes	aggregate	353	domestication		append	treatment				yes	legacy aggregate domestication -> treatment
+aggregate_treatment_drip_255	yes	aggregate	354	drip		append	treatment				yes	legacy aggregate drip -> treatment
+aggregate_treatment_energy_balance_256	yes	aggregate	355	energy_balance		append	treatment				yes	legacy aggregate energy_balance -> treatment
+aggregate_treatment_fed_status_257	yes	aggregate	356	fed_status		append	treatment				yes	legacy aggregate fed_status -> treatment
+aggregate_treatment_feeding_258	yes	aggregate	357	feeding		append	treatment				yes	legacy aggregate feeding -> treatment
+aggregate_treatment_feeding_type_259	yes	aggregate	358	feeding_type		append	treatment				yes	legacy aggregate feeding_type -> treatment
+aggregate_treatment_fertility_group_260	yes	aggregate	359	fertility_group		append	treatment				yes	legacy aggregate fertility_group -> treatment
+aggregate_treatment_food_261	yes	aggregate	360	food		append	treatment				yes	legacy aggregate food -> treatment
+aggregate_treatment_group_262	yes	aggregate	361	group		append	treatment				yes	legacy aggregate group -> treatment
+aggregate_treatment_health_state_263	yes	aggregate	362	health_state		append	treatment				yes	legacy aggregate health_state -> treatment
+aggregate_treatment_infect_264	yes	aggregate	363	infect		append	treatment				yes	legacy aggregate infect -> treatment
+aggregate_treatment_infected_with_265	yes	aggregate	364	infected_with		append	treatment				yes	legacy aggregate infected_with -> treatment
+aggregate_treatment_infection_266	yes	aggregate	365	infection		append	treatment				yes	legacy aggregate infection -> treatment
+aggregate_treatment_infection_status_267	yes	aggregate	366	infection_status		append	treatment				yes	legacy aggregate infection_status -> treatment
+aggregate_treatment_inoculation_268	yes	aggregate	367	inoculation		append	treatment				yes	legacy aggregate inoculation -> treatment
+aggregate_treatment_maternal_diet_269	yes	aggregate	368	maternal_diet		append	treatment				yes	legacy aggregate maternal_diet -> treatment
+aggregate_treatment_meat_quality_270	yes	aggregate	369	meat_quality		append	treatment				yes	legacy aggregate meat_quality -> treatment
+aggregate_treatment_mptp_treatment_271	yes	aggregate	370	mptp_treatment		append	treatment				yes	legacy aggregate mptp_treatment -> treatment
+aggregate_treatment_oxidation_272	yes	aggregate	371	oxidation		append	treatment				yes	legacy aggregate oxidation -> treatment
+aggregate_treatment_pathogen_273	yes	aggregate	372	pathogen		append	treatment				yes	legacy aggregate pathogen -> treatment
+aggregate_treatment_percent_marinade_uptake_at_24h_post_slaughter_274	yes	aggregate	373	percent_marinade_uptake_at_24h_post-slaughter		append	treatment				yes	legacy aggregate percent_marinade_uptake_at_24h_post-slaughter -> treatment
+aggregate_treatment_phenotype_sample_type_275	yes	aggregate	374	phenotype_sample_type		append	treatment				yes	legacy aggregate phenotype_sample_type -> treatment
+aggregate_treatment_restriction_model_276	yes	aggregate	375	restriction_model		append	treatment				yes	legacy aggregate restriction_model -> treatment
+aggregate_treatment_altitude_277	yes	aggregate	376	altitude		append	treatment				yes	legacy aggregate altitude -> treatment
+aggregate_treatment_dpi_278	yes	aggregate	377	dpi		append	treatment				yes	legacy aggregate dpi -> treatment
+aggregate_treatment_salmonella_shedding_status_279	yes	aggregate	378	salmonella_shedding_status		append	treatment				yes	legacy aggregate salmonella_shedding_status -> treatment
+aggregate_treatment_status_280	yes	aggregate	379	status		append	treatment				yes	legacy aggregate status -> treatment
+aggregate_treatment_stimulation_281	yes	aggregate	380	stimulation		append	treatment				yes	legacy aggregate stimulation -> treatment
+aggregate_treatment_stimulus_282	yes	aggregate	381	stimulus		append	treatment				yes	legacy aggregate stimulus -> treatment
+aggregate_treatment_stress_283	yes	aggregate	382	stress		append	treatment				yes	legacy aggregate stress -> treatment
+aggregate_treatment_survival_284	yes	aggregate	383	survival		append	treatment				yes	legacy aggregate survival -> treatment
+aggregate_treatment_transplant_type_285	yes	aggregate	384	transplant_type		append	treatment				yes	legacy aggregate transplant_type -> treatment
+aggregate_treatment_treated_with_286	yes	aggregate	385	treated_with		append	treatment				yes	legacy aggregate treated_with -> treatment
+aggregate_treatment_treatment_group_287	yes	aggregate	386	treatment_group		append	treatment				yes	legacy aggregate treatment_group -> treatment
+aggregate_treatment_pregnancy_outcome_288	yes	aggregate	387	pregnancy_outcome		append	treatment				yes	legacy aggregate pregnancy_outcome -> treatment
+aggregate_treatment_isol_growth_condt_289	yes	aggregate	388	isol_growth_condt		append	treatment				yes	legacy aggregate isol_growth_condt -> treatment
+aggregate_treatment_agent_290	yes	aggregate	389	agent		append	treatment				yes	legacy aggregate agent -> treatment
+aggregate_treatment_aliquot_291	yes	aggregate	390	aliquot		append	treatment				yes	legacy aggregate aliquot -> treatment
+aggregate_treatment_ammonia_concentration_292	yes	aggregate	391	ammonia_concentration		append	treatment				yes	legacy aggregate ammonia_concentration -> treatment
+aggregate_treatment_ammonia_exposure_293	yes	aggregate	392	ammonia_exposure		append	treatment				yes	legacy aggregate ammonia_exposure -> treatment
+aggregate_treatment_average_altitude_294	yes	aggregate	393	average_altitude		append	treatment				yes	legacy aggregate average_altitude -> treatment
+aggregate_treatment_blastocyst_rate_295	yes	aggregate	394	blastocyst_rate		append	treatment				yes	legacy aggregate blastocyst_rate -> treatment
+aggregate_treatment_breeding_method_296	yes	aggregate	395	breeding_method		append	treatment				yes	legacy aggregate breeding_method -> treatment
+aggregate_treatment_bull_ntm_297	yes	aggregate	396	bull_ntm		append	treatment				yes	legacy aggregate bull_ntm -> treatment
+aggregate_treatment_calcium_intake_298	yes	aggregate	397	calcium_intake		append	treatment				yes	legacy aggregate calcium_intake -> treatment
+aggregate_treatment_cell_status_299	yes	aggregate	398	cell_status		append	treatment				yes	legacy aggregate cell_status -> treatment
+aggregate_treatment_cellular_compartment_300	yes	aggregate	399	cellular_compartment		append	treatment				yes	legacy aggregate cellular_compartment -> treatment
+aggregate_treatment_chemical_301	yes	aggregate	400	chemical		append	treatment				yes	legacy aggregate chemical -> treatment
+aggregate_treatment_collection_time_302	yes	aggregate	401	collection_time		append	treatment				yes	legacy aggregate collection_time -> treatment
+aggregate_treatment_comment_303	yes	aggregate	402	comment		append	treatment				yes	legacy aggregate comment -> treatment
+aggregate_treatment_concentration_304	yes	aggregate	403	concentration		append	treatment				yes	legacy aggregate concentration -> treatment
+aggregate_treatment_condition_305	yes	aggregate	404	condition		append	treatment				yes	legacy aggregate condition -> treatment
+aggregate_treatment_culture_condition_306	yes	aggregate	405	culture_condition		append	treatment				yes	legacy aggregate culture_condition -> treatment
+aggregate_treatment_culture_collection_307	yes	aggregate	406	culture-collection		append	treatment				yes	legacy aggregate culture-collection -> treatment
+aggregate_treatment_culture_type_308	yes	aggregate	407	culture_type		append	treatment				yes	legacy aggregate culture_type -> treatment
+aggregate_treatment_custom_name_309	yes	aggregate	408	custom_name		append	treatment				yes	legacy aggregate custom_name -> treatment
+aggregate_treatment_day_of_infection_310	yes	aggregate	409	day_of_infection		append	treatment				yes	legacy aggregate day_of_infection -> treatment
+aggregate_treatment_day_post_infection_311	yes	aggregate	410	day_post_infection		append	treatment				yes	legacy aggregate day_post_infection -> treatment
+aggregate_treatment_days_at_29_c_312	yes	aggregate	411	days_at_29_c		append	treatment				yes	legacy aggregate days_at_29_c -> treatment
+aggregate_treatment_days_post_infection_313	yes	aggregate	412	days_post_infection		append	treatment				yes	legacy aggregate days_post_infection -> treatment
+aggregate_treatment_differentiation_time_314	yes	aggregate	413	differentiation_time		append	treatment				yes	legacy aggregate differentiation_time -> treatment
+aggregate_treatment_disease_stage_315	yes	aggregate	414	disease_stage		append	treatment				yes	legacy aggregate disease_stage -> treatment
+aggregate_treatment_drinking_category_316	yes	aggregate	415	drinking_category		append	treatment				yes	legacy aggregate drinking_category -> treatment
+aggregate_treatment_drug_317	yes	aggregate	416	drug		append	treatment				yes	legacy aggregate drug -> treatment
+aggregate_treatment_drug_for_synchronization_318	yes	aggregate	417	drug_for_synchronization		append	treatment				yes	legacy aggregate drug_for_synchronization -> treatment
+aggregate_treatment_egg_production_319	yes	aggregate	418	egg_production		append	treatment				yes	legacy aggregate egg_production -> treatment
+aggregate_treatment_enzyme_treatment_320	yes	aggregate	419	enzyme_treatment		append	treatment				yes	legacy aggregate enzyme_treatment -> treatment
+aggregate_treatment_exposure_time_321	yes	aggregate	420	exposure_time		append	treatment				yes	legacy aggregate exposure_time -> treatment
+aggregate_treatment_extracellular_component_322	yes	aggregate	421	extracellular_component		append	treatment				yes	legacy aggregate extracellular_component -> treatment
+aggregate_treatment_fasted_status_323	yes	aggregate	422	fasted_status		append	treatment				yes	legacy aggregate fasted_status -> treatment
+aggregate_treatment_fed_for_324	yes	aggregate	423	fed_for		append	treatment				yes	legacy aggregate fed_for -> treatment
+aggregate_treatment_feed_efficiency_325	yes	aggregate	424	feed_efficiency		append	treatment				yes	legacy aggregate feed_efficiency -> treatment
+aggregate_treatment_feeding_period_326	yes	aggregate	425	feeding_period		append	treatment				yes	legacy aggregate feeding_period -> treatment
+aggregate_treatment_feeding_treatment_327	yes	aggregate	426	feeding_treatment		append	treatment				yes	legacy aggregate feeding_treatment -> treatment
+aggregate_treatment_growth_condition_328	yes	aggregate	427	growth_condition		append	treatment				yes	legacy aggregate growth_condition -> treatment
+aggregate_treatment_growth_protocol_329	yes	aggregate	428	growth_protocol		append	treatment				yes	legacy aggregate growth_protocol -> treatment
+aggregate_treatment_harmonized_disease_score_330	yes	aggregate	429	harmonized_disease_score		append	treatment				yes	legacy aggregate harmonized_disease_score -> treatment
+aggregate_treatment_harvest_time_331	yes	aggregate	430	harvest_time		append	treatment				yes	legacy aggregate harvest_time -> treatment
+aggregate_treatment_health_state_332	yes	aggregate	431	health-state		append	treatment				yes	legacy aggregate health-state -> treatment
+aggregate_treatment_health_status_333	yes	aggregate	432	health_status		append	treatment				yes	legacy aggregate health_status -> treatment
+aggregate_treatment_health_status_at_collection_334	yes	aggregate	433	health_status_at_collection		append	treatment				yes	legacy aggregate health_status_at_collection -> treatment
+aggregate_treatment_heat_hours_335	yes	aggregate	434	heat_hours		append	treatment				yes	legacy aggregate heat_hours -> treatment
+aggregate_treatment_hematocrit_336	yes	aggregate	435	hematocrit		append	treatment				yes	legacy aggregate hematocrit -> treatment
+aggregate_treatment_hemoglobin_measurement_337	yes	aggregate	436	hemoglobin_measurement		append	treatment				yes	legacy aggregate hemoglobin_measurement -> treatment
+aggregate_treatment_host_338	yes	aggregate	437	host		append	treatment				yes	legacy aggregate host -> treatment
+aggregate_treatment_host_tissue_sampled_339	yes	aggregate	438	host_tissue_sampled		append	treatment				yes	legacy aggregate host_tissue_sampled -> treatment
+aggregate_treatment_hours_at_restrictive_temperature_340	yes	aggregate	439	hours_at_restrictive_temperature		append	treatment				yes	legacy aggregate hours_at_restrictive_temperature -> treatment
+aggregate_treatment_hp_prrsv_infection_341	yes	aggregate	440	hp-prrsv_infection		append	treatment				yes	legacy aggregate hp-prrsv_infection -> treatment
+aggregate_treatment_infection_route_342	yes	aggregate	441	infection_route		append	treatment				yes	legacy aggregate infection_route -> treatment
+aggregate_treatment_infectious_agent_343	yes	aggregate	442	infectious_agent		append	treatment				yes	legacy aggregate infectious_agent -> treatment
+aggregate_treatment_inflammatory_stimulus_treatment_344	yes	aggregate	443	inflammatory_stimulus_treatment		append	treatment				yes	legacy aggregate inflammatory_stimulus_treatment -> treatment
+aggregate_treatment_injury_345	yes	aggregate	444	injury		append	treatment				yes	legacy aggregate injury -> treatment
+aggregate_treatment_kinetics_346	yes	aggregate	445	kinetics		append	treatment				yes	legacy aggregate kinetics -> treatment
+aggregate_treatment_lens_type_347	yes	aggregate	446	lens_type		append	treatment				yes	legacy aggregate lens_type -> treatment
+aggregate_treatment_lesion_score_348	yes	aggregate	447	lesion_score		append	treatment				yes	legacy aggregate lesion_score -> treatment
+aggregate_treatment_lesion_number_349	yes	aggregate	448	lesion_number		append	treatment				yes	legacy aggregate lesion_number -> treatment
+aggregate_treatment_library_name_350	yes	aggregate	449	library_name		append	treatment				yes	legacy aggregate library_name -> treatment
+aggregate_treatment_litter_351	yes	aggregate	450	litter		append	treatment				yes	legacy aggregate litter -> treatment
+aggregate_treatment_loin_weight_group_352	yes	aggregate	451	loin_weight_group		append	treatment				yes	legacy aggregate loin_weight_group -> treatment
+aggregate_treatment_lps_exposure_353	yes	aggregate	452	lps_exposure		append	treatment				yes	legacy aggregate lps_exposure -> treatment
+aggregate_treatment_material_354	yes	aggregate	453	material		append	treatment				yes	legacy aggregate material -> treatment
+aggregate_treatment_maternal_treatment_355	yes	aggregate	454	maternal_treatment		append	treatment				yes	legacy aggregate maternal_treatment -> treatment
+aggregate_treatment_mating_status_356	yes	aggregate	455	mating_status		append	treatment				yes	legacy aggregate mating_status -> treatment
+aggregate_treatment_mock_357	yes	aggregate	456	mock		append	treatment				yes	legacy aggregate mock -> treatment
+aggregate_treatment_mode_358	yes	aggregate	457	mode		append	treatment				yes	legacy aggregate mode -> treatment
+aggregate_treatment_morpholino_359	yes	aggregate	458	morpholino		append	treatment				yes	legacy aggregate morpholino -> treatment
+aggregate_treatment_muscle_name_360	yes	aggregate	459	muscle_name		append	treatment				yes	legacy aggregate muscle_name -> treatment
+aggregate_treatment_neutralization_group_361	yes	aggregate	460	neutralization_group		append	treatment				yes	legacy aggregate neutralization_group -> treatment
+aggregate_treatment_normalized_362	yes	aggregate	461	normalized?		append	treatment				yes	legacy aggregate normalized? -> treatment
+aggregate_treatment_number_born_alive_363	yes	aggregate	462	number_born_alive		append	treatment				yes	legacy aggregate number_born_alive -> treatment
+aggregate_treatment_oxygen_concentration_364	yes	aggregate	463	oxygen_concentration		append	treatment				yes	legacy aggregate oxygen_concentration -> treatment
+aggregate_treatment_parity_number_365	yes	aggregate	464	parity_number		append	treatment				yes	legacy aggregate parity_number -> treatment
+aggregate_treatment_passage_366	yes	aggregate	465	passage		append	treatment				yes	legacy aggregate passage -> treatment
+aggregate_treatment_passage_number_367	yes	aggregate	466	passage_number		append	treatment				yes	legacy aggregate passage_number -> treatment
+aggregate_treatment_passagers_368	yes	aggregate	467	passagers		append	treatment				yes	legacy aggregate passagers -> treatment
+aggregate_treatment_passages_369	yes	aggregate	468	passages		append	treatment				yes	legacy aggregate passages -> treatment
+aggregate_treatment_phase_370	yes	aggregate	469	phase		append	treatment				yes	legacy aggregate phase -> treatment
+aggregate_treatment_pooled_371	yes	aggregate	470	pooled		append	treatment				yes	legacy aggregate pooled -> treatment
+aggregate_treatment_pregnancy_status_372	yes	aggregate	471	pregnancy_status		append	treatment				yes	legacy aggregate pregnancy_status -> treatment
+aggregate_treatment_pregnancy_time_373	yes	aggregate	472	pregnancy_time		append	treatment				yes	legacy aggregate pregnancy_time -> treatment
+aggregate_treatment_purity_374	yes	aggregate	473	purity		append	treatment				yes	legacy aggregate purity -> treatment
+aggregate_treatment_resorted_375	yes	aggregate	474	resorted		append	treatment				yes	legacy aggregate resorted -> treatment
+aggregate_treatment_rna_treatment_376	yes	aggregate	475	rna_treatment		append	treatment				yes	legacy aggregate rna_treatment -> treatment
+aggregate_treatment_sample_processing_377	yes	aggregate	476	sample_processing		append	treatment				yes	legacy aggregate sample_processing -> treatment
+aggregate_treatment_sampleid_378	yes	aggregate	477	sampleid		append	treatment				yes	legacy aggregate sampleid -> treatment
+aggregate_treatment_sampling_time_point_379	yes	aggregate	478	sampling_time_point		append	treatment				yes	legacy aggregate sampling_time_point -> treatment
+aggregate_treatment_sampling_to_preparation_interval_380	yes	aggregate	479	sampling_to_preparation_interval		append	treatment				yes	legacy aggregate sampling_to_preparation_interval -> treatment
+aggregate_treatment_selection_criteria_381	yes	aggregate	480	selection_criteria		append	treatment				yes	legacy aggregate selection_criteria -> treatment
+aggregate_treatment_serologic_response_status_382	yes	aggregate	481	serologic_response_status		append	treatment				yes	legacy aggregate serologic_response_status -> treatment
+aggregate_treatment_shear_force_383	yes	aggregate	482	shear_force		append	treatment				yes	legacy aggregate shear_force -> treatment
+aggregate_treatment_skin_color_384	yes	aggregate	483	skin_color		append	treatment				yes	legacy aggregate skin_color -> treatment
+aggregate_treatment_social_rank_385	yes	aggregate	484	social_rank		append	treatment				yes	legacy aggregate social_rank -> treatment
+aggregate_treatment_sorted_386	yes	aggregate	485	sorted		append	treatment				yes	legacy aggregate sorted -> treatment
+aggregate_treatment_specific_host_387	yes	aggregate	486	specific_host		append	treatment				yes	legacy aggregate specific_host -> treatment
+aggregate_treatment_stim_time_388	yes	aggregate	487	stim_time		append	treatment				yes	legacy aggregate stim_time -> treatment
+aggregate_treatment_stud_book_number_389	yes	aggregate	488	stud_book_number		append	treatment				yes	legacy aggregate stud_book_number -> treatment
+aggregate_treatment_superovulated_390	yes	aggregate	489	superovulated		append	treatment				yes	legacy aggregate superovulated -> treatment
+aggregate_treatment_temperature_391	yes	aggregate	490	temperature		append	treatment				yes	legacy aggregate temperature -> treatment
+aggregate_treatment_thermal_treatment_392	yes	aggregate	491	thermal_treatment		append	treatment				yes	legacy aggregate thermal_treatment -> treatment
+aggregate_treatment_time_393	yes	aggregate	492	time		append	treatment				yes	legacy aggregate time -> treatment
+aggregate_treatment_time_point_394	yes	aggregate	493	time-point		append	treatment				yes	legacy aggregate time-point -> treatment
+aggregate_treatment_time_point_395	yes	aggregate	494	time_point		append	treatment				yes	legacy aggregate time_point -> treatment
+aggregate_treatment_ega_disease_396	yes	aggregate	495	ega-disease		append	treatment				yes	legacy aggregate ega-disease -> treatment
+aggregate_treatment_time_post_infection_397	yes	aggregate	496	time_post_infection		append	treatment				yes	legacy aggregate time_post_infection -> treatment
+aggregate_treatment_timepoint_postchallenge_398	yes	aggregate	497	timepoint_postchallenge		append	treatment				yes	legacy aggregate timepoint_postchallenge -> treatment
+aggregate_treatment_training_399	yes	aggregate	498	training		append	treatment				yes	legacy aggregate training -> treatment
+aggregate_treatment_training_timepoint_400	yes	aggregate	499	training_timepoint		append	treatment				yes	legacy aggregate training_timepoint -> treatment
+aggregate_treatment_treatment_description_401	yes	aggregate	500	treatment_description		append	treatment				yes	legacy aggregate treatment_description -> treatment
+aggregate_treatment_tumor_402	yes	aggregate	501	tumor		append	treatment				yes	legacy aggregate tumor -> treatment
+aggregate_treatment_tumor_grading_403	yes	aggregate	502	tumor_grading		append	treatment				yes	legacy aggregate tumor_grading -> treatment
+aggregate_treatment_vaccine_404	yes	aggregate	503	vaccine		append	treatment				yes	legacy aggregate vaccine -> treatment
+aggregate_treatment_vaccine_administration_405	yes	aggregate	504	vaccine_administration		append	treatment				yes	legacy aggregate vaccine_administration -> treatment
+aggregate_treatment_vaccine_group_406	yes	aggregate	505	vaccine_group		append	treatment				yes	legacy aggregate vaccine_group -> treatment
+aggregate_treatment_viremia_level_407	yes	aggregate	506	viremia_level		append	treatment				yes	legacy aggregate viremia_level -> treatment
+aggregate_treatment_virus_408	yes	aggregate	507	virus		append	treatment				yes	legacy aggregate virus -> treatment
+aggregate_treatment_virus_dose_409	yes	aggregate	508	virus_dose		append	treatment				yes	legacy aggregate virus_dose -> treatment
+aggregate_treatment_d_410	yes	aggregate	509	d		append	treatment				yes	legacy aggregate d -> treatment
+aggregate_treatment_days_post_infection_411	yes	aggregate	510	days_post-infection		append	treatment				yes	legacy aggregate days_post-infection -> treatment
+aggregate_treatment_ega_subject_412	yes	aggregate	511	ega-subject		append	treatment				yes	legacy aggregate ega-subject -> treatment
+aggregate_treatment_ega_treatment_413	yes	aggregate	512	ega-treatment		append	treatment				yes	legacy aggregate ega-treatment -> treatment
+aggregate_treatment_ercc_pool_414	yes	aggregate	513	ercc_pool		append	treatment				yes	legacy aggregate ercc_pool -> treatment
+aggregate_treatment_host_taxid_415	yes	aggregate	514	host_taxid		append	treatment				yes	legacy aggregate host_taxid -> treatment
+aggregate_treatment_lymphocyte_416	yes	aggregate	515	lymphocyte		append	treatment				yes	legacy aggregate lymphocyte -> treatment
+aggregate_treatment_monocyte_417	yes	aggregate	516	monocyte		append	treatment				yes	legacy aggregate monocyte -> treatment
+aggregate_treatment_morphology_418	yes	aggregate	517	morphology		append	treatment				yes	legacy aggregate morphology -> treatment
+aggregate_treatment_neutrophil_419	yes	aggregate	518	neutrophil		append	treatment				yes	legacy aggregate neutrophil -> treatment
+aggregate_treatment_platelet_count_420	yes	aggregate	519	platelet_count		append	treatment				yes	legacy aggregate platelet_count -> treatment
+aggregate_treatment_rfi_value_421	yes	aggregate	520	rfi_value		append	treatment				yes	legacy aggregate rfi_value -> treatment
+aggregate_treatment_sample_type_422	yes	aggregate	521	sample_type		append	treatment				yes	legacy aggregate sample_type -> treatment
+aggregate_treatment_source_of_female_423	yes	aggregate	522	source_of_female		append	treatment				yes	legacy aggregate source_of_female -> treatment
+aggregate_treatment_sperm_dna_fragmentation_index_424	yes	aggregate	523	sperm_dna_fragmentation_index		append	treatment				yes	legacy aggregate sperm_dna_fragmentation_index -> treatment
+aggregate_treatment_srek_ligation_425	yes	aggregate	524	srek_ligation		append	treatment				yes	legacy aggregate srek_ligation -> treatment
+aggregate_treatment_time_hpf_426	yes	aggregate	525	time/hpf		append	treatment				yes	legacy aggregate time/hpf -> treatment
+aggregate_treatment_total_number_born_427	yes	aggregate	526	total_number_born		append	treatment				yes	legacy aggregate total_number_born -> treatment
+aggregate_treatment_treatments_428	yes	aggregate	527	treatments		append	treatment				yes	legacy aggregate treatments -> treatment
+aggregate_treatment_type_429	yes	aggregate	528	type		append	treatment				yes	legacy aggregate type -> treatment
+aggregate_treatment_weight_430	yes	aggregate	529	weight		append	treatment				yes	legacy aggregate weight -> treatment
+aggregate_treatment_arrayexpress_compound_431	yes	aggregate	530	arrayexpress-compound		append	treatment				yes	legacy aggregate arrayexpress-compound -> treatment
+aggregate_treatment_arrayexpress_dose_432	yes	aggregate	531	arrayexpress-dose		append	treatment				yes	legacy aggregate arrayexpress-dose -> treatment
+aggregate_treatment_assay_type_433	yes	aggregate	532	assay_type		append	treatment				yes	legacy aggregate assay_type -> treatment
+aggregate_treatment_backfat_thickness_of_live_mm_434	yes	aggregate	533	backfat_thickness_of_live(mm)		append	treatment				yes	legacy aggregate backfat_thickness_of_live(mm) -> treatment
+aggregate_treatment_basophil_435	yes	aggregate	534	basophil		append	treatment				yes	legacy aggregate basophil -> treatment
+aggregate_treatment_photorecptors_remaining_436	yes	aggregate	535	photorecptors_remaining		append	treatment				yes	legacy aggregate photorecptors_remaining -> treatment
+aggregate_treatment_productivity_437	yes	aggregate	536	productivity		append	treatment				yes	legacy aggregate productivity -> treatment
+aggregate_treatment_hours_days_after_injury_438	yes	aggregate	537	hours/days_after_injury		append	treatment				yes	legacy aggregate hours/days_after_injury -> treatment
+aggregate_treatment_disease_state_439	yes	aggregate	538	disease_state		append	treatment				yes	legacy aggregate disease_state -> treatment
+aggregate_treatment_mehg_exposure_440	yes	aggregate	539	mehg_exposure		append	treatment				yes	legacy aggregate mehg_exposure -> treatment
+aggregate_treatment_operation_441	yes	aggregate	540	operation		append	treatment				yes	legacy aggregate operation -> treatment
+aggregate_treatment_post_injury_time_point_442	yes	aggregate	541	post-injury_time_point		append	treatment				yes	legacy aggregate post-injury_time_point -> treatment
+aggregate_treatment_embryo_source_443	yes	aggregate	542	embryo_source		append	treatment				yes	legacy aggregate embryo_source -> treatment
+aggregate_treatment_earlobe_color_444	yes	aggregate	543	earlobe_color		append	treatment				yes	legacy aggregate earlobe_color -> treatment
+aggregate_treatment_reproductive_status_445	yes	aggregate	544	reproductive_status		append	treatment				yes	legacy aggregate reproductive_status -> treatment
+aggregate_treatment_specimen_size_446	yes	aggregate	545	specimen_size		append	treatment				yes	legacy aggregate specimen_size -> treatment
+aggregate_treatment_specimen_volume_447	yes	aggregate	546	specimen_volume		append	treatment				yes	legacy aggregate specimen_volume -> treatment
+aggregate_treatment_specimen_weight_448	yes	aggregate	547	specimen_weight		append	treatment				yes	legacy aggregate specimen_weight -> treatment
+aggregate_treatment_liver_phenotype_449	yes	aggregate	548	liver_phenotype		append	treatment				yes	legacy aggregate liver_phenotype -> treatment
+aggregate_treatment_clinical_information_450	yes	aggregate	549	clinical_information		append	treatment				yes	legacy aggregate clinical_information -> treatment
+aggregate_treatment_oestrous_peroid_451	yes	aggregate	550	oestrous_peroid		append	treatment				yes	legacy aggregate oestrous_peroid -> treatment
+aggregate_treatment_secondary_description_452	yes	aggregate	551	secondary_description		append	treatment				yes	legacy aggregate secondary_description -> treatment
+aggregate_treatment_finishing_diet_453	yes	aggregate	552	finishing_diet		append	treatment				yes	legacy aggregate finishing_diet -> treatment
+aggregate_treatment_gestation_duration_454	yes	aggregate	553	gestation_duration		append	treatment				yes	legacy aggregate gestation_duration -> treatment
+aggregate_treatment_growth_rate_455	yes	aggregate	554	growth_rate		append	treatment				yes	legacy aggregate growth_rate -> treatment
+aggregate_treatment_heart_weight_456	yes	aggregate	555	heart_weight		append	treatment				yes	legacy aggregate heart_weight -> treatment
+aggregate_treatment_information_457	yes	aggregate	556	information		append	treatment				yes	legacy aggregate information -> treatment
+aggregate_treatment_light_treatment_458	yes	aggregate	557	light_treatment		append	treatment				yes	legacy aggregate light_treatment -> treatment
+aggregate_treatment_maternal_food_459	yes	aggregate	558	maternal_food		append	treatment				yes	legacy aggregate maternal_food -> treatment
+aggregate_treatment_number_of_passages_460	yes	aggregate	559	number_of_passages		append	treatment				yes	legacy aggregate number_of_passages -> treatment
+aggregate_treatment_paternal_experience_461	yes	aggregate	560	paternal_experience		append	treatment				yes	legacy aggregate paternal_experience -> treatment
+aggregate_treatment_personal_experience_462	yes	aggregate	561	personal_experience		append	treatment				yes	legacy aggregate personal_experience -> treatment
+aggregate_treatment_physiological_conditions_463	yes	aggregate	562	physiological_conditions		append	treatment				yes	legacy aggregate physiological_conditions -> treatment
+aggregate_treatment_rfi_group_464	yes	aggregate	563	rfi_group		append	treatment				yes	legacy aggregate rfi_group -> treatment
+aggregate_treatment_sample_role_465	yes	aggregate	564	sample_role		append	treatment				yes	legacy aggregate sample_role -> treatment
+aggregate_treatment_slaughter_weight_466	yes	aggregate	565	slaughter_weight		append	treatment				yes	legacy aggregate slaughter_weight -> treatment
+aggregate_treatment_target_467	yes	aggregate	566	target		append	treatment				yes	legacy aggregate target -> treatment
+aggregate_treatment_target_source_468	yes	aggregate	567	target_source		append	treatment				yes	legacy aggregate target_source -> treatment
+aggregate_treatment_temperature_regimen_469	yes	aggregate	568	temperature_regimen		append	treatment				yes	legacy aggregate temperature_regimen -> treatment
+normalize_review_hairy_root_culture	yes	normalize	10	sample_attribute_tissue,tissue,sample_group,sample_title,source_name,sample_description,exp_title,design	\bhairy root culture\b	assign		review			yes	culture-derived root material is review
+normalize_review_root_hair	yes	normalize	20	sample_attribute_tissue,tissue,sample_group,sample_title,source_name,sample_description,exp_title,design	\broot hair\b	assign		review			yes	partial root structure is review
+normalize_review_floral_suborgan	yes	normalize	30	sample_attribute_tissue,tissue,sample_group,sample_title,source_name,sample_description,exp_title,design	\b(?:petal|petals|corolla|corollas|anther|anthers|ovary|ovaries|pistil|pistils)\b	assign		review			yes	floral sub-organs are review
+normalize_review_flower_bud	yes	normalize	40	sample_attribute_tissue,tissue,sample_group,sample_title,source_name,sample_description,exp_title,design	\b(?:flower[\s_-]?bud|flower[\s_-]?buds)\b	assign		review			yes	developmental flower-stage labels are review
+normalize_review_petiole	yes	normalize	50	sample_attribute_tissue,tissue,sample_group,sample_title,source_name,sample_description,exp_title,design	\b(?:petiole|petioles)\b	assign		review			yes	leaf sub-organs are review
+normalize_review_structure	yes	normalize	60	sample_attribute_tissue,tissue,sample_group,sample_title,source_name,sample_description,exp_title,design	\b(?:nodule|nodules|shoot|shoots|stem|stems|meristem|whole plant|whole seedling|seedling|pseudostem|axillary bud|vegetative bud|hypocotyl|internode|callus|embryo|embryos|cotyledon|cotyledons|pith|aerial part|aerial parts|young shoot|young shoots|rootstock|inflorescence meristem|inflorescence bud)\b	assign		review			yes	non-target or immature structures are review
+normalize_non_target_reproductive	yes	normalize	70	sample_attribute_tissue,tissue,sample_group,sample_title,source_name,sample_description,exp_title,design	\b(?:fruit|fruits|receptacle|receptacles|flesh|pulp|seed|seeds|testa|pod|pods|silique|ovule|ovules)\b	assign		non_target			yes	non-target organs
+normalize_root_hairy_root	yes	normalize	100	sample_attribute_tissue,tissue,sample_group,sample_title,source_name,sample_description,exp_title,design	\b(?:hairy root|hairy roots)\b	assign		root			yes	hairy root is accepted as root
+normalize_flower_whole	yes	normalize	110	sample_attribute_tissue,tissue,sample_group,sample_title,source_name,sample_description,exp_title,design	\b(?:flower|flowers|floral|inflorescence|inflorescences|catkin|catkins)\b	assign		flower			yes	whole-organ flower labels
+normalize_leaf_whole	yes	normalize	120	sample_attribute_tissue,tissue,sample_group,sample_title,source_name,sample_description,exp_title,design	\b(?:leaf|leaves|foliar|foliage|blade|lamina|trifoliate|leave)\b	assign		leaf			yes	whole-organ leaf labels
+normalize_root_whole	yes	normalize	130	sample_attribute_tissue,tissue,sample_group,sample_title,source_name,sample_description,exp_title,design	\b(?:root|roots|radicle|radicles|root[\s_-]?tip|root[\s_-]?tips|primary root)\b	assign		root			yes	whole-organ root labels
+exclude_single_cell_1	yes	exclude	1000	exp_title,study_title,design,sample_title,sample_description,lib_name,experiment,treatment,protocol,age	single cell	exclude	exclusion	single_cell			yes	legacy exclude single_cell
+exclude_immunoprecipitation_2	yes	exclude	1001	exp_title,study_title,design,sample_title,sample_description,lib_name,protocol	RipSeq	exclude	exclusion	immunoprecipitation			yes	legacy exclude immunoprecipitation
+exclude_immunoprecipitation_3	yes	exclude	1002	exp_title,study_title,design,sample_title,sample_description,lib_name,protocol	chrom_RNAseq	exclude	exclusion	immunoprecipitation			yes	legacy exclude immunoprecipitation
+exclude_rnai_4	yes	exclude	1003	exp_title,study_title,design,sample_title,sample_description,lib_name,protocol	RNAi	exclude	exclusion	RNAi			yes	legacy exclude RNAi
+exclude_small_rna_5	yes	exclude	1004	exp_title,study_title,design,sample_title,sample_description,lib_name,protocol	shRNA RNA-seq	exclude	exclusion	small_RNA			yes	legacy exclude small_RNA
+exclude_small_rna_6	yes	exclude	1005	exp_title,study_title,design,sample_title,sample_description,lib_name,protocol	piRNA	exclude	exclusion	small_RNA			yes	legacy exclude small_RNA
+exclude_small_rna_7	yes	exclude	1006	exp_title,study_title,design,sample_title,sample_description,lib_name,protocol	smRNA	exclude	exclusion	small_RNA			yes	legacy exclude small_RNA
+exclude_cage_8	yes	exclude	1007	exp_title,study_title,design,sample_title,sample_description,lib_name,protocol	CAGE	exclude	exclusion	CAGE			yes	legacy exclude CAGE
+exclude_treatment_9	yes	exclude	1008	exp_title,study_title,design,sample_title,sample_description,lib_name,protocol,treatment	^exposed to	exclude	exclusion	treatment			yes	legacy exclude treatment
+exclude_small_rna_10	yes	exclude	1009	treatment,protocol	miRNA	exclude	exclusion	small_RNA			yes	legacy exclude small_RNA
+exclude_small_rna_11	yes	exclude	1010	treatment,protocol	sRNA	exclude	exclusion	small_RNA			yes	legacy exclude small_RNA
+exclude_treatment_12	yes	exclude	1011	treatment,protocol	uranium	exclude	exclusion	treatment			yes	legacy exclude treatment
+exclude_embryonic_13	yes	exclude	1012	age	embryo	exclude	exclusion	embryonic			yes	legacy exclude embryonic
+exclude_embryonic_14	yes	exclude	1013	age	somite	exclude	exclusion	embryonic			yes	legacy exclude embryonic
+exclude_embryonic_15	yes	exclude	1014	age	fertiliz.*	exclude	exclusion	embryonic			yes	legacy exclude embryonic
+exclude_embryonic_16	yes	exclude	1015	age	oocyte	exclude	exclusion	embryonic			yes	legacy exclude embryonic
+exclude_transgenic_17	yes	exclude	1016	genotype	foxn3	exclude	exclusion	transgenic			yes	legacy exclude transgenic
+control_mock_1	yes	control	2000	treatment	mock	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_control_2	yes	control	2001	treatment	control	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_cntl_3	yes	control	2002	treatment	cntl	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_con_d_4	yes	control	2003	treatment	con\d	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_con_5	yes	control	2004	treatment	con_	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_cont_b_6	yes	control	2005	treatment	cont\b	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_cont_7	yes	control	2006	treatment	cont_	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_kontrol_8	yes	control	2007	treatment	kontrol	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_contral_9	yes	control	2008	treatment	contral	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_contron_10	yes	control	2009	treatment	contron	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_bck_11	yes	control	2010	treatment	\bCK	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_none_12	yes	control	2011	treatment	none	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_normal_13	yes	control	2012	treatment	normal	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_natural_14	yes	control	2013	treatment	natural	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_standard_15	yes	control	2014	treatment	standard	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_optimal_16	yes	control	2015	treatment	optimal	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_sufficient_17	yes	control	2016	treatment	sufficient	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_no_s_w_s_treat_18	yes	control	2017	treatment	no(?:\s+\w+)?\s+treat	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_non_treat_19	yes	control	2018	treatment	non-treat	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_non_treat_20	yes	control	2019	treatment	non- treat	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_nontreat_21	yes	control	2020	treatment	nontreat	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_untreat_22	yes	control	2021	treatment	untreat	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_without_23	yes	control	2022	treatment	without	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_no_24	yes	control	2023	treatment	^no$	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_ad_libitum_25	yes	control	2024	treatment	Ad Libitum	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_in_the_absence_of_26	yes	control	2025	treatment	in the absence of	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_thermoneutral_27	yes	control	2026	treatment	Thermoneutral	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_21_oxygen_concentration_28	yes	control	2027	treatment	21%[oxygen_concentration]	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_dmso_29	yes	control	2028	treatment	DMSO	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_b0h_30	yes	control	2029	treatment	\b0h	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_b0_h_31	yes	control	2030	treatment	\b0 h	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_0h_32	yes	control	2031	treatment	_0h	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_b0day_33	yes	control	2032	treatment	\b0day	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_b0_day_34	yes	control	2033	treatment	\b0 day	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_b0m_35	yes	control	2034	treatment	\b0m	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_b0_m_36	yes	control	2035	treatment	\b0 m	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_b0_dpi_37	yes	control	2036	treatment	\b0 dpi	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_0_ppm_38	yes	control	2037	treatment	^0 ppm	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_wild_39	yes	control	2038	treatment	wild	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_uninfected_40	yes	control	2039	treatment	uninfected	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_un_infected_41	yes	control	2040	treatment	un-infected	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_non_infected_42	yes	control	2041	treatment	non infected	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_non_inifected_43	yes	control	2042	treatment	non-inifected	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_no_inoculation_44	yes	control	2043	treatment	no inoculation	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_un_inoculated_45	yes	control	2044	treatment	un-inoculated	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_no_disease_46	yes	control	2045	treatment	no disease	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_non_diseased_47	yes	control	2046	treatment	non-diseased	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_unwound_48	yes	control	2047	treatment	unwound	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_un_grazing_49	yes	control	2048	treatment	un-grazing	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_healthy_50	yes	control	2049	treatment	healthy	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_stress_free_51	yes	control	2050	treatment	stress-free	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_nostress_52	yes	control	2051	treatment	nostress	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_non_stress_53	yes	control	2052	treatment	non-stress	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_unstressed_54	yes	control	2053	treatment	unstressed	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_non_s_w_s_stress_55	yes	control	2054	treatment	non(?:\s+\w+)?\s+stress	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_room_temperature_56	yes	control	2055	treatment	room temperature	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_ambient_57	yes	control	2056	treatment	ambient	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_water_w_b_s_deficit_58	yes	control	2057	treatment	water\w*\b(?!\s*deficit)	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_h2o_w_b_s_deficit_59	yes	control	2058	treatment	H2O\w*\b(?!\s*deficit)	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_wild_60	yes	control	2059	genotype	wild	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_n2_61	yes	control	2060	genotype	N2	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_oregonr_62	yes	control	2061	genotype	OregonR	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_oregon_r_63	yes	control	2062	genotype	Oregon R	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_canton_s_64	yes	control	2063	genotype	Canton S	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_canton_s_65	yes	control	2064	genotype	Canton-S	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_y_w_66	yes	control	2065	genotype	y w	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_yw_67	yes	control	2066	genotype	yw	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_wt_68	yes	control	2067	genotype	wt	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_rule_69	yes	control	2068	genotype	\+\/\+	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_wild_70	yes	control	2069	sample_title	wild	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_bwt_71	yes	control	2070	sample_title	\bWT	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_control_72	yes	control	2071	sample_title	control	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_con_73	yes	control	2072	sample_title	CON_	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_ck_74	yes	control	2073	sample_title	CK_	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_ck_75	yes	control	2074	sample_title	CK-	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_ck_d_76	yes	control	2075	sample_title	CK\d	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_bck_b_77	yes	control	2076	sample_title	\bCK\b	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_normal_78	yes	control	2077	sample_title	normal	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_non_treat_79	yes	control	2078	sample_title	non-treat	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_non_inoculated_80	yes	control	2079	sample_title	non-inoculated	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_ungrazed_81	yes	control	2080	sample_title	ungrazed	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_healthy_82	yes	control	2081	sample_title	healthy	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_water_83	yes	control	2082	sample_title	water	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_h2o_84	yes	control	2083	sample_title	H2O	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_b0dpi_85	yes	control	2084	sample_title	\b0dpi	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_control_86	yes	control	2085	sample_description	control	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_mock_87	yes	control	2086	sample_description	mock	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_no_treatment_88	yes	control	2087	sample_description	no treatment	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_non_infected_89	yes	control	2088	sample_description	non-infected	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_before_90	yes	control	2089	sample_description	before	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_wild_91	yes	control	2090	sample_description	wild	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_control_92	yes	control	2091	lib_name	control	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_ck_93	yes	control	2092	lib_name	CK_	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_ck_94	yes	control	2093	lib_name	CK-	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_ck_d_95	yes	control	2094	lib_name	CK\d	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_bck_b_96	yes	control	2095	lib_name	\bCK\b	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_bcon_97	yes	control	2096	lib_name	\bcon-	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_ctrl_98	yes	control	2097	lib_name	ctrl	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_mock_99	yes	control	2098	lib_name	mock	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_wild_100	yes	control	2099	lib_name	wild	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_bwt_101	yes	control	2100	lib_name	\bWT	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_d_0h_102	yes	control	2101	lib_name	(?<!\d)0h	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_control_103	yes	control	2102	exp_title	control	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_con_104	yes	control	2103	exp_title	CON_	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_ck_105	yes	control	2104	exp_title	CK_	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_ck_106	yes	control	2105	exp_title	CK-	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_ck_d_107	yes	control	2106	exp_title	CK\d	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_bck_b_108	yes	control	2107	exp_title	\bCK\b	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_untreated_109	yes	control	2108	exp_title	untreated	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_mock_110	yes	control	2109	exp_title	mock	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_without_111	yes	control	2110	exp_title	without	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_water_112	yes	control	2111	exp_title	water	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_h2o_113	yes	control	2112	exp_title	H2O	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_timepoint1_114	yes	control	2113	exp_title	TimePoint1_	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_0_days_post_infection_115	yes	control	2114	exp_title	0 days post infection	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_b0h_116	yes	control	2115	exp_title	\b0h	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_b0_h_117	yes	control	2116	exp_title	\b0 h	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_0h_118	yes	control	2117	exp_title	_0h	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_control_119	yes	control	2118	design	control	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_ck_120	yes	control	2119	design	CK_	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_ck_121	yes	control	2120	design	CK-	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_ck_d_122	yes	control	2121	design	CK\d	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_bck_b_123	yes	control	2122	design	\bCK\b	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_bcon_124	yes	control	2123	design	\bcon-	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_mock_125	yes	control	2124	design	mock	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_normal_126	yes	control	2125	design	normal	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_common_127	yes	control	2126	design	common	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_untreat_128	yes	control	2127	design	untreat	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_non_treat_129	yes	control	2128	design	non-treat	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_no_s_w_s_treat_130	yes	control	2129	design	no(?:\s+\w+)?\s+treat	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_no_processing_131	yes	control	2130	design	no processing	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_without_132	yes	control	2131	design	without	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_water_133	yes	control	2132	design	water	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_h2o_134	yes	control	2133	design	H2O	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_before_135	yes	control	2134	design	before	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_b0h_136	yes	control	2135	design	\b0h	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_b0_h_137	yes	control	2136	design	\b0 h	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_0h_138	yes	control	2137	design	_0h	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_b0d_139	yes	control	2138	design	\b0d	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_b0_d_140	yes	control	2139	design	\b0 d	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_b0_m_141	yes	control	2140	design	\b0 m	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_healthy_142	yes	control	2141	design	healthy	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_ungrazed_143	yes	control	2142	design	ungrazed	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_no_grazing_144	yes	control	2143	design	no grazing	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_no_grazing_145	yes	control	2144	design	no-grazing	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_not_inoculated_146	yes	control	2145	design	not inoculated	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_non_inoculated_147	yes	control	2146	design	non-inoculated	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_uninfected_148	yes	control	2147	design	uninfected	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_no_incubation_149	yes	control	2148	design	no incubation	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_not_primed_150	yes	control	2149	design	not primed	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_not_induced_151	yes	control	2150	design	not induced	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_wt_152	yes	control	2151	design	wt	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_wild_153	yes	control	2152	design	wild	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
