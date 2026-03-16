@@ -262,8 +262,10 @@ class TestSelectHelpers:
         ('text', 'expected_status', 'expected_organ'),
         [
             ('flower', 'organ', 'flower'),
+            ('Flower of Bora mutant(purple-petal) at full-bloom stage rep1', 'organ', 'flower'),
             ('leaflet', 'organ', 'leaf'),
             ('lamina', 'organ', 'leaf'),
+            ('taproot', 'organ', 'root'),
             ('bract', 'review', ''),
             ('inflorescence apex', 'review', ''),
             ('petal', 'review', ''),
@@ -288,6 +290,24 @@ class TestSelectHelpers:
                 'pattern': r'\bhairy root culture\b',
                 'action': 'assign',
                 'outcome': 'review',
+            },
+            {
+                'rule_id': 'root_taproot',
+                'stage': 'normalize',
+                'priority': '15',
+                'columns': 'sample_group',
+                'pattern': r'\b(?:taproot|taproots)\b',
+                'action': 'assign',
+                'outcome': 'root',
+            },
+            {
+                'rule_id': 'flower_whole_full_bloom',
+                'stage': 'normalize',
+                'priority': '18',
+                'columns': 'sample_group',
+                'pattern': r'\b(?:flower|flowers)\b(?![\s_-]?buds?)\b.{0,40}\bfull[- ]bloom\b|\bfull[- ]bloom\b.{0,40}\b(?:flower|flowers)\b(?![\s_-]?buds?)',
+                'action': 'assign',
+                'outcome': 'flower',
             },
             {
                 'rule_id': 'review_suborgan',
@@ -478,6 +498,48 @@ class TestSelectRuleApplication:
         assert out.df.loc[0, 'sample_attribute_tissue'] == 'leaf'
         assert 'sample_group_normalization_source' in out.df.columns
         assert out.df.loc[0, 'sample_group_normalization_source'] == 'sample_attribute_tissue'
+
+    def test_full_bloom_flower_rule_ignores_sample_description_context(self, tmp_path):
+        rules_path = tmp_path / 'select_rules.tsv'
+        write_select_rules(rules_path, [
+            {
+                'rule_id': 'flower_whole_full_bloom',
+                'stage': 'normalize',
+                'priority': '10',
+                'columns': 'sample_title,source_name,exp_title',
+                'pattern': r'\b(?:flower|flowers)\b(?![\s_-]?buds?)\b.{0,40}\bfull[- ]bloom\b|\bfull[- ]bloom\b.{0,40}\b(?:flower|flowers)\b(?![\s_-]?buds?)',
+                'action': 'assign',
+                'outcome': 'flower',
+            },
+            {
+                'rule_id': 'fruit_non_target',
+                'stage': 'normalize',
+                'priority': '20',
+                'columns': 'sample_title,source_name,exp_title,sample_description',
+                'pattern': r'\bfruit\b',
+                'action': 'assign',
+                'outcome': 'non_target',
+            },
+        ])
+        select_rules = read_select_rules(str(rules_path))
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001'],
+            'scientific_name': ['Species A'],
+            'sample_group': [''],
+            'sample_title': ['Plant sample from Species A'],
+            'exp_title': ['RNAseq of Species A fruits 5 DAFB'],
+            'sample_description': ['Flowers were collected at full bloom before fruit sampling.'],
+            'bioproject': ['PRJ1'],
+            'biosample': ['SAM1'],
+            'total_spots': [100],
+            'exclusion': ['no'],
+        }))
+
+        out = prepare_select_metadata(metadata, select_rules)
+
+        assert out.df.loc[0, 'sample_group'] == ''
+        assert out.df.loc[0, 'sample_group_normalization_status'] == 'non_target'
+        assert out.df.loc[0, 'sample_group_normalization_rule_id'] == 'fruit_non_target'
 
 
 class TestSelectMain:
