@@ -480,6 +480,7 @@ def apply_select_control_rules(metadata, select_rules):
         return metadata
     print('{}: Marking SRAs with select control rules'.format(datetime.datetime.now()), flush=True)
     metadata.df = ensure_select_target_column(metadata.df, SELECT_DEFAULT_TARGET_COLUMN)
+    aggregated_matches = dict()
     for rule in control_rules:
         scope_column = rule['scope_column'] if rule['scope_column'] != '' else SELECT_DEFAULT_SCOPE_COLUMN
         if scope_column not in metadata.df.columns:
@@ -495,22 +496,42 @@ def apply_select_control_rules(metadata, select_rules):
         target_column = rule['target_column'] if rule['target_column'] != '' else SELECT_DEFAULT_TARGET_COLUMN
         metadata.df = ensure_select_target_column(metadata.df, target_column)
         matched = build_select_rule_match_mask(metadata.df, rule)
+        num_control = 0
         scope_values = metadata.df.loc[matched, scope_column].fillna('').astype(str).str.strip()
+        for scope_value in scope_values.unique().tolist():
+            if scope_value == '':
+                continue
+            is_scope = metadata.df.loc[:, scope_column].fillna('').astype(str).str.strip() == scope_value
+            num_control += int((is_scope & matched).sum())
+        aggregate_key = (scope_column, target_column, rule['outcome'], rule['stop_on_match'])
+        if aggregate_key not in aggregated_matches:
+            aggregated_matches[aggregate_key] = pandas.Series(False, index=metadata.df.index)
+        aggregated_matches[aggregate_key] = aggregated_matches[aggregate_key] | matched
+        print(
+            '{}: Applying control rule "{}" within "{}": control {:,}'.format(
+                datetime.datetime.now(),
+                rule['rule_id'],
+                scope_column,
+                num_control,
+            ),
+            flush=True,
+        )
+    for (scope_column, target_column, outcome, stop_on_match), matched_any in aggregated_matches.items():
+        scope_values = metadata.df.loc[matched_any, scope_column].fillna('').astype(str).str.strip()
         num_control = 0
         num_treatment = 0
         for scope_value in scope_values.unique().tolist():
             if scope_value == '':
                 continue
             is_scope = metadata.df.loc[:, scope_column].fillna('').astype(str).str.strip() == scope_value
-            candidate_mask = is_scope & (~matched)
-            write_mask = resolve_select_rule_write_mask(metadata.df, target_column, candidate_mask, rule['stop_on_match'])
-            metadata.df.loc[write_mask, target_column] = rule['outcome']
-            num_control += int((is_scope & matched).sum())
+            candidate_mask = is_scope & (~matched_any)
+            write_mask = resolve_select_rule_write_mask(metadata.df, target_column, candidate_mask, stop_on_match)
+            metadata.df.loc[write_mask, target_column] = outcome
+            num_control += int((is_scope & matched_any).sum())
             num_treatment += int(write_mask.sum())
         print(
-            '{}: Applying control rule "{}" within "{}": control {:,}, marked {:,}'.format(
+            '{}: Applied control scope "{}": protected {:,}, marked {:,}'.format(
                 datetime.datetime.now(),
-                rule['rule_id'],
                 scope_column,
                 num_control,
                 num_treatment,

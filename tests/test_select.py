@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from pathlib import Path
 
 from amalgkit.select import (
+    apply_select_control_rules,
     apply_select_filters,
     classify_select_text,
     prepare_select_metadata,
@@ -341,6 +342,53 @@ class TestSelectHelpers:
 
 
 class TestSelectRuleApplication:
+    def test_control_rules_protect_union_of_controls_within_scope(self, tmp_path):
+        rules_path = tmp_path / 'select_rules.tsv'
+        write_select_rules(rules_path, [
+            {
+                'rule_id': 'control_wt_title',
+                'stage': 'control',
+                'priority': '10',
+                'columns': 'sample_title',
+                'pattern': r'\bWT\b',
+                'action': 'mark_non_control',
+                'target_column': 'exclusion',
+                'outcome': 'non_control',
+                'scope_column': 'bioproject',
+                'scope_mode': 'mark_other_rows_in_scope',
+            },
+            {
+                'rule_id': 'control_wild_description',
+                'stage': 'control',
+                'priority': '20',
+                'columns': 'sample_description',
+                'pattern': r'wild',
+                'action': 'mark_non_control',
+                'target_column': 'exclusion',
+                'outcome': 'non_control',
+                'scope_column': 'bioproject',
+                'scope_mode': 'mark_other_rows_in_scope',
+            },
+        ])
+        select_rules = read_select_rules(str(rules_path))
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001', 'SRR002', 'SRR003'],
+            'scientific_name': ['Species A', 'Species A', 'Species A'],
+            'sample_group': ['flower', 'flower', 'flower'],
+            'bioproject': ['PRJ1', 'PRJ1', 'PRJ1'],
+            'biosample': ['SAM1', 'SAM2', 'SAM3'],
+            'total_spots': [100, 100, 100],
+            'exclusion': ['no', 'no', 'no'],
+            'sample_title': ['WT-Flower-1', 'Flower-2', '397a-Flower-1'],
+            'sample_description': ['', 'Flowers of wild plant', 'Transgenic flower'],
+        }))
+
+        out = apply_select_control_rules(metadata, select_rules)
+
+        assert out.df.loc[out.df['run'] == 'SRR001', 'exclusion'].iloc[0] == 'no'
+        assert out.df.loc[out.df['run'] == 'SRR002', 'exclusion'].iloc[0] == 'no'
+        assert out.df.loc[out.df['run'] == 'SRR003', 'exclusion'].iloc[0] == 'non_control'
+
     def test_prepare_and_filter_metadata_applies_single_file_rules(self, tmp_path):
         rules_path = tmp_path / 'select_rules.tsv'
         write_select_rules(rules_path, [
