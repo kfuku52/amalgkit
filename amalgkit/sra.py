@@ -1,5 +1,6 @@
 from Bio import Entrez
 import datetime
+from http.client import IncompleteRead
 import time
 import xml.etree.ElementTree as ET
 
@@ -48,7 +49,7 @@ def fetch_sra_xml_chunk(record_ids, start, end, retmax, max_retry=10, verbose=Tr
             continue
         try:
             return ET.parse(handle).getroot()
-        except ET.ParseError:
+        except (ET.ParseError, IncompleteRead):
             if verbose:
                 print('XML may be truncated. Retrying...', flush=True)
             continue

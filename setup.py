@@ -40,7 +40,11 @@ setup(
         'biopython',
         'ete4',
     ],
-    scripts                 = ['amalgkit/amalgkit',],
+    entry_points            = {
+        'console_scripts': [
+            'amalgkit=amalgkit.cli_entry:main',
+        ],
+    },
     include_package_data    = False,
     python_requires         = '>=3.9',
 )

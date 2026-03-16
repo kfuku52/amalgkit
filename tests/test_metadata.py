@@ -4,6 +4,7 @@ import json
 import pytest
 import pandas
 import urllib.error
+from http.client import IncompleteRead
 
 from types import SimpleNamespace
 
@@ -76,6 +77,26 @@ class TestFetchSraXml:
 
         assert root.tag == 'EXPERIMENT_PACKAGE'
         assert efetch_calls['n'] == 2
+
+    def test_retries_chunk_parse_once_on_incomplete_read(self, monkeypatch):
+        monkeypatch.setattr('amalgkit.metadata.Entrez.esearch', lambda **kwargs: object())
+        monkeypatch.setattr('amalgkit.metadata.Entrez.read', lambda handle: {'IdList': ['ID1']})
+        monkeypatch.setattr('amalgkit.metadata.Entrez.efetch', lambda **kwargs: object())
+        parse_calls = {'n': 0}
+
+        def flaky_parse(_handle):
+            parse_calls['n'] += 1
+            if parse_calls['n'] == 1:
+                raise IncompleteRead(b'partial-xml', len(b'partial-xml') + 10)
+            return self._DummyTree(ET.Element('EXPERIMENT_PACKAGE'))
+
+        monkeypatch.setattr('amalgkit.metadata.ET.parse', flaky_parse)
+        monkeypatch.setattr('amalgkit.metadata.time.sleep', lambda *_args, **_kwargs: None)
+
+        root = fetch_sra_xml(search_term='SRR000000', retmax=1000)
+
+        assert root.tag == 'EXPERIMENT_PACKAGE'
+        assert parse_calls['n'] == 2
 
     def test_batches_without_extra_request_on_exact_multiple(self, monkeypatch):
         id_list = ['ID{}'.format(i) for i in range(2000)]

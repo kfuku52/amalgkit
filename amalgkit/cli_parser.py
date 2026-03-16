@@ -9,8 +9,11 @@ from amalgkit.cli_utils import (
 )
 
 
-def build_parser(command_handlers, command_names, version):
-    parser = argparse.ArgumentParser(description='A toolkit for cross-species transcriptome amalgamation')
+def build_parser(command_handlers, command_names, version, prog=None):
+    parser = argparse.ArgumentParser(
+        description='A toolkit for cross-species transcriptome amalgamation',
+        prog=prog,
+    )
     parser.add_argument('--version', action='version', version='amalgkit version ' + version)
     subparsers = parser.add_subparsers()
 
@@ -91,6 +94,25 @@ def build_parser(command_handlers, command_names, version):
 
     pse_help = 'Selecting SRA entries for analysis. See `amalgkit select -h`'
     pse = subparsers.add_parser('select', help=pse_help, parents=[pp_out, pp_meta, pp_sg])
+    pse.add_argument('--species_tsv', metavar='PATH', default=None, type=str, required=False, action='store',
+                     help='default=%(default)s: TSV with a scientific_name column for native batch select mode. '
+                          'When set, select builds per-species workspaces from metadata_specieswise and writes '
+                          'batch summaries/queues/manifests under --out_dir.')
+    pse.add_argument('--metadata_specieswise_dir', metavar='PATH|inferred', default='inferred', type=str,
+                     required=False, action='store',
+                     help='default=%(default)s: Root directory containing <species_token>/<species_token>.metadata.tsv '
+                          'for --species_tsv batch mode. "inferred" = dirname(out_dir)/metadata_specieswise.')
+    pse.add_argument('--summary_tsv', metavar='PATH|inferred', default='inferred', type=str, required=False, action='store',
+                     help='default=%(default)s: Batch select summary output path. "inferred" = out_dir/select_summary.tsv.')
+    pse.add_argument('--queue_tsv', metavar='PATH|inferred', default='inferred', type=str, required=False, action='store',
+                     help='default=%(default)s: Batch select queue output path. "inferred" = out_dir/select_queue.tsv.')
+    pse.add_argument('--manifest_tsv', metavar='PATH|inferred', default='inferred', type=str, required=False, action='store',
+                     help='default=%(default)s: Batch external-manifest output path. '
+                          '"inferred" = out_dir/external_manifest.tsv. '
+                          'Strict/relaxed sidecars are written next to this path.')
+    pse.add_argument('--batch_label', metavar='STR|inferred', default='inferred', type=str, required=False, action='store',
+                     help='default=%(default)s: Label written to batch manifests in --species_tsv mode. '
+                          '"inferred" = basename(out_dir).')
     pse.add_argument('--config_dir', metavar='PATH', default='inferred', type=str, required=False, action='store',
                      help='default=%(default)s: PATH to the config directory. "inferred" = out_dir/config')
     pse.add_argument('--min_nspots', metavar='INT', default=5000000, type=int, required=False, action='store',
