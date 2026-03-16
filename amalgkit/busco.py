@@ -4,6 +4,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import warnings
 
 import pandas
 
@@ -14,6 +15,7 @@ from amalgkit.metadata_utils import (
     is_private_fastq_scientific_name_placeholder,
     load_metadata,
 )
+from amalgkit.orthology_utils import parse_busco_species_name
 from amalgkit.parallel_utils import resolve_thread_worker_allocation, run_tasks_with_optional_threads
 from amalgkit.prefix_utils import find_species_prefixed_entries
 from amalgkit.subprocess_utils import run_checked_command
@@ -170,6 +172,195 @@ def normalize_busco_table(src_path, dest_path):
     with open(dest_path, 'w') as f:
         f.write('# Busco id\tStatus\tSequence\tScore\tLength\tOrthoDB url\tDescription\n')
         df.to_csv(f, sep='\t', index=False, header=False)
+
+
+def _load_pyplot():
+    try:
+        import matplotlib
+        matplotlib.use('Agg', force=True)
+        from matplotlib import pyplot
+    except Exception as exc:
+        warnings.warn('matplotlib is required to generate BUSCO completeness plot: {}'.format(exc))
+        return None
+    return pyplot
+
+
+def _normalize_busco_id_series(series):
+    return (
+        series.fillna('')
+        .astype(str)
+        .str.lower()
+        .str.replace(r'[^a-z0-9]', '', regex=True)
+    )
+
+
+def _list_normalized_busco_tables(busco_dir):
+    tables = []
+    with os.scandir(busco_dir) as entries:
+        for entry in entries:
+            if not entry.is_file():
+                continue
+            if not entry.name.lower().endswith('_busco.tsv'):
+                continue
+            tables.append(entry.name)
+    return sorted(tables)
+
+
+def summarize_busco_species_tables(busco_dir, species_order=None):
+    table_names = _list_normalized_busco_tables(busco_dir)
+    if len(table_names) == 0:
+        return pandas.DataFrame(columns=['species', 'status', 'count']), 0
+    frames = []
+    for table_name in table_names:
+        path = os.path.join(busco_dir, table_name)
+        tmp = pandas.read_table(
+            path,
+            sep='\t',
+            header=None,
+            comment='#',
+            names=REQUIRED_COLUMNS,
+            dtype=str,
+            low_memory=False,
+        )
+        tmp = tmp.loc[_normalize_busco_id_series(tmp.loc[:, 'busco_id']) != 'buscoid', ['busco_id', 'status']].copy()
+        if tmp.empty:
+            continue
+        tmp.loc[:, 'species'] = parse_busco_species_name(table_name).replace('_', ' ')
+        tmp.loc[:, 'status'] = tmp.loc[:, 'status'].fillna('').astype(str).str.strip()
+        tmp.loc[tmp.loc[:, 'status'] == 'Complete', 'status'] = 'Single'
+        tmp = tmp.loc[tmp.loc[:, 'status'].isin(['Single', 'Duplicated', 'Fragmented', 'Missing']), :]
+        if tmp.empty:
+            continue
+        frames.append(tmp.loc[:, ['species', 'status', 'busco_id']].drop_duplicates())
+    if len(frames) == 0:
+        return pandas.DataFrame(columns=['species', 'status', 'count']), 0
+    combined = pandas.concat(frames, axis=0, ignore_index=True)
+    summary = (
+        combined.groupby(['species', 'status'], sort=False)['busco_id']
+        .nunique()
+        .reset_index(name='count')
+    )
+    expected_statuses = ['Single', 'Duplicated', 'Fragmented', 'Missing']
+    species_seen = list(dict.fromkeys(summary.loc[:, 'species'].tolist()))
+    ordered_species = []
+    if species_order is not None:
+        ordered_species.extend(
+            sp for sp in [str(species).strip() for species in species_order]
+            if (sp != '') and (sp in species_seen)
+        )
+    ordered_species.extend([sp for sp in species_seen if sp not in ordered_species])
+    full_index = pandas.MultiIndex.from_product(
+        [ordered_species, expected_statuses],
+        names=['species', 'status'],
+    )
+    summary = (
+        summary.set_index(['species', 'status'])
+        .reindex(full_index, fill_value=0)
+        .reset_index()
+    )
+    total_buscos = int(
+        summary.loc[summary.loc[:, 'status'].isin(expected_statuses), :]
+        .groupby('species', sort=False)['count']
+        .sum()
+        .max()
+    )
+    return summary, total_buscos
+
+
+def generate_busco_species_plot(busco_dir, species_order=None, out_path=None, font_size=8):
+    if out_path is None:
+        out_path = os.path.join(busco_dir, 'busco_completeness.pdf')
+    summary, total_buscos = summarize_busco_species_tables(busco_dir, species_order=species_order)
+    if summary.empty:
+        print('No normalized BUSCO tables were found for plot generation at: {}'.format(busco_dir), flush=True)
+        return None
+    pyplot = _load_pyplot()
+    if pyplot is None:
+        return None
+    colors = {
+        'Single': '#000000',
+        'Duplicated': '#b22222',
+        'Fragmented': '#666666',
+        'Missing': '#cccccc',
+    }
+    status_order = ['Single', 'Duplicated', 'Fragmented', 'Missing']
+    species_labels = list(dict.fromkeys(summary.loc[:, 'species'].tolist()))
+    plot_height = max(0.72, 0.12 * len(species_labels) + 0.34)
+    legend_height = 0.74
+    figure = pyplot.figure(figsize=(3.6, plot_height + legend_height))
+    left_margin = min(0.78, max(0.50, 0.18 + 0.013 * max(len(label) for label in species_labels)))
+    plot_bottom = 0.54
+    plot_top = 0.74
+    axis = figure.add_axes([left_margin, plot_bottom, 0.96 - left_margin, plot_top - plot_bottom])
+    positions = list(range(len(species_labels)))
+    bottoms = [0.0] * len(species_labels)
+    pivot = (
+        summary.pivot(index='species', columns='status', values='count')
+        .reindex(index=species_labels, columns=status_order)
+        .fillna(0.0)
+    )
+    for status in status_order:
+        values = pivot.loc[:, status].to_numpy(dtype=float)
+        axis.barh(
+            positions,
+            values,
+            left=bottoms,
+            color=colors[status],
+            label=status,
+            height=0.544,
+        )
+        bottoms = [bottoms[i] + values[i] for i in range(len(values))]
+    axis.set_yticks(positions)
+    axis.set_yticklabels(species_labels, fontsize=float(font_size))
+    axis.set_xlabel('BUSCO count', fontsize=float(font_size))
+    axis.tick_params(axis='x', labelsize=float(font_size))
+    axis.tick_params(axis='y', length=0)
+    axis.spines['top'].set_visible(False)
+    axis.spines['right'].set_visible(False)
+    axis.set_ylim(-0.5, max(positions) + 0.5)
+    if total_buscos > 0:
+        axis.set_xlim(0.0, float(total_buscos))
+        top_axis = axis.secondary_xaxis(
+            'top',
+            functions=(
+                lambda value: value / float(total_buscos) * 100.0,
+                lambda value: value / 100.0 * float(total_buscos),
+            ),
+        )
+        top_axis.set_xlabel('Percent', fontsize=float(font_size))
+        top_axis.tick_params(axis='x', labelsize=float(font_size))
+    legend_axis = figure.add_axes([left_margin, 0.08, 0.96 - left_margin, 0.18])
+    legend_axis.set_axis_off()
+    legend_layout = [
+        ('Single', 0.02, 0.64),
+        ('Fragmented', 0.54, 0.64),
+        ('Duplicated', 0.02, 0.18),
+        ('Missing', 0.54, 0.18),
+    ]
+    for label, x_pos, y_pos in legend_layout:
+        legend_axis.add_patch(
+            pyplot.Rectangle(
+                (x_pos, y_pos),
+                0.10,
+                0.20,
+                transform=legend_axis.transAxes,
+                facecolor=colors[label],
+                edgecolor='none',
+            )
+        )
+        legend_axis.text(
+            x_pos + 0.14,
+            y_pos + 0.10,
+            label,
+            transform=legend_axis.transAxes,
+            va='center',
+            ha='left',
+            fontsize=float(font_size),
+        )
+    figure.savefig(os.path.realpath(out_path), format='pdf')
+    pyplot.close(figure)
+    print('BUSCO completeness plot written: {}'.format(out_path), flush=True)
+    return out_path
 
 
 def find_full_table(output_dir):
@@ -597,4 +788,9 @@ def busco_main(args):
             args=runtime_args,
             extra_args=extra_args,
             species_jobs=species_jobs,
+        )
+        generate_busco_species_plot(
+            busco_dir=stage_dir,
+            species_order=species,
+            out_path=os.path.join(stage_dir, 'busco_completeness.pdf'),
         )

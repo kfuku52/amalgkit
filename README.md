@@ -105,7 +105,7 @@ amalgkit finalize --out_dir ./ --metadata ./csfilter/metadata.tsv --batch_effect
 ```
 
 ## Bundled Demo Data
-AMALGKIT ships with a small bundled dataset for smoke testing and examples.
+AMALGKIT ships with a small bundled dataset for smoke testing and examples. The `yeast` dataset uses small BUSCO-focused test FASTAs rather than full gene sets, so its BUSCO completeness is intentionally modest.
 
 ```bash
 amalgkit dataset --list

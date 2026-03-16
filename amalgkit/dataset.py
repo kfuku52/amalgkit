@@ -12,7 +12,7 @@ import sys
 # Available datasets and their descriptions
 DATASETS = {
     'yeast': {
-        'description': 'Two yeast species (S. cerevisiae + S. pombe) with BUSCO genes only (~3 MB)',
+        'description': 'Two yeast species (S. cerevisiae + S. pombe) with small BUSCO-focused test FASTAs and matching BUSCO tables (~3 MB)',
         'species': ['Saccharomyces_cerevisiae', 'Schizosaccharomyces_pombe'],
         'files': {
             'fasta': [
@@ -156,6 +156,8 @@ def dataset_main(args):
     print(f'  FASTA files:  {paths["fasta"]}')
     print(f'  BUSCO files:  {paths["busco"]}')
     print(f'  Config files: {paths["config"]}')
+    if args.name == 'yeast':
+        print('  Note: the yeast dataset uses small BUSCO-focused test FASTAs, so BUSCO completeness is intentionally lower than a full gene set.')
     print('')
     print('Example usage with this dataset:')
     print(f'  amalgkit config --out_dir {args.out_dir} --config base --overwrite yes')

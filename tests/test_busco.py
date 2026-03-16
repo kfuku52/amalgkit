@@ -10,6 +10,8 @@ from amalgkit.busco import (
     find_full_table,
     resolve_species_fasta,
     collect_species,
+    summarize_busco_species_tables,
+    generate_busco_species_plot,
     select_tool,
     ensure_clean_dir,
     run_command,
@@ -113,6 +115,66 @@ def test_find_full_table_accepts_uppercase_gzip_extension(tmp_path):
         f.write("Busco id\tStatus\tSequence\tScore\tLength\tOrthoDB url\tDescription\n")
     found = find_full_table(str(out_dir))
     assert os.path.realpath(found) == os.path.realpath(str(table))
+
+
+def test_summarize_busco_species_tables_counts_unique_buscos(tmp_path):
+    busco_dir = tmp_path / 'busco'
+    busco_dir.mkdir()
+    write_busco_table(
+        busco_dir / 'Species_A_busco.tsv',
+        [
+            ['BUSCO1', 'Complete', 'seq1', '100', '200', 'url1', 'desc1'],
+            ['BUSCO2', 'Duplicated', 'seq2a', '100', '200', 'url2', 'desc2'],
+            ['BUSCO2', 'Duplicated', 'seq2b', '100', '200', 'url2', 'desc2'],
+            ['BUSCO3', 'Fragmented', 'seq3', '80', '150', 'url3', 'desc3'],
+            ['BUSCO4', 'Missing', '-', '0', '0', 'url4', 'desc4'],
+        ],
+    )
+    (busco_dir / 'Species_A').mkdir()
+
+    summary, total_buscos = summarize_busco_species_tables(
+        str(busco_dir),
+        species_order=['Species A'],
+    )
+
+    summary = summary.set_index(['species', 'status'])
+    assert int(summary.loc[('Species A', 'Single'), 'count']) == 1
+    assert int(summary.loc[('Species A', 'Duplicated'), 'count']) == 1
+    assert int(summary.loc[('Species A', 'Fragmented'), 'count']) == 1
+    assert int(summary.loc[('Species A', 'Missing'), 'count']) == 1
+    assert total_buscos == 4
+
+
+def test_generate_busco_species_plot_writes_pdf(tmp_path):
+    busco_dir = tmp_path / 'busco'
+    busco_dir.mkdir()
+    write_busco_table(
+        busco_dir / 'Species_A_busco.tsv',
+        [
+            ['BUSCO1', 'Complete', 'seq1', '100', '200', 'url1', 'desc1'],
+            ['BUSCO2', 'Missing', '-', '0', '0', 'url2', 'desc2'],
+        ],
+    )
+    write_busco_table(
+        busco_dir / 'Species_B_busco.tsv',
+        [
+            ['BUSCO1', 'Duplicated', 'seq1a', '100', '200', 'url1', 'desc1'],
+            ['BUSCO1', 'Duplicated', 'seq1b', '100', '200', 'url1', 'desc1'],
+            ['BUSCO2', 'Fragmented', 'seq2', '80', '150', 'url2', 'desc2'],
+        ],
+    )
+    (busco_dir / 'Species_A').mkdir()
+    out_plot = busco_dir / 'busco_completeness.pdf'
+
+    result = generate_busco_species_plot(
+        str(busco_dir),
+        species_order=['Species B', 'Species A'],
+        out_path=str(out_plot),
+    )
+
+    assert result == str(out_plot)
+    assert out_plot.exists()
+    assert out_plot.stat().st_size > 0
 
 
 def test_run_command_tolerates_non_utf8_output(monkeypatch):
@@ -911,6 +973,7 @@ def test_busco_main_parallel_species_jobs(tmp_path, monkeypatch):
     assert set(processed) == {'Species A', 'Species B'}
     assert (out_dir / 'busco' / 'Species_A_busco.tsv').exists()
     assert (out_dir / 'busco' / 'Species_B_busco.tsv').exists()
+    assert (out_dir / 'busco' / 'busco_completeness.pdf').exists()
 
 
 def test_busco_main_prunes_stale_species_outputs(tmp_path, monkeypatch):
@@ -961,6 +1024,7 @@ def test_busco_main_prunes_stale_species_outputs(tmp_path, monkeypatch):
     assert not stale_dir.exists()
     assert (out_dir / 'busco' / 'Species_A').exists()
     assert (out_dir / 'busco' / 'Species_A_busco.tsv').exists()
+    assert (out_dir / 'busco' / 'busco_completeness.pdf').exists()
 
 
 def test_busco_main_restores_existing_output_when_staged_run_fails(tmp_path, monkeypatch):
@@ -1065,3 +1129,4 @@ def test_busco_main_cpu_budget_caps_species_jobs_to_serial(tmp_path, monkeypatch
     assert observed['runtime_lineage'] == 'eukaryota_odb12'
     assert args.threads == 2
     assert args.internal_jobs == 4
+    assert (out_dir / 'busco' / 'busco_completeness.pdf').exists()
