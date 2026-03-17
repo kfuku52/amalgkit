@@ -226,6 +226,8 @@ aggregate_tissue_organismpart_219	yes	aggregate	318	organismpart		append	tissue	
 aggregate_tissue_oviduct_220	yes	aggregate	319	oviduct		append	tissue				yes			legacy aggregate oviduct -> tissue
 aggregate_tissue_region_221	yes	aggregate	320	region		append	tissue				yes			legacy aggregate region -> tissue
 aggregate_tissue_sample_name_222	yes	aggregate	321	sample_name		append	tissue				yes			legacy aggregate sample_name -> tissue
+aggregate_source_name_sample_attribute_source_name_222a	yes	aggregate	322	sample_attribute_source_name		append	source_name				yes			aggregate sample_attribute_source_name -> source_name
+aggregate_sample_title_sample_attribute_sample_title_222b	yes	aggregate	323	sample_attribute_sample_title		append	sample_title				yes			aggregate sample_attribute_sample_title -> sample_title
 aggregate_tissue_sample_origin_223	yes	aggregate	322	sample_origin		append	tissue				yes			legacy aggregate sample_origin -> tissue
 aggregate_tissue_sampling_position_224	yes	aggregate	323	sampling_position		append	tissue				yes			legacy aggregate sampling_position -> tissue
 aggregate_tissue_source_name_225	yes	aggregate	324	source_name		append	tissue				yes			legacy aggregate source_name -> tissue

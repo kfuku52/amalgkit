@@ -5,6 +5,8 @@ param_mark_missing_rank_3	yes	parameter	0								yes	mark_missing_rank	species	s
 param_mark_redundant_biosamples_4	yes	parameter	0								yes	mark_redundant_biosamples	no	select parameter mark_redundant_biosamples
 aggregate_age_arrayexpress_developmentalstage_1	yes	aggregate	100	arrayexpress-developmentalstage		append	age				yes			legacy aggregate arrayexpress-developmentalstage -> age
 aggregate_treatment_infection_2	yes	aggregate	101	infection		append	treatment				yes			legacy aggregate infection -> treatment
+aggregate_source_name_sample_attribute_source_name_3	yes	aggregate	102	sample_attribute_source_name		append	source_name				yes			aggregate sample_attribute_source_name -> source_name
+aggregate_sample_title_sample_attribute_sample_title_4	yes	aggregate	103	sample_attribute_sample_title		append	sample_title				yes			aggregate sample_attribute_sample_title -> sample_title
 normalize_review_hairy_root_culture	yes	normalize	10	sample_attribute_tissue,tissue,sample_group,sample_title,source_name,exp_title	\bhairy root culture\b	assign		review			yes			culture-derived root material is review
 normalize_review_root_hair	yes	normalize	20	sample_attribute_tissue,tissue,sample_group,sample_title,source_name,exp_title	\broot hair\b	assign		review			yes			partial root structure is review
 normalize_root_taproot	yes	normalize	22	sample_attribute_tissue,tissue,sample_group,sample_title,source_name,exp_title	\b(?:taproot|taproots)\b	assign		root			yes			mature taproot is accepted as root

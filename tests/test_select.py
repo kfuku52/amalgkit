@@ -714,6 +714,68 @@ class TestSelectRuleApplication:
         assert out.df.loc[0, 'sample_group'] == 'cancer'
         assert 'sample_attribute' in out.df.columns
 
+    def test_prepare_select_metadata_aggregates_sparse_sample_attribute_aliases(self, tmp_path):
+        rules_path = tmp_path / 'select_rules.tsv'
+        write_select_rules(rules_path, [
+            {
+                'rule_id': 'aggregate_source_name_alias',
+                'stage': 'aggregate',
+                'priority': '10',
+                'columns': 'sample_attribute_source_name',
+                'action': 'append',
+                'target_column': 'source_name',
+            },
+            {
+                'rule_id': 'aggregate_sample_title_alias',
+                'stage': 'aggregate',
+                'priority': '20',
+                'columns': 'sample_attribute_sample_title',
+                'action': 'append',
+                'target_column': 'sample_title',
+            },
+            {
+                'rule_id': 'normalize_root_from_source_name',
+                'stage': 'normalize',
+                'priority': '30',
+                'columns': 'source_name',
+                'pattern': r'\broot\b',
+                'action': 'assign',
+                'outcome': 'root',
+            },
+            {
+                'rule_id': 'normalize_leaf_from_sample_title',
+                'stage': 'normalize',
+                'priority': '40',
+                'columns': 'sample_title',
+                'pattern': r'\bleaf\b',
+                'action': 'assign',
+                'outcome': 'leaf',
+            },
+        ])
+        select_rules = read_select_rules(str(rules_path))
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001', 'SRR002'],
+            'scientific_name': ['Species A', 'Species A'],
+            'sample_group': ['', ''],
+            'source_name': ['', 'existing source'],
+            'sample_title': ['existing title', 'existing title'],
+            'sample_attribute_source_name': ['primary root', ''],
+            'sample_attribute_sample_title': ['', 'leaf replicate 1'],
+            'bioproject': ['PRJ1', 'PRJ1'],
+            'biosample': ['SAM1', 'SAM2'],
+            'total_spots': [100, 100],
+            'exclusion': ['no', 'no'],
+        }))
+
+        out = prepare_select_metadata(metadata, select_rules)
+
+        assert out.df.loc[0, 'source_name'] == 'primary root'
+        assert out.df.loc[0, 'sample_group'] == 'root'
+        assert out.df.loc[0, 'sample_group_normalization_source'] == 'source_name'
+        assert out.df.loc[1, 'sample_title'] == 'existing title; leaf replicate 1'
+        assert out.df.loc[1, 'sample_group'] == 'leaf'
+        assert out.df.loc[1, 'sample_group_normalization_source'] == 'sample_title'
+
     def test_apply_select_filters_prefers_non_excluded_duplicate_biosample(self):
         metadata = Metadata.from_DataFrame(pandas.DataFrame({
             'run': ['SRR001', 'SRR002'],
