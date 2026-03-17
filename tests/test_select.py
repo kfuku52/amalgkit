@@ -541,6 +541,22 @@ class TestSelectRuleApplication:
         assert out.df.loc[0, 'sample_group_normalization_status'] == 'non_target'
         assert out.df.loc[0, 'sample_group_normalization_rule_id'] == 'fruit_non_target'
 
+    def test_default_plantae_normalize_rules_use_whitelisted_columns(self):
+        rules_path = Path(__file__).resolve().parents[1] / 'amalgkit' / 'config_dir' / 'plantae' / 'select_rules.tsv'
+        select_rules = read_select_rules(str(rules_path))
+        allowed = {
+            'sample_attribute_tissue',
+            'tissue',
+            'sample_group',
+            'sample_title',
+            'source_name',
+            'exp_title',
+        }
+        normalize_rules = [rule for rule in select_rules if rule['stage'] == 'normalize']
+        assert len(normalize_rules) > 0
+        for rule in normalize_rules:
+            assert set(rule['columns']).issubset(allowed), rule['rule_id']
+
 
 class TestSelectMain:
     def test_rejects_out_dir_file_path(self, tmp_path, monkeypatch):
