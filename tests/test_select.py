@@ -344,11 +344,18 @@ class TestSelectHelpers:
             ('flower', 'organ', 'flower'),
             ('Flower of Bora mutant(purple-petal) at full-bloom stage rep1', 'organ', 'flower'),
             ('root tips', 'organ', 'root'),
+            ('primary root', 'organ', 'root'),
+            ('lateral root', 'organ', 'root'),
+            ('radicle', 'organ', 'root'),
             ('leaf blade', 'organ', 'leaf'),
+            ('seedling leaf', 'organ', 'leaf'),
             ('spikes in seedling stage', 'organ', 'flower'),
             ('seedling roots', 'organ', 'root'),
             ('seedling root', 'organ', 'root'),
-            ('unopened flower buds', 'organ', 'flower'),
+            ('Leaves were sampled from fully grown plants with well developed roots and flowers.', 'mixed', ''),
+            ('leaf and spine', 'review', ''),
+            ('leaf and leaves', 'organ', 'leaf'),
+            ('unopened flower buds', 'review', ''),
             ('leaflet', 'organ', 'leaf'),
             ('lamina', 'organ', 'leaf'),
             ('taproot', 'organ', 'root'),
@@ -396,20 +403,47 @@ class TestSelectHelpers:
                 'outcome': 'root',
             },
             {
-                'rule_id': 'flower_whole_full_bloom',
+                'rule_id': 'root_whole_primary_lateral_radicle',
+                'stage': 'normalize',
+                'priority': '17',
+                'columns': 'sample_group',
+                'pattern': r'\b(?:primary root|primary roots|lateral root|lateral roots|radicle|radicles)\b',
+                'action': 'assign',
+                'outcome': 'root',
+            },
+            {
+                'rule_id': 'mixed_leaf_root',
                 'stage': 'normalize',
                 'priority': '18',
                 'columns': 'sample_group',
-                'pattern': r'\b(?:flower|flowers)\b(?![\s_-]?buds?)\b.{0,40}\bfull[- ]bloom\b|\bfull[- ]bloom\b.{0,40}\b(?:flower|flowers)\b(?![\s_-]?buds?)',
+                'pattern': r'\b(?:leaf|leaves|foliar|foliage|trifoliate|leave|lamina|laminae|leaflet|leaflets|leaf[\s_-]?blades?|seedling[\s_-]?leaves?)\b.*\b(?:root|roots|taproot|taproots|primary root|primary roots|lateral root|lateral roots|radicle|radicles|root[\s_-]?tip|root[\s_-]?tips|seedling[\s_-]?roots?|hairy root|hairy roots)\b|\b(?:root|roots|taproot|taproots|primary root|primary roots|lateral root|lateral roots|radicle|radicles|root[\s_-]?tip|root[\s_-]?tips|seedling[\s_-]?roots?|hairy root|hairy roots)\b.*\b(?:leaf|leaves|foliar|foliage|trifoliate|leave|lamina|laminae|leaflet|leaflets|leaf[\s_-]?blades?|seedling[\s_-]?leaves?)\b',
                 'action': 'assign',
-                'outcome': 'flower',
+                'outcome': 'mixed',
             },
             {
-                'rule_id': 'flower_whole_unopened_flower_buds',
+                'rule_id': 'mixed_leaf_flower',
+                'stage': 'normalize',
+                'priority': '18',
+                'columns': 'sample_group',
+                'pattern': r'\b(?:leaf|leaves|foliar|foliage|trifoliate|leave|lamina|laminae|leaflet|leaflets|leaf[\s_-]?blades?|seedling[\s_-]?leaves?)\b.*\b(?:flower|flowers|floral|inflorescence|inflorescences|catkin|catkins|spikes?\s+in\s+seedling\s+stage)\b|\b(?:flower|flowers|floral|inflorescence|inflorescences|catkin|catkins|spikes?\s+in\s+seedling\s+stage)\b.*\b(?:leaf|leaves|foliar|foliage|trifoliate|leave|lamina|laminae|leaflet|leaflets|leaf[\s_-]?blades?|seedling[\s_-]?leaves?)\b',
+                'action': 'assign',
+                'outcome': 'mixed',
+            },
+            {
+                'rule_id': 'mixed_root_flower',
+                'stage': 'normalize',
+                'priority': '18',
+                'columns': 'sample_group',
+                'pattern': r'\b(?:root|roots|taproot|taproots|primary root|primary roots|lateral root|lateral roots|radicle|radicles|root[\s_-]?tip|root[\s_-]?tips|seedling[\s_-]?roots?|hairy root|hairy roots)\b.*\b(?:flower|flowers|floral|inflorescence|inflorescences|catkin|catkins|spikes?\s+in\s+seedling\s+stage)\b|\b(?:flower|flowers|floral|inflorescence|inflorescences|catkin|catkins|spikes?\s+in\s+seedling\s+stage)\b.*\b(?:root|roots|taproot|taproots|primary root|primary roots|lateral root|lateral roots|radicle|radicles|root[\s_-]?tip|root[\s_-]?tips|seedling[\s_-]?roots?|hairy root|hairy roots)\b',
+                'action': 'assign',
+                'outcome': 'mixed',
+            },
+            {
+                'rule_id': 'flower_whole_full_bloom',
                 'stage': 'normalize',
                 'priority': '19',
                 'columns': 'sample_group',
-                'pattern': r'\b(?:unopened|closed)\b.{0,20}\bflower[\s_-]?buds?\b|\bflower[\s_-]?buds?\b.{0,20}\b(?:unopened|closed)\b',
+                'pattern': r'\b(?:flower|flowers)\b(?![\s_-]?buds?)\b.{0,40}\bfull[- ]bloom\b|\bfull[- ]bloom\b.{0,40}\b(?:flower|flowers)\b(?![\s_-]?buds?)',
                 'action': 'assign',
                 'outcome': 'flower',
             },
@@ -418,7 +452,7 @@ class TestSelectHelpers:
                 'stage': 'normalize',
                 'priority': '20',
                 'columns': 'sample_group',
-                'pattern': r'\b(?:petal|corolla|anther|ovary|pistil|bract|flower[\s_-]?bud|petiole|root hair)\b',
+                'pattern': r'\b(?:petal|corolla|anther|ovary|pistil|bract|flower[\s_-]?buds?|petiole|root hair)\b',
                 'action': 'assign',
                 'outcome': 'review',
             },
@@ -441,9 +475,18 @@ class TestSelectHelpers:
                 'outcome': 'flower',
             },
             {
-                'rule_id': 'root_whole_seedling_root',
+                'rule_id': 'leaf_whole_seedling_leaf',
                 'stage': 'normalize',
                 'priority': '27',
+                'columns': 'sample_group',
+                'pattern': r'\bseedling[\s_-]?leaves?\b',
+                'action': 'assign',
+                'outcome': 'leaf',
+            },
+            {
+                'rule_id': 'root_whole_seedling_root',
+                'stage': 'normalize',
+                'priority': '28',
                 'columns': 'sample_group',
                 'pattern': r'\bseedling[\s_-]?roots?\b',
                 'action': 'assign',
@@ -490,6 +533,55 @@ class TestSelectHelpers:
         result = classify_select_text(text, normalize_rules)
         assert result['status'] == expected_status
         assert result['organ'] == expected_organ
+
+    def test_prepare_select_metadata_applies_unknown_segment_validator(self, tmp_path):
+        rules_path = tmp_path / 'select_rules.tsv'
+        write_select_rules(rules_path, [
+            {
+                'rule_id': 'leaf_whole',
+                'stage': 'normalize',
+                'priority': '120',
+                'columns': 'sample_group',
+                'pattern': r'\b(?:leaf|leaves|lamina|laminae|leaflet|leaflets)\b',
+                'action': 'assign',
+                'outcome': 'leaf',
+            },
+            {
+                'rule_id': 'root_whole',
+                'stage': 'normalize',
+                'priority': '130',
+                'columns': 'sample_group',
+                'pattern': r'\b(?:root|roots)\b',
+                'action': 'assign',
+                'outcome': 'root',
+            },
+            {
+                'rule_id': 'flower_whole',
+                'stage': 'normalize',
+                'priority': '140',
+                'columns': 'sample_group',
+                'pattern': r'\b(?:flower|flowers)\b',
+                'action': 'assign',
+                'outcome': 'flower',
+            },
+        ])
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001', 'SRR002'],
+            'scientific_name': ['sp1', 'sp1'],
+            'sample_group': ['leaf and spine', 'leaf and leaves'],
+            'exclusion': ['no', 'no'],
+        }))
+        out = prepare_select_metadata(metadata, read_select_rules(str(rules_path)))
+        observed = out.df.set_index('run')[[
+            'sample_group',
+            'sample_group_normalization_status',
+            'sample_group_normalization_rule_id',
+        ]]
+        assert observed.loc['SRR001', 'sample_group'] == 'review'
+        assert observed.loc['SRR001', 'sample_group_normalization_status'] == 'review'
+        assert observed.loc['SRR001', 'sample_group_normalization_rule_id'] == 'validate_review_unknown_segment'
+        assert observed.loc['SRR002', 'sample_group'] == 'leaf'
+        assert observed.loc['SRR002', 'sample_group_normalization_status'] == 'organ'
 
 
 class TestSelectRuleApplication:

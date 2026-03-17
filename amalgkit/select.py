@@ -58,6 +58,7 @@ SELECT_STAGE_ORDER = {
 }
 SELECT_NORMALIZE_ORGANS = {'flower', 'leaf', 'root'}
 SELECT_NORMALIZE_STATUSES = {'review', 'mixed', 'non_target'}
+SELECT_VALIDATION_SPLIT_PATTERN = re.compile(r'\s*(?:/|&|\b(?:and|or|plus)\b)\s*', re.IGNORECASE)
 SELECT_DEFAULT_SCOPE_COLUMN = 'bioproject'
 SELECT_DEFAULT_SCOPE_MODE = 'mark_other_rows_in_scope'
 SELECT_DEFAULT_TARGET_COLUMN = 'exclusion'
@@ -460,7 +461,7 @@ def build_select_normalization_columns(normalize_rules):
     return columns
 
 
-def classify_select_text(text, normalize_rules):
+def classify_select_text_raw(text, normalize_rules):
     normalized = normalize_select_value(text)
     if normalized.lower() in SELECT_IGNORE_VALUES:
         return {'status': 'empty', 'organ': '', 'text': normalized, 'rule_id': ''}
@@ -483,6 +484,69 @@ def classify_select_text(text, normalize_rules):
     return {'status': 'unknown', 'organ': '', 'text': normalized, 'rule_id': ''}
 
 
+def validate_select_organ_text(text, organ, normalize_rules):
+    normalized = normalize_select_value(text)
+    if normalized.lower() in SELECT_IGNORE_VALUES:
+        return None
+    if not SELECT_VALIDATION_SPLIT_PATTERN.search(normalized):
+        return None
+    segments = [
+        segment.strip(" \t\r\n;:.()[]{}")
+        for segment in SELECT_VALIDATION_SPLIT_PATTERN.split(normalized)
+    ]
+    segments = [segment for segment in segments if segment and (segment.lower() not in SELECT_IGNORE_VALUES)]
+    if len(segments) <= 1:
+        return None
+    for segment in segments:
+        classification = classify_select_text_raw(segment, normalize_rules)
+        if classification['status'] == 'empty':
+            continue
+        if classification['status'] == 'unknown':
+            return {
+                'status': 'review',
+                'organ': '',
+                'text': normalized,
+                'rule_id': 'validate_review_unknown_segment',
+            }
+        if classification['status'] == 'organ':
+            if classification['organ'] != organ:
+                return {
+                    'status': 'mixed',
+                    'organ': '',
+                    'text': normalized,
+                    'rule_id': 'validate_mixed_segment',
+                }
+            continue
+        if classification['status'] == 'mixed':
+            return {
+                'status': 'mixed',
+                'organ': '',
+                'text': normalized,
+                'rule_id': 'validate_mixed_segment',
+            }
+        return {
+            'status': 'review',
+            'organ': '',
+            'text': normalized,
+            'rule_id': 'validate_review_segment',
+        }
+    return None
+
+
+def classify_select_text(text, normalize_rules):
+    classification = classify_select_text_raw(text, normalize_rules)
+    if classification['status'] != 'organ':
+        return classification
+    validation = validate_select_organ_text(
+        text=classification['text'],
+        organ=classification['organ'],
+        normalize_rules=normalize_rules,
+    )
+    if validation is not None:
+        return validation
+    return classification
+
+
 def normalize_select_row(row, normalize_rules, normalization_columns):
     original_sample_group = normalize_select_value(row.get('sample_group', ''))
     result = {
@@ -499,7 +563,7 @@ def normalize_select_row(row, normalize_rules, normalization_columns):
         for column in rule['columns']:
             if column not in row.index:
                 continue
-            classification = classify_select_text(row[column], [rule])
+            classification = classify_select_text_raw(row[column], [rule])
             status = classification['status']
             if status == 'empty':
                 continue
@@ -508,6 +572,15 @@ def normalize_select_row(row, normalize_rules, normalization_columns):
                 fallback_text = classification['text']
             if status == 'unknown':
                 continue
+            if status == 'organ':
+                validation = validate_select_organ_text(
+                    text=classification['text'],
+                    organ=classification['organ'],
+                    normalize_rules=normalize_rules,
+                )
+                if validation is not None:
+                    classification = validation
+                    status = classification['status']
             result['sample_group_normalization_status'] = status
             result['sample_group_normalization_source'] = column
             result['sample_group_normalization_text'] = classification['text']
@@ -580,6 +653,42 @@ def normalize_select_metadata_frame(df, select_rules):
             if not candidate_mask.any():
                 continue
             if rule['outcome'] in SELECT_NORMALIZE_ORGANS:
+                validation_series = text_series.loc[candidate_mask].apply(
+                    lambda text: validate_select_organ_text(
+                        text=text,
+                        organ=rule['outcome'],
+                        normalize_rules=normalize_rules,
+                    )
+                )
+                validation_mask = validation_series.notna()
+                if validation_mask.any():
+                    validation_records = pandas.DataFrame(
+                        list(validation_series.loc[validation_mask]),
+                        index=validation_series.loc[validation_mask].index,
+                    )
+                    if not validation_records.empty:
+                        mixed_mask = validation_records['status'] == 'mixed'
+                        review_mask = validation_records['status'] == 'review'
+                        if mixed_mask.any():
+                            mixed_index = validation_records.index[mixed_mask]
+                            updated_groups.loc[mixed_index] = 'mixed'
+                            statuses.loc[mixed_index] = 'mixed'
+                            sources.loc[mixed_index] = column
+                            source_texts.loc[mixed_index] = validation_records.loc[mixed_index, 'text']
+                            rule_ids.loc[mixed_index] = validation_records.loc[mixed_index, 'rule_id']
+                        if review_mask.any():
+                            review_index = validation_records.index[review_mask]
+                            updated_groups.loc[review_index] = 'review'
+                            statuses.loc[review_index] = 'review'
+                            sources.loc[review_index] = column
+                            source_texts.loc[review_index] = validation_records.loc[review_index, 'text']
+                            rule_ids.loc[review_index] = validation_records.loc[review_index, 'rule_id']
+                        candidate_mask = candidate_mask.copy()
+                        candidate_mask.loc[validation_records.index] = False
+                        if rule['stop_on_match']:
+                            resolved.loc[validation_records.index] = True
+                if not candidate_mask.any():
+                    continue
                 updated_groups.loc[candidate_mask] = rule['outcome']
                 statuses.loc[candidate_mask] = 'organ'
             else:
