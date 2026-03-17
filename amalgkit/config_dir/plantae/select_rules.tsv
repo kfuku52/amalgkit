@@ -508,159 +508,159 @@ exclude_embryonic_14	yes	exclude	1013	age	somite	exclude	exclusion	embryonic			y
 exclude_embryonic_15	yes	exclude	1014	age	fertiliz.*	exclude	exclusion	embryonic			yes	legacy exclude embryonic
 exclude_embryonic_16	yes	exclude	1015	age	oocyte	exclude	exclusion	embryonic			yes	legacy exclude embryonic
 exclude_transgenic_17	yes	exclude	1016	genotype	foxn3	exclude	exclusion	transgenic			yes	legacy exclude transgenic
-control_mock_1	yes	control	2000	treatment	mock	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_control_2	yes	control	2001	treatment	control	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_cntl_3	yes	control	2002	treatment	cntl	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_con_d_4	yes	control	2003	treatment	con\d	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_con_5	yes	control	2004	treatment	con_	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_cont_b_6	yes	control	2005	treatment	cont\b	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_cont_7	yes	control	2006	treatment	cont_	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_kontrol_8	yes	control	2007	treatment	kontrol	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_contral_9	yes	control	2008	treatment	contral	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_contron_10	yes	control	2009	treatment	contron	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_bck_11	yes	control	2010	treatment	\bCK	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_none_12	yes	control	2011	treatment	none	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_normal_13	yes	control	2012	treatment	normal	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_natural_14	yes	control	2013	treatment	natural	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_standard_15	yes	control	2014	treatment	standard	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_optimal_16	yes	control	2015	treatment	optimal	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_sufficient_17	yes	control	2016	treatment	sufficient	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_no_s_w_s_treat_18	yes	control	2017	treatment	no(?:\s+\w+)?\s+treat	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_non_treat_19	yes	control	2018	treatment	non-treat	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_non_treat_20	yes	control	2019	treatment	non- treat	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_nontreat_21	yes	control	2020	treatment	nontreat	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_untreat_22	yes	control	2021	treatment	untreat	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_without_23	yes	control	2022	treatment	without	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_no_24	yes	control	2023	treatment	^no$	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_ad_libitum_25	yes	control	2024	treatment	Ad Libitum	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_in_the_absence_of_26	yes	control	2025	treatment	in the absence of	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_thermoneutral_27	yes	control	2026	treatment	Thermoneutral	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_21_oxygen_concentration_28	yes	control	2027	treatment	21%[oxygen_concentration]	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_dmso_29	yes	control	2028	treatment	DMSO	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_b0h_30	yes	control	2029	treatment	\b0h	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_b0_h_31	yes	control	2030	treatment	\b0 h	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_0h_32	yes	control	2031	treatment	_0h	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_b0day_33	yes	control	2032	treatment	\b0day	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_b0_day_34	yes	control	2033	treatment	\b0 day	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_b0m_35	yes	control	2034	treatment	\b0m	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_b0_m_36	yes	control	2035	treatment	\b0 m	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_b0_dpi_37	yes	control	2036	treatment	\b0 dpi	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_0_ppm_38	yes	control	2037	treatment	^0 ppm	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_wild_39	yes	control	2038	treatment	wild	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_uninfected_40	yes	control	2039	treatment	uninfected	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_un_infected_41	yes	control	2040	treatment	un-infected	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_non_infected_42	yes	control	2041	treatment	non infected	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_non_inifected_43	yes	control	2042	treatment	non-inifected	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_no_inoculation_44	yes	control	2043	treatment	no inoculation	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_un_inoculated_45	yes	control	2044	treatment	un-inoculated	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_no_disease_46	yes	control	2045	treatment	no disease	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_non_diseased_47	yes	control	2046	treatment	non-diseased	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_unwound_48	yes	control	2047	treatment	unwound	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_un_grazing_49	yes	control	2048	treatment	un-grazing	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_healthy_50	yes	control	2049	treatment	healthy	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_stress_free_51	yes	control	2050	treatment	stress-free	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_nostress_52	yes	control	2051	treatment	nostress	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_non_stress_53	yes	control	2052	treatment	non-stress	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_unstressed_54	yes	control	2053	treatment	unstressed	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_non_s_w_s_stress_55	yes	control	2054	treatment	non(?:\s+\w+)?\s+stress	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_room_temperature_56	yes	control	2055	treatment	room temperature	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_ambient_57	yes	control	2056	treatment	ambient	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_water_w_b_s_deficit_58	yes	control	2057	treatment	water\w*\b(?!\s*deficit)	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_h2o_w_b_s_deficit_59	yes	control	2058	treatment	H2O\w*\b(?!\s*deficit)	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_wild_60	yes	control	2059	genotype	wild	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_n2_61	yes	control	2060	genotype	N2	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_oregonr_62	yes	control	2061	genotype	OregonR	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_oregon_r_63	yes	control	2062	genotype	Oregon R	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_canton_s_64	yes	control	2063	genotype	Canton S	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_canton_s_65	yes	control	2064	genotype	Canton-S	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_y_w_66	yes	control	2065	genotype	y w	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_yw_67	yes	control	2066	genotype	yw	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_wt_68	yes	control	2067	genotype	wt	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_rule_69	yes	control	2068	genotype	\+\/\+	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_columbia_70	yes	control	2069	genotype	columbia	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_col0_71	yes	control	2070	genotype	col0	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_col_0_72	yes	control	2071	genotype	col-0	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_wild_73	yes	control	2072	sample_title	wild	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_bwt_74	yes	control	2073	sample_title	\bWT	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_control_75	yes	control	2074	sample_title	control	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_con_76	yes	control	2075	sample_title	CON_	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_ck_77	yes	control	2076	sample_title	CK_	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_ck_78	yes	control	2077	sample_title	CK-	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_ck_d_79	yes	control	2078	sample_title	CK\d	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_bck_b_80	yes	control	2079	sample_title	\bCK\b	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_normal_81	yes	control	2080	sample_title	normal	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_non_treat_82	yes	control	2081	sample_title	non-treat	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_non_inoculated_83	yes	control	2082	sample_title	non-inoculated	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_ungrazed_84	yes	control	2083	sample_title	ungrazed	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_healthy_85	yes	control	2084	sample_title	healthy	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_water_86	yes	control	2085	sample_title	water	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_h2o_87	yes	control	2086	sample_title	H2O	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_b0dpi_88	yes	control	2087	sample_title	\b0dpi	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_control_89	yes	control	2088	sample_description	control	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_mock_90	yes	control	2089	sample_description	mock	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_no_treatment_91	yes	control	2090	sample_description	no treatment	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_non_infected_92	yes	control	2091	sample_description	non-infected	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_before_93	yes	control	2092	sample_description	before	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_wild_94	yes	control	2093	sample_description	wild	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_control_95	yes	control	2094	lib_name	control	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_ck_96	yes	control	2095	lib_name	CK_	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_ck_97	yes	control	2096	lib_name	CK-	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_ck_d_98	yes	control	2097	lib_name	CK\d	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_bck_b_99	yes	control	2098	lib_name	\bCK\b	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_bcon_100	yes	control	2099	lib_name	\bcon-	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_ctrl_101	yes	control	2100	lib_name	ctrl	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_mock_102	yes	control	2101	lib_name	mock	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_wild_103	yes	control	2102	lib_name	wild	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_bwt_104	yes	control	2103	lib_name	\bWT	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_d_0h_105	yes	control	2104	lib_name	(?<!\d)0h	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_control_106	yes	control	2105	exp_title	control	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_con_107	yes	control	2106	exp_title	CON_	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_ck_108	yes	control	2107	exp_title	CK_	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_ck_109	yes	control	2108	exp_title	CK-	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_ck_d_110	yes	control	2109	exp_title	CK\d	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_bck_b_111	yes	control	2110	exp_title	\bCK\b	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_untreated_112	yes	control	2111	exp_title	untreated	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_mock_113	yes	control	2112	exp_title	mock	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_without_114	yes	control	2113	exp_title	without	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_water_115	yes	control	2114	exp_title	water	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_h2o_116	yes	control	2115	exp_title	H2O	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_timepoint1_117	yes	control	2116	exp_title	TimePoint1_	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_0_days_post_infection_118	yes	control	2117	exp_title	0 days post infection	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_b0h_119	yes	control	2118	exp_title	\b0h	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_b0_h_120	yes	control	2119	exp_title	\b0 h	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_0h_121	yes	control	2120	exp_title	_0h	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_control_122	yes	control	2121	design	control	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_ck_123	yes	control	2122	design	CK_	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_ck_124	yes	control	2123	design	CK-	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_ck_d_125	yes	control	2124	design	CK\d	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_bck_b_126	yes	control	2125	design	\bCK\b	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_bcon_127	yes	control	2126	design	\bcon-	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_mock_128	yes	control	2127	design	mock	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_normal_129	yes	control	2128	design	normal	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_common_130	yes	control	2129	design	common	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_untreat_131	yes	control	2130	design	untreat	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_non_treat_132	yes	control	2131	design	non-treat	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_no_s_w_s_treat_133	yes	control	2132	design	no(?:\s+\w+)?\s+treat	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_no_processing_134	yes	control	2133	design	no processing	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_without_135	yes	control	2134	design	without	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_water_136	yes	control	2135	design	water	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_h2o_137	yes	control	2136	design	H2O	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_before_138	yes	control	2137	design	before	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_b0h_139	yes	control	2138	design	\b0h	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_b0_h_140	yes	control	2139	design	\b0 h	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_0h_141	yes	control	2140	design	_0h	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_b0d_142	yes	control	2141	design	\b0d	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_b0_d_143	yes	control	2142	design	\b0 d	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_b0_m_144	yes	control	2143	design	\b0 m	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_healthy_145	yes	control	2144	design	healthy	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_ungrazed_146	yes	control	2145	design	ungrazed	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_no_grazing_147	yes	control	2146	design	no grazing	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_no_grazing_148	yes	control	2147	design	no-grazing	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_not_inoculated_149	yes	control	2148	design	not inoculated	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_non_inoculated_150	yes	control	2149	design	non-inoculated	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_uninfected_151	yes	control	2150	design	uninfected	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_no_incubation_152	yes	control	2151	design	no incubation	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_not_primed_153	yes	control	2152	design	not primed	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_not_induced_154	yes	control	2153	design	not induced	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_wt_155	yes	control	2154	design	wt	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
-control_wild_156	yes	control	2155	design	wild	mark_non_control	exclusion	non_control	bioproject	mark_other_rows_in_scope	yes	legacy control rule
+control_mock_1	yes	control	2000	treatment	mock	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_control_2	yes	control	2001	treatment	control	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_cntl_3	yes	control	2002	treatment	cntl	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_con_d_4	yes	control	2003	treatment	con\d	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_con_5	yes	control	2004	treatment	con_	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_cont_b_6	yes	control	2005	treatment	cont\b	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_cont_7	yes	control	2006	treatment	cont_	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_kontrol_8	yes	control	2007	treatment	kontrol	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_contral_9	yes	control	2008	treatment	contral	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_contron_10	yes	control	2009	treatment	contron	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_bck_11	yes	control	2010	treatment	\bCK	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_none_12	yes	control	2011	treatment	none	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_normal_13	yes	control	2012	treatment	normal	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_natural_14	yes	control	2013	treatment	natural	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_standard_15	yes	control	2014	treatment	standard	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_optimal_16	yes	control	2015	treatment	optimal	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_sufficient_17	yes	control	2016	treatment	sufficient	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_no_s_w_s_treat_18	yes	control	2017	treatment	no(?:\s+\w+)?\s+treat	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_non_treat_19	yes	control	2018	treatment	non-treat	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_non_treat_20	yes	control	2019	treatment	non- treat	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_nontreat_21	yes	control	2020	treatment	nontreat	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_untreat_22	yes	control	2021	treatment	untreat	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_without_23	yes	control	2022	treatment	without	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_no_24	yes	control	2023	treatment	^no$	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_ad_libitum_25	yes	control	2024	treatment	Ad Libitum	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_in_the_absence_of_26	yes	control	2025	treatment	in the absence of	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_thermoneutral_27	yes	control	2026	treatment	Thermoneutral	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_21_oxygen_concentration_28	yes	control	2027	treatment	21%[oxygen_concentration]	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_dmso_29	yes	control	2028	treatment	DMSO	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_b0h_30	yes	control	2029	treatment	\b0h	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_b0_h_31	yes	control	2030	treatment	\b0 h	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_0h_32	yes	control	2031	treatment	_0h	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_b0day_33	yes	control	2032	treatment	\b0day	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_b0_day_34	yes	control	2033	treatment	\b0 day	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_b0m_35	yes	control	2034	treatment	\b0m	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_b0_m_36	yes	control	2035	treatment	\b0 m	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_b0_dpi_37	yes	control	2036	treatment	\b0 dpi	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_0_ppm_38	yes	control	2037	treatment	^0 ppm	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_wild_39	yes	control	2038	treatment	wild	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_uninfected_40	yes	control	2039	treatment	uninfected	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_un_infected_41	yes	control	2040	treatment	un-infected	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_non_infected_42	yes	control	2041	treatment	non infected	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_non_inifected_43	yes	control	2042	treatment	non-inifected	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_no_inoculation_44	yes	control	2043	treatment	no inoculation	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_un_inoculated_45	yes	control	2044	treatment	un-inoculated	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_no_disease_46	yes	control	2045	treatment	no disease	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_non_diseased_47	yes	control	2046	treatment	non-diseased	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_unwound_48	yes	control	2047	treatment	unwound	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_un_grazing_49	yes	control	2048	treatment	un-grazing	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_healthy_50	yes	control	2049	treatment	healthy	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_stress_free_51	yes	control	2050	treatment	stress-free	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_nostress_52	yes	control	2051	treatment	nostress	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_non_stress_53	yes	control	2052	treatment	non-stress	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_unstressed_54	yes	control	2053	treatment	unstressed	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_non_s_w_s_stress_55	yes	control	2054	treatment	non(?:\s+\w+)?\s+stress	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_room_temperature_56	yes	control	2055	treatment	room temperature	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_ambient_57	yes	control	2056	treatment	ambient	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_water_w_b_s_deficit_58	yes	control	2057	treatment	water\w*\b(?!\s*deficit)	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_h2o_w_b_s_deficit_59	yes	control	2058	treatment	H2O\w*\b(?!\s*deficit)	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_wild_60	yes	control	2059	genotype	wild	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_n2_61	yes	control	2060	genotype	N2	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_oregonr_62	yes	control	2061	genotype	OregonR	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_oregon_r_63	yes	control	2062	genotype	Oregon R	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_canton_s_64	yes	control	2063	genotype	Canton S	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_canton_s_65	yes	control	2064	genotype	Canton-S	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_y_w_66	yes	control	2065	genotype	y w	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_yw_67	yes	control	2066	genotype	yw	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_wt_68	yes	control	2067	genotype	wt	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_rule_69	yes	control	2068	genotype	\+\/\+	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_columbia_70	yes	control	2069	genotype	columbia	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_col0_71	yes	control	2070	genotype	col0	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_col_0_72	yes	control	2071	genotype	col-0	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_wild_73	yes	control	2072	sample_title	wild	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_bwt_74	yes	control	2073	sample_title	\bWT	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_control_75	yes	control	2074	sample_title	control	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_con_76	yes	control	2075	sample_title	CON_	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_ck_77	yes	control	2076	sample_title	CK_	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_ck_78	yes	control	2077	sample_title	CK-	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_ck_d_79	yes	control	2078	sample_title	CK\d	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_bck_b_80	yes	control	2079	sample_title	\bCK\b	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_normal_81	yes	control	2080	sample_title	normal	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_non_treat_82	yes	control	2081	sample_title	non-treat	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_non_inoculated_83	yes	control	2082	sample_title	non-inoculated	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_ungrazed_84	yes	control	2083	sample_title	ungrazed	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_healthy_85	yes	control	2084	sample_title	healthy	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_water_86	yes	control	2085	sample_title	water	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_h2o_87	yes	control	2086	sample_title	H2O	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_b0dpi_88	yes	control	2087	sample_title	\b0dpi	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_control_89	yes	control	2088	sample_description	control	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_mock_90	yes	control	2089	sample_description	mock	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_no_treatment_91	yes	control	2090	sample_description	no treatment	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_non_infected_92	yes	control	2091	sample_description	non-infected	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_before_93	yes	control	2092	sample_description	before	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_wild_94	yes	control	2093	sample_description	wild	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_control_95	yes	control	2094	lib_name	control	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_ck_96	yes	control	2095	lib_name	CK_	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_ck_97	yes	control	2096	lib_name	CK-	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_ck_d_98	yes	control	2097	lib_name	CK\d	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_bck_b_99	yes	control	2098	lib_name	\bCK\b	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_bcon_100	yes	control	2099	lib_name	\bcon-	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_ctrl_101	yes	control	2100	lib_name	ctrl	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_mock_102	yes	control	2101	lib_name	mock	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_wild_103	yes	control	2102	lib_name	wild	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_bwt_104	yes	control	2103	lib_name	\bWT	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_d_0h_105	yes	control	2104	lib_name	(?<!\d)0h	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_control_106	yes	control	2105	exp_title	control	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_con_107	yes	control	2106	exp_title	CON_	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_ck_108	yes	control	2107	exp_title	CK_	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_ck_109	yes	control	2108	exp_title	CK-	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_ck_d_110	yes	control	2109	exp_title	CK\d	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_bck_b_111	yes	control	2110	exp_title	\bCK\b	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_untreated_112	yes	control	2111	exp_title	untreated	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_mock_113	yes	control	2112	exp_title	mock	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_without_114	yes	control	2113	exp_title	without	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_water_115	yes	control	2114	exp_title	water	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_h2o_116	yes	control	2115	exp_title	H2O	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_timepoint1_117	yes	control	2116	exp_title	TimePoint1_	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_0_days_post_infection_118	yes	control	2117	exp_title	0 days post infection	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_b0h_119	yes	control	2118	exp_title	\b0h	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_b0_h_120	yes	control	2119	exp_title	\b0 h	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_0h_121	yes	control	2120	exp_title	_0h	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_control_122	yes	control	2121	design	control	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_ck_123	yes	control	2122	design	CK_	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_ck_124	yes	control	2123	design	CK-	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_ck_d_125	yes	control	2124	design	CK\d	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_bck_b_126	yes	control	2125	design	\bCK\b	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_bcon_127	yes	control	2126	design	\bcon-	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_mock_128	yes	control	2127	design	mock	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_normal_129	yes	control	2128	design	normal	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_common_130	yes	control	2129	design	common	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_untreat_131	yes	control	2130	design	untreat	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_non_treat_132	yes	control	2131	design	non-treat	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_no_s_w_s_treat_133	yes	control	2132	design	no(?:\s+\w+)?\s+treat	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_no_processing_134	yes	control	2133	design	no processing	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_without_135	yes	control	2134	design	without	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_water_136	yes	control	2135	design	water	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_h2o_137	yes	control	2136	design	H2O	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_before_138	yes	control	2137	design	before	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_b0h_139	yes	control	2138	design	\b0h	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_b0_h_140	yes	control	2139	design	\b0 h	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_0h_141	yes	control	2140	design	_0h	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_b0d_142	yes	control	2141	design	\b0d	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_b0_d_143	yes	control	2142	design	\b0 d	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_b0_m_144	yes	control	2143	design	\b0 m	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_healthy_145	yes	control	2144	design	healthy	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_ungrazed_146	yes	control	2145	design	ungrazed	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_no_grazing_147	yes	control	2146	design	no grazing	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_no_grazing_148	yes	control	2147	design	no-grazing	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_not_inoculated_149	yes	control	2148	design	not inoculated	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_non_inoculated_150	yes	control	2149	design	non-inoculated	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_uninfected_151	yes	control	2150	design	uninfected	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_no_incubation_152	yes	control	2151	design	no incubation	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_not_primed_153	yes	control	2152	design	not primed	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_not_induced_154	yes	control	2153	design	not induced	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_wt_155	yes	control	2154	design	wt	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule
+control_wild_156	yes	control	2155	design	wild	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes	legacy control rule

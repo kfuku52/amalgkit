@@ -98,6 +98,19 @@ def parse_select_rule_columns(value):
     return [token.strip() for token in str(value).split(',') if token.strip() != '']
 
 
+def build_select_scope_key_series(df, scope_columns):
+    normalized_columns = []
+    for column in scope_columns:
+        if column not in df.columns:
+            raise KeyError(column)
+        normalized_columns.append(df[column].fillna('').astype(str).str.strip())
+    return pandas.Series(list(zip(*normalized_columns)), index=df.index)
+
+
+def is_valid_select_scope_key(scope_key):
+    return all(str(value).strip() != '' for value in scope_key)
+
+
 def compile_select_rule_pattern(pattern, rule_id):
     try:
         return re.compile(str(pattern), re.IGNORECASE)
@@ -155,6 +168,7 @@ def read_select_rules(select_rules_tsv):
         target_column = row['target_column']
         outcome = row['outcome']
         scope_column = row['scope_column'] if row['scope_column'] != '' else SELECT_DEFAULT_SCOPE_COLUMN
+        scope_columns = parse_select_rule_columns(scope_column)
         scope_mode = row['scope_mode'] if row['scope_mode'] != '' else SELECT_DEFAULT_SCOPE_MODE
         stop_on_match = parse_select_rule_bool(
             row['stop_on_match'] if row['stop_on_match'] != '' else 'yes',
@@ -210,6 +224,10 @@ def read_select_rules(select_rules_tsv):
                 raise ValueError(
                     'Control select rule "{}" must use action=mark_non_control.'.format(rule_id)
                 )
+            if len(scope_columns) == 0:
+                raise ValueError(
+                    'Control select rule "{}" must define at least one scope column.'.format(rule_id)
+                )
             if target_column == '':
                 target_column = SELECT_DEFAULT_TARGET_COLUMN
             if outcome == '':
@@ -229,6 +247,7 @@ def read_select_rules(select_rules_tsv):
             'target_column': target_column,
             'outcome': outcome,
             'scope_column': scope_column,
+            'scope_columns': scope_columns,
             'scope_mode': scope_mode,
             'stop_on_match': stop_on_match,
             'note': row['note'],
@@ -485,12 +504,14 @@ def apply_select_control_rules(metadata, select_rules):
     aggregated_matches = dict()
     for rule in control_rules:
         scope_column = rule['scope_column'] if rule['scope_column'] != '' else SELECT_DEFAULT_SCOPE_COLUMN
-        if scope_column not in metadata.df.columns:
+        scope_columns = rule.get('scope_columns', parse_select_rule_columns(scope_column))
+        missing_scope_columns = [column for column in scope_columns if column not in metadata.df.columns]
+        if len(missing_scope_columns) > 0:
             print(
-                '{}: Skipping control rule "{}" because scope column "{}" is missing'.format(
+                '{}: Skipping control rule "{}" because scope column(s) "{}" are missing'.format(
                     datetime.datetime.now(),
                     rule['rule_id'],
-                    scope_column,
+                    ','.join(missing_scope_columns),
                 ),
                 flush=True,
             )
@@ -498,14 +519,15 @@ def apply_select_control_rules(metadata, select_rules):
         target_column = rule['target_column'] if rule['target_column'] != '' else SELECT_DEFAULT_TARGET_COLUMN
         metadata.df = ensure_select_target_column(metadata.df, target_column)
         matched = build_select_rule_match_mask(metadata.df, rule)
+        scope_key_series = build_select_scope_key_series(metadata.df, scope_columns)
         num_control = 0
-        scope_values = metadata.df.loc[matched, scope_column].fillna('').astype(str).str.strip()
+        scope_values = scope_key_series.loc[matched]
         for scope_value in scope_values.unique().tolist():
-            if scope_value == '':
+            if not is_valid_select_scope_key(scope_value):
                 continue
-            is_scope = metadata.df.loc[:, scope_column].fillna('').astype(str).str.strip() == scope_value
+            is_scope = scope_key_series == scope_value
             num_control += int((is_scope & matched).sum())
-        aggregate_key = (scope_column, target_column, rule['outcome'], rule['stop_on_match'])
+        aggregate_key = (tuple(scope_columns), target_column, rule['outcome'], rule['stop_on_match'])
         if aggregate_key not in aggregated_matches:
             aggregated_matches[aggregate_key] = pandas.Series(False, index=metadata.df.index)
         aggregated_matches[aggregate_key] = aggregated_matches[aggregate_key] | matched
@@ -513,19 +535,20 @@ def apply_select_control_rules(metadata, select_rules):
             '{}: Applying control rule "{}" within "{}": control {:,}'.format(
                 datetime.datetime.now(),
                 rule['rule_id'],
-                scope_column,
+                ','.join(scope_columns),
                 num_control,
             ),
             flush=True,
         )
-    for (scope_column, target_column, outcome, stop_on_match), matched_any in aggregated_matches.items():
-        scope_values = metadata.df.loc[matched_any, scope_column].fillna('').astype(str).str.strip()
+    for (scope_columns, target_column, outcome, stop_on_match), matched_any in aggregated_matches.items():
+        scope_key_series = build_select_scope_key_series(metadata.df, list(scope_columns))
+        scope_values = scope_key_series.loc[matched_any]
         num_control = 0
         num_treatment = 0
         for scope_value in scope_values.unique().tolist():
-            if scope_value == '':
+            if not is_valid_select_scope_key(scope_value):
                 continue
-            is_scope = metadata.df.loc[:, scope_column].fillna('').astype(str).str.strip() == scope_value
+            is_scope = scope_key_series == scope_value
             candidate_mask = is_scope & (~matched_any)
             write_mask = resolve_select_rule_write_mask(metadata.df, target_column, candidate_mask, stop_on_match)
             metadata.df.loc[write_mask, target_column] = outcome
@@ -534,7 +557,7 @@ def apply_select_control_rules(metadata, select_rules):
         print(
             '{}: Applied control scope "{}": protected {:,}, marked {:,}'.format(
                 datetime.datetime.now(),
-                scope_column,
+                ','.join(scope_columns),
                 num_control,
                 num_treatment,
             ),

@@ -460,6 +460,41 @@ class TestSelectRuleApplication:
         assert out.df.loc[out.df['run'] == 'SRR002', 'exclusion'].iloc[0] == 'no'
         assert out.df.loc[out.df['run'] == 'SRR003', 'exclusion'].iloc[0] == 'non_control'
 
+    def test_control_rules_respect_multi_column_scope(self, tmp_path):
+        rules_path = tmp_path / 'select_rules.tsv'
+        write_select_rules(rules_path, [
+            {
+                'rule_id': 'control_mock_treatment',
+                'stage': 'control',
+                'priority': '10',
+                'columns': 'treatment',
+                'pattern': r'mock',
+                'action': 'mark_non_control',
+                'target_column': 'exclusion',
+                'outcome': 'non_control',
+                'scope_column': 'bioproject,sample_group',
+                'scope_mode': 'mark_other_rows_in_scope',
+            },
+        ])
+        select_rules = read_select_rules(str(rules_path))
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001', 'SRR002', 'SRR003', 'SRR004'],
+            'scientific_name': ['Species A'] * 4,
+            'sample_group': ['leaf', 'leaf', 'flower', 'flower'],
+            'bioproject': ['PRJ1'] * 4,
+            'biosample': ['SAM1', 'SAM2', 'SAM3', 'SAM4'],
+            'total_spots': [100, 100, 100, 100],
+            'exclusion': ['no', 'no', 'no', 'no'],
+            'treatment': ['mock treatment', 'PepMov infection', '', ''],
+        }))
+
+        out = apply_select_control_rules(metadata, select_rules)
+
+        assert out.df.loc[out.df['run'] == 'SRR001', 'exclusion'].iloc[0] == 'no'
+        assert out.df.loc[out.df['run'] == 'SRR002', 'exclusion'].iloc[0] == 'non_control'
+        assert out.df.loc[out.df['run'] == 'SRR003', 'exclusion'].iloc[0] == 'no'
+        assert out.df.loc[out.df['run'] == 'SRR004', 'exclusion'].iloc[0] == 'no'
+
     def test_prepare_and_filter_metadata_applies_single_file_rules(self, tmp_path):
         rules_path = tmp_path / 'select_rules.tsv'
         write_select_rules(rules_path, [
