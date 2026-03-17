@@ -9,6 +9,7 @@ from amalgkit.arg_utils import clone_namespace
 from amalgkit.filter_utils import staged_output_dir
 from amalgkit.metadata_utils import Metadata, load_metadata
 from amalgkit.output_utils import atomic_write_dataframe
+from amalgkit.parallel_utils import resolve_worker_allocation, run_tasks_with_optional_threads
 
 SELECT_PRIORITY_COLUMNS = [
     'sample_attribute_tissue',
@@ -45,6 +46,8 @@ SELECT_RULES_REQUIRED_COLUMNS = [
     'scope_column',
     'scope_mode',
     'stop_on_match',
+    'parameter_name',
+    'parameter_value',
     'note',
 ]
 SELECT_STAGE_ORDER = {
@@ -58,6 +61,31 @@ SELECT_NORMALIZE_STATUSES = {'review', 'mixed', 'non_target'}
 SELECT_DEFAULT_SCOPE_COLUMN = 'bioproject'
 SELECT_DEFAULT_SCOPE_MODE = 'mark_other_rows_in_scope'
 SELECT_DEFAULT_TARGET_COLUMN = 'exclusion'
+SELECT_PARAMETER_DEFINITIONS = {
+    'min_nspots': {
+        'kind': 'int',
+        'minimum': 0,
+        'required': True,
+    },
+    'max_sample': {
+        'kind': 'int',
+        'minimum': 1,
+        'required': True,
+    },
+    'mark_missing_rank': {
+        'kind': 'choice',
+        'choices': ['species', 'genus', 'family', 'order', 'class', 'phylum', 'kingdom', 'domain', 'none'],
+        'required': True,
+    },
+    'mark_redundant_biosamples': {
+        'kind': 'bool',
+        'required': True,
+    },
+    'sample_group': {
+        'kind': 'string',
+        'required': False,
+    },
+}
 
 
 def resolve_select_rules_tsv(args, out_dir=None):
@@ -120,7 +148,46 @@ def compile_select_rule_pattern(pattern, rule_id):
         ) from exc
 
 
-def read_select_rules(select_rules_tsv):
+def parse_select_parameter_value(parameter_name, parameter_value, rule_id):
+    definition = SELECT_PARAMETER_DEFINITIONS[parameter_name]
+    raw_value = str(parameter_value).strip()
+    if raw_value == '':
+        raise ValueError(
+            'Parameter select rule "{}" must define parameter_value.'.format(rule_id)
+        )
+    if definition['kind'] == 'int':
+        try:
+            value = int(raw_value)
+        except ValueError as exc:
+            raise ValueError(
+                'Invalid integer parameter_value in select rule "{}": {}'.format(rule_id, parameter_value)
+            ) from exc
+        minimum = definition.get('minimum')
+        if (minimum is not None) and (value < minimum):
+            raise ValueError(
+                'Parameter select rule "{}" must be >= {}: {}'.format(rule_id, minimum, parameter_value)
+            )
+        return value
+    if definition['kind'] == 'choice':
+        if raw_value not in definition['choices']:
+            raise ValueError(
+                'Invalid parameter_value in select rule "{}": {} (expected one of {}).'.format(
+                    rule_id,
+                    parameter_value,
+                    ', '.join(definition['choices']),
+                )
+            )
+        return raw_value
+    if definition['kind'] == 'bool':
+        return parse_select_rule_bool(raw_value, 'parameter_value', rule_id)
+    if definition['kind'] == 'string':
+        return raw_value
+    raise ValueError(
+        'Unsupported parameter kind for "{}": {}'.format(parameter_name, definition['kind'])
+    )
+
+
+def load_select_rules_table(select_rules_tsv):
     if not os.path.exists(select_rules_tsv):
         raise FileNotFoundError('select rules file not found: {}'.format(select_rules_tsv))
     if not os.path.isfile(select_rules_tsv):
@@ -151,13 +218,39 @@ def read_select_rules(select_rules_tsv):
     if rules_df['rule_id'].duplicated().any():
         duplicated = sorted(rules_df.loc[rules_df['rule_id'].duplicated(), 'rule_id'].unique().tolist())
         raise ValueError('Duplicate rule_id detected in select_rules.tsv: {}'.format(', '.join(duplicated)))
+    return rules_df
+
+
+def read_select_config(select_rules_tsv):
+    rules_df = load_select_rules_table(select_rules_tsv)
     rules = []
+    parameters = {}
     for _, row in rules_df.iterrows():
         rule_id = row['rule_id']
         enabled = parse_select_rule_bool(row['enabled'] if row['enabled'] != '' else 'yes', 'enabled', rule_id)
         if not enabled:
             continue
         stage = row['stage'].lower()
+        if stage == 'parameter':
+            parameter_name = row['parameter_name']
+            if parameter_name == '':
+                raise ValueError(
+                    'Parameter select rule "{}" must define parameter_name.'.format(rule_id)
+                )
+            if parameter_name not in SELECT_PARAMETER_DEFINITIONS:
+                raise ValueError(
+                    'Unsupported parameter_name in select rule "{}": {}'.format(rule_id, parameter_name)
+                )
+            if parameter_name in parameters:
+                raise ValueError(
+                    'Duplicate parameter_name detected in select_rules.tsv: {}'.format(parameter_name)
+                )
+            parameters[parameter_name] = parse_select_parameter_value(
+                parameter_name,
+                row['parameter_value'],
+                rule_id,
+            )
+            continue
         if stage not in SELECT_STAGE_ORDER:
             raise ValueError(
                 'Unsupported stage in select rule "{}": {}'.format(rule_id, row['stage'])
@@ -254,10 +347,38 @@ def read_select_rules(select_rules_tsv):
         })
     if len(rules) == 0:
         raise ValueError('select_rules.tsv does not contain any enabled rules.')
-    return sorted(
-        rules,
-        key=lambda rule: (SELECT_STAGE_ORDER[rule['stage']], rule['priority'], rule['rule_id']),
-    )
+    return {
+        'rules': sorted(
+            rules,
+            key=lambda rule: (SELECT_STAGE_ORDER[rule['stage']], rule['priority'], rule['rule_id']),
+        ),
+        'parameters': parameters,
+    }
+
+
+def read_select_rules(select_rules_tsv):
+    return read_select_config(select_rules_tsv)['rules']
+
+
+def read_select_parameters(select_rules_tsv):
+    return read_select_config(select_rules_tsv)['parameters']
+
+
+def apply_select_config_parameters(runtime_args, select_parameters):
+    for parameter_name, definition in SELECT_PARAMETER_DEFINITIONS.items():
+        current_value = getattr(runtime_args, parameter_name, None)
+        if current_value is not None:
+            continue
+        if parameter_name not in select_parameters:
+            if definition.get('required', False):
+                raise ValueError(
+                    'Select parameter "{}" must be provided via select_rules.tsv or runtime args.'.format(
+                        parameter_name
+                    )
+                )
+            continue
+        setattr(runtime_args, parameter_name, select_parameters[parameter_name])
+    return runtime_args
 
 
 def resolve_select_metadata_specieswise_dir(args, out_dir):
@@ -420,26 +541,70 @@ def normalize_select_metadata_frame(df, select_rules):
     out_df = df.copy(deep=True)
     if 'sample_group' not in out_df.columns:
         out_df['sample_group'] = ''
-    normalized_groups = []
-    statuses = []
-    sources = []
-    source_texts = []
-    original_groups = []
-    rule_ids = []
-    for _, row in out_df.iterrows():
-        updated_sample_group, result = normalize_select_row(
-            row=row,
-            normalize_rules=normalize_rules,
-            normalization_columns=normalization_columns,
-        )
-        normalized_groups.append(updated_sample_group)
-        statuses.append(result['sample_group_normalization_status'])
-        sources.append(result['sample_group_normalization_source'])
-        source_texts.append(result['sample_group_normalization_text'])
-        original_groups.append(result['sample_group_original'])
-        rule_ids.append(result['sample_group_normalization_rule_id'])
+    normalized_columns = {}
+    ignored_columns = {}
+    for column in normalization_columns:
+        if column not in out_df.columns:
+            continue
+        normalized_series = normalize_select_series(out_df[column])
+        normalized_columns[column] = normalized_series
+        ignored_columns[column] = normalized_series.str.lower().isin(SELECT_IGNORE_VALUES)
+    original_groups = normalized_columns.get(
+        'sample_group',
+        pandas.Series('', index=out_df.index, dtype=str),
+    ).copy()
+    updated_groups = original_groups.copy()
+    statuses = pandas.Series('unchanged', index=out_df.index, dtype=str)
+    sources = pandas.Series('', index=out_df.index, dtype=str)
+    source_texts = pandas.Series('', index=out_df.index, dtype=str)
+    rule_ids = pandas.Series('', index=out_df.index, dtype=str)
+    fallback_sources = pandas.Series('', index=out_df.index, dtype=str)
+    fallback_texts = pandas.Series('', index=out_df.index, dtype=str)
+    resolved = pandas.Series(False, index=out_df.index)
+    for rule in normalize_rules:
+        compiled_pattern = rule['regex']
+        for column in rule['columns']:
+            if column not in normalized_columns:
+                continue
+            text_series = normalized_columns[column]
+            ignored_mask = ignored_columns[column]
+            nonempty_mask = ~ignored_mask
+            fallback_mask = (fallback_texts == '') & nonempty_mask
+            if fallback_mask.any():
+                fallback_sources.loc[fallback_mask] = column
+                fallback_texts.loc[fallback_mask] = text_series.loc[fallback_mask]
+            matched_mask = text_series.str.contains(compiled_pattern, regex=True).fillna(False)
+            candidate_mask = nonempty_mask & matched_mask
+            if rule['stop_on_match']:
+                candidate_mask = candidate_mask & (~resolved)
+            if not candidate_mask.any():
+                continue
+            if rule['outcome'] in SELECT_NORMALIZE_ORGANS:
+                updated_groups.loc[candidate_mask] = rule['outcome']
+                statuses.loc[candidate_mask] = 'organ'
+            else:
+                updated_groups.loc[candidate_mask] = rule['outcome']
+                statuses.loc[candidate_mask] = rule['outcome']
+            sources.loc[candidate_mask] = column
+            source_texts.loc[candidate_mask] = text_series.loc[candidate_mask]
+            rule_ids.loc[candidate_mask] = rule['rule_id']
+            if rule['stop_on_match']:
+                resolved = resolved | candidate_mask
+    for column in normalization_columns:
+        if column not in normalized_columns:
+            continue
+        text_series = normalized_columns[column]
+        fallback_mask = (fallback_texts == '') & (~ignored_columns[column])
+        if fallback_mask.any():
+            fallback_sources.loc[fallback_mask] = column
+            fallback_texts.loc[fallback_mask] = text_series.loc[fallback_mask]
+    unknown_mask = (statuses == 'unchanged') & (fallback_texts != '')
+    if unknown_mask.any():
+        statuses.loc[unknown_mask] = 'unknown'
+        sources.loc[unknown_mask] = fallback_sources.loc[unknown_mask]
+        source_texts.loc[unknown_mask] = fallback_texts.loc[unknown_mask]
     out_df['sample_group_original'] = original_groups
-    out_df['sample_group'] = normalized_groups
+    out_df['sample_group'] = updated_groups
     out_df['sample_group_normalization_status'] = statuses
     out_df['sample_group_normalization_source'] = sources
     out_df['sample_group_normalization_text'] = source_texts
@@ -455,13 +620,66 @@ def prepare_select_metadata(metadata, select_rules):
 
 
 def build_select_rule_match_mask(df, rule):
+    return build_select_rule_match_mask_with_cache(df=df, rule=rule, text_cache=None)
+
+
+def get_select_text_series(df, column, text_cache):
+    if text_cache is None:
+        return df[column].fillna('').astype(str)
+    if column not in text_cache:
+        text_cache[column] = df[column].fillna('').astype(str)
+    return text_cache[column]
+
+
+def build_select_rule_match_mask_with_cache(df, rule, text_cache=None):
     matched = pandas.Series(False, index=df.index)
+    compiled_pattern = rule.get('regex', rule['pattern'])
     for column in rule['columns']:
         if column not in df.columns:
             continue
-        text_col = df[column].fillna('').astype(str)
-        matched = matched | text_col.str.contains(rule['pattern'], regex=True, case=False).fillna(False)
+        text_col = get_select_text_series(df, column, text_cache=text_cache)
+        matched = matched | text_col.str.contains(compiled_pattern, regex=True).fillna(False)
     return matched
+
+
+def get_select_scope_key_series(df, scope_columns, scope_key_cache):
+    cache_key = tuple(scope_columns)
+    if scope_key_cache is None:
+        return build_select_scope_key_series(df, list(cache_key))
+    if cache_key not in scope_key_cache:
+        scope_key_cache[cache_key] = build_select_scope_key_series(df, list(cache_key))
+    return scope_key_cache[cache_key]
+
+
+def build_select_control_rule_groups(control_rules):
+    grouped = {}
+    for rule in control_rules:
+        scope_columns = tuple(rule.get('scope_columns', parse_select_rule_columns(rule.get('scope_column', SELECT_DEFAULT_SCOPE_COLUMN))))
+        target_column = rule['target_column'] if rule['target_column'] != '' else SELECT_DEFAULT_TARGET_COLUMN
+        outcome = rule['outcome'] if rule['outcome'] != '' else 'non_control'
+        aggregate_key = (scope_columns, target_column, outcome, rule['stop_on_match'])
+        group = grouped.setdefault(
+            aggregate_key,
+            {
+                'scope_columns': scope_columns,
+                'target_column': target_column,
+                'outcome': outcome,
+                'stop_on_match': rule['stop_on_match'],
+                'column_patterns': {},
+            },
+        )
+        for column in rule['columns']:
+            group['column_patterns'].setdefault(column, []).append(rule['pattern'])
+    for aggregate_key, group in grouped.items():
+        compiled_by_column = {}
+        for column, patterns in group['column_patterns'].items():
+            combined_pattern = '|'.join(['(?:{})'.format(pattern) for pattern in patterns])
+            compiled_by_column[column] = compile_select_rule_pattern(
+                combined_pattern,
+                'control_group:{}:{}'.format(','.join(aggregate_key[0]), column),
+            )
+        group['compiled_by_column'] = compiled_by_column
+    return list(grouped.values())
 
 
 def resolve_select_rule_write_mask(df, target_column, candidate_mask, stop_on_match):
@@ -477,21 +695,32 @@ def apply_select_exclude_rules(metadata, select_rules):
         return metadata
     print('{}: Marking SRAs with select exclude rules'.format(datetime.datetime.now()), flush=True)
     metadata.df = ensure_select_target_column(metadata.df, SELECT_DEFAULT_TARGET_COLUMN)
+    text_cache = {}
+    total_matched = 0
+    total_wrote = 0
+    rules_with_writes = 0
     for rule in exclude_rules:
         target_column = rule['target_column'] if rule['target_column'] != '' else SELECT_DEFAULT_TARGET_COLUMN
         metadata.df = ensure_select_target_column(metadata.df, target_column)
-        matched = build_select_rule_match_mask(metadata.df, rule)
+        matched = build_select_rule_match_mask_with_cache(metadata.df, rule, text_cache=text_cache)
         write_mask = resolve_select_rule_write_mask(metadata.df, target_column, matched, rule['stop_on_match'])
+        matched_count = int(matched.sum())
+        wrote_count = int(write_mask.sum())
         metadata.df.loc[write_mask, target_column] = rule['outcome']
-        print(
-            '{}: Applying exclude rule "{}": matched {:,}, wrote {:,}'.format(
-                datetime.datetime.now(),
-                rule['rule_id'],
-                int(matched.sum()),
-                int(write_mask.sum()),
-            ),
-            flush=True,
-        )
+        total_matched += matched_count
+        total_wrote += wrote_count
+        if wrote_count > 0:
+            rules_with_writes += 1
+    print(
+        '{}: Exclude rules complete: rules={}, matched_total={:,}, wrote_total={:,}, wrote_rules={}'.format(
+            datetime.datetime.now(),
+            len(exclude_rules),
+            total_matched,
+            total_wrote,
+            rules_with_writes,
+        ),
+        flush=True,
+    )
     return metadata
 
 
@@ -501,25 +730,33 @@ def apply_select_control_rules(metadata, select_rules):
         return metadata
     print('{}: Marking SRAs with select control rules'.format(datetime.datetime.now()), flush=True)
     metadata.df = ensure_select_target_column(metadata.df, SELECT_DEFAULT_TARGET_COLUMN)
+    text_cache = {}
+    scope_key_cache = {}
+    control_groups = build_select_control_rule_groups(control_rules)
+    total_control = 0
+    total_matched = 0
     aggregated_matches = dict()
-    for rule in control_rules:
-        scope_column = rule['scope_column'] if rule['scope_column'] != '' else SELECT_DEFAULT_SCOPE_COLUMN
-        scope_columns = rule.get('scope_columns', parse_select_rule_columns(scope_column))
+    for group in control_groups:
+        scope_columns = list(group['scope_columns'])
         missing_scope_columns = [column for column in scope_columns if column not in metadata.df.columns]
         if len(missing_scope_columns) > 0:
             print(
-                '{}: Skipping control rule "{}" because scope column(s) "{}" are missing'.format(
+                '{}: Skipping control rule group because scope column(s) "{}" are missing'.format(
                     datetime.datetime.now(),
-                    rule['rule_id'],
                     ','.join(missing_scope_columns),
                 ),
                 flush=True,
             )
             continue
-        target_column = rule['target_column'] if rule['target_column'] != '' else SELECT_DEFAULT_TARGET_COLUMN
+        target_column = group['target_column']
         metadata.df = ensure_select_target_column(metadata.df, target_column)
-        matched = build_select_rule_match_mask(metadata.df, rule)
-        scope_key_series = build_select_scope_key_series(metadata.df, scope_columns)
+        matched = pandas.Series(False, index=metadata.df.index)
+        for column, compiled_pattern in group['compiled_by_column'].items():
+            if column not in metadata.df.columns:
+                continue
+            text_col = get_select_text_series(metadata.df, column, text_cache=text_cache)
+            matched = matched | text_col.str.contains(compiled_pattern, regex=True).fillna(False)
+        scope_key_series = get_select_scope_key_series(metadata.df, scope_columns, scope_key_cache=scope_key_cache)
         num_control = 0
         scope_values = scope_key_series.loc[matched]
         for scope_value in scope_values.unique().tolist():
@@ -527,21 +764,14 @@ def apply_select_control_rules(metadata, select_rules):
                 continue
             is_scope = scope_key_series == scope_value
             num_control += int((is_scope & matched).sum())
-        aggregate_key = (tuple(scope_columns), target_column, rule['outcome'], rule['stop_on_match'])
-        if aggregate_key not in aggregated_matches:
-            aggregated_matches[aggregate_key] = pandas.Series(False, index=metadata.df.index)
-        aggregated_matches[aggregate_key] = aggregated_matches[aggregate_key] | matched
-        print(
-            '{}: Applying control rule "{}" within "{}": control {:,}'.format(
-                datetime.datetime.now(),
-                rule['rule_id'],
-                ','.join(scope_columns),
-                num_control,
-            ),
-            flush=True,
-        )
+        total_control += num_control
+        total_matched += int(matched.sum())
+        aggregate_key = (tuple(scope_columns), target_column, group['outcome'], group['stop_on_match'])
+        aggregated_matches[aggregate_key] = matched
+    total_protected = 0
+    total_marked = 0
     for (scope_columns, target_column, outcome, stop_on_match), matched_any in aggregated_matches.items():
-        scope_key_series = build_select_scope_key_series(metadata.df, list(scope_columns))
+        scope_key_series = get_select_scope_key_series(metadata.df, list(scope_columns), scope_key_cache=scope_key_cache)
         scope_values = scope_key_series.loc[matched_any]
         num_control = 0
         num_treatment = 0
@@ -554,24 +784,90 @@ def apply_select_control_rules(metadata, select_rules):
             metadata.df.loc[write_mask, target_column] = outcome
             num_control += int((is_scope & matched_any).sum())
             num_treatment += int(write_mask.sum())
+        total_protected += num_control
+        total_marked += num_treatment
+    print(
+        '{}: Control rules complete: rules={}, groups={}, matched_total={:,}, control_total={:,}, protected_total={:,}, marked_total={:,}, scope_groups={}'.format(
+            datetime.datetime.now(),
+            len(control_rules),
+            len(control_groups),
+            total_matched,
+            total_control,
+            total_protected,
+            total_marked,
+            len(aggregated_matches),
+        ),
+        flush=True,
+    )
+    return metadata
+
+
+def apply_select_redundant_biosample_filter(metadata, enabled):
+    if not enabled:
+        return metadata
+    required_columns = ['bioproject', 'biosample']
+    missing_columns = [column for column in required_columns if column not in metadata.df.columns]
+    if len(missing_columns) > 0:
+        raise ValueError(
+            'Column(s) required for redundant BioSample filtering were not found in metadata: {}'.format(
+                ', '.join(missing_columns)
+            )
+        )
+    print('{}: Marking redundant BioSample rows after rule/QC filtering'.format(datetime.datetime.now()), flush=True)
+    exclusion_series = metadata.df['exclusion'].fillna('no').astype(str).str.strip().str.lower()
+    bioproject_series = metadata.df['bioproject'].fillna('').astype(str).str.strip()
+    biosample_series = metadata.df['biosample'].fillna('').astype(str).str.strip()
+    valid_key_mask = (bioproject_series != '') & (biosample_series != '')
+    eligible_mask = (exclusion_series == 'no') & valid_key_mask
+    if not bool(eligible_mask.any()):
         print(
-            '{}: Applied control scope "{}": protected {:,}, marked {:,}'.format(
+            '{}: Redundant BioSample filter complete: candidates=0, redundant_marked=0'.format(
                 datetime.datetime.now(),
-                ','.join(scope_columns),
-                num_control,
-                num_treatment,
             ),
             flush=True,
         )
+        return metadata
+    if 'total_spots' in metadata.df.columns:
+        total_spots = pandas.to_numeric(metadata.df['total_spots'], errors='coerce').fillna(0).astype(int)
+    else:
+        total_spots = pandas.Series(0, index=metadata.df.index, dtype=int)
+    if 'run' in metadata.df.columns:
+        run_series = metadata.df['run'].fillna('').astype(str).str.strip()
+    else:
+        run_series = pandas.Series('', index=metadata.df.index, dtype=str)
+    ranking_df = pandas.DataFrame({
+        'orig_index': metadata.df.index,
+        'bioproject': bioproject_series,
+        'biosample': biosample_series,
+        'total_spots': total_spots,
+        'run': run_series,
+    }).loc[eligible_mask, :].copy()
+    ranking_df = ranking_df.sort_values(
+        ['bioproject', 'biosample', 'total_spots', 'run', 'orig_index'],
+        ascending=[True, True, False, True, True],
+        kind='mergesort',
+    )
+    redundant_mask = ranking_df.duplicated(subset=['bioproject', 'biosample'], keep='first')
+    redundant_indices = ranking_df.loc[redundant_mask, 'orig_index']
+    if len(redundant_indices) > 0:
+        metadata.df.loc[redundant_indices, 'exclusion'] = 'redundant_biosample'
+    print(
+        '{}: Redundant BioSample filter complete: candidates={:,}, redundant_marked={:,}'.format(
+            datetime.datetime.now(),
+            int(eligible_mask.sum()),
+            int(len(redundant_indices)),
+        ),
+        flush=True,
+    )
     return metadata
 
 
 def apply_select_filters(metadata, args, select_rules):
-    metadata.nspot_cutoff(args.min_nspots)
-    metadata.mark_missing_rank(args.mark_missing_rank)
-    metadata.mark_redundant_biosample(args.mark_redundant_biosamples)
     metadata = apply_select_exclude_rules(metadata, select_rules)
     metadata = apply_select_control_rules(metadata, select_rules)
+    metadata.nspot_cutoff(args.min_nspots)
+    metadata.mark_missing_rank(args.mark_missing_rank)
+    metadata = apply_select_redundant_biosample_filter(metadata, args.mark_redundant_biosamples)
     metadata.label_sampled_data(args.max_sample)
     metadata.reorder(omit_misc=False)
     return metadata
@@ -611,6 +907,16 @@ def normalize_select_value(value):
     text = text.replace('_', ' ')
     text = re.sub(r'\s+', ' ', text).strip()
     return text
+
+
+def normalize_select_series(series):
+    return (
+        series.fillna('')
+        .astype(str)
+        .str.replace('_', ' ', regex=False)
+        .str.replace(r'\s+', ' ', regex=True)
+        .str.strip()
+    )
 
 
 def summarize_select_normalization(species_name, species_token, df, workspace_dir, metadata_path):
@@ -737,11 +1043,87 @@ def load_select_species_table(path_species_tsv):
     return species_df.reset_index(drop=True)
 
 
+def _resolve_select_species_jobs(args, task_count):
+    species_jobs, _ = resolve_worker_allocation(
+        requested_workers=getattr(args, 'internal_jobs', 'auto'),
+        requested_threads=getattr(args, 'threads', 'auto'),
+        internal_cpu_budget=getattr(args, 'internal_cpu_budget', 'auto'),
+        worker_option_name='internal_jobs',
+        context='select:',
+    )
+    if species_jobs > int(task_count):
+        species_jobs = int(task_count)
+    if species_jobs <= 0:
+        species_jobs = 1
+    return species_jobs
+
+
+def _run_select_batch_task(task, args, species_count, select_rules, select_parameters, metadata_specieswise_dir):
+    index, species_name, species_token = task
+    print('[{}/{}] {}'.format(index, species_count, species_token), flush=True)
+    merged_metadata_path = os.path.join(
+        metadata_specieswise_dir,
+        species_token,
+        '{}.metadata.tsv'.format(species_token),
+    )
+    if not os.path.exists(merged_metadata_path):
+        raise FileNotFoundError('Merged metadata not found: {}'.format(merged_metadata_path))
+    merged_df = pandas.read_csv(
+        merged_metadata_path,
+        sep='\t',
+        dtype=str,
+        keep_default_na=False,
+        low_memory=False,
+    ).fillna('')
+    metadata = Metadata.from_DataFrame(merged_df)
+    metadata = prepare_select_metadata(metadata, select_rules)
+    normalized_df = metadata.df.copy(deep=True)
+    species_out_dir = os.path.join(args.out_dir, species_token)
+    metadata_dir = os.path.join(species_out_dir, 'metadata')
+    normalized_metadata_path = os.path.join(metadata_dir, 'metadata.tsv')
+    normalization_row = summarize_select_normalization(
+        species_name=species_name,
+        species_token=species_token,
+        df=normalized_df,
+        workspace_dir=species_out_dir,
+        metadata_path=normalized_metadata_path,
+    )
+    runtime_args = apply_select_config_parameters(
+        clone_namespace(args, out_dir=species_out_dir),
+        select_parameters,
+    )
+    metadata_original_df = metadata.df.copy(deep=True)
+    metadata = filter_metadata_by_sample_group(metadata, getattr(runtime_args, 'sample_group', None))
+    metadata = apply_select_filters(metadata, runtime_args, select_rules)
+    path_metadata_original = os.path.join(metadata_dir, 'metadata_original.tsv')
+    path_metadata_table = os.path.join(metadata_dir, 'metadata.tsv')
+    write_select_outputs(
+        path_metadata_original=path_metadata_original,
+        path_metadata_table=path_metadata_table,
+        metadata_dir=metadata_dir,
+        metadata=metadata,
+        metadata_original_df=metadata_original_df,
+    )
+    summary_row = summarize_selected_metadata(
+        species_name=species_name,
+        species_token=species_token,
+        metadata=metadata,
+        selected_metadata_path=path_metadata_table,
+        max_sample=runtime_args.max_sample,
+    )
+    return {
+        'normalization_row': normalization_row,
+        'summary_row': summary_row,
+    }
+
+
 def select_batch_main(args):
     out_dir = os.path.realpath(args.out_dir)
     os.makedirs(out_dir, exist_ok=True)
     select_rules_tsv = resolve_select_rules_tsv(args, out_dir=out_dir)
-    select_rules = read_select_rules(select_rules_tsv)
+    select_config = read_select_config(select_rules_tsv)
+    select_rules = select_config['rules']
+    select_parameters = select_config['parameters']
     metadata_specieswise_dir = resolve_select_metadata_specieswise_dir(args, out_dir)
     if not os.path.isdir(metadata_specieswise_dir):
         raise FileNotFoundError(
@@ -753,64 +1135,59 @@ def select_batch_main(args):
     manifest_tsv = resolve_select_batch_output_path(args, out_dir, 'manifest_tsv', 'external_manifest.tsv')
     normalization_summary_tsv = os.path.join(out_dir, 'normalization_summary.tsv')
     batch_label = resolve_select_batch_label(args, out_dir)
-    normalization_rows = []
-    summary_rows = []
     print('select batch: processing {} species'.format(species_df.shape[0]), flush=True)
-    for index, row in species_df.iterrows():
-        species_name = row['scientific_name']
-        species_token = row['species_token']
-        print('[{}/{}] {}'.format(index + 1, species_df.shape[0], species_token), flush=True)
-        merged_metadata_path = os.path.join(
-            metadata_specieswise_dir,
-            species_token,
-            '{}.metadata.tsv'.format(species_token),
-        )
-        if not os.path.exists(merged_metadata_path):
-            raise FileNotFoundError('Merged metadata not found: {}'.format(merged_metadata_path))
-        merged_df = pandas.read_csv(
-            merged_metadata_path,
-            sep='\t',
-            dtype=str,
-            keep_default_na=False,
-            low_memory=False,
-        ).fillna('')
-        metadata = Metadata.from_DataFrame(merged_df)
-        metadata = prepare_select_metadata(metadata, select_rules)
-        normalized_df = metadata.df.copy(deep=True)
-        species_out_dir = os.path.join(out_dir, species_token)
-        metadata_dir = os.path.join(species_out_dir, 'metadata')
-        normalized_metadata_path = os.path.join(metadata_dir, 'metadata.tsv')
-        normalization_rows.append(
-            summarize_select_normalization(
-                species_name=species_name,
-                species_token=species_token,
-                df=normalized_df,
-                workspace_dir=species_out_dir,
-                metadata_path=normalized_metadata_path,
+    task_items = [
+        (index + 1, row['scientific_name'], row['species_token'])
+        for index, row in species_df.iterrows()
+    ]
+    species_jobs = _resolve_select_species_jobs(args=args, task_count=len(task_items))
+    task_results = {}
+    if (species_jobs == 1) or (len(task_items) <= 1):
+        for task in task_items:
+            task_results[task] = _run_select_batch_task(
+                task=task,
+                args=args,
+                species_count=species_df.shape[0],
+                select_rules=select_rules,
+                select_parameters=select_parameters,
+                metadata_specieswise_dir=metadata_specieswise_dir,
             )
+    else:
+        print(
+            'select: running {:,} species with {:,} parallel job(s).'.format(
+                len(task_items),
+                species_jobs,
+            ),
+            flush=True,
         )
-        runtime_args = clone_namespace(args, out_dir=species_out_dir)
-        metadata_original_df = metadata.df.copy(deep=True)
-        metadata = filter_metadata_by_sample_group(metadata, runtime_args.sample_group)
-        metadata = apply_select_filters(metadata, runtime_args, select_rules)
-        path_metadata_original = os.path.join(metadata_dir, 'metadata_original.tsv')
-        path_metadata_table = os.path.join(metadata_dir, 'metadata.tsv')
-        write_select_outputs(
-            path_metadata_original=path_metadata_original,
-            path_metadata_table=path_metadata_table,
-            metadata_dir=metadata_dir,
-            metadata=metadata,
-            metadata_original_df=metadata_original_df,
+        task_results, failures = run_tasks_with_optional_threads(
+            task_items=task_items,
+            task_fn=lambda task: _run_select_batch_task(
+                task=task,
+                args=args,
+                species_count=species_df.shape[0],
+                select_rules=select_rules,
+                select_parameters=select_parameters,
+                metadata_specieswise_dir=metadata_specieswise_dir,
+            ),
+            max_workers=species_jobs,
         )
-        summary_rows.append(
-            summarize_selected_metadata(
-                species_name=species_name,
-                species_token=species_token,
-                metadata=metadata,
-                selected_metadata_path=path_metadata_table,
-                max_sample=runtime_args.max_sample,
+        if failures:
+            details = '; '.join(
+                [
+                    '{}: {}'.format(task[2] if isinstance(task, tuple) and len(task) >= 3 else task, err)
+                    for task, err in failures
+                ]
             )
-        )
+            raise RuntimeError(
+                'select batch failed for {}/{} species. {}'.format(
+                    len(failures),
+                    len(task_items),
+                    details,
+                )
+            )
+    normalization_rows = [task_results[task]['normalization_row'] for task in task_items]
+    summary_rows = [task_results[task]['summary_row'] for task in task_items]
     normalization_df = pandas.DataFrame(normalization_rows)
     summary_df = pandas.DataFrame(summary_rows)
     if not summary_df.empty:
@@ -870,14 +1247,16 @@ def select_main(args):
         return
     metadata_dir = os.path.join(out_dir, 'metadata')
     select_rules_tsv = resolve_select_rules_tsv(runtime_args, out_dir=out_dir)
-    select_rules = read_select_rules(select_rules_tsv)
+    select_config = read_select_config(select_rules_tsv)
+    select_rules = select_config['rules']
+    runtime_args = apply_select_config_parameters(runtime_args, select_config['parameters'])
     path_metadata_table = os.path.join(metadata_dir, 'metadata.tsv')
     path_metadata_original = os.path.join(metadata_dir, 'metadata_original.tsv')
 
     metadata = load_metadata(runtime_args)
     metadata = prepare_select_metadata(metadata, select_rules)
     metadata_original_df = metadata.df.copy(deep=True)
-    metadata = filter_metadata_by_sample_group(metadata, runtime_args.sample_group)
+    metadata = filter_metadata_by_sample_group(metadata, getattr(runtime_args, 'sample_group', None))
     metadata = apply_select_filters(metadata, runtime_args, select_rules)
     write_select_outputs(
         path_metadata_original=path_metadata_original,

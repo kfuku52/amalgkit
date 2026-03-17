@@ -93,7 +93,7 @@ def build_parser(command_handlers, command_names, version, prog=None):
     pme.set_defaults(handler=command_handlers['metadata'])
 
     pse_help = 'Selecting SRA entries for analysis. See `amalgkit select -h`'
-    pse = subparsers.add_parser('select', help=pse_help, parents=[pp_out, pp_meta, pp_sg])
+    pse = subparsers.add_parser('select', help=pse_help, parents=[pp_out, pp_meta, pp_threads, pp_internal_jobs, pp_cpu_budget])
     pse.add_argument('--species_tsv', metavar='PATH', default=None, type=str, required=False, action='store',
                      help='default=%(default)s: TSV with a scientific_name column for native batch select mode. '
                           'When set, select builds per-species workspaces from metadata_specieswise and writes '
@@ -115,16 +115,14 @@ def build_parser(command_handlers, command_names, version, prog=None):
                           '"inferred" = basename(out_dir).')
     pse.add_argument('--select_rules_tsv', metavar='PATH|inferred', default='inferred', type=str, required=False, action='store',
                      help='default=%(default)s: PATH to select_rules.tsv. "inferred" = out_dir/select_rules.tsv')
-    pse.add_argument('--min_nspots', metavar='INT', default=5000000, type=int, required=False, action='store',
-                     help='default=%(default)s: Minimum number of RNA-seq reads per sample.')
-    pse.add_argument('--max_sample', metavar='INT', default=99999, type=int, required=False, action='store',
-                     help='default=%(default)s: Maximum number of RNA-seq data to retain for one sample group in a species.')
-    pse.add_argument('--mark_missing_rank', metavar='species|genus|family|order|class|phylum|kingdom|domain|none', default='species', type=str, required=False, action='store',
+    pse.add_argument('--max_sample', metavar='INT', default=None, type=int, required=False, action='store',
+                     help='default=from select_rules.tsv: Maximum number of RNA-seq data to retain for one sample group in a species.')
+    pse.add_argument('--mark_missing_rank', metavar='species|genus|family|order|class|phylum|kingdom|domain|none', default=None, type=str, required=False, action='store',
                      choices=['species', 'genus', 'family', 'order', 'class', 'phylum', 'kingdom', 'domain', 'none'],
-                     help='default=%(default)s: Mark samples lacking taxid information at the specified rank as unqualified.')
-    pse.add_argument('--mark_redundant_biosamples', metavar='no|yes', default='no', type=strtobool,
+                     help='default=from select_rules.tsv: Mark samples lacking taxid information at the specified rank as unqualified.')
+    pse.add_argument('--mark_redundant_biosamples', metavar='no|yes', default=None, type=strtobool,
                      required=False, action='store',
-                     help='default=%(default)s: Whether to label SRAs with the same BioSample ID as unqualified.')
+                     help='default=from select_rules.tsv: Whether to label SRAs with the same BioSample ID as unqualified.')
     pse.set_defaults(handler=command_handlers['select'])
 
     pge_help = 'Retrieving fastq files. See `amalgkit getfastq -h`'

@@ -8,10 +8,12 @@ from types import SimpleNamespace
 from pathlib import Path
 
 from amalgkit.select import (
+    apply_select_config_parameters,
     apply_select_control_rules,
     apply_select_filters,
     classify_select_text,
     prepare_select_metadata,
+    read_select_config,
     read_select_rules,
     write_select_outputs,
     resolve_select_rules_tsv,
@@ -33,6 +35,8 @@ SELECT_RULE_COLUMNS = [
     'scope_column',
     'scope_mode',
     'stop_on_match',
+    'parameter_name',
+    'parameter_value',
     'note',
 ]
 
@@ -51,6 +55,8 @@ def write_select_rules(path, rows):
         'scope_column': '',
         'scope_mode': '',
         'stop_on_match': 'yes',
+        'parameter_name': '',
+        'parameter_value': '',
         'note': '',
     }
     normalized_rows = []
@@ -257,6 +263,80 @@ class TestSelectHelpers:
         metadata.df = metadata.df.drop(columns=['sample_group'])
         with pytest.raises(ValueError, match='Column \"sample_group\" is required'):
             filter_metadata_by_sample_group(metadata, 'brain')
+
+    def test_read_select_config_parses_parameter_rows(self, tmp_path):
+        rules_path = tmp_path / 'select_rules.tsv'
+        write_select_rules(rules_path, [
+            {
+                'rule_id': 'param_min_nspots',
+                'stage': 'parameter',
+                'parameter_name': 'min_nspots',
+                'parameter_value': '1000000',
+            },
+            {
+                'rule_id': 'flower_whole',
+                'stage': 'normalize',
+                'priority': '10',
+                'columns': 'sample_group',
+                'pattern': r'\\bflower\\b',
+                'action': 'assign',
+                'outcome': 'flower',
+            },
+        ])
+
+        config = read_select_config(str(rules_path))
+
+        assert config['parameters']['min_nspots'] == 1000000
+        assert len(config['rules']) == 1
+        assert config['rules'][0]['rule_id'] == 'flower_whole'
+
+    def test_apply_select_config_parameters_uses_config_when_args_missing(self):
+        args = SimpleNamespace(
+            min_nspots=None,
+            max_sample=None,
+            mark_missing_rank=None,
+            mark_redundant_biosamples=None,
+            sample_group=None,
+        )
+
+        out = apply_select_config_parameters(
+            args,
+            {
+                'min_nspots': 1000000,
+                'max_sample': 30,
+                'mark_missing_rank': 'none',
+                'mark_redundant_biosamples': False,
+                'sample_group': 'flower,leaf,root',
+            },
+        )
+
+        assert out.min_nspots == 1000000
+        assert out.max_sample == 30
+        assert out.mark_missing_rank == 'none'
+        assert out.mark_redundant_biosamples is False
+        assert out.sample_group == 'flower,leaf,root'
+
+    def test_apply_select_config_parameters_keeps_runtime_sample_group_override(self):
+        args = SimpleNamespace(
+            min_nspots=None,
+            max_sample=None,
+            mark_missing_rank=None,
+            mark_redundant_biosamples=None,
+            sample_group='leaf',
+        )
+
+        out = apply_select_config_parameters(
+            args,
+            {
+                'min_nspots': 1000000,
+                'max_sample': 30,
+                'mark_missing_rank': 'none',
+                'mark_redundant_biosamples': False,
+                'sample_group': 'flower,leaf,root',
+            },
+        )
+
+        assert out.sample_group == 'leaf'
 
     @pytest.mark.parametrize(
         ('text', 'expected_status', 'expected_organ'),
@@ -542,6 +622,52 @@ class TestSelectRuleApplication:
         assert out.df.loc[0, 'sample_group'] == 'cancer'
         assert 'sample_attribute' in out.df.columns
 
+    def test_apply_select_filters_prefers_non_excluded_duplicate_biosample(self):
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001', 'SRR002'],
+            'scientific_name': ['Species A', 'Species A'],
+            'sample_group': ['flower', 'flower'],
+            'bioproject': ['PRJ1', 'PRJ1'],
+            'biosample': ['SAM1', 'SAM1'],
+            'total_spots': [100, 6000000],
+            'exclusion': ['no', 'no'],
+        }))
+        args = SimpleNamespace(
+            min_nspots=1000000,
+            mark_missing_rank='none',
+            mark_redundant_biosamples=True,
+            max_sample=10,
+        )
+
+        out = apply_select_filters(metadata, args, [])
+
+        assert out.df.loc[out.df['run'] == 'SRR001', 'exclusion'].iloc[0] == 'low_nspots'
+        assert out.df.loc[out.df['run'] == 'SRR002', 'exclusion'].iloc[0] == 'no'
+        assert out.df.loc[out.df['run'] == 'SRR002', 'is_sampled'].iloc[0] == 'yes'
+
+    def test_apply_select_filters_keeps_highest_depth_duplicate_biosample(self):
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001', 'SRR002'],
+            'scientific_name': ['Species A', 'Species A'],
+            'sample_group': ['flower', 'flower'],
+            'bioproject': ['PRJ1', 'PRJ1'],
+            'biosample': ['SAM1', 'SAM1'],
+            'total_spots': [6000000, 7000000],
+            'exclusion': ['no', 'no'],
+        }))
+        args = SimpleNamespace(
+            min_nspots=1000000,
+            mark_missing_rank='none',
+            mark_redundant_biosamples=True,
+            max_sample=10,
+        )
+
+        out = apply_select_filters(metadata, args, [])
+
+        assert out.df.loc[out.df['run'] == 'SRR001', 'exclusion'].iloc[0] == 'redundant_biosample'
+        assert out.df.loc[out.df['run'] == 'SRR002', 'exclusion'].iloc[0] == 'no'
+        assert out.df.loc[out.df['run'] == 'SRR002', 'is_sampled'].iloc[0] == 'yes'
+
     def test_preserves_taxid_and_extra_columns_after_filtering(self, tmp_path):
         rules_path = tmp_path / 'select_rules.tsv'
         write_select_rules(rules_path, [
@@ -700,8 +826,8 @@ class TestSelectMain:
             max_sample=1,
         )
         monkeypatch.setattr(
-            'amalgkit.select.read_select_rules',
-            lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError('read_select_rules should not be called')),
+            'amalgkit.select.read_select_config',
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError('read_select_config should not be called')),
         )
 
         with pytest.raises(NotADirectoryError, match='Output path exists but is not a directory'):
@@ -730,9 +856,17 @@ class TestSelectMain:
         }))
         observed = {}
 
-        def fake_read_select_rules(path_select_rules):
+        def fake_read_select_config(path_select_rules):
             observed['select_rules_tsv'] = path_select_rules
-            return [{'stage': 'normalize', 'columns': ['sample_group'], 'regex': None}]
+            return {
+                'rules': [{'stage': 'normalize', 'columns': ['sample_group'], 'regex': None}],
+                'parameters': {
+                    'min_nspots': 1000000,
+                    'max_sample': 1,
+                    'mark_missing_rank': 'none',
+                    'mark_redundant_biosamples': False,
+                },
+            }
 
         def fake_load_metadata(runtime_args):
             observed['load_out_dir'] = runtime_args.out_dir
@@ -750,7 +884,7 @@ class TestSelectMain:
         def fake_write_select_outputs(**kwargs):
             observed['write_table'] = kwargs['path_metadata_table']
 
-        monkeypatch.setattr('amalgkit.select.read_select_rules', fake_read_select_rules)
+        monkeypatch.setattr('amalgkit.select.read_select_config', fake_read_select_config)
         monkeypatch.setattr('amalgkit.select.load_metadata', fake_load_metadata)
         monkeypatch.setattr('amalgkit.select.prepare_select_metadata', fake_prepare_select_metadata)
         monkeypatch.setattr('amalgkit.select.apply_select_filters', fake_apply_select_filters)
@@ -774,6 +908,36 @@ class TestSelectBatchMain:
         species_tsv = tmp_path / 'species.tsv'
         rules_path = tmp_path / 'select_rules.tsv'
         write_select_rules(rules_path, [
+            {
+                'rule_id': 'param_min_nspots',
+                'stage': 'parameter',
+                'parameter_name': 'min_nspots',
+                'parameter_value': '0',
+            },
+            {
+                'rule_id': 'param_max_sample',
+                'stage': 'parameter',
+                'parameter_name': 'max_sample',
+                'parameter_value': '2',
+            },
+            {
+                'rule_id': 'param_mark_missing_rank',
+                'stage': 'parameter',
+                'parameter_name': 'mark_missing_rank',
+                'parameter_value': 'none',
+            },
+            {
+                'rule_id': 'param_mark_redundant_biosamples',
+                'stage': 'parameter',
+                'parameter_name': 'mark_redundant_biosamples',
+                'parameter_value': 'no',
+            },
+            {
+                'rule_id': 'param_sample_group',
+                'stage': 'parameter',
+                'parameter_name': 'sample_group',
+                'parameter_value': 'flower,leaf,root',
+            },
             {
                 'rule_id': 'flower_whole',
                 'stage': 'normalize',
@@ -849,17 +1013,20 @@ class TestSelectBatchMain:
             out_dir=str(out_dir),
             select_rules_tsv=str(rules_path),
             metadata='inferred',
-            sample_group='flower,leaf,root',
-            min_nspots=0,
-            mark_missing_rank='none',
-            mark_redundant_biosamples=False,
-            max_sample=2,
+            sample_group=None,
+            min_nspots=None,
+            mark_missing_rank=None,
+            mark_redundant_biosamples=None,
+            max_sample=None,
             species_tsv=str(species_tsv),
             metadata_specieswise_dir=str(metadata_specieswise_dir),
             summary_tsv='inferred',
             queue_tsv='inferred',
             manifest_tsv='inferred',
             batch_label='inferred',
+            threads='auto',
+            internal_jobs='auto',
+            internal_cpu_budget='auto',
         )
 
         select_main(args)
@@ -888,6 +1055,154 @@ class TestSelectBatchMain:
         assert set(manifest_df['queue_tier'].tolist()) == {'strict', 'defer'}
         assert 'selected_metadata_path' in manifest_df.columns
 
+    def test_batch_mode_uses_parallel_worker_path(self, tmp_path, monkeypatch):
+        metadata_specieswise_dir = tmp_path / 'metadata_specieswise'
+        metadata_specieswise_dir.mkdir()
+        species_tsv = tmp_path / 'species.tsv'
+        rules_path = tmp_path / 'select_rules.tsv'
+        write_select_rules(rules_path, [
+            {
+                'rule_id': 'param_min_nspots',
+                'stage': 'parameter',
+                'parameter_name': 'min_nspots',
+                'parameter_value': '0',
+            },
+            {
+                'rule_id': 'param_max_sample',
+                'stage': 'parameter',
+                'parameter_name': 'max_sample',
+                'parameter_value': '2',
+            },
+            {
+                'rule_id': 'param_mark_missing_rank',
+                'stage': 'parameter',
+                'parameter_name': 'mark_missing_rank',
+                'parameter_value': 'none',
+            },
+            {
+                'rule_id': 'param_mark_redundant_biosamples',
+                'stage': 'parameter',
+                'parameter_name': 'mark_redundant_biosamples',
+                'parameter_value': 'no',
+            },
+            {
+                'rule_id': 'param_sample_group',
+                'stage': 'parameter',
+                'parameter_name': 'sample_group',
+                'parameter_value': 'flower,leaf,root',
+            },
+            {
+                'rule_id': 'flower_whole',
+                'stage': 'normalize',
+                'priority': '10',
+                'columns': 'sample_attribute_tissue',
+                'pattern': r'\bflower\b',
+                'action': 'assign',
+                'outcome': 'flower',
+            },
+            {
+                'rule_id': 'leaf_whole',
+                'stage': 'normalize',
+                'priority': '20',
+                'columns': 'sample_attribute_tissue',
+                'pattern': r'\bleaf\b',
+                'action': 'assign',
+                'outcome': 'leaf',
+            },
+            {
+                'rule_id': 'root_whole',
+                'stage': 'normalize',
+                'priority': '30',
+                'columns': 'sample_attribute_tissue',
+                'pattern': r'\broot\b',
+                'action': 'assign',
+                'outcome': 'root',
+            },
+        ])
+        species_rows = pandas.DataFrame({
+            'scientific_name': ['Species alpha', 'Species beta'],
+            'species_token': ['Species_alpha', 'Species_beta'],
+        })
+        species_rows.to_csv(species_tsv, sep='\t', index=False)
+        for species_token, scientific_name in [('Species_alpha', 'Species alpha'), ('Species_beta', 'Species beta')]:
+            species_dir = metadata_specieswise_dir / species_token
+            species_dir.mkdir()
+            pandas.DataFrame([
+                {
+                    'run': 'SRR1',
+                    'scientific_name': scientific_name,
+                    'sample_group': '',
+                    'sample_attribute_tissue': 'flower',
+                    'bioproject': 'PRJ1',
+                    'biosample': 'SAM1',
+                    'total_spots': 100,
+                    'exclusion': 'no',
+                },
+                {
+                    'run': 'SRR2',
+                    'scientific_name': scientific_name,
+                    'sample_group': '',
+                    'sample_attribute_tissue': 'leaf',
+                    'bioproject': 'PRJ2',
+                    'biosample': 'SAM2',
+                    'total_spots': 100,
+                    'exclusion': 'no',
+                },
+                {
+                    'run': 'SRR3',
+                    'scientific_name': scientific_name,
+                    'sample_group': '',
+                    'sample_attribute_tissue': 'root',
+                    'bioproject': 'PRJ3',
+                    'biosample': 'SAM3',
+                    'total_spots': 100,
+                    'exclusion': 'no',
+                },
+            ]).to_csv(species_dir / '{}.metadata.tsv'.format(species_token), sep='\t', index=False)
+
+        observed = {}
+
+        def fake_resolve_jobs(args, task_count):
+            observed['task_count'] = task_count
+            return 2
+
+        def fake_run_tasks(task_items, task_fn, max_workers=1):
+            observed['used_parallel'] = True
+            observed['max_workers'] = max_workers
+            results = {}
+            for task in task_items:
+                results[task] = task_fn(task)
+            return results, []
+
+        monkeypatch.setattr('amalgkit.select._resolve_select_species_jobs', fake_resolve_jobs)
+        monkeypatch.setattr('amalgkit.select.run_tasks_with_optional_threads', fake_run_tasks)
+
+        args = SimpleNamespace(
+            out_dir=str(tmp_path / 'select_batch'),
+            select_rules_tsv=str(rules_path),
+            metadata='inferred',
+            sample_group=None,
+            min_nspots=None,
+            mark_missing_rank=None,
+            mark_redundant_biosamples=None,
+            max_sample=None,
+            species_tsv=str(species_tsv),
+            metadata_specieswise_dir=str(metadata_specieswise_dir),
+            summary_tsv='inferred',
+            queue_tsv='inferred',
+            manifest_tsv='inferred',
+            batch_label='inferred',
+            threads='auto',
+            internal_jobs='auto',
+            internal_cpu_budget='auto',
+        )
+
+        select_main(args)
+
+        assert observed['task_count'] == 2
+        assert observed['used_parallel'] is True
+        assert observed['max_workers'] == 2
+
 
 class TestCliEntry:
     def test_python_module_entrypoint_supports_help(self):
@@ -901,3 +1216,4 @@ class TestCliEntry:
         )
         assert completed.returncode == 0
         assert 'usage: amalgkit select' in completed.stdout
+        assert '--sample_group tissueA,tissueB,tissueC,...' not in completed.stdout
