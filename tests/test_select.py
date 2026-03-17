@@ -537,7 +537,7 @@ class TestSelectRuleApplication:
 
         out = prepare_select_metadata(metadata, select_rules)
 
-        assert out.df.loc[0, 'sample_group'] == ''
+        assert out.df.loc[0, 'sample_group'] == 'non_target'
         assert out.df.loc[0, 'sample_group_normalization_status'] == 'non_target'
         assert out.df.loc[0, 'sample_group_normalization_rule_id'] == 'fruit_non_target'
 
@@ -556,6 +556,47 @@ class TestSelectRuleApplication:
         assert len(normalize_rules) > 0
         for rule in normalize_rules:
             assert set(rule['columns']).issubset(allowed), rule['rule_id']
+
+    def test_review_rule_overrides_original_sample_group(self, tmp_path):
+        rules_path = tmp_path / 'select_rules.tsv'
+        write_select_rules(rules_path, [
+            {
+                'rule_id': 'review_structure',
+                'stage': 'normalize',
+                'priority': '10',
+                'columns': 'sample_title,exp_title,sample_group',
+                'pattern': r'\bbud\b',
+                'action': 'assign',
+                'outcome': 'review',
+            },
+            {
+                'rule_id': 'flower_whole',
+                'stage': 'normalize',
+                'priority': '20',
+                'columns': 'sample_title,exp_title,sample_group',
+                'pattern': r'\bflower\b',
+                'action': 'assign',
+                'outcome': 'flower',
+            },
+        ])
+        select_rules = read_select_rules(str(rules_path))
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001'],
+            'scientific_name': ['Species A'],
+            'sample_group': ['flower'],
+            'exp_title': ['flowers at bud stage'],
+            'bioproject': ['PRJ1'],
+            'biosample': ['SAM1'],
+            'total_spots': [100],
+            'exclusion': ['no'],
+        }))
+
+        out = prepare_select_metadata(metadata, select_rules)
+
+        assert out.df.loc[0, 'sample_group_original'] == 'flower'
+        assert out.df.loc[0, 'sample_group'] == 'review'
+        assert out.df.loc[0, 'sample_group_normalization_status'] == 'review'
+        assert out.df.loc[0, 'sample_group_normalization_rule_id'] == 'review_structure'
 
 
 class TestSelectMain:

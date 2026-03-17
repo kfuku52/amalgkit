@@ -374,6 +374,8 @@ def normalize_select_row(row, normalize_rules, normalization_columns):
             result['sample_group_normalization_rule_id'] = classification['rule_id']
             if status == 'organ':
                 updated_sample_group = classification['organ']
+            else:
+                updated_sample_group = status
             if rule['stop_on_match']:
                 return updated_sample_group, result
     if fallback_text == '':
