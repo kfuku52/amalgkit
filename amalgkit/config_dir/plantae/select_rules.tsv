@@ -573,13 +573,6 @@ control_ambient_57	yes	control	2056	treatment	ambient	mark_non_control	exclusion
 control_water_w_b_s_deficit_58	yes	control	2057	treatment	water\w*\b(?!\s*deficit)	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes			legacy control rule
 control_h2o_w_b_s_deficit_59	yes	control	2058	treatment	H2O\w*\b(?!\s*deficit)	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes			legacy control rule
 control_wild_60	yes	control	2059	genotype	wild	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes			legacy control rule
-control_n2_61	yes	control	2060	genotype	N2	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes			legacy control rule
-control_oregonr_62	yes	control	2061	genotype	OregonR	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes			legacy control rule
-control_oregon_r_63	yes	control	2062	genotype	Oregon R	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes			legacy control rule
-control_canton_s_64	yes	control	2063	genotype	Canton S	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes			legacy control rule
-control_canton_s_65	yes	control	2064	genotype	Canton-S	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes			legacy control rule
-control_y_w_66	yes	control	2065	genotype	y w	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes			legacy control rule
-control_yw_67	yes	control	2066	genotype	yw	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes			legacy control rule
 control_wt_68	yes	control	2067	genotype	wt	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes			legacy control rule
 control_rule_69	yes	control	2068	genotype	\+\/\+	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes			legacy control rule
 control_columbia_70	yes	control	2069	genotype	columbia	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes			legacy control rule
