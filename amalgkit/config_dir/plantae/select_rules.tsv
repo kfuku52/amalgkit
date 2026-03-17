@@ -606,7 +606,6 @@ control_mock_90	yes	control	2089	sample_description	mock	mark_non_control	exclus
 control_no_treatment_91	yes	control	2090	sample_description	no treatment	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes			legacy control rule
 control_non_infected_92	yes	control	2091	sample_description	non-infected	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes			legacy control rule
 control_before_93	yes	control	2092	sample_description	before	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes			legacy control rule
-control_wild_94	yes	control	2093	sample_description	wild	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes			legacy control rule
 control_control_95	yes	control	2094	lib_name	control	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes			legacy control rule
 control_ck_96	yes	control	2095	lib_name	CK_	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes			legacy control rule
 control_ck_97	yes	control	2096	lib_name	CK-	mark_non_control	exclusion	non_control	bioproject,sample_group	mark_other_rows_in_scope	yes			legacy control rule
