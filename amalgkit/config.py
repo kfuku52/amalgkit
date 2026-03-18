@@ -29,7 +29,7 @@ def check_directory(args):
 
 
 def list_available_config_sets():
-    root = ir.files('amalgkit.config_dir')
+    root = ir.files('amalgkit.select_rule_sets')
     config_sets = []
     for entry in root.iterdir():
         if not entry.is_dir():
@@ -53,7 +53,7 @@ def validate_config_set(config_name):
     )
 
 def create_config_from_package(args, path_config):
-    config_base = 'amalgkit.config_dir' + '.' + args.config
+    config_base = 'amalgkit.select_rule_sets' + '.' + args.config
     try:
         config_root = ir.files(config_base)
     except ModuleNotFoundError as exc:

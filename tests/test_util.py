@@ -16,11 +16,9 @@ from amalgkit.util import (
     strtobool,
     parse_bool_flags,
     Metadata,
-    read_config_file,
     get_sra_stat,
     check_ortholog_parameter_compatibility,
     orthogroup2genecount,
-    check_config_dir,
     load_metadata,
     detect_layout_from_file,
     is_there_unpaired_file,
@@ -419,169 +417,6 @@ class TestMetadataFromXml:
         assert m.df.shape[0] == 0
 
 
-class TestMetadataNspotCutoff:
-    def test_marks_low_spots(self, sample_metadata):
-        m = sample_metadata
-        m.nspot_cutoff(1000000)
-        # SRR003 has 100 spots, SRR005 has 200 spots - both below cutoff
-        low = m.df.loc[m.df['run'].isin(['SRR003', 'SRR005']), 'exclusion']
-        assert (low == 'low_nspots').all()
-        # SRR001 has 10M spots - should remain 'no'
-        high = m.df.loc[m.df['run'] == 'SRR001', 'exclusion'].values[0]
-        assert high == 'no'
-
-
-class TestMetadataMarkExcludeKeywords:
-    def test_marks_matching_keyword(self, sample_metadata, tmp_config_dir):
-        m = sample_metadata
-        m.df.loc[0, 'sample_description'] = 'cancer tissue sample'
-        m.mark_exclude_keywords(tmp_config_dir)
-        assert m.df.loc[0, 'exclusion'] == 'disease'
-
-    def test_no_false_positives(self, sample_metadata, tmp_config_dir):
-        m = sample_metadata
-        m.mark_exclude_keywords(tmp_config_dir)
-        assert (m.df['exclusion'] == 'no').all()
-
-    def test_strips_config_column_tokens(self, sample_metadata, tmp_path):
-        (tmp_path / 'exclude_keyword.config').write_text('sample_description, tissue\tdisease\tcancer\n')
-        m = sample_metadata
-        m.df.loc[0, 'tissue'] = 'cancer tissue'
-        m.mark_exclude_keywords(str(tmp_path))
-        assert m.df.loc[0, 'exclusion'] == 'disease'
-
-    def test_raises_for_unknown_config_column(self, sample_metadata, tmp_path):
-        (tmp_path / 'exclude_keyword.config').write_text('unknown_column\tdisease\tcancer\n')
-        m = sample_metadata
-        with pytest.raises(ValueError, match='exclude_keyword.config were not found in metadata'):
-            m.mark_exclude_keywords(str(tmp_path))
-
-    def test_raises_for_invalid_keyword_regex(self, sample_metadata, tmp_path):
-        (tmp_path / 'exclude_keyword.config').write_text('sample_description\tdisease\t[invalid\n')
-        m = sample_metadata
-        with pytest.raises(ValueError, match='Invalid regex pattern in exclude_keyword.config row 1'):
-            m.mark_exclude_keywords(str(tmp_path))
-
-    def test_ignores_empty_keyword_row_without_mass_exclusion(self, sample_metadata, tmp_path):
-        (tmp_path / 'exclude_keyword.config').write_text('sample_description\tdisease\t\n')
-        m = sample_metadata
-        m.mark_exclude_keywords(str(tmp_path))
-        assert (m.df['exclusion'] == 'no').all()
-
-    def test_ignores_empty_reason_row_without_mass_exclusion(self, sample_metadata, tmp_path):
-        (tmp_path / 'exclude_keyword.config').write_text('sample_description\t\tcancer\n')
-        m = sample_metadata
-        m.df.loc[0, 'sample_description'] = 'cancer tissue sample'
-        m.mark_exclude_keywords(str(tmp_path))
-        assert (m.df['exclusion'] == 'no').all()
-
-    def test_raises_when_exclude_keyword_config_path_is_directory(self, sample_metadata, tmp_path):
-        (tmp_path / 'exclude_keyword.config').mkdir()
-        m = sample_metadata
-        with pytest.raises(IsADirectoryError, match='Config path exists but is not a file'):
-            m.mark_exclude_keywords(str(tmp_path))
-
-    def test_raises_for_malformed_config_with_too_few_columns(self, sample_metadata, tmp_path):
-        (tmp_path / 'exclude_keyword.config').write_text('sample_description_only\n')
-        m = sample_metadata
-        with pytest.raises(ValueError, match='exclude_keyword.config must contain at least 3'):
-            m.mark_exclude_keywords(str(tmp_path))
-
-
-class TestMetadataMarkTreatmentTerms:
-    def test_marks_non_control(self, tmp_config_dir):
-        data = {
-            'scientific_name': ['Sp1'] * 4,
-            'sample_group': ['leaf'] * 4,
-            'treatment': ['wild type', 'wild type', 'drought', 'heat'],
-            'bioproject': ['PRJ1'] * 4,
-            'biosample': ['S1', 'S2', 'S3', 'S4'],
-            'run': ['R1', 'R2', 'R3', 'R4'],
-            'exclusion': ['no'] * 4,
-        }
-        df = pandas.DataFrame(data)
-        m = Metadata.from_DataFrame(df)
-        m.mark_treatment_terms(tmp_config_dir)
-        assert m.df.loc[m.df['run'] == 'R1', 'exclusion'].values[0] == 'no'
-        assert m.df.loc[m.df['run'] == 'R2', 'exclusion'].values[0] == 'no'
-        assert m.df.loc[m.df['run'] == 'R3', 'exclusion'].values[0] == 'non_control'
-        assert m.df.loc[m.df['run'] == 'R4', 'exclusion'].values[0] == 'non_control'
-
-    def test_raises_for_malformed_config_with_too_few_columns(self, sample_metadata, tmp_path):
-        (tmp_path / 'control_term.config').write_text('treatment_only\n')
-        m = sample_metadata
-        with pytest.raises(ValueError, match='control_term.config must contain at least 2'):
-            m.mark_treatment_terms(str(tmp_path))
-
-    def test_strips_control_term_config_column_tokens(self, tmp_path):
-        (tmp_path / 'control_term.config').write_text('treatment, source_name\twild.type\n')
-        data = {
-            'scientific_name': ['Sp1', 'Sp1', 'Sp1'],
-            'sample_group': ['leaf', 'leaf', 'leaf'],
-            'treatment': ['drought', 'heat', 'drought'],
-            'source_name': ['wild type', '', ''],
-            'bioproject': ['PRJ1', 'PRJ1', 'PRJ2'],
-            'biosample': ['S1', 'S2', 'S3'],
-            'run': ['R1', 'R2', 'R3'],
-            'exclusion': ['no', 'no', 'no'],
-        }
-        m = Metadata.from_DataFrame(pandas.DataFrame(data))
-        m.mark_treatment_terms(str(tmp_path))
-        assert m.df.loc[m.df['run'] == 'R1', 'exclusion'].values[0] == 'no'
-        assert m.df.loc[m.df['run'] == 'R2', 'exclusion'].values[0] == 'non_control'
-        assert m.df.loc[m.df['run'] == 'R3', 'exclusion'].values[0] == 'no'
-
-    def test_raises_for_unknown_control_term_config_column(self, tmp_path):
-        (tmp_path / 'control_term.config').write_text('unknown_column\twild.type\n')
-        data = {
-            'scientific_name': ['Sp1'],
-            'sample_group': ['leaf'],
-            'treatment': ['wild type'],
-            'bioproject': ['PRJ1'],
-            'biosample': ['S1'],
-            'run': ['R1'],
-            'exclusion': ['no'],
-        }
-        m = Metadata.from_DataFrame(pandas.DataFrame(data))
-        with pytest.raises(ValueError, match='control_term.config were not found in metadata'):
-            m.mark_treatment_terms(str(tmp_path))
-
-    def test_raises_for_invalid_control_term_regex(self, tmp_path):
-        (tmp_path / 'control_term.config').write_text('treatment\t[invalid\n')
-        data = {
-            'scientific_name': ['Sp1'],
-            'sample_group': ['leaf'],
-            'treatment': ['wild type'],
-            'bioproject': ['PRJ1'],
-            'biosample': ['S1'],
-            'run': ['R1'],
-            'exclusion': ['no'],
-        }
-        m = Metadata.from_DataFrame(pandas.DataFrame(data))
-        with pytest.raises(ValueError, match='Invalid regex pattern in control_term.config row 1'):
-            m.mark_treatment_terms(str(tmp_path))
-
-
-class TestMetadataMarkRedundantBiosample:
-    def test_marks_duplicates(self, sample_metadata_df):
-        df = sample_metadata_df.copy()
-        # Add a duplicate biosample within same bioproject
-        new_row = df.iloc[0].copy()
-        new_row['run'] = 'SRR006'
-        new_row['experiment'] = 'SRX6'
-        # same bioproject PRJNA1, same biosample SAMN1
-        df = pandas.concat([df, pandas.DataFrame([new_row])], ignore_index=True)
-        m = Metadata.from_DataFrame(df)
-        m.mark_redundant_biosample(True)
-        dup = m.df.loc[m.df['run'] == 'SRR006', 'exclusion'].values[0]
-        assert dup == 'redundant_biosample'
-
-    def test_no_action_when_disabled(self, sample_metadata):
-        m = sample_metadata
-        m.mark_redundant_biosample(False)
-        assert (m.df['exclusion'] == 'no').all()
-
-
 class TestMetadataRemoveSpecialchars:
     def test_removes_special_characters(self):
         data = {
@@ -744,37 +579,6 @@ class TestMaximizeBioprojSampling:
 # ---------------------------------------------------------------------------
 # Utility functions
 # ---------------------------------------------------------------------------
-
-class TestReadConfigFile:
-    def test_reads_config(self, tmp_path):
-        config = tmp_path / 'test.config'
-        config.write_text('col1\tcol2\tcol3\n')
-        df = read_config_file('test.config', str(tmp_path))
-        assert df.shape == (1, 3)
-
-    def test_missing_file_returns_empty(self, tmp_path):
-        df = read_config_file('nonexistent.config', str(tmp_path))
-        assert isinstance(df, pandas.DataFrame)
-        assert df.empty
-
-    def test_single_column_returns_series(self, tmp_path):
-        config = tmp_path / 'single.config'
-        config.write_text('value1\nvalue2\nvalue3\n')
-        result = read_config_file('single.config', str(tmp_path))
-        assert isinstance(result, pandas.Series)
-        assert len(result) == 3
-
-    def test_malformed_config_raises_parser_error(self, tmp_path):
-        config = tmp_path / 'bad.config'
-        config.write_text('"unterminated\nvalue2\n')
-        with pytest.raises(pandas.errors.ParserError):
-            read_config_file('bad.config', str(tmp_path))
-
-    def test_raises_when_config_path_is_directory(self, tmp_path):
-        (tmp_path / 'dir.config').mkdir()
-        with pytest.raises(IsADirectoryError, match='Config path exists but is not a file'):
-            read_config_file('dir.config', str(tmp_path))
-
 
 class TestCleanupTmpAmalgkitFiles:
     def test_removes_matching_files_and_directories(self, tmp_path):
@@ -1052,139 +856,12 @@ class TestOrthogroup2Genecount:
 
 
 # ---------------------------------------------------------------------------
-# group_attributes (wiki: column merging via group_attribute.config)
-# ---------------------------------------------------------------------------
-
-class TestMetadataGroupAttributes:
-    def test_aggregates_source_to_target(self, tmp_path):
-        """Wiki: group_attribute.config merges heterogeneous SRA attribute columns."""
-        ga = tmp_path / 'group_attribute.config'
-        ga.write_text('tissue\tsource_name\n')
-        data = {
-            'scientific_name': ['Sp1'],
-            'sample_group': [''],
-            'tissue': [''],
-            'source_name': ['brain cortex'],
-            'run': ['R1'],
-            'exclusion': ['no'],
-        }
-        m = Metadata.from_DataFrame(pandas.DataFrame(data))
-        m.group_attributes(str(tmp_path))
-        assert 'brain cortex[source_name]' in m.df.loc[0, 'tissue']
-
-    def test_aggregates_appends_to_nonempty_target(self, tmp_path):
-        """When target already has a value, append with semicolon separator."""
-        ga = tmp_path / 'group_attribute.config'
-        ga.write_text('tissue\tsource_name\n')
-        data = {
-            'scientific_name': ['Sp1'],
-            'sample_group': [''],
-            'tissue': ['brain'],
-            'source_name': ['frontal lobe'],
-            'run': ['R1'],
-            'exclusion': ['no'],
-        }
-        m = Metadata.from_DataFrame(pandas.DataFrame(data))
-        m.group_attributes(str(tmp_path))
-        assert 'brain' in m.df.loc[0, 'tissue']
-        assert 'frontal lobe[source_name]' in m.df.loc[0, 'tissue']
-
-    def test_can_defer_dropping_source_columns(self, tmp_path):
-        ga = tmp_path / 'group_attribute.config'
-        ga.write_text('tissue\tsource_name\n')
-        data = {
-            'scientific_name': ['Sp1'],
-            'sample_group': [''],
-            'tissue': [''],
-            'source_name': ['brain cortex'],
-            'run': ['R1'],
-            'exclusion': ['no'],
-        }
-        m = Metadata.from_DataFrame(pandas.DataFrame(data))
-
-        dropped_columns = m.group_attributes(str(tmp_path), drop_source_columns=False)
-
-        assert dropped_columns == ['source_name']
-        assert 'brain cortex[source_name]' in m.df.loc[0, 'tissue']
-        assert 'source_name' in m.df.columns
-
-    def test_missing_config_no_error(self, tmp_path):
-        """Issue #108: Missing config should not raise error."""
-        m = Metadata.from_DataFrame(pandas.DataFrame({
-            'scientific_name': ['Sp1'], 'run': ['R1'], 'exclusion': ['no'],
-        }))
-        m.group_attributes(str(tmp_path))  # no config file present
-
-    def test_no_futurewarning_when_target_column_is_float(self, tmp_path):
-        """String aggregation into float target must not emit pandas FutureWarning."""
-        ga = tmp_path / 'group_attribute.config'
-        ga.write_text('treatment\tgrowth_condition\n')
-        data = {
-            'scientific_name': ['Sp1', 'Sp1'],
-            'sample_group': ['g1', 'g2'],
-            'run': ['R1', 'R2'],
-            'exclusion': ['no', 'no'],
-            'growth_condition': ['sd medium', 'sd medium'],
-            # Simulate dtype inferred from all-missing values at file-load time.
-            'treatment': [numpy.nan, numpy.nan],
-        }
-        m = Metadata.from_DataFrame(pandas.DataFrame(data))
-        with warnings.catch_warnings(record=True) as captured:
-            warnings.simplefilter('always')
-            m.group_attributes(str(tmp_path))
-        future_warnings = [w for w in captured if issubclass(w.category, FutureWarning)]
-        assert len(future_warnings) == 0
-
-    def test_raises_for_malformed_config_with_too_few_columns(self, tmp_path):
-        ga = tmp_path / 'group_attribute.config'
-        ga.write_text('tissue_only\n')
-        m = Metadata.from_DataFrame(pandas.DataFrame({
-            'scientific_name': ['Sp1'],
-            'run': ['R1'],
-            'exclusion': ['no'],
-        }))
-        with pytest.raises(ValueError, match='group_attribute.config must contain at least 2'):
-            m.group_attributes(str(tmp_path))
-
-
-# ---------------------------------------------------------------------------
-# mark_missing_rank
-# ---------------------------------------------------------------------------
-
-class TestMetadataMarkMissingRank:
-    def test_marks_missing_taxid(self):
-        data = {
-            'scientific_name': ['Sp1', 'Sp2'],
-            'run': ['R1', 'R2'],
-            'exclusion': ['no', 'no'],
-            'taxid_species': [9606, pandas.NA],
-        }
-        df = pandas.DataFrame(data)
-        df['taxid_species'] = df['taxid_species'].astype('Int64')
-        m = Metadata.from_DataFrame(df)
-        m.mark_missing_rank('species')
-        assert m.df.loc[m.df['run'] == 'R1', 'exclusion'].values[0] == 'no'
-        assert m.df.loc[m.df['run'] == 'R2', 'exclusion'].values[0] == 'missing_taxid'
-
-    def test_none_rank_skips(self, sample_metadata):
-        """rank_name='none' should do nothing."""
-        m = sample_metadata
-        m.mark_missing_rank('none')
-        assert (m.df['exclusion'] == 'no').all()
-
-    def test_raises_when_required_rank_column_missing(self, sample_metadata):
-        m = sample_metadata
-        with pytest.raises(ValueError, match='Column \"taxid_species\" is required'):
-            m.mark_missing_rank('species')
-
-
-# ---------------------------------------------------------------------------
 # label_sampled_data: empty sample_group handling (wiki: select)
 # ---------------------------------------------------------------------------
 
 class TestMetadataLabelSampledDataEdgeCases:
     def test_empty_sample_group_marked_unqualified(self):
-        """Wiki/select: samples with empty sample_group get exclusion=no_tissue_label."""
+        """Empty sample_group rows remain unqualified and are not auto-assigned an exclusion label."""
         data = {
             'scientific_name': ['Sp1', 'Sp1'],
             'sample_group': ['brain', ''],
@@ -1196,7 +873,7 @@ class TestMetadataLabelSampledDataEdgeCases:
         m = Metadata.from_DataFrame(pandas.DataFrame(data))
         m.label_sampled_data(max_sample=10)
         empty_sg = m.df.loc[m.df['run'] == 'R2']
-        assert empty_sg['exclusion'].values[0] == 'no_tissue_label'
+        assert empty_sg['exclusion'].values[0] == 'no'
         assert empty_sg['is_qualified'].values[0] == 'no'
 
     def test_no_futurewarning_when_is_qualified_starts_float(self):
@@ -1329,46 +1006,6 @@ class TestMetadataFromXmlAttributes:
 
 
 # ---------------------------------------------------------------------------
-# check_config_dir (issue #108: missing configs should warn, not crash)
-# ---------------------------------------------------------------------------
-
-class TestCheckConfigDir:
-    def test_all_configs_present(self, tmp_config_dir):
-        """No error when all config files are present."""
-        check_config_dir(tmp_config_dir, mode='select')
-
-    def test_missing_config_warns(self, tmp_path):
-        """Issue #108: Missing config files should print warning, not raise."""
-        # Create only one of the three required files
-        ga = tmp_path / 'group_attribute.config'
-        ga.write_text('tissue\tsource_name\n')
-        # Should not raise an exception
-        check_config_dir(str(tmp_path), mode='select')
-
-    def test_invalid_mode_raises(self, tmp_path):
-        with pytest.raises(ValueError, match='Unsupported config check mode'):
-            check_config_dir(str(tmp_path), mode='unknown')
-
-    def test_missing_config_dir_raises(self, tmp_path):
-        missing_dir = tmp_path / 'missing'
-        with pytest.raises(FileNotFoundError, match='Config directory not found'):
-            check_config_dir(str(missing_dir), mode='select')
-
-    def test_config_dir_file_path_raises(self, tmp_path):
-        file_path = tmp_path / 'config_path'
-        file_path.write_text('not a directory')
-        with pytest.raises(NotADirectoryError, match='not a directory'):
-            check_config_dir(str(file_path), mode='select')
-
-    def test_config_entry_directory_is_treated_as_missing(self, tmp_path, capsys):
-        (tmp_path / 'group_attribute.config').write_text('tissue\tsource_name\n')
-        (tmp_path / 'exclude_keyword.config').mkdir()
-        check_config_dir(str(tmp_path), mode='select')
-        captured = capsys.readouterr()
-        assert 'Config entry exists but is not a file: exclude_keyword.config' in captured.err
-
-
-# ---------------------------------------------------------------------------
 # Metadata.reorder: extra columns preserved
 # ---------------------------------------------------------------------------
 
@@ -1389,38 +1026,6 @@ class TestMetadataReorderExtraCols:
         original_rows = sample_metadata.df.shape[0]
         sample_metadata.reorder()
         assert sample_metadata.df.shape[0] == original_rows
-
-
-# ---------------------------------------------------------------------------
-# Metadata.nspot_cutoff edge cases (issue #96, #110)
-# ---------------------------------------------------------------------------
-
-class TestMetadataNspotCutoffEdgeCases:
-    def test_zero_spots_not_marked(self):
-        """Rows with total_spots=0 should NOT be marked low_nspots (they are unknown)."""
-        data = {
-            'scientific_name': ['Sp1'],
-            'run': ['R1'],
-            'exclusion': ['no'],
-            'total_spots': [0],
-        }
-        m = Metadata.from_DataFrame(pandas.DataFrame(data))
-        m.nspot_cutoff(1000000)
-        # Zero spots: the negation -(0==0) is False, so row is NOT marked
-        assert m.df.loc[0, 'exclusion'] == 'no'
-
-    def test_empty_string_spots(self):
-        """Empty string total_spots should be handled gracefully."""
-        data = {
-            'scientific_name': ['Sp1'],
-            'run': ['R1'],
-            'exclusion': ['no'],
-            'total_spots': [''],
-        }
-        m = Metadata.from_DataFrame(pandas.DataFrame(data))
-        m.nspot_cutoff(1000000)
-        # Empty string -> converted to 0, not marked
-        assert m.df.loc[0, 'exclusion'] == 'no'
 
 
 # ---------------------------------------------------------------------------

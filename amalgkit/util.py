@@ -1,4 +1,3 @@
-import pandas
 import ete4
 
 import os
@@ -48,7 +47,6 @@ from amalgkit.prefix_utils import (
     find_species_prefixed_entries as _find_species_prefixed_entries,
 )
 from amalgkit.runtime_utils import (
-    check_config_dir as _check_config_dir,
     cleanup_tmp_amalgkit_files as _cleanup_tmp_amalgkit_files,
     get_getfastq_run_dir as _get_getfastq_run_dir,
 )
@@ -70,7 +68,6 @@ validate_positive_int_option = _validate_positive_int_option
 find_prefixed_entries = _find_prefixed_entries
 find_run_prefixed_entries = _find_run_prefixed_entries
 find_species_prefixed_entries = _find_species_prefixed_entries
-check_config_dir = _check_config_dir
 cleanup_tmp_amalgkit_files = _cleanup_tmp_amalgkit_files
 get_getfastq_run_dir = _get_getfastq_run_dir
 
@@ -96,21 +93,6 @@ def get_ete_ncbitaxa(args=None):
         resolve_ete_data_dir_fn=resolve_ete_data_dir,
         resolve_ete_lock_path_fn=resolve_ete_lock_path,
     )
-
-def read_config_file(file_name, dir_path):
-    config_path = os.path.join(dir_path, file_name)
-    if os.path.exists(config_path) and (not os.path.isfile(config_path)):
-        raise IsADirectoryError('Config path exists but is not a file: {}'.format(config_path))
-    try:
-        df = pandas.read_csv(config_path,
-                             parse_dates=False, quotechar='"', sep='\t',
-                             header=None, index_col=None, skip_blank_lines=True, comment='#')
-    except (FileNotFoundError, pandas.errors.EmptyDataError):
-        df = pandas.DataFrame([])
-    if df.shape[1]==1:
-        df = df.iloc[:,0]
-    return df
-
 get_newest_intermediate_file_extension = _get_newest_intermediate_file_extension
 is_there_unpaired_file = _is_there_unpaired_file
 detect_layout_from_file = _detect_layout_from_file

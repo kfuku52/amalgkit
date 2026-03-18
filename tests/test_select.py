@@ -67,6 +67,95 @@ def write_select_rules(path, rows):
     pandas.DataFrame(normalized_rows, columns=SELECT_RULE_COLUMNS).to_csv(path, sep='\t', index=False)
 
 
+def build_test_validate_rows():
+    return [
+        {
+            'rule_id': 'validate_hint_leaf',
+            'stage': 'validate',
+            'priority': '10',
+            'pattern': r'\b(?:leaf|leaves|leaflet|leaflets|lamina|laminae|leaf[\s_-]?blade|leaf[\s_-]?blades|seedling[\s_-]?leaf|seedling[\s_-]?leaves)\b',
+            'action': 'hint_organ',
+            'outcome': 'leaf',
+        },
+        {
+            'rule_id': 'validate_hint_root',
+            'stage': 'validate',
+            'priority': '11',
+            'pattern': r'\b(?:root|roots|taproot|taproots|primary root|primary roots|lateral root|lateral roots|radicle|radicles|root[\s_-]?tip|root[\s_-]?tips|seedling[\s_-]?root|seedling[\s_-]?roots|hairy root|hairy roots)\b',
+            'action': 'hint_organ',
+            'outcome': 'root',
+        },
+        {
+            'rule_id': 'validate_hint_flower',
+            'stage': 'validate',
+            'priority': '12',
+            'pattern': r'\b(?:flower|flowers|floral|inflorescence|inflorescences|spike|spikes|panicle|panicles|catkin|catkins)\b',
+            'action': 'hint_organ',
+            'outcome': 'flower',
+        },
+        {
+            'rule_id': 'validate_hint_review',
+            'stage': 'validate',
+            'priority': '13',
+            'pattern': r'\b(?:petal|petals|corolla|anther|anthers|ovary|ovaries|pistil|pistils|style|styles|stigma|stigmas|bract|bracts|bud|buds|petiole|petioles|root hair|root hairs|apex|meristem|fruit|fruits|seed|seeds|spine|spines)\b',
+            'action': 'hint_review',
+            'outcome': 'review',
+        },
+        {
+            'rule_id': 'validate_ignore_safe_metadata',
+            'stage': 'validate',
+            'priority': '14',
+            'pattern': r'^(?:(?:biological|technical)\s+replicates?(?:\s+[A-Za-z0-9._-]+)?|replicates?(?:\s+[A-Za-z0-9._-]+)?|repeats?(?:\s+[A-Za-z0-9._-]+)?|rep(?:licate)?\s*[A-Za-z0-9._-]+|samples?(?:\s+[A-Za-z0-9._-]+)?|libraries?(?:\s+[A-Za-z0-9._-]+)?|libs?(?:\s+[A-Za-z0-9._-]+)?|lanes?(?:\s+[A-Za-z0-9._-]+)?|controls?(?:\s+[A-Za-z0-9._-]+)?|mock(?:\s+[A-Za-z0-9._-]+)?|(?:cold|heat|salt|drought|stress|treated|treatment|cultivar)(?:\s+[A-Za-z0-9._-]+)*)$',
+            'action': 'ignore_segment',
+            'outcome': 'ignore',
+        },
+    ]
+
+
+def build_test_filter_dedup_rows():
+    return [
+        {
+            'rule_id': 'filter_low_nspots',
+            'stage': 'filter',
+            'priority': '3000',
+            'columns': 'total_spots',
+            'action': 'exclude_if_lt_parameter',
+            'target_column': 'exclusion',
+            'outcome': 'low_nspots',
+            'parameter_name': 'min_nspots',
+        },
+        {
+            'rule_id': 'filter_missing_taxid',
+            'stage': 'filter',
+            'priority': '3010',
+            'columns': 'taxid_{parameter}',
+            'action': 'exclude_if_missing_selected_rank',
+            'target_column': 'exclusion',
+            'outcome': 'missing_taxid',
+            'parameter_name': 'mark_missing_rank',
+        },
+        {
+            'rule_id': 'filter_no_sample_group',
+            'stage': 'filter',
+            'priority': '3020',
+            'columns': 'sample_group',
+            'action': 'exclude_if_empty',
+            'target_column': 'exclusion',
+            'outcome': 'no_sample_group',
+        },
+        {
+            'rule_id': 'dedup_redundant_biosample',
+            'stage': 'dedup',
+            'priority': '3030',
+            'columns': 'bioproject,biosample',
+            'action': 'exclude_redundant_by_best_numeric',
+            'target_column': 'total_spots',
+            'outcome': 'redundant_biosample',
+            'parameter_name': 'mark_redundant_biosamples',
+        },
+    ]
+
+
 # ---------------------------------------------------------------------------
 # write_select_outputs (writes metadata and pivot tables)
 # ---------------------------------------------------------------------------
@@ -289,6 +378,55 @@ class TestSelectHelpers:
         assert config['parameters']['min_nspots'] == 1000000
         assert len(config['rules']) == 1
         assert config['rules'][0]['rule_id'] == 'flower_whole'
+
+    def test_read_select_config_parses_filter_dedup_and_validate_rows(self, tmp_path):
+        rules_path = tmp_path / 'select_rules.tsv'
+        write_select_rules(rules_path, [
+            {
+                'rule_id': 'validate_hint_leaf',
+                'stage': 'validate',
+                'priority': '10',
+                'pattern': r'\\bleaf\\b',
+                'action': 'hint_organ',
+                'outcome': 'leaf',
+            },
+            {
+                'rule_id': 'filter_no_sample_group',
+                'stage': 'filter',
+                'priority': '20',
+                'columns': 'sample_group',
+                'action': 'exclude_if_empty',
+                'target_column': 'exclusion',
+                'outcome': 'no_sample_group',
+            },
+            {
+                'rule_id': 'dedup_redundant_biosample',
+                'stage': 'dedup',
+                'priority': '30',
+                'columns': 'bioproject,biosample',
+                'action': 'exclude_redundant_by_best_numeric',
+                'target_column': 'total_spots',
+                'outcome': 'redundant_biosample',
+                'parameter_name': 'mark_redundant_biosamples',
+            },
+            {
+                'rule_id': 'flower_whole',
+                'stage': 'normalize',
+                'priority': '40',
+                'columns': 'sample_group',
+                'pattern': r'\\bflower\\b',
+                'action': 'assign',
+                'outcome': 'flower',
+            },
+        ])
+
+        config = read_select_config(str(rules_path))
+
+        rule_by_id = {rule['rule_id']: rule for rule in config['rules']}
+        assert rule_by_id['validate_hint_leaf']['stage'] == 'validate'
+        assert rule_by_id['filter_no_sample_group']['stage'] == 'filter'
+        assert rule_by_id['dedup_redundant_biosample']['stage'] == 'dedup'
+        assert rule_by_id['dedup_redundant_biosample']['parameter_name'] == 'mark_redundant_biosamples'
 
     def test_apply_select_config_parameters_uses_config_when_args_missing(self):
         args = SimpleNamespace(
@@ -546,15 +684,17 @@ class TestSelectHelpers:
                 'action': 'assign',
                 'outcome': 'leaf',
             },
-        ])
-        normalize_rules = [rule for rule in read_select_rules(str(rules_path)) if rule['stage'] == 'normalize']
-        result = classify_select_text(text, normalize_rules)
+        ] + build_test_validate_rows())
+        parsed_rules = read_select_rules(str(rules_path))
+        normalize_rules = [rule for rule in parsed_rules if rule['stage'] == 'normalize']
+        validate_rules = [rule for rule in parsed_rules if rule['stage'] == 'validate']
+        result = classify_select_text(text, normalize_rules, validate_rules=validate_rules)
         assert result['status'] == expected_status
         assert result['organ'] == expected_organ
 
     def test_prepare_select_metadata_applies_unknown_segment_validator(self, tmp_path):
         rules_path = tmp_path / 'select_rules.tsv'
-        write_select_rules(rules_path, [
+        write_select_rules(rules_path, build_test_validate_rows() + [
             {
                 'rule_id': 'leaf_whole',
                 'stage': 'normalize',
@@ -603,7 +743,7 @@ class TestSelectHelpers:
 
     def test_prepare_select_metadata_applies_list_segment_validator(self, tmp_path):
         rules_path = tmp_path / 'select_rules.tsv'
-        write_select_rules(rules_path, [
+        write_select_rules(rules_path, build_test_validate_rows() + [
             {
                 'rule_id': 'flower_whole',
                 'stage': 'normalize',
@@ -660,6 +800,60 @@ class TestSelectHelpers:
         assert observed.loc['SRR004', 'sample_group_normalization_status'] == 'organ'
         assert observed.loc['SRR005', 'sample_group'] == 'leaf'
         assert observed.loc['SRR005', 'sample_group_normalization_status'] == 'organ'
+
+    def test_assign_safe_normalize_rule_skips_validator(self, tmp_path):
+        rules_path = tmp_path / 'select_rules.tsv'
+        write_select_rules(rules_path, build_test_validate_rows() + [
+            {
+                'rule_id': 'leaf_safe_floral_induction_context',
+                'stage': 'normalize',
+                'priority': '10',
+                'columns': 'sample_group',
+                'pattern': r'\b(?:leaf|leaves)\b.{0,120}\b(?:flower|floral)\s+induction\b|\b(?:flower|floral)\s+induction\b.{0,120}\b(?:leaf|leaves)\b',
+                'action': 'assign_safe',
+                'outcome': 'leaf',
+            },
+            {
+                'rule_id': 'mixed_leaf_flower',
+                'stage': 'normalize',
+                'priority': '20',
+                'columns': 'sample_group',
+                'pattern': r'\b(?:leaf|leaves)\b.*\b(?:flower|flowers|floral)\b|\b(?:flower|flowers|floral)\b.*\b(?:leaf|leaves)\b',
+                'action': 'assign',
+                'outcome': 'mixed',
+            },
+            {
+                'rule_id': 'flower_whole',
+                'stage': 'normalize',
+                'priority': '30',
+                'columns': 'sample_group',
+                'pattern': r'\b(?:flower|flowers)\b',
+                'action': 'assign',
+                'outcome': 'flower',
+            },
+            {
+                'rule_id': 'leaf_whole',
+                'stage': 'normalize',
+                'priority': '40',
+                'columns': 'sample_group',
+                'pattern': r'\b(?:leaf|leaves)\b',
+                'action': 'assign',
+                'outcome': 'leaf',
+            },
+        ])
+        parsed_rules = read_select_rules(str(rules_path))
+        normalize_rules = [rule for rule in parsed_rules if rule['stage'] == 'normalize']
+        validate_rules = [rule for rule in parsed_rules if rule['stage'] == 'validate']
+
+        result = classify_select_text(
+            'RNA-seq of Cajanus cajan during floral induction: Leaves before induction',
+            normalize_rules,
+            validate_rules=validate_rules,
+        )
+
+        assert result['status'] == 'organ'
+        assert result['organ'] == 'leaf'
+        assert result['rule_id'] == 'leaf_safe_floral_induction_context'
 
 
 class TestSelectRuleApplication:
@@ -854,7 +1048,10 @@ class TestSelectRuleApplication:
         assert out.df.loc[1, 'sample_group'] == 'leaf'
         assert out.df.loc[1, 'sample_group_normalization_source'] == 'sample_title'
 
-    def test_apply_select_filters_prefers_non_excluded_duplicate_biosample(self):
+    def test_apply_select_filters_prefers_non_excluded_duplicate_biosample(self, tmp_path):
+        rules_path = tmp_path / 'select_rules.tsv'
+        write_select_rules(rules_path, build_test_filter_dedup_rows())
+        select_rules = read_select_rules(str(rules_path))
         metadata = Metadata.from_DataFrame(pandas.DataFrame({
             'run': ['SRR001', 'SRR002'],
             'scientific_name': ['Species A', 'Species A'],
@@ -871,13 +1068,16 @@ class TestSelectRuleApplication:
             max_sample=10,
         )
 
-        out = apply_select_filters(metadata, args, [])
+        out = apply_select_filters(metadata, args, select_rules)
 
         assert out.df.loc[out.df['run'] == 'SRR001', 'exclusion'].iloc[0] == 'low_nspots'
         assert out.df.loc[out.df['run'] == 'SRR002', 'exclusion'].iloc[0] == 'no'
         assert out.df.loc[out.df['run'] == 'SRR002', 'is_sampled'].iloc[0] == 'yes'
 
-    def test_apply_select_filters_keeps_highest_depth_duplicate_biosample(self):
+    def test_apply_select_filters_keeps_highest_depth_duplicate_biosample(self, tmp_path):
+        rules_path = tmp_path / 'select_rules.tsv'
+        write_select_rules(rules_path, build_test_filter_dedup_rows())
+        select_rules = read_select_rules(str(rules_path))
         metadata = Metadata.from_DataFrame(pandas.DataFrame({
             'run': ['SRR001', 'SRR002'],
             'scientific_name': ['Species A', 'Species A'],
@@ -894,7 +1094,7 @@ class TestSelectRuleApplication:
             max_sample=10,
         )
 
-        out = apply_select_filters(metadata, args, [])
+        out = apply_select_filters(metadata, args, select_rules)
 
         assert out.df.loc[out.df['run'] == 'SRR001', 'exclusion'].iloc[0] == 'redundant_biosample'
         assert out.df.loc[out.df['run'] == 'SRR002', 'exclusion'].iloc[0] == 'no'
@@ -902,7 +1102,7 @@ class TestSelectRuleApplication:
 
     def test_preserves_taxid_and_extra_columns_after_filtering(self, tmp_path):
         rules_path = tmp_path / 'select_rules.tsv'
-        write_select_rules(rules_path, [
+        write_select_rules(rules_path, build_test_filter_dedup_rows() + [
             {
                 'rule_id': 'leaf_whole',
                 'stage': 'normalize',
@@ -942,6 +1142,31 @@ class TestSelectRuleApplication:
         assert out.df.loc[0, 'sample_attribute_tissue'] == 'leaf'
         assert 'sample_group_normalization_source' in out.df.columns
         assert out.df.loc[0, 'sample_group_normalization_source'] == 'sample_attribute_tissue'
+
+    def test_apply_select_filters_marks_empty_sample_group_as_no_sample_group(self, tmp_path):
+        rules_path = tmp_path / 'select_rules.tsv'
+        write_select_rules(rules_path, build_test_filter_dedup_rows())
+        select_rules = read_select_rules(str(rules_path))
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001'],
+            'scientific_name': ['Species A'],
+            'sample_group': [''],
+            'bioproject': ['PRJ1'],
+            'biosample': ['SAM1'],
+            'total_spots': [100],
+            'exclusion': ['no'],
+        }))
+        args = SimpleNamespace(
+            min_nspots=0,
+            mark_missing_rank='none',
+            mark_redundant_biosamples=False,
+            max_sample=10,
+        )
+
+        out = apply_select_filters(metadata, args, select_rules)
+
+        assert out.df.loc[0, 'exclusion'] == 'no_sample_group'
+        assert out.df.loc[0, 'is_qualified'] == 'no'
 
     def test_full_bloom_flower_rule_ignores_sample_description_context(self, tmp_path):
         rules_path = tmp_path / 'select_rules.tsv'
@@ -986,7 +1211,7 @@ class TestSelectRuleApplication:
         assert out.df.loc[0, 'sample_group_normalization_rule_id'] == 'fruit_non_target'
 
     def test_default_plantae_normalize_rules_use_whitelisted_columns(self):
-        rules_path = Path(__file__).resolve().parents[1] / 'amalgkit' / 'config_dir' / 'plantae' / 'select_rules.tsv'
+        rules_path = Path(__file__).resolve().parents[1] / 'amalgkit' / 'select_rule_sets' / 'plantae' / 'select_rules.tsv'
         select_rules = read_select_rules(str(rules_path))
         allowed = {
             'sample_attribute_tissue',
@@ -1000,6 +1225,46 @@ class TestSelectRuleApplication:
         assert len(normalize_rules) > 0
         for rule in normalize_rules:
             assert set(rule['columns']).issubset(allowed), rule['rule_id']
+
+    def test_default_plantae_config_contains_manual_recovery_and_filter_rules(self):
+        rules_path = Path(__file__).resolve().parents[1] / 'amalgkit' / 'select_rule_sets' / 'plantae' / 'select_rules.tsv'
+        select_rules = read_select_rules(str(rules_path))
+        rule_ids = {rule['rule_id'] for rule in select_rules}
+        validate_rule_ids = {rule['rule_id'] for rule in select_rules if rule['stage'] == 'validate'}
+        assert 'normalize_leaf_safe_covering_inflorescence' in rule_ids
+        assert 'normalize_leaf_safe_floral_induction_context' in rule_ids
+        assert 'normalize_root_safe_leaf_stage_context' in rule_ids
+        assert 'normalize_leaf_safe_leaf_blade_and_sheath' in rule_ids
+        assert 'filter_low_nspots_1' in rule_ids
+        assert 'filter_missing_taxid_2' in rule_ids
+        assert 'filter_no_sample_group_3' in rule_ids
+        assert 'dedup_redundant_biosample_1' in rule_ids
+        assert 'exclude_single_cell_1' in rule_ids
+        assert 'exclude_single_nucleus_1a' in rule_ids
+        assert 'exclude_rnai_4' in rule_ids
+        assert 'exclude_cage_8' in rule_ids
+        assert 'control_mock_1' in rule_ids
+        assert validate_rule_ids == {
+            'validate_hint_flower_1',
+            'validate_hint_leaf_2',
+            'validate_hint_root_3',
+            'validate_hint_review_4',
+            'validate_ignore_safe_metadata_5',
+        }
+
+    def test_default_plantae_covering_inflorescence_phrase_is_leaf(self):
+        rules_path = Path(__file__).resolve().parents[1] / 'amalgkit' / 'select_rule_sets' / 'plantae' / 'select_rules.tsv'
+        select_rules = read_select_rules(str(rules_path))
+        normalize_rules = [rule for rule in select_rules if rule['stage'] == 'normalize']
+
+        result = classify_select_text(
+            'leaves (covering the inflorescence)',
+            normalize_rules,
+        )
+
+        assert result['status'] == 'organ'
+        assert result['organ'] == 'leaf'
+        assert result['rule_id'] == 'normalize_leaf_safe_covering_inflorescence'
 
     def test_review_rule_overrides_original_sample_group(self, tmp_path):
         rules_path = tmp_path / 'select_rules.tsv'
@@ -1449,3 +1714,6 @@ class TestCliEntry:
         assert completed.returncode == 0
         assert 'usage: amalgkit select' in completed.stdout
         assert '--sample_group tissueA,tissueB,tissueC,...' not in completed.stdout
+        assert '--max_sample' not in completed.stdout
+        assert '--mark_missing_rank' not in completed.stdout
+        assert '--mark_redundant_biosamples' not in completed.stdout

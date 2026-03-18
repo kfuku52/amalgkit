@@ -314,7 +314,7 @@ class Metadata:
                     value = get_first_text(sa, './VALUE')
                     if value == "":
                         continue
-                    if (normalized_tag in blocked_tags) or (normalized_tag in core_column_tags):
+                    if normalized_tag in blocked_tags:
                         target_tag = 'sample_attribute_' + normalized_tag
                     else:
                         target_tag = normalized_tag
@@ -510,189 +510,6 @@ class Metadata:
         if str(self.df['taxid'].dtype) != 'Int64':
             raise TypeError('taxid column must be Int64 dtype')
 
-    def _load_tab_config(self, dir_config, config_filename):
-        config_path = os.path.join(dir_config, config_filename)
-        if os.path.exists(config_path) and (not os.path.isfile(config_path)):
-            raise IsADirectoryError('Config path exists but is not a file: {}'.format(config_path))
-        try:
-            config = pandas.read_csv(
-                config_path,
-                parse_dates=False,
-                quotechar='"',
-                sep='\t',
-                header=None,
-                index_col=None,
-                skip_blank_lines=True,
-                comment='#',
-            )
-        except (FileNotFoundError, pandas.errors.EmptyDataError):
-            config = pandas.DataFrame()
-        return config.replace(numpy.nan, '')
-
-    def _build_text_series_getter(self):
-        text_series_cache = {}
-
-        def get_text_series(col):
-            if col not in text_series_cache:
-                text_series_cache[col] = self.df.loc[:, col].astype(str)
-            return text_series_cache[col]
-
-        return get_text_series
-
-    def _load_group_attribute_pairs(self, dir_config):
-        config = self._load_tab_config(dir_config=dir_config, config_filename='group_attribute.config')
-        if (config.shape[0] > 0) and (config.shape[1] < 2):
-            raise ValueError('group_attribute.config must contain at least 2 tab-separated columns.')
-        pairs = []
-        for i in config.index:
-            aggregate_to = config.iloc[i, 0]
-            aggregate_from = config.iloc[i, 1]
-            pairs.append((aggregate_to, aggregate_from))
-        return pairs
-
-    def group_attributes(self, dir_config, drop_source_columns=True):
-        group_attribute_pairs = self._load_group_attribute_pairs(dir_config)
-        dropped_columns = []
-        for aggregate_to, aggregate_from in group_attribute_pairs:
-            if (aggregate_from in self.df.columns) & (aggregate_from != ''):
-                print('{}: Aggregating column "{}" to column "{}"'.format(datetime.datetime.now(), aggregate_from, aggregate_to), flush=True)
-                if aggregate_to not in self.df.columns:
-                    self.df[aggregate_to] = ''
-                else:
-                    self.df[aggregate_to] = self.df[aggregate_to].fillna('').astype(str)
-                is_from_empty = (self.df.loc[:, aggregate_from].isnull()) | (
-                    self.df.loc[:, aggregate_from].astype(str) == ''
-                )
-                is_to_empty = (self.df.loc[:, aggregate_to].isnull()) | (self.df.loc[:, aggregate_to].astype(str) == '')
-                new_annotations = self.df.loc[(~is_from_empty) & (is_to_empty), aggregate_from].astype(
-                    str
-                ) + '[' + aggregate_from + ']'
-                self.df.loc[(~is_from_empty) & (is_to_empty), aggregate_to] = new_annotations
-                new_annotations = self.df.loc[(~is_from_empty) & (~is_to_empty), aggregate_to].astype(str) + "; " + \
-                                  self.df.loc[(~is_from_empty) & (~is_to_empty), aggregate_from].astype(
-                                      str) + '[' + aggregate_from + ']'
-                self.df.loc[(~is_from_empty) & (~is_to_empty), aggregate_to] = new_annotations
-                if (aggregate_from != aggregate_to) and (aggregate_from not in dropped_columns):
-                    dropped_columns.append(aggregate_from)
-        if drop_source_columns and (len(dropped_columns) > 0):
-            self.df = self.df.drop(labels=dropped_columns, axis=1)
-        self.reorder(omit_misc=False)
-        return dropped_columns
-
-    def mark_exclude_keywords(self, dir_config):
-        config = self._load_tab_config(dir_config=dir_config, config_filename='exclude_keyword.config')
-        if (config.shape[0] > 0) and (config.shape[1] < 3):
-            raise ValueError('exclude_keyword.config must contain at least 3 tab-separated columns.')
-        if config.shape[0] > 0:
-            print('{}: Marking SRAs with bad keywords'.format(datetime.datetime.now()), flush=True)
-        get_text_series = self._build_text_series_getter()
-
-        for i in config.index:
-            cols = [col.strip() for col in str(config.iloc[i, 0]).split(',') if col.strip() != '']
-            if len(cols) == 0:
-                continue
-            missing_cols = [col for col in cols if col not in self.df.columns]
-            if len(missing_cols) > 0:
-                raise ValueError(
-                    'Column(s) in exclude_keyword.config were not found in metadata: {}'.format(
-                        ', '.join(missing_cols)
-                    )
-                )
-            reason = str(config.iloc[i, 1]).strip()
-            exclude_keyword = str(config.iloc[i, 2]).strip()
-            if reason == '':
-                warnings.warn(
-                    'Skipping exclude_keyword.config row {} because exclusion reason is empty.'.format(i + 1)
-                )
-                continue
-            if exclude_keyword == '':
-                warnings.warn(
-                    'Skipping exclude_keyword.config row {} because keyword is empty.'.format(i + 1)
-                )
-                continue
-            num_detected = 0
-            for col in cols:
-                text_col = get_text_series(col)
-                try:
-                    has_bad_keyword = text_col.str.contains(exclude_keyword, regex=True, case=False).fillna(False)
-                except re.error as exc:
-                    raise ValueError(
-                        'Invalid regex pattern in exclude_keyword.config row {}: {}'.format(i + 1, exclude_keyword)
-                    ) from exc
-                self.df.loc[has_bad_keyword, 'exclusion'] = reason
-                num_detected += has_bad_keyword.sum()
-            txt = '{}: Marking {:,} SRAs with keyword "{}"'
-            print(txt.format(datetime.datetime.now(), num_detected, exclude_keyword), flush=True)
-
-    def mark_treatment_terms(self, dir_config):
-        config = self._load_tab_config(dir_config=dir_config, config_filename='control_term.config')
-        if (config.shape[0] > 0) and (config.shape[1] < 2):
-            raise ValueError('control_term.config must contain at least 2 tab-separated columns.')
-        if config.shape[0] > 0:
-            print('{}: Marking SRAs with non-control terms'.format(datetime.datetime.now()), flush=True)
-        get_text_series = self._build_text_series_getter()
-
-        for i in config.index:
-            cols = [col.strip() for col in str(config.iloc[i, 0]).split(',') if col.strip() != '']
-            if len(cols) == 0:
-                continue
-            missing_cols = [col for col in cols if col not in self.df.columns]
-            if len(missing_cols) > 0:
-                raise ValueError(
-                    'Column(s) in control_term.config were not found in metadata: {}'.format(
-                        ', '.join(missing_cols)
-                    )
-                )
-            control_term = str(config.iloc[i, 1]).strip()
-            if control_term == '':
-                continue
-            num_control = 0
-            num_treatment = 0
-            for col in cols:
-                text_col = get_text_series(col)
-                try:
-                    is_control = text_col.str.contains(control_term, regex=True, case=False).fillna(False)
-                except re.error as exc:
-                    raise ValueError(
-                        'Invalid regex pattern in control_term.config row {}: {}'.format(i + 1, control_term)
-                    ) from exc
-                if not any(is_control):
-                    continue
-                control_bioprojects = self.df.loc[is_control, 'bioproject'].unique()
-                if len(control_bioprojects) == 0:
-                    continue
-                is_control_bioproject = self.df.loc[:, 'bioproject'].isin(control_bioprojects)
-                is_treatment = is_control_bioproject & (~is_control)
-                self.df.loc[is_treatment, 'exclusion'] = 'non_control'
-                num_control += int((is_control_bioproject & is_control).sum())
-                num_treatment += int(is_treatment.sum())
-            txt = '{}: Applying control term "{}" to "{}": Detected control and treatment SRAs: {:,} and {:,}'
-            print(txt.format(datetime.datetime.now(), control_term, ','.join(cols), num_control, num_treatment), flush=True)
-
-    def nspot_cutoff(self, min_nspots):
-        print('{}: Marking SRAs with less than {:,} reads'.format(datetime.datetime.now(), min_nspots), flush=True)
-        self.df['total_spots'] = pandas.to_numeric(self.df['total_spots'], errors='coerce').fillna(0).astype(int)
-        self.df.loc[-(self.df.loc[:, 'total_spots'] == 0) & (
-            self.df.loc[:, 'total_spots'] < min_nspots), 'exclusion'] = 'low_nspots'
-
-    def mark_missing_rank(self, rank_name):
-        if rank_name == 'none':
-            return
-        print('{}: Marking SRAs with missing taxid at the {} level'.format(datetime.datetime.now(), rank_name), flush=True)
-        rank_col = 'taxid_' + rank_name
-        if rank_col not in self.df.columns:
-            raise ValueError(
-                'Column "{}" is required in metadata for missing-rank filtering.'.format(rank_col)
-            )
-        is_empty = (self.df[rank_col].isna())
-        self.df.loc[is_empty, 'exclusion'] = 'missing_taxid'
-
-    def mark_redundant_biosample(self, exe_flag):
-        if exe_flag:
-            print('{}: Marking SRAs with redundant BioSample IDs'.format(datetime.datetime.now()), flush=True)
-            redundant_bool = self.df.duplicated(subset=['bioproject', 'biosample'], keep='first')
-            self.df.loc[redundant_bool, 'exclusion'] = 'redundant_biosample'
-
     def _maximize_bioproject_sampling(self, df, target_n=10):
         if 'exclusion' not in df.columns:
             raise ValueError('Column "exclusion" is required for sample selection.')
@@ -756,8 +573,7 @@ class Metadata:
             self.df['is_sampled'] = 'no'
             self.df['is_qualified'] = 'no'
             is_empty = (self.df['sample_group'] == '')
-            self.df.loc[is_empty, 'exclusion'] = 'no_tissue_label'
-            self.df.loc[(self.df.loc[:, 'exclusion'] == 'no'), 'is_qualified'] = 'yes'
+            self.df.loc[(self.df.loc[:, 'exclusion'] == 'no') & (~is_empty), 'is_qualified'] = 'yes'
             grouped = self.df.groupby(['scientific_name', 'sample_group'], sort=False, dropna=False)
             for (_, _), sp_sample_group in grouped:
                 sampled_group = self._maximize_bioproject_sampling(

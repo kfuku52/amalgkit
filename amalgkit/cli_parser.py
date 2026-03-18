@@ -115,14 +115,6 @@ def build_parser(command_handlers, command_names, version, prog=None):
                           '"inferred" = basename(out_dir).')
     pse.add_argument('--select_rules_tsv', metavar='PATH|inferred', default='inferred', type=str, required=False, action='store',
                      help='default=%(default)s: PATH to select_rules.tsv. "inferred" = out_dir/select_rules.tsv')
-    pse.add_argument('--max_sample', metavar='INT', default=None, type=int, required=False, action='store',
-                     help='default=from select_rules.tsv: Maximum number of RNA-seq data to retain for one sample group in a species.')
-    pse.add_argument('--mark_missing_rank', metavar='species|genus|family|order|class|phylum|kingdom|domain|none', default=None, type=str, required=False, action='store',
-                     choices=['species', 'genus', 'family', 'order', 'class', 'phylum', 'kingdom', 'domain', 'none'],
-                     help='default=from select_rules.tsv: Mark samples lacking taxid information at the specified rank as unqualified.')
-    pse.add_argument('--mark_redundant_biosamples', metavar='no|yes', default=None, type=strtobool,
-                     required=False, action='store',
-                     help='default=from select_rules.tsv: Whether to label SRAs with the same BioSample ID as unqualified.')
     pse.set_defaults(handler=command_handlers['select'])
 
     pge_help = 'Retrieving fastq files. See `amalgkit getfastq -h`'

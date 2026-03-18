@@ -20,10 +20,10 @@ setup(
     packages                = find_packages(exclude=('*.tests', 'tests', 'tests.*', '*.test', '*.test.*', '*.__pycache__', '__pycache__')),
     package_data            = {
         'amalgkit': [
-            'config_dir/base/*.config',
-            'config_dir/plantae/*.config',
-            'config_dir/test/*.config',
-            'config_dir/vertebrate/*.config',
+            'select_rule_sets/base/select_rules.tsv',
+            'select_rule_sets/plantae/select_rules.tsv',
+            'select_rule_sets/test/select_rules.tsv',
+            'select_rule_sets/vertebrate/select_rules.tsv',
             'datasets/yeast/*.fa.gz',
             'datasets/yeast/*.tsv',
             'datasets/yeast/*.config',

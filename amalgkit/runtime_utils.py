@@ -1,39 +1,5 @@
 import os
 import shutil
-import sys
-
-
-def check_config_dir(dir_path, mode):
-    mode_to_files = {
-        'select': [
-            'group_attribute.config',
-            'exclude_keyword.config',
-            'control_term.config',
-        ],
-    }
-    asserted_files = mode_to_files.get(mode)
-    if asserted_files is None:
-        raise ValueError('Unsupported config check mode: {}'.format(mode))
-    if not os.path.exists(dir_path):
-        raise FileNotFoundError('Config directory not found: {}'.format(dir_path))
-    if not os.path.isdir(dir_path):
-        raise NotADirectoryError('Config path exists but is not a directory: {}'.format(dir_path))
-    missing_count = 0
-    for af in asserted_files:
-        af_path = os.path.join(dir_path, af)
-        if os.path.isfile(af_path):
-            print('Config file found: {}'.format(af))
-        elif os.path.exists(af_path):
-            sys.stderr.write('Config entry exists but is not a file: {}\n'.format(af))
-            missing_count += 1
-        else:
-            sys.stderr.write('Config file not found: {}\n'.format(af))
-            missing_count += 1
-    if (missing_count > 0):
-        txt = 'Please refer to the AMALGKIT Wiki for more info: https://github.com/kfuku52/amalgkit/wiki/amalgkit-metadata\n'
-        sys.stderr.write(txt)
-
-
 def cleanup_tmp_amalgkit_files(work_dir='.'):
     try:
         with os.scandir(work_dir) as entries:

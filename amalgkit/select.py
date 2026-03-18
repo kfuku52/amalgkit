@@ -52,66 +52,17 @@ SELECT_RULES_REQUIRED_COLUMNS = [
 ]
 SELECT_STAGE_ORDER = {
     'aggregate': 0,
-    'normalize': 1,
-    'exclude': 2,
-    'control': 3,
+    'validate': 1,
+    'normalize': 2,
+    'exclude': 3,
+    'control': 4,
+    'filter': 5,
+    'dedup': 6,
 }
 SELECT_NORMALIZE_ORGANS = {'flower', 'leaf', 'root'}
 SELECT_NORMALIZE_STATUSES = {'review', 'mixed', 'non_target'}
 SELECT_VALIDATION_STRONG_SPLIT_PATTERN = re.compile(r'\s*(?:/|&|\b(?:and|or|plus)\b)\s*', re.IGNORECASE)
 SELECT_VALIDATION_LIST_SPLIT_PATTERN = re.compile(r'\s*[;,]\s*')
-SELECT_VALIDATION_SAFE_LIST_METADATA_PATTERN = re.compile(
-    r'^(?:'
-    r'(?:biological|technical)\s+replicates?(?:\s+[A-Za-z0-9._-]+)?|'
-    r'replicates?(?:\s+[A-Za-z0-9._-]+)?|'
-    r'repeats?(?:\s+[A-Za-z0-9._-]+)?|'
-    r'rep(?:licate)?\s*[A-Za-z0-9._-]+|'
-    r'samples?(?:\s+[A-Za-z0-9._-]+)?|'
-    r'libraries?(?:\s+[A-Za-z0-9._-]+)?|'
-    r'libs?(?:\s+[A-Za-z0-9._-]+)?|'
-    r'lanes?(?:\s+[A-Za-z0-9._-]+)?|'
-    r'controls?(?:\s+[A-Za-z0-9._-]+)?|'
-    r'mock(?:\s+[A-Za-z0-9._-]+)?|'
-    r'(?:cold|heat|salt|drought|stress|treated|treatment)(?:\s+[A-Za-z0-9._-]+)*'
-    r')$',
-    re.IGNORECASE,
-)
-SELECT_VALIDATION_ORGAN_HINT_PATTERNS = {
-    'flower': re.compile(
-        r'\b(?:'
-        r'flower|flowers|floral|inflorescence|inflorescences|'
-        r'spike|spikes|panicle|panicles|tassel|tassels|ear|ears|catkin|catkins'
-        r')\b',
-        re.IGNORECASE,
-    ),
-    'leaf': re.compile(
-        r'\b(?:'
-        r'leaf|leaves|flag leaf|flag leaves|lamina|laminae|leaflet|leaflets|'
-        r'leaf[\s_-]?blade|leaf[\s_-]?blades|seedling[\s_-]?leaf|seedling[\s_-]?leaves'
-        r')\b',
-        re.IGNORECASE,
-    ),
-    'root': re.compile(
-        r'\b(?:'
-        r'root|roots|taproot|taproots|primary root|primary roots|'
-        r'lateral root|lateral roots|radicle|radicles|'
-        r'root[\s_-]?tip|root[\s_-]?tips|seedling[\s_-]?root|seedling[\s_-]?roots|'
-        r'hairy root|hairy roots'
-        r')\b',
-        re.IGNORECASE,
-    ),
-}
-SELECT_VALIDATION_REVIEW_HINT_PATTERN = re.compile(
-    r'\b(?:'
-    r'petal|petals|corolla|anther|anthers|ovary|ovaries|pistil|pistils|'
-    r'stigma|stigmas|style|styles|carpel|carpels|bract|bracts|'
-    r'flower[\s_-]?bud|flower[\s_-]?buds|floral[\s_-]?bud|floral[\s_-]?buds|'
-    r'bud|buds|petiole|petioles|root hair|root hairs|'
-    r'apex|meristem|embryo|embryos|capsule|capsules|fruit|fruits|seed|seeds|'
-    r'shoot|shoots|stem|stems|spine|spines'
-    r')\b',
-    re.IGNORECASE,
-)
 SELECT_DEFAULT_SCOPE_COLUMN = 'bioproject'
 SELECT_DEFAULT_SCOPE_MODE = 'mark_other_rows_in_scope'
 SELECT_DEFAULT_TARGET_COLUMN = 'exclusion'
@@ -241,6 +192,25 @@ def parse_select_parameter_value(parameter_name, parameter_value, rule_id):
     )
 
 
+def resolve_select_runtime_parameter(args, parameter_name, rule_id):
+    if parameter_name == '':
+        raise ValueError(
+            'Select rule "{}" must define parameter_name.'.format(rule_id)
+        )
+    if parameter_name not in SELECT_PARAMETER_DEFINITIONS:
+        raise ValueError(
+            'Unsupported parameter_name in select rule "{}": {}'.format(rule_id, parameter_name)
+        )
+    if not hasattr(args, parameter_name):
+        raise ValueError(
+            'Runtime args do not define parameter "{}" required by select rule "{}".'.format(
+                parameter_name,
+                rule_id,
+            )
+        )
+    return getattr(args, parameter_name)
+
+
 def load_select_rules_table(select_rules_tsv):
     if not os.path.exists(select_rules_tsv):
         raise FileNotFoundError('select rules file not found: {}'.format(select_rules_tsv))
@@ -314,6 +284,7 @@ def read_select_config(select_rules_tsv):
         action = row['action'].lower()
         target_column = row['target_column']
         outcome = row['outcome']
+        parameter_name = row['parameter_name']
         scope_column = row['scope_column'] if row['scope_column'] != '' else SELECT_DEFAULT_SCOPE_COLUMN
         scope_columns = parse_select_rule_columns(scope_column)
         scope_mode = row['scope_mode'] if row['scope_mode'] != '' else SELECT_DEFAULT_SCOPE_MODE
@@ -336,20 +307,23 @@ def read_select_config(select_rules_tsv):
                     'Aggregate select rule "{}" must define target_column.'.format(rule_id)
                 )
             compiled_pattern = None
-        else:
+        elif stage in {'normalize', 'exclude', 'control', 'validate'}:
             if len(columns) == 0:
-                raise ValueError(
-                    'Select rule "{}" must define at least one column.'.format(rule_id)
-                )
+                if stage != 'validate':
+                    raise ValueError(
+                        'Select rule "{}" must define at least one column.'.format(rule_id)
+                    )
             if row['pattern'] == '':
                 raise ValueError(
                     'Select rule "{}" must define pattern.'.format(rule_id)
                 )
             compiled_pattern = compile_select_rule_pattern(row['pattern'], rule_id)
+        else:
+            compiled_pattern = None
         if stage == 'normalize':
-            if action != 'assign':
+            if action not in {'assign', 'assign_safe'}:
                 raise ValueError(
-                    'Normalize select rule "{}" must use action=assign.'.format(rule_id)
+                    'Normalize select rule "{}" must use action=assign or action=assign_safe.'.format(rule_id)
                 )
             if outcome not in (SELECT_NORMALIZE_ORGANS | SELECT_NORMALIZE_STATUSES):
                 raise ValueError(
@@ -383,6 +357,93 @@ def read_select_config(select_rules_tsv):
                 raise ValueError(
                     'Control select rule "{}" has unsupported scope_mode: {}'.format(rule_id, scope_mode)
                 )
+        elif stage == 'filter':
+            if action == 'exclude_if_lt_parameter':
+                if len(columns) != 1:
+                    raise ValueError(
+                        'Filter select rule "{}" must define exactly one column for action=exclude_if_lt_parameter.'.format(rule_id)
+                    )
+                if target_column == '':
+                    target_column = SELECT_DEFAULT_TARGET_COLUMN
+                if outcome == '':
+                    raise ValueError(
+                        'Filter select rule "{}" must define outcome.'.format(rule_id)
+                    )
+                if parameter_name == '':
+                    raise ValueError(
+                        'Filter select rule "{}" must define parameter_name.'.format(rule_id)
+                    )
+            elif action == 'exclude_if_empty':
+                if len(columns) == 0:
+                    raise ValueError(
+                        'Filter select rule "{}" must define at least one column for action=exclude_if_empty.'.format(rule_id)
+                    )
+                if target_column == '':
+                    target_column = SELECT_DEFAULT_TARGET_COLUMN
+                if outcome == '':
+                    raise ValueError(
+                        'Filter select rule "{}" must define outcome.'.format(rule_id)
+                    )
+            elif action == 'exclude_if_missing_selected_rank':
+                if len(columns) != 1:
+                    raise ValueError(
+                        'Filter select rule "{}" must define exactly one column template for action=exclude_if_missing_selected_rank.'.format(rule_id)
+                    )
+                if target_column == '':
+                    target_column = SELECT_DEFAULT_TARGET_COLUMN
+                if outcome == '':
+                    raise ValueError(
+                        'Filter select rule "{}" must define outcome.'.format(rule_id)
+                    )
+                if parameter_name == '':
+                    raise ValueError(
+                        'Filter select rule "{}" must define parameter_name.'.format(rule_id)
+                    )
+            else:
+                raise ValueError(
+                    'Unsupported filter action in select rule "{}": {}'.format(rule_id, action)
+                )
+        elif stage == 'dedup':
+            if action != 'exclude_redundant_by_best_numeric':
+                raise ValueError(
+                    'Dedup select rule "{}" must use action=exclude_redundant_by_best_numeric.'.format(rule_id)
+                )
+            if len(columns) < 2:
+                raise ValueError(
+                    'Dedup select rule "{}" must define at least two key columns.'.format(rule_id)
+                )
+            if target_column == '':
+                raise ValueError(
+                    'Dedup select rule "{}" must define target_column.'.format(rule_id)
+                )
+            if outcome == '':
+                raise ValueError(
+                    'Dedup select rule "{}" must define outcome.'.format(rule_id)
+                )
+        elif stage == 'validate':
+            if action == 'hint_organ':
+                if outcome not in SELECT_NORMALIZE_ORGANS:
+                    raise ValueError(
+                        'Validate select rule "{}" has unsupported organ outcome: {}'.format(rule_id, outcome)
+                    )
+            elif action == 'hint_review':
+                if outcome == '':
+                    outcome = 'review'
+                if outcome != 'review':
+                    raise ValueError(
+                        'Validate select rule "{}" with action=hint_review must use outcome=review.'.format(rule_id)
+                    )
+            elif action == 'ignore_segment':
+                if outcome == '':
+                    outcome = 'ignore'
+                if outcome != 'ignore':
+                    raise ValueError(
+                        'Validate select rule "{}" with action=ignore_segment must use outcome=ignore.'.format(rule_id)
+                    )
+            else:
+                raise ValueError(
+                    'Unsupported validate action in select rule "{}": {}'.format(rule_id, action)
+                )
         rules.append({
             'rule_id': rule_id,
             'stage': stage,
@@ -393,10 +454,12 @@ def read_select_config(select_rules_tsv):
             'action': action,
             'target_column': target_column,
             'outcome': outcome,
+            'parameter_name': parameter_name,
             'scope_column': scope_column,
             'scope_columns': scope_columns,
             'scope_mode': scope_mode,
             'stop_on_match': stop_on_match,
+            'skip_validation': (stage == 'normalize') and (action == 'assign_safe'),
             'note': row['note'],
         })
     if len(rules) == 0:
@@ -517,7 +580,7 @@ def build_select_normalization_columns(normalize_rules):
 def classify_select_text_raw(text, normalize_rules):
     normalized = normalize_select_value(text)
     if normalized.lower() in SELECT_IGNORE_VALUES:
-        return {'status': 'empty', 'organ': '', 'text': normalized, 'rule_id': ''}
+        return {'status': 'empty', 'organ': '', 'text': normalized, 'rule_id': '', 'skip_validation': False}
     for rule in normalize_rules:
         if not rule['regex'].search(normalized):
             continue
@@ -527,14 +590,16 @@ def classify_select_text_raw(text, normalize_rules):
                 'organ': rule['outcome'],
                 'text': normalized,
                 'rule_id': rule['rule_id'],
+                'skip_validation': rule.get('skip_validation', False),
             }
         return {
             'status': rule['outcome'],
             'organ': '',
             'text': normalized,
             'rule_id': rule['rule_id'],
+            'skip_validation': False,
         }
-    return {'status': 'unknown', 'organ': '', 'text': normalized, 'rule_id': ''}
+    return {'status': 'unknown', 'organ': '', 'text': normalized, 'rule_id': '', 'skip_validation': False}
 
 
 def split_select_validation_segments(normalized, split_pattern):
@@ -545,41 +610,50 @@ def split_select_validation_segments(normalized, split_pattern):
     ]
 
 
-def classify_select_validation_segment(segment, normalize_rules):
+def classify_select_validation_segment(segment, normalize_rules, validate_rules=None):
     classification = classify_select_text_raw(segment, normalize_rules)
     if classification['status'] != 'unknown':
         return classification
     normalized = normalize_select_value(segment)
-    for hinted_organ, hinted_pattern in SELECT_VALIDATION_ORGAN_HINT_PATTERNS.items():
-        if hinted_pattern.search(normalized):
+    for rule in (validate_rules or []):
+        if not rule['regex'].search(normalized):
+            continue
+        if rule['action'] == 'hint_organ':
             return {
                 'status': 'organ',
-                'organ': hinted_organ,
+                'organ': rule['outcome'],
                 'text': normalized,
-                'rule_id': 'validate_hint_{}'.format(hinted_organ),
+                'rule_id': rule['rule_id'],
             }
-    if SELECT_VALIDATION_REVIEW_HINT_PATTERN.search(normalized):
-        return {
-            'status': 'review',
-            'organ': '',
-            'text': normalized,
-            'rule_id': 'validate_hint_review',
-        }
+        if rule['action'] == 'hint_review':
+            return {
+                'status': 'review',
+                'organ': '',
+                'text': normalized,
+                'rule_id': rule['rule_id'],
+            }
+        if rule['action'] == 'ignore_segment':
+            return {
+                'status': 'ignore',
+                'organ': '',
+                'text': normalized,
+                'rule_id': rule['rule_id'],
+            }
     return classification
 
 
-def summarize_select_segment_classifications(segments, organ, normalize_rules, unknown_policy, allow_safe_metadata=False):
+def summarize_select_segment_classifications(segments, organ, normalize_rules, validate_rules, unknown_policy):
     seen_target = False
     seen_other_target = False
     seen_review_like = False
     for segment in segments:
-        classification = classify_select_validation_segment(segment, normalize_rules)
+        classification = classify_select_validation_segment(segment, normalize_rules, validate_rules=validate_rules)
         status = classification['status']
         if status == 'empty':
             continue
+        if status == 'ignore':
+            continue
         if status == 'unknown':
-            if allow_safe_metadata and SELECT_VALIDATION_SAFE_LIST_METADATA_PATTERN.search(segment):
-                continue
             if unknown_policy == 'review':
                 return {
                     'status': 'review',
@@ -615,7 +689,7 @@ def summarize_select_segment_classifications(segments, organ, normalize_rules, u
     return None
 
 
-def validate_select_organ_text(text, organ, normalize_rules):
+def validate_select_organ_text(text, organ, normalize_rules, validate_rules=None):
     normalized = normalize_select_value(text)
     if normalized.lower() in SELECT_IGNORE_VALUES:
         return None
@@ -626,8 +700,8 @@ def validate_select_organ_text(text, organ, normalize_rules):
                 segments=segments,
                 organ=organ,
                 normalize_rules=normalize_rules,
+                validate_rules=validate_rules,
                 unknown_policy='review',
-                allow_safe_metadata=False,
             )
             if summary is not None:
                 summary['text'] = normalized
@@ -639,8 +713,8 @@ def validate_select_organ_text(text, organ, normalize_rules):
                 segments=segments,
                 organ=organ,
                 normalize_rules=normalize_rules,
+                validate_rules=validate_rules,
                 unknown_policy='ignore',
-                allow_safe_metadata=True,
             )
             if summary is not None:
                 summary['text'] = normalized
@@ -648,21 +722,24 @@ def validate_select_organ_text(text, organ, normalize_rules):
     return None
 
 
-def classify_select_text(text, normalize_rules):
+def classify_select_text(text, normalize_rules, validate_rules=None):
     classification = classify_select_text_raw(text, normalize_rules)
     if classification['status'] != 'organ':
+        return classification
+    if classification.get('skip_validation', False):
         return classification
     validation = validate_select_organ_text(
         text=classification['text'],
         organ=classification['organ'],
         normalize_rules=normalize_rules,
+        validate_rules=validate_rules,
     )
     if validation is not None:
         return validation
     return classification
 
 
-def normalize_select_row(row, normalize_rules, normalization_columns):
+def normalize_select_row(row, normalize_rules, normalization_columns, validate_rules=None):
     original_sample_group = normalize_select_value(row.get('sample_group', ''))
     result = {
         'sample_group_original': original_sample_group,
@@ -688,14 +765,16 @@ def normalize_select_row(row, normalize_rules, normalization_columns):
             if status == 'unknown':
                 continue
             if status == 'organ':
-                validation = validate_select_organ_text(
-                    text=classification['text'],
-                    organ=classification['organ'],
-                    normalize_rules=normalize_rules,
-                )
-                if validation is not None:
-                    classification = validation
-                    status = classification['status']
+                if not rule.get('skip_validation', False):
+                    validation = validate_select_organ_text(
+                        text=classification['text'],
+                        organ=classification['organ'],
+                        normalize_rules=normalize_rules,
+                        validate_rules=validate_rules,
+                    )
+                    if validation is not None:
+                        classification = validation
+                        status = classification['status']
             result['sample_group_normalization_status'] = status
             result['sample_group_normalization_source'] = column
             result['sample_group_normalization_text'] = classification['text']
@@ -724,6 +803,7 @@ def normalize_select_row(row, normalize_rules, normalization_columns):
 
 
 def normalize_select_metadata_frame(df, select_rules):
+    validate_rules = [rule for rule in select_rules if rule['stage'] == 'validate']
     normalize_rules = [rule for rule in select_rules if rule['stage'] == 'normalize']
     normalization_columns = build_select_normalization_columns(normalize_rules)
     out_df = df.copy(deep=True)
@@ -768,40 +848,42 @@ def normalize_select_metadata_frame(df, select_rules):
             if not candidate_mask.any():
                 continue
             if rule['outcome'] in SELECT_NORMALIZE_ORGANS:
-                validation_series = text_series.loc[candidate_mask].apply(
-                    lambda text: validate_select_organ_text(
-                        text=text,
-                        organ=rule['outcome'],
-                        normalize_rules=normalize_rules,
+                if not rule.get('skip_validation', False):
+                    validation_series = text_series.loc[candidate_mask].apply(
+                        lambda text: validate_select_organ_text(
+                            text=text,
+                            organ=rule['outcome'],
+                            normalize_rules=normalize_rules,
+                            validate_rules=validate_rules,
+                        )
                     )
-                )
-                validation_mask = validation_series.notna()
-                if validation_mask.any():
-                    validation_records = pandas.DataFrame(
-                        list(validation_series.loc[validation_mask]),
-                        index=validation_series.loc[validation_mask].index,
-                    )
-                    if not validation_records.empty:
-                        mixed_mask = validation_records['status'] == 'mixed'
-                        review_mask = validation_records['status'] == 'review'
-                        if mixed_mask.any():
-                            mixed_index = validation_records.index[mixed_mask]
-                            updated_groups.loc[mixed_index] = 'mixed'
-                            statuses.loc[mixed_index] = 'mixed'
-                            sources.loc[mixed_index] = column
-                            source_texts.loc[mixed_index] = validation_records.loc[mixed_index, 'text']
-                            rule_ids.loc[mixed_index] = validation_records.loc[mixed_index, 'rule_id']
-                        if review_mask.any():
-                            review_index = validation_records.index[review_mask]
-                            updated_groups.loc[review_index] = 'review'
-                            statuses.loc[review_index] = 'review'
-                            sources.loc[review_index] = column
-                            source_texts.loc[review_index] = validation_records.loc[review_index, 'text']
-                            rule_ids.loc[review_index] = validation_records.loc[review_index, 'rule_id']
-                        candidate_mask = candidate_mask.copy()
-                        candidate_mask.loc[validation_records.index] = False
-                        if rule['stop_on_match']:
-                            resolved.loc[validation_records.index] = True
+                    validation_mask = validation_series.notna()
+                    if validation_mask.any():
+                        validation_records = pandas.DataFrame(
+                            list(validation_series.loc[validation_mask]),
+                            index=validation_series.loc[validation_mask].index,
+                        )
+                        if not validation_records.empty:
+                            mixed_mask = validation_records['status'] == 'mixed'
+                            review_mask = validation_records['status'] == 'review'
+                            if mixed_mask.any():
+                                mixed_index = validation_records.index[mixed_mask]
+                                updated_groups.loc[mixed_index] = 'mixed'
+                                statuses.loc[mixed_index] = 'mixed'
+                                sources.loc[mixed_index] = column
+                                source_texts.loc[mixed_index] = validation_records.loc[mixed_index, 'text']
+                                rule_ids.loc[mixed_index] = validation_records.loc[mixed_index, 'rule_id']
+                            if review_mask.any():
+                                review_index = validation_records.index[review_mask]
+                                updated_groups.loc[review_index] = 'review'
+                                statuses.loc[review_index] = 'review'
+                                sources.loc[review_index] = column
+                                source_texts.loc[review_index] = validation_records.loc[review_index, 'text']
+                                rule_ids.loc[review_index] = validation_records.loc[review_index, 'rule_id']
+                            candidate_mask = candidate_mask.copy()
+                            candidate_mask.loc[validation_records.index] = False
+                            if rule['stop_on_match']:
+                                resolved.loc[validation_records.index] = True
                 if not candidate_mask.any():
                     continue
                 updated_groups.loc[candidate_mask] = rule['outcome']
@@ -1026,58 +1108,142 @@ def apply_select_control_rules(metadata, select_rules):
     return metadata
 
 
-def apply_select_redundant_biosample_filter(metadata, enabled):
+def resolve_select_rule_runtime_column(column_template, parameter_value):
+    if '{parameter}' not in column_template:
+        return column_template
+    return column_template.format(parameter=parameter_value)
+
+
+def apply_select_filter_rules(metadata, args, select_rules):
+    filter_rules = [rule for rule in select_rules if rule['stage'] == 'filter']
+    if len(filter_rules) == 0:
+        return metadata
+    print('{}: Applying select filter rules'.format(datetime.datetime.now()), flush=True)
+    metadata.df = ensure_select_target_column(metadata.df, SELECT_DEFAULT_TARGET_COLUMN)
+    total_marked = 0
+    for rule in filter_rules:
+        target_column = rule['target_column'] if rule['target_column'] != '' else SELECT_DEFAULT_TARGET_COLUMN
+        metadata.df = ensure_select_target_column(metadata.df, target_column)
+        marked_mask = pandas.Series(False, index=metadata.df.index)
+        if rule['action'] == 'exclude_if_lt_parameter':
+            threshold = int(resolve_select_runtime_parameter(args, rule['parameter_name'], rule['rule_id']))
+            column = rule['columns'][0]
+            if column not in metadata.df.columns:
+                raise ValueError(
+                    'Column "{}" required by filter rule "{}" was not found in metadata.'.format(
+                        column,
+                        rule['rule_id'],
+                    )
+                )
+            numeric_series = pandas.to_numeric(metadata.df[column], errors='coerce').fillna(0).astype(int)
+            if threshold > 0:
+                marked_mask = (numeric_series != 0) & (numeric_series < threshold)
+        elif rule['action'] == 'exclude_if_missing_selected_rank':
+            selected_rank = resolve_select_runtime_parameter(args, rule['parameter_name'], rule['rule_id'])
+            if selected_rank != 'none':
+                column = resolve_select_rule_runtime_column(rule['columns'][0], selected_rank)
+                if column not in metadata.df.columns:
+                    raise ValueError(
+                        'Column "{}" required by filter rule "{}" was not found in metadata.'.format(
+                            column,
+                            rule['rule_id'],
+                        )
+                    )
+                marked_mask = metadata.df[column].isna()
+        elif rule['action'] == 'exclude_if_empty':
+            empty_masks = []
+            for column in rule['columns']:
+                if column not in metadata.df.columns:
+                    raise ValueError(
+                        'Column "{}" required by filter rule "{}" was not found in metadata.'.format(
+                            column,
+                            rule['rule_id'],
+                        )
+                    )
+                empty_masks.append(metadata.df[column].fillna('').astype(str).str.strip() == '')
+            if len(empty_masks) > 0:
+                marked_mask = empty_masks[0].copy()
+                for extra_mask in empty_masks[1:]:
+                    marked_mask = marked_mask & extra_mask
+        else:
+            raise ValueError(
+                'Unsupported filter rule action "{}" in "{}".'.format(rule['action'], rule['rule_id'])
+            )
+        if bool(marked_mask.any()):
+            metadata.df.loc[marked_mask, target_column] = rule['outcome']
+            total_marked += int(marked_mask.sum())
+    print(
+        '{}: Filter rules complete: rules={}, marked_total={:,}'.format(
+            datetime.datetime.now(),
+            len(filter_rules),
+            total_marked,
+        ),
+        flush=True,
+    )
+    return metadata
+
+
+def apply_select_redundant_biosample_filter(metadata, rule, enabled):
     if not enabled:
         return metadata
-    required_columns = ['bioproject', 'biosample']
+    required_columns = list(rule['columns']) + [rule['target_column']]
     missing_columns = [column for column in required_columns if column not in metadata.df.columns]
     if len(missing_columns) > 0:
         raise ValueError(
-            'Column(s) required for redundant BioSample filtering were not found in metadata: {}'.format(
-                ', '.join(missing_columns)
+            'Column(s) required for dedup rule "{}" were not found in metadata: {}'.format(
+                rule['rule_id'],
+                ', '.join(missing_columns),
             )
         )
-    print('{}: Marking redundant BioSample rows after rule/QC filtering'.format(datetime.datetime.now()), flush=True)
+    print('{}: Applying dedup rule "{}"'.format(datetime.datetime.now(), rule['rule_id']), flush=True)
     exclusion_series = metadata.df['exclusion'].fillna('no').astype(str).str.strip().str.lower()
-    bioproject_series = metadata.df['bioproject'].fillna('').astype(str).str.strip()
-    biosample_series = metadata.df['biosample'].fillna('').astype(str).str.strip()
-    valid_key_mask = (bioproject_series != '') & (biosample_series != '')
+    key_series = []
+    valid_key_mask = pandas.Series(True, index=metadata.df.index)
+    for column in rule['columns']:
+        series = metadata.df[column].fillna('').astype(str).str.strip()
+        key_series.append(series)
+        valid_key_mask = valid_key_mask & (series != '')
     eligible_mask = (exclusion_series == 'no') & valid_key_mask
     if not bool(eligible_mask.any()):
         print(
-            '{}: Redundant BioSample filter complete: candidates=0, redundant_marked=0'.format(
+            '{}: Dedup rule "{}" complete: candidates=0, redundant_marked=0'.format(
                 datetime.datetime.now(),
+                rule['rule_id'],
             ),
             flush=True,
         )
         return metadata
-    if 'total_spots' in metadata.df.columns:
-        total_spots = pandas.to_numeric(metadata.df['total_spots'], errors='coerce').fillna(0).astype(int)
-    else:
-        total_spots = pandas.Series(0, index=metadata.df.index, dtype=int)
+    ranking_series = pandas.to_numeric(metadata.df[rule['target_column']], errors='coerce').fillna(0).astype(int)
     if 'run' in metadata.df.columns:
         run_series = metadata.df['run'].fillna('').astype(str).str.strip()
     else:
         run_series = pandas.Series('', index=metadata.df.index, dtype=str)
     ranking_df = pandas.DataFrame({
         'orig_index': metadata.df.index,
-        'bioproject': bioproject_series,
-        'biosample': biosample_series,
-        'total_spots': total_spots,
         'run': run_series,
+        'ranking_value': ranking_series,
     }).loc[eligible_mask, :].copy()
+    subset_columns = []
+    sort_columns = []
+    ascending = []
+    for column, series in zip(rule['columns'], key_series):
+        ranking_df[column] = series.loc[eligible_mask]
+        subset_columns.append(column)
+        sort_columns.append(column)
+        ascending.append(True)
     ranking_df = ranking_df.sort_values(
-        ['bioproject', 'biosample', 'total_spots', 'run', 'orig_index'],
-        ascending=[True, True, False, True, True],
+        sort_columns + ['ranking_value', 'run', 'orig_index'],
+        ascending=ascending + [False, True, True],
         kind='mergesort',
     )
-    redundant_mask = ranking_df.duplicated(subset=['bioproject', 'biosample'], keep='first')
+    redundant_mask = ranking_df.duplicated(subset=subset_columns, keep='first')
     redundant_indices = ranking_df.loc[redundant_mask, 'orig_index']
     if len(redundant_indices) > 0:
-        metadata.df.loc[redundant_indices, 'exclusion'] = 'redundant_biosample'
+        metadata.df.loc[redundant_indices, 'exclusion'] = rule['outcome']
     print(
-        '{}: Redundant BioSample filter complete: candidates={:,}, redundant_marked={:,}'.format(
+        '{}: Dedup rule "{}" complete: candidates={:,}, redundant_marked={:,}'.format(
             datetime.datetime.now(),
+            rule['rule_id'],
             int(eligible_mask.sum()),
             int(len(redundant_indices)),
         ),
@@ -1089,9 +1255,13 @@ def apply_select_redundant_biosample_filter(metadata, enabled):
 def apply_select_filters(metadata, args, select_rules):
     metadata = apply_select_exclude_rules(metadata, select_rules)
     metadata = apply_select_control_rules(metadata, select_rules)
-    metadata.nspot_cutoff(args.min_nspots)
-    metadata.mark_missing_rank(args.mark_missing_rank)
-    metadata = apply_select_redundant_biosample_filter(metadata, args.mark_redundant_biosamples)
+    metadata = apply_select_filter_rules(metadata, args, select_rules)
+    dedup_rules = [rule for rule in select_rules if rule['stage'] == 'dedup']
+    for rule in dedup_rules:
+        enabled = True
+        if rule['parameter_name'] != '':
+            enabled = bool(resolve_select_runtime_parameter(args, rule['parameter_name'], rule['rule_id']))
+        metadata = apply_select_redundant_biosample_filter(metadata, rule, enabled)
     metadata.label_sampled_data(args.max_sample)
     metadata.reorder(omit_misc=False)
     return metadata
