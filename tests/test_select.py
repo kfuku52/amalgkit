@@ -355,6 +355,15 @@ class TestSelectHelpers:
             ('Leaves were sampled from fully grown plants with well developed roots and flowers.', 'mixed', ''),
             ('leaf and spine', 'review', ''),
             ('leaf and leaves', 'organ', 'leaf'),
+            ('leaf,spike', 'mixed', ''),
+            ('flag leaf; young spike', 'mixed', ''),
+            ('RNA-Seq of Cannabis Plant 3; Auto-flower; Vegetative; Day 20', 'review', ''),
+            ('RNAseq of Panax notoginseng with flower removal1', 'review', ''),
+            ('RNAseq of Panax notoginseng with flower kept1', 'review', ''),
+            ('flower, biological replicate D1', 'organ', 'flower'),
+            ('flower, cold treatment', 'organ', 'flower'),
+            ('leaf, cultivar A', 'organ', 'leaf'),
+            ('leaf, petal', 'review', ''),
             ('unopened flower buds', 'review', ''),
             ('leaflet', 'organ', 'leaf'),
             ('lamina', 'organ', 'leaf'),
@@ -439,9 +448,18 @@ class TestSelectHelpers:
                 'outcome': 'mixed',
             },
             {
+                'rule_id': 'review_flower_false_positive_phrase',
+                'stage': 'normalize',
+                'priority': '27',
+                'columns': 'sample_group',
+                'pattern': r'\bauto[\s_-]?flower(?:ing)?\b|\bflower[\s_-]?(?:removal|kept)\d*\b|\b(?:removal|kept)\d*[\s_-]?flower\b',
+                'action': 'assign',
+                'outcome': 'review',
+            },
+            {
                 'rule_id': 'flower_whole_full_bloom',
                 'stage': 'normalize',
-                'priority': '19',
+                'priority': '28',
                 'columns': 'sample_group',
                 'pattern': r'\b(?:flower|flowers)\b(?![\s_-]?buds?)\b.{0,40}\bfull[- ]bloom\b|\bfull[- ]bloom\b.{0,40}\b(?:flower|flowers)\b(?![\s_-]?buds?)',
                 'action': 'assign',
@@ -450,7 +468,7 @@ class TestSelectHelpers:
             {
                 'rule_id': 'review_suborgan',
                 'stage': 'normalize',
-                'priority': '20',
+                'priority': '30',
                 'columns': 'sample_group',
                 'pattern': r'\b(?:petal|corolla|anther|ovary|pistil|bract|flower[\s_-]?buds?|petiole|root hair)\b',
                 'action': 'assign',
@@ -515,7 +533,7 @@ class TestSelectHelpers:
                 'stage': 'normalize',
                 'priority': '110',
                 'columns': 'sample_group',
-                'pattern': r'\bflower\b',
+                'pattern': r'\b(?:flower|flowers|spike|spikes)\b',
                 'action': 'assign',
                 'outcome': 'flower',
             },
@@ -579,9 +597,69 @@ class TestSelectHelpers:
         ]]
         assert observed.loc['SRR001', 'sample_group'] == 'review'
         assert observed.loc['SRR001', 'sample_group_normalization_status'] == 'review'
-        assert observed.loc['SRR001', 'sample_group_normalization_rule_id'] == 'validate_review_unknown_segment'
+        assert observed.loc['SRR001', 'sample_group_normalization_rule_id'] == 'validate_review_segment'
         assert observed.loc['SRR002', 'sample_group'] == 'leaf'
         assert observed.loc['SRR002', 'sample_group_normalization_status'] == 'organ'
+
+    def test_prepare_select_metadata_applies_list_segment_validator(self, tmp_path):
+        rules_path = tmp_path / 'select_rules.tsv'
+        write_select_rules(rules_path, [
+            {
+                'rule_id': 'flower_whole',
+                'stage': 'normalize',
+                'priority': '10',
+                'columns': 'sample_group',
+                'pattern': r'\b(?:flower|flowers|spike|spikes|inflorescence|inflorescences)\b',
+                'action': 'assign',
+                'outcome': 'flower',
+            },
+            {
+                'rule_id': 'leaf_whole',
+                'stage': 'normalize',
+                'priority': '20',
+                'columns': 'sample_group',
+                'pattern': r'\b(?:leaf|leaves)\b',
+                'action': 'assign',
+                'outcome': 'leaf',
+            },
+            {
+                'rule_id': 'review_suborgan',
+                'stage': 'normalize',
+                'priority': '30',
+                'columns': 'sample_group',
+                'pattern': r'\b(?:petal|petals)\b',
+                'action': 'assign',
+                'outcome': 'review',
+            },
+        ])
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001', 'SRR002', 'SRR003', 'SRR004', 'SRR005'],
+            'scientific_name': ['sp1', 'sp1', 'sp1', 'sp1', 'sp1'],
+            'sample_group': [
+                'leaf,spike',
+                'flower, biological replicate D1',
+                'leaf; petal',
+                'flower, cold treatment',
+                'leaf, cultivar A',
+            ],
+            'exclusion': ['no', 'no', 'no', 'no', 'no'],
+        }))
+        out = prepare_select_metadata(metadata, read_select_rules(str(rules_path)))
+        observed = out.df.set_index('run')[[
+            'sample_group',
+            'sample_group_normalization_status',
+            'sample_group_normalization_rule_id',
+        ]]
+        assert observed.loc['SRR001', 'sample_group'] == 'mixed'
+        assert observed.loc['SRR001', 'sample_group_normalization_rule_id'] == 'validate_mixed_segment'
+        assert observed.loc['SRR002', 'sample_group'] == 'flower'
+        assert observed.loc['SRR002', 'sample_group_normalization_status'] == 'organ'
+        assert observed.loc['SRR003', 'sample_group'] == 'review'
+        assert observed.loc['SRR003', 'sample_group_normalization_rule_id'] == 'validate_review_segment'
+        assert observed.loc['SRR004', 'sample_group'] == 'flower'
+        assert observed.loc['SRR004', 'sample_group_normalization_status'] == 'organ'
+        assert observed.loc['SRR005', 'sample_group'] == 'leaf'
+        assert observed.loc['SRR005', 'sample_group_normalization_status'] == 'organ'
 
 
 class TestSelectRuleApplication:

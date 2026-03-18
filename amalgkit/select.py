@@ -58,7 +58,60 @@ SELECT_STAGE_ORDER = {
 }
 SELECT_NORMALIZE_ORGANS = {'flower', 'leaf', 'root'}
 SELECT_NORMALIZE_STATUSES = {'review', 'mixed', 'non_target'}
-SELECT_VALIDATION_SPLIT_PATTERN = re.compile(r'\s*(?:/|&|\b(?:and|or|plus)\b)\s*', re.IGNORECASE)
+SELECT_VALIDATION_STRONG_SPLIT_PATTERN = re.compile(r'\s*(?:/|&|\b(?:and|or|plus)\b)\s*', re.IGNORECASE)
+SELECT_VALIDATION_LIST_SPLIT_PATTERN = re.compile(r'\s*[;,]\s*')
+SELECT_VALIDATION_SAFE_LIST_METADATA_PATTERN = re.compile(
+    r'^(?:'
+    r'(?:biological|technical)\s+replicates?(?:\s+[A-Za-z0-9._-]+)?|'
+    r'replicates?(?:\s+[A-Za-z0-9._-]+)?|'
+    r'repeats?(?:\s+[A-Za-z0-9._-]+)?|'
+    r'rep(?:licate)?\s*[A-Za-z0-9._-]+|'
+    r'samples?(?:\s+[A-Za-z0-9._-]+)?|'
+    r'libraries?(?:\s+[A-Za-z0-9._-]+)?|'
+    r'libs?(?:\s+[A-Za-z0-9._-]+)?|'
+    r'lanes?(?:\s+[A-Za-z0-9._-]+)?|'
+    r'controls?(?:\s+[A-Za-z0-9._-]+)?|'
+    r'mock(?:\s+[A-Za-z0-9._-]+)?|'
+    r'(?:cold|heat|salt|drought|stress|treated|treatment)(?:\s+[A-Za-z0-9._-]+)*'
+    r')$',
+    re.IGNORECASE,
+)
+SELECT_VALIDATION_ORGAN_HINT_PATTERNS = {
+    'flower': re.compile(
+        r'\b(?:'
+        r'flower|flowers|floral|inflorescence|inflorescences|'
+        r'spike|spikes|panicle|panicles|tassel|tassels|ear|ears|catkin|catkins'
+        r')\b',
+        re.IGNORECASE,
+    ),
+    'leaf': re.compile(
+        r'\b(?:'
+        r'leaf|leaves|flag leaf|flag leaves|lamina|laminae|leaflet|leaflets|'
+        r'leaf[\s_-]?blade|leaf[\s_-]?blades|seedling[\s_-]?leaf|seedling[\s_-]?leaves'
+        r')\b',
+        re.IGNORECASE,
+    ),
+    'root': re.compile(
+        r'\b(?:'
+        r'root|roots|taproot|taproots|primary root|primary roots|'
+        r'lateral root|lateral roots|radicle|radicles|'
+        r'root[\s_-]?tip|root[\s_-]?tips|seedling[\s_-]?root|seedling[\s_-]?roots|'
+        r'hairy root|hairy roots'
+        r')\b',
+        re.IGNORECASE,
+    ),
+}
+SELECT_VALIDATION_REVIEW_HINT_PATTERN = re.compile(
+    r'\b(?:'
+    r'petal|petals|corolla|anther|anthers|ovary|ovaries|pistil|pistils|'
+    r'stigma|stigmas|style|styles|carpel|carpels|bract|bracts|'
+    r'flower[\s_-]?bud|flower[\s_-]?buds|floral[\s_-]?bud|floral[\s_-]?buds|'
+    r'bud|buds|petiole|petioles|root hair|root hairs|'
+    r'apex|meristem|embryo|embryos|capsule|capsules|fruit|fruits|seed|seeds|'
+    r'shoot|shoots|stem|stems|spine|spines'
+    r')\b',
+    re.IGNORECASE,
+)
 SELECT_DEFAULT_SCOPE_COLUMN = 'bioproject'
 SELECT_DEFAULT_SCOPE_MODE = 'mark_other_rows_in_scope'
 SELECT_DEFAULT_TARGET_COLUMN = 'exclusion'
@@ -484,52 +537,114 @@ def classify_select_text_raw(text, normalize_rules):
     return {'status': 'unknown', 'organ': '', 'text': normalized, 'rule_id': ''}
 
 
-def validate_select_organ_text(text, organ, normalize_rules):
-    normalized = normalize_select_value(text)
-    if normalized.lower() in SELECT_IGNORE_VALUES:
-        return None
-    if not SELECT_VALIDATION_SPLIT_PATTERN.search(normalized):
-        return None
-    segments = [
-        segment.strip(" \t\r\n;:.()[]{}")
-        for segment in SELECT_VALIDATION_SPLIT_PATTERN.split(normalized)
+def split_select_validation_segments(normalized, split_pattern):
+    return [
+        segment.strip(" \t\r\n;:,.()[]{}")
+        for segment in split_pattern.split(normalized)
+        if segment.strip(" \t\r\n;:,.()[]{}") != ''
     ]
-    segments = [segment for segment in segments if segment and (segment.lower() not in SELECT_IGNORE_VALUES)]
-    if len(segments) <= 1:
-        return None
-    for segment in segments:
-        classification = classify_select_text_raw(segment, normalize_rules)
-        if classification['status'] == 'empty':
-            continue
-        if classification['status'] == 'unknown':
+
+
+def classify_select_validation_segment(segment, normalize_rules):
+    classification = classify_select_text_raw(segment, normalize_rules)
+    if classification['status'] != 'unknown':
+        return classification
+    normalized = normalize_select_value(segment)
+    for hinted_organ, hinted_pattern in SELECT_VALIDATION_ORGAN_HINT_PATTERNS.items():
+        if hinted_pattern.search(normalized):
             return {
-                'status': 'review',
-                'organ': '',
+                'status': 'organ',
+                'organ': hinted_organ,
                 'text': normalized,
-                'rule_id': 'validate_review_unknown_segment',
+                'rule_id': 'validate_hint_{}'.format(hinted_organ),
             }
-        if classification['status'] == 'organ':
-            if classification['organ'] != organ:
-                return {
-                    'status': 'mixed',
-                    'organ': '',
-                    'text': normalized,
-                    'rule_id': 'validate_mixed_segment',
-                }
-            continue
-        if classification['status'] == 'mixed':
-            return {
-                'status': 'mixed',
-                'organ': '',
-                'text': normalized,
-                'rule_id': 'validate_mixed_segment',
-            }
+    if SELECT_VALIDATION_REVIEW_HINT_PATTERN.search(normalized):
         return {
             'status': 'review',
             'organ': '',
             'text': normalized,
+            'rule_id': 'validate_hint_review',
+        }
+    return classification
+
+
+def summarize_select_segment_classifications(segments, organ, normalize_rules, unknown_policy, allow_safe_metadata=False):
+    seen_target = False
+    seen_other_target = False
+    seen_review_like = False
+    for segment in segments:
+        classification = classify_select_validation_segment(segment, normalize_rules)
+        status = classification['status']
+        if status == 'empty':
+            continue
+        if status == 'unknown':
+            if allow_safe_metadata and SELECT_VALIDATION_SAFE_LIST_METADATA_PATTERN.search(segment):
+                continue
+            if unknown_policy == 'review':
+                return {
+                    'status': 'review',
+                    'organ': '',
+                    'text': '',
+                    'rule_id': 'validate_review_unknown_segment',
+                }
+            continue
+        if status == 'organ':
+            if classification['organ'] == organ:
+                seen_target = True
+            else:
+                seen_other_target = True
+            continue
+        if status == 'mixed':
+            seen_other_target = True
+            continue
+        seen_review_like = True
+    if seen_other_target:
+        return {
+            'status': 'mixed',
+            'organ': '',
+            'text': '',
+            'rule_id': 'validate_mixed_segment',
+        }
+    if seen_review_like and seen_target:
+        return {
+            'status': 'review',
+            'organ': '',
+            'text': '',
             'rule_id': 'validate_review_segment',
         }
+    return None
+
+
+def validate_select_organ_text(text, organ, normalize_rules):
+    normalized = normalize_select_value(text)
+    if normalized.lower() in SELECT_IGNORE_VALUES:
+        return None
+    if SELECT_VALIDATION_STRONG_SPLIT_PATTERN.search(normalized):
+        segments = split_select_validation_segments(normalized, SELECT_VALIDATION_STRONG_SPLIT_PATTERN)
+        if len(segments) > 1:
+            summary = summarize_select_segment_classifications(
+                segments=segments,
+                organ=organ,
+                normalize_rules=normalize_rules,
+                unknown_policy='review',
+                allow_safe_metadata=False,
+            )
+            if summary is not None:
+                summary['text'] = normalized
+                return summary
+    if SELECT_VALIDATION_LIST_SPLIT_PATTERN.search(normalized):
+        segments = split_select_validation_segments(normalized, SELECT_VALIDATION_LIST_SPLIT_PATTERN)
+        if len(segments) > 1:
+            summary = summarize_select_segment_classifications(
+                segments=segments,
+                organ=organ,
+                normalize_rules=normalize_rules,
+                unknown_policy='ignore',
+                allow_safe_metadata=True,
+            )
+            if summary is not None:
+                summary['text'] = normalized
+                return summary
     return None
 
 
