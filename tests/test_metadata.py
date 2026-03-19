@@ -265,6 +265,35 @@ class TestMetadataMain:
         captured = capsys.readouterr()
         assert '--search_string' in captured.err
 
+    def test_empty_result_guidance_reports_accession_filter_mismatch(self, tmp_path, monkeypatch, capsys):
+        args = self._args(tmp_path / 'out')
+        args.search_string = '(SRR29779594) AND "Illumina"[Platform] AND ("RNA-seq"[Strategy] OR "EST"[Strategy])'
+        empty_metadata = Metadata.from_DataFrame(pandas.DataFrame(columns=Metadata.column_names))
+
+        monkeypatch.setattr('amalgkit.metadata.search_sra_record_ids', lambda search_term: [])
+        monkeypatch.setattr('amalgkit.metadata.Metadata.from_xml_roots', lambda xml_roots: empty_metadata)
+        monkeypatch.setattr('amalgkit.metadata.Metadata.add_standard_rank_taxids', lambda self, args=None: None)
+        monkeypatch.setattr(
+            'amalgkit.metadata.inspect_accession_search_mismatches',
+            lambda search_term: [
+                {
+                    'accession': 'SRR29779594',
+                    'scientific_name': 'Acanthamoeba astronyxis',
+                    'platform': 'CAPILLARY (AB 3730xL Genetic Analyzer)',
+                    'library_strategy': 'CLONE',
+                    'library_source': 'TRANSCRIPTOMIC',
+                    'library_selection': 'cDNA',
+                }
+            ],
+        )
+
+        metadata_main(args)
+
+        captured = capsys.readouterr()
+        assert 'SRR29779594' in captured.err
+        assert 'platform=CAPILLARY (AB 3730xL Genetic Analyzer)' in captured.err
+        assert 'library_strategy=CLONE' in captured.err
+
     def test_redo_keeps_existing_metadata_when_generation_fails(self, tmp_path, monkeypatch):
         out_dir = tmp_path / 'out'
         metadata_dir = out_dir / 'metadata'

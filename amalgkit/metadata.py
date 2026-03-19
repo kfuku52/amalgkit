@@ -24,6 +24,7 @@ from amalgkit.sra import (
     esearch_sra_with_retry as _esearch_sra_with_retry,
     fetch_sra_xml as _fetch_sra_xml,
     fetch_sra_xml_chunk as _fetch_sra_xml_chunk,
+    inspect_accession_search_mismatches as _inspect_accession_search_mismatches,
     iter_sra_xml_chunks as _iter_sra_xml_chunks,
     merge_xml_chunk as _merge_xml_chunk,
     raise_if_xml_has_error as _raise_if_xml_has_error,
@@ -62,6 +63,10 @@ def raise_if_xml_has_error(root):
 
 def search_sra_record_ids(search_term):
     return _search_sra_record_ids(search_term, verbose=True)
+
+
+def inspect_accession_search_mismatches(search_term):
+    return _inspect_accession_search_mismatches(search_term)
 
 
 def iter_sra_xml_chunks(record_ids, retmax=1000):
@@ -414,6 +419,32 @@ def _prepare_single_metadata(metadata, args):
     metadata.missing_run_drop_examples = missing_run_stats['missing_run_drop_examples']
     metadata.df = _validate_metadata_dataframe(df=metadata.df, context='metadata generation')
     return metadata
+
+
+def _build_zero_record_guidance(search_term):
+    diagnostics = inspect_accession_search_mismatches(search_term)
+    if len(diagnostics) == 0:
+        return ''
+    lines = [
+        'Diagnostic: the full --search_string returned zero SRA records, '
+        'but accession-specific lookups found the following existing record(s):\n'
+    ]
+    for diagnostic in diagnostics:
+        fields = []
+        for key in ['scientific_name', 'platform', 'library_strategy', 'library_source', 'library_selection']:
+            value = diagnostic.get(key, '')
+            if value not in [None, '']:
+                fields.append('{}={}'.format(key, value))
+        line = '  {} exists in SRA'.format(diagnostic.get('accession', 'accession'))
+        if len(fields) > 0:
+            line += ' ({})'.format('; '.join(fields))
+        line += '.'
+        lines.append(line + '\n')
+    lines.append(
+        'Diagnostic: this usually means the accession does not satisfy additional query clauses such as '
+        '[Platform] or [Strategy]. Consider relaxing those filters if this run is intended.\n'
+    )
+    return ''.join(lines)
 
 
 def _run_single_query(
@@ -810,6 +841,14 @@ def metadata_main(args):
         return
     result = _run_single_query(args=args, out_dir=args.out_dir, search_string=search_term, mode='single')
     if result['metadata'].df.shape[0] == 0:
+        query_info = result.get('query_info', {})
+        record_id_count = query_info.get('record_id_count')
+        try:
+            record_id_count = int(record_id_count)
+        except (TypeError, ValueError):
+            record_id_count = None
+        if (record_id_count == 0) and (search_term != ''):
+            sys.stderr.write(_build_zero_record_guidance(search_term))
         txt = (
             'No entry was found/survived in the metadata processing. '
             'Please reconsider the --search_string specification.\n'

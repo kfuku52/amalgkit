@@ -1,10 +1,13 @@
 from Bio import Entrez
 import datetime
 from http.client import IncompleteRead
+import re
 import time
 import xml.etree.ElementTree as ET
 
 from urllib.error import HTTPError, URLError
+
+SRA_ACCESSION_PATTERN = re.compile(r'\b(?:[SED](?:RR|RP|RS|RX)\d+)\b', re.IGNORECASE)
 
 
 def merge_xml_chunk(root, chunk):
@@ -81,6 +84,87 @@ def search_sra_record_ids(search_term, verbose=True):
     if verbose:
         print('Number of SRA records: {:,}'.format(len(record_ids)))
     return record_ids
+
+
+def extract_sra_accessions(search_term, max_count=None):
+    if search_term in [None, '']:
+        return []
+    accessions = []
+    seen = set()
+    for match in SRA_ACCESSION_PATTERN.finditer(str(search_term)):
+        accession = match.group(0).upper()
+        if accession in seen:
+            continue
+        seen.add(accession)
+        accessions.append(accession)
+        if (max_count is not None) and (len(accessions) >= max_count):
+            break
+    return accessions
+
+
+def _extract_sra_summary_fields(root):
+    scientific_name_node = root.find('.//SAMPLE_NAME/SCIENTIFIC_NAME')
+    scientific_name = ''
+    if (scientific_name_node is not None) and (scientific_name_node.text is not None):
+        scientific_name = scientific_name_node.text.strip()
+    platform = ''
+    platform_node = root.find('.//PLATFORM')
+    if platform_node is not None:
+        platform_children = list(platform_node)
+        if len(platform_children) > 0:
+            platform_child = platform_children[0]
+            platform = platform_child.tag.strip()
+            instrument_model = platform_child.attrib.get('instrument_model', '').strip()
+            if (instrument_model != '') and (instrument_model != platform):
+                platform = '{} ({})'.format(platform, instrument_model)
+    def get_text(path):
+        node = root.find(path)
+        if (node is None) or (node.text is None):
+            return ''
+        return node.text.strip()
+    return {
+        'scientific_name': scientific_name,
+        'platform': platform,
+        'library_strategy': get_text('.//LIBRARY_DESCRIPTOR/LIBRARY_STRATEGY'),
+        'library_source': get_text('.//LIBRARY_DESCRIPTOR/LIBRARY_SOURCE'),
+        'library_selection': get_text('.//LIBRARY_DESCRIPTOR/LIBRARY_SELECTION'),
+    }
+
+
+def summarize_sra_record(record_id):
+    root = fetch_sra_xml_chunk(
+        record_ids=[record_id],
+        start=0,
+        end=1,
+        retmax=1,
+        max_retry=2,
+        verbose=False,
+    )
+    raise_if_xml_has_error(root)
+    return _extract_sra_summary_fields(root)
+
+
+def inspect_accession_search_mismatches(search_term, max_accessions=3):
+    diagnostics = []
+    for accession in extract_sra_accessions(search_term, max_count=max_accessions):
+        try:
+            record_ids = search_sra_record_ids(accession, verbose=False)
+        except Exception:
+            continue
+        if len(record_ids) == 0:
+            continue
+        summary = {}
+        try:
+            summary = summarize_sra_record(record_ids[0])
+        except Exception:
+            summary = {}
+        summary.update({
+            'accession': accession,
+            'record_id': record_ids[0],
+            'matched_record_count': len(record_ids),
+        })
+        diagnostics.append(summary)
+    return diagnostics
 
 
 def iter_sra_xml_chunks(record_ids, retmax=1000, verbose=True, timestamp_logs=True, progress_label='Retrieving SRA XML'):
