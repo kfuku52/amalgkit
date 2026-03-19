@@ -69,6 +69,7 @@ CONTAM_FILTER_SUPPORTED_RANKS = ['superkingdom', 'kingdom', 'phylum', 'class', '
 CONTAM_FILTER_RANK_ALIASES = {'domain': 'superkingdom'}
 CONTAM_FILTER_DEFAULT_DB_NAME = 'UniRef90'
 FILTER_ORDER_SUPPORTED_FILTERS = ['fastp', 'rrna', 'contam']
+TRACE_RUN_XML_URL_TEMPLATE = 'https://trace.ncbi.nlm.nih.gov/Traces/sra-db-be/run_new?acc={}'
 GETFASTQ_DURATION_COLUMNS = [
     'sec_sra_download',
     'sec_fasterq_dump',
@@ -677,6 +678,138 @@ def remove_intermediate_files(sra_stat, ext, work_dir):
         else:
             print('Tried to delete but file not found:', file_path)
 
+
+def build_trace_run_xml_url(sra_id):
+    return TRACE_RUN_XML_URL_TEMPLATE.format(urllib.parse.quote(str(sra_id).strip()))
+
+
+def fetch_trace_run_xml_root(sra_id, timeout=30):
+    trace_url = build_trace_run_xml_url(sra_id)
+    with urllib.request.urlopen(trace_url, timeout=timeout) as response:
+        return ET.fromstring(response.read())
+
+
+def _normalize_public_original_fastq_source_name(raw_name):
+    source_name = str(raw_name or '').strip()
+    if source_name == '':
+        return 'TRACE'
+    return source_name
+
+
+def _append_public_original_fastq_source(source_list, seen_sources, source_name, url):
+    source_name = _normalize_public_original_fastq_source_name(source_name)
+    url = str(url or '').strip()
+    if url == '':
+        return
+    scheme = urllib.parse.urlparse(url).scheme.lower()
+    if scheme not in ('http', 'https', 'ftp'):
+        return
+    source_key = (source_name, url)
+    if source_key in seen_sources:
+        return
+    source_list.append({'source_name': source_name, 'url': url})
+    seen_sources.add(source_key)
+
+
+def resolve_public_original_fastq_sources_from_xml_root(xml_root):
+    if xml_root is None:
+        return []
+    public_original_fastqs = []
+    for sra_file in xml_root.findall('.//SRAFile'):
+        semantic_name = str(sra_file.get('semantic_name', '')).strip().lower()
+        supertype = str(sra_file.get('supertype', '')).strip().lower()
+        if (semantic_name != 'fastq') or (supertype != 'original'):
+            continue
+        filename = str(sra_file.get('filename', '')).strip()
+        sources = []
+        seen_sources = set()
+        for alternative in sra_file.findall('./Alternatives'):
+            _append_public_original_fastq_source(
+                source_list=sources,
+                seen_sources=seen_sources,
+                source_name=alternative.get('org', 'TRACE'),
+                url=alternative.get('url', ''),
+            )
+        _append_public_original_fastq_source(
+            source_list=sources,
+            seen_sources=seen_sources,
+            source_name='TRACE',
+            url=sra_file.get('url', ''),
+        )
+        if len(sources) == 0:
+            continue
+        public_original_fastqs.append({
+            'filename': filename,
+            'sources': sources,
+        })
+    return public_original_fastqs
+
+
+def fetch_public_original_fastq_sources(sra_id):
+    xml_root = fetch_trace_run_xml_root(sra_id=sra_id)
+    return resolve_public_original_fastq_sources_from_xml_root(xml_root)
+
+
+def _detect_public_original_fastq_read_index(filename):
+    filename = os.path.basename(str(filename or '')).lower()
+    if re.search(r'(^|[._-])(read1|r1|forward|fwd|1)([._-]|$)', filename):
+        return 1
+    if re.search(r'(^|[._-])(read2|r2|reverse|rev|2)([._-]|$)', filename):
+        return 2
+    return None
+
+
+def assign_public_original_fastq_suffixes(public_original_fastqs, sra_id):
+    if len(public_original_fastqs) == 0:
+        return []
+    if len(public_original_fastqs) == 1:
+        return [(public_original_fastqs[0], '')]
+    if len(public_original_fastqs) != 2:
+        raise RuntimeError(
+            'Expected 1 or 2 public original FASTQ files for {} but found {}.'.format(
+                sra_id,
+                len(public_original_fastqs),
+            )
+        )
+    read1_entries = []
+    read2_entries = []
+    unknown_entries = []
+    for fastq_entry in public_original_fastqs:
+        read_index = _detect_public_original_fastq_read_index(fastq_entry.get('filename', ''))
+        if read_index == 1:
+            read1_entries.append(fastq_entry)
+        elif read_index == 2:
+            read2_entries.append(fastq_entry)
+        else:
+            unknown_entries.append(fastq_entry)
+    if (len(read1_entries) == 1) and (len(read2_entries) == 1) and (len(unknown_entries) == 0):
+        return [
+            (read1_entries[0], '_1'),
+            (read2_entries[0], '_2'),
+        ]
+    ordered_entries = sorted(
+        public_original_fastqs,
+        key=lambda entry: str(entry.get('filename', '')).lower(),
+    )
+    return [
+        (ordered_entries[0], '_1'),
+        (ordered_entries[1], '_2'),
+    ]
+
+
+def remove_raw_fastq_artifacts(sra_stat):
+    work_dir = sra_stat['getfastq_sra_dir']
+    sra_id = sra_stat['sra_id']
+    for suffix in ['', '_1', '_2']:
+        for ext in ['.fastq', '.fastq.gz']:
+            path_fastq = os.path.join(work_dir, sra_id + suffix + ext)
+            if not os.path.exists(path_fastq):
+                continue
+            if not os.path.isfile(path_fastq):
+                raise IsADirectoryError('FASTQ artifact exists but is not a file: {}'.format(path_fastq))
+            print('Removing failed fasterq-dump artifact: {}'.format(path_fastq), flush=True)
+            os.remove(path_fastq)
+
 def normalize_url_for_urllib(source_name, source_url, gcp_project=''):
     source_url = str(source_url).strip()
     parsed = urllib.parse.urlparse(source_url)
@@ -729,11 +862,11 @@ def normalize_sra_download_method(args):
     sys.stderr.write('Unknown --sra_download_method "{}". Falling back to "auto".\n'.format(method_raw))
     return 'auto'
 
-def download_with_curl(source_url, path_downloaded_sra, args, sra_source_name):
+def download_with_curl(source_url, output_path, args, sra_source_name, artifact_label='file'):
     curl_exe = shutil.which('curl')
     if curl_exe is None:
         return False
-    tmp_path = path_downloaded_sra + '.curltmp.{}'.format(time.time_ns())
+    tmp_path = output_path + '.curltmp.{}'.format(time.time_ns())
     command = [
         curl_exe,
         '-L',
@@ -755,23 +888,23 @@ def download_with_curl(source_url, path_downloaded_sra, args, sra_source_name):
     if out.returncode != 0:
         if os.path.exists(tmp_path):
             os.remove(tmp_path)
-        sys.stderr.write('curl failed SRA download from {}.\n'.format(sra_source_name))
+        sys.stderr.write('curl failed {} download from {}.\n'.format(str(artifact_label).lower(), sra_source_name))
         return False
     if not os.path.exists(tmp_path):
         sys.stderr.write('curl download did not create output file for {}.\n'.format(sra_source_name))
         return False
-    os.replace(tmp_path, path_downloaded_sra)
-    print('SRA file was downloaded with curl from {}'.format(sra_source_name), flush=True)
+    os.replace(tmp_path, output_path)
+    print('{} was downloaded with curl from {}'.format(artifact_label, sra_source_name), flush=True)
     return True
 
 
-def download_sra_from_source(sra_id, sra_source_name, source_url_original, path_downloaded_sra, args):
+def download_file_from_source(sra_id, sra_source_name, source_url_original, output_path, args, artifact_label):
     source_url = normalize_url_for_urllib(
         source_name=sra_source_name,
         source_url=source_url_original,
         gcp_project=getattr(args, 'gcp_project', ''),
     )
-    print("Trying to fetch {} from {}: {}".format(sra_id, sra_source_name, source_url_original))
+    print("Trying to fetch {} for {} from {}: {}".format(artifact_label, sra_id, sra_source_name, source_url_original))
     if source_url != source_url_original:
         print("Converted {} URL for urllib: {}".format(sra_source_name, source_url))
     if source_url == 'nan':
@@ -786,17 +919,18 @@ def download_sra_from_source(sra_id, sra_source_name, source_url_original, path_
     if method in ['auto', 'curl']:
         if download_with_curl(
             source_url=source_url,
-            path_downloaded_sra=path_downloaded_sra,
+            output_path=output_path,
             args=args,
             sra_source_name=sra_source_name,
+            artifact_label=artifact_label,
         ):
             return True
         if method == 'curl':
             sys.stderr.write('Falling back to urllib.request after curl failure.\n')
     try:
-        urllib.request.urlretrieve(source_url, path_downloaded_sra)
-        if os.path.exists(path_downloaded_sra):
-            print('SRA file was downloaded with urllib.request from {}'.format(sra_source_name), flush=True)
+        urllib.request.urlretrieve(source_url, output_path)
+        if os.path.exists(output_path):
+            print('{} was downloaded with urllib.request from {}'.format(artifact_label, sra_source_name), flush=True)
             return True
     except urllib.error.HTTPError as e:
         if (sra_source_name == 'GCP') and (e.code == 400):
@@ -809,10 +943,106 @@ def download_sra_from_source(sra_id, sra_source_name, source_url_original, path_
                 txt = 'GCP requester-pays bucket requires --gcp_project for billing context. '
                 txt += 'Continuing with other download sources.\n'
                 sys.stderr.write(txt)
-        sys.stderr.write("urllib.request failed SRA download from {}.\n".format(sra_source_name))
+        sys.stderr.write("urllib.request failed {} download from {}.\n".format(str(artifact_label).lower(), sra_source_name))
     except urllib.error.URLError:
-        sys.stderr.write("urllib.request failed SRA download from {}.\n".format(sra_source_name))
+        sys.stderr.write("urllib.request failed {} download from {}.\n".format(str(artifact_label).lower(), sra_source_name))
     return False
+
+
+def download_sra_from_source(sra_id, sra_source_name, source_url_original, path_downloaded_sra, args):
+    return download_file_from_source(
+        sra_id=sra_id,
+        sra_source_name=sra_source_name,
+        source_url_original=source_url_original,
+        output_path=path_downloaded_sra,
+        args=args,
+        artifact_label='SRA file',
+    )
+
+
+def download_public_original_fastq_files(sra_stat, args, start, end):
+    sra_id = sra_stat['sra_id']
+    work_dir = sra_stat['getfastq_sra_dir']
+    print('Attempting public original FASTQ fallback for {}.'.format(sra_id), flush=True)
+    try:
+        public_original_fastqs = fetch_public_original_fastq_sources(sra_id=sra_id)
+    except Exception as exc:
+        sys.stderr.write('Failed to retrieve Trace XML for {}: {}\n'.format(sra_id, exc))
+        return None
+    if len(public_original_fastqs) == 0:
+        sys.stderr.write('No public original FASTQ files were listed in Trace XML for {}.\n'.format(sra_id))
+        return None
+    try:
+        assigned_fastqs = assign_public_original_fastq_suffixes(
+            public_original_fastqs=public_original_fastqs,
+            sra_id=sra_id,
+        )
+    except Exception as exc:
+        sys.stderr.write('Failed to assign public original FASTQ files for {}: {}\n'.format(sra_id, exc))
+        return None
+    remove_raw_fastq_artifacts(sra_stat=sra_stat)
+    start, end = normalize_requested_spot_range(start=start, end=end)
+    created_paths = []
+    tmp_paths = []
+    try:
+        for fastq_entry, suffix in assigned_fastqs:
+            output_filename = sra_id + suffix + '.fastq.gz'
+            output_path = os.path.join(work_dir, output_filename)
+            tmp_path = output_path + '.downloadtmp.{}'.format(time.time_ns())
+            tmp_paths.append(tmp_path)
+            if os.path.exists(output_path):
+                if not os.path.isfile(output_path):
+                    raise IsADirectoryError('Fallback FASTQ path exists but is not a file: {}'.format(output_path))
+                os.remove(output_path)
+            is_downloaded = False
+            for source in fastq_entry['sources']:
+                is_downloaded = download_file_from_source(
+                    sra_id=sra_id,
+                    sra_source_name=source['source_name'],
+                    source_url_original=source['url'],
+                    output_path=tmp_path,
+                    args=args,
+                    artifact_label='Original FASTQ file',
+                )
+                if is_downloaded:
+                    break
+            if not is_downloaded:
+                raise FileNotFoundError(
+                    'Original FASTQ file download failed for {} ({})'.format(
+                        sra_id,
+                        fastq_entry.get('filename', 'unknown'),
+                    )
+                )
+            if is_full_requested_spot_range(sra_stat=sra_stat, start=start, end=end):
+                os.replace(tmp_path, output_path)
+            else:
+                run_seqkit_range_command(
+                    input_path=tmp_path,
+                    output_path=output_path,
+                    start=start,
+                    end=end,
+                    args=args,
+                    command_label='Original FASTQ spot-range trim with seqkit',
+                )
+                os.remove(tmp_path)
+            created_paths.append(output_path)
+        print(
+            'Public original FASTQ fallback succeeded for {} with {:,} file(s).'.format(
+                sra_id,
+                len(created_paths),
+            ),
+            flush=True,
+        )
+        return RunFileState(work_dir=work_dir)
+    except Exception as exc:
+        sys.stderr.write('Public original FASTQ fallback failed for {}: {}\n'.format(sra_id, exc))
+        for tmp_path in tmp_paths:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        for output_path in created_paths:
+            if os.path.exists(output_path):
+                os.remove(output_path)
+        return None
 
 
 def download_sra(metadata, sra_stat, args, work_dir, overwrite=False):
@@ -2004,52 +2234,69 @@ def run_fasterq_dump(sra_stat, args, metadata, start, end, return_files=False, r
         end=command_end,
     )
     print('Total sampled bases:', "{:,}".format(sra_stat['spot_length'] * (end - start + 1)), 'bp')
-    fqd_out = run_fasterq_dump_with_retry(
-        fasterq_dump_command=fasterq_dump_command,
-        path_downloaded_sra=path_downloaded_sra,
-        metadata=metadata,
-        sra_stat=sra_stat,
-        args=args,
-    )
-    ensure_fasterq_output_files_exist(sra_stat=sra_stat)
-    run_file_state = RunFileState(work_dir=sra_stat['getfastq_sra_dir'])
-    if trim_after_dump:
-        trimmed_counts, run_file_state = trim_fasterq_output_files(
-            sra_stat=sra_stat,
-            start=start,
-            end=end,
-            file_state=run_file_state,
-            args=args,
-            compress_to_gz=False,
-            return_file_state=True,
-        )
-        written_spots = calculate_written_spots_from_trim_counts(trimmed_counts)
-        if written_spots is not None:
-            print('Using trimmed FASTQ spot count after fallback extraction: {:,}'.format(written_spots))
-    else:
-        written_spots, run_file_state = resolve_written_spots_from_fasterq_output(
-            sra_stat=sra_stat,
-            start=start,
-            end=end,
-            fqd_out=fqd_out,
-            run_file_state=run_file_state,
-        )
-    should_compress = should_compress_fasterq_output_before_filters(args)
-    if should_compress:
-        updated_file_state = compress_fasterq_output_files(
+    used_original_fastq_fallback = False
+    try:
+        fqd_out = run_fasterq_dump_with_retry(
+            fasterq_dump_command=fasterq_dump_command,
+            path_downloaded_sra=path_downloaded_sra,
+            metadata=metadata,
             sra_stat=sra_stat,
             args=args,
-            file_state=run_file_state,
-            return_file_state=True,
         )
-        if isinstance(updated_file_state, RunFileState):
-            run_file_state = updated_file_state
-        else:
-            run_file_state = RunFileState(work_dir=sra_stat['getfastq_sra_dir'])
+    except RuntimeError:
+        run_file_state = download_public_original_fastq_files(
+            sra_stat=sra_stat,
+            args=args,
+            start=start,
+            end=end,
+        )
+        if not isinstance(run_file_state, RunFileState):
+            raise
+        fqd_out = None
+        used_original_fastq_fallback = True
+    if used_original_fastq_fallback:
         set_current_intermediate_extension(sra_stat, '.fastq.gz')
+        written_spots = None
     else:
-        print('Skipping seqkit compression after fasterq-dump because downstream filtering is enabled.')
-        set_current_intermediate_extension(sra_stat, '.fastq')
+        ensure_fasterq_output_files_exist(sra_stat=sra_stat)
+        run_file_state = RunFileState(work_dir=sra_stat['getfastq_sra_dir'])
+        if trim_after_dump:
+            trimmed_counts, run_file_state = trim_fasterq_output_files(
+                sra_stat=sra_stat,
+                start=start,
+                end=end,
+                file_state=run_file_state,
+                args=args,
+                compress_to_gz=False,
+                return_file_state=True,
+            )
+            written_spots = calculate_written_spots_from_trim_counts(trimmed_counts)
+            if written_spots is not None:
+                print('Using trimmed FASTQ spot count after fallback extraction: {:,}'.format(written_spots))
+        else:
+            written_spots, run_file_state = resolve_written_spots_from_fasterq_output(
+                sra_stat=sra_stat,
+                start=start,
+                end=end,
+                fqd_out=fqd_out,
+                run_file_state=run_file_state,
+            )
+        should_compress = should_compress_fasterq_output_before_filters(args)
+        if should_compress:
+            updated_file_state = compress_fasterq_output_files(
+                sra_stat=sra_stat,
+                args=args,
+                file_state=run_file_state,
+                return_file_state=True,
+            )
+            if isinstance(updated_file_state, RunFileState):
+                run_file_state = updated_file_state
+            else:
+                run_file_state = RunFileState(work_dir=sra_stat['getfastq_sra_dir'])
+            set_current_intermediate_extension(sra_stat, '.fastq.gz')
+        else:
+            print('Skipping seqkit compression after fasterq-dump because downstream filtering is enabled.')
+            set_current_intermediate_extension(sra_stat, '.fastq')
     if written_spots is None:
         written_spots = estimate_num_written_spots_from_fastq(sra_stat, file_state=run_file_state)
     ind_sra = sra_stat.get('metadata_idx', get_metadata_row_index_by_run(metadata, sra_stat['sra_id']))

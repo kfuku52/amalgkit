@@ -80,6 +80,8 @@ from amalgkit.getfastq import (
     collect_valid_run_ids,
     remove_sra_files,
     remove_sra_path,
+    resolve_public_original_fastq_sources_from_xml_root,
+    assign_public_original_fastq_suffixes,
 )
 from amalgkit.util import Metadata
 
@@ -3629,6 +3631,42 @@ class TestSraRecovery:
     def _disable_fasterq_output_validation(self, monkeypatch):
         monkeypatch.setattr('amalgkit.getfastq.ensure_fasterq_output_files_exist', lambda **_kwargs: None)
 
+    def test_resolve_public_original_fastq_sources_from_xml_root_extracts_original_fastqs(self):
+        xml_root = ET.fromstring(
+            """
+            <RunBundle>
+              <RUN accession="SRR001">
+                <SRAFiles>
+                  <SRAFile filename="forward_reads.fastq.gz" semantic_name="fastq" supertype="Original"
+                           url="https://trace.example/forward.fastq.gz">
+                    <Alternatives url="https://aws.example/forward.fastq.gz" org="AWS"/>
+                  </SRAFile>
+                  <SRAFile filename="reverse_reads.fastq.gz" semantic_name="fastq" supertype="Original"
+                           url="https://trace.example/reverse.fastq.gz">
+                    <Alternatives url="https://aws.example/reverse.fastq.gz" org="AWS"/>
+                  </SRAFile>
+                  <SRAFile filename="SRR001" semantic_name="SRA Normalized" supertype="Primary ETL"
+                           url="https://aws.example/SRR001"/>
+                </SRAFiles>
+              </RUN>
+            </RunBundle>
+            """
+        )
+
+        observed = resolve_public_original_fastq_sources_from_xml_root(xml_root)
+        assigned = assign_public_original_fastq_suffixes(observed, 'SRR001')
+
+        assert [entry['filename'] for entry in observed] == [
+            'forward_reads.fastq.gz',
+            'reverse_reads.fastq.gz',
+        ]
+        assert observed[0]['sources'][0]['source_name'] == 'AWS'
+        assert observed[0]['sources'][0]['url'] == 'https://aws.example/forward.fastq.gz'
+        assert [(entry['filename'], suffix) for entry, suffix in assigned] == [
+            ('forward_reads.fastq.gz', '_1'),
+            ('reverse_reads.fastq.gz', '_2'),
+        ]
+
     def test_remove_sra_files_deletes_matching_sra_files(self, tmp_path):
         metadata = Metadata.from_DataFrame(pandas.DataFrame({
             'run': ['SRR001'],
@@ -3813,6 +3851,88 @@ class TestSraRecovery:
             run_fasterq_dump(sra_stat, args, metadata, start=1, end=10)
         assert run_calls['count'] == 2
         assert redownload_calls == [True]
+
+    def test_run_fasterq_dump_falls_back_to_public_original_fastq_when_retry_fails(self, tmp_path, monkeypatch):
+        sra_id = 'SRR001'
+        metadata = self._metadata_for_extraction(sra_id)
+        sra_stat = {
+            'sra_id': sra_id,
+            'getfastq_sra_dir': str(tmp_path),
+            'spot_length': 100,
+            'layout': 'paired',
+            'total_spot': 10,
+        }
+        args = self._args_for_fasterq_dump()
+        args.sra_download_method = 'urllib'
+
+        def fail_retry(**_kwargs):
+            raise RuntimeError('fasterq-dump did not finish safely after re-download.')
+
+        def fake_fetch_public_original_fastq_sources(sra_id):
+            assert sra_id == 'SRR001'
+            return [
+                {
+                    'filename': 'forward_reads.fastq.gz',
+                    'sources': [{'source_name': 'AWS', 'url': 'https://example.org/forward.fastq.gz'}],
+                },
+                {
+                    'filename': 'reverse_reads.fastq.gz',
+                    'sources': [{'source_name': 'AWS', 'url': 'https://example.org/reverse.fastq.gz'}],
+                },
+            ]
+
+        def _write_fastq_gz(path, suffix):
+            with gzip.open(path, 'wt') as handle:
+                for i in range(10):
+                    handle.write('@read{}_{}\n'.format(i + 1, suffix))
+                    handle.write('ACGT\n')
+                    handle.write('+\n')
+                    handle.write('!!!!\n')
+
+        def fake_urlretrieve(url, out_path):
+            if 'forward' in url:
+                _write_fastq_gz(out_path, '1')
+            elif 'reverse' in url:
+                _write_fastq_gz(out_path, '2')
+            else:
+                raise AssertionError('Unexpected URL {}'.format(url))
+
+        monkeypatch.setattr('amalgkit.getfastq.run_fasterq_dump_with_retry', fail_retry)
+        monkeypatch.setattr('amalgkit.getfastq.fetch_public_original_fastq_sources', fake_fetch_public_original_fastq_sources)
+        monkeypatch.setattr('amalgkit.getfastq.shutil.which', lambda _name: None)
+        monkeypatch.setattr('amalgkit.getfastq.urllib.request.urlretrieve', fake_urlretrieve)
+
+        metadata, sra_stat_out = run_fasterq_dump(sra_stat, args, metadata, start=1, end=10)
+
+        assert count_fastq_records(str(tmp_path / 'SRR001_1.fastq.gz')) == 10
+        assert count_fastq_records(str(tmp_path / 'SRR001_2.fastq.gz')) == 10
+        assert metadata.df.loc[0, 'num_written'] == 10
+        assert metadata.df.loc[0, 'num_dumped'] == 10
+        assert metadata.df.loc[0, 'num_rejected'] == 0
+        assert metadata.df.loc[0, 'bp_written'] == 1000
+        assert metadata.df.loc[0, 'layout_amalgkit'] == 'paired'
+        assert sra_stat_out['layout'] == 'paired'
+
+    def test_run_fasterq_dump_raises_when_public_original_fastq_fallback_is_unavailable(self, tmp_path, monkeypatch):
+        sra_id = 'SRR001'
+        metadata = self._metadata_for_extraction(sra_id)
+        sra_stat = {
+            'sra_id': sra_id,
+            'getfastq_sra_dir': str(tmp_path),
+            'spot_length': 100,
+            'layout': 'paired',
+            'total_spot': 10,
+        }
+        args = self._args_for_fasterq_dump()
+
+        def fail_retry(**_kwargs):
+            raise RuntimeError('fasterq-dump did not finish safely after re-download.')
+
+        monkeypatch.setattr('amalgkit.getfastq.run_fasterq_dump_with_retry', fail_retry)
+        monkeypatch.setattr('amalgkit.getfastq.fetch_public_original_fastq_sources', lambda _sra_id: [])
+
+        with pytest.raises(RuntimeError, match='fasterq-dump did not finish safely after re-download'):
+            run_fasterq_dump(sra_stat, args, metadata, start=1, end=10)
 
     def test_run_fasterq_dump_no_redownload_when_first_attempt_succeeds(self, tmp_path, monkeypatch, capsys):
         sra_id = 'SRR001'
