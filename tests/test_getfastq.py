@@ -3819,7 +3819,7 @@ class TestSraRecovery:
         out = capsys.readouterr().out
         assert 'Time elapsed for SRA re-download (SRR001):' in out
 
-    def test_run_fasterq_dump_exits_when_retry_fails(self, tmp_path, monkeypatch):
+    def test_run_fasterq_dump_exits_when_retry_fails(self, tmp_path, monkeypatch, capsys):
         sra_id = 'SRR001'
         sra_path = tmp_path / '{}.sra'.format(sra_id)
         sra_path.write_text('broken')
@@ -3851,6 +3851,11 @@ class TestSraRecovery:
             run_fasterq_dump(sra_stat, args, metadata, start=1, end=10)
         assert run_calls['count'] == 2
         assert redownload_calls == [True]
+        captured = capsys.readouterr()
+        assert 'Command failed with exit code 1:' in captured.err
+        assert 'Retry command failed with exit code 1:' in captured.err
+        assert 'fasterq-dump stderr:' in captured.err
+        assert 'fasterq-dump failed' in captured.err
 
     def test_run_fasterq_dump_falls_back_to_public_original_fastq_when_retry_fails(self, tmp_path, monkeypatch):
         sra_id = 'SRR001'

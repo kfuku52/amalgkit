@@ -35,7 +35,7 @@ from amalgkit.output_utils import atomic_write_dataframe
 from amalgkit.prefix_utils import find_run_prefixed_entries
 from amalgkit.runtime_utils import get_getfastq_run_dir
 from amalgkit.sra import fetch_sra_xml as shared_fetch_sra_xml
-from amalgkit.subprocess_utils import probe_dependency_command, run_checked_command, run_logged_command
+from amalgkit.subprocess_utils import format_command, probe_dependency_command, run_checked_command, run_logged_command
 
 import os
 import re
@@ -2089,7 +2089,7 @@ def build_fasterq_dump_command(args, sra_stat, path_downloaded_sra, size_check, 
 
 
 def execute_fasterq_dump_command(fasterq_dump_command, args, prefix='Command'):
-    fqd_out, _stdout_txt, _stderr_txt = run_logged_command(
+    fqd_out, stdout_txt, stderr_txt = run_logged_command(
         command=fasterq_dump_command,
         runner=subprocess.run,
         print_command=True,
@@ -2098,13 +2098,31 @@ def execute_fasterq_dump_command(fasterq_dump_command, args, prefix='Command'):
         stdout_label='fasterq-dump stdout:',
         stderr_label='fasterq-dump stderr:',
     )
-    return fqd_out
+    return fqd_out, stdout_txt, stderr_txt
+
+
+def emit_fasterq_dump_failure_details(fasterq_dump_command, result, stdout_txt, stderr_txt, prefix):
+    command_txt = format_command(fasterq_dump_command)
+    sys.stderr.write('{} failed with exit code {}: {}\n'.format(prefix, result.returncode, command_txt))
+    if stdout_txt.strip() != '':
+        sys.stderr.write('fasterq-dump stdout:\n')
+        sys.stderr.write(stdout_txt if stdout_txt.endswith('\n') else stdout_txt + '\n')
+    if stderr_txt.strip() != '':
+        sys.stderr.write('fasterq-dump stderr:\n')
+        sys.stderr.write(stderr_txt if stderr_txt.endswith('\n') else stderr_txt + '\n')
 
 
 def run_fasterq_dump_with_retry(fasterq_dump_command, path_downloaded_sra, metadata, sra_stat, args):
-    fqd_out = execute_fasterq_dump_command(fasterq_dump_command, args, prefix='Command')
+    fqd_out, stdout_txt, stderr_txt = execute_fasterq_dump_command(fasterq_dump_command, args, prefix='Command')
     if fqd_out.returncode == 0:
         return fqd_out
+    emit_fasterq_dump_failure_details(
+        fasterq_dump_command=fasterq_dump_command,
+        result=fqd_out,
+        stdout_txt=stdout_txt,
+        stderr_txt=stderr_txt,
+        prefix='Command',
+    )
 
     sys.stderr.write("fasterq-dump did not finish safely. Removing the cached SRA file and retrying once.\n")
     remove_sra_path(path_downloaded_sra)
@@ -2117,8 +2135,15 @@ def run_fasterq_dump_with_retry(fasterq_dump_command, path_downloaded_sra, metad
         elapsed_seconds=(time.perf_counter() - redownload_started_at),
         stage_label='SRA re-download',
     )
-    fqd_out = execute_fasterq_dump_command(fasterq_dump_command, args, prefix='Retry command')
+    fqd_out, stdout_txt, stderr_txt = execute_fasterq_dump_command(fasterq_dump_command, args, prefix='Retry command')
     if fqd_out.returncode != 0:
+        emit_fasterq_dump_failure_details(
+            fasterq_dump_command=fasterq_dump_command,
+            result=fqd_out,
+            stdout_txt=stdout_txt,
+            stderr_txt=stderr_txt,
+            prefix='Retry command',
+        )
         sys.stderr.write("fasterq-dump did not finish safely after re-download.\n")
         raise RuntimeError('fasterq-dump did not finish safely after re-download.')
     return fqd_out
