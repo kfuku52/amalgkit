@@ -1111,6 +1111,12 @@ def check_getfastq_dependency(args):
         return out
 
     fasterq_dump_exe = getattr(args, 'fasterq_dump_exe', 'fasterq-dump')
+    fasterq_version = probe_command([fasterq_dump_exe, '--version'], 'fasterq-dump')
+    ensure_supported_fasterq_dump_version(
+        version_stdout_txt=fasterq_version.stdout.decode('utf8', errors='replace'),
+        version_stderr_txt=fasterq_version.stderr.decode('utf8', errors='replace'),
+        executable_name=fasterq_dump_exe,
+    )
     fasterq_help = probe_command([fasterq_dump_exe, '-h'], 'fasterq-dump')
     help_stdout_txt = fasterq_help.stdout.decode('utf8', errors='replace')
     help_stderr_txt = fasterq_help.stderr.decode('utf8', errors='replace')
@@ -1947,6 +1953,33 @@ def detect_fasterq_spot_range_support(help_stdout_txt, help_stderr_txt=''):
     has_start = ('-N|' in combined) or ('--minSpotId' in combined) or ('--min-spot-id' in combined.lower())
     has_end = ('-X|' in combined) or ('--maxSpotId' in combined) or ('--max-spot-id' in combined.lower())
     return bool(has_start and has_end)
+
+
+def parse_fasterq_dump_version(version_stdout_txt, version_stderr_txt=''):
+    combined = '\n'.join([str(version_stdout_txt or ''), str(version_stderr_txt or '')])
+    matched = re.search(r'\b([0-9]+)\.([0-9]+)(?:\.([0-9]+))?\b', combined)
+    if matched is None:
+        return None
+    major = int(matched.group(1))
+    minor = int(matched.group(2))
+    patch = int(matched.group(3) or 0)
+    return (major, minor, patch)
+
+
+def ensure_supported_fasterq_dump_version(version_stdout_txt, version_stderr_txt='', executable_name='fasterq-dump'):
+    version_parts = parse_fasterq_dump_version(version_stdout_txt, version_stderr_txt)
+    if version_parts is None:
+        raise RuntimeError(
+            'Could not determine fasterq-dump version from {} output. '
+            'sra-tools >= 3 is required for amalgkit getfastq.'.format(executable_name)
+        )
+    if version_parts[0] < 3:
+        version_txt = '{}.{}.{}'.format(*version_parts)
+        raise RuntimeError(
+            'Unsupported fasterq-dump version detected: {} from {}. '
+            'sra-tools >= 3 is required for amalgkit getfastq.'.format(version_txt, executable_name)
+        )
+    return version_parts
 
 
 def resolve_fasterq_spot_range_support(args):

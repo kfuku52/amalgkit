@@ -28,6 +28,13 @@ amalgkit -h
 amalgkit help metadata
 ```
 
+`amalgkit getfastq` requires `fasterq-dump` from `sra-tools >= 3` on `PATH`.
+If you manage external tools separately, install it explicitly, for example:
+
+```bash
+mamba install -c conda-forge -c bioconda "sra-tools>=3"
+```
+
 ## Commands
 See [Wiki](https://github.com/kfuku52/amalgkit/wiki) for detailed examples and option descriptions.
 

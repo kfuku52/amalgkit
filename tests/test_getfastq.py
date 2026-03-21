@@ -5964,18 +5964,37 @@ class TestGetfastqDependencyChecks:
 
         def fake_run(cmd, stdout=None, stderr=None):
             called['cmds'].append(cmd)
+            if cmd == ['fasterq-dump', '--version']:
+                return subprocess.CompletedProcess(cmd, 0, stdout=b'3.0.10\n', stderr=b'')
             return subprocess.CompletedProcess(cmd, 0, stdout=b'', stderr=b'')
 
         monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
         check_getfastq_dependency(Args())
-        assert called['cmds'] == [['fasterq-dump', '-h'], ['seqkit', '--help']]
+        assert called['cmds'] == [['fasterq-dump', '--version'], ['fasterq-dump', '-h'], ['seqkit', '--help']]
+
+    def test_requires_fasterq_dump_version_3_or_newer(self, monkeypatch):
+        class Args:
+            fasterq_dump_exe = 'fasterq-dump'
+
+        def fake_run(cmd, stdout=None, stderr=None):
+            if cmd == ['fasterq-dump', '--version']:
+                return subprocess.CompletedProcess(cmd, 0, stdout=b'2.9.6\n', stderr=b'')
+            if cmd == ['fasterq-dump', '-h']:
+                return subprocess.CompletedProcess(cmd, 0, stdout=b'Usage:\n', stderr=b'')
+            return subprocess.CompletedProcess(cmd, 0, stdout=b'', stderr=b'')
+
+        monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
+        with pytest.raises(RuntimeError, match='sra-tools >= 3 is required'):
+            check_getfastq_dependency(Args())
 
     def test_detects_missing_fasterq_spot_range_flags(self, monkeypatch):
         class Args:
             fasterq_dump_exe = 'fasterq-dump'
 
         def fake_run(cmd, stdout=None, stderr=None):
-            if cmd[0] == 'fasterq-dump':
+            if cmd == ['fasterq-dump', '--version']:
+                return subprocess.CompletedProcess(cmd, 0, stdout=b'3.0.10\n', stderr=b'')
+            if cmd == ['fasterq-dump', '-h']:
                 return subprocess.CompletedProcess(
                     cmd,
                     0,
@@ -5994,7 +6013,9 @@ class TestGetfastqDependencyChecks:
             fasterq_dump_exe = 'fasterq-dump'
 
         def fake_run(cmd, stdout=None, stderr=None):
-            if cmd[0] == 'fasterq-dump':
+            if cmd == ['fasterq-dump', '--version']:
+                return subprocess.CompletedProcess(cmd, 0, stdout=b'3.0.10\n', stderr=b'')
+            if cmd == ['fasterq-dump', '-h']:
                 return subprocess.CompletedProcess(
                     cmd,
                     0,
@@ -6017,13 +6038,16 @@ class TestGetfastqDependencyChecks:
 
         def fake_run(cmd, stdout=None, stderr=None):
             called['cmds'].append(cmd)
+            if cmd == ['fasterq-dump', '--version']:
+                return subprocess.CompletedProcess(cmd, 0, stdout=b'3.0.10\n', stderr=b'')
             return subprocess.CompletedProcess(cmd, 0, stdout=b'', stderr=b'')
 
         monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
         check_getfastq_dependency(Args())
-        assert called['cmds'][0] == ['fasterq-dump', '-h']
-        assert called['cmds'][1] == ['seqkit', '--help']
-        assert called['cmds'][2] == ['fastp', '--help']
+        assert called['cmds'][0] == ['fasterq-dump', '--version']
+        assert called['cmds'][1] == ['fasterq-dump', '-h']
+        assert called['cmds'][2] == ['seqkit', '--help']
+        assert called['cmds'][3] == ['fastp', '--help']
 
     def test_uses_fasterq_dump_dependency(self, monkeypatch):
         class Args:
@@ -6036,6 +6060,8 @@ class TestGetfastqDependencyChecks:
 
         def fake_run(cmd, stdout=None, stderr=None):
             called['cmds'].append(cmd)
+            if cmd == ['fasterq-dump', '--version']:
+                return subprocess.CompletedProcess(cmd, 0, stdout=b'3.0.10\n', stderr=b'')
             return subprocess.CompletedProcess(cmd, 0, stdout=b'', stderr=b'')
 
         monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
@@ -6057,6 +6083,8 @@ class TestGetfastqDependencyChecks:
 
         def fake_run(cmd, stdout=None, stderr=None):
             called['cmds'].append(cmd)
+            if cmd == ['fasterq-dump', '--version']:
+                return subprocess.CompletedProcess(cmd, 0, stdout=b'3.0.10\n', stderr=b'')
             return subprocess.CompletedProcess(cmd, 0, stdout=b'', stderr=b'')
 
         monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
@@ -6074,6 +6102,8 @@ class TestGetfastqDependencyChecks:
 
         def fake_run(cmd, stdout=None, stderr=None):
             called['cmds'].append(cmd)
+            if cmd == ['fasterq-dump', '--version']:
+                return subprocess.CompletedProcess(cmd, 0, stdout=b'3.0.10\n', stderr=b'')
             return subprocess.CompletedProcess(cmd, 0, stdout=b'', stderr=b'')
 
         monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
@@ -6105,6 +6135,8 @@ class TestGetfastqDependencyChecks:
         def fake_run(cmd, stdout=None, stderr=None):
             if cmd[0] == 'missing-seqkit':
                 raise FileNotFoundError(cmd[0])
+            if cmd == ['fasterq-dump', '--version']:
+                return subprocess.CompletedProcess(cmd, 0, stdout=b'3.0.10\n', stderr=b'')
             return subprocess.CompletedProcess(cmd, 0, stdout=b'', stderr=b'')
 
         monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
@@ -6121,6 +6153,8 @@ class TestGetfastqDependencyChecks:
         def fake_run(cmd, stdout=None, stderr=None):
             if cmd[0] == 'fastp':
                 return subprocess.CompletedProcess(cmd, 127, stdout=b'', stderr=b'')
+            if cmd == ['fasterq-dump', '--version']:
+                return subprocess.CompletedProcess(cmd, 0, stdout=b'3.0.10\n', stderr=b'')
             return subprocess.CompletedProcess(cmd, 0, stdout=b'', stderr=b'')
 
         monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
@@ -6140,6 +6174,8 @@ class TestGetfastqDependencyChecks:
 
         def fake_run(cmd, stdout=None, stderr=None):
             called['cmds'].append(cmd)
+            if cmd == ['fasterq-dump', '--version']:
+                return subprocess.CompletedProcess(cmd, 0, stdout=b'3.0.10\n', stderr=b'')
             return subprocess.CompletedProcess(cmd, 0, stdout=b'', stderr=b'')
 
         def fake_prepare_db(_args):
@@ -6149,9 +6185,10 @@ class TestGetfastqDependencyChecks:
         monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
         monkeypatch.setattr('amalgkit.getfastq.ensure_mmseqs_rrna_reference_db_exists', fake_prepare_db)
         check_getfastq_dependency(args)
-        assert called['cmds'][0] == ['fasterq-dump', '-h']
-        assert called['cmds'][1] == ['seqkit', '--help']
-        assert called['cmds'][2] == ['mmseqs', '--help']
+        assert called['cmds'][0] == ['fasterq-dump', '--version']
+        assert called['cmds'][1] == ['fasterq-dump', '-h']
+        assert called['cmds'][2] == ['seqkit', '--help']
+        assert called['cmds'][3] == ['mmseqs', '--help']
         assert called['db_prepare'] == 1
         assert download_dir.exists()
         assert download_dir.is_dir()
@@ -6169,7 +6206,12 @@ class TestGetfastqDependencyChecks:
 
         monkeypatch.setattr(
             'amalgkit.getfastq.subprocess.run',
-            lambda cmd, stdout=None, stderr=None: subprocess.CompletedProcess(cmd, 0, stdout=b'', stderr=b''),
+            lambda cmd, stdout=None, stderr=None: subprocess.CompletedProcess(
+                cmd,
+                0,
+                stdout=(b'3.0.10\n' if cmd == ['fasterq-dump', '--version'] else b''),
+                stderr=b'',
+            ),
         )
         with pytest.raises(NotADirectoryError, match='Download path exists but is not a directory'):
             check_getfastq_dependency(args)
