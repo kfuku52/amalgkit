@@ -779,3 +779,48 @@ class TestMetadataFromXmlRoots:
         assert metadata.df.loc[0, 'sample_attribute_tissue'] == 'leaf'
         assert metadata.df.loc[0, 'leaf'] == 'foliage | leaf blade'
         assert metadata.sample_attribute_collision_count >= 2
+
+    def test_from_xml_roots_extracts_generic_platform_and_instrument(self):
+        xml_root = ET.fromstring(
+            '''
+            <EXPERIMENT_PACKAGE_SET>
+              <EXPERIMENT_PACKAGE>
+                <SAMPLE>
+                  <SAMPLE_NAME>
+                    <SCIENTIFIC_NAME>Arabidopsis thaliana</SCIENTIFIC_NAME>
+                    <TAXON_ID>3702</TAXON_ID>
+                  </SAMPLE_NAME>
+                </SAMPLE>
+                <EXPERIMENT>
+                  <IDENTIFIERS>
+                    <PRIMARY_ID>SRX000002</PRIMARY_ID>
+                  </IDENTIFIERS>
+                  <DESIGN>
+                    <LIBRARY_DESCRIPTOR>
+                      <LIBRARY_LAYOUT>
+                        <SINGLE />
+                      </LIBRARY_LAYOUT>
+                    </LIBRARY_DESCRIPTOR>
+                  </DESIGN>
+                  <PLATFORM>
+                    <PACBIO_SMRT>
+                      <INSTRUMENT_MODEL>Sequel II</INSTRUMENT_MODEL>
+                    </PACBIO_SMRT>
+                  </PLATFORM>
+                </EXPERIMENT>
+                <RUN_SET>
+                  <RUN total_spots="10" total_bases="10000" size="1000">
+                    <IDENTIFIERS>
+                      <PRIMARY_ID>SRR000002</PRIMARY_ID>
+                    </IDENTIFIERS>
+                  </RUN>
+                </RUN_SET>
+              </EXPERIMENT_PACKAGE>
+            </EXPERIMENT_PACKAGE_SET>
+            '''
+        )
+
+        metadata = Metadata.from_xml_roots([xml_root])
+
+        assert metadata.df.loc[0, 'platform'] == 'PACBIO_SMRT'
+        assert metadata.df.loc[0, 'instrument'] == 'Sequel II'

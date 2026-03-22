@@ -1,5 +1,7 @@
+import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import time
@@ -29,6 +31,52 @@ INDEX_BUILD_LOCK_POLL_SECONDS = 5
 INDEX_BUILD_LOCK_TIMEOUT_SECONDS = 3600
 
 INDEX_FASTA_SUFFIXES = ('.fa', '.fasta', '.fa.gz', '.fasta.gz')
+KALLISTO_INDEX_SUFFIX = '.idx'
+OARFISH_INDEX_SUFFIX = '.mmi'
+QUANT_BACKENDS = ('auto', 'kallisto', 'oarfish')
+OARFISH_SEQ_TECHS = ('auto', 'ont-cdna', 'ont-drna', 'pac-bio', 'pac-bio-hifi')
+SHORT_READ_SPOT_LENGTH_THRESHOLD = 1000
+
+PLATFORM_REGEX_BY_FAMILY = {
+    'ont': (
+        r'oxford[\s_/-]*nanopore',
+        r'\bnanopore\b',
+        r'\bpromethion\b',
+        r'\bgridion\b',
+        r'\bminion\b',
+        r'\bont\b',
+    ),
+    'pacbio': (
+        r'\bpacbio\b',
+        r'pacific[\s_/-]*biosciences',
+        r'\bsmrt\b',
+        r'\bsequel\b',
+        r'\brevio\b',
+        r'\brs[\s_-]*ii\b',
+    ),
+    'illumina': (
+        r'\billumina\b',
+        r'\bnovaseq\b',
+        r'\bhiseq\b',
+        r'\bnextseq\b',
+        r'\bmiseq\b',
+        r'\biseq\b',
+        r'genome[\s_-]*analyzer',
+    ),
+}
+
+OARFISH_PACBIO_HIFI_PATTERNS = (
+    r'\bhifi\b',
+    r'\bccs\b',
+    r'\biso[\s_-]*seq\b',
+    r'\bisoseq\b',
+)
+OARFISH_ONT_DIRECT_RNA_PATTERNS = (
+    r'\bdirect[\s_-]*rna\b',
+    r'\bd[\s_-]*rna\b',
+    r'\bdrna\b',
+)
+
 
 def purge_existing_quant_outputs(sra_id, output_dir):
     stale_names = [
@@ -38,6 +86,12 @@ def purge_existing_quant_outputs(sra_id, output_dir):
         'abundance.tsv',
         'run_info.json',
         'abundance.h5',
+        sra_id + '.quant',
+        sra_id + '.meta_info.json',
+        sra_id + '.ambig_info.tsv',
+        sra_id + '.infreps.pq',
+        sra_id + '.prob',
+        sra_id + '.prob.lz4',
     ]
     for stale_name in stale_names:
         stale_path = os.path.join(output_dir, stale_name)
@@ -46,6 +100,7 @@ def purge_existing_quant_outputs(sra_id, output_dir):
         if not os.path.isfile(stale_path):
             raise IsADirectoryError('Quant output path exists but is not a file: {}'.format(stale_path))
         os.remove(stale_path)
+
 
 def quant_output_exists(sra_id, output_dir):
     abundance_path = os.path.join(output_dir, sra_id + '_abundance.tsv')
@@ -61,9 +116,167 @@ def quant_output_exists(sra_id, output_dir):
         print('Output file was not detected: {}'.format(run_info_path))
     return False
 
+
+def _normalize_metadata_text(value):
+    if pandas.isna(value):
+        return ''
+    text = str(value).strip()
+    if text.lower() in {'', 'nan', 'none'}:
+        return ''
+    return re.sub(r'\s+', ' ', text)
+
+
+def _normalize_search_text(text):
+    text = _normalize_metadata_text(text).lower()
+    return re.sub(r'[^0-9a-z]+', ' ', text).strip()
+
+
+def _metadata_row_index(metadata, sra_id):
+    return get_metadata_row_index_by_run(metadata, sra_id)
+
+
+def _metadata_value(metadata, sra_id, column_name, default=''):
+    if column_name not in metadata.df.columns:
+        return default
+    return metadata.df.at[_metadata_row_index(metadata, sra_id), column_name]
+
+
+def _metadata_numeric_value(metadata, sra_id, column_name):
+    if column_name not in metadata.df.columns:
+        return numpy.nan
+    return pandas.to_numeric(metadata.df.at[_metadata_row_index(metadata, sra_id), column_name], errors='coerce')
+
+
+def _collect_metadata_text_fragments(metadata, sra_id):
+    fragments = []
+    for column_name in [
+        'platform',
+        'instrument',
+        'protocol',
+        'lib_strategy',
+        'lib_selection',
+        'lib_source',
+        'lib_name',
+        'exp_title',
+        'design',
+        'sample_title',
+        'sample_description',
+    ]:
+        text = _normalize_metadata_text(_metadata_value(metadata, sra_id, column_name, default=''))
+        if text != '':
+            fragments.append(text)
+    return fragments
+
+
+def _describe_metadata_backend_context(metadata, sra_id):
+    values = []
+    for column_name in ['platform', 'instrument', 'lib_layout', 'spot_length', 'total_spots', 'total_bases']:
+        if column_name in metadata.df.columns:
+            values.append('{}={}'.format(column_name, _metadata_value(metadata, sra_id, column_name, default='')))
+    if not values:
+        return 'no platform-related metadata columns were available'
+    return ', '.join(values)
+
+
+def _estimate_spot_length_from_metadata(metadata, sra_id):
+    spot_length = _metadata_numeric_value(metadata, sra_id, 'spot_length')
+    if numpy.isfinite(spot_length) and (float(spot_length) > 0):
+        return float(spot_length)
+    total_spots = _metadata_numeric_value(metadata, sra_id, 'total_spots')
+    total_bases = _metadata_numeric_value(metadata, sra_id, 'total_bases')
+    if (
+        numpy.isfinite(total_spots)
+        and numpy.isfinite(total_bases)
+        and (float(total_spots) > 0)
+        and (float(total_bases) > 0)
+    ):
+        return float(total_bases) / float(total_spots)
+    return numpy.nan
+
+
+def _matches_search_patterns(search_text, patterns):
+    if search_text == '':
+        return False
+    for pattern in patterns:
+        if re.search(pattern, search_text):
+            return True
+    return False
+
+
+def infer_platform_family(metadata, sra_id):
+    search_text = _normalize_search_text(' '.join(_collect_metadata_text_fragments(metadata, sra_id)))
+    for family in ['ont', 'pacbio', 'illumina']:
+        if _matches_search_patterns(search_text, PLATFORM_REGEX_BY_FAMILY[family]):
+            return family
+    layout = _normalize_metadata_text(_metadata_value(metadata, sra_id, 'lib_layout', default='')).lower()
+    if layout == 'paired':
+        return 'illumina'
+    spot_length = _estimate_spot_length_from_metadata(metadata, sra_id)
+    if numpy.isfinite(spot_length):
+        if float(spot_length) <= SHORT_READ_SPOT_LENGTH_THRESHOLD:
+            return 'illumina'
+        return 'long-read-unknown'
+    return 'unknown'
+
+
+def resolve_quant_backend(args, metadata, sra_id):
+    requested_backend = str(getattr(args, 'quant_backend', 'kallisto')).strip().lower()
+    if requested_backend not in QUANT_BACKENDS:
+        raise ValueError('Unsupported quant backend: {}'.format(requested_backend))
+    if requested_backend in {'kallisto', 'oarfish'}:
+        return requested_backend
+    platform_family = infer_platform_family(metadata, sra_id)
+    if platform_family == 'illumina':
+        return 'kallisto'
+    if platform_family in {'ont', 'pacbio', 'long-read-unknown'}:
+        return 'oarfish'
+    raise ValueError(
+        'Could not infer quant backend for run {} from metadata ({}). '
+        'Populate metadata platform/instrument fields or set --quant_backend explicitly.'.format(
+            sra_id,
+            _describe_metadata_backend_context(metadata, sra_id),
+        )
+    )
+
+
+def resolve_oarfish_seq_tech(args, metadata, sra_id):
+    requested_seq_tech = str(getattr(args, 'oarfish_seq_tech', 'auto')).strip().lower()
+    if requested_seq_tech not in OARFISH_SEQ_TECHS:
+        raise ValueError('Unsupported oarfish sequencing technology preset: {}'.format(requested_seq_tech))
+    if requested_seq_tech != 'auto':
+        return requested_seq_tech
+    platform_family = infer_platform_family(metadata, sra_id)
+    search_text = _normalize_search_text(' '.join(_collect_metadata_text_fragments(metadata, sra_id)))
+    if platform_family == 'ont':
+        if _matches_search_patterns(search_text, OARFISH_ONT_DIRECT_RNA_PATTERNS):
+            return 'ont-drna'
+        return 'ont-cdna'
+    if platform_family == 'pacbio':
+        if _matches_search_patterns(search_text, OARFISH_PACBIO_HIFI_PATTERNS):
+            return 'pac-bio-hifi'
+        return 'pac-bio'
+    raise ValueError(
+        'Could not infer oarfish sequencing technology for run {} from metadata ({}). '
+        'Populate metadata platform/instrument fields or set --oarfish_seq_tech explicitly.'.format(
+            sra_id,
+            _describe_metadata_backend_context(metadata, sra_id),
+        )
+    )
+
+
+def resolve_quant_backends_for_tasks(args, metadata, tasks):
+    backend_by_run = {}
+    oarfish_seq_tech_by_run = {}
+    for sra_id, _sci_name in tasks:
+        backend = resolve_quant_backend(args, metadata, sra_id)
+        backend_by_run[sra_id] = backend
+        if backend == 'oarfish':
+            oarfish_seq_tech_by_run[sra_id] = resolve_oarfish_seq_tech(args, metadata, sra_id)
+    return backend_by_run, oarfish_seq_tech_by_run
+
+
 def resolve_nominal_length_for_kallisto(metadata, sra_id, sra_stat):
     nominal_length = sra_stat.get('nominal_length', numpy.nan)
-    # Backward-compatible fallback for direct call_kallisto callers.
     if numpy.isnan(pandas.to_numeric(nominal_length, errors='coerce')):
         try:
             idx = get_metadata_row_index_by_run(metadata, sra_id)
@@ -83,26 +296,49 @@ def resolve_nominal_length_for_kallisto(metadata, sra_id, sra_stat):
     return nominal_length, fragment_sd
 
 
+def parse_quant_option_args(option_string, option_name):
+    if not option_string:
+        return []
+    try:
+        return shlex.split(option_string)
+    except ValueError as e:
+        raise ValueError('Invalid {} string: {}'.format(option_name, option_string)) from e
+
+
 def build_kallisto_quant_command(args, in_files, lib_layout, output_dir, index, nominal_length=None, fragment_sd=None):
+    extra_option_args = parse_quant_option_args(getattr(args, 'kallisto_options', None), '--kallisto_options')
     if lib_layout == 'single':
         if len(in_files) != 1:
             txt = "Library layout: {} and expected 1 input file. " \
                   "Received {} input file[s]. Please check your inputs and metadata."
             raise ValueError(txt.format(lib_layout, len(in_files)))
         return [
-            "kallisto", "quant", "--threads", str(args.threads), "--index", index, "-o", output_dir,
-            "--single", "-l", str(nominal_length), "-s", str(fragment_sd), in_files[0],
-        ]
+            'kallisto', 'quant', '--threads', str(args.threads), '--index', index, '-o', output_dir,
+            '--single', '-l', str(nominal_length), '-s', str(fragment_sd),
+        ] + extra_option_args + [in_files[0]]
     if lib_layout == 'paired':
         if len(in_files) != 2:
             txt = "Library layout: {} and expected 2 input files. " \
                   "Received {} input file[s]. Please check your inputs and metadata."
             raise ValueError(txt.format(lib_layout, len(in_files)))
         return [
-            "kallisto", "quant", "--threads", str(args.threads), "-i", index, "-o", output_dir,
-            in_files[0], in_files[1],
-        ]
+            'kallisto', 'quant', '--threads', str(args.threads), '-i', index, '-o', output_dir,
+        ] + extra_option_args + [in_files[0], in_files[1]]
     raise ValueError("Unsupported library layout: {}. Expected 'single' or 'paired'.".format(lib_layout))
+
+
+def build_oarfish_quant_command(args, in_files, output_prefix, index, seq_tech):
+    extra_option_args = parse_quant_option_args(getattr(args, 'oarfish_options', None), '--oarfish_options')
+    if len(in_files) != 1:
+        raise ValueError(
+            'oarfish requires exactly one input read file per run. Received {} input file(s).'.format(len(in_files))
+        )
+    return [
+        'oarfish', '-j', str(args.threads),
+        '--reads', in_files[0],
+        '--index', index,
+        '--seq-tech', seq_tech,
+    ] + extra_option_args + ['-o', output_prefix]
 
 
 def rename_kallisto_outputs(output_dir, sra_id):
@@ -125,11 +361,101 @@ def rename_kallisto_outputs(output_dir, sra_id):
         os.replace(src_path, dst_path)
 
 
+def _compute_compatibility_tpm(counts, lengths):
+    counts = numpy.asarray(counts, dtype=float)
+    lengths = numpy.asarray(lengths, dtype=float)
+    with numpy.errstate(divide='ignore', invalid='ignore'):
+        rate = counts / lengths
+    rate[~numpy.isfinite(rate)] = 0.0
+    denom = float(numpy.nansum(rate))
+    if denom <= 0:
+        return numpy.zeros(rate.shape[0], dtype=float)
+    return rate * 1e6 / denom
+
+
+def _normalize_oarfish_quant_columns(quant_df):
+    rename_map = {}
+    for column_name in quant_df.columns:
+        normalized = re.sub(r'[^0-9a-z]+', '', str(column_name).strip().lower())
+        if normalized in {'tname', 'targetid', 'targetname', 'name'}:
+            rename_map[column_name] = 'target_id'
+        elif normalized in {'len', 'length'}:
+            rename_map[column_name] = 'length'
+        elif normalized in {'numreads', 'numread', 'estcounts', 'estcount'}:
+            rename_map[column_name] = 'est_counts'
+        elif normalized == 'tpm':
+            rename_map[column_name] = 'tpm'
+    return quant_df.rename(columns=rename_map)
+
+
+def adapt_oarfish_outputs(output_dir, sra_id, sra_stat, output_prefix, seq_tech):
+    quant_path = output_prefix + '.quant'
+    meta_info_path = output_prefix + '.meta_info.json'
+    if not os.path.exists(quant_path):
+        raise FileNotFoundError('oarfish output file was not generated: {}'.format(quant_path))
+    if not os.path.isfile(quant_path):
+        raise IsADirectoryError('oarfish output path exists but is not a file: {}'.format(quant_path))
+    if not os.path.exists(meta_info_path):
+        raise FileNotFoundError('oarfish output file was not generated: {}'.format(meta_info_path))
+    if not os.path.isfile(meta_info_path):
+        raise IsADirectoryError('oarfish output path exists but is not a file: {}'.format(meta_info_path))
+
+    quant_df = pandas.read_csv(quant_path, sep='\t', header=0)
+    quant_df = _normalize_oarfish_quant_columns(quant_df)
+    required_columns = ['target_id', 'length', 'est_counts']
+    missing_columns = [col for col in required_columns if col not in quant_df.columns]
+    if missing_columns:
+        raise ValueError(
+            'oarfish quant output is missing required column(s): {}. Found columns: {}'.format(
+                ', '.join(missing_columns),
+                ', '.join([str(col) for col in quant_df.columns.tolist()]),
+            )
+        )
+
+    target_ids = quant_df['target_id'].astype(str)
+    lengths = pandas.to_numeric(quant_df['length'], errors='coerce').fillna(0.0)
+    est_counts = pandas.to_numeric(quant_df['est_counts'], errors='coerce').fillna(0.0)
+    if 'tpm' in quant_df.columns:
+        tpm = pandas.to_numeric(quant_df['tpm'], errors='coerce').fillna(0.0)
+    else:
+        tpm = pandas.Series(_compute_compatibility_tpm(est_counts.to_numpy(), lengths.to_numpy()))
+
+    abundance_df = pandas.DataFrame({
+        'target_id': target_ids,
+        'length': lengths,
+        'eff_length': lengths,
+        'est_counts': est_counts,
+        'tpm': tpm,
+    })
+    abundance_path = os.path.join(output_dir, sra_id + '_abundance.tsv')
+    abundance_df.to_csv(abundance_path, sep='\t', index=False)
+
+    with open(meta_info_path) as meta_handle:
+        meta_info = json.load(meta_handle)
+    if not isinstance(meta_info, dict):
+        meta_info = {'oarfish_meta_info': meta_info}
+    mapped_reads = float(est_counts.sum())
+    total_reads = float(sra_stat['total_spot'])
+    p_pseudoaligned = 0.0
+    if total_reads > 0:
+        p_pseudoaligned = mapped_reads / total_reads * 100.0
+    p_pseudoaligned = min(max(float(p_pseudoaligned), 0.0), 100.0)
+    run_info = dict(meta_info)
+    run_info['quant_backend'] = 'oarfish'
+    run_info['oarfish_seq_tech'] = seq_tech
+    run_info['num_processed'] = total_reads
+    run_info['num_pseudoaligned'] = mapped_reads
+    run_info['p_pseudoaligned'] = p_pseudoaligned
+    run_info_path = os.path.join(output_dir, sra_id + '_run_info.json')
+    with open(run_info_path, 'w') as run_info_handle:
+        json.dump(run_info, run_info_handle, indent=2, sort_keys=True)
+
+
 def call_kallisto(args, in_files, metadata, sra_stat, output_dir, index):
     sra_id = sra_stat['sra_id']
     lib_layout = sra_stat['layout']
     if lib_layout == 'single':
-        print("Single end reads detected. Proceeding in single mode")
+        print('Single end reads detected. Proceeding in single mode')
         nominal_length, fragment_sd = resolve_nominal_length_for_kallisto(metadata, sra_id, sra_stat)
         kallisto_cmd = build_kallisto_quant_command(
             args=args,
@@ -142,7 +468,7 @@ def call_kallisto(args, in_files, metadata, sra_stat, output_dir, index):
         )
     else:
         if lib_layout == 'paired':
-            print("Paired-end reads detected. Running in paired read mode.")
+            print('Paired-end reads detected. Running in paired read mode.')
         kallisto_cmd = build_kallisto_quant_command(
             args=args,
             in_files=in_files,
@@ -160,7 +486,7 @@ def call_kallisto(args, in_files, metadata, sra_stat, output_dir, index):
         stderr_label='kallisto quant stderr:',
     )
     if kallisto_out.returncode != 0:
-        sys.stderr.write("kallisto did not finish safely.\n")
+        sys.stderr.write('kallisto did not finish safely.\n')
         if 'Zero reads pseudoaligned' in stderr_txt:
             sys.stderr.write(
                 'No reads are mapped to the reference. This sample will be excluded by downstream filtering/final export.'
@@ -169,10 +495,46 @@ def call_kallisto(args, in_files, metadata, sra_stat, output_dir, index):
             'kallisto quant failed with exit code {} for {}.'.format(kallisto_out.returncode, sra_id)
         )
 
-    # move output to results with unique name
     rename_kallisto_outputs(output_dir=output_dir, sra_id=sra_id)
-
     return kallisto_out
+
+
+def call_oarfish(args, in_files, metadata, sra_stat, output_dir, index, seq_tech):
+    _ = metadata
+    sra_id = sra_stat['sra_id']
+    if sra_stat['layout'] != 'single':
+        raise ValueError(
+            'oarfish backend currently supports single-end long-read runs only. '
+            'Run {} was labeled as {}.'.format(sra_id, sra_stat['layout'])
+        )
+    output_prefix = os.path.join(output_dir, sra_id)
+    oarfish_cmd = build_oarfish_quant_command(
+        args=args,
+        in_files=in_files,
+        output_prefix=output_prefix,
+        index=index,
+        seq_tech=seq_tech,
+    )
+    oarfish_out, _stdout_txt, _stderr_txt = run_logged_command(
+        command=oarfish_cmd,
+        runner=subprocess.run,
+        print_command=True,
+        print_output=True,
+        stdout_label='oarfish quant stdout:',
+        stderr_label='oarfish quant stderr:',
+    )
+    if oarfish_out.returncode != 0:
+        raise RuntimeError(
+            'oarfish quant failed with exit code {} for {}.'.format(oarfish_out.returncode, sra_id)
+        )
+    adapt_oarfish_outputs(
+        output_dir=output_dir,
+        sra_id=sra_id,
+        sra_stat=sra_stat,
+        output_prefix=output_prefix,
+        seq_tech=seq_tech,
+    )
+    return oarfish_out
 
 
 def check_kallisto_dependency():
@@ -181,6 +543,22 @@ def check_kallisto_dependency():
         label='kallisto',
         runner=subprocess.run,
     )
+
+
+def check_oarfish_dependency():
+    probe_dependency_command(
+        command=['oarfish', '--version'],
+        label='oarfish',
+        runner=subprocess.run,
+    )
+
+
+def check_quant_dependencies(backend_by_run):
+    backends = set([backend for backend in backend_by_run.values() if backend != ''])
+    if 'kallisto' in backends:
+        check_kallisto_dependency()
+    if 'oarfish' in backends:
+        check_oarfish_dependency()
 
 
 def list_getfastq_run_files(output_dir):
@@ -199,10 +577,22 @@ def list_dir_entries(path_dir):
         return set()
 
 
-def find_species_index_files(index_dir, sci_name, entries=None):
+def _normalize_index_suffixes(suffixes):
+    if suffixes is None:
+        return None
+    return tuple([str(suffix).lower() for suffix in suffixes])
+
+
+def find_species_index_files(index_dir, sci_name, entries=None, suffixes=(KALLISTO_INDEX_SUFFIX,)):
     if entries is None:
         entries = list_dir_entries(index_dir)
+    normalized_suffixes = _normalize_index_suffixes(suffixes)
     matched = find_species_prefixed_entries(entries, sci_name)
+    if normalized_suffixes is not None:
+        matched = [
+            entry for entry in matched
+            if str(entry).lower().endswith(normalized_suffixes)
+        ]
     return [
         os.path.join(index_dir, entry)
         for entry in matched
@@ -221,6 +611,30 @@ def find_species_fasta_files(path_fasta_dir, sci_name, entries=None):
         and os.path.isfile(os.path.join(path_fasta_dir, entry))
     ]
     return [os.path.join(path_fasta_dir, entry) for entry in matched]
+
+
+def _normalize_fasta_candidate_key(fasta_file):
+    filename = os.path.basename(fasta_file)
+    filename_lower = filename.lower()
+    for suffix in sorted(INDEX_FASTA_SUFFIXES, key=len, reverse=True):
+        if filename_lower.endswith(suffix):
+            return filename_lower[:-len(suffix)]
+    return filename_lower
+
+
+def _resolve_duplicate_fasta_candidates(fasta_files):
+    preferred_by_key = {}
+    for fasta_file in fasta_files:
+        key = _normalize_fasta_candidate_key(fasta_file)
+        existing = preferred_by_key.get(key)
+        if existing is None:
+            preferred_by_key[key] = fasta_file
+            continue
+        existing_is_gz = str(existing).lower().endswith('.gz')
+        current_is_gz = str(fasta_file).lower().endswith('.gz')
+        if existing_is_gz and (not current_is_gz):
+            preferred_by_key[key] = fasta_file
+    return sorted(preferred_by_key.values())
 
 
 def check_layout_mismatch(sra_stat, output_dir, files=None):
@@ -262,8 +676,7 @@ def resolve_input_fastq_files(sra_stat, output_dir_getfastq, ext, files=None):
     return [os.path.join(output_dir_getfastq, f) for f in matched]
 
 
-def run_quant(args, metadata, sra_id, index, runtime_context=None):
-    # make results directory, if not already there
+def run_quant(args, metadata, sra_id, index, runtime_context=None, backend=None, oarfish_seq_tech=None):
     output_dir = os.path.join(args.out_dir, 'quant', sra_id)
     if os.path.exists(output_dir) and (not os.path.isdir(output_dir)):
         raise NotADirectoryError('Quant run output path exists but is not a directory: {}'.format(output_dir))
@@ -283,6 +696,16 @@ def run_quant(args, metadata, sra_id, index, runtime_context=None):
             'getfastq run path exists but is not a directory: {}'.format(output_dir_getfastq)
         )
     sra_stat = get_sra_stat(sra_id, metadata, num_bp_per_sra=None)
+    if backend is None:
+        if isinstance(runtime_context, QuantRuntimeContext) and (sra_id in runtime_context.quant_backend_by_run):
+            backend = runtime_context.quant_backend_by_run[sra_id]
+        else:
+            backend = resolve_quant_backend(args, metadata, sra_id)
+    if (backend == 'oarfish') and (oarfish_seq_tech is None):
+        if isinstance(runtime_context, QuantRuntimeContext) and (sra_id in runtime_context.oarfish_seq_tech_by_run):
+            oarfish_seq_tech = runtime_context.oarfish_seq_tech_by_run[sra_id]
+        else:
+            oarfish_seq_tech = resolve_oarfish_seq_tech(args, metadata, sra_id)
     run_files = None
     if isinstance(runtime_context, QuantRuntimeContext):
         run_files = runtime_context.run_files_by_run.get(sra_id, None)
@@ -302,22 +725,29 @@ def run_quant(args, metadata, sra_id, index, runtime_context=None):
         raise FileNotFoundError('getfastq output not found for {}.'.format(sra_stat['sra_id']))
     in_files = resolve_input_fastq_files(sra_stat, output_dir_getfastq, ext, files=run_files)
     if len(in_files) == 0:
-        # Refresh once in case files changed after initial snapshot.
         run_files = list_getfastq_run_files(output_dir_getfastq)
         in_files = resolve_input_fastq_files(sra_stat, output_dir_getfastq, ext, files=run_files)
     if not in_files:
         raise FileNotFoundError('{}: Fastq file not found. Check {}'.format(sra_id, output_dir_getfastq))
     print('Input fastq detected:', ', '.join(in_files))
-    call_kallisto(args, in_files, metadata, sra_stat, output_dir, index)
+    print('Quant backend selected for {}: {}'.format(sra_id, backend))
+    if backend == 'kallisto':
+        call_kallisto(args, in_files, metadata, sra_stat, output_dir, index)
+    elif backend == 'oarfish':
+        print('oarfish seq-tech selected for {}: {}'.format(sra_id, oarfish_seq_tech))
+        call_oarfish(args, in_files, metadata, sra_stat, output_dir, index, oarfish_seq_tech)
+    else:
+        raise ValueError('Unsupported quant backend: {}'.format(backend))
     if (args.clean_fastq and quant_output_exists(sra_id, output_dir)):
         print('Safe-deleting getfastq files.', flush=True)
         for in_file in in_files:
             print('Output file detected. Safely removing fastq:', in_file)
             os.remove(in_file)
-            with open(in_file + '.safely_removed', "w") as f:
-                f.write("This fastq file was safely removed after `amalgkit quant`.")
+            with open(in_file + '.safely_removed', 'w') as handle:
+                handle.write('This fastq file was safely removed after `amalgkit quant`.')
     else:
         print('Skipping the deletion of getfastq files.', flush=True)
+
 
 def _resolve_index_lock_options(args):
     lock_poll_seconds = int(getattr(args, 'index_lock_poll', INDEX_BUILD_LOCK_POLL_SECONDS))
@@ -328,6 +758,7 @@ def _resolve_index_lock_options(args):
         raise ValueError('--index_lock_timeout must be > 0 (seconds).')
     return lock_poll_seconds, lock_timeout_seconds
 
+
 def _resolve_index_dir(args):
     if args.index_dir is not None:
         index_dir = args.index_dir
@@ -336,16 +767,18 @@ def _resolve_index_dir(args):
     if (not os.path.exists(index_dir)) and args.build_index:
         os.makedirs(index_dir, exist_ok=True)
     if not os.path.exists(index_dir):
-        raise FileNotFoundError("Could not find index folder at: {}".format(index_dir))
+        raise FileNotFoundError('Could not find index folder at: {}'.format(index_dir))
     if not os.path.isdir(index_dir):
-        raise NotADirectoryError("Index path exists but is not a directory: {}".format(index_dir))
+        raise NotADirectoryError('Index path exists but is not a directory: {}'.format(index_dir))
     return index_dir
+
 
 def _assert_lock_path_is_regular_file(lock_path):
     if not os.path.lexists(lock_path):
         return
     if os.path.islink(lock_path) or (not os.path.isfile(lock_path)):
         raise IsADirectoryError('Index lock path exists but is not a file: {}'.format(lock_path))
+
 
 def _acquire_index_lock(lock_path):
     _assert_lock_path_is_regular_file(lock_path)
@@ -356,6 +789,7 @@ def _acquire_index_lock(lock_path):
     with os.fdopen(fd, 'w') as lock_handle:
         lock_handle.write('{}\n'.format(os.getpid()))
     return True
+
 
 def _wait_for_existing_builder(index_path, lock_path, sci_name, lock_poll_seconds, lock_timeout_seconds):
     _assert_lock_path_is_regular_file(lock_path)
@@ -376,6 +810,7 @@ def _wait_for_existing_builder(index_path, lock_path, sci_name, lock_poll_second
         return True
     return False
 
+
 def _normalize_species_identifier(text):
     normalized = str(text).strip()
     if normalized == '':
@@ -384,7 +819,8 @@ def _normalize_species_identifier(text):
     normalized = re.sub(r'_+', '_', normalized)
     return normalized
 
-def _find_single_index_file(index_dir, sci_name, entries=None):
+
+def _build_species_identifier_candidates(sci_name):
     candidates = []
     raw = str(sci_name).strip()
     normalized = _normalize_species_identifier(raw)
@@ -402,26 +838,71 @@ def _find_single_index_file(index_dir, sci_name, entries=None):
         fallback_no_dot = fallback.replace('.', '')
         if (fallback_no_dot != fallback) and (fallback_no_dot not in candidates):
             candidates.append(fallback_no_dot)
-    for prefix in candidates:
-        index_files = find_species_index_files(index_dir=index_dir, sci_name=prefix, entries=entries)
+    return candidates
+
+
+def _resolve_index_suffix(backend):
+    if backend == 'kallisto':
+        return KALLISTO_INDEX_SUFFIX
+    if backend == 'oarfish':
+        return OARFISH_INDEX_SUFFIX
+    raise ValueError('Unsupported quant backend: {}'.format(backend))
+
+
+def _build_index_stem(sci_name, backend='kallisto', oarfish_seq_tech=None):
+    normalized_sci_name = _normalize_species_identifier(sci_name)
+    if backend == 'kallisto':
+        return normalized_sci_name
+    if oarfish_seq_tech in {None, ''}:
+        raise ValueError('oarfish index stem requires sequencing technology.')
+    return '{}.{}'.format(normalized_sci_name, oarfish_seq_tech)
+
+
+def _build_index_cache_key(backend, sci_name, oarfish_seq_tech=None):
+    normalized_sci_name = _normalize_species_identifier(sci_name)
+    if backend == 'kallisto':
+        return normalized_sci_name
+    return (backend, normalized_sci_name, str(oarfish_seq_tech))
+
+
+def _find_single_index_file(index_dir, sci_name, entries=None, backend='kallisto', oarfish_seq_tech=None):
+    backend_label = 'Kallisto' if backend == 'kallisto' else 'oarfish'
+    index_suffix = _resolve_index_suffix(backend)
+    for species_prefix in _build_species_identifier_candidates(sci_name):
+        prefix = _build_index_stem(species_prefix, backend=backend, oarfish_seq_tech=oarfish_seq_tech)
+        index_files = find_species_index_files(
+            index_dir=index_dir,
+            sci_name=prefix,
+            entries=entries,
+            suffixes=(index_suffix,),
+        )
         if len(index_files) > 1:
             raise ValueError(
-                "Found multiple index files for species. Please make sure there is only one index file for this species.")
+                'Found multiple {} index files for species. Please make sure there is only one index file for this species.'.format(
+                    backend_label
+                )
+            )
         if len(index_files) == 1:
             index_file = index_files[0]
-            if prefix != sci_name:
+            if species_prefix != sci_name:
                 print(
-                    "Kallisto index fallback prefix '{}' was used for species '{}'.".format(prefix, sci_name),
+                    "{} index fallback prefix '{}' was used for species '{}'.".format(
+                        backend_label,
+                        species_prefix,
+                        sci_name,
+                    ),
                     flush=True,
                 )
-            print("Kallisto index file found: {}".format(index_file), flush=True)
+            print('{} index file found: {}'.format(backend_label, index_file), flush=True)
             return index_file
     return None
+
 
 def _resolve_prefetched_index_entries(index_dir, runtime_context=None):
     if isinstance(runtime_context, QuantRuntimeContext):
         return runtime_context.prefetched_index.resolve_entries(index_dir)
     return None
+
 
 def _resolve_single_fasta_file(args, sci_name, runtime_context=None):
     if args.fasta_dir == 'inferred':
@@ -436,20 +917,22 @@ def _resolve_single_fasta_file(args, sci_name, runtime_context=None):
         sci_name=sci_name,
         entries=prefetched_entries,
     )
+    fasta_files = _resolve_duplicate_fasta_candidates(fasta_files)
     if len(fasta_files) > 1:
-        txt = "Found multiple reference fasta files for this species: {}\n"
-        txt += "Please make sure there is only one index file for this species.\n{}"
+        txt = 'Found multiple reference fasta files for this species: {}\n'
+        txt += 'Please make sure there is only one index file for this species.\n{}'
         raise ValueError(txt.format(sci_name, ', '.join(fasta_files)))
     if len(fasta_files) == 0:
-        txt = "Could not find reference fasta file for this species: {}\n".format(sci_name)
+        txt = 'Could not find reference fasta file for this species: {}\n'.format(sci_name)
         txt += 'If the reference fasta file is correctly placed, the column "scientific_name" of the --metadata file may need to be edited.'
         raise FileNotFoundError(txt)
     return fasta_files[0]
 
+
 def _build_kallisto_index(index_path, fasta_file, sci_name):
     print('Reference fasta file found: {}'.format(fasta_file), flush=True)
     print('Building index: {}'.format(index_path), flush=True)
-    kallisto_build_cmd = ["kallisto", "index", "-i", index_path, fasta_file]
+    kallisto_build_cmd = ['kallisto', 'index', '-i', index_path, fasta_file]
     index_out, _stdout_txt, _stderr_txt = run_logged_command(
         command=kallisto_build_cmd,
         runner=subprocess.run,
@@ -459,15 +942,45 @@ def _build_kallisto_index(index_path, fasta_file, sci_name):
         stderr_label='kallisto index stderr:',
     )
     if index_out.returncode != 0:
-        raise RuntimeError("kallisto index failed for {}.".format(sci_name))
+        raise RuntimeError('kallisto index failed for {}.'.format(sci_name))
     if not os.path.isfile(index_path):
-        raise RuntimeError("Index file was not generated: {}".format(index_path))
+        raise RuntimeError('Index file was not generated: {}'.format(index_path))
 
-def get_index(args, sci_name, runtime_context=None):
+
+def _build_oarfish_index(args, index_path, fasta_file, sci_name, seq_tech):
+    print('Reference fasta file found: {}'.format(fasta_file), flush=True)
+    print('Building index: {}'.format(index_path), flush=True)
+    oarfish_build_cmd = [
+        'oarfish', '-j', str(args.threads),
+        '--annotated', fasta_file,
+        '--seq-tech', seq_tech,
+        '--only-index',
+        '--index-out', index_path,
+    ]
+    index_out, _stdout_txt, _stderr_txt = run_logged_command(
+        command=oarfish_build_cmd,
+        runner=subprocess.run,
+        print_command=True,
+        print_output=True,
+        stdout_label='oarfish index stdout:',
+        stderr_label='oarfish index stderr:',
+    )
+    if index_out.returncode != 0:
+        raise RuntimeError('oarfish index failed for {}.'.format(sci_name))
+    if not os.path.isfile(index_path):
+        raise RuntimeError('Index file was not generated: {}'.format(index_path))
+
+
+def get_index(args, sci_name, runtime_context=None, backend=None, oarfish_seq_tech=None):
+    backend = str(backend if backend is not None else getattr(args, 'quant_backend', 'kallisto')).strip().lower()
+    if backend == 'auto':
+        backend = 'kallisto'
     lock_poll_seconds, lock_timeout_seconds = _resolve_index_lock_options(args)
     index_dir = _resolve_index_dir(args)
-    index_path = os.path.join(index_dir, sci_name + '.idx')
-    lock_path = os.path.join(index_dir, '.{}.idx.lock'.format(sci_name))
+    index_stem = _build_index_stem(sci_name, backend=backend, oarfish_seq_tech=oarfish_seq_tech)
+    index_suffix = _resolve_index_suffix(backend)
+    index_path = os.path.join(index_dir, index_stem + index_suffix)
+    lock_path = os.path.join(index_dir, '.{}.lock'.format(os.path.basename(index_path)))
     prefetched_index_lookup_entries = _resolve_prefetched_index_entries(index_dir, runtime_context=runtime_context)
     use_prefetched_index = prefetched_index_lookup_entries is not None
 
@@ -477,17 +990,24 @@ def get_index(args, sci_name, runtime_context=None):
                 index_dir=index_dir,
                 sci_name=sci_name,
                 entries=prefetched_index_lookup_entries,
+                backend=backend,
+                oarfish_seq_tech=oarfish_seq_tech,
             )
             use_prefetched_index = False
         else:
-            index = _find_single_index_file(index_dir=index_dir, sci_name=sci_name)
+            index = _find_single_index_file(
+                index_dir=index_dir,
+                sci_name=sci_name,
+                backend=backend,
+                oarfish_seq_tech=oarfish_seq_tech,
+            )
         if index is not None:
             return index
 
         if not args.build_index:
             sys.stderr.write('No index file was found in: {}\n'.format(index_dir))
             sys.stderr.write('Try --fasta_dir PATH and --build_index yes\n')
-            raise FileNotFoundError("Could not find index file.")
+            raise FileNotFoundError('Could not find index file.')
 
         if _wait_for_existing_builder(
             index_path=index_path,
@@ -502,15 +1022,30 @@ def get_index(args, sci_name, runtime_context=None):
             continue
 
         try:
-            # Another process may have finished between lock release and acquisition.
-            index = _find_single_index_file(index_dir=index_dir, sci_name=sci_name)
+            index = _find_single_index_file(
+                index_dir=index_dir,
+                sci_name=sci_name,
+                backend=backend,
+                oarfish_seq_tech=oarfish_seq_tech,
+            )
             if index is not None:
                 return index
 
-            print("--build_index set. Building index for {}".format(sci_name))
+            print('--build_index set. Building index for {}'.format(sci_name))
             fasta_file = _resolve_single_fasta_file(args, sci_name, runtime_context=runtime_context)
-            _build_kallisto_index(index_path=index_path, fasta_file=fasta_file, sci_name=sci_name)
-            print("Kallisto index file found: {}".format(index_path), flush=True)
+            if backend == 'kallisto':
+                _build_kallisto_index(index_path=index_path, fasta_file=fasta_file, sci_name=sci_name)
+            elif backend == 'oarfish':
+                _build_oarfish_index(
+                    args=args,
+                    index_path=index_path,
+                    fasta_file=fasta_file,
+                    sci_name=sci_name,
+                    seq_tech=oarfish_seq_tech,
+                )
+            else:
+                raise ValueError('Unsupported quant backend: {}'.format(backend))
+            print('Index file found: {}'.format(index_path), flush=True)
             return index_path
         finally:
             if os.path.lexists(lock_path):
@@ -518,28 +1053,88 @@ def get_index(args, sci_name, runtime_context=None):
                 os.remove(lock_path)
 
 
+def _get_index_for_backend(args, sci_name, runtime_context=None, backend='kallisto', oarfish_seq_tech=None):
+    if (backend == 'kallisto') and (oarfish_seq_tech in {None, ''}):
+        return get_index(args, sci_name, runtime_context=runtime_context)
+    return get_index(
+        args,
+        sci_name,
+        runtime_context=runtime_context,
+        backend=backend,
+        oarfish_seq_tech=oarfish_seq_tech,
+    )
+
+
 def run_quant_for_sra(args, metadata, sra_id, sci_name, runtime_context=None):
     print('')
     print('Species: {}'.format(sci_name))
     print('SRA Run ID: {}'.format(sra_id))
-    sci_name = _normalize_species_identifier(sci_name)
+    normalized_sci_name = _normalize_species_identifier(sci_name)
+    backend = None
+    oarfish_seq_tech = None
     index_cache = None
     if isinstance(runtime_context, QuantRuntimeContext):
+        backend = runtime_context.quant_backend_by_run.get(sra_id, None)
+        oarfish_seq_tech = runtime_context.oarfish_seq_tech_by_run.get(sra_id, None)
         index_cache = runtime_context.resolved_index_cache
-    if isinstance(index_cache, dict) and (sci_name in index_cache):
-        index = index_cache[sci_name]
+    if backend is None:
+        backend = resolve_quant_backend(args, metadata, sra_id)
+    if (backend == 'oarfish') and (oarfish_seq_tech is None):
+        oarfish_seq_tech = resolve_oarfish_seq_tech(args, metadata, sra_id)
+    index_cache_key = _build_index_cache_key(backend, normalized_sci_name, oarfish_seq_tech=oarfish_seq_tech)
+    if isinstance(index_cache, dict) and (index_cache_key in index_cache):
+        index = index_cache[index_cache_key]
         print('Using pre-resolved index: {}'.format(index))
     else:
-        print('Looking for index folder in ', args.out_dir)
-        index = get_index(args, sci_name, runtime_context=runtime_context)
-    run_quant(args, metadata, sra_id, index, runtime_context=runtime_context)
+        print('Looking for index folder in {}'.format(args.out_dir))
+        index = _get_index_for_backend(
+            args,
+            normalized_sci_name,
+            runtime_context=runtime_context,
+            backend=backend,
+            oarfish_seq_tech=oarfish_seq_tech,
+        )
+    run_quant(
+        args,
+        metadata,
+        sra_id,
+        index,
+        runtime_context=runtime_context,
+        backend=backend,
+        oarfish_seq_tech=oarfish_seq_tech,
+    )
+
+
+def _resolve_task_backend_info(args, tasks, runtime_context=None):
+    task_info = []
+    for sra_id, sci_name in tasks:
+        backend = 'kallisto'
+        oarfish_seq_tech = None
+        if isinstance(runtime_context, QuantRuntimeContext):
+            backend = runtime_context.quant_backend_by_run.get(sra_id, backend)
+            oarfish_seq_tech = runtime_context.oarfish_seq_tech_by_run.get(sra_id, None)
+        elif str(getattr(args, 'quant_backend', 'kallisto')).strip().lower() == 'oarfish':
+            backend = 'oarfish'
+            requested_seq_tech = str(getattr(args, 'oarfish_seq_tech', 'auto')).strip().lower()
+            if requested_seq_tech == 'auto':
+                raise ValueError(
+                    'pre_resolve_species_indices requires metadata-backed oarfish seq-tech resolution '
+                    'or an explicit --oarfish_seq_tech override.'
+                )
+            oarfish_seq_tech = requested_seq_tech
+        task_info.append((sra_id, _normalize_species_identifier(sci_name), backend, oarfish_seq_tech))
+    return task_info
+
 
 def pre_resolve_species_indices(args, tasks, runtime_context=None):
-    # Resolve one index per species once to avoid redundant index lookups across SRA runs.
     if runtime_context is None:
         runtime_context = QuantRuntimeContext()
-    species_list = sorted(set([_normalize_species_identifier(sci_name) for _, sci_name in tasks]))
-    if len(species_list) == 0:
+    target_info = _resolve_task_backend_info(args, tasks, runtime_context=runtime_context)
+    unique_targets = sorted(set([
+        (backend, sci_name, '' if oarfish_seq_tech is None else oarfish_seq_tech)
+        for _sra_id, sci_name, backend, oarfish_seq_tech in target_info
+    ]))
+    if len(unique_targets) == 0:
         return {}
     prefetched_fasta_entries = None
     prefetched_fasta_dir = None
@@ -569,40 +1164,64 @@ def pre_resolve_species_indices(args, tasks, runtime_context=None):
         entries=prefetched_index_entries,
         path_dir=index_dir,
     )
-    print('Resolving kallisto index for {:,} species.'.format(len(species_list)), flush=True)
+    print('Resolving quant indices for {:,} target(s).'.format(len(unique_targets)), flush=True)
     requested_jobs = getattr(args, 'internal_jobs', 'auto')
     if is_auto_parallel_option(requested_jobs):
         requested_jobs = resolve_detected_cpu_count()
     try:
-        max_workers = min(max(1, int(requested_jobs)), len(species_list))
+        max_workers = min(max(1, int(requested_jobs)), len(unique_targets))
     except (TypeError, ValueError):
         max_workers = 1
 
+    def resolve_one_target(target):
+        backend, sci_name, oarfish_seq_tech = target
+        seq_tech_arg = None if oarfish_seq_tech == '' else oarfish_seq_tech
+        return _get_index_for_backend(
+            args,
+            sci_name,
+            runtime_context=runtime_context,
+            backend=backend,
+            oarfish_seq_tech=seq_tech_arg,
+        )
+
     if max_workers <= 1:
         resolved = dict()
-        for sci_name in species_list:
-            print('Pre-resolving index for species: {}'.format(sci_name), flush=True)
-            resolved[sci_name] = get_index(args, sci_name, runtime_context=runtime_context)
+        for backend, sci_name, oarfish_seq_tech in unique_targets:
+            print('Pre-resolving index for {} ({})'.format(sci_name, backend), flush=True)
+            cache_key = _build_index_cache_key(
+                backend,
+                sci_name,
+                oarfish_seq_tech=None if oarfish_seq_tech == '' else oarfish_seq_tech,
+            )
+            resolved[cache_key] = resolve_one_target((backend, sci_name, oarfish_seq_tech))
         return resolved
 
     print('Pre-resolving indices with {:,} parallel jobs.'.format(max_workers), flush=True)
-    resolved_by_species, failures = run_tasks_with_optional_threads(
-        task_items=species_list,
-        task_fn=lambda sci_name: get_index(args, sci_name, runtime_context=runtime_context),
+    resolved_by_target, failures = run_tasks_with_optional_threads(
+        task_items=unique_targets,
+        task_fn=resolve_one_target,
         max_workers=max_workers,
     )
     if failures:
-        details = '; '.join(['{}: {}'.format(sci_name, err) for sci_name, err in failures])
+        details = '; '.join([
+            '{}:{}: {}'.format(target[0], target[1], err)
+            for target, err in failures
+        ])
         raise RuntimeError(
-            'Failed to pre-resolve index for {}/{} species. {}'.format(
+            'Failed to pre-resolve index for {}/{} target(s). {}'.format(
                 len(failures),
-                len(species_list),
+                len(unique_targets),
                 details,
             )
         )
     resolved = dict()
-    for sci_name in species_list:
-        resolved[sci_name] = resolved_by_species[sci_name]
+    for backend, sci_name, oarfish_seq_tech in unique_targets:
+        cache_key = _build_index_cache_key(
+            backend,
+            sci_name,
+            oarfish_seq_tech=None if oarfish_seq_tech == '' else oarfish_seq_tech,
+        )
+        resolved[cache_key] = resolved_by_target[(backend, sci_name, oarfish_seq_tech)]
     return resolved
 
 
@@ -626,9 +1245,17 @@ def prefetch_getfastq_run_files(args, tasks):
     return prefetched
 
 
-def prepare_quant_runtime_context(args, tasks):
+def prepare_quant_runtime_context(args, tasks, metadata=None, backend_by_run=None, oarfish_seq_tech_by_run=None):
     runtime_context = QuantRuntimeContext()
     runtime_context.run_files_by_run = prefetch_getfastq_run_files(args, tasks)
+    if backend_by_run is None or oarfish_seq_tech_by_run is None:
+        if metadata is None:
+            backend_by_run = {sra_id: 'kallisto' for sra_id, _sci_name in tasks}
+            oarfish_seq_tech_by_run = {}
+        else:
+            backend_by_run, oarfish_seq_tech_by_run = resolve_quant_backends_for_tasks(args, metadata, tasks)
+    runtime_context.quant_backend_by_run = dict(backend_by_run)
+    runtime_context.oarfish_seq_tech_by_run = dict(oarfish_seq_tech_by_run)
     runtime_context.resolved_index_cache = pre_resolve_species_indices(
         args,
         tasks,
@@ -702,10 +1329,17 @@ def quant_main(args):
     if os.path.exists(quant_dir) and (not os.path.isdir(quant_dir)):
         raise NotADirectoryError('Quant path exists but is not a directory: {}'.format(quant_dir))
     runtime_args = clone_namespace(args, threads=threads, internal_jobs=jobs, out_dir=out_dir)
-    check_kallisto_dependency()
     metadata = load_metadata(runtime_args)
     tasks = build_quant_tasks(metadata)
-    runtime_context = prepare_quant_runtime_context(runtime_args, tasks)
+    backend_by_run, oarfish_seq_tech_by_run = resolve_quant_backends_for_tasks(runtime_args, metadata, tasks)
+    check_quant_dependencies(backend_by_run)
+    runtime_context = prepare_quant_runtime_context(
+        runtime_args,
+        tasks,
+        metadata=metadata,
+        backend_by_run=backend_by_run,
+        oarfish_seq_tech_by_run=oarfish_seq_tech_by_run,
+    )
     if (jobs == 1) or (len(tasks) <= 1):
         for sra_id, sci_name in tasks:
             run_quant_for_sra(runtime_args, metadata, sra_id, sci_name, runtime_context=runtime_context)

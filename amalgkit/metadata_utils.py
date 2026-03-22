@@ -106,7 +106,7 @@ class Metadata:
                     'is_sampled', 'is_qualified', 'exclusion', 'protocol', 'bioproject', 'biosample',
                     'experiment', 'run', 'sra_primary', 'sra_sample', 'sra_study', 'study_title', 'exp_title', 'design',
                     'sample_title', 'sample_description', 'lib_name', 'lib_layout', 'lib_strategy', 'lib_source',
-                    'lib_selection', 'instrument', 'total_spots', 'total_bases', 'size', 'nominal_length',
+                    'lib_selection', 'platform', 'instrument', 'total_spots', 'total_bases', 'size', 'nominal_length',
                     'nominal_sdev',
                     'spot_length', 'read_index', 'read_class', 'read_type', 'base_coord', 'center',
                     'submitter_id',
@@ -188,6 +188,23 @@ class Metadata:
                 external_ids[namespace] = '' if text is None else str(text)
             return external_ids
 
+        def get_platform_info(entry):
+            platform = ''
+            instrument = ''
+            platform_root = entry.find('./EXPERIMENT/PLATFORM')
+            if platform_root is None:
+                return platform, instrument
+            for child in list(platform_root):
+                tag = str(getattr(child, 'tag', '')).strip()
+                if tag == '':
+                    continue
+                platform = tag
+                instrument = get_first_text(child, './INSTRUMENT_MODEL')
+                if instrument == '':
+                    instrument = str(child.attrib.get('instrument_model', '')).strip()
+                break
+            return platform, instrument
+
         def normalize_sample_attribute_tag(tag):
             normalized = str(tag).strip().lower()
             normalized = re.sub(r" \(.*", "", normalized)
@@ -244,6 +261,7 @@ class Metadata:
                     library_layout = "paired"
                 else:
                     library_layout = ""
+                platform_name, instrument_model = get_platform_info(entry)
                 row = {
                     "bioproject": bioproject,
                     "scientific_name": get_first_text(entry, './SAMPLE/SAMPLE_NAME/SCIENTIFIC_NAME'),
@@ -276,7 +294,8 @@ class Metadata:
                     "read_class": get_first_text(entry, './EXPERIMENT/DESIGN/SPOT_DESCRIPTOR/SPOT_DECODE_SPEC/READ_SPEC/READ_CLASS'),
                     "read_type": get_first_text(entry, './EXPERIMENT/DESIGN/SPOT_DESCRIPTOR/SPOT_DECODE_SPEC/READ_SPEC/READ_TYPE'),
                     "base_coord": get_first_text(entry, './EXPERIMENT/DESIGN/SPOT_DESCRIPTOR/SPOT_DECODE_SPEC/READ_SPEC/BASE_COORD'),
-                    "instrument": get_first_text(entry, './EXPERIMENT/PLATFORM/ILLUMINA/INSTRUMENT_MODEL'),
+                    "platform": platform_name,
+                    "instrument": instrument_model,
                     "center": get_first_attr(entry, './SUBMISSION', 'center_name'),
                     "submitter_id": get_first_text(entry, './SUBMISSION/IDENTIFIERS/SUBMITTER_ID'),
                     "study_title": get_first_text(entry, './STUDY/DESCRIPTOR/STUDY_TITLE'),
@@ -318,26 +337,34 @@ class Metadata:
                         target_tag = 'sample_attribute_' + normalized_tag
                     else:
                         target_tag = normalized_tag
-                    existing_value = str(row.get(target_tag, ''))
-                    if existing_value != "":
-                        updated_value = append_unique_text(existing_value, value)
-                        if updated_value != existing_value:
+
+                    def store_sample_attribute(target_column):
+                        existing_value = str(row.get(target_column, ''))
+                        if existing_value != "":
+                            updated_value = append_unique_text(existing_value, value)
+                            if updated_value != existing_value:
+                                record_sample_attribute_collision(
+                                    normalized_tag=normalized_tag,
+                                    target_tag=target_column,
+                                    existing_value=existing_value,
+                                    new_value=value,
+                                )
+                            row[target_column] = updated_value
+                            return
+                        if target_column != normalized_tag:
                             record_sample_attribute_collision(
                                 normalized_tag=normalized_tag,
-                                target_tag=target_tag,
-                                existing_value=existing_value,
+                                target_tag=target_column,
+                                existing_value=str(row.get(normalized_tag, '')),
                                 new_value=value,
                             )
-                        row[target_tag] = updated_value
-                        continue
-                    if target_tag != normalized_tag:
-                        record_sample_attribute_collision(
-                            normalized_tag=normalized_tag,
-                            target_tag=target_tag,
-                            existing_value=str(row.get(normalized_tag, '')),
-                            new_value=value,
-                        )
-                    row[target_tag] = value
+                        row[target_column] = value
+
+                    store_sample_attribute(target_tag)
+                    if normalized_tag in core_column_tags:
+                        preserved_tag = 'sample_attribute_' + normalized_tag
+                        if preserved_tag != target_tag:
+                            store_sample_attribute(preserved_tag)
                 row_list.append(row)
                 counter += 1
         if len(row_list) == 0:

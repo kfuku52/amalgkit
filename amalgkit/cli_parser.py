@@ -241,8 +241,18 @@ def build_parser(command_handlers, command_names, version, prog=None):
                           'compensate the loss.')
     pge.set_defaults(handler=command_handlers['getfastq'])
 
-    pqu_help = 'Estimating transcript abundance with kallisto. See `amalgkit quant -h`'
+    pqu_help = 'Estimating transcript abundance with auto-selected kallisto/oarfish backend. See `amalgkit quant -h`'
     pqu = subparsers.add_parser('quant', help=pqu_help, parents=[pp_out, pp_meta, pp_threads, pp_internal_jobs, pp_cpu_budget, pp_redo, pp_batch])
+    pqu.add_argument('--quant_backend', metavar='auto|kallisto|oarfish', default='auto', type=str, required=False, action='store',
+                     choices=['auto', 'kallisto', 'oarfish'],
+                     help='default=%(default)s: Quantification backend. "auto" uses metadata to choose kallisto for short-read runs and oarfish for long-read runs.')
+    pqu.add_argument('--oarfish_seq_tech', metavar='auto|ont-cdna|ont-drna|pac-bio|pac-bio-hifi', default='auto', type=str, required=False, action='store',
+                     choices=['auto', 'ont-cdna', 'ont-drna', 'pac-bio', 'pac-bio-hifi'],
+                     help='default=%(default)s: Override oarfish sequencing-technology preset. "auto" infers ONT/PacBio subtype from metadata where possible.')
+    pqu.add_argument('--kallisto_options', metavar='STR', default=None, type=str, required=False, action='store',
+                     help='default=%(default)s: Additional shell-style option string passed through to `kallisto quant`. Example: --kallisto_options "--bias --seed 42".')
+    pqu.add_argument('--oarfish_options', metavar='STR', default=None, type=str, required=False, action='store',
+                     help='default=%(default)s: Additional shell-style option string passed through to `oarfish`. Example: --oarfish_options "--filter-group no-filters --model-coverage".')
     pqu.add_argument('--index_dir', metavar='PATH', default=None, type=str, required=False, action='store',
                      help='default=%(default)s: PATH to index directory. Only required if index directory is not '
                           'out_dir/index/')

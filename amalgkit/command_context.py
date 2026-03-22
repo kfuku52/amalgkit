@@ -47,6 +47,8 @@ class PrefetchedDirEntries:
 @dataclass
 class QuantRuntimeContext:
     run_files_by_run: dict = field(default_factory=dict)
+    quant_backend_by_run: dict = field(default_factory=dict)
+    oarfish_seq_tech_by_run: dict = field(default_factory=dict)
     resolved_index_cache: dict = field(default_factory=dict)
     prefetched_fasta: PrefetchedDirEntries = field(default_factory=PrefetchedDirEntries)
     prefetched_index: PrefetchedDirEntries = field(default_factory=PrefetchedDirEntries)

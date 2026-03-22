@@ -20,6 +20,7 @@ EXTERNAL_TOOL_SPECS = [
     ('cat', 'cat', [['--version']]),
     ('seqkit', 'seqkit', [['version'], ['--help']]),
     ('kallisto', 'kallisto', [['version'], ['-h']]),
+    ('oarfish', 'oarfish', [['--version'], ['-h']]),
     ('fasterq-dump', 'fasterq-dump', [['--version'], ['-h']]),
     ('fastp', 'fastp', [['--version'], ['-h']]),
     ('busco', 'busco', [['--version'], ['-h']]),

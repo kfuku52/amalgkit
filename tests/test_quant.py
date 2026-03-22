@@ -1,11 +1,15 @@
 import os
+import json
 import subprocess
 import pytest
+import numpy
 import pandas
 from types import SimpleNamespace
 
 from amalgkit.command_context import PrefetchedDirEntries, QuantRuntimeContext
 from amalgkit.quant import (
+    build_kallisto_quant_command,
+    build_oarfish_quant_command,
     quant_output_exists,
     purge_existing_quant_outputs,
     check_layout_mismatch,
@@ -13,13 +17,17 @@ from amalgkit.quant import (
     find_species_index_files,
     find_species_fasta_files,
     check_kallisto_dependency,
+    check_oarfish_dependency,
     get_index,
     call_kallisto,
+    call_oarfish,
     run_quant,
     pre_resolve_species_indices,
     prefetch_getfastq_run_files,
     build_quant_tasks,
     quant_main,
+    resolve_quant_backend,
+    resolve_oarfish_seq_tech,
 )
 from amalgkit.util import Metadata
 
@@ -96,6 +104,144 @@ class TestCheckKallistoDependency:
 
         with pytest.raises(RuntimeError, match='kallisto dependency probe failed'):
             check_kallisto_dependency()
+
+
+class TestCheckOarfishDependency:
+    def test_raises_clear_error_when_oarfish_missing(self, monkeypatch):
+        def fake_run(_cmd, stdout=None, stderr=None):
+            raise FileNotFoundError('oarfish')
+
+        monkeypatch.setattr(subprocess, 'run', fake_run)
+
+        with pytest.raises(FileNotFoundError, match='oarfish executable not found'):
+            check_oarfish_dependency()
+
+    def test_raises_when_oarfish_probe_returns_nonzero(self, monkeypatch):
+        def fake_run(cmd, stdout=None, stderr=None):
+            return subprocess.CompletedProcess(cmd, 127, stdout=b'', stderr=b'')
+
+        monkeypatch.setattr(subprocess, 'run', fake_run)
+
+        with pytest.raises(RuntimeError, match='oarfish dependency probe failed'):
+            check_oarfish_dependency()
+
+
+class TestQuantBackendAuto:
+    def test_resolve_quant_backend_auto_uses_short_read_heuristic(self):
+        args = SimpleNamespace(quant_backend='auto')
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001'],
+            'scientific_name': ['Species A'],
+            'lib_layout': ['single'],
+            'spot_length': [150],
+            'total_spots': [10],
+            'total_bases': [1500],
+            'exclusion': ['no'],
+        }))
+
+        observed = resolve_quant_backend(args, metadata, 'SRR001')
+
+        assert observed == 'kallisto'
+
+    def test_resolve_quant_backend_auto_detects_pacbio_platform(self):
+        args = SimpleNamespace(quant_backend='auto')
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001'],
+            'scientific_name': ['Species A'],
+            'platform': ['PACBIO_SMRT'],
+            'instrument': ['Sequel II'],
+            'lib_layout': ['single'],
+            'spot_length': [2500],
+            'total_spots': [10],
+            'total_bases': [25000],
+            'exclusion': ['no'],
+        }))
+
+        observed = resolve_quant_backend(args, metadata, 'SRR001')
+
+        assert observed == 'oarfish'
+
+    def test_resolve_oarfish_seq_tech_auto_detects_ont_direct_rna(self):
+        args = SimpleNamespace(quant_backend='auto', oarfish_seq_tech='auto')
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001'],
+            'scientific_name': ['Species A'],
+            'platform': ['OXFORD_NANOPORE'],
+            'instrument': ['PromethION'],
+            'sample_description': ['direct RNA sequencing library'],
+            'lib_layout': ['single'],
+            'spot_length': [1500],
+            'total_spots': [10],
+            'total_bases': [15000],
+            'exclusion': ['no'],
+        }))
+
+        observed = resolve_oarfish_seq_tech(args, metadata, 'SRR001')
+
+        assert observed == 'ont-drna'
+
+
+class TestQuantOptionPassthrough:
+    def test_build_kallisto_quant_command_appends_user_options_before_input(self):
+        args = SimpleNamespace(threads=4, kallisto_options='--bias --seed 42')
+
+        observed = build_kallisto_quant_command(
+            args=args,
+            in_files=['reads.fastq.gz'],
+            lib_layout='single',
+            output_dir='out_dir',
+            index='ref.idx',
+            nominal_length=250,
+            fragment_sd=25,
+        )
+
+        assert observed == [
+            'kallisto', 'quant', '--threads', '4', '--index', 'ref.idx', '-o', 'out_dir',
+            '--single', '-l', '250', '-s', '25', '--bias', '--seed', '42', 'reads.fastq.gz',
+        ]
+
+    def test_build_oarfish_quant_command_appends_user_options_before_output(self):
+        args = SimpleNamespace(threads=8, oarfish_options='--filter-group no-filters --best-n 25')
+
+        observed = build_oarfish_quant_command(
+            args=args,
+            in_files=['reads.fastq.gz'],
+            output_prefix='out_prefix',
+            index='ref.mmi',
+            seq_tech='ont-drna',
+        )
+
+        assert observed == [
+            'oarfish', '-j', '8', '--reads', 'reads.fastq.gz', '--index', 'ref.mmi',
+            '--seq-tech', 'ont-drna', '--filter-group', 'no-filters', '--best-n', '25',
+            '-o', 'out_prefix',
+        ]
+
+    def test_build_kallisto_quant_command_rejects_invalid_option_string(self):
+        args = SimpleNamespace(threads=1, kallisto_options='"unterminated')
+
+        with pytest.raises(ValueError, match='Invalid --kallisto_options string'):
+            build_kallisto_quant_command(
+                args=args,
+                in_files=['reads.fastq.gz'],
+                lib_layout='single',
+                output_dir='out_dir',
+                index='ref.idx',
+                nominal_length=200,
+                fragment_sd=20,
+            )
+
+    def test_build_oarfish_quant_command_rejects_invalid_option_string(self):
+        args = SimpleNamespace(threads=1, oarfish_options='"unterminated')
+
+        with pytest.raises(ValueError, match='Invalid --oarfish_options string'):
+            build_oarfish_quant_command(
+                args=args,
+                in_files=['reads.fastq.gz'],
+                output_prefix='out_prefix',
+                index='ref.mmi',
+                seq_tech='pac-bio',
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -648,6 +794,38 @@ class TestQuantEdgeCases:
         with pytest.raises(ValueError, match='Found multiple reference fasta files'):
             get_index(args, 'Homo_sapiens')
 
+    def test_get_index_prefers_uncompressed_fasta_over_matching_gz_copy(self, tmp_path, monkeypatch):
+        out_dir = tmp_path / 'out'
+        fasta_dir = tmp_path / 'fasta'
+        index_dir = tmp_path / 'index'
+        out_dir.mkdir()
+        fasta_dir.mkdir()
+        index_dir.mkdir()
+        fasta_plain = fasta_dir / 'Homo_sapiens.fa'
+        fasta_gz = fasta_dir / 'Homo_sapiens.fa.gz'
+        fasta_plain.write_text('>a\nAAAA\n')
+        fasta_gz.write_text('gz')
+        observed = {'fasta_file': None}
+
+        def fake_build(index_path, fasta_file, sci_name):
+            observed['fasta_file'] = fasta_file
+            assert sci_name == 'Homo_sapiens'
+            open(index_path, 'w').write('idx')
+
+        monkeypatch.setattr('amalgkit.quant._build_kallisto_index', fake_build)
+
+        args = SimpleNamespace(
+            out_dir=str(out_dir),
+            index_dir=str(index_dir),
+            build_index=True,
+            fasta_dir=str(fasta_dir),
+        )
+
+        observed_index = get_index(args, 'Homo_sapiens')
+
+        assert observed_index == str(index_dir / 'Homo_sapiens.idx')
+        assert observed['fasta_file'] == str(fasta_plain)
+
     def test_get_index_waits_for_existing_builder_lock(self, tmp_path, monkeypatch):
         out_dir = tmp_path / 'out'
         index_dir = tmp_path / 'index'
@@ -960,6 +1138,99 @@ class TestQuantEdgeCases:
                 output_dir=str(tmp_path),
                 index='dummy.idx',
             )
+
+    def test_call_oarfish_writes_compatibility_outputs(self, tmp_path, monkeypatch):
+        args = SimpleNamespace(threads=1)
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001'],
+            'platform': ['OXFORD_NANOPORE'],
+            'instrument': ['PromethION'],
+            'lib_layout': ['single'],
+            'total_spots': [10],
+            'spot_length': [1000],
+            'total_bases': [10000],
+            'exclusion': ['no'],
+        }))
+        sra_stat = {
+            'sra_id': 'SRR001',
+            'layout': 'single',
+            'total_spot': 10,
+        }
+
+        def fake_run(cmd, stdout, stderr):
+            prefix = tmp_path / 'SRR001'
+            (prefix.with_suffix('.quant')).write_text(
+                'tname\tlen\tnum_reads\n'
+                'tx1\t1000\t4\n'
+                'tx2\t500\t1\n'
+            )
+            (prefix.with_suffix('.meta_info.json')).write_text(json.dumps({'alignment_source': 'from_raw_reads'}))
+            return SimpleNamespace(returncode=0, stdout=b'', stderr=b'')
+
+        monkeypatch.setattr(subprocess, 'run', fake_run)
+
+        observed = call_oarfish(
+            args=args,
+            in_files=['reads.fastq.gz'],
+            metadata=metadata,
+            sra_stat=sra_stat,
+            output_dir=str(tmp_path),
+            index='dummy.mmi',
+            seq_tech='ont-cdna',
+        )
+
+        assert observed.returncode == 0
+        abundance_df = pandas.read_csv(tmp_path / 'SRR001_abundance.tsv', sep='\t')
+        assert list(abundance_df.columns) == ['target_id', 'length', 'eff_length', 'est_counts', 'tpm']
+        assert abundance_df['target_id'].tolist() == ['tx1', 'tx2']
+        with open(tmp_path / 'SRR001_run_info.json') as handle:
+            run_info = json.load(handle)
+        assert run_info['quant_backend'] == 'oarfish'
+        assert run_info['oarfish_seq_tech'] == 'ont-cdna'
+        assert run_info['p_pseudoaligned'] == 50.0
+
+    def test_run_quant_auto_uses_oarfish_for_long_reads(self, tmp_path, monkeypatch):
+        out_dir = tmp_path / 'out'
+        out_dir.mkdir()
+        args = SimpleNamespace(
+            out_dir=str(out_dir),
+            redo=False,
+            clean_fastq=False,
+            threads=1,
+            quant_backend='auto',
+            oarfish_seq_tech='auto',
+        )
+        runtime_context = QuantRuntimeContext(run_files_by_run={'SRR001': {'SRR001.fastq.gz'}})
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001'],
+            'scientific_name': ['Species A'],
+            'platform': ['PACBIO_SMRT'],
+            'instrument': ['Sequel IIe'],
+            'lib_layout': ['single'],
+            'total_spots': [10],
+            'spot_length': [2000],
+            'total_bases': [20000],
+            'nominal_length': [numpy.nan],
+            'exclusion': ['no'],
+        }))
+        observed = {'kallisto': 0, 'oarfish': 0}
+
+        monkeypatch.setattr(
+            'amalgkit.quant.call_kallisto',
+            lambda *_args, **_kwargs: observed.__setitem__('kallisto', observed['kallisto'] + 1),
+        )
+
+        def fake_call_oarfish(_args, in_files, _metadata, _sra_stat, _output_dir, _index, seq_tech):
+            observed['oarfish'] += 1
+            assert in_files == [str(out_dir / 'getfastq' / 'SRR001' / 'SRR001.fastq.gz')]
+            assert seq_tech == 'pac-bio'
+            return SimpleNamespace(returncode=0)
+
+        monkeypatch.setattr('amalgkit.quant.call_oarfish', fake_call_oarfish)
+
+        run_quant(args, metadata, 'SRR001', 'dummy.mmi', runtime_context=runtime_context)
+
+        assert observed == {'kallisto': 0, 'oarfish': 1}
 
     def test_quant_main_rejects_nonpositive_jobs(self):
         args = SimpleNamespace(internal_jobs=0)
