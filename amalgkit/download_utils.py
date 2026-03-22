@@ -308,6 +308,13 @@ def _normalize_optional_concurrency_limit(raw_value, option_name='max_concurrenc
     return limit
 
 
+def resolve_optional_download_concurrency_limit(args, limit_attr):
+    return _normalize_optional_concurrency_limit(
+        getattr(args, limit_attr, None),
+        option_name='--{}'.format(limit_attr),
+    )
+
+
 def _build_semaphore_slot_paths(semaphore_dir, max_concurrency):
     slot_width = max(4, len(str(int(max_concurrency))))
     return [
@@ -405,6 +412,7 @@ def acquire_counting_semaphore(
     lock_label='Semaphore',
     poll_seconds=DOWNLOAD_LOCK_POLL_SECONDS,
     timeout_seconds=DOWNLOAD_LOCK_TIMEOUT_SECONDS,
+    wait=True,
 ):
     poll_seconds = int(poll_seconds)
     timeout_seconds = int(timeout_seconds)
@@ -447,6 +455,9 @@ def acquire_counting_semaphore(
             ):
                 break
         else:
+            if not wait:
+                yield None
+                return
             elapsed = time.time() - wait_start
             if not has_reported_wait:
                 print(
@@ -479,11 +490,9 @@ def maybe_acquire_download_semaphore(
     semaphore_name,
     lock_label,
     resolve_download_dir_fn=None,
+    wait=True,
 ):
-    max_concurrency = _normalize_optional_concurrency_limit(
-        getattr(args, limit_attr, None),
-        option_name='--{}'.format(limit_attr),
-    )
+    max_concurrency = resolve_optional_download_concurrency_limit(args, limit_attr)
     if max_concurrency is None:
         yield None
         return
@@ -495,6 +504,7 @@ def maybe_acquire_download_semaphore(
         semaphore_dir=semaphore_dir,
         max_concurrency=max_concurrency,
         lock_label=lock_label,
+        wait=wait,
     ) as slot_path:
         yield slot_path
 

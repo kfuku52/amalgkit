@@ -2345,6 +2345,31 @@ class TestDownloadLockRecovery:
 
 
 class TestDownloadSemaphoreRecovery:
+    def test_acquire_counting_semaphore_wait_false_returns_none_when_all_slots_busy(self, tmp_path):
+        from amalgkit.download_utils import acquire_counting_semaphore
+
+        semaphore_dir = tmp_path / 'semaphore'
+        semaphore_dir.mkdir()
+        slot_path = semaphore_dir / 'slot-0001.lock'
+        slot_path.write_text(json.dumps({
+            'format': 'amalgkit-lock-v2',
+            'hostname': socket.gethostname(),
+            'pid': os.getpid(),
+            'created_at': time.time(),
+        }) + '\n')
+
+        with acquire_counting_semaphore(
+            semaphore_dir=str(semaphore_dir),
+            max_concurrency=1,
+            lock_label='test semaphore',
+            poll_seconds=1,
+            timeout_seconds=2,
+            wait=False,
+        ) as acquired_slot_path:
+            assert acquired_slot_path is None
+
+        assert slot_path.exists()
+
     def test_acquire_counting_semaphore_reclaims_stale_same_host_slot(self, tmp_path, monkeypatch):
         from amalgkit.download_utils import acquire_counting_semaphore
 

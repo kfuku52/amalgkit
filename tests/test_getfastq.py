@@ -5541,11 +5541,12 @@ class TestDownloadSraUrlSchemes:
         observed = {}
 
         @contextmanager
-        def fake_maybe_acquire(args, limit_attr, semaphore_name, lock_label, resolve_download_dir_fn=None):
+        def fake_maybe_acquire(args, limit_attr, semaphore_name, lock_label, resolve_download_dir_fn=None, wait=True):
             observed['limit_attr'] = limit_attr
             observed['semaphore_name'] = semaphore_name
             observed['lock_label'] = lock_label
             observed['max_concurrency'] = args.ncbi_download_max_concurrency
+            observed['wait'] = wait
             yield 'slot'
 
         def fake_urlretrieve(_url, path):
@@ -5563,7 +5564,53 @@ class TestDownloadSraUrlSchemes:
             'semaphore_name': 'ncbi_download',
             'lock_label': 'NCBI download',
             'max_concurrency': 4,
+            'wait': False,
         }
+
+    def test_tries_next_source_when_first_source_slot_is_unavailable(self, tmp_path, monkeypatch):
+        sra_id = 'SRR_FALLTHROUGH'
+        metadata = self._make_metadata(
+            sra_id=sra_id,
+            aws_link='https://example.invalid/aws.sra',
+            gcp_link='',
+            ncbi_link='https://example.invalid/ncbi.sra',
+        )
+        sra_stat = {'sra_id': sra_id}
+        args = self._make_args()
+        args.download_lock_dir = str(tmp_path / 'locks')
+        args.aws_download_max_concurrency = 1
+        args.ncbi_download_max_concurrency = 1
+        args.gcp_download_max_concurrency = 'auto'
+        observed = {
+            'acquire_calls': [],
+            'download_urls': [],
+        }
+
+        @contextmanager
+        def fake_maybe_acquire(args, limit_attr, semaphore_name, lock_label, resolve_download_dir_fn=None, wait=True):
+            observed['acquire_calls'].append((limit_attr, semaphore_name, wait))
+            if limit_attr == 'aws_download_max_concurrency':
+                yield None
+                return
+            yield 'slot'
+
+        def fake_urlretrieve(url, path):
+            observed['download_urls'].append(url)
+            with open(path, 'w') as f:
+                f.write('ok')
+            return (path, None)
+
+        monkeypatch.setattr('amalgkit.getfastq.maybe_acquire_download_semaphore', fake_maybe_acquire)
+        monkeypatch.setattr('amalgkit.getfastq.urllib.request.urlretrieve', fake_urlretrieve)
+
+        download_sra(metadata=metadata, sra_stat=sra_stat, args=args, work_dir=str(tmp_path), overwrite=False)
+
+        assert observed['acquire_calls'] == [
+            ('aws_download_max_concurrency', 'aws_download', False),
+            ('ncbi_download_max_concurrency', 'ncbi_download', False),
+        ]
+        assert observed['download_urls'] == ['https://example.invalid/ncbi.sra']
+        assert (tmp_path / '{}.sra'.format(sra_id)).exists()
 
 
 class TestSequenceExtractionPrivate:

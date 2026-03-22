@@ -1,4 +1,5 @@
 from Bio import Entrez
+from contextlib import contextmanager
 import itertools
 import numpy
 import gzip
@@ -7,7 +8,14 @@ import shlex
 
 from amalgkit.arg_utils import clone_namespace
 from amalgkit.command_context import GetfastqRuntimeContext
-from amalgkit.download_utils import acquire_exclusive_lock, get_ete_ncbitaxa, maybe_acquire_download_semaphore, resolve_download_dir
+from amalgkit.download_utils import (
+    DOWNLOAD_LOCK_POLL_SECONDS,
+    acquire_exclusive_lock,
+    get_ete_ncbitaxa,
+    maybe_acquire_download_semaphore,
+    resolve_download_dir,
+    resolve_optional_download_concurrency_limit,
+)
 from amalgkit.exceptions import AmalgkitExit
 from amalgkit.fastq_utils import (
     count_fastq_records_and_bases as shared_count_fastq_records_and_bases,
@@ -896,6 +904,27 @@ def resolve_download_semaphore_spec(source_name):
     return semaphore_specs.get(normalized)
 
 
+@contextmanager
+def maybe_acquire_source_download_slot(args, sra_source_name, wait=True):
+    semaphore_spec = resolve_download_semaphore_spec(sra_source_name)
+    if semaphore_spec is None:
+        yield False, None
+        return
+    limit_attr, semaphore_name, lock_label = semaphore_spec
+    max_concurrency = resolve_optional_download_concurrency_limit(args, limit_attr)
+    if max_concurrency is None:
+        yield False, None
+        return
+    with maybe_acquire_download_semaphore(
+        args=args,
+        limit_attr=limit_attr,
+        semaphore_name=semaphore_name,
+        lock_label=lock_label,
+        wait=wait,
+    ) as slot_path:
+        yield True, slot_path
+
+
 def download_with_curl(source_url, output_path, args, sra_source_name, artifact_label='file'):
     curl_exe = shutil.which('curl')
     if curl_exe is None:
@@ -932,68 +961,118 @@ def download_with_curl(source_url, output_path, args, sra_source_name, artifact_
     return True
 
 
-def download_file_from_source(sra_id, sra_source_name, source_url_original, output_path, args, artifact_label):
-    def _perform_download():
-        source_url = normalize_url_for_urllib(
-            source_name=sra_source_name,
-            source_url=source_url_original,
-            gcp_project=getattr(args, 'gcp_project', ''),
-        )
-        print("Trying to fetch {} for {} from {}: {}".format(artifact_label, sra_id, sra_source_name, source_url_original))
-        if source_url != source_url_original:
-            print("Converted {} URL for urllib: {}".format(sra_source_name, source_url))
-        if source_url == 'nan':
-            sys.stderr.write("Skipping. No URL for {}.\n".format(sra_source_name))
-            return False
-        scheme = urllib.parse.urlparse(source_url).scheme.lower()
-        if scheme not in ('http', 'https', 'ftp'):
-            msg = 'Skipping {} download source due to unsupported URL scheme for urllib: {}\n'
-            sys.stderr.write(msg.format(sra_source_name, scheme if scheme else '(none)'))
-            return False
-        method = normalize_sra_download_method(args)
-        if method in ['auto', 'curl']:
-            if download_with_curl(
-                source_url=source_url,
-                output_path=output_path,
-                args=args,
-                sra_source_name=sra_source_name,
-                artifact_label=artifact_label,
-            ):
-                return True
-            if method == 'curl':
-                sys.stderr.write('Falling back to urllib.request after curl failure.\n')
-        try:
-            urllib.request.urlretrieve(source_url, output_path)
-            if os.path.exists(output_path):
-                print('{} was downloaded with urllib.request from {}'.format(artifact_label, sra_source_name), flush=True)
-                return True
-        except urllib.error.HTTPError as e:
-            if (sra_source_name == 'GCP') and (e.code == 400):
-                details = ''
-                try:
-                    details = e.read().decode('utf-8', errors='ignore')
-                except Exception:
-                    details = ''
-                if ('UserProjectMissing' in details) and (str(getattr(args, 'gcp_project', '')).strip() == ''):
-                    txt = 'GCP requester-pays bucket requires --gcp_project for billing context. '
-                    txt += 'Continuing with other download sources.\n'
-                    sys.stderr.write(txt)
-            sys.stderr.write("urllib.request failed {} download from {}.\n".format(str(artifact_label).lower(), sra_source_name))
-        except urllib.error.URLError:
-            sys.stderr.write("urllib.request failed {} download from {}.\n".format(str(artifact_label).lower(), sra_source_name))
+def _download_file_from_source_without_semaphore(
+    sra_id,
+    sra_source_name,
+    source_url_original,
+    output_path,
+    args,
+    artifact_label,
+):
+    source_url = normalize_url_for_urllib(
+        source_name=sra_source_name,
+        source_url=source_url_original,
+        gcp_project=getattr(args, 'gcp_project', ''),
+    )
+    print("Trying to fetch {} for {} from {}: {}".format(artifact_label, sra_id, sra_source_name, source_url_original))
+    if source_url != source_url_original:
+        print("Converted {} URL for urllib: {}".format(sra_source_name, source_url))
+    if source_url == 'nan':
+        sys.stderr.write("Skipping. No URL for {}.\n".format(sra_source_name))
         return False
+    scheme = urllib.parse.urlparse(source_url).scheme.lower()
+    if scheme not in ('http', 'https', 'ftp'):
+        msg = 'Skipping {} download source due to unsupported URL scheme for urllib: {}\n'
+        sys.stderr.write(msg.format(sra_source_name, scheme if scheme else '(none)'))
+        return False
+    method = normalize_sra_download_method(args)
+    if method in ['auto', 'curl']:
+        if download_with_curl(
+            source_url=source_url,
+            output_path=output_path,
+            args=args,
+            sra_source_name=sra_source_name,
+            artifact_label=artifact_label,
+        ):
+            return True
+        if method == 'curl':
+            sys.stderr.write('Falling back to urllib.request after curl failure.\n')
+    try:
+        urllib.request.urlretrieve(source_url, output_path)
+        if os.path.exists(output_path):
+            print('{} was downloaded with urllib.request from {}'.format(artifact_label, sra_source_name), flush=True)
+            return True
+    except urllib.error.HTTPError as e:
+        if (sra_source_name == 'GCP') and (e.code == 400):
+            details = ''
+            try:
+                details = e.read().decode('utf-8', errors='ignore')
+            except Exception:
+                details = ''
+            if ('UserProjectMissing' in details) and (str(getattr(args, 'gcp_project', '')).strip() == ''):
+                txt = 'GCP requester-pays bucket requires --gcp_project for billing context. '
+                txt += 'Continuing with other download sources.\n'
+                sys.stderr.write(txt)
+        sys.stderr.write("urllib.request failed {} download from {}.\n".format(str(artifact_label).lower(), sra_source_name))
+    except urllib.error.URLError:
+        sys.stderr.write("urllib.request failed {} download from {}.\n".format(str(artifact_label).lower(), sra_source_name))
+    return False
 
-    semaphore_spec = resolve_download_semaphore_spec(sra_source_name)
-    if semaphore_spec is None:
-        return _perform_download()
-    limit_attr, semaphore_name, lock_label = semaphore_spec
-    with maybe_acquire_download_semaphore(
-        args=args,
-        limit_attr=limit_attr,
-        semaphore_name=semaphore_name,
-        lock_label=lock_label,
-    ):
-        return _perform_download()
+
+def download_file_from_source(sra_id, sra_source_name, source_url_original, output_path, args, artifact_label):
+    with maybe_acquire_source_download_slot(args=args, sra_source_name=sra_source_name, wait=True):
+        return _download_file_from_source_without_semaphore(
+            sra_id=sra_id,
+            sra_source_name=sra_source_name,
+            source_url_original=source_url_original,
+            output_path=output_path,
+            args=args,
+            artifact_label=artifact_label,
+        )
+
+
+def download_file_from_candidate_sources(sra_id, source_candidates, output_path, args, artifact_label):
+    pending_sources = list(source_candidates)
+    wait_reported_for = None
+    while len(pending_sources) > 0:
+        deferred_sources = []
+        for source in pending_sources:
+            source_name = source['source_name']
+            source_url = source['url']
+            with maybe_acquire_source_download_slot(
+                args=args,
+                sra_source_name=source_name,
+                wait=False,
+            ) as (is_limited, slot_path):
+                if is_limited and (slot_path is None):
+                    deferred_sources.append(source)
+                    continue
+                is_downloaded = _download_file_from_source_without_semaphore(
+                    sra_id=sra_id,
+                    sra_source_name=source_name,
+                    source_url_original=source_url,
+                    output_path=output_path,
+                    args=args,
+                    artifact_label=artifact_label,
+                )
+            if is_downloaded:
+                return True
+        if len(deferred_sources) == 0:
+            return False
+        deferred_source_names = tuple(source['source_name'] for source in deferred_sources)
+        if deferred_source_names != wait_reported_for:
+            print(
+                'All remaining {} sources for {} are at concurrency limit. Waiting for the first available slot among: {}.'.format(
+                    str(artifact_label).lower(),
+                    sra_id,
+                    ', '.join(deferred_source_names),
+                ),
+                flush=True,
+            )
+            wait_reported_for = deferred_source_names
+        time.sleep(DOWNLOAD_LOCK_POLL_SECONDS)
+        pending_sources = deferred_sources
+    return False
 
 
 def download_sra_from_source(sra_id, sra_source_name, source_url_original, path_downloaded_sra, args):
@@ -1041,18 +1120,13 @@ def download_public_original_fastq_files(sra_stat, args, start, end):
                 if not os.path.isfile(output_path):
                     raise IsADirectoryError('Fallback FASTQ path exists but is not a file: {}'.format(output_path))
                 os.remove(output_path)
-            is_downloaded = False
-            for source in fastq_entry['sources']:
-                is_downloaded = download_file_from_source(
-                    sra_id=sra_id,
-                    sra_source_name=source['source_name'],
-                    source_url_original=source['url'],
-                    output_path=tmp_path,
-                    args=args,
-                    artifact_label='Original FASTQ file',
-                )
-                if is_downloaded:
-                    break
+            is_downloaded = download_file_from_candidate_sources(
+                sra_id=sra_id,
+                source_candidates=fastq_entry['sources'],
+                output_path=tmp_path,
+                args=args,
+                artifact_label='Original FASTQ file',
+            )
             if not is_downloaded:
                 raise FileNotFoundError(
                     'Original FASTQ file download failed for {} ({})'.format(
@@ -1112,18 +1186,20 @@ def download_sra(metadata, sra_stat, args, work_dir, overwrite=False):
         sra_sources = resolve_sra_download_sources(metadata=metadata, sra_stat=sra_stat, args=args)
         if len(sra_sources)==0:
             print('No source URL is available. Check whether --aws, --gcp, and --ncbi are properly set.')
-        is_sra_download_completed = False
-        for sra_source_name in sra_sources.keys():
-            source_url_original = str(sra_sources[sra_source_name])
-            is_sra_download_completed = download_sra_from_source(
-                sra_id=sra_id,
-                sra_source_name=sra_source_name,
-                source_url_original=source_url_original,
-                path_downloaded_sra=path_downloaded_sra,
-                args=args,
-            )
-            if is_sra_download_completed:
-                break
+        source_candidates = [
+            {
+                'source_name': sra_source_name,
+                'url': str(source_url_original),
+            }
+            for sra_source_name, source_url_original in sra_sources.items()
+        ]
+        is_sra_download_completed = download_file_from_candidate_sources(
+            sra_id=sra_id,
+            source_candidates=source_candidates,
+            output_path=path_downloaded_sra,
+            args=args,
+            artifact_label='SRA file',
+        )
         if not is_sra_download_completed:
             sys.stderr.write("Exhausted all sources of download.\n")
         else:
