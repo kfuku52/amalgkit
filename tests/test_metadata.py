@@ -1,5 +1,6 @@
 import xml.etree.ElementTree as ET
 import json
+from contextlib import contextmanager
 
 import pytest
 import pandas
@@ -190,6 +191,38 @@ class TestFetchSraXml:
 
         with pytest.raises(RuntimeError, match='Error found in Entrez XML response'):
             fetch_sra_xml(search_term='SRR000000', retmax=1000)
+
+    def test_acquires_ncbi_metadata_semaphore_for_esearch_and_efetch(self, monkeypatch, tmp_path):
+        observed = []
+
+        @contextmanager
+        def fake_maybe_acquire(args, limit_attr, semaphore_name, lock_label, resolve_download_dir_fn=None):
+            observed.append((limit_attr, semaphore_name, lock_label, args.ncbi_metadata_max_concurrency))
+            yield 'slot'
+
+        args = SimpleNamespace(
+            out_dir=str(tmp_path / 'out'),
+            download_dir='inferred',
+            download_lock_dir='inferred',
+            ncbi_metadata_max_concurrency=2,
+        )
+
+        monkeypatch.setattr('amalgkit.sra.maybe_acquire_download_semaphore', fake_maybe_acquire)
+        monkeypatch.setattr('amalgkit.metadata.Entrez.esearch', lambda **kwargs: object())
+        monkeypatch.setattr('amalgkit.metadata.Entrez.read', lambda handle: {'IdList': ['ID1']})
+        monkeypatch.setattr('amalgkit.metadata.Entrez.efetch', lambda **kwargs: object())
+        monkeypatch.setattr(
+            'amalgkit.metadata.ET.parse',
+            lambda handle: self._DummyTree(ET.Element('EXPERIMENT_PACKAGE'))
+        )
+
+        root = fetch_sra_xml(search_term='SRR000000', retmax=1000, args=args)
+
+        assert root.tag == 'EXPERIMENT_PACKAGE'
+        assert observed == [
+            ('ncbi_metadata_max_concurrency', 'ncbi_metadata', 'NCBI metadata download', 2),
+            ('ncbi_metadata_max_concurrency', 'ncbi_metadata', 'NCBI metadata download', 2),
+        ]
 
 
 class TestMetadataMain:

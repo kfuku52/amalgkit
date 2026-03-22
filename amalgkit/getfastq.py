@@ -7,7 +7,7 @@ import shlex
 
 from amalgkit.arg_utils import clone_namespace
 from amalgkit.command_context import GetfastqRuntimeContext
-from amalgkit.download_utils import acquire_exclusive_lock, get_ete_ncbitaxa, resolve_download_dir
+from amalgkit.download_utils import acquire_exclusive_lock, get_ete_ncbitaxa, maybe_acquire_download_semaphore, resolve_download_dir
 from amalgkit.exceptions import AmalgkitExit
 from amalgkit.fastq_utils import (
     count_fastq_records_and_bases as shared_count_fastq_records_and_bases,
@@ -283,9 +283,9 @@ def _fetch_single_sra_metadata_frame(args, sra_id, log_details=True):
     search_term = getfastq_search_term(sra_id, args.entrez_additional_search_term)
     if log_details:
         print('Entrez search term:', search_term)
-        xml_root = getfastq_getxml(search_term)
+        xml_root = _call_getfastq_getxml(search_term, args=args, verbose=True)
     else:
-        xml_root = getfastq_getxml(search_term, verbose=False)
+        xml_root = _call_getfastq_getxml(search_term, args=args, verbose=False)
     metadata_dict_tmp = Metadata.from_xml(xml_root)
     if metadata_dict_tmp.df.shape[0] == 0:
         if log_details:
@@ -352,14 +352,37 @@ def _fetch_id_list_metadata_frames(args, sra_id_list):
         metadata_frames.append(metadata_frame)
     return metadata_frames
 
-def getfastq_getxml(search_term, retmax=1000, verbose=True):
+def getfastq_getxml(search_term, retmax=1000, verbose=True, args=None):
     return shared_fetch_sra_xml(
         search_term=search_term,
         retmax=retmax,
         verbose=verbose,
         timestamp_logs=False,
         progress_label='processing SRA records',
+        args=args,
     )
+
+
+def _call_getfastq_getxml(search_term, args, verbose=True):
+    call_variants = [
+        {'search_term': search_term, 'verbose': verbose, 'args': args},
+        {'search_term': search_term, 'args': args},
+        {'search_term': search_term, 'verbose': verbose},
+        {'search_term': search_term},
+    ]
+    last_type_error = None
+    for kwargs in call_variants:
+        try:
+            return getfastq_getxml(**kwargs)
+        except TypeError as exc:
+            if 'unexpected keyword argument' not in str(exc):
+                raise
+            last_type_error = exc
+            continue
+    if last_type_error is not None:
+        raise last_type_error
+    raise RuntimeError('Failed to call getfastq_getxml().')
+
 
 def get_range(sra_stat, offset, total_sra_bp, max_bp):
     if (total_sra_bp <= max_bp):
@@ -862,6 +885,17 @@ def normalize_sra_download_method(args):
     sys.stderr.write('Unknown --sra_download_method "{}". Falling back to "auto".\n'.format(method_raw))
     return 'auto'
 
+
+def resolve_download_semaphore_spec(source_name):
+    normalized = str(source_name).strip().upper()
+    semaphore_specs = {
+        'NCBI': ('ncbi_download_max_concurrency', 'ncbi_download', 'NCBI download'),
+        'AWS': ('aws_download_max_concurrency', 'aws_download', 'AWS download'),
+        'GCP': ('gcp_download_max_concurrency', 'gcp_download', 'GCP download'),
+    }
+    return semaphore_specs.get(normalized)
+
+
 def download_with_curl(source_url, output_path, args, sra_source_name, artifact_label='file'):
     curl_exe = shutil.which('curl')
     if curl_exe is None:
@@ -899,54 +933,67 @@ def download_with_curl(source_url, output_path, args, sra_source_name, artifact_
 
 
 def download_file_from_source(sra_id, sra_source_name, source_url_original, output_path, args, artifact_label):
-    source_url = normalize_url_for_urllib(
-        source_name=sra_source_name,
-        source_url=source_url_original,
-        gcp_project=getattr(args, 'gcp_project', ''),
-    )
-    print("Trying to fetch {} for {} from {}: {}".format(artifact_label, sra_id, sra_source_name, source_url_original))
-    if source_url != source_url_original:
-        print("Converted {} URL for urllib: {}".format(sra_source_name, source_url))
-    if source_url == 'nan':
-        sys.stderr.write("Skipping. No URL for {}.\n".format(sra_source_name))
-        return False
-    scheme = urllib.parse.urlparse(source_url).scheme.lower()
-    if scheme not in ('http', 'https', 'ftp'):
-        msg = 'Skipping {} download source due to unsupported URL scheme for urllib: {}\n'
-        sys.stderr.write(msg.format(sra_source_name, scheme if scheme else '(none)'))
-        return False
-    method = normalize_sra_download_method(args)
-    if method in ['auto', 'curl']:
-        if download_with_curl(
-            source_url=source_url,
-            output_path=output_path,
-            args=args,
-            sra_source_name=sra_source_name,
-            artifact_label=artifact_label,
-        ):
-            return True
-        if method == 'curl':
-            sys.stderr.write('Falling back to urllib.request after curl failure.\n')
-    try:
-        urllib.request.urlretrieve(source_url, output_path)
-        if os.path.exists(output_path):
-            print('{} was downloaded with urllib.request from {}'.format(artifact_label, sra_source_name), flush=True)
-            return True
-    except urllib.error.HTTPError as e:
-        if (sra_source_name == 'GCP') and (e.code == 400):
-            details = ''
-            try:
-                details = e.read().decode('utf-8', errors='ignore')
-            except Exception:
+    def _perform_download():
+        source_url = normalize_url_for_urllib(
+            source_name=sra_source_name,
+            source_url=source_url_original,
+            gcp_project=getattr(args, 'gcp_project', ''),
+        )
+        print("Trying to fetch {} for {} from {}: {}".format(artifact_label, sra_id, sra_source_name, source_url_original))
+        if source_url != source_url_original:
+            print("Converted {} URL for urllib: {}".format(sra_source_name, source_url))
+        if source_url == 'nan':
+            sys.stderr.write("Skipping. No URL for {}.\n".format(sra_source_name))
+            return False
+        scheme = urllib.parse.urlparse(source_url).scheme.lower()
+        if scheme not in ('http', 'https', 'ftp'):
+            msg = 'Skipping {} download source due to unsupported URL scheme for urllib: {}\n'
+            sys.stderr.write(msg.format(sra_source_name, scheme if scheme else '(none)'))
+            return False
+        method = normalize_sra_download_method(args)
+        if method in ['auto', 'curl']:
+            if download_with_curl(
+                source_url=source_url,
+                output_path=output_path,
+                args=args,
+                sra_source_name=sra_source_name,
+                artifact_label=artifact_label,
+            ):
+                return True
+            if method == 'curl':
+                sys.stderr.write('Falling back to urllib.request after curl failure.\n')
+        try:
+            urllib.request.urlretrieve(source_url, output_path)
+            if os.path.exists(output_path):
+                print('{} was downloaded with urllib.request from {}'.format(artifact_label, sra_source_name), flush=True)
+                return True
+        except urllib.error.HTTPError as e:
+            if (sra_source_name == 'GCP') and (e.code == 400):
                 details = ''
-            if ('UserProjectMissing' in details) and (str(getattr(args, 'gcp_project', '')).strip() == ''):
-                txt = 'GCP requester-pays bucket requires --gcp_project for billing context. '
-                txt += 'Continuing with other download sources.\n'
-                sys.stderr.write(txt)
-        sys.stderr.write("urllib.request failed {} download from {}.\n".format(str(artifact_label).lower(), sra_source_name))
-    except urllib.error.URLError:
-        sys.stderr.write("urllib.request failed {} download from {}.\n".format(str(artifact_label).lower(), sra_source_name))
-    return False
+                try:
+                    details = e.read().decode('utf-8', errors='ignore')
+                except Exception:
+                    details = ''
+                if ('UserProjectMissing' in details) and (str(getattr(args, 'gcp_project', '')).strip() == ''):
+                    txt = 'GCP requester-pays bucket requires --gcp_project for billing context. '
+                    txt += 'Continuing with other download sources.\n'
+                    sys.stderr.write(txt)
+            sys.stderr.write("urllib.request failed {} download from {}.\n".format(str(artifact_label).lower(), sra_source_name))
+        except urllib.error.URLError:
+            sys.stderr.write("urllib.request failed {} download from {}.\n".format(str(artifact_label).lower(), sra_source_name))
+        return False
+
+    semaphore_spec = resolve_download_semaphore_spec(sra_source_name)
+    if semaphore_spec is None:
+        return _perform_download()
+    limit_attr, semaphore_name, lock_label = semaphore_spec
+    with maybe_acquire_download_semaphore(
+        args=args,
+        limit_attr=limit_attr,
+        semaphore_name=semaphore_name,
+        lock_label=lock_label,
+    ):
+        return _perform_download()
 
 
 def download_sra_from_source(sra_id, sra_source_name, source_url_original, path_downloaded_sra, args):
@@ -1084,7 +1131,7 @@ def download_sra(metadata, sra_stat, args, work_dir, overwrite=False):
                 raise FileNotFoundError('SRA file download failed: ' + sra_stat['sra_id'])
             return
     err_txt = 'SRA file download failed for {}. Expected PATH: {}. '
-    err_txt += 'Cloud URL download sources were exhausted and prefetch fallback is obsolete.'
+    err_txt += 'Cloud URL download sources were exhausted.'
     if not os.path.exists(path_downloaded_sra):
         raise FileNotFoundError(err_txt.format(sra_stat['sra_id'], path_downloaded_sra))
 
@@ -1098,9 +1145,6 @@ def check_getfastq_dependency(args):
         sys.stderr.write('--pfd_exe is obsolete and ignored.\n')
     if obsolete_fastq_dump_exe:
         sys.stderr.write('--fastq_dump_exe is obsolete and ignored.\n')
-    obsolete_prefetch_exe = getattr(args, 'obsolete_prefetch_exe', getattr(args, 'prefetch_exe', None))
-    if obsolete_prefetch_exe:
-        sys.stderr.write('--prefetch_exe is obsolete and ignored.\n')
 
     def probe_command(command, label):
         out, _stdout_txt, _stderr_txt = probe_dependency_command(
@@ -3847,7 +3891,7 @@ def getfastq_metadata(args):
         sra_id = args.id
         search_term = getfastq_search_term(sra_id, args.entrez_additional_search_term)
         print('Entrez search term:', search_term)
-        xml_root = getfastq_getxml(search_term=search_term)
+        xml_root = _call_getfastq_getxml(search_term=search_term, args=args, verbose=True)
         metadata = Metadata.from_xml(xml_root=xml_root)
         print('Filtering SRA entry with --layout:', args.layout)
         layout = get_layout(args, metadata)

@@ -2342,3 +2342,57 @@ class TestDownloadLockRecovery:
             time.sleep(0.2)
             second_mtime = os.stat(lock_path).st_mtime_ns
             assert second_mtime > first_mtime
+
+
+class TestDownloadSemaphoreRecovery:
+    def test_acquire_counting_semaphore_reclaims_stale_same_host_slot(self, tmp_path, monkeypatch):
+        from amalgkit.download_utils import acquire_counting_semaphore
+
+        semaphore_dir = tmp_path / 'semaphore'
+        semaphore_dir.mkdir()
+        slot_path = semaphore_dir / 'slot-0001.lock'
+        slot_path.write_text(json.dumps({
+            'format': 'amalgkit-lock-v2',
+            'hostname': socket.gethostname(),
+            'boot_id': 'boot-semaphore',
+            'pid': 999999,
+            'created_at': time.time(),
+        }) + '\n')
+
+        def fake_kill(_pid, _sig):
+            raise ProcessLookupError()
+
+        monkeypatch.setattr('amalgkit.download_utils._resolve_local_boot_id', lambda: 'boot-semaphore')
+        monkeypatch.setattr('amalgkit.download_utils.os.kill', fake_kill)
+
+        with acquire_counting_semaphore(
+            semaphore_dir=str(semaphore_dir),
+            max_concurrency=1,
+            lock_label='test semaphore',
+            poll_seconds=1,
+            timeout_seconds=2,
+        ) as acquired_slot_path:
+            assert acquired_slot_path == str(slot_path)
+            metadata = json.loads(slot_path.read_text())
+            assert metadata['pid'] == os.getpid()
+            assert metadata['hostname'] == socket.gethostname()
+
+        assert not slot_path.exists()
+
+    def test_acquire_counting_semaphore_updates_slot_heartbeat(self, tmp_path, monkeypatch):
+        from amalgkit.download_utils import acquire_counting_semaphore
+
+        semaphore_dir = tmp_path / 'semaphore'
+        monkeypatch.setattr('amalgkit.download_utils.DOWNLOAD_LOCK_HEARTBEAT_SECONDS', 0.05)
+
+        with acquire_counting_semaphore(
+            semaphore_dir=str(semaphore_dir),
+            max_concurrency=1,
+            lock_label='test semaphore',
+            poll_seconds=1,
+            timeout_seconds=2,
+        ) as acquired_slot_path:
+            first_mtime = os.stat(acquired_slot_path).st_mtime_ns
+            time.sleep(0.2)
+            second_mtime = os.stat(acquired_slot_path).st_mtime_ns
+            assert second_mtime > first_mtime

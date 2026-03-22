@@ -49,45 +49,47 @@ def merge_xml_chunk(root, chunk):
     return _merge_xml_chunk(root, chunk)
 
 
-def esearch_sra_with_retry(search_term):
-    return _esearch_sra_with_retry(search_term)
+def esearch_sra_with_retry(search_term, args=None):
+    return _esearch_sra_with_retry(search_term, args=args)
 
 
-def fetch_sra_xml_chunk(record_ids, start, end, retmax, max_retry=10):
-    return _fetch_sra_xml_chunk(record_ids, start, end, retmax, max_retry=max_retry, verbose=True)
+def fetch_sra_xml_chunk(record_ids, start, end, retmax, max_retry=10, args=None):
+    return _fetch_sra_xml_chunk(record_ids, start, end, retmax, max_retry=max_retry, verbose=True, args=args)
 
 
 def raise_if_xml_has_error(root):
     return _raise_if_xml_has_error(root)
 
 
-def search_sra_record_ids(search_term):
-    return _search_sra_record_ids(search_term, verbose=True)
+def search_sra_record_ids(search_term, args=None):
+    return _search_sra_record_ids(search_term, verbose=True, args=args)
 
 
 def inspect_accession_search_mismatches(search_term):
     return _inspect_accession_search_mismatches(search_term)
 
 
-def iter_sra_xml_chunks(record_ids, retmax=1000):
+def iter_sra_xml_chunks(record_ids, retmax=1000, args=None):
     for chunk in _iter_sra_xml_chunks(
         record_ids=record_ids,
         retmax=retmax,
         verbose=True,
         timestamp_logs=True,
         progress_label='Retrieving SRA XML',
+        args=args,
     ):
         raise_if_xml_has_error(chunk)
         yield chunk
 
 
-def fetch_sra_xml(search_term, retmax=1000):
+def fetch_sra_xml(search_term, retmax=1000, args=None):
     return _fetch_sra_xml(
         search_term=search_term,
         retmax=retmax,
         verbose=True,
         timestamp_logs=True,
         progress_label='Retrieving SRA XML',
+        args=args,
     )
 
 
@@ -447,6 +449,24 @@ def _build_zero_record_guidance(search_term):
     return ''.join(lines)
 
 
+def _call_search_sra_record_ids(search_term, args):
+    try:
+        return search_sra_record_ids(search_term, args=args)
+    except TypeError as exc:
+        if 'unexpected keyword argument' not in str(exc):
+            raise
+    return search_sra_record_ids(search_term)
+
+
+def _call_iter_sra_xml_chunks(record_ids, args):
+    try:
+        return iter_sra_xml_chunks(record_ids=record_ids, args=args)
+    except TypeError as exc:
+        if 'unexpected keyword argument' not in str(exc):
+            raise
+    return iter_sra_xml_chunks(record_ids=record_ids)
+
+
 def _run_single_query(
     args,
     out_dir=None,
@@ -482,8 +502,8 @@ def _run_single_query(
         record_ids = None
     else:
         print('Entrez search term:', search_term)
-        record_ids = search_sra_record_ids(search_term)
-        metadata = Metadata.from_xml_roots(iter_sra_xml_chunks(record_ids=record_ids))
+        record_ids = _call_search_sra_record_ids(search_term, args=args)
+        metadata = Metadata.from_xml_roots(_call_iter_sra_xml_chunks(record_ids=record_ids, args=args))
         metadata = _prepare_single_metadata(metadata=metadata, args=args)
         metadata = _write_metadata_tsv_with_validation(
             df=metadata.df,

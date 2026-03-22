@@ -7,6 +7,8 @@ import xml.etree.ElementTree as ET
 
 from urllib.error import HTTPError, URLError
 
+from amalgkit.download_utils import maybe_acquire_download_semaphore
+
 SRA_ACCESSION_PATTERN = re.compile(r'\b(?:[SED](?:RR|RP|RS|RX)\d+)\b', re.IGNORECASE)
 
 
@@ -29,19 +31,39 @@ def merge_xml_chunk(root, chunk):
     return wrapped
 
 
-def esearch_sra_with_retry(search_term):
+def esearch_sra_with_retry(search_term, args=None):
     try:
-        sra_handle = Entrez.esearch(db='sra', term=search_term, retmax=10000000)
+        with maybe_acquire_download_semaphore(
+            args=args,
+            limit_attr='ncbi_metadata_max_concurrency',
+            semaphore_name='ncbi_metadata',
+            lock_label='NCBI metadata download',
+        ):
+            sra_handle = Entrez.esearch(db='sra', term=search_term, retmax=10000000)
+            return Entrez.read(sra_handle)
     except (HTTPError, URLError) as exc:
         print(exc, '- Trying Entrez.esearch() again...')
-        sra_handle = Entrez.esearch(db='sra', term=search_term, retmax=10000000)
-    return Entrez.read(sra_handle)
+        with maybe_acquire_download_semaphore(
+            args=args,
+            limit_attr='ncbi_metadata_max_concurrency',
+            semaphore_name='ncbi_metadata',
+            lock_label='NCBI metadata download',
+        ):
+            sra_handle = Entrez.esearch(db='sra', term=search_term, retmax=10000000)
+            return Entrez.read(sra_handle)
 
 
-def fetch_sra_xml_chunk(record_ids, start, end, retmax, max_retry=10, verbose=True, retry_sleep_second=60):
+def fetch_sra_xml_chunk(record_ids, start, end, retmax, max_retry=10, verbose=True, retry_sleep_second=60, args=None):
     for _ in range(max_retry):
         try:
-            handle = Entrez.efetch(db='sra', id=record_ids[start:end], rettype='full', retmode='xml', retmax=retmax)
+            with maybe_acquire_download_semaphore(
+                args=args,
+                limit_attr='ncbi_metadata_max_concurrency',
+                semaphore_name='ncbi_metadata',
+                lock_label='NCBI metadata download',
+            ):
+                handle = Entrez.efetch(db='sra', id=record_ids[start:end], rettype='full', retmode='xml', retmax=retmax)
+                return ET.parse(handle).getroot()
         except (HTTPError, URLError) as exc:
             if verbose:
                 print(
@@ -50,8 +72,6 @@ def fetch_sra_xml_chunk(record_ids, start, end, retmax, max_retry=10, verbose=Tr
                 )
             time.sleep(retry_sleep_second)
             continue
-        try:
-            return ET.parse(handle).getroot()
         except (ET.ParseError, IncompleteRead):
             if verbose:
                 print('XML may be truncated. Retrying...', flush=True)
@@ -78,8 +98,8 @@ def raise_if_xml_has_error(root, search_term=None):
     raise RuntimeError('Error found in Entrez XML response.{}'.format(suffix))
 
 
-def search_sra_record_ids(search_term, verbose=True):
-    sra_record = esearch_sra_with_retry(search_term)
+def search_sra_record_ids(search_term, verbose=True, args=None):
+    sra_record = esearch_sra_with_retry(search_term, args=args)
     record_ids = sra_record['IdList']
     if verbose:
         print('Number of SRA records: {:,}'.format(len(record_ids)))
@@ -139,6 +159,7 @@ def summarize_sra_record(record_id):
         retmax=1,
         max_retry=2,
         verbose=False,
+        args=None,
     )
     raise_if_xml_has_error(root)
     return _extract_sra_summary_fields(root)
@@ -167,7 +188,7 @@ def inspect_accession_search_mismatches(search_term, max_accessions=3):
     return diagnostics
 
 
-def iter_sra_xml_chunks(record_ids, retmax=1000, verbose=True, timestamp_logs=True, progress_label='Retrieving SRA XML'):
+def iter_sra_xml_chunks(record_ids, retmax=1000, verbose=True, timestamp_logs=True, progress_label='Retrieving SRA XML', args=None):
     num_record = len(record_ids)
     if num_record == 0:
         return
@@ -185,7 +206,7 @@ def iter_sra_xml_chunks(record_ids, retmax=1000, verbose=True, timestamp_logs=Tr
                 )
             else:
                 print('{}: {} - {}'.format(progress_label, start, end - 1), flush=True)
-        chunk = fetch_sra_xml_chunk(record_ids, start, end, retmax, max_retry=10, verbose=verbose)
+        chunk = fetch_sra_xml_chunk(record_ids, start, end, retmax, max_retry=10, verbose=verbose, args=args)
         yield chunk
     if verbose and timestamp_logs:
         elapsed_time = int(time.time() - start_time)
@@ -193,8 +214,8 @@ def iter_sra_xml_chunks(record_ids, retmax=1000, verbose=True, timestamp_logs=Tr
         print('SRA XML retrieval time: {:,.1f} sec'.format(elapsed_time), flush=True)
 
 
-def fetch_sra_xml(search_term, retmax=1000, verbose=True, timestamp_logs=True, progress_label='Retrieving SRA XML'):
-    record_ids = search_sra_record_ids(search_term, verbose=verbose)
+def fetch_sra_xml(search_term, retmax=1000, verbose=True, timestamp_logs=True, progress_label='Retrieving SRA XML', args=None):
+    record_ids = search_sra_record_ids(search_term, verbose=verbose, args=args)
     if len(record_ids) == 0:
         return ET.Element('EXPERIMENT_PACKAGE_SET')
     root = None
@@ -204,6 +225,7 @@ def fetch_sra_xml(search_term, retmax=1000, verbose=True, timestamp_logs=True, p
         verbose=verbose,
         timestamp_logs=timestamp_logs,
         progress_label=progress_label,
+        args=args,
     ):
         raise_if_xml_has_error(chunk, search_term=search_term)
         if root is None:

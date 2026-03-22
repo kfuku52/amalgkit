@@ -39,6 +39,19 @@ def resolve_download_dir(args):
     return os.path.realpath(normalized)
 
 
+def resolve_download_lock_dir(args, resolve_download_dir_fn=None):
+    if resolve_download_dir_fn is None:
+        resolve_download_dir_fn = resolve_download_dir
+    inferred = os.path.join(resolve_download_dir_fn(args), 'locks')
+    raw_dir = getattr(args, 'download_lock_dir', 'inferred')
+    if raw_dir is None:
+        return inferred
+    normalized = str(raw_dir).strip()
+    if normalized.lower() in ['', 'inferred']:
+        return inferred
+    return os.path.realpath(normalized)
+
+
 def resolve_ete_data_dir(args, resolve_download_dir_fn=None):
     if resolve_download_dir_fn is None:
         resolve_download_dir_fn = resolve_download_dir
@@ -223,6 +236,14 @@ def _start_lock_heartbeat(lock_path, interval_seconds):
     return stop_event, thread
 
 
+def _release_heartbeat_lock(lock_path, heartbeat_stop, heartbeat_thread, lock_label='Lock'):
+    heartbeat_stop.set()
+    heartbeat_thread.join(timeout=max(1.0, float(DOWNLOAD_LOCK_HEARTBEAT_SECONDS)))
+    if os.path.lexists(lock_path):
+        _assert_lock_path_is_regular_file(lock_path, lock_label=lock_label)
+        os.remove(lock_path)
+
+
 def _break_stale_lock_if_needed(lock_path, lock_label='Lock', stale_seconds=DOWNLOAD_LOCK_STALE_SECONDS):
     if not os.path.lexists(lock_path):
         return False
@@ -269,6 +290,47 @@ def _break_stale_lock_if_needed(lock_path, lock_label='Lock', stale_seconds=DOWN
     return True
 
 
+def _normalize_optional_concurrency_limit(raw_value, option_name='max_concurrency'):
+    if raw_value is None:
+        return None
+    if isinstance(raw_value, str):
+        normalized = raw_value.strip().lower()
+        if normalized in ['', 'auto', 'none', 'off', 'disabled']:
+            return None
+    try:
+        limit = int(raw_value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError('{} must be >= 0 or "auto".'.format(option_name)) from exc
+    if limit < 0:
+        raise ValueError('{} must be >= 0.'.format(option_name))
+    if limit == 0:
+        return None
+    return limit
+
+
+def _build_semaphore_slot_paths(semaphore_dir, max_concurrency):
+    slot_width = max(4, len(str(int(max_concurrency))))
+    return [
+        os.path.join(semaphore_dir, 'slot-{:0{width}d}.lock'.format(slot_index, width=slot_width))
+        for slot_index in range(1, int(max_concurrency) + 1)
+    ]
+
+
+def _describe_semaphore_owners(slot_paths):
+    descriptions = []
+    for slot_index, slot_path in enumerate(slot_paths, start=1):
+        if not os.path.lexists(slot_path):
+            continue
+        metadata = _read_lock_metadata(slot_path)
+        descriptions.append('slot {} ({})'.format(slot_index, _describe_lock_owner(metadata)))
+    if len(descriptions) == 0:
+        return 'owners=unknown'
+    preview = descriptions[:3]
+    if len(descriptions) > 3:
+        preview.append('... {} more'.format(len(descriptions) - 3))
+    return '; '.join(preview)
+
+
 @contextmanager
 def acquire_exclusive_lock(
     lock_path,
@@ -299,11 +361,12 @@ def acquire_exclusive_lock(
             try:
                 yield
             finally:
-                heartbeat_stop.set()
-                heartbeat_thread.join(timeout=max(1.0, float(DOWNLOAD_LOCK_HEARTBEAT_SECONDS)))
-                if os.path.lexists(lock_path):
-                    _assert_lock_path_is_regular_file(lock_path, lock_label=lock_label)
-                    os.remove(lock_path)
+                _release_heartbeat_lock(
+                    lock_path=lock_path,
+                    heartbeat_stop=heartbeat_stop,
+                    heartbeat_thread=heartbeat_thread,
+                    lock_label=lock_label,
+                )
             return
         _assert_lock_path_is_regular_file(lock_path, lock_label=lock_label)
         if _break_stale_lock_if_needed(
@@ -333,6 +396,107 @@ def acquire_exclusive_lock(
                 )
             )
         time.sleep(poll_seconds)
+
+
+@contextmanager
+def acquire_counting_semaphore(
+    semaphore_dir,
+    max_concurrency,
+    lock_label='Semaphore',
+    poll_seconds=DOWNLOAD_LOCK_POLL_SECONDS,
+    timeout_seconds=DOWNLOAD_LOCK_TIMEOUT_SECONDS,
+):
+    poll_seconds = int(poll_seconds)
+    timeout_seconds = int(timeout_seconds)
+    if poll_seconds <= 0:
+        raise ValueError('poll_seconds must be > 0.')
+    if timeout_seconds <= 0:
+        raise ValueError('timeout_seconds must be > 0.')
+    max_concurrency = int(max_concurrency)
+    if max_concurrency <= 0:
+        raise ValueError('max_concurrency must be > 0.')
+    semaphore_dir = os.path.realpath(semaphore_dir)
+    if os.path.exists(semaphore_dir) and (not os.path.isdir(semaphore_dir)):
+        raise NotADirectoryError('Semaphore path exists but is not a directory: {}'.format(semaphore_dir))
+    os.makedirs(semaphore_dir, exist_ok=True)
+    slot_paths = _build_semaphore_slot_paths(semaphore_dir=semaphore_dir, max_concurrency=max_concurrency)
+    wait_start = time.time()
+    has_reported_wait = False
+    while True:
+        for slot_path in slot_paths:
+            if _try_create_lock_file(slot_path):
+                heartbeat_stop, heartbeat_thread = _start_lock_heartbeat(
+                    lock_path=slot_path,
+                    interval_seconds=DOWNLOAD_LOCK_HEARTBEAT_SECONDS,
+                )
+                try:
+                    yield slot_path
+                finally:
+                    _release_heartbeat_lock(
+                        lock_path=slot_path,
+                        heartbeat_stop=heartbeat_stop,
+                        heartbeat_thread=heartbeat_thread,
+                        lock_label=lock_label,
+                    )
+                return
+            _assert_lock_path_is_regular_file(slot_path, lock_label=lock_label)
+            if _break_stale_lock_if_needed(
+                lock_path=slot_path,
+                lock_label=lock_label,
+                stale_seconds=DOWNLOAD_LOCK_STALE_SECONDS,
+            ):
+                break
+        else:
+            elapsed = time.time() - wait_start
+            if not has_reported_wait:
+                print(
+                    'All {:,} slot(s) are occupied for {}. Waiting for a slot in {} ({})'.format(
+                        max_concurrency,
+                        lock_label,
+                        semaphore_dir,
+                        _describe_semaphore_owners(slot_paths),
+                    ),
+                    flush=True,
+                )
+                has_reported_wait = True
+            if elapsed > timeout_seconds:
+                raise TimeoutError(
+                    'Timed out after {:,} sec waiting for {} slot: {}'.format(
+                        timeout_seconds,
+                        lock_label,
+                        semaphore_dir,
+                    )
+                )
+            time.sleep(poll_seconds)
+            continue
+        continue
+
+
+@contextmanager
+def maybe_acquire_download_semaphore(
+    args,
+    limit_attr,
+    semaphore_name,
+    lock_label,
+    resolve_download_dir_fn=None,
+):
+    max_concurrency = _normalize_optional_concurrency_limit(
+        getattr(args, limit_attr, None),
+        option_name='--{}'.format(limit_attr),
+    )
+    if max_concurrency is None:
+        yield None
+        return
+    semaphore_dir = os.path.join(
+        resolve_download_lock_dir(args, resolve_download_dir_fn=resolve_download_dir_fn),
+        semaphore_name,
+    )
+    with acquire_counting_semaphore(
+        semaphore_dir=semaphore_dir,
+        max_concurrency=max_concurrency,
+        lock_label=lock_label,
+    ) as slot_path:
+        yield slot_path
 
 
 def ensure_ete_taxdump_file(taxdump_path, urlretrieve_fn=None):

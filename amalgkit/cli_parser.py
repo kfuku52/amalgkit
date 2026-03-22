@@ -53,6 +53,9 @@ def build_parser(command_handlers, command_names, version, prog=None):
     pp_download = argparse.ArgumentParser(add_help=False)
     pp_download.add_argument('--download_dir', metavar='PATH', default='inferred', type=str, required=False, action='store',
                      help='default=%(default)s: Shared download/cache directory. "inferred" = out_dir/downloads')
+    pp_download.add_argument('--download_lock_dir', metavar='PATH|inferred', default='inferred', type=str, required=False, action='store',
+                     help='default=%(default)s: Shared filesystem lock/semaphore directory for download throttling. '
+                          '"inferred" = download_dir/locks')
     pp_sg = argparse.ArgumentParser(add_help=False)
     pp_sg.add_argument('--sample_group', metavar='tissueA,tissueB,tissueC,...', default=None, type=str, required=False, action='store',
                      help='default=%(default)s: "Comma separated list of sample groups. '
@@ -90,6 +93,10 @@ def build_parser(command_handlers, command_names, version, prog=None):
                      help='default=%(default)s: Your email address. See https://www.ncbi.nlm.nih.gov/books/NBK25497/')
     pme.add_argument('--resolve_names', metavar='yes|no', default='yes', type=strtobool, required=False, action='store',
                      help='default=%(default)s: Whether to resolve scientific names based on NCBI Taxonomy IDs.')
+    pme.add_argument('--ncbi_metadata_max_concurrency', metavar='INT|auto', default='auto', type=nonnegative_int_or_auto,
+                     required=False, action='store',
+                     help='default=%(default)s: Maximum concurrent NCBI Entrez metadata requests across processes when '
+                          'download_lock_dir is shared. Set to 0 or "auto" to disable throttling.')
     pme.set_defaults(handler=command_handlers['metadata'])
 
     pse_help = 'Selecting SRA entries for analysis. See `amalgkit select -h`'
@@ -155,8 +162,6 @@ def build_parser(command_handlers, command_names, version, prog=None):
     pge.add_argument('--fasterq_disk_limit_tmp', metavar='STR', default=None, type=str, required=False, action='store',
                      help='default=%(default)s: Optional value forwarded to fasterq-dump --disk-limit-tmp '
                           '(for example, "200G").')
-    pge.add_argument('--prefetch_exe', dest='obsolete_prefetch_exe', metavar='PATH', default=None, type=str,
-                     required=False, action='store', help=argparse.SUPPRESS)
     pge.add_argument('--fastp', metavar='yes|no', default='yes', type=strtobool, required=False, action='store',
                      help='default=%(default)s: Run fastp.')
     pge.add_argument('--fastp_exe', metavar='PATH', default='fastp', type=str, required=False, action='store',
@@ -225,6 +230,22 @@ def build_parser(command_handlers, command_names, version, prog=None):
                      help='default=%(default)s: Download SRA files from Google Cloud (GCP), if available.')
     pge.add_argument('--gcp_project', metavar='STR', default='', type=str, required=False, action='store',
                      help='default=%(default)s: Google Cloud project for requester-pays GCP buckets (used when GCP_Link is gs://).')
+    pge.add_argument('--ncbi_download_max_concurrency', metavar='INT|auto', default='auto', type=nonnegative_int_or_auto,
+                     required=False, action='store',
+                     help='default=%(default)s: Maximum concurrent NCBI cloud-object downloads across processes when '
+                          'download_lock_dir is shared. Set to 0 or "auto" to disable throttling.')
+    pge.add_argument('--aws_download_max_concurrency', metavar='INT|auto', default='auto', type=nonnegative_int_or_auto,
+                     required=False, action='store',
+                     help='default=%(default)s: Maximum concurrent AWS cloud-object downloads across processes when '
+                          'download_lock_dir is shared. Set to 0 or "auto" to disable throttling.')
+    pge.add_argument('--gcp_download_max_concurrency', metavar='INT|auto', default='auto', type=nonnegative_int_or_auto,
+                     required=False, action='store',
+                     help='default=%(default)s: Maximum concurrent GCP cloud-object downloads across processes when '
+                          'download_lock_dir is shared. Set to 0 or "auto" to disable throttling.')
+    pge.add_argument('--ncbi_metadata_max_concurrency', metavar='INT|auto', default='auto', type=nonnegative_int_or_auto,
+                     required=False, action='store',
+                     help='default=%(default)s: Maximum concurrent NCBI Entrez metadata requests for --id/--id_list across '
+                          'processes when download_lock_dir is shared. Set to 0 or "auto" to disable throttling.')
     pge.add_argument('--sra_download_method', metavar='auto|urllib|curl', default='auto', type=str, required=False, action='store',
                      choices=['auto', 'urllib', 'curl'],
                      help='default=%(default)s: Method for downloading SRA objects from cloud URLs.')

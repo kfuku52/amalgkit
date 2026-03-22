@@ -4,6 +4,7 @@ import numpy
 import gzip
 import subprocess
 import xml.etree.ElementTree as ET
+from contextlib import contextmanager
 
 import os
 import urllib.error
@@ -5523,6 +5524,47 @@ class TestDownloadSraUrlSchemes:
         assert observed['cmd'][0] == '/usr/bin/curl'
         assert (tmp_path / '{}.sra'.format(sra_id)).exists()
 
+    def test_acquires_ncbi_download_semaphore_for_ncbi_source(self, tmp_path, monkeypatch):
+        sra_id = 'SRR_LIMITED'
+        metadata = self._make_metadata(
+            sra_id=sra_id,
+            aws_link='',
+            gcp_link='',
+            ncbi_link='https://example.invalid/path/to.sra',
+        )
+        sra_stat = {'sra_id': sra_id}
+        args = self._make_args()
+        args.download_lock_dir = str(tmp_path / 'locks')
+        args.ncbi_download_max_concurrency = 4
+        args.aws_download_max_concurrency = 'auto'
+        args.gcp_download_max_concurrency = 'auto'
+        observed = {}
+
+        @contextmanager
+        def fake_maybe_acquire(args, limit_attr, semaphore_name, lock_label, resolve_download_dir_fn=None):
+            observed['limit_attr'] = limit_attr
+            observed['semaphore_name'] = semaphore_name
+            observed['lock_label'] = lock_label
+            observed['max_concurrency'] = args.ncbi_download_max_concurrency
+            yield 'slot'
+
+        def fake_urlretrieve(_url, path):
+            with open(path, 'w') as f:
+                f.write('ok')
+            return (path, None)
+
+        monkeypatch.setattr('amalgkit.getfastq.maybe_acquire_download_semaphore', fake_maybe_acquire)
+        monkeypatch.setattr('amalgkit.getfastq.urllib.request.urlretrieve', fake_urlretrieve)
+
+        download_sra(metadata=metadata, sra_stat=sra_stat, args=args, work_dir=str(tmp_path), overwrite=False)
+
+        assert observed == {
+            'limit_attr': 'ncbi_download_max_concurrency',
+            'semaphore_name': 'ncbi_download',
+            'lock_label': 'NCBI download',
+            'max_concurrency': 4,
+        }
+
 
 class TestSequenceExtractionPrivate:
     def test_uses_run_id_for_private_symlink_names(self, tmp_path, monkeypatch):
@@ -6073,7 +6115,6 @@ class TestGetfastqDependencyChecks:
             obsolete_pfd = True
             obsolete_pfd_exe = '/tmp/legacy_pfd_exe'
             obsolete_fastq_dump_exe = '/tmp/legacy_fastq_dump_exe'
-            obsolete_prefetch_exe = '/tmp/legacy_prefetch_exe'
             fasterq_dump_exe = 'fasterq-dump'
             fastp = False
             fastp_exe = 'fastp'
