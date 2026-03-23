@@ -14,7 +14,9 @@ from amalgkit.download_utils import (
     get_ete_ncbitaxa,
     maybe_acquire_download_semaphore,
     resolve_download_dir,
+    resolve_download_lock_path,
     resolve_optional_download_concurrency_limit,
+    resolve_resource_lock_path,
 )
 from amalgkit.exceptions import AmalgkitExit
 from amalgkit.fastq_utils import (
@@ -1624,7 +1626,11 @@ def resolve_silva_download_dir(args):
     return os.path.join(resolve_shared_download_dir(args), 'silva')
 
 def resolve_silva_lock_path(args):
-    return os.path.join(resolve_shared_download_dir(args), 'locks', 'silva_refs.lock')
+    return resolve_download_lock_path(
+        args=args,
+        lock_name='silva_refs',
+        resolve_download_dir_fn=resolve_shared_download_dir,
+    )
 
 def resolve_silva_ready_path(args):
     return os.path.join(resolve_silva_download_dir(args), 'silva.ready')
@@ -1731,12 +1737,11 @@ def resolve_mmseqs_db_ready_path(db_path):
     return db_path + '.ready'
 
 def resolve_mmseqs_db_lock_path(db_path):
-    parent = ensure_contam_filter_db_parent_dir_exists(db_path=db_path)
-    db_name = os.path.basename(db_path)
-    if db_name.endswith('_DB'):
-        db_name = db_name[:-3]
-    lock_name = '{}.lock'.format(db_name.lower())
-    return os.path.join(parent, 'locks', lock_name)
+    return resolve_resource_lock_path(
+        resource_path=db_path,
+        trim_suffixes=['_DB'],
+        lowercase=True,
+    )
 
 def ensure_mmseqs_contam_taxonomy_db_exists(args):
     db_path = resolve_contam_filter_db_path(args)

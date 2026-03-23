@@ -9,7 +9,11 @@ import warnings
 import pandas
 
 from amalgkit.arg_utils import clone_namespace
-from amalgkit.download_utils import acquire_exclusive_lock, resolve_download_dir
+from amalgkit.download_utils import (
+    acquire_exclusive_lock,
+    resolve_download_dir,
+    resolve_download_lock_path,
+)
 from amalgkit.filter_utils import staged_output_dir
 from amalgkit.metadata_utils import (
     is_private_fastq_scientific_name_placeholder,
@@ -552,22 +556,14 @@ def build_busco_download_command(args, extra_args):
     return cmd
 
 
-def _sanitize_lock_suffix(text):
-    normalized = re.sub(r'[^A-Za-z0-9._-]+', '_', str(text).strip())
-    if normalized == '':
-        return 'lineage'
-    return normalized
-
-
 def resolve_busco_download_path(args):
     return os.path.join(resolve_download_dir(args), 'busco_downloads')
 
 
 def resolve_busco_download_lock_path(args, lineage):
-    return os.path.join(
-        resolve_download_dir(args),
-        'locks',
-        'busco_{}.lock'.format(_sanitize_lock_suffix(lineage)),
+    return resolve_download_lock_path(
+        args=args,
+        lock_name='busco_{}'.format(lineage),
     )
 
 

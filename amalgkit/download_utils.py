@@ -1,6 +1,7 @@
 import errno
 import json
 import os
+import re
 import socket
 import threading
 import time
@@ -52,6 +53,45 @@ def resolve_download_lock_dir(args, resolve_download_dir_fn=None):
     return os.path.realpath(normalized)
 
 
+def _sanitize_lock_name(text, default='lock'):
+    normalized = re.sub(r'[^A-Za-z0-9._-]+', '_', str(text).strip())
+    if normalized == '':
+        return default
+    return normalized
+
+
+def resolve_lock_path(lock_dir, lock_name, default_name='lock'):
+    lock_dir = os.path.realpath(lock_dir)
+    return os.path.join(lock_dir, '{}.lock'.format(_sanitize_lock_name(lock_name, default=default_name)))
+
+
+def resolve_download_lock_path(args, lock_name, resolve_download_dir_fn=None):
+    if resolve_download_dir_fn is None:
+        resolve_download_dir_fn = resolve_download_dir
+    lock_dir = os.path.join(resolve_download_dir_fn(args), 'locks')
+    return resolve_lock_path(lock_dir=lock_dir, lock_name=lock_name)
+
+
+def resolve_resource_lock_path(resource_path, lock_name=None, default_name='resource', trim_suffixes=None, lowercase=False):
+    resource_path = os.path.realpath(resource_path)
+    parent = os.path.dirname(resource_path)
+    if parent == '':
+        parent = '.'
+    if os.path.exists(parent) and (not os.path.isdir(parent)):
+        raise NotADirectoryError('Lock parent path exists but is not a directory: {}'.format(parent))
+    os.makedirs(parent, exist_ok=True)
+    if lock_name is None:
+        lock_name = os.path.basename(resource_path)
+        for suffix in (trim_suffixes or []):
+            if suffix and str(lock_name).endswith(suffix):
+                lock_name = str(lock_name)[:-len(suffix)]
+                break
+    if lowercase:
+        lock_name = str(lock_name).lower()
+    lock_dir = os.path.join(parent, 'locks')
+    return resolve_lock_path(lock_dir=lock_dir, lock_name=lock_name, default_name=default_name)
+
+
 def resolve_ete_data_dir(args, resolve_download_dir_fn=None):
     if resolve_download_dir_fn is None:
         resolve_download_dir_fn = resolve_download_dir
@@ -59,9 +99,11 @@ def resolve_ete_data_dir(args, resolve_download_dir_fn=None):
 
 
 def resolve_ete_lock_path(args, resolve_download_dir_fn=None):
-    if resolve_download_dir_fn is None:
-        resolve_download_dir_fn = resolve_download_dir
-    return os.path.join(resolve_download_dir_fn(args), 'locks', 'ete_taxonomy.lock')
+    return resolve_download_lock_path(
+        args=args,
+        lock_name='ete_taxonomy',
+        resolve_download_dir_fn=resolve_download_dir_fn,
+    )
 
 
 def _assert_regular_file_or_absent(path, label='Path'):
