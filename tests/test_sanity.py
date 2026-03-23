@@ -4,6 +4,7 @@ import pandas
 import numpy as np
 from types import SimpleNamespace
 
+from amalgkit.exceptions import AmalgkitExit
 from amalgkit.sanity import list_duplicates, parse_metadata, check_quant_output, check_quant_index, check_getfastq_outputs, sanity_main
 from amalgkit.util import Metadata
 
@@ -734,6 +735,66 @@ class TestCheckQuantIndex:
         assert avail == ['Canis   lupus familiaris']
         assert unavail == []
 
+    def test_suppresses_per_species_logs_when_verbose_runs_exceeded(self, tmp_path, capsys):
+        class Args:
+            out_dir = str(tmp_path)
+            index_dir = None
+            metadata = 'metadata.tsv'
+            quiet = False
+            verbose_runs = 1
+        index_dir = tmp_path / 'index'
+        index_dir.mkdir()
+        (index_dir / 'Species_alpha.idx').write_text('')
+        (index_dir / 'Species_beta.idx').write_text('')
+        output_dir = tmp_path / 'sanity'
+        output_dir.mkdir()
+
+        check_quant_index(Args(), np.array(['Species alpha', 'Species beta']), str(output_dir))
+
+        stdout = capsys.readouterr().out
+        assert 'Per-species logs suppressed for 2 species' in stdout
+        assert 'Looking for index file' not in stdout
+
+    def test_uses_parallel_workers_when_logs_suppressed(self, tmp_path, monkeypatch):
+        class Args:
+            out_dir = str(tmp_path)
+            index_dir = None
+            metadata = 'metadata.tsv'
+            quiet = True
+            verbose_runs = 0
+            threads = 2
+
+        index_dir = tmp_path / 'index'
+        index_dir.mkdir()
+        (index_dir / 'Species_alpha.idx').write_text('')
+        (index_dir / 'Species_beta.idx').write_text('')
+        output_dir = tmp_path / 'sanity'
+        output_dir.mkdir()
+        observed = {'max_workers': None}
+
+        def fake_run_tasks(task_items, task_fn, max_workers=1):
+            observed['max_workers'] = max_workers
+            results = {}
+            failures = []
+            for task_item in task_items:
+                try:
+                    results[task_item] = task_fn(task_item)
+                except Exception as exc:
+                    failures.append((task_item, exc))
+            return results, failures
+
+        monkeypatch.setattr('amalgkit.sanity.run_tasks_with_optional_threads', fake_run_tasks)
+
+        avail, unavail = check_quant_index(
+            Args(),
+            np.array(['Species alpha', 'Species beta']),
+            str(output_dir),
+        )
+
+        assert observed['max_workers'] == 2
+        assert avail == ['Species alpha', 'Species beta']
+        assert unavail == []
+
 
 class TestSanityMain:
     def test_rejects_out_dir_file_path(self, tmp_path):
@@ -773,3 +834,75 @@ class TestSanityMain:
 
         with pytest.raises(NotADirectoryError, match='Sanity output path exists but is not a directory'):
             sanity_main(args)
+
+    def test_defaults_to_all_checks_and_writes_summary(self, tmp_path, monkeypatch):
+        out_dir = tmp_path / 'out'
+        out_dir.mkdir()
+        args = SimpleNamespace(
+            out_dir=str(out_dir),
+            metadata='metadata.tsv',
+            all=False,
+            getfastq=False,
+            index=False,
+            quant=False,
+            strict=False,
+        )
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'scientific_name': ['Sp1'],
+            'run': ['SRR001'],
+            'exclusion': ['no'],
+        }))
+        call_order = []
+
+        monkeypatch.setattr('amalgkit.sanity.load_metadata', lambda _args: metadata)
+
+        def fake_getfastq(_args, _sra_ids, _metadata, _output_dir):
+            call_order.append('getfastq')
+            return ['SRR001'], []
+
+        def fake_index(_args, _uni_species, _output_dir):
+            call_order.append('index')
+            return ['Sp1'], []
+
+        def fake_quant(_args, _sra_ids, _output_dir):
+            call_order.append('quant')
+            return ['SRR001'], []
+
+        monkeypatch.setattr('amalgkit.sanity.check_getfastq_outputs', fake_getfastq)
+        monkeypatch.setattr('amalgkit.sanity.check_quant_index', fake_index)
+        monkeypatch.setattr('amalgkit.sanity.check_quant_output', fake_quant)
+
+        sanity_main(args)
+
+        assert call_order == ['getfastq', 'index', 'quant']
+        summary_df = pandas.read_csv(out_dir / 'sanity' / 'sanity_summary.tsv', sep='\t')
+        assert summary_df['check'].tolist() == ['getfastq', 'index', 'quant']
+        assert summary_df['status'].tolist() == ['ok', 'ok', 'ok']
+
+    def test_strict_mode_raises_after_writing_summary(self, tmp_path, monkeypatch):
+        out_dir = tmp_path / 'out'
+        out_dir.mkdir()
+        args = SimpleNamespace(
+            out_dir=str(out_dir),
+            metadata='metadata.tsv',
+            all=False,
+            getfastq=False,
+            index=False,
+            quant=True,
+            strict=True,
+        )
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'scientific_name': ['Sp1'],
+            'run': ['SRR001'],
+            'exclusion': ['no'],
+        }))
+        monkeypatch.setattr('amalgkit.sanity.load_metadata', lambda _args: metadata)
+
+        with pytest.raises(AmalgkitExit, match='Sanity checks reported 1 issue'):
+            sanity_main(args)
+
+        assert (out_dir / 'sanity' / 'SRA_IDs_without_quant.txt').exists()
+        summary_df = pandas.read_csv(out_dir / 'sanity' / 'sanity_summary.tsv', sep='\t')
+        assert summary_df.loc[0, 'check'] == 'quant'
+        assert int(summary_df.loc[0, 'unavailable_count']) == 1
+        assert summary_df.loc[0, 'status'] == 'issues_found'

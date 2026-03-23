@@ -3,6 +3,7 @@ import os
 import pandas
 import re
 
+from amalgkit.exceptions import AmalgkitExit
 from amalgkit.metadata_utils import (
     get_newest_intermediate_file_extension,
     get_sra_stat,
@@ -75,27 +76,31 @@ def _get_species_fallback_prefix(species):
         return None
     return _normalize_species_prefix(' '.join(parts[0:2]))
 
-def _should_log_per_run(args, num_runs):
+def _should_log_per_item(args, num_items):
     if bool(getattr(args, 'quiet', False)):
         return False
     verbose_runs = int(getattr(args, 'verbose_runs', 20))
     if verbose_runs < 0:
         return True
-    return num_runs <= verbose_runs
+    return num_items <= verbose_runs
 
-def _print_run_log_mode(args, num_runs):
-    if _should_log_per_run(args, num_runs):
+def _print_log_mode(args, num_items, singular_label='run', plural_label=None):
+    if _should_log_per_item(args, num_items):
         return
     verbose_runs = int(getattr(args, 'verbose_runs', 20))
-    print('Per-run logs suppressed for {:,} runs (--verbose_runs={}, --quiet={}).'.format(
-        num_runs,
+    if plural_label is None:
+        plural_label = singular_label + 's'
+    print('Per-{} logs suppressed for {:,} {} (--verbose_runs={}, --quiet={}).'.format(
+        singular_label,
+        num_items,
+        plural_label,
         verbose_runs,
         bool(getattr(args, 'quiet', False)),
     ))
 
 def _write_unavailable_items(output_dir, filename, item_ids, label):
     if not item_ids:
-        return
+        return ''
     if os.path.exists(output_dir) and (not os.path.isdir(output_dir)):
         raise NotADirectoryError('Sanity output path exists but is not a directory: {}'.format(output_dir))
     os.makedirs(output_dir, exist_ok=True)
@@ -104,6 +109,7 @@ def _write_unavailable_items(output_dir, filename, item_ids, label):
     with open(outpath, "w") as f:
         for item_id in item_ids:
             f.write(item_id + "\n")
+    return outpath
 
 
 def _normalize_sra_ids(sra_ids):
@@ -144,8 +150,8 @@ def _prepare_run_output_scan(args, root_path, sra_ids, found_msg, missing_msg):
         return None, None, None
     print(found_msg)
     target_runs = set(sra_ids)
-    verbose_run_logs = _should_log_per_run(args, len(target_runs))
-    _print_run_log_mode(args, len(target_runs))
+    verbose_run_logs = _should_log_per_item(args, len(target_runs))
+    _print_log_mode(args, len(target_runs), singular_label='run')
     run_files_map, non_dir_runs = _scan_target_run_dirs(root_path, target_runs)
     return verbose_run_logs, run_files_map, non_dir_runs
 
@@ -393,36 +399,63 @@ def _find_index_files(index_entries, index_dir_path, prefix):
         if os.path.isfile(os.path.join(index_dir_path, entry))
     ]
 
-def _resolve_species_index_files(species, index_entries, index_dir_path):
+def _resolve_species_index_files(species, index_entries, index_dir_path, verbose_run_logs=True):
     candidates = _get_species_prefix_candidates(species)
     sci_name = candidates[0]
     index_path = os.path.join(index_dir_path, sci_name + "*")
-    print("\n")
-    print("Looking for index file {} for species {}".format(index_path, species))
+    if verbose_run_logs:
+        print("\n")
+        print("Looking for index file {} for species {}".format(index_path, species))
     for candidate in candidates:
         index_files = _find_index_files(index_entries, index_dir_path, candidate)
         if index_files:
-            print("Found ", index_files, "!")
+            if verbose_run_logs:
+                print("Found ", index_files, "!")
             return index_files
 
-    print("could not find anything in", index_path)
+    if verbose_run_logs:
+        print("could not find anything in", index_path)
     # Deprecate subspecies or variants and look again
     # I.e. if Gorilla_gorilla_gorilla.idx was not found, we look for Gorilla_gorilla.idx instead.
     fallback_prefix = _get_species_fallback_prefix(species)
     if fallback_prefix is None:
-        print("Could not find any index files for ", species)
+        if verbose_run_logs:
+            print("Could not find any index files for ", species)
         return []
-    print("Ignoring subspecies.")
+    if verbose_run_logs:
+        print("Ignoring subspecies.")
     fallback_candidates = _get_species_prefix_candidates(fallback_prefix)
     index_path = os.path.join(index_dir_path, fallback_candidates[0] + "*")
-    print("Looking for {}".format(index_path))
+    if verbose_run_logs:
+        print("Looking for {}".format(index_path))
     for candidate in fallback_candidates:
         index_files = _find_index_files(index_entries, index_dir_path, candidate)
         if index_files:
-            print("Found ", index_files, "!")
+            if verbose_run_logs:
+                print("Found ", index_files, "!")
             return index_files
-    print("Could not find any index files for ", species)
+    if verbose_run_logs:
+        print("Could not find any index files for ", species)
     return []
+
+
+def _classify_index_files(species, index_files, index_available, index_unavailable, verbose_run_logs):
+    if len(index_files) == 1:
+        index_available.append(species)
+        return False
+    if len(index_files) > 1:
+        if verbose_run_logs:
+            print(
+                "Multiple possible index files detected for ",
+                species,
+                ": ",
+                index_files,
+                ". Please keep only one index file per species.",
+            )
+        index_unavailable.append(species)
+        return True
+    index_unavailable.append(species)
+    return False
 
 
 def _check_single_quant_run(sra_id, quant_path, quant_run_files_map, non_dir_runs, verbose_run_logs):
@@ -472,25 +505,64 @@ def check_quant_index(args, uni_species, output_dir):
             )
             return index_available, index_unavailable
         index_entries = sorted(os.listdir(index_dir_path))
-        for species in uni_species:
-            index_files = _resolve_species_index_files(
-                species=species,
-                index_entries=index_entries,
-                index_dir_path=index_dir_path,
-            )
-            if len(index_files) == 1:
-                index_available.append(species)
-            elif len(index_files) > 1:
-                print(
-                    "Multiple possible index files detected for ",
-                    species,
-                    ": ",
-                    index_files,
-                    ". Please keep only one index file per species.",
+        species_items = list(uni_species)
+        verbose_run_logs = _should_log_per_item(args, len(species_items))
+        _print_log_mode(args, len(species_items), singular_label='species', plural_label='species')
+        ambiguous_species = []
+        if verbose_run_logs:
+            for species in species_items:
+                index_files = _resolve_species_index_files(
+                    species=species,
+                    index_entries=index_entries,
+                    index_dir_path=index_dir_path,
+                    verbose_run_logs=verbose_run_logs,
                 )
-                index_unavailable.append(species)
-            else:
-                index_unavailable.append(species)
+                is_ambiguous = _classify_index_files(
+                    species=species,
+                    index_files=index_files,
+                    index_available=index_available,
+                    index_unavailable=index_unavailable,
+                    verbose_run_logs=verbose_run_logs,
+                )
+                if is_ambiguous:
+                    ambiguous_species.append(species)
+        else:
+            max_workers = _resolve_sanity_workers(args=args, num_tasks=len(species_items), verbose_run_logs=verbose_run_logs)
+            if max_workers > 1:
+                print(
+                    'Checking index inputs for {:,} species with {:,} parallel worker(s).'.format(
+                        len(species_items),
+                        max_workers,
+                    ),
+                    flush=True,
+                )
+            results_by_species, failures = _run_sanity_tasks(
+                task_items=species_items,
+                task_fn=lambda species: _resolve_species_index_files(
+                    species=species,
+                    index_entries=index_entries,
+                    index_dir_path=index_dir_path,
+                    verbose_run_logs=False,
+                ),
+                max_workers=max_workers,
+            )
+            for species, _exc in failures:
+                results_by_species[species] = []
+            for species in species_items:
+                is_ambiguous = _classify_index_files(
+                    species=species,
+                    index_files=results_by_species.get(species, []),
+                    index_available=index_available,
+                    index_unavailable=index_unavailable,
+                    verbose_run_logs=False,
+                )
+                if is_ambiguous:
+                    ambiguous_species.append(species)
+            if ambiguous_species:
+                print(
+                    'Multiple possible index files detected for {:,} species. '
+                    'Please keep only one index file per species.'.format(len(ambiguous_species))
+                )
 
         if index_unavailable:
             _write_unavailable_items(
@@ -597,6 +669,96 @@ def check_quant_output(args, sra_ids, output_dir):
     return data_available, data_unavailable
 
 
+def _resolve_sanity_check_path(args, subdir_name, attr_name):
+    custom_path = getattr(args, attr_name, None)
+    if custom_path:
+        return os.path.realpath(custom_path)
+    return os.path.join(os.path.realpath(args.out_dir), subdir_name)
+
+
+def _build_sanity_summary_row(check_name, target_type, checked_items, available_items, unavailable_items, scanned_path, report_path=''):
+    checked_count = len(list(checked_items))
+    available_count = len(list(available_items))
+    unavailable_count = len(list(unavailable_items))
+    return {
+        'check': check_name,
+        'target_type': target_type,
+        'checked_count': checked_count,
+        'available_count': available_count,
+        'unavailable_count': unavailable_count,
+        'status': 'ok' if unavailable_count == 0 else 'issues_found',
+        'scanned_path': os.path.realpath(scanned_path),
+        'missing_report_path': '' if report_path == '' else os.path.realpath(report_path),
+    }
+
+
+def _write_sanity_summary(output_dir, summary_rows):
+    summary_path = os.path.join(output_dir, 'sanity_summary.tsv')
+    summary_df = pandas.DataFrame(summary_rows, columns=[
+        'check',
+        'target_type',
+        'checked_count',
+        'available_count',
+        'unavailable_count',
+        'status',
+        'scanned_path',
+        'missing_report_path',
+    ])
+    summary_df.to_csv(summary_path, sep='\t', index=False)
+    return summary_path
+
+
+def _print_sanity_summary(summary_rows, summary_path):
+    print("\nSanity summary:")
+    if not summary_rows:
+        print('No sanity checks were selected.')
+    for row in summary_rows:
+        print(
+            '{}: {:,}/{:,} {} available ({}; {:,} issue(s))'.format(
+                row['check'],
+                int(row['available_count']),
+                int(row['checked_count']),
+                row['target_type'],
+                row['status'],
+                int(row['unavailable_count']),
+            )
+        )
+        print('scanned_path={}'.format(row['scanned_path']))
+        if row['missing_report_path'] != '':
+            print('missing_report_path={}'.format(row['missing_report_path']))
+    print('summary_path={}'.format(summary_path))
+
+
+def _resolve_requested_sanity_checks(args):
+    if bool(getattr(args, 'all', False)):
+        return ['getfastq', 'index', 'quant']
+    selected = []
+    if bool(getattr(args, 'getfastq', False)):
+        selected.append('getfastq')
+    if bool(getattr(args, 'index', False)):
+        selected.append('index')
+    if bool(getattr(args, 'quant', False)):
+        selected.append('quant')
+    if selected:
+        return selected
+    print('No specific sanity targets were selected. Running all checks (--all).')
+    return ['getfastq', 'index', 'quant']
+
+
+def _raise_if_sanity_issues(args, summary_rows):
+    if not bool(getattr(args, 'strict', False)):
+        return
+    failed_rows = [row for row in summary_rows if int(row['unavailable_count']) > 0]
+    if not failed_rows:
+        return
+    total_issues = sum(int(row['unavailable_count']) for row in failed_rows)
+    failed_checks = ', '.join(row['check'] for row in failed_rows)
+    raise AmalgkitExit(
+        'Sanity checks reported {} issue(s) across: {}.'.format(total_issues, failed_checks),
+        exit_code=1,
+    )
+
+
 def sanity_main(args):
     out_dir = os.path.realpath(args.out_dir)
     if os.path.exists(out_dir) and (not os.path.isdir(out_dir)):
@@ -607,9 +769,41 @@ def sanity_main(args):
         raise NotADirectoryError('Sanity output path exists but is not a directory: {}'.format(output_dir))
     os.makedirs(output_dir, exist_ok=True)
     uni_species, sra_ids = parse_metadata(args, metadata)
-    if args.getfastq or args.all:
-        check_getfastq_outputs(args, sra_ids, metadata, output_dir)
-    if args.index or args.all:
-        check_quant_index(args, uni_species, output_dir)
-    if args.quant or args.all:
-        check_quant_output(args, sra_ids, output_dir)
+    requested_checks = _resolve_requested_sanity_checks(args)
+    summary_rows = []
+    if 'getfastq' in requested_checks:
+        data_available, data_unavailable = check_getfastq_outputs(args, sra_ids, metadata, output_dir)
+        summary_rows.append(_build_sanity_summary_row(
+            check_name='getfastq',
+            target_type='runs',
+            checked_items=sra_ids,
+            available_items=data_available,
+            unavailable_items=data_unavailable,
+            scanned_path=_resolve_sanity_check_path(args, 'getfastq', 'getfastq_dir'),
+            report_path=os.path.join(output_dir, 'SRA_IDs_without_fastq.txt') if data_unavailable else '',
+        ))
+    if 'index' in requested_checks:
+        index_available, index_unavailable = check_quant_index(args, uni_species, output_dir)
+        summary_rows.append(_build_sanity_summary_row(
+            check_name='index',
+            target_type='species',
+            checked_items=uni_species,
+            available_items=index_available,
+            unavailable_items=index_unavailable,
+            scanned_path=_resolve_sanity_check_path(args, 'index', 'index_dir'),
+            report_path=os.path.join(output_dir, 'species_without_index.txt') if index_unavailable else '',
+        ))
+    if 'quant' in requested_checks:
+        data_available, data_unavailable = check_quant_output(args, sra_ids, output_dir)
+        summary_rows.append(_build_sanity_summary_row(
+            check_name='quant',
+            target_type='runs',
+            checked_items=sra_ids,
+            available_items=data_available,
+            unavailable_items=data_unavailable,
+            scanned_path=_resolve_sanity_check_path(args, 'quant', 'quant_dir'),
+            report_path=os.path.join(output_dir, 'SRA_IDs_without_quant.txt') if data_unavailable else '',
+        ))
+    summary_path = _write_sanity_summary(output_dir, summary_rows)
+    _print_sanity_summary(summary_rows, summary_path)
+    _raise_if_sanity_issues(args, summary_rows)

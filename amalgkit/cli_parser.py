@@ -281,14 +281,18 @@ def build_parser(command_handlers, command_names, version, prog=None):
                      help='default=%(default)s: Remove getfastq-processed fastq files when quant is successfully completed.')
     pqu.add_argument('--fasta_dir', metavar='PATH', default='inferred', type=str, required=False, action='store',
                      help='default=%(default)s: "inferred" = out_dir/fasta. '
-                          'PATH to directory containing reference transcriptome fasta files required for kallisto index building (see --build_index). '
+                          'PATH to directory containing reference transcriptome fasta files used when building backend-specific quant indices '
+                          '(see --build_index; kallisto .idx or oarfish .mmi). '
                           'In this directory, file names of fasta files are expected to start with the string '
                           'in the "scientific_name" column of the metadata table, with a space replaced with an underbar. '
+                          'Accepted suffixes include .fa, .fasta, .fa.gz, and .fasta.gz. '
                           'Example: Arabidopsis_thaliana_v1.fasta for Arabidopsis thaliana.')
     pqu.add_argument('--build_index', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
-                     help='default=%(default)s: Allows AMALGKIT to build kallisto index from reference fasta files. '
-                          'Will only do this for a species if an index file is not already present. One fasta file per species should be put in --fasta_dir. '
-                          'AMALGKIT will read the species from the metadata, try to find the fasta file (.fa or .fasta) and build the index for further use.')
+                     help='default=%(default)s: Allows AMALGKIT to build quant backend indices from reference fasta files '
+                          '(kallisto .idx or oarfish .mmi, depending on the selected backend). '
+                          'Will only do this for a species/backend target if an index file is not already present. '
+                          'One fasta file per species should be put in --fasta_dir. '
+                          'AMALGKIT will read species names from the metadata, try to find the matching fasta file, and build the index for further use.')
     pqu.add_argument('--index_lock_poll', metavar='INT', default=5, type=int, required=False, action='store',
                      help='default=%(default)s: Poll interval in seconds while waiting for another batch process to finish building a species index.')
     pqu.add_argument('--index_lock_timeout', metavar='INT', default=3600, type=int, required=False, action='store',
@@ -439,7 +443,7 @@ def build_parser(command_handlers, command_names, version, prog=None):
     pfi.set_defaults(handler=command_handlers['finalize'])
 
     psa_help = 'Checking the integrity of AMALGKIT input and output files. See `amalgkit sanity -h`'
-    psa = subparsers.add_parser('sanity', help=psa_help, parents=[pp_out, pp_meta])
+    psa = subparsers.add_parser('sanity', help=psa_help, parents=[pp_out, pp_meta, pp_threads])
     psa.add_argument('--index', required=False, action='store_true',
                      help='set this option if you want to check for availability of index files '
                           'based on species name in metadata file.')
@@ -450,7 +454,8 @@ def build_parser(command_handlers, command_names, version, prog=None):
                      help='set this option if you want to check for availability of getfastq output files '
                           'based on SRA IDs in metadata file.')
     psa.add_argument('--all', required=False, action='store_true',
-                     help='setting this option runs amalgkit sanity as if --index, --quant, --getfastq were set')
+                     help='setting this option runs amalgkit sanity as if --index, --quant, --getfastq were set. '
+                          'If none of these target flags are specified, --all is assumed.')
     psa.add_argument('--index_dir', metavar='PATH', default=None, type=str, required=False, action='store',
                      help='default=%(default)s: PATH to index directory. Only required if index directory is not '
                           'out_dir/index/')
@@ -465,6 +470,9 @@ def build_parser(command_handlers, command_names, version, prog=None):
     psa.add_argument('--verbose_runs', metavar='INT', default=20, type=int, required=False, action='store',
                      help='default=%(default)s: Maximum number of runs for per-run logging in sanity checks. '
                           'Set a negative value to always print per-run logs.')
+    psa.add_argument('--strict', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
+                     help='default=%(default)s: Exit with code 1 if any selected sanity check reports missing or '
+                          'ambiguous inputs/outputs.')
     psa.set_defaults(handler=command_handlers['sanity'])
 
     pin_help = 'Appending local fastq info to a metadata table. See `amalgkit integrate -h`'

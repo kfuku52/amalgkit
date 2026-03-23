@@ -67,6 +67,16 @@ def test_help_topic_cstmm_includes_redo():
     assert '--tmm_backend' in merged
 
 
+def test_help_topic_quant_mentions_backend_specific_index_building():
+    out = run_cli('help', 'quant')
+    assert out.returncode == 0
+    merged = ' '.join((out.stdout + '\n' + out.stderr).lower().split())
+    assert '--build_index' in merged
+    assert 'kallisto .idx or oarfish .mmi' in merged
+    assert '.fa.gz' in merged
+    assert '.fasta.gz' in merged
+
+
 def test_help_rejects_legacy_csca_command():
     out = run_cli('help', 'csca')
     assert out.returncode != 0
@@ -112,3 +122,12 @@ def test_help_topic_integrate_mentions_download_dir():
     assert out.returncode == 0
     merged = (out.stdout + '\n' + out.stderr).lower()
     assert '--download_dir' in merged
+
+
+def test_help_topic_sanity_mentions_threads_and_strict():
+    out = run_cli('help', 'sanity')
+    assert out.returncode == 0
+    merged = (out.stdout + '\n' + out.stderr).lower()
+    assert '--threads' in merged
+    assert '--strict' in merged
+    assert '--all is assumed' in merged

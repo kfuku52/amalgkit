@@ -151,15 +151,44 @@ def _extract_sra_summary_fields(root):
     }
 
 
+def _call_fetch_sra_xml_chunk(
+    record_ids,
+    start,
+    end,
+    retmax,
+    max_retry=10,
+    verbose=True,
+    retry_sleep_second=60,
+    args=None,
+):
+    kwargs = {
+        'record_ids': record_ids,
+        'start': start,
+        'end': end,
+        'retmax': retmax,
+        'max_retry': max_retry,
+        'verbose': verbose,
+        'retry_sleep_second': retry_sleep_second,
+    }
+    if args is not None:
+        kwargs['args'] = args
+    try:
+        return fetch_sra_xml_chunk(**kwargs)
+    except TypeError as exc:
+        if ('unexpected keyword argument' not in str(exc)) or ('args' not in str(exc)):
+            raise
+    kwargs.pop('args', None)
+    return fetch_sra_xml_chunk(**kwargs)
+
+
 def summarize_sra_record(record_id):
-    root = fetch_sra_xml_chunk(
+    root = _call_fetch_sra_xml_chunk(
         record_ids=[record_id],
         start=0,
         end=1,
         retmax=1,
         max_retry=2,
         verbose=False,
-        args=None,
     )
     raise_if_xml_has_error(root)
     return _extract_sra_summary_fields(root)
@@ -206,7 +235,15 @@ def iter_sra_xml_chunks(record_ids, retmax=1000, verbose=True, timestamp_logs=Tr
                 )
             else:
                 print('{}: {} - {}'.format(progress_label, start, end - 1), flush=True)
-        chunk = fetch_sra_xml_chunk(record_ids, start, end, retmax, max_retry=10, verbose=verbose, args=args)
+        chunk = _call_fetch_sra_xml_chunk(
+            record_ids=record_ids,
+            start=start,
+            end=end,
+            retmax=retmax,
+            max_retry=10,
+            verbose=verbose,
+            args=args,
+        )
         yield chunk
     if verbose and timestamp_logs:
         elapsed_time = int(time.time() - start_time)
