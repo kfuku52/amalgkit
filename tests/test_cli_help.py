@@ -124,10 +124,17 @@ def test_help_topic_integrate_mentions_download_dir():
     assert '--download_dir' in merged
 
 
-def test_help_topic_sanity_mentions_threads_and_strict():
+def test_help_topic_sanity_mentions_new_selection_and_strictness_options():
     out = run_cli('help', 'sanity')
     assert out.returncode == 0
     merged = (out.stdout + '\n' + out.stderr).lower()
     assert '--threads' in merged
     assert '--strict' in merged
+    assert '--strict_level' in merged
+    assert '--check' in merged
+    assert '--run' in merged
+    assert '--species' in merged
+    assert '--merge' in merged
+    assert '--busco' in merged
+    assert '--finalize' in merged
     assert '--all is assumed' in merged

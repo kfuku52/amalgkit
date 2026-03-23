@@ -1,3 +1,4 @@
+import json
 import os
 import pytest
 import pandas
@@ -5,8 +6,46 @@ import numpy as np
 from types import SimpleNamespace
 
 from amalgkit.exceptions import AmalgkitExit
-from amalgkit.sanity import list_duplicates, parse_metadata, check_quant_output, check_quant_index, check_getfastq_outputs, sanity_main
+from amalgkit.sanity import (
+    list_duplicates,
+    parse_metadata,
+    check_quant_output,
+    check_quant_index,
+    check_getfastq_outputs,
+    run_sanity_check_quant,
+    sanity_main,
+)
 from amalgkit.util import Metadata
+
+
+def make_sanity_args(tmp_path, **overrides):
+    defaults = {
+        'out_dir': str(tmp_path / 'out'),
+        'metadata': 'metadata.tsv',
+        'all': False,
+        'getfastq': False,
+        'index': False,
+        'quant': False,
+        'merge': False,
+        'busco': False,
+        'finalize': False,
+        'check': None,
+        'run': None,
+        'species': None,
+        'getfastq_dir': None,
+        'index_dir': None,
+        'quant_dir': None,
+        'merge_dir': None,
+        'busco_dir': None,
+        'finalize_dir': None,
+        'quiet': True,
+        'verbose_runs': 0,
+        'threads': 1,
+        'strict': False,
+        'strict_level': 'none',
+    }
+    defaults.update(overrides)
+    return SimpleNamespace(**defaults)
 
 
 class TestListDuplicates:
@@ -816,14 +855,7 @@ class TestSanityMain:
         out_dir = tmp_path / 'out'
         out_dir.mkdir()
         (out_dir / 'sanity').write_text('not a directory')
-        args = SimpleNamespace(
-            out_dir=str(out_dir),
-            metadata='metadata.tsv',
-            all=False,
-            getfastq=False,
-            index=False,
-            quant=False,
-        )
+        args = make_sanity_args(tmp_path, out_dir=str(out_dir))
 
         metadata = Metadata.from_DataFrame(pandas.DataFrame({
             'scientific_name': ['Sp1'],
@@ -838,15 +870,7 @@ class TestSanityMain:
     def test_defaults_to_all_checks_and_writes_summary(self, tmp_path, monkeypatch):
         out_dir = tmp_path / 'out'
         out_dir.mkdir()
-        args = SimpleNamespace(
-            out_dir=str(out_dir),
-            metadata='metadata.tsv',
-            all=False,
-            getfastq=False,
-            index=False,
-            quant=False,
-            strict=False,
-        )
+        args = make_sanity_args(tmp_path, out_dir=str(out_dir))
         metadata = Metadata.from_DataFrame(pandas.DataFrame({
             'scientific_name': ['Sp1'],
             'run': ['SRR001'],
@@ -856,41 +880,48 @@ class TestSanityMain:
 
         monkeypatch.setattr('amalgkit.sanity.load_metadata', lambda _args: metadata)
 
-        def fake_getfastq(_args, _sra_ids, _metadata, _output_dir):
-            call_order.append('getfastq')
-            return ['SRR001'], []
+        def fake_runner(check_name, target_type):
+            def _runner(args, metadata, uni_species, sra_ids, output_dir, metadata_path):
+                _ = (args, metadata, uni_species, sra_ids, metadata_path)
+                call_order.append(check_name)
+                return {
+                    'check': check_name,
+                    'target_type': target_type,
+                    'checked_count': 1,
+                    'available_count': 1,
+                    'unavailable_count': 0,
+                    'warning_count': 0,
+                    'issue_count': 0,
+                    'status': 'ok',
+                    'scanned_path': str(tmp_path / check_name),
+                    'missing_report_path': '',
+                    'rerun_manifest_path': '',
+                    'example_targets': '',
+                }, []
+            return _runner
 
-        def fake_index(_args, _uni_species, _output_dir):
-            call_order.append('index')
-            return ['Sp1'], []
-
-        def fake_quant(_args, _sra_ids, _output_dir):
-            call_order.append('quant')
-            return ['SRR001'], []
-
-        monkeypatch.setattr('amalgkit.sanity.check_getfastq_outputs', fake_getfastq)
-        monkeypatch.setattr('amalgkit.sanity.check_quant_index', fake_index)
-        monkeypatch.setattr('amalgkit.sanity.check_quant_output', fake_quant)
+        monkeypatch.setattr('amalgkit.sanity.run_sanity_check_getfastq', fake_runner('getfastq', 'runs'))
+        monkeypatch.setattr('amalgkit.sanity.run_sanity_check_index', fake_runner('index', 'species'))
+        monkeypatch.setattr('amalgkit.sanity.run_sanity_check_quant', fake_runner('quant', 'runs'))
+        monkeypatch.setattr('amalgkit.sanity.run_sanity_check_merge', fake_runner('merge', 'species'))
+        monkeypatch.setattr('amalgkit.sanity.run_sanity_check_busco', fake_runner('busco', 'species'))
+        monkeypatch.setattr('amalgkit.sanity.run_sanity_check_finalize', fake_runner('finalize', 'species'))
 
         sanity_main(args)
 
-        assert call_order == ['getfastq', 'index', 'quant']
+        assert call_order == ['getfastq', 'index', 'quant', 'merge', 'busco', 'finalize']
         summary_df = pandas.read_csv(out_dir / 'sanity' / 'sanity_summary.tsv', sep='\t')
-        assert summary_df['check'].tolist() == ['getfastq', 'index', 'quant']
-        assert summary_df['status'].tolist() == ['ok', 'ok', 'ok']
+        assert summary_df['check'].tolist() == ['getfastq', 'index', 'quant', 'merge', 'busco', 'finalize']
+        assert summary_df['status'].tolist() == ['ok', 'ok', 'ok', 'ok', 'ok', 'ok']
+        assert (out_dir / 'sanity' / 'sanity_issues.tsv').exists()
+        with open(out_dir / 'sanity' / 'sanity_report.json', 'r', encoding='utf-8') as handle:
+            report_payload = json.load(handle)
+        assert report_payload['requested_checks'] == ['getfastq', 'index', 'quant', 'merge', 'busco', 'finalize']
 
     def test_strict_mode_raises_after_writing_summary(self, tmp_path, monkeypatch):
         out_dir = tmp_path / 'out'
         out_dir.mkdir()
-        args = SimpleNamespace(
-            out_dir=str(out_dir),
-            metadata='metadata.tsv',
-            all=False,
-            getfastq=False,
-            index=False,
-            quant=True,
-            strict=True,
-        )
+        args = make_sanity_args(tmp_path, out_dir=str(out_dir), quant=True, strict=True)
         metadata = Metadata.from_DataFrame(pandas.DataFrame({
             'scientific_name': ['Sp1'],
             'run': ['SRR001'],
@@ -898,11 +929,157 @@ class TestSanityMain:
         }))
         monkeypatch.setattr('amalgkit.sanity.load_metadata', lambda _args: metadata)
 
-        with pytest.raises(AmalgkitExit, match='Sanity checks reported 1 issue'):
+        with pytest.raises(
+            AmalgkitExit,
+            match=r'Sanity checks reported 1 error\(s\) and 0 warning\(s\) at strict_level=error\.',
+        ):
             sanity_main(args)
 
         assert (out_dir / 'sanity' / 'SRA_IDs_without_quant.txt').exists()
+        assert (out_dir / 'sanity' / 'rerun_quant_run_ids.txt').exists()
         summary_df = pandas.read_csv(out_dir / 'sanity' / 'sanity_summary.tsv', sep='\t')
         assert summary_df.loc[0, 'check'] == 'quant'
         assert int(summary_df.loc[0, 'unavailable_count']) == 1
-        assert summary_df.loc[0, 'status'] == 'issues_found'
+        assert summary_df.loc[0, 'status'] == 'error'
+
+    def test_check_and_filter_options_limit_selected_runners_and_write_comparison(self, tmp_path, monkeypatch):
+        out_dir = tmp_path / 'out'
+        output_dir = out_dir / 'sanity'
+        output_dir.mkdir(parents=True)
+        previous_payload = {
+            'summary': [
+                {
+                    'check': 'quant',
+                    'status': 'error',
+                    'unavailable_count': 1,
+                    'warning_count': 0,
+                },
+            ],
+        }
+        (output_dir / 'sanity_report.json').write_text(json.dumps(previous_payload), encoding='utf-8')
+        args = make_sanity_args(
+            tmp_path,
+            out_dir=str(out_dir),
+            check='quant,merge',
+            run='SRR001',
+            species='Sp1',
+        )
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'scientific_name': ['Sp1', 'Sp2'],
+            'run': ['SRR001', 'SRR002'],
+            'exclusion': ['no', 'no'],
+        }))
+        observed = {}
+
+        monkeypatch.setattr('amalgkit.sanity.load_metadata', lambda _args: metadata)
+
+        def fake_quant(args, metadata, uni_species, sra_ids, output_dir, metadata_path):
+            observed['quant'] = {
+                'species': list(uni_species),
+                'runs': list(sra_ids),
+                'metadata_runs': metadata.df['run'].tolist(),
+                'metadata_species': metadata.df['scientific_name'].tolist(),
+            }
+            return {
+                'check': 'quant',
+                'target_type': 'runs',
+                'checked_count': 1,
+                'available_count': 1,
+                'unavailable_count': 0,
+                'warning_count': 0,
+                'issue_count': 0,
+                'status': 'ok',
+                'scanned_path': str(tmp_path / 'quant'),
+                'missing_report_path': '',
+                'rerun_manifest_path': '',
+                'example_targets': '',
+            }, []
+
+        def fake_merge(args, metadata, uni_species, sra_ids, output_dir, metadata_path):
+            observed['merge'] = {
+                'species': list(uni_species),
+                'runs': list(sra_ids),
+            }
+            return {
+                'check': 'merge',
+                'target_type': 'species',
+                'checked_count': 1,
+                'available_count': 1,
+                'unavailable_count': 0,
+                'warning_count': 0,
+                'issue_count': 0,
+                'status': 'ok',
+                'scanned_path': str(tmp_path / 'merge'),
+                'missing_report_path': '',
+                'rerun_manifest_path': '',
+                'example_targets': '',
+            }, []
+
+        monkeypatch.setattr('amalgkit.sanity.run_sanity_check_quant', fake_quant)
+        monkeypatch.setattr('amalgkit.sanity.run_sanity_check_merge', fake_merge)
+        monkeypatch.setattr('amalgkit.sanity.run_sanity_check_getfastq', lambda *args, **kwargs: pytest.fail('getfastq should not run'))
+        monkeypatch.setattr('amalgkit.sanity.run_sanity_check_index', lambda *args, **kwargs: pytest.fail('index should not run'))
+        monkeypatch.setattr('amalgkit.sanity.run_sanity_check_busco', lambda *args, **kwargs: pytest.fail('busco should not run'))
+        monkeypatch.setattr('amalgkit.sanity.run_sanity_check_finalize', lambda *args, **kwargs: pytest.fail('finalize should not run'))
+
+        sanity_main(args)
+
+        assert observed['quant']['species'] == ['Sp1']
+        assert observed['quant']['runs'] == ['SRR001']
+        assert observed['quant']['metadata_runs'] == ['SRR001']
+        assert observed['quant']['metadata_species'] == ['Sp1']
+        assert observed['merge']['species'] == ['Sp1']
+        comparison_df = pandas.read_csv(output_dir / 'sanity_comparison.tsv', sep='\t')
+        assert comparison_df['check'].tolist() == ['quant', 'merge']
+        assert comparison_df.loc[0, 'delta_unavailable_count'] == -1
+        with open(output_dir / 'sanity_report.json', 'r', encoding='utf-8') as handle:
+            report_payload = json.load(handle)
+        assert report_payload['run_filters'] == ['SRR001']
+        assert report_payload['species_filters'] == ['Sp1']
+        assert report_payload['requested_checks'] == ['quant', 'merge']
+
+    def test_quant_runner_reports_invalid_content_orphans_and_rerun_manifest(self, tmp_path):
+        out_dir = tmp_path / 'out'
+        quant_dir = out_dir / 'quant'
+        output_dir = out_dir / 'sanity'
+        quant_dir.mkdir(parents=True)
+        output_dir.mkdir(parents=True)
+        metadata_path = tmp_path / 'metadata.tsv'
+        metadata_path.write_text(
+            'scientific_name\trun\texclusion\n'
+            'Sp1\tSRR001\tno\n',
+            encoding='utf-8',
+        )
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'scientific_name': ['Sp1'],
+            'run': ['SRR001'],
+            'exclusion': ['no'],
+        }))
+        sra_dir = quant_dir / 'SRR001'
+        sra_dir.mkdir()
+        (sra_dir / 'SRR001_abundance.tsv').write_text('bad_column\nx\n', encoding='utf-8')
+        (sra_dir / 'SRR001_run_info.json').write_text('{}', encoding='utf-8')
+        orphan_dir = quant_dir / 'SRR999'
+        orphan_dir.mkdir()
+        (orphan_dir / 'SRR999_abundance.tsv').write_text('target_id\tlength\teff_length\test_counts\ttpm\nx\t1\t1\t1\t1\n', encoding='utf-8')
+        (orphan_dir / 'SRR999_run_info.json').write_text('{"p_pseudoaligned": 10}', encoding='utf-8')
+        args = make_sanity_args(tmp_path, out_dir=str(out_dir), quant=True)
+
+        row, issues = run_sanity_check_quant(
+            args=args,
+            metadata=metadata,
+            uni_species=np.array(['Sp1']),
+            sra_ids=pandas.Series(['SRR001']),
+            output_dir=str(output_dir),
+            metadata_path=str(metadata_path),
+        )
+
+        assert row['status'] == 'error'
+        assert row['unavailable_count'] == 1
+        assert row['warning_count'] == 1
+        assert os.path.exists(row['rerun_manifest_path'])
+        with open(row['rerun_manifest_path'], 'r', encoding='utf-8') as handle:
+            assert handle.read().strip() == 'SRR001'
+        issue_types = {(issue['issue_type'], issue['target_id']) for issue in issues}
+        assert ('invalid_content', 'SRR001') in issue_types
+        assert ('orphan_output', 'SRR999') in issue_types

@@ -453,9 +453,23 @@ def build_parser(command_handlers, command_names, version, prog=None):
     psa.add_argument('--getfastq', required=False, action='store_true',
                      help='set this option if you want to check for availability of getfastq output files '
                           'based on SRA IDs in metadata file.')
+    psa.add_argument('--merge', required=False, action='store_true',
+                     help='set this option if you want to check merge outputs based on species in metadata file.')
+    psa.add_argument('--busco', required=False, action='store_true',
+                     help='set this option if you want to check busco outputs based on species in metadata file.')
+    psa.add_argument('--finalize', required=False, action='store_true',
+                     help='set this option if you want to check finalize outputs based on species in metadata file.')
     psa.add_argument('--all', required=False, action='store_true',
-                     help='setting this option runs amalgkit sanity as if --index, --quant, --getfastq were set. '
+                     help='setting this option runs amalgkit sanity as if --index, --quant, --getfastq, --merge, '
+                          '--busco, --finalize were set. '
                           'If none of these target flags are specified, --all is assumed.')
+    psa.add_argument('--check', metavar='LIST', default=None, type=str, required=False, action='store',
+                     help='default=%(default)s: Comma-separated sanity checks to run. Accepted values: '
+                          'getfastq,index,quant,merge,busco,finalize,all.')
+    psa.add_argument('--run', metavar='RUN1,RUN2,...', default=None, type=str, required=False, action='store',
+                     help='default=%(default)s: Optional comma-separated run IDs to limit sanity checks.')
+    psa.add_argument('--species', metavar='SPECIES1,SPECIES2,...', default=None, type=str, required=False, action='store',
+                     help='default=%(default)s: Optional comma-separated scientific_name values to limit sanity checks.')
     psa.add_argument('--index_dir', metavar='PATH', default=None, type=str, required=False, action='store',
                      help='default=%(default)s: PATH to index directory. Only required if index directory is not '
                           'out_dir/index/')
@@ -465,6 +479,15 @@ def build_parser(command_handlers, command_names, version, prog=None):
     psa.add_argument('--getfastq_dir', metavar='PATH', default=None, type=str, required=False, action='store',
                      help='default=%(default)s: PATH to index directory. Only required if getfastq directory is not '
                           'out_dir/getfastq/')
+    psa.add_argument('--merge_dir', metavar='PATH', default=None, type=str, required=False, action='store',
+                     help='default=%(default)s: PATH to merge directory. Only required if merge directory is not '
+                          'out_dir/merge/')
+    psa.add_argument('--busco_dir', metavar='PATH', default=None, type=str, required=False, action='store',
+                     help='default=%(default)s: PATH to busco directory. Only required if busco directory is not '
+                          'out_dir/busco/')
+    psa.add_argument('--finalize_dir', metavar='PATH', default=None, type=str, required=False, action='store',
+                     help='default=%(default)s: PATH to finalize directory. Only required if finalize directory is not '
+                          'out_dir/finalize/')
     psa.add_argument('--quiet', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
                      help='default=%(default)s: Suppress per-run status lines and print only summary results.')
     psa.add_argument('--verbose_runs', metavar='INT', default=20, type=int, required=False, action='store',
@@ -473,6 +496,10 @@ def build_parser(command_handlers, command_names, version, prog=None):
     psa.add_argument('--strict', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
                      help='default=%(default)s: Exit with code 1 if any selected sanity check reports missing or '
                           'ambiguous inputs/outputs.')
+    psa.add_argument('--strict_level', metavar='none|error|warning', default='none', type=str, required=False, action='store',
+                     choices=['none', 'error', 'warning'],
+                     help='default=%(default)s: Failure threshold for sanity issues. '
+                          '"error" fails only on errors, "warning" fails on warnings or errors.')
     psa.set_defaults(handler=command_handlers['sanity'])
 
     pin_help = 'Appending local fastq info to a metadata table. See `amalgkit integrate -h`'
