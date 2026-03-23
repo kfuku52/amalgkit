@@ -26,7 +26,6 @@ setup(
             'select_rule_sets/vertebrate/select_rules.tsv',
             'datasets/yeast/*.fa.gz',
             'datasets/yeast/*.tsv',
-            'datasets/yeast/*.config',
         ],
     },
     install_requires        = [

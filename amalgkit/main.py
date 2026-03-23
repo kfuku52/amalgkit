@@ -40,7 +40,6 @@ COMMAND_SPECS = [
     ('finalize', 'amalgkit.finalize', 'finalize_main'),
     ('sanity', 'amalgkit.sanity', 'sanity_main'),
     ('integrate', 'amalgkit.integrate', 'integrate_main'),
-    ('config', 'amalgkit.config', 'config_main'),
     ('dataset', 'amalgkit.dataset', 'dataset_main'),
 ]
 

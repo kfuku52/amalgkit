@@ -115,7 +115,6 @@ class Metadata:
     id_cols = ['bioproject', 'biosample', 'experiment', 'run', 'sra_primary', 'sra_sample', 'sra_study']
 
     def __init__(self, column_names=column_names):
-        self.config_dir = ''
         self.df = pandas.DataFrame(index=[], columns=column_names)
         self.sample_attribute_collision_count = 0
         self.sample_attribute_collision_examples = []

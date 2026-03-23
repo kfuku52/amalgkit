@@ -488,26 +488,17 @@ def build_parser(command_handlers, command_names, version, prog=None):
                           'to estimate average read length. If yes, scans the whole file for exact statistics.')
     pin.set_defaults(handler=command_handlers['integrate'])
 
-    pco_help = 'Creating a series of config files for the metadata search. See `amalgkit config -h`'
-    pco = subparsers.add_parser('config', help=pco_help, parents=[pp_out])
-    pco.add_argument('--config', metavar='base|test|plantae|vertebrate', default='base', type=str, required=False, action='store',
-                     help='default=%(default)s: Name of config dataset to be exported. Options: '
-                          '"base": a minimal select_rules.tsv for custom editing. '
-                          '"test": short set for testing amalgkit select. '
-                          '"vertebrate": preconfigured select_rules.tsv for vertebrate data. '
-                          '"plantae": preconfigured select_rules.tsv for plant data.')
-    pco.add_argument('--overwrite', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
-                     help='default=%(default)s: allow to overwrite out_dir/select_rules.tsv .')
-    pco.set_defaults(handler=command_handlers['config'])
-
-    pda_help = 'Extracting bundled test datasets. See `amalgkit dataset -h`'
+    pda_help = 'Extracting bundled test datasets and packaged select rule sets. See `amalgkit dataset -h`'
     pda = subparsers.add_parser('dataset', help=pda_help, parents=[pp_out])
     pda.add_argument('--name', metavar='yeast|...', default=None, type=str, required=False, action='store',
                      help='default=%(default)s: Name of the dataset to extract. Use --list to see available datasets.')
+    pda.add_argument('--rule_set', metavar='base|test|plantae|vertebrate', default=None, type=str, required=False, action='store',
+                     help='default=%(default)s: Bundled select rule set to export to out_dir/select_rules.tsv. '
+                          'Use --list to see available rule sets.')
     pda.add_argument('--list', default=False, required=False, action='store_true',
-                     help='List available datasets and exit.')
+                     help='List available datasets and rule sets and exit.')
     pda.add_argument('--overwrite', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
-                     help='default=%(default)s: Allow overwriting existing files.')
+                     help='default=%(default)s: Allow overwriting existing files, including out_dir/select_rules.tsv.')
     pda.set_defaults(handler=command_handlers['dataset'])
 
     parser_help = subparsers.add_parser('help', help='Printing help messages')
