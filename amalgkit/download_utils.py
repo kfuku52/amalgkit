@@ -351,6 +351,7 @@ def acquire_exclusive_lock(
         raise ValueError('poll_seconds must be > 0.')
     if timeout_seconds <= 0:
         raise ValueError('timeout_seconds must be > 0.')
+    _assert_lock_path_is_regular_file(lock_path, lock_label=lock_label)
     lock_path = os.path.realpath(lock_path)
     lock_dir = os.path.dirname(lock_path)
     if lock_dir != '':

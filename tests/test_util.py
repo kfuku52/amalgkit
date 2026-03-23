@@ -2251,6 +2251,14 @@ class TestMetadataTaxidValidation:
 
 
 class TestDownloadLockRecovery:
+    def test_acquire_exclusive_lock_rejects_symlink_lock_path(self, tmp_path):
+        lock_path = tmp_path / 'download.lock'
+        os.symlink(tmp_path / 'dangling.lock.target', lock_path)
+
+        with pytest.raises(IsADirectoryError, match='test lock path exists but is not a file'):
+            with acquire_exclusive_lock(str(lock_path), lock_label='test lock', poll_seconds=1, timeout_seconds=2):
+                pass
+
     def test_acquire_exclusive_lock_reclaims_stale_same_host_lock(self, tmp_path, monkeypatch):
         lock_path = tmp_path / 'download.lock'
         lock_path.write_text(json.dumps({

@@ -4,13 +4,13 @@ import re
 import shlex
 import subprocess
 import sys
-import time
 
 import numpy
 import pandas
 
 from amalgkit.arg_utils import clone_namespace
 from amalgkit.command_context import PrefetchedDirEntries, QuantRuntimeContext
+from amalgkit.download_utils import acquire_exclusive_lock
 from amalgkit.metadata_utils import (
     get_metadata_row_index_by_run,
     get_newest_intermediate_file_extension,
@@ -773,44 +773,6 @@ def _resolve_index_dir(args):
     return index_dir
 
 
-def _assert_lock_path_is_regular_file(lock_path):
-    if not os.path.lexists(lock_path):
-        return
-    if os.path.islink(lock_path) or (not os.path.isfile(lock_path)):
-        raise IsADirectoryError('Index lock path exists but is not a file: {}'.format(lock_path))
-
-
-def _acquire_index_lock(lock_path):
-    _assert_lock_path_is_regular_file(lock_path)
-    try:
-        fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-    except FileExistsError:
-        return False
-    with os.fdopen(fd, 'w') as lock_handle:
-        lock_handle.write('{}\n'.format(os.getpid()))
-    return True
-
-
-def _wait_for_existing_builder(index_path, lock_path, sci_name, lock_poll_seconds, lock_timeout_seconds):
-    _assert_lock_path_is_regular_file(lock_path)
-    if not os.path.lexists(lock_path):
-        return False
-    print('Another process is building index for {}. Waiting for lock release: {}'.format(sci_name, lock_path), flush=True)
-    wait_start = time.time()
-    while os.path.lexists(lock_path):
-        _assert_lock_path_is_regular_file(lock_path)
-        elapsed = time.time() - wait_start
-        if elapsed > lock_timeout_seconds:
-            txt = 'Timed out after {:,} sec while waiting for index lock: {}\n'
-            txt += 'Remove stale lock if no builder is running and rerun quant.'
-            raise TimeoutError(txt.format(lock_timeout_seconds, lock_path))
-        time.sleep(lock_poll_seconds)
-    if os.path.exists(index_path):
-        print('Detected completed index after waiting: {}'.format(index_path), flush=True)
-        return True
-    return False
-
-
 def _normalize_species_identifier(text):
     normalized = str(text).strip()
     if normalized == '':
@@ -984,73 +946,61 @@ def get_index(args, sci_name, runtime_context=None, backend=None, oarfish_seq_te
     prefetched_index_lookup_entries = _resolve_prefetched_index_entries(index_dir, runtime_context=runtime_context)
     use_prefetched_index = prefetched_index_lookup_entries is not None
 
-    while True:
-        if use_prefetched_index:
-            index = _find_single_index_file(
-                index_dir=index_dir,
-                sci_name=sci_name,
-                entries=prefetched_index_lookup_entries,
-                backend=backend,
-                oarfish_seq_tech=oarfish_seq_tech,
-            )
-            use_prefetched_index = False
-        else:
-            index = _find_single_index_file(
-                index_dir=index_dir,
-                sci_name=sci_name,
-                backend=backend,
-                oarfish_seq_tech=oarfish_seq_tech,
-            )
+    if use_prefetched_index:
+        index = _find_single_index_file(
+            index_dir=index_dir,
+            sci_name=sci_name,
+            entries=prefetched_index_lookup_entries,
+            backend=backend,
+            oarfish_seq_tech=oarfish_seq_tech,
+        )
+    else:
+        index = _find_single_index_file(
+            index_dir=index_dir,
+            sci_name=sci_name,
+            backend=backend,
+            oarfish_seq_tech=oarfish_seq_tech,
+        )
+    if index is not None:
+        return index
+
+    if not args.build_index:
+        sys.stderr.write('No index file was found in: {}\n'.format(index_dir))
+        sys.stderr.write('Try --fasta_dir PATH and --build_index yes\n')
+        raise FileNotFoundError('Could not find index file.')
+
+    with acquire_exclusive_lock(
+        lock_path=lock_path,
+        lock_label='Index lock',
+        poll_seconds=lock_poll_seconds,
+        timeout_seconds=lock_timeout_seconds,
+    ):
+        index = _find_single_index_file(
+            index_dir=index_dir,
+            sci_name=sci_name,
+            backend=backend,
+            oarfish_seq_tech=oarfish_seq_tech,
+        )
         if index is not None:
+            print('Detected completed index after lock acquisition: {}'.format(index), flush=True)
             return index
 
-        if not args.build_index:
-            sys.stderr.write('No index file was found in: {}\n'.format(index_dir))
-            sys.stderr.write('Try --fasta_dir PATH and --build_index yes\n')
-            raise FileNotFoundError('Could not find index file.')
-
-        if _wait_for_existing_builder(
-            index_path=index_path,
-            lock_path=lock_path,
-            sci_name=sci_name,
-            lock_poll_seconds=lock_poll_seconds,
-            lock_timeout_seconds=lock_timeout_seconds,
-        ):
-            continue
-
-        if not _acquire_index_lock(lock_path):
-            continue
-
-        try:
-            index = _find_single_index_file(
-                index_dir=index_dir,
+        print('--build_index set. Building index for {}'.format(sci_name))
+        fasta_file = _resolve_single_fasta_file(args, sci_name, runtime_context=runtime_context)
+        if backend == 'kallisto':
+            _build_kallisto_index(index_path=index_path, fasta_file=fasta_file, sci_name=sci_name)
+        elif backend == 'oarfish':
+            _build_oarfish_index(
+                args=args,
+                index_path=index_path,
+                fasta_file=fasta_file,
                 sci_name=sci_name,
-                backend=backend,
-                oarfish_seq_tech=oarfish_seq_tech,
+                seq_tech=oarfish_seq_tech,
             )
-            if index is not None:
-                return index
-
-            print('--build_index set. Building index for {}'.format(sci_name))
-            fasta_file = _resolve_single_fasta_file(args, sci_name, runtime_context=runtime_context)
-            if backend == 'kallisto':
-                _build_kallisto_index(index_path=index_path, fasta_file=fasta_file, sci_name=sci_name)
-            elif backend == 'oarfish':
-                _build_oarfish_index(
-                    args=args,
-                    index_path=index_path,
-                    fasta_file=fasta_file,
-                    sci_name=sci_name,
-                    seq_tech=oarfish_seq_tech,
-                )
-            else:
-                raise ValueError('Unsupported quant backend: {}'.format(backend))
-            print('Index file found: {}'.format(index_path), flush=True)
-            return index_path
-        finally:
-            if os.path.lexists(lock_path):
-                _assert_lock_path_is_regular_file(lock_path)
-                os.remove(lock_path)
+        else:
+            raise ValueError('Unsupported quant backend: {}'.format(backend))
+        print('Index file found: {}'.format(index_path), flush=True)
+        return index_path
 
 
 def _get_index_for_backend(args, sci_name, runtime_context=None, backend='kallisto', oarfish_seq_tech=None):

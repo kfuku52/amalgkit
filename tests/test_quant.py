@@ -1,6 +1,8 @@
 import os
 import json
 import subprocess
+from contextlib import contextmanager
+
 import pytest
 import numpy
 import pandas
@@ -826,34 +828,48 @@ class TestQuantEdgeCases:
         assert observed_index == str(index_dir / 'Homo_sapiens.idx')
         assert observed['fasta_file'] == str(fasta_plain)
 
-    def test_get_index_waits_for_existing_builder_lock(self, tmp_path, monkeypatch):
+    def test_get_index_uses_shared_lock_and_rechecks_after_acquire(self, tmp_path, monkeypatch):
         out_dir = tmp_path / 'out'
         index_dir = tmp_path / 'index'
         out_dir.mkdir()
         index_dir.mkdir()
         lock_path = index_dir / '.Homo_sapiens.idx.lock'
-        lock_path.write_text('12345\n')
 
         args = SimpleNamespace(
             out_dir=str(out_dir),
             index_dir=str(index_dir),
             build_index=True,
             fasta_dir='inferred',
+            index_lock_poll=7,
+            index_lock_timeout=11,
         )
 
         index_path = index_dir / 'Homo_sapiens.idx'
+        captured = {}
 
-        def fake_sleep(_seconds):
+        @contextmanager
+        def fake_acquire_exclusive_lock(lock_path, lock_label='Lock', poll_seconds=5, timeout_seconds=3600):
+            captured['lock_path'] = lock_path
+            captured['lock_label'] = lock_label
+            captured['poll_seconds'] = poll_seconds
+            captured['timeout_seconds'] = timeout_seconds
             index_path.write_text('index_ready')
-            lock_path.unlink()
+            yield
 
         def fail_if_called(*_args, **_kwargs):
             raise AssertionError('subprocess.run should not be called when waiting for another builder.')
 
-        monkeypatch.setattr('amalgkit.quant.time.sleep', fake_sleep)
+        monkeypatch.setattr('amalgkit.quant.acquire_exclusive_lock', fake_acquire_exclusive_lock)
         monkeypatch.setattr(subprocess, 'run', fail_if_called)
         observed = get_index(args, 'Homo_sapiens')
+
         assert observed == str(index_path)
+        assert captured == {
+            'lock_path': str(lock_path),
+            'lock_label': 'Index lock',
+            'poll_seconds': 7,
+            'timeout_seconds': 11,
+        }
 
     def test_get_index_rejects_lock_path_that_is_directory(self, tmp_path):
         out_dir = tmp_path / 'out'
