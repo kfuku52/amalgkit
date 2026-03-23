@@ -7,7 +7,7 @@ import pandas
 
 from amalgkit.arg_utils import clone_namespace
 from amalgkit.filter_utils import staged_output_dir
-from amalgkit.metadata_utils import Metadata, load_metadata
+from amalgkit.metadata_utils import Metadata, load_metadata, SELECT_SAMPLING_STRATEGIES
 from amalgkit.output_utils import atomic_write_dataframe
 from amalgkit.parallel_utils import resolve_worker_allocation, run_tasks_with_optional_threads
 
@@ -88,6 +88,11 @@ SELECT_PARAMETER_DEFINITIONS = {
     },
     'sample_group': {
         'kind': 'string',
+        'required': False,
+    },
+    'sampling_strategy': {
+        'kind': 'choice',
+        'choices': list(SELECT_SAMPLING_STRATEGIES),
         'required': False,
     },
 }
@@ -1262,7 +1267,10 @@ def apply_select_filters(metadata, args, select_rules):
         if rule['parameter_name'] != '':
             enabled = bool(resolve_select_runtime_parameter(args, rule['parameter_name'], rule['rule_id']))
         metadata = apply_select_redundant_biosample_filter(metadata, rule, enabled)
-    metadata.label_sampled_data(args.max_sample)
+    metadata.label_sampled_data(
+        args.max_sample,
+        sampling_strategy=getattr(args, 'sampling_strategy', 'maximize_bioproject_diversity'),
+    )
     metadata.reorder(omit_misc=False)
     return metadata
 

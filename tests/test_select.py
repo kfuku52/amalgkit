@@ -1,6 +1,7 @@
 import os
 import subprocess
 import sys
+import numpy
 import pandas
 import pytest
 
@@ -363,6 +364,12 @@ class TestSelectHelpers:
                 'parameter_value': '1000000',
             },
             {
+                'rule_id': 'param_sampling_strategy',
+                'stage': 'parameter',
+                'parameter_name': 'sampling_strategy',
+                'parameter_value': 'random',
+            },
+            {
                 'rule_id': 'flower_whole',
                 'stage': 'normalize',
                 'priority': '10',
@@ -376,6 +383,7 @@ class TestSelectHelpers:
         config = read_select_config(str(rules_path))
 
         assert config['parameters']['min_nspots'] == 1000000
+        assert config['parameters']['sampling_strategy'] == 'random'
         assert len(config['rules']) == 1
         assert config['rules'][0]['rule_id'] == 'flower_whole'
 
@@ -435,6 +443,7 @@ class TestSelectHelpers:
             mark_missing_rank=None,
             mark_redundant_biosamples=None,
             sample_group=None,
+            sampling_strategy=None,
         )
 
         out = apply_select_config_parameters(
@@ -445,6 +454,7 @@ class TestSelectHelpers:
                 'mark_missing_rank': 'none',
                 'mark_redundant_biosamples': False,
                 'sample_group': 'flower,leaf,root',
+                'sampling_strategy': 'largest_bioprojects_first',
             },
         )
 
@@ -453,6 +463,7 @@ class TestSelectHelpers:
         assert out.mark_missing_rank == 'none'
         assert out.mark_redundant_biosamples is False
         assert out.sample_group == 'flower,leaf,root'
+        assert out.sampling_strategy == 'largest_bioprojects_first'
 
     def test_apply_select_config_parameters_keeps_runtime_sample_group_override(self):
         args = SimpleNamespace(
@@ -461,6 +472,7 @@ class TestSelectHelpers:
             mark_missing_rank=None,
             mark_redundant_biosamples=None,
             sample_group='leaf',
+            sampling_strategy='random',
         )
 
         out = apply_select_config_parameters(
@@ -471,10 +483,68 @@ class TestSelectHelpers:
                 'mark_missing_rank': 'none',
                 'mark_redundant_biosamples': False,
                 'sample_group': 'flower,leaf,root',
+                'sampling_strategy': 'largest_bioprojects_first',
             },
         )
 
         assert out.sample_group == 'leaf'
+        assert out.sampling_strategy == 'random'
+
+
+class TestSamplingStrategies:
+    @staticmethod
+    def _build_sampling_metadata():
+        return Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001', 'SRR002', 'SRR003', 'SRR004', 'SRR005', 'SRR006', 'SRR007'],
+            'scientific_name': ['Species A'] * 7,
+            'sample_group': ['leaf'] * 7,
+            'bioproject': ['PRJ1', 'PRJ1', 'PRJ1', 'PRJ1', 'PRJ2', 'PRJ2', 'PRJ3'],
+            'biosample': ['SAM1', 'SAM2', 'SAM3', 'SAM4', 'SAM5', 'SAM6', 'SAM7'],
+            'total_spots': [100] * 7,
+            'exclusion': ['no'] * 7,
+        }))
+
+    def test_maximize_bioproject_diversity_is_current_default(self, monkeypatch):
+        metadata = self._build_sampling_metadata()
+        monkeypatch.setattr(numpy.random, 'permutation', lambda values: numpy.array(list(values)))
+
+        metadata.label_sampled_data(max_sample=3, sampling_strategy='maximize_bioproject_diversity')
+
+        selected = metadata.df.loc[metadata.df['is_sampled'] == 'yes', 'bioproject'].value_counts().to_dict()
+        assert selected == {'PRJ1': 1, 'PRJ2': 1, 'PRJ3': 1}
+
+    def test_largest_bioprojects_first_fills_largest_project_before_others(self, monkeypatch):
+        metadata = self._build_sampling_metadata()
+        monkeypatch.setattr(numpy.random, 'permutation', lambda values: numpy.array(list(values)))
+
+        metadata.label_sampled_data(max_sample=3, sampling_strategy='largest_bioprojects_first')
+
+        selected = metadata.df.loc[metadata.df['is_sampled'] == 'yes', 'bioproject'].value_counts().to_dict()
+        assert selected == {'PRJ1': 3}
+
+    def test_smallest_bioprojects_first_fills_smallest_projects_before_others(self, monkeypatch):
+        metadata = self._build_sampling_metadata()
+        monkeypatch.setattr(numpy.random, 'permutation', lambda values: numpy.array(list(values)))
+
+        metadata.label_sampled_data(max_sample=3, sampling_strategy='smallest_bioprojects_first')
+
+        selected = metadata.df.loc[metadata.df['is_sampled'] == 'yes', 'bioproject'].value_counts().to_dict()
+        assert selected == {'PRJ2': 2, 'PRJ3': 1}
+
+    def test_random_sampling_ignores_bioproject_balance(self, monkeypatch):
+        metadata = self._build_sampling_metadata()
+        monkeypatch.setattr(numpy.random, 'permutation', lambda values: numpy.array(list(values)))
+
+        metadata.label_sampled_data(max_sample=3, sampling_strategy='random')
+
+        selected_runs = metadata.df.loc[metadata.df['is_sampled'] == 'yes', 'run'].tolist()
+        assert selected_runs == ['SRR001', 'SRR002', 'SRR003']
+
+    def test_invalid_sampling_strategy_raises(self):
+        metadata = self._build_sampling_metadata()
+
+        with pytest.raises(ValueError, match='Unknown sampling_strategy'):
+            metadata.label_sampled_data(max_sample=3, sampling_strategy='unsupported_strategy')
 
     @pytest.mark.parametrize(
         ('text', 'expected_status', 'expected_organ'),
@@ -1228,9 +1298,11 @@ class TestSelectRuleApplication:
 
     def test_default_plantae_config_contains_manual_recovery_and_filter_rules(self):
         rules_path = Path(__file__).resolve().parents[1] / 'amalgkit' / 'select_rule_sets' / 'plantae' / 'select_rules.tsv'
-        select_rules = read_select_rules(str(rules_path))
+        config = read_select_config(str(rules_path))
+        select_rules = config['rules']
         rule_ids = {rule['rule_id'] for rule in select_rules}
         validate_rule_ids = {rule['rule_id'] for rule in select_rules if rule['stage'] == 'validate'}
+        assert config['parameters']['sampling_strategy'] == 'maximize_bioproject_diversity'
         assert 'normalize_leaf_safe_covering_inflorescence' in rule_ids
         assert 'normalize_leaf_safe_floral_induction_context' in rule_ids
         assert 'normalize_root_safe_leaf_stage_context' in rule_ids

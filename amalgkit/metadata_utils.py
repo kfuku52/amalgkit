@@ -20,6 +20,12 @@ from amalgkit.parallel_utils import (
 )
 
 PRIVATE_FASTQ_SCIENTIFIC_NAME_PLACEHOLDER = 'Please add in format: Genus species'
+SELECT_SAMPLING_STRATEGIES = (
+    'maximize_bioproject_diversity',
+    'largest_bioprojects_first',
+    'smallest_bioprojects_first',
+    'random',
+)
 _TAXONOMY_LOOKUP_CACHE_LOCK = threading.Lock()
 _LINEAGE_BY_TAXID_CACHE = {}
 _RANK_BY_TAXID_CACHE = {}
@@ -587,12 +593,100 @@ class Metadata:
                 active_bioprojects = [bp for bp in active_bioprojects if bp not in exhausted]
         return df
 
-    def label_sampled_data(self, max_sample=10):
+    def _sample_bioprojects_by_size(self, df, target_n=10, largest_first=True):
+        if 'exclusion' not in df.columns:
+            raise ValueError('Column "exclusion" is required for sample selection.')
+        exclusion_series = (
+            df.loc[:, 'exclusion']
+            .fillna('')
+            .astype(str)
+            .str.strip()
+            .str.lower()
+        )
+        is_eligible = (exclusion_series == 'no')
+        if int(is_eligible.sum()) <= target_n:
+            df.loc[is_eligible, 'is_sampled'] = 'yes'
+            return df
+
+        is_selected = (df.loc[:, 'is_sampled'] == 'yes') & is_eligible
+        selected_n = int(is_selected.sum())
+        if selected_n >= target_n:
+            return df
+
+        is_unselected_eligible = (df.loc[:, 'is_sampled'] == 'no') & is_eligible
+        if not bool(is_unselected_eligible.any()):
+            return df
+
+        grouped = df.loc[is_unselected_eligible, :].groupby('bioproject', sort=False).groups
+        index_pools = {}
+        for bioproject, indices in grouped.items():
+            shuffled = list(numpy.random.permutation(indices.to_numpy()))
+            if len(shuffled) > 0:
+                index_pools[bioproject] = shuffled
+
+        randomized_bioprojects = list(numpy.random.permutation(list(index_pools.keys())))
+        ordered_bioprojects = sorted(
+            randomized_bioprojects,
+            key=lambda bioproject: len(index_pools[bioproject]),
+            reverse=largest_first,
+        )
+        for bioproject in ordered_bioprojects:
+            pool = index_pools[bioproject]
+            while (selected_n < target_n) and (len(pool) > 0):
+                selected_index = pool.pop()
+                df.at[selected_index, 'is_sampled'] = 'yes'
+                selected_n += 1
+            if selected_n >= target_n:
+                break
+        return df
+
+    def _sample_random(self, df, target_n=10):
+        if 'exclusion' not in df.columns:
+            raise ValueError('Column "exclusion" is required for sample selection.')
+        exclusion_series = (
+            df.loc[:, 'exclusion']
+            .fillna('')
+            .astype(str)
+            .str.strip()
+            .str.lower()
+        )
+        is_eligible = (exclusion_series == 'no')
+        if int(is_eligible.sum()) <= target_n:
+            df.loc[is_eligible, 'is_sampled'] = 'yes'
+            return df
+
+        is_selected = (df.loc[:, 'is_sampled'] == 'yes') & is_eligible
+        selected_n = int(is_selected.sum())
+        if selected_n >= target_n:
+            return df
+
+        is_unselected_eligible = (df.loc[:, 'is_sampled'] == 'no') & is_eligible
+        if not bool(is_unselected_eligible.any()):
+            return df
+
+        remaining_n = target_n - selected_n
+        eligible_indices = df.index[is_unselected_eligible].to_numpy()
+        selected_indices = numpy.random.permutation(eligible_indices)[:remaining_n]
+        if len(selected_indices) > 0:
+            df.loc[selected_indices, 'is_sampled'] = 'yes'
+        return df
+
+    def label_sampled_data(self, max_sample=10, sampling_strategy='maximize_bioproject_diversity'):
         previous_mode = pandas.get_option('mode.chained_assignment')
         pandas.set_option('mode.chained_assignment', None)
         try:
-            txt = '{}: Selecting subsets of SRA IDs for >{:,} samples per sample_group per species'
-            print(txt.format(datetime.datetime.now(), max_sample), flush=True)
+            normalized_strategy = str(sampling_strategy).strip().lower()
+            if normalized_strategy == '':
+                normalized_strategy = 'maximize_bioproject_diversity'
+            if normalized_strategy not in SELECT_SAMPLING_STRATEGIES:
+                raise ValueError(
+                    'Unknown sampling_strategy "{}". Expected one of: {}'.format(
+                        sampling_strategy,
+                        ', '.join(SELECT_SAMPLING_STRATEGIES),
+                    )
+                )
+            txt = '{}: Selecting subsets of SRA IDs for >{:,} samples per sample_group per species (sampling_strategy={})'
+            print(txt.format(datetime.datetime.now(), max_sample, normalized_strategy), flush=True)
             self.df['sample_group'] = self.df['sample_group'].fillna('').astype(str)
             self.df['exclusion'] = self.df['exclusion'].fillna('no').astype(str).str.strip().str.lower()
             self.df['bioproject'] = self.df['bioproject'].fillna('unknown').astype(str).values
@@ -602,10 +696,29 @@ class Metadata:
             self.df.loc[(self.df.loc[:, 'exclusion'] == 'no') & (~is_empty), 'is_qualified'] = 'yes'
             grouped = self.df.groupby(['scientific_name', 'sample_group'], sort=False, dropna=False)
             for (_, _), sp_sample_group in grouped:
-                sampled_group = self._maximize_bioproject_sampling(
-                    df=sp_sample_group.copy(),
-                    target_n=max_sample,
-                )
+                sampled_group = sp_sample_group.copy()
+                if normalized_strategy == 'maximize_bioproject_diversity':
+                    sampled_group = self._maximize_bioproject_sampling(
+                        df=sampled_group,
+                        target_n=max_sample,
+                    )
+                elif normalized_strategy == 'largest_bioprojects_first':
+                    sampled_group = self._sample_bioprojects_by_size(
+                        df=sampled_group,
+                        target_n=max_sample,
+                        largest_first=True,
+                    )
+                elif normalized_strategy == 'smallest_bioprojects_first':
+                    sampled_group = self._sample_bioprojects_by_size(
+                        df=sampled_group,
+                        target_n=max_sample,
+                        largest_first=False,
+                    )
+                else:
+                    sampled_group = self._sample_random(
+                        df=sampled_group,
+                        target_n=max_sample,
+                    )
                 self.df.loc[sampled_group.index, 'is_sampled'] = sampled_group['is_sampled'].to_numpy()
             self.reorder(omit_misc=False)
         finally:
