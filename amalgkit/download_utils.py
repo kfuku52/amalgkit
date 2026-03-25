@@ -28,6 +28,14 @@ def _get_thread_local_ete_ncbitaxa_cache():
     return cache
 
 
+def _build_ete_ncbitaxa_cache_key(scope, ncbitaxa_cls, dbfile=None):
+    # Keep the constructor object itself in the key so monkeypatched callables
+    # cannot alias through recycled integer ids across tests or repeated setup.
+    if scope == 'default':
+        return ('default', ncbitaxa_cls)
+    return ('custom', ncbitaxa_cls, dbfile)
+
+
 def resolve_download_dir(args):
     out_dir = getattr(args, 'out_dir', './')
     inferred = os.path.join(os.path.realpath(out_dir), 'downloads')
@@ -619,7 +627,7 @@ def get_ete_ncbitaxa(
     if is_taxadb_up_to_date_fn is None:
         is_taxadb_up_to_date_fn = getattr(ete4, 'is_taxadb_up_to_date', None)
     if args is None:
-        cache_key = ('default', id(ncbitaxa_cls))
+        cache_key = _build_ete_ncbitaxa_cache_key('default', ncbitaxa_cls)
         cache = _get_thread_local_ete_ncbitaxa_cache()
         cached = cache.get(cache_key)
         if cached is not None:
@@ -637,7 +645,7 @@ def get_ete_ncbitaxa(
         os.makedirs(lock_dir, exist_ok=True)
     dbfile = os.path.realpath(os.path.join(ete_data_dir, 'taxa.sqlite'))
     taxdump_file = os.path.realpath(os.path.join(ete_data_dir, 'taxdump.tar.gz'))
-    cache_key = ('custom', id(ncbitaxa_cls), dbfile)
+    cache_key = _build_ete_ncbitaxa_cache_key('custom', ncbitaxa_cls, dbfile=dbfile)
     cache = _get_thread_local_ete_ncbitaxa_cache()
     cached = cache.get(cache_key)
     if cached is not None:

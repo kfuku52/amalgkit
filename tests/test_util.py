@@ -2202,6 +2202,36 @@ class TestMetadataTaxidValidation:
         assert captured['init_calls'] == 1
         assert captured['lock_calls'] == 1
 
+    def test_get_ete_ncbitaxa_default_cache_ignores_constructor_id_collisions(self, monkeypatch):
+        import builtins
+        import amalgkit.download_utils as download_utils
+
+        class FirstNcbi:
+            pass
+
+        class SecondNcbi:
+            pass
+
+        cache = download_utils._get_thread_local_ete_ncbitaxa_cache()
+        cache.clear()
+        original_id = builtins.id
+
+        def fake_id(value):
+            if value in {FirstNcbi, SecondNcbi}:
+                return 424242
+            return original_id(value)
+
+        monkeypatch.setattr(builtins, 'id', fake_id)
+        try:
+            first = download_utils.get_ete_ncbitaxa(ncbitaxa_cls=FirstNcbi)
+            second = download_utils.get_ete_ncbitaxa(ncbitaxa_cls=SecondNcbi)
+        finally:
+            cache.clear()
+
+        assert isinstance(first, FirstNcbi)
+        assert isinstance(second, SecondNcbi)
+        assert first is not second
+
     def test_get_ete_ncbitaxa_serializes_custom_constructor_across_threads(self, tmp_path, monkeypatch):
         captured = {'active': 0, 'max_active': 0, 'init_calls': 0}
         state_lock = threading.Lock()
