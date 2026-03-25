@@ -39,6 +39,7 @@ RUNTIME_BANNER_COMMANDS = {
     'csfilter',
     'finalize',
     'sanity',
+    'rerun',
     'integrate',
 }
 

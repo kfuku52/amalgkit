@@ -696,6 +696,7 @@ class TestIntegrateMain:
             out_dir=str(tmp_path),
             fastq_dir=str(tmp_path / 'fq'),
             accurate_size=True,
+            output_metadata=None,
         )
         metadata = Metadata.from_DataFrame(pandas.DataFrame({
             'run': [' SRR001 '],
@@ -721,6 +722,73 @@ class TestIntegrateMain:
         out_df = pandas.read_csv(str(out_path), sep='\t')
         assert out_df.loc[0, 'run'] == 'SRR001'
         assert out_df.loc[0, 'data_available'] == 'yes'
+
+    def test_writes_merged_metadata_to_explicit_output_path(self, tmp_path, monkeypatch):
+        metadata_dir = tmp_path / 'metadata'
+        metadata_dir.mkdir()
+        (metadata_dir / 'metadata.tsv').write_text('dummy\n')
+        explicit_out = tmp_path / 'custom' / 'integrated.tsv'
+        args = SimpleNamespace(
+            metadata='inferred',
+            out_dir=str(tmp_path),
+            fastq_dir=str(tmp_path / 'fq'),
+            accurate_size=True,
+            output_metadata=str(explicit_out),
+        )
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001'],
+            'scientific_name': ['Sp1'],
+            'exclusion': ['no'],
+        }))
+
+        monkeypatch.setattr('amalgkit.integrate.load_metadata', lambda _args: metadata)
+        monkeypatch.setattr('amalgkit.integrate.check_getfastq_outputs', lambda *_args, **_kwargs: (['SRR001'], []))
+        monkeypatch.setattr(
+            'amalgkit.integrate.get_fastq_stats',
+            lambda _args, existing_df=None: pandas.DataFrame({
+                'run': ['private001'],
+                'scientific_name': ['Sp2'],
+                'exclusion': ['no'],
+            }),
+        )
+
+        integrate_main(args)
+
+        assert explicit_out.exists()
+        out_df = pandas.read_csv(str(explicit_out), sep='\t')
+        assert set(out_df['run']) == {'SRR001', 'private001'}
+        assert not (metadata_dir / 'metadata_updated_for_private_fastq.tsv').exists()
+
+    def test_writes_new_private_metadata_to_explicit_output_path(self, tmp_path, monkeypatch):
+        explicit_out = tmp_path / 'custom' / 'private_metadata.tsv'
+        args = SimpleNamespace(
+            metadata='inferred',
+            out_dir=str(tmp_path),
+            fastq_dir=str(tmp_path / 'fq'),
+            accurate_size=True,
+            output_metadata=str(explicit_out),
+        )
+        expected_df = pandas.DataFrame({
+            'run': ['private001'],
+            'scientific_name': ['Sp2'],
+            'exclusion': ['no'],
+        })
+
+        def fake_get_fastq_stats(_args, existing_df=None, output_path=None):
+            assert existing_df is None
+            assert os.path.realpath(output_path) == os.path.realpath(str(explicit_out))
+            explicit_out.parent.mkdir(parents=True, exist_ok=True)
+            expected_df.to_csv(str(explicit_out), sep='\t', index=False)
+            return expected_df
+
+        monkeypatch.setattr('amalgkit.integrate.get_fastq_stats', fake_get_fastq_stats)
+
+        integrate_main(args)
+
+        assert explicit_out.exists()
+        out_df = pandas.read_csv(str(explicit_out), sep='\t')
+        pandas.testing.assert_frame_equal(out_df, expected_df)
+        assert not (tmp_path / 'metadata_private_fastq.tsv').exists()
 
     def test_rejects_missing_run_ids_in_existing_metadata(self, tmp_path, monkeypatch):
         metadata_dir = tmp_path / 'metadata'
@@ -847,6 +915,7 @@ class TestIntegrateMain:
             out_dir=str(tmp_path),
             fastq_dir=str(tmp_path / 'fq'),
             accurate_size=True,
+            output_metadata=None,
         )
 
         with pytest.raises(FileNotFoundError, match='Metadata file not found'):

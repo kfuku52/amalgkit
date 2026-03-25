@@ -943,7 +943,7 @@ def build_private_fastq_metadata_rows(run_specs, stats_by_run):
     return rows
 
 
-def get_fastq_stats(args, existing_df=None):
+def get_fastq_stats(args, existing_df=None, output_path=None):
     print("Starting integration of fastq-file metadata...")
     if (getattr(args, 'fastq_dir', None) is None) or (str(args.fastq_dir).strip() == ''):
         raise ValueError('--fastq_dir is required.')
@@ -974,13 +974,26 @@ def get_fastq_stats(args, existing_df=None):
     os.makedirs(metadata_dir, exist_ok=True)
     tmp_metadata = tmp_metadata.sort_values(by='run', axis=0, ascending=True).reset_index(drop=True)
     tmp_metadata = finalize_private_fastq_metadata(tmp_metadata, args=args, existing_df=existing_df)
+    if output_path is None:
+        output_path = os.path.join(out_dir, 'metadata_private_fastq.tsv')
     atomic_write_dataframe(
         tmp_metadata,
-        os.path.join(out_dir, 'metadata_private_fastq.tsv'),
+        output_path,
         sep='\t',
         index=False,
     )
     return tmp_metadata
+
+def resolve_integrate_output_metadata_path(args, merge_with_existing_metadata):
+    output_metadata = getattr(args, 'output_metadata', None)
+    if output_metadata is not None:
+        output_metadata = str(output_metadata).strip()
+        if output_metadata != '':
+            return os.path.realpath(output_metadata)
+    out_dir = os.path.realpath(args.out_dir)
+    if merge_with_existing_metadata:
+        return os.path.join(out_dir, 'metadata', 'metadata_updated_for_private_fastq.tsv')
+    return os.path.join(out_dir, 'metadata_private_fastq.tsv')
 
 def integrate_main(args):
     if args.metadata=='inferred':
@@ -1024,12 +1037,14 @@ def integrate_main(args):
             )
         df['run'] = merged_runs
         df = ensure_taxonomy_columns(df, args=args)
+        output_metadata_path = resolve_integrate_output_metadata_path(args, merge_with_existing_metadata=True)
         atomic_write_dataframe(
             df,
-            os.path.join(args.out_dir, 'metadata', 'metadata_updated_for_private_fastq.tsv'),
+            output_metadata_path,
             sep='\t',
             index=False,
         )
     else:
         print('Generating a new metadata table.')
-        get_fastq_stats(args)
+        output_metadata_path = resolve_integrate_output_metadata_path(args, merge_with_existing_metadata=False)
+        get_fastq_stats(args, output_path=output_metadata_path)

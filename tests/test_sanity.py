@@ -7,11 +7,15 @@ from types import SimpleNamespace
 
 from amalgkit.exceptions import AmalgkitExit
 from amalgkit.sanity import (
+    _build_sanity_summary_row,
     list_duplicates,
     parse_metadata,
     check_quant_output,
     check_quant_index,
     check_getfastq_outputs,
+    run_sanity_check_busco,
+    run_sanity_check_finalize,
+    run_sanity_check_merge,
     run_sanity_check_quant,
     sanity_main,
 )
@@ -63,6 +67,33 @@ class TestListDuplicates:
 
     def test_single_element(self):
         assert list_duplicates([42]) == []
+
+
+class TestSanitySummaryRow:
+    def test_global_error_marks_all_checked_items_unavailable(self, tmp_path):
+        row = _build_sanity_summary_row(
+            check_name='merge',
+            target_type='species',
+            checked_items=['Sp1', 'Sp2'],
+            issues=[
+                {
+                    'check': 'merge',
+                    'severity': 'error',
+                    'issue_type': 'missing_output',
+                    'target_type': 'global',
+                    'target_id': 'merge',
+                    'path': str(tmp_path / 'merge' / 'metadata.tsv'),
+                    'message': 'merge metadata.tsv was not found.',
+                    'suggested_action': 'rerun_merge',
+                },
+            ],
+            scanned_path=str(tmp_path / 'merge'),
+        )
+
+        assert row['status'] == 'error'
+        assert row['checked_count'] == 2
+        assert row['unavailable_count'] == 2
+        assert row['available_count'] == 0
 
 
 # ---------------------------------------------------------------------------
@@ -1083,3 +1114,212 @@ class TestSanityMain:
         issue_types = {(issue['issue_type'], issue['target_id']) for issue in issues}
         assert ('invalid_content', 'SRR001') in issue_types
         assert ('orphan_output', 'SRR999') in issue_types
+
+
+def test_run_sanity_check_merge_accepts_current_root_plot_filenames(tmp_path, monkeypatch):
+    metadata_path = tmp_path / 'metadata.tsv'
+    metadata_df = pandas.DataFrame({
+        'run': ['RUN1'],
+        'scientific_name': ['Species A'],
+        'exclusion': ['no'],
+    })
+    metadata_df.to_csv(metadata_path, sep='\t', index=False)
+    merge_dir = tmp_path / 'merge'
+    species_dir = merge_dir / 'Species_A'
+    species_dir.mkdir(parents=True)
+    pandas.DataFrame({'run': ['RUN1']}).to_csv(merge_dir / 'metadata.tsv', sep='\t', index=False)
+    for suffix in ['eff_length.tsv', 'est_counts.tsv', 'tpm.tsv']:
+        pandas.DataFrame({'target_id': ['g1'], 'RUN1': [1.0]}).to_csv(
+            species_dir / f'Species_A_{suffix}',
+            sep='\t',
+            index=False,
+        )
+    for filename in [
+        'merge_mapping_rate.pdf',
+        'merge_total_spots.pdf',
+        'merge_total_bases.pdf',
+        'merge_library_layout.pdf',
+        'merge_mean_expression_boxplot.pdf',
+        'merge_fastp_duplication_rate_histogram.pdf',
+        'merge_fastp_insert_size_peak_histogram.pdf',
+        'merge_exclusion.pdf',
+    ]:
+        (merge_dir / filename).write_text('pdf', encoding='utf-8')
+    args = make_sanity_args(tmp_path, out_dir=str(tmp_path), merge=True)
+    metadata = Metadata.from_DataFrame(metadata_df)
+
+    monkeypatch.setattr('amalgkit.sanity._is_stale_output', lambda *_args, **_kwargs: False)
+
+    row, issues = run_sanity_check_merge(
+        args=args,
+        metadata=metadata,
+        uni_species=np.array(['Species A']),
+        sra_ids=pandas.Series(['RUN1']),
+        output_dir=str(tmp_path / 'sanity'),
+        metadata_path=str(metadata_path),
+    )
+
+    assert row['status'] == 'ok'
+    assert issues == []
+
+
+def test_run_sanity_check_merge_reports_missing_required_root_plots(tmp_path, monkeypatch):
+    metadata_path = tmp_path / 'metadata.tsv'
+    metadata_df = pandas.DataFrame({
+        'run': ['RUN1'],
+        'scientific_name': ['Species A'],
+        'exclusion': ['no'],
+        'mapping_rate': [90.0],
+        'total_spots': [100.0],
+        'total_bases': [1000.0],
+        'lib_layout': ['paired'],
+        'fastp_duplication_rate': [5.0],
+        'fastp_insert_size_peak': [250.0],
+    })
+    metadata_df.to_csv(metadata_path, sep='\t', index=False)
+    merge_dir = tmp_path / 'merge'
+    species_dir = merge_dir / 'Species_A'
+    species_dir.mkdir(parents=True)
+    metadata_df.to_csv(merge_dir / 'metadata.tsv', sep='\t', index=False)
+    for suffix in ['eff_length.tsv', 'est_counts.tsv', 'tpm.tsv']:
+        pandas.DataFrame({'target_id': ['g1'], 'RUN1': [1.0]}).to_csv(
+            species_dir / f'Species_A_{suffix}',
+            sep='\t',
+            index=False,
+        )
+    args = make_sanity_args(tmp_path, out_dir=str(tmp_path), merge=True)
+    metadata = Metadata.from_DataFrame(metadata_df)
+
+    monkeypatch.setattr('amalgkit.sanity._is_stale_output', lambda *_args, **_kwargs: False)
+
+    row, issues = run_sanity_check_merge(
+        args=args,
+        metadata=metadata,
+        uni_species=np.array(['Species A']),
+        sra_ids=pandas.Series(['RUN1']),
+        output_dir=str(tmp_path / 'sanity'),
+        metadata_path=str(metadata_path),
+    )
+
+    assert row['status'] == 'error'
+    missing_targets = {
+        issue['target_id']
+        for issue in issues
+        if issue['issue_type'] == 'missing_output' and issue['target_type'] == 'global'
+    }
+    assert {
+        'merge_mapping_rate',
+        'merge_total_spots',
+        'merge_total_bases',
+        'merge_library_layout',
+        'merge_mean_expression_boxplot',
+        'merge_fastp_duplication_rate_histogram',
+        'merge_fastp_insert_size_peak_histogram',
+        'merge_exclusion',
+    }.issubset(missing_targets)
+
+
+@pytest.mark.parametrize(
+    ('check_name', 'runner_name', 'setup_workspace', 'expected_manifest_line'),
+    [
+        (
+            'merge',
+            'run_sanity_check_merge',
+            lambda root: _setup_merge_global_manifest_workspace(root),
+            'merge',
+        ),
+        (
+            'busco',
+            'run_sanity_check_busco',
+            lambda root: _setup_busco_global_manifest_workspace(root),
+            'busco_completeness',
+        ),
+        (
+            'finalize',
+            'run_sanity_check_finalize',
+            lambda root: _setup_finalize_global_manifest_workspace(root),
+            'finalize_exclusion',
+        ),
+    ],
+)
+def test_global_only_issue_writes_rerun_manifest(tmp_path, monkeypatch, check_name, runner_name, setup_workspace, expected_manifest_line):
+    metadata_path, metadata = setup_workspace(tmp_path)
+    args = make_sanity_args(tmp_path, out_dir=str(tmp_path), **{check_name: True})
+
+    monkeypatch.setattr('amalgkit.sanity._is_stale_output', lambda *_args, **_kwargs: False)
+
+    runner = {
+        'run_sanity_check_merge': run_sanity_check_merge,
+        'run_sanity_check_busco': run_sanity_check_busco,
+        'run_sanity_check_finalize': run_sanity_check_finalize,
+    }[runner_name]
+    row, issues = runner(
+        args=args,
+        metadata=metadata,
+        uni_species=np.array(['Species A']),
+        sra_ids=pandas.Series(['RUN1']),
+        output_dir=str(tmp_path / 'sanity'),
+        metadata_path=str(metadata_path),
+    )
+
+    assert row['rerun_manifest_path'] != ''
+    assert os.path.exists(row['rerun_manifest_path'])
+    with open(row['rerun_manifest_path'], 'r', encoding='utf-8') as handle:
+        assert handle.read().strip() == expected_manifest_line
+    assert any(issue['target_id'] == expected_manifest_line for issue in issues)
+
+
+def _setup_merge_global_manifest_workspace(root):
+    metadata_path = root / 'metadata.tsv'
+    metadata_df = pandas.DataFrame({
+        'run': ['RUN1'],
+        'scientific_name': ['Species A'],
+        'exclusion': ['no'],
+    })
+    metadata_df.to_csv(metadata_path, sep='\t', index=False)
+    species_dir = root / 'merge' / 'Species_A'
+    species_dir.mkdir(parents=True)
+    for suffix in ['eff_length.tsv', 'est_counts.tsv', 'tpm.tsv']:
+        pandas.DataFrame({'target_id': ['g1'], 'RUN1': [1.0]}).to_csv(
+            species_dir / f'Species_A_{suffix}',
+            sep='\t',
+            index=False,
+        )
+    return metadata_path, Metadata.from_DataFrame(metadata_df)
+
+
+def _setup_busco_global_manifest_workspace(root):
+    metadata_path = root / 'metadata.tsv'
+    metadata_df = pandas.DataFrame({
+        'run': ['RUN1'],
+        'scientific_name': ['Species A'],
+        'exclusion': ['no'],
+    })
+    metadata_df.to_csv(metadata_path, sep='\t', index=False)
+    busco_dir = root / 'busco'
+    busco_dir.mkdir()
+    (busco_dir / 'Species_A').mkdir()
+    (busco_dir / 'Species_A_busco.tsv').write_text(
+        'BUSCO_1\tComplete\tseq1\t100\t100\turl\tdesc\n',
+        encoding='utf-8',
+    )
+    return metadata_path, Metadata.from_DataFrame(metadata_df)
+
+
+def _setup_finalize_global_manifest_workspace(root):
+    metadata_path = root / 'metadata.tsv'
+    metadata_df = pandas.DataFrame({
+        'run': ['RUN1'],
+        'scientific_name': ['Species A'],
+        'exclusion': ['no'],
+    })
+    metadata_df.to_csv(metadata_path, sep='\t', index=False)
+    finalize_dir = root / 'finalize'
+    species_dir = finalize_dir / 'Species_A'
+    species_dir.mkdir(parents=True)
+    pandas.DataFrame({'run': ['RUN1']}).to_csv(finalize_dir / 'metadata.tsv', sep='\t', index=False)
+    pandas.DataFrame({'run': ['RUN1']}).to_csv(species_dir / 'Species_A_metadata.tsv', sep='\t', index=False)
+    pandas.DataFrame({'target_id': ['g1'], 'RUN1': [1.0]}).to_csv(species_dir / 'Species_A_expression.tsv', sep='\t', index=False)
+    pandas.DataFrame({'scientific_name': ['Species A']}).to_csv(species_dir / 'Species_A_batch_effect_summary.tsv', sep='\t', index=False)
+    pandas.DataFrame({'scientific_name': ['Species A']}).to_csv(species_dir / 'Species_A_curation_final_summary.tsv', sep='\t', index=False)
+    return metadata_path, Metadata.from_DataFrame(metadata_df)

@@ -1,10 +1,12 @@
 import os
 from types import SimpleNamespace
 
+import numpy
 import pandas
 
 from amalgkit.command_context import PerSpeciesTableContext
 from amalgkit.metadata_utils import Metadata
+from amalgkit.per_species_finalize_python import _compute_distance_matrix
 from amalgkit import per_species_tables as per_species_tables_module
 
 
@@ -115,6 +117,23 @@ def _build_args(tmp_path):
         latent_max_iter=200,
         latent_tol=1e-5,
     )
+
+
+def test_compute_distance_matrix_clips_negative_roundoff():
+    corr_df = pandas.DataFrame(
+        [
+            [1.0, 1.0000000001],
+            [1.0000000001, 1.0],
+        ],
+        columns=['A', 'B'],
+        index=['A', 'B'],
+    )
+
+    dist = _compute_distance_matrix(corr_df)
+
+    assert numpy.all(dist >= 0.0)
+    assert dist[0, 1] == 0.0
+    assert dist[1, 0] == 0.0
 
 
 def test_generate_per_species_tables_uses_python_finalize_worker_for_skip_curation(tmp_path):

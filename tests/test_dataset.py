@@ -1,4 +1,5 @@
 import os
+from types import SimpleNamespace
 
 import pytest
 
@@ -6,6 +7,7 @@ from amalgkit import dataset as dataset_module
 from amalgkit.dataset import (
     export_rule_set,
     extract_dataset,
+    initialize_workspace,
     list_available_rule_sets,
     validate_dataset_name,
     validate_rule_set_name,
@@ -65,7 +67,13 @@ class TestDatasetExtract:
 
         assert os.path.exists(os.path.join(paths['fasta'], 'toy.fa.gz'))
         assert os.path.exists(os.path.join(paths['busco'], 'toy_busco.tsv'))
-        assert os.path.exists(os.path.join(paths['rules'], 'select_rules.tsv'))
+        assert paths['select_rules_tsv'] == str(out_dir / 'select_rules.tsv')
+        assert os.path.exists(paths['select_rules_tsv'])
+        assert not os.path.exists(out_dir / 'rules' / 'select_rules.tsv')
+        assert os.path.isdir(paths['private_fastq'])
+        assert os.path.isdir(paths['downloads'])
+        assert os.path.isdir(paths['metadata'])
+        assert os.path.isdir(paths['metadata_specieswise'])
 
     def test_extract_dataset_skips_existing_when_not_overwrite(self, tmp_path, monkeypatch):
         _prepare_fake_dataset(tmp_path, monkeypatch)
@@ -129,10 +137,52 @@ class TestDatasetValidation:
         with pytest.raises(ValueError):
             validate_dataset_name('unknown_dataset')
 
+    def test_validate_dataset_name_accepts_init(self):
+        validate_dataset_name('init')
+
     def test_resolve_dataset_source_dir_missing_exits(self, tmp_path, monkeypatch):
         monkeypatch.setattr(dataset_module, 'get_dataset_dir', lambda: str(tmp_path / 'missing_root'))
         with pytest.raises(FileNotFoundError):
             resolve_dataset_source_dir('toy')
+
+
+class TestWorkspaceInit:
+    def test_initialize_workspace_creates_templates_and_base_rules(self, tmp_path, monkeypatch):
+        _prepare_fake_rule_sets(tmp_path, monkeypatch)
+        out_dir = tmp_path / 'out'
+
+        paths = initialize_workspace(str(out_dir), overwrite=False)
+
+        assert os.path.isdir(paths['workspace_dirs']['fasta'])
+        assert os.path.isdir(paths['workspace_dirs']['private_fastq'])
+        assert os.path.isdir(paths['workspace_dirs']['downloads'])
+        assert os.path.isdir(paths['workspace_dirs']['download_locks'])
+        assert os.path.isdir(paths['workspace_dirs']['metadata'])
+        assert os.path.isdir(paths['workspace_dirs']['metadata_specieswise'])
+        assert os.path.exists(paths['workspace_readme'])
+        assert os.path.exists(paths['species_tsv'])
+        assert os.path.exists(paths['organ_terms_tsv'])
+        assert os.path.exists(paths['select_rules_tsv'])
+        assert 'species.tsv' in (out_dir / 'WORKSPACE_README.md').read_text()
+        assert (out_dir / 'species.tsv').read_text() == 'scientific_name\tspecies_token\n'
+        assert (out_dir / 'organ_terms.tsv').read_text() == 'sample_group\ttitle_terms\n'
+        assert 'rule_id' in (out_dir / 'select_rules.tsv').read_text()
+
+    def test_initialize_workspace_keeps_existing_templates_when_not_overwrite(self, tmp_path, monkeypatch):
+        _prepare_fake_rule_sets(tmp_path, monkeypatch)
+        out_dir = tmp_path / 'out'
+        out_dir.mkdir()
+        workspace_readme = out_dir / 'WORKSPACE_README.md'
+        workspace_readme.write_text('keep me\n')
+        species_tsv = out_dir / 'species.tsv'
+        species_tsv.write_text('existing\n')
+
+        paths = initialize_workspace(str(out_dir), overwrite=False)
+
+        assert paths['workspace_readme'] == str(workspace_readme)
+        assert workspace_readme.read_text() == 'keep me\n'
+        assert paths['species_tsv'] == str(species_tsv)
+        assert species_tsv.read_text() == 'existing\n'
 
 
 class TestRuleSetExport:
@@ -210,8 +260,71 @@ class TestDatasetCli:
 
         assert args.rule_set == 'base'
 
+    def test_dataset_cli_accepts_init_name(self):
+        parser = build_main_parser()
+
+        args = parser.parse_args(['dataset', '--name', 'init'])
+
+        assert args.name == 'init'
+
     def test_config_command_is_removed(self):
         parser = build_main_parser()
 
         with pytest.raises(SystemExit):
             parser.parse_args(['config'])
+
+
+class TestDatasetMain:
+    def test_explicit_rule_set_overrides_dataset_rules(self, tmp_path, monkeypatch):
+        _prepare_fake_dataset(tmp_path, monkeypatch)
+        _prepare_fake_rule_sets(tmp_path, monkeypatch)
+        out_dir = tmp_path / 'out'
+
+        dataset_module.dataset_main(SimpleNamespace(
+            list=False,
+            name='toy',
+            rule_set='plantae',
+            out_dir=str(out_dir),
+            overwrite=False,
+        ))
+
+        assert (out_dir / 'fasta' / 'toy.fa.gz').exists()
+        assert (out_dir / 'busco' / 'toy_busco.tsv').exists()
+        rules_text = (out_dir / 'select_rules.tsv').read_text()
+        assert 'plantae' in rules_text
+
+    def test_invalid_rule_set_does_not_create_init_workspace_side_effects(self, tmp_path, monkeypatch):
+        _prepare_fake_rule_sets(tmp_path, monkeypatch)
+        out_dir = tmp_path / 'out'
+
+        with pytest.raises(ValueError, match='Unknown rule set'):
+            dataset_module.dataset_main(SimpleNamespace(
+                list=False,
+                name='init',
+                rule_set='does_not_exist',
+                out_dir=str(out_dir),
+                overwrite=False,
+            ))
+
+        assert not out_dir.exists()
+
+    def test_existing_rule_file_blocks_init_before_templates_are_written(self, tmp_path, monkeypatch):
+        _prepare_fake_rule_sets(tmp_path, monkeypatch)
+        out_dir = tmp_path / 'out'
+        out_dir.mkdir()
+        (out_dir / 'select_rules.tsv').write_text('keep-rules\n')
+
+        with pytest.raises(AmalgkitExit) as exc:
+            dataset_module.dataset_main(SimpleNamespace(
+                list=False,
+                name='init',
+                rule_set='plantae',
+                out_dir=str(out_dir),
+                overwrite=False,
+            ))
+
+        assert exc.value.exit_code == 0
+        assert not (out_dir / 'WORKSPACE_README.md').exists()
+        assert not (out_dir / 'species.tsv').exists()
+        assert not (out_dir / 'organ_terms.tsv').exists()
+        assert (out_dir / 'select_rules.tsv').read_text() == 'keep-rules\n'

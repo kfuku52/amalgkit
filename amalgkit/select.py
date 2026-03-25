@@ -1,6 +1,7 @@
 import datetime
 import os
 import re
+import shlex
 import shutil
 
 import pandas
@@ -103,6 +104,17 @@ def resolve_select_rules_tsv(args, out_dir=None):
     if getattr(args, 'select_rules_tsv', 'inferred') == 'inferred':
         return os.path.join(base_out_dir, SELECT_RULES_FILENAME)
     return os.path.realpath(args.select_rules_tsv)
+
+
+def build_missing_select_rules_message(select_rules_tsv):
+    out_dir = os.path.dirname(os.path.realpath(select_rules_tsv))
+    quoted_out_dir = shlex.quote(out_dir)
+    return '\n'.join([
+        'select rules file not found: {}'.format(select_rules_tsv),
+        'Create it with one of:',
+        '  amalgkit dataset --name init --out_dir {}'.format(quoted_out_dir),
+        '  amalgkit dataset --rule_set base --out_dir {}'.format(quoted_out_dir),
+    ])
 
 
 def parse_select_rule_bool(value, field_name, rule_id):
@@ -218,7 +230,7 @@ def resolve_select_runtime_parameter(args, parameter_name, rule_id):
 
 def load_select_rules_table(select_rules_tsv):
     if not os.path.exists(select_rules_tsv):
-        raise FileNotFoundError('select rules file not found: {}'.format(select_rules_tsv))
+        raise FileNotFoundError(build_missing_select_rules_message(select_rules_tsv))
     if not os.path.isfile(select_rules_tsv):
         raise IsADirectoryError('select rules path exists but is not a file: {}'.format(select_rules_tsv))
     rules_df = pandas.read_csv(

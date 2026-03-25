@@ -39,6 +39,7 @@ COMMAND_SPECS = [
     ('csfilter', 'amalgkit.csfilter', 'csfilter_main'),
     ('finalize', 'amalgkit.finalize', 'finalize_main'),
     ('sanity', 'amalgkit.sanity', 'sanity_main'),
+    ('rerun', 'amalgkit.rerun', 'rerun_main'),
     ('integrate', 'amalgkit.integrate', 'integrate_main'),
     ('dataset', 'amalgkit.dataset', 'dataset_main'),
 ]

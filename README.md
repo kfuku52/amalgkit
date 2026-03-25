@@ -42,8 +42,6 @@ See [Wiki](https://github.com/kfuku52/amalgkit/wiki) for detailed examples and o
 
 - [`amalgkit integrate`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-integrate): Appending local fastq info to a metadata table
 
-- [`amalgkit config`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-config): Creating a series of config files for the metadata selection
-
 - [`amalgkit select`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-select): Selecting SRA entries for analysis
 
 - [`amalgkit getfastq`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-getfastq): Generating fastq files
@@ -64,16 +62,25 @@ See [Wiki](https://github.com/kfuku52/amalgkit/wiki) for detailed examples and o
 
 - [`amalgkit sanity`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-sanity): Checking the integrity of AMALGKIT input and output files
 
+- `amalgkit rerun`: Rerunning failed sanity targets from `sanity_report.json` and writing `rerun_manifest.json`
+
 - [`amalgkit dataset`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-dataset): Extracting bundled test datasets
 
 ## Typical Workflows
+### Initialize an empty workspace
+```bash
+amalgkit dataset --name init --out_dir ./work
+```
+
+This writes `WORKSPACE_README.md` plus starter `species.tsv`, `organ_terms.tsv`, and `select_rules.tsv`.
+
 ### Metadata to merged quantification tables
 ```bash
 # 1. Retrieve metadata from SRA
 amalgkit metadata --search_string 'vertebrata[Organism] AND liver'
 
-# 2. Create/edit config files, then select runs
-amalgkit config --out_dir ./ --config base --overwrite yes
+# 2. Export/edit select rules, then select runs
+amalgkit dataset --out_dir ./ --rule_set base --overwrite yes
 amalgkit select --out_dir ./
 
 # 3. Optionally append private FASTQ files to metadata
@@ -112,10 +119,11 @@ amalgkit finalize --out_dir ./ --metadata ./csfilter/metadata.tsv --batch_effect
 ```
 
 ## Bundled Demo Data
-AMALGKIT ships with a small bundled dataset for smoke testing and examples. The `yeast` dataset uses small BUSCO-focused test FASTAs rather than full gene sets, so its BUSCO completeness is intentionally modest.
+AMALGKIT ships with an empty workspace scaffold (`init`) and a small bundled dataset for smoke testing and examples. The `yeast` dataset uses small BUSCO-focused test FASTAs rather than full gene sets, so its BUSCO completeness is intentionally modest.
 
 ```bash
 amalgkit dataset --list
+amalgkit dataset --name init --out_dir ./work
 amalgkit dataset --name yeast --out_dir ./demo
 ```
 

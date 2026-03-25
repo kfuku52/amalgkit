@@ -122,6 +122,7 @@ def test_help_topic_integrate_mentions_download_dir():
     assert out.returncode == 0
     merged = (out.stdout + '\n' + out.stderr).lower()
     assert '--download_dir' in merged
+    assert '--output_metadata' in merged
 
 
 def test_help_topic_sanity_mentions_new_selection_and_strictness_options():
@@ -138,3 +139,25 @@ def test_help_topic_sanity_mentions_new_selection_and_strictness_options():
     assert '--busco' in merged
     assert '--finalize' in merged
     assert '--all is assumed' in merged
+
+
+def test_help_topic_rerun_mentions_report_and_warning_selection():
+    out = run_cli('help', 'rerun')
+    assert out.returncode == 0
+    merged = (out.stdout + '\n' + out.stderr).lower()
+    assert '--report' in merged
+    assert '--metadata' in merged
+    assert '--check' in merged
+    assert '--manifest' in merged
+    assert '--include_warnings' in merged
+    assert 'sanity_report.json' in merged
+    assert 'rerun_manifest.json' in merged
+
+
+def test_help_topic_dataset_mentions_init_workspace_scaffold():
+    out = run_cli('help', 'dataset')
+    assert out.returncode == 0
+    merged = (out.stdout + '\n' + out.stderr).lower()
+    assert '--name' in merged
+    assert 'init' in merged
+    assert 'workspace scaffold' in merged

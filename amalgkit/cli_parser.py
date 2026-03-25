@@ -502,6 +502,37 @@ def build_parser(command_handlers, command_names, version, prog=None):
                           '"error" fails only on errors, "warning" fails on warnings or errors.')
     psa.set_defaults(handler=command_handlers['sanity'])
 
+    pre_help = 'Rerunning failed outputs based on amalgkit sanity report. See `amalgkit rerun -h`'
+    pre = subparsers.add_parser('rerun', help=pre_help, parents=[pp_threads, pp_internal_jobs, pp_cpu_budget, pp_download])
+    pre.add_argument('--out_dir', metavar='PATH', default='./', type=str, required=False, action='store',
+                     help='default=%(default)s: Workspace root. Used to infer --report when --report inferred.')
+    pre.add_argument('--report', metavar='PATH|inferred', default='inferred', type=str, required=False, action='store',
+                     help='default=%(default)s: PATH to sanity_report.json. "inferred" = out_dir/sanity/sanity_report.json')
+    pre.add_argument('--metadata', metavar='PATH|report|inferred', default='report', type=str, required=False, action='store',
+                     help='default=%(default)s: Metadata table to use for rerun target selection. '
+                          '"report" uses metadata_path stored in sanity_report.json. '
+                          '"inferred" = out_dir/metadata/metadata.tsv.')
+    pre.add_argument('--check', metavar='LIST', default=None, type=str, required=False, action='store',
+                     help='default=%(default)s: Comma-separated rerun targets. Accepted values: '
+                          'getfastq,index,quant,merge,busco,finalize,all. '
+                          'If omitted, rerun uses the checks recorded in sanity_report.json.')
+    pre.add_argument('--run', metavar='RUN1,RUN2,...', default=None, type=str, required=False, action='store',
+                     help='default=%(default)s: Optional comma-separated run IDs to further limit run-based reruns.')
+    pre.add_argument('--species', metavar='SPECIES1,SPECIES2,...', default=None, type=str, required=False, action='store',
+                     help='default=%(default)s: Optional comma-separated scientific_name values to further limit species-based reruns.')
+    pre.add_argument('--redo', metavar='yes|no', default='yes', type=strtobool, required=False, action='store',
+                     help='default=%(default)s: Overwrite broken outputs when rerunning targets.')
+    pre.add_argument('--dry_run', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
+                     help='default=%(default)s: Print resolved rerun targets without executing commands.')
+    pre.add_argument('--manifest', metavar='PATH|inferred|none', default='inferred', type=str, required=False, action='store',
+                     help='default=%(default)s: JSON path for the resolved rerun execution plan. '
+                          '"inferred" = out_dir/sanity/rerun_manifest.json. '
+                          '"none" disables manifest output.')
+    pre.add_argument('--include_warnings', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
+                     help='default=%(default)s: Include warning-level sanity issues in rerun target selection. '
+                          'Useful for regenerating global summary outputs such as BUSCO/merge/finalize PDFs.')
+    pre.set_defaults(handler=command_handlers['rerun'])
+
     pin_help = 'Appending local fastq info to a metadata table. See `amalgkit integrate -h`'
     pin = subparsers.add_parser('integrate', help=pin_help, parents=[pp_out, pp_meta, pp_threads, pp_download])
     pin.add_argument('--fastq_dir', metavar='PATH', default=None, type=str, required=False, action='store',
@@ -516,6 +547,10 @@ def build_parser(command_handlers, command_names, version, prog=None):
     pin.add_argument('--getfastq_dir', metavar='PATH', default=None, type=str, required=False, action='store',
                      help='default=%(default)s: PATH to index directory. Only required if getfastq directory is not '
                           'out_dir/getfastq/')
+    pin.add_argument('--output_metadata', metavar='PATH', default=None, type=str, required=False, action='store',
+                     help='default=%(default)s: Explicit output path for the generated metadata table. '
+                          'Without this option, standalone integrate writes out_dir/metadata_private_fastq.tsv and '
+                          'merge mode writes out_dir/metadata/metadata_updated_for_private_fastq.tsv.')
     pin.add_argument('--remove_tmp', metavar='yes|no', default='yes', type=strtobool, required=False, action='store',
                      help='default=%(default)s: Remove temporary files.')
     pin.add_argument('--accurate_size', metavar='yes|no', default='yes', type=strtobool, required=False, action='store',
@@ -523,10 +558,12 @@ def build_parser(command_handlers, command_names, version, prog=None):
                           'to estimate average read length. If yes, scans the whole file for exact statistics.')
     pin.set_defaults(handler=command_handlers['integrate'])
 
-    pda_help = 'Extracting bundled test datasets and packaged select rule sets. See `amalgkit dataset -h`'
+    pda_help = 'Extracting bundled datasets, initializing workspaces, and exporting select rule sets. See `amalgkit dataset -h`'
     pda = subparsers.add_parser('dataset', help=pda_help, parents=[pp_out])
-    pda.add_argument('--name', metavar='yeast|...', default=None, type=str, required=False, action='store',
-                     help='default=%(default)s: Name of the dataset to extract. Use --list to see available datasets.')
+    pda.add_argument('--name', metavar='init|yeast|...', default=None, type=str, required=False, action='store',
+                     help='default=%(default)s: Name of the dataset to extract. '
+                          '`init` creates an empty workspace scaffold with template TSVs and default select_rules.tsv. '
+                          'Use --list to see available datasets.')
     pda.add_argument('--rule_set', metavar='base|test|plantae|vertebrate', default=None, type=str, required=False, action='store',
                      help='default=%(default)s: Bundled select rule set to export to out_dir/select_rules.tsv. '
                           'Use --list to see available rule sets.')

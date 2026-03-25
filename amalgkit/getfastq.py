@@ -4537,8 +4537,22 @@ def process_getfastq_run(args, row_index, sra_id, run_row_df, g, runtime_context
     }
 
 
+def _build_run_runtime_context_map(run_rows, runtime_context=None):
+    if runtime_context is not None:
+        shared_context = ensure_getfastq_runtime_context(runtime_context)
+        return {
+            sra_id: shared_context
+            for _row_index, sra_id in run_rows
+        }
+    return {
+        sra_id: GetfastqRuntimeContext()
+        for _row_index, sra_id in run_rows
+    }
+
+
 def run_first_round_getfastq(args, metadata, run_rows, g, jobs, runtime_context=None):
     run_results_by_id = dict()
+    runtime_context_by_run = _build_run_runtime_context_map(run_rows, runtime_context=runtime_context)
     if (jobs == 1) or (len(run_rows) <= 1):
         for row_index, sra_id in run_rows:
             run_results_by_id[sra_id] = process_getfastq_run(
@@ -4547,7 +4561,7 @@ def run_first_round_getfastq(args, metadata, run_rows, g, jobs, runtime_context=
                 sra_id=sra_id,
                 run_row_df=metadata.df.loc[[row_index], :].copy(),
                 g=g,
-                runtime_context=ensure_getfastq_runtime_context(runtime_context),
+                runtime_context=runtime_context_by_run[sra_id],
             )
         return run_results_by_id
 
@@ -4561,7 +4575,7 @@ def run_first_round_getfastq(args, metadata, run_rows, g, jobs, runtime_context=
             run_row[1],
             metadata.df.loc[[run_row[0]], :].copy(),
             g,
-            ensure_getfastq_runtime_context(runtime_context),
+            runtime_context_by_run[run_row[1]],
         ),
         max_workers=max_workers,
     )

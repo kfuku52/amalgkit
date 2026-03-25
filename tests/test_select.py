@@ -1402,6 +1402,27 @@ class TestSelectMain:
         with pytest.raises(NotADirectoryError, match='Output path exists but is not a directory'):
             select_main(args)
 
+    def test_missing_inferred_select_rules_suggests_dataset_commands(self, tmp_path):
+        out_dir = tmp_path / 'out'
+        args = SimpleNamespace(
+            out_dir=str(out_dir),
+            select_rules_tsv='inferred',
+            metadata='inferred',
+            sample_group=None,
+            min_nspots=0,
+            mark_missing_rank='none',
+            mark_redundant_biosamples=False,
+            max_sample=1,
+        )
+
+        with pytest.raises(FileNotFoundError) as exc:
+            select_main(args)
+
+        message = str(exc.value)
+        assert 'select rules file not found' in message
+        assert 'amalgkit dataset --name init --out_dir' in message
+        assert 'amalgkit dataset --rule_set base --out_dir' in message
+
     def test_uses_runtime_copy_without_mutating_caller_args(self, tmp_path, monkeypatch):
         raw_out_dir = str(tmp_path / 'nested' / '..' / 'out')
         args = SimpleNamespace(

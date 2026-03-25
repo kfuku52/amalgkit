@@ -7,6 +7,7 @@ import re
 
 from amalgkit.exceptions import AmalgkitExit
 from amalgkit.fastq_utils import open_fastq_binary
+from amalgkit.merge_plots import _collect_est_count_summaries
 from amalgkit.metadata_utils import (
     get_newest_intermediate_file_extension,
     get_sra_stat,
@@ -19,6 +20,17 @@ from amalgkit.parallel_utils import (
     validate_positive_int_option,
 )
 from amalgkit.prefix_utils import find_run_prefixed_entries, find_species_prefixed_entries
+
+MERGE_ROOT_OUTPUT_FILENAMES = [
+    'merge_mapping_rate.pdf',
+    'merge_total_spots.pdf',
+    'merge_total_bases.pdf',
+    'merge_library_layout.pdf',
+    'merge_mean_expression_boxplot.pdf',
+    'merge_fastp_duplication_rate_histogram.pdf',
+    'merge_fastp_insert_size_peak_histogram.pdf',
+    'merge_exclusion.pdf',
+]
 
 
 def list_duplicates(seq):
@@ -761,12 +773,27 @@ def _write_manifest(output_dir, filename, target_ids, label):
 
 
 def _collect_error_targets(issues, target_type):
+    return _collect_issue_targets(issues, target_type, severities=('error',))
+
+
+def _collect_issue_targets(issues, target_types, severities=('error',)):
+    if isinstance(target_types, str):
+        target_type_values = {str(target_types).lower()}
+    else:
+        target_type_values = {
+            str(target_type).lower()
+            for target_type in list(target_types)
+        }
+    severity_values = {
+        str(severity).lower()
+        for severity in list(severities)
+    }
     targets = []
     seen = set()
     for issue in issues:
-        if str(issue.get('severity', '')).lower() != 'error':
+        if str(issue.get('severity', '')).lower() not in severity_values:
             continue
-        if str(issue.get('target_type', '')).lower() != str(target_type).lower():
+        if str(issue.get('target_type', '')).lower() not in target_type_values:
             continue
         target_id = str(issue.get('target_id', '')).strip()
         if target_id == '':
@@ -776,6 +803,21 @@ def _collect_error_targets(issues, target_type):
         seen.add(target_id)
         targets.append(target_id)
     return targets
+
+
+def _collect_rerun_manifest_targets(issues, item_target_type, include_global=False):
+    targets = _collect_issue_targets(issues, item_target_type, severities=('error',))
+    if include_global:
+        targets.extend(_collect_issue_targets(issues, 'global', severities=('error', 'warning')))
+    normalized_targets = []
+    seen = set()
+    for target_id in targets:
+        normalized = str(target_id).strip()
+        if (normalized == '') or (normalized in seen):
+            continue
+        seen.add(normalized)
+        normalized_targets.append(normalized)
+    return normalized_targets
 
 
 def _safe_get_mtime(path):
@@ -791,6 +833,123 @@ def _is_stale_output(metadata_path, output_path):
     if (metadata_mtime is None) or (output_mtime is None):
         return False
     return output_mtime < metadata_mtime
+
+
+def _normalize_metadata_text_series(values):
+    return values.fillna('').astype(str).str.strip()
+
+
+def _merge_nonexcluded_mask(metadata_df):
+    if 'exclusion' not in metadata_df.columns:
+        return pandas.Series([False] * metadata_df.shape[0], index=metadata_df.index, dtype=bool)
+    exclusion_series = _normalize_metadata_text_series(metadata_df.loc[:, 'exclusion']).str.lower()
+    return exclusion_series.eq('no')
+
+
+def _has_merge_nonexcluded_numeric_values(metadata_df, value_col):
+    if ('scientific_name' not in metadata_df.columns) or (value_col not in metadata_df.columns):
+        return False
+    species_series = _normalize_metadata_text_series(metadata_df.loc[:, 'scientific_name'])
+    numeric_values = pandas.to_numeric(metadata_df.loc[:, value_col], errors='coerce')
+    mask = _merge_nonexcluded_mask(metadata_df)
+    valid = mask & species_series.ne('') & np.isfinite(numeric_values.to_numpy(dtype=float))
+    return bool(valid.any())
+
+
+def _should_expect_merge_library_layout_pdf(metadata_df):
+    required_columns = {'scientific_name', 'lib_layout'}
+    if not required_columns.issubset(metadata_df.columns):
+        return False
+    mask = _merge_nonexcluded_mask(metadata_df)
+    species_series = _normalize_metadata_text_series(metadata_df.loc[:, 'scientific_name'])
+    layout_series = _normalize_metadata_text_series(metadata_df.loc[:, 'lib_layout'])
+    valid = mask & species_series.ne('') & layout_series.ne('')
+    return bool(valid.any())
+
+
+def _should_expect_merge_mean_expression_pdf(root_path, metadata_df):
+    summary_df = _collect_est_count_summaries(merge_dir=root_path)
+    if summary_df.empty:
+        return False
+    if {'scientific_name', 'run'}.issubset(metadata_df.columns):
+        metadata_cols = [column for column in ['scientific_name', 'run', 'exclusion'] if column in metadata_df.columns]
+        metadata_subset = metadata_df.loc[:, metadata_cols].drop_duplicates()
+        summary_df = summary_df.merge(
+            metadata_subset,
+            on=['scientific_name', 'run'],
+            how='left',
+            sort=False,
+        )
+    elif 'run' in metadata_df.columns:
+        metadata_cols = [column for column in ['run', 'exclusion'] if column in metadata_df.columns]
+        metadata_subset = metadata_df.loc[:, metadata_cols].drop_duplicates()
+        summary_df = summary_df.merge(metadata_subset, on='run', how='left', sort=False)
+    else:
+        summary_df.loc[:, 'exclusion'] = pandas.NA
+    if 'exclusion' in summary_df.columns:
+        has_metadata_match = summary_df.loc[:, 'exclusion'].notna()
+        if int(has_metadata_match.sum()) == 0:
+            return False
+        exclusion_norm = _normalize_metadata_text_series(summary_df.loc[:, 'exclusion']).str.lower()
+        summary_df = summary_df.loc[has_metadata_match & exclusion_norm.eq('no'), :].copy()
+    return not summary_df.empty
+
+
+def _should_expect_merge_exclusion_pdf(metadata_df):
+    required_columns = {'scientific_name', 'exclusion'}
+    if not required_columns.issubset(metadata_df.columns):
+        return False
+    species_series = _normalize_metadata_text_series(metadata_df.loc[:, 'scientific_name'])
+    exclusion_series = _normalize_metadata_text_series(metadata_df.loc[:, 'exclusion'])
+    valid = species_series.ne('') & exclusion_series.ne('')
+    return bool(valid.any())
+
+
+def _expected_merge_root_output_filenames(root_path, metadata_out_path):
+    metadata_df = pandas.read_csv(metadata_out_path, sep='\t', low_memory=False)
+    expected = []
+    if _has_merge_nonexcluded_numeric_values(metadata_df, 'mapping_rate'):
+        expected.append('merge_mapping_rate.pdf')
+    if _has_merge_nonexcluded_numeric_values(metadata_df, 'total_spots'):
+        expected.append('merge_total_spots.pdf')
+    if _has_merge_nonexcluded_numeric_values(metadata_df, 'total_bases'):
+        expected.append('merge_total_bases.pdf')
+    if _should_expect_merge_library_layout_pdf(metadata_df):
+        expected.append('merge_library_layout.pdf')
+    if _should_expect_merge_mean_expression_pdf(root_path, metadata_df):
+        expected.append('merge_mean_expression_boxplot.pdf')
+    if _has_merge_nonexcluded_numeric_values(metadata_df, 'fastp_duplication_rate'):
+        expected.append('merge_fastp_duplication_rate_histogram.pdf')
+    if _has_merge_nonexcluded_numeric_values(metadata_df, 'fastp_insert_size_peak'):
+        expected.append('merge_fastp_insert_size_peak_histogram.pdf')
+    if _should_expect_merge_exclusion_pdf(metadata_df):
+        expected.append('merge_exclusion.pdf')
+    return expected
+
+
+def _build_root_pdf_target_id(filename):
+    if filename.lower().endswith('.pdf'):
+        return filename[:-4]
+    return filename
+
+
+def _validate_missing_merge_root_outputs(root_path, metadata_out_path):
+    issues = []
+    for filename in _expected_merge_root_output_filenames(root_path, metadata_out_path):
+        file_path = os.path.join(root_path, filename)
+        if os.path.isfile(file_path):
+            continue
+        issues.append(_build_issue(
+            check_name='merge',
+            severity='error',
+            issue_type='missing_output',
+            target_type='global',
+            target_id=_build_root_pdf_target_id(filename),
+            path=file_path,
+            message='Required merge root-level plot was not found.',
+            suggested_action='rerun_merge',
+        ))
+    return issues
 
 
 def _list_root_entries(root_path):
@@ -926,7 +1085,15 @@ def _build_sanity_summary_row(check_name, target_type, checked_items, issues, sc
         if str(issue.get('severity', '')).lower() == 'error'
     }
     checked_count = len(checked_ids)
-    unavailable_count = len(error_checked_targets)
+    has_global_error = any(
+        (str(issue.get('severity', '')).lower() == 'error')
+        and (str(issue.get('target_type', '')).lower() == 'global')
+        for issue in issues
+    )
+    if has_global_error and (checked_count > 0):
+        unavailable_count = checked_count
+    else:
+        unavailable_count = len(error_checked_targets)
     available_count = max(0, checked_count - unavailable_count)
     status = 'ok'
     if error_targets:
@@ -1563,29 +1730,19 @@ def run_sanity_check_merge(args, metadata, uni_species, sra_ids, output_dir, met
                 message=metadata_error,
                 suggested_action='rerun_merge',
             ))
-        elif _is_stale_output(metadata_path, metadata_out_path):
-            issues.append(_build_issue(
-                check_name='merge',
-                severity='warning',
-                issue_type='stale_output',
-                target_type='global',
-                target_id='merge',
-                path=metadata_out_path,
-                message='merge metadata.tsv is older than the input metadata file.',
-                suggested_action='review_or_rerun',
-            ))
-        summary_pdf_path = os.path.join(root_path, 'merge_summary.pdf')
-        if not os.path.isfile(summary_pdf_path):
-            issues.append(_build_issue(
-                check_name='merge',
-                severity='warning',
-                issue_type='missing_output',
-                target_type='global',
-                target_id='merge_summary',
-                path=summary_pdf_path,
-                message='merge_summary.pdf was not found.',
-                suggested_action='review_merge_plots',
-            ))
+        else:
+            issues.extend(_validate_missing_merge_root_outputs(root_path, metadata_out_path))
+            if _is_stale_output(metadata_path, metadata_out_path):
+                issues.append(_build_issue(
+                    check_name='merge',
+                    severity='warning',
+                    issue_type='stale_output',
+                    target_type='global',
+                    target_id='merge',
+                    path=metadata_out_path,
+                    message='merge metadata.tsv is older than the input metadata file.',
+                    suggested_action='review_or_rerun',
+                ))
         for token, species in species_tokens.items():
             species_dir = os.path.join(root_path, token)
             if not os.path.isdir(species_dir):
@@ -1601,13 +1758,13 @@ def run_sanity_check_merge(args, metadata, uni_species, sra_ids, output_dir, met
                 ))
                 continue
             issues.extend(_validate_merge_species_tables(species, species_dir, metadata_path))
-        expected_entries = list(species_tokens.keys()) + ['metadata.tsv', 'merge_summary.pdf']
+        expected_entries = list(species_tokens.keys()) + ['metadata.tsv'] + list(MERGE_ROOT_OUTPUT_FILENAMES)
         issues.extend(_validate_orphan_entries('merge', root_path, expected_entries, 'species'))
     rerun_manifest_path = _write_manifest(
         output_dir,
         'rerun_merge_species.txt',
-        _collect_error_targets(issues, 'species'),
-        'merge rerun species',
+        _collect_rerun_manifest_targets(issues, 'species', include_global=True),
+        'merge rerun targets',
     )
     row = _build_sanity_summary_row('merge', 'species', checked_species, issues, root_path, '', rerun_manifest_path)
     return row, issues
@@ -1698,8 +1855,8 @@ def run_sanity_check_busco(args, metadata, uni_species, sra_ids, output_dir, met
     rerun_manifest_path = _write_manifest(
         output_dir,
         'rerun_busco_species.txt',
-        _collect_error_targets(issues, 'species'),
-        'busco rerun species',
+        _collect_rerun_manifest_targets(issues, 'species', include_global=True),
+        'busco rerun targets',
     )
     row = _build_sanity_summary_row('busco', 'species', checked_species, issues, root_path, '', rerun_manifest_path)
     return row, issues
@@ -1843,8 +2000,8 @@ def run_sanity_check_finalize(args, metadata, uni_species, sra_ids, output_dir, 
     rerun_manifest_path = _write_manifest(
         output_dir,
         'rerun_finalize_species.txt',
-        _collect_error_targets(issues, 'species'),
-        'finalize rerun species',
+        _collect_rerun_manifest_targets(issues, 'species', include_global=True),
+        'finalize rerun targets',
     )
     row = _build_sanity_summary_row('finalize', 'species', checked_species, issues, root_path, '', rerun_manifest_path)
     return row, issues

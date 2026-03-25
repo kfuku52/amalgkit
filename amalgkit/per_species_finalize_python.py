@@ -371,8 +371,12 @@ def _compute_corr_matrix(counts_df, dist_method):
 
 
 def _compute_distance_matrix(corr_df):
-    dist = 1.0 - corr_df.to_numpy(dtype=float)
+    corr = corr_df.to_numpy(dtype=float)
+    corr = numpy.clip(corr, -1.0, 1.0)
+    dist = 1.0 - corr
     dist = (dist + dist.T) / 2.0
+    dist[~numpy.isfinite(dist)] = 0.0
+    dist = numpy.clip(dist, 0.0, 2.0)
     numpy.fill_diagonal(dist, 0.0)
     return dist
 
@@ -478,20 +482,25 @@ def _draw_dendrogram_panel(ax, corr_df, labels, font_size, title):
         ax.text(0.5, 0.5, 'SciPy not available', ha='center', va='center', fontsize=font_size)
         ax.set_axis_off()
         return
-    dist = _compute_distance_matrix(corr_df)
-    condensed = squareform(dist, checks=False)
-    linkage_matrix = linkage(condensed, method='average')
-    dendrogram(
-        linkage_matrix,
-        labels=labels,
-        ax=ax,
-        leaf_rotation=90,
-        leaf_font_size=max(4, font_size - 2),
-        color_threshold=None,
-    )
-    ax.set_title(title, fontsize=font_size)
-    ax.set_ylabel('Distance', fontsize=font_size)
-    ax.tick_params(axis='y', labelsize=font_size)
+    try:
+        dist = _compute_distance_matrix(corr_df)
+        condensed = squareform(dist, checks=False)
+        linkage_matrix = linkage(condensed, method='average')
+        dendrogram(
+            linkage_matrix,
+            labels=labels,
+            ax=ax,
+            leaf_rotation=90,
+            leaf_font_size=max(4, font_size - 2),
+            color_threshold=None,
+        )
+        ax.set_title(title, fontsize=font_size)
+        ax.set_ylabel('Distance', fontsize=font_size)
+        ax.tick_params(axis='y', labelsize=font_size)
+    except Exception as exc:
+        warnings.warn('Could not render dendrogram panel "{}": {}'.format(title, exc))
+        ax.text(0.5, 0.5, 'Dendrogram unavailable', ha='center', va='center', fontsize=font_size)
+        ax.set_axis_off()
 
 
 def _compute_numeric_r2(values, covariate):
