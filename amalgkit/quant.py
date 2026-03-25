@@ -601,16 +601,24 @@ def find_species_index_files(index_dir, sci_name, entries=None, suffixes=(KALLIS
 
 
 def find_species_fasta_files(path_fasta_dir, sci_name, entries=None):
+    _, matched_files = _find_species_fasta_files(path_fasta_dir, sci_name, entries=entries)
+    return matched_files
+
+
+def _find_species_fasta_files(path_fasta_dir, sci_name, entries=None):
     if os.path.exists(path_fasta_dir) and (not os.path.isdir(path_fasta_dir)):
         raise NotADirectoryError('Fasta path exists but is not a directory: {}'.format(path_fasta_dir))
     if entries is None:
         entries = list_dir_entries(path_fasta_dir)
-    matched = [
-        entry for entry in find_species_prefixed_entries(entries, sci_name)
-        if entry.lower().endswith(INDEX_FASTA_SUFFIXES)
-        and os.path.isfile(os.path.join(path_fasta_dir, entry))
-    ]
-    return [os.path.join(path_fasta_dir, entry) for entry in matched]
+    for species_prefix in _build_species_identifier_candidates(sci_name):
+        matched = [
+            entry for entry in find_species_prefixed_entries(entries, species_prefix)
+            if entry.lower().endswith(INDEX_FASTA_SUFFIXES)
+            and os.path.isfile(os.path.join(path_fasta_dir, entry))
+        ]
+        if matched:
+            return species_prefix, [os.path.join(path_fasta_dir, entry) for entry in matched]
+    return None, []
 
 
 def _normalize_fasta_candidate_key(fasta_file):
@@ -874,7 +882,7 @@ def _resolve_single_fasta_file(args, sci_name, runtime_context=None):
     prefetched_entries = None
     if isinstance(runtime_context, QuantRuntimeContext):
         prefetched_entries = runtime_context.prefetched_fasta.resolve_entries(path_fasta_dir)
-    fasta_files = find_species_fasta_files(
+    matched_prefix, fasta_files = _find_species_fasta_files(
         path_fasta_dir=path_fasta_dir,
         sci_name=sci_name,
         entries=prefetched_entries,
@@ -888,6 +896,11 @@ def _resolve_single_fasta_file(args, sci_name, runtime_context=None):
         txt = 'Could not find reference fasta file for this species: {}\n'.format(sci_name)
         txt += 'If the reference fasta file is correctly placed, the column "scientific_name" of the --metadata file may need to be edited.'
         raise FileNotFoundError(txt)
+    if matched_prefix != sci_name:
+        print(
+            "Reference fasta fallback prefix '{}' was used for species '{}'.".format(matched_prefix, sci_name),
+            flush=True,
+        )
     return fasta_files[0]
 
 

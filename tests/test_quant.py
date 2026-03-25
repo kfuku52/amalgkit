@@ -360,6 +360,11 @@ class TestIndexDiscoveryHelpers:
             str(tmp_path / 'Homo_sapiens.FASTA.GZ'),
         ]
 
+    def test_find_species_fasta_files_normalizes_spaces_to_underscores(self, tmp_path):
+        (tmp_path / 'Homo_sapiens.fa').write_text('>a\nAAAA\n')
+        result = find_species_fasta_files(str(tmp_path), 'Homo sapiens')
+        assert result == [str(tmp_path / 'Homo_sapiens.fa')]
+
     def test_find_species_index_files_rejects_similar_species_prefix(self, tmp_path):
         (tmp_path / 'Homo_sapiens.idx').write_text('idx')
         (tmp_path / 'Homo_sapiens2.idx').write_text('idx')
@@ -383,6 +388,16 @@ class TestIndexDiscoveryHelpers:
         (tmp_path / 'Homo_sapiens.fasta').write_text('>a\nAAAA\n')
         result = find_species_fasta_files(str(tmp_path), 'Homo_sapiens')
         assert result == [str(tmp_path / 'Homo_sapiens.fasta')]
+
+    def test_find_species_fasta_files_uses_subspecies_fallback_prefix(self, tmp_path):
+        (tmp_path / 'Gorilla_gorilla.fa').write_text('>a\nAAAA\n')
+        result = find_species_fasta_files(str(tmp_path), 'Gorilla_gorilla_gorilla')
+        assert result == [str(tmp_path / 'Gorilla_gorilla.fa')]
+
+    def test_find_species_fasta_files_normalizes_redundant_underscores_for_subspecies_fallback(self, tmp_path):
+        (tmp_path / 'Canis_lupus.fa').write_text('>a\nAAAA\n')
+        result = find_species_fasta_files(str(tmp_path), 'Canis__lupus_familiaris')
+        assert result == [str(tmp_path / 'Canis_lupus.fa')]
 
 
 class TestGetfastqPrefetch:
@@ -828,6 +843,36 @@ class TestQuantEdgeCases:
         assert observed_index == str(index_dir / 'Homo_sapiens.idx')
         assert observed['fasta_file'] == str(fasta_plain)
 
+    def test_get_index_uses_subspecies_fasta_fallback_prefix_when_building_index(self, tmp_path, monkeypatch):
+        out_dir = tmp_path / 'out'
+        fasta_dir = tmp_path / 'fasta'
+        index_dir = tmp_path / 'index'
+        out_dir.mkdir()
+        fasta_dir.mkdir()
+        index_dir.mkdir()
+        fasta_path = fasta_dir / 'Gorilla_gorilla.fa'
+        fasta_path.write_text('>a\nAAAA\n')
+        index_path = index_dir / 'Gorilla_gorilla_gorilla.idx'
+        args = SimpleNamespace(
+            out_dir=str(out_dir),
+            index_dir=str(index_dir),
+            build_index=True,
+            fasta_dir=str(fasta_dir),
+        )
+        captured = {}
+
+        def fake_run(cmd, stdout, stderr):
+            captured['cmd'] = cmd
+            index_path.write_text('built')
+            return SimpleNamespace(returncode=0, stdout=b'', stderr=b'')
+
+        monkeypatch.setattr(subprocess, 'run', fake_run)
+
+        observed = get_index(args, 'Gorilla_gorilla_gorilla')
+
+        assert observed == str(index_path)
+        assert captured['cmd'][-1] == str(fasta_path)
+
     def test_get_index_uses_shared_lock_and_rechecks_after_acquire(self, tmp_path, monkeypatch):
         out_dir = tmp_path / 'out'
         index_dir = tmp_path / 'index'
@@ -969,13 +1014,13 @@ class TestQuantEdgeCases:
 
         def fake_find_species_fasta_files(path_fasta_dir, sci_name, entries=None):
             seen['entries'] = entries
-            return [os.path.join(path_fasta_dir, sci_name + '.fa')]
+            return sci_name, [os.path.join(path_fasta_dir, sci_name + '.fa')]
 
         def fake_run(cmd, stdout, stderr):
             index_path.write_text('built')
             return SimpleNamespace(returncode=0, stdout=b'', stderr=b'')
 
-        monkeypatch.setattr('amalgkit.quant.find_species_fasta_files', fake_find_species_fasta_files)
+        monkeypatch.setattr('amalgkit.quant._find_species_fasta_files', fake_find_species_fasta_files)
         monkeypatch.setattr(subprocess, 'run', fake_run)
 
         observed = get_index(args, 'Homo_sapiens', runtime_context=runtime_context)
