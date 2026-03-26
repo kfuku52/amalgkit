@@ -228,20 +228,39 @@ def build_parser(command_handlers, command_names, version, prog=None):
                      help='default=%(default)s: Download SRA files from Amazon Cloud (AWS), if available.')
     pge.add_argument('--gcp', metavar='yes|no', default='yes', type=strtobool, required=False, action='store',
                      help='default=%(default)s: Download SRA files from Google Cloud (GCP), if available.')
+    pge.add_argument('--ena', metavar='yes|no', default='yes', type=strtobool, required=False, action='store',
+                     help='default=%(default)s: Download SRA files from ENA, if derivable from the run accession. '
+                          'Tried after AWS/GCP/NCBI and can absorb load when higher-priority sources are busy.')
+    pge.add_argument('--ddbj', metavar='yes|no', default='yes', type=strtobool, required=False, action='store',
+                     help='default=%(default)s: Download SRA files from DDBJ for DRA runs, if derivable from DRR/DRX accessions. '
+                          'Tried after AWS/GCP/NCBI/ENA and can absorb load when higher-priority sources are busy.')
     pge.add_argument('--gcp_project', metavar='STR', default='', type=str, required=False, action='store',
                      help='default=%(default)s: Google Cloud project for requester-pays GCP buckets (used when GCP_Link is gs://).')
     pge.add_argument('--ncbi_download_max_concurrency', metavar='INT|auto', default='auto', type=nonnegative_int_or_auto,
                      required=False, action='store',
                      help='default=%(default)s: Maximum concurrent NCBI cloud-object downloads across processes when '
-                          'download_lock_dir is shared. Set to 0 or "auto" to disable throttling.')
+                          'download_lock_dir is shared. Set to 0 or "auto" to disable throttling. '
+                          'When NCBI is at its limit, getfastq tries the next enabled source before waiting.')
     pge.add_argument('--aws_download_max_concurrency', metavar='INT|auto', default='auto', type=nonnegative_int_or_auto,
                      required=False, action='store',
                      help='default=%(default)s: Maximum concurrent AWS cloud-object downloads across processes when '
-                          'download_lock_dir is shared. Set to 0 or "auto" to disable throttling.')
+                          'download_lock_dir is shared. Set to 0 or "auto" to disable throttling. '
+                          'When AWS is at its limit, getfastq tries the next enabled source before waiting.')
     pge.add_argument('--gcp_download_max_concurrency', metavar='INT|auto', default='auto', type=nonnegative_int_or_auto,
                      required=False, action='store',
                      help='default=%(default)s: Maximum concurrent GCP cloud-object downloads across processes when '
-                          'download_lock_dir is shared. Set to 0 or "auto" to disable throttling.')
+                          'download_lock_dir is shared. Set to 0 or "auto" to disable throttling. '
+                          'When GCP is at its limit, getfastq tries the next enabled source before waiting.')
+    pge.add_argument('--ena_download_max_concurrency', metavar='INT|auto', default='auto', type=nonnegative_int_or_auto,
+                     required=False, action='store',
+                     help='default=%(default)s: Maximum concurrent ENA downloads across processes when '
+                          'download_lock_dir is shared. Set to 0 or "auto" to disable throttling. '
+                          'When ENA is at its limit, getfastq tries the next enabled source before waiting.')
+    pge.add_argument('--ddbj_download_max_concurrency', metavar='INT|auto', default='auto', type=nonnegative_int_or_auto,
+                     required=False, action='store',
+                     help='default=%(default)s: Maximum concurrent DDBJ downloads across processes when '
+                          'download_lock_dir is shared. Set to 0 or "auto" to disable throttling. '
+                          'When DDBJ is at its limit, getfastq tries the next enabled source before waiting.')
     pge.add_argument('--ncbi_metadata_max_concurrency', metavar='INT|auto', default='auto', type=nonnegative_int_or_auto,
                      required=False, action='store',
                      help='default=%(default)s: Maximum concurrent NCBI Entrez metadata requests for --id/--id_list across '

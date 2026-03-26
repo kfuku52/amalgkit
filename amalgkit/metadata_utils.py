@@ -18,6 +18,13 @@ from amalgkit.parallel_utils import (
     run_tasks_with_optional_threads,
     validate_positive_int_option,
 )
+from amalgkit.sra_sources import (
+    DDBJ_SRA_LINK_COLUMN,
+    ENA_SRA_LINK_COLUMN,
+    build_ddbj_sra_download_url,
+    build_ena_sra_download_url,
+    normalize_sra_download_url,
+)
 
 PRIVATE_FASTQ_SCIENTIFIC_NAME_PLACEHOLDER = 'Please add in format: Genus species'
 SELECT_SAMPLING_STRATEGIES = (
@@ -116,7 +123,8 @@ class Metadata:
                     'nominal_sdev',
                     'spot_length', 'read_index', 'read_class', 'read_type', 'base_coord', 'center',
                     'submitter_id',
-                    'pubmed_id', 'taxid', 'published_date', 'NCBI_Link', 'AWS_Link', 'GCP_Link', ]
+                    'pubmed_id', 'taxid', 'published_date', 'NCBI_Link', 'AWS_Link', 'GCP_Link',
+                    ENA_SRA_LINK_COLUMN, DDBJ_SRA_LINK_COLUMN, ]
     removed_metadata_columns = ['lab', 'biomaterial_provider', 'cell', 'location', 'antibody', 'batch', 'misc']
     id_cols = ['bioproject', 'biosample', 'experiment', 'run', 'sra_primary', 'sra_sample', 'sra_study']
 
@@ -182,6 +190,17 @@ class Metadata:
             if value is None:
                 return ""
             return str(value)
+
+        def get_first_attr_by_org(entry, org_names):
+            for org_name in org_names:
+                value = get_first_attr(
+                    entry,
+                    "./RUN_SET/RUN/SRAFiles/SRAFile[@supertype='Primary ETL']/Alternatives[@org='{}']".format(org_name),
+                    'url',
+                )
+                if value != "":
+                    return value
+            return ""
 
         def get_external_id_map(entry):
             external_ids = {}
@@ -327,6 +346,24 @@ class Metadata:
                         "url",
                     ),
                 }
+                row[ENA_SRA_LINK_COLUMN] = normalize_sra_download_url(
+                    source_name='ENA',
+                    source_url=get_first_attr_by_org(entry, ['ENA', 'EBI']),
+                    run_accession=row['run'],
+                )
+                if row[ENA_SRA_LINK_COLUMN] == "":
+                    row[ENA_SRA_LINK_COLUMN] = build_ena_sra_download_url(row['run'])
+                row[DDBJ_SRA_LINK_COLUMN] = normalize_sra_download_url(
+                    source_name='DDBJ',
+                    source_url=get_first_attr_by_org(entry, ['DDBJ']),
+                    run_accession=row['run'],
+                    experiment_accession=row['experiment'],
+                )
+                if row[DDBJ_SRA_LINK_COLUMN] == "":
+                    row[DDBJ_SRA_LINK_COLUMN] = build_ddbj_sra_download_url(
+                        run_accession=row['run'],
+                        experiment_accession=row['experiment'],
+                    )
                 sas = entry.findall('./SAMPLE/SAMPLE_ATTRIBUTES/SAMPLE_ATTRIBUTE')
                 for sa in sas:
                     tag = get_first_text(sa, './TAG')

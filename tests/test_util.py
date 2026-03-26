@@ -254,7 +254,7 @@ class TestMetadataInit:
     def test_column_names_present(self):
         m = Metadata()
         for col in ['tissue', 'sample_group', 'bioproject', 'biosample',
-                     'lib_layout', 'total_spots', 'exclusion']:
+                     'lib_layout', 'total_spots', 'exclusion', 'ENA_SRA_Link', 'DDBJ_SRA_Link']:
             assert col in m.df.columns
 
 
@@ -406,8 +406,52 @@ class TestMetadataFromXml:
         assert m.df.loc[0, 'run'] == 'SRR000001'
         assert m.df.loc[0, 'lib_layout'] == 'paired'
         assert m.df.loc[0, 'bioproject'] == 'PRJNA000001'
+        assert m.df.loc[0, 'ENA_SRA_Link'] == 'ftp://ftp.sra.ebi.ac.uk/vol1/srr/SRR000/SRR000001/SRR000001.sra'
+        assert m.df.loc[0, 'DDBJ_SRA_Link'] == ''
         for col in Metadata.removed_metadata_columns:
             assert col not in m.df.columns
+
+    def test_parse_drr_xml_derives_ddbj_sra_link(self):
+        xml_str = b"""<?xml version="1.0" encoding="UTF-8"?>
+        <EXPERIMENT_PACKAGE_SET>
+          <EXPERIMENT_PACKAGE>
+            <EXPERIMENT>
+              <IDENTIFIERS><PRIMARY_ID>DRX000001</PRIMARY_ID></IDENTIFIERS>
+              <DESIGN>
+                <LIBRARY_DESCRIPTOR>
+                  <LIBRARY_LAYOUT><SINGLE/></LIBRARY_LAYOUT>
+                </LIBRARY_DESCRIPTOR>
+              </DESIGN>
+            </EXPERIMENT>
+            <SUBMISSION>
+              <IDENTIFIERS><PRIMARY_ID>DRA000001</PRIMARY_ID></IDENTIFIERS>
+            </SUBMISSION>
+            <STUDY>
+              <DESCRIPTOR><STUDY_TITLE>Test Study</STUDY_TITLE></DESCRIPTOR>
+            </STUDY>
+            <SAMPLE>
+              <IDENTIFIERS><PRIMARY_ID>DRS000001</PRIMARY_ID></IDENTIFIERS>
+              <SAMPLE_NAME>
+                <SCIENTIFIC_NAME>Test species</SCIENTIFIC_NAME>
+                <TAXON_ID>1234</TAXON_ID>
+              </SAMPLE_NAME>
+            </SAMPLE>
+            <RUN_SET>
+              <RUN accession="DRR000001" total_spots="10" total_bases="100" size="1000">
+                <IDENTIFIERS><PRIMARY_ID>DRR000001</PRIMARY_ID></IDENTIFIERS>
+              </RUN>
+            </RUN_SET>
+          </EXPERIMENT_PACKAGE>
+        </EXPERIMENT_PACKAGE_SET>"""
+        root = ET.fromstring(xml_str)
+        tree = ET.ElementTree(root)
+        m = Metadata.from_xml(tree)
+
+        assert m.df.loc[0, 'ENA_SRA_Link'] == 'ftp://ftp.sra.ebi.ac.uk/vol1/drr/DRR000/DRR000001/DRR000001.sra'
+        assert m.df.loc[0, 'DDBJ_SRA_Link'] == (
+            'https://ddbj.nig.ac.jp/public/ddbj_database/dra/sra/ByExp/sra/DRX/'
+            'DRX000/DRX000001/DRR000001/DRR000001.sra'
+        )
 
     def test_parse_empty_xml(self):
         xml_str = b"""<EXPERIMENT_PACKAGE_SET></EXPERIMENT_PACKAGE_SET>"""

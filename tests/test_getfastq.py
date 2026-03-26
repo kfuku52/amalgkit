@@ -68,6 +68,8 @@ from amalgkit.getfastq import (
     resolve_run_target_rank_taxid,
     count_fastq_records_and_bases,
     summarize_layout_fastq_records_and_bases,
+    build_sra_source_candidates,
+    download_file_from_candidate_sources,
     download_sra,
     run_fasterq_dump,
     getfastq_main,
@@ -5387,23 +5389,55 @@ class TestSequenceExtractionSecondRound:
 
 class TestDownloadSraUrlSchemes:
     @staticmethod
-    def _make_metadata(sra_id, aws_link, gcp_link, ncbi_link):
+    def _make_metadata(
+        sra_id,
+        aws_link,
+        gcp_link,
+        ncbi_link,
+        experiment='',
+        ena_sra_link='',
+        ddbj_sra_link='',
+    ):
         return Metadata.from_DataFrame(pandas.DataFrame({
             'run': [sra_id],
+            'experiment': [experiment],
             'AWS_Link': [aws_link],
             'GCP_Link': [gcp_link],
             'NCBI_Link': [ncbi_link],
+            'ENA_SRA_Link': [ena_sra_link],
+            'DDBJ_SRA_Link': [ddbj_sra_link],
         }))
 
     @staticmethod
-    def _make_args(gcp_project='', sra_download_method='urllib'):
+    def _make_args(gcp_project='', sra_download_method='urllib', ena=False, ddbj=False):
         args = type('Args', (), {})()
         args.aws = True
         args.gcp = True
         args.ncbi = True
+        args.ena = ena
+        args.ddbj = ddbj
         args.gcp_project = gcp_project
         args.sra_download_method = sra_download_method
+        args.ena_download_max_concurrency = 'auto'
+        args.ddbj_download_max_concurrency = 'auto'
         return args
+
+    def test_build_sra_source_candidates_uses_explicit_priority(self):
+        source_candidates = build_sra_source_candidates({
+            'DDBJ': 'https://example.invalid/ddbj.sra',
+            'NCBI': 'https://example.invalid/ncbi.sra',
+            'AWS': 'https://example.invalid/aws.sra',
+            'ENA': 'https://example.invalid/ena.sra',
+            'GCP': 'https://example.invalid/gcp.sra',
+        })
+
+        assert [source['source_name'] for source in source_candidates] == [
+            'AWS',
+            'GCP',
+            'NCBI',
+            'ENA',
+            'DDBJ',
+        ]
 
     def test_raises_when_existing_sra_path_is_directory(self, tmp_path):
         sra_id = 'SRR_DIR'
@@ -5610,6 +5644,225 @@ class TestDownloadSraUrlSchemes:
             ('ncbi_download_max_concurrency', 'ncbi_download', False),
         ]
         assert observed['download_urls'] == ['https://example.invalid/ncbi.sra']
+        assert (tmp_path / '{}.sra'.format(sra_id)).exists()
+
+    def test_tries_ena_when_higher_priority_sources_are_at_concurrency_limit(self, tmp_path, monkeypatch):
+        sra_id = 'SRR123456'
+        metadata = self._make_metadata(
+            sra_id=sra_id,
+            aws_link='https://example.invalid/aws.sra',
+            gcp_link='https://example.invalid/gcp.sra',
+            ncbi_link='https://example.invalid/ncbi.sra',
+        )
+        sra_stat = {'sra_id': sra_id}
+        args = self._make_args(ena=True)
+        args.download_lock_dir = str(tmp_path / 'locks')
+        args.aws_download_max_concurrency = 1
+        args.gcp_download_max_concurrency = 1
+        args.ncbi_download_max_concurrency = 1
+        args.ena_download_max_concurrency = 1
+        observed = {
+            'acquire_calls': [],
+            'download_urls': [],
+        }
+
+        @contextmanager
+        def fake_maybe_acquire(args, limit_attr, semaphore_name, lock_label, resolve_download_dir_fn=None, wait=True):
+            observed['acquire_calls'].append((limit_attr, semaphore_name, wait))
+            if limit_attr in {
+                'aws_download_max_concurrency',
+                'gcp_download_max_concurrency',
+                'ncbi_download_max_concurrency',
+            }:
+                yield None
+                return
+            yield 'slot'
+
+        def fake_urlretrieve(url, path):
+            observed['download_urls'].append(url)
+            with open(path, 'w') as f:
+                f.write('ok')
+            return (path, None)
+
+        monkeypatch.setattr('amalgkit.getfastq.maybe_acquire_download_semaphore', fake_maybe_acquire)
+        monkeypatch.setattr('amalgkit.getfastq.urllib.request.urlretrieve', fake_urlretrieve)
+
+        download_sra(metadata=metadata, sra_stat=sra_stat, args=args, work_dir=str(tmp_path), overwrite=False)
+
+        assert observed['acquire_calls'] == [
+            ('aws_download_max_concurrency', 'aws_download', False),
+            ('gcp_download_max_concurrency', 'gcp_download', False),
+            ('ncbi_download_max_concurrency', 'ncbi_download', False),
+            ('ena_download_max_concurrency', 'ena_download', False),
+        ]
+        assert observed['download_urls'] == [
+            'ftp://ftp.sra.ebi.ac.uk/vol1/srr/SRR123/SRR123456/SRR123456.sra'
+        ]
+        assert (tmp_path / '{}.sra'.format(sra_id)).exists()
+
+    def test_tries_ddbj_when_higher_priority_sources_are_at_concurrency_limit(self, tmp_path, monkeypatch):
+        sra_id = 'DRR000001'
+        metadata = self._make_metadata(
+            sra_id=sra_id,
+            aws_link='https://example.invalid/aws.sra',
+            gcp_link='https://example.invalid/gcp.sra',
+            ncbi_link='https://example.invalid/ncbi.sra',
+            experiment='DRX000001',
+        )
+        sra_stat = {'sra_id': sra_id}
+        args = self._make_args(ddbj=True)
+        args.download_lock_dir = str(tmp_path / 'locks')
+        args.aws_download_max_concurrency = 1
+        args.gcp_download_max_concurrency = 1
+        args.ncbi_download_max_concurrency = 1
+        args.ddbj_download_max_concurrency = 1
+        observed = {
+            'acquire_calls': [],
+            'download_urls': [],
+        }
+
+        @contextmanager
+        def fake_maybe_acquire(args, limit_attr, semaphore_name, lock_label, resolve_download_dir_fn=None, wait=True):
+            observed['acquire_calls'].append((limit_attr, semaphore_name, wait))
+            if limit_attr in {
+                'aws_download_max_concurrency',
+                'gcp_download_max_concurrency',
+                'ncbi_download_max_concurrency',
+            }:
+                yield None
+                return
+            yield 'slot'
+
+        def fake_urlretrieve(url, path):
+            observed['download_urls'].append(url)
+            with open(path, 'w') as f:
+                f.write('ok')
+            return (path, None)
+
+        monkeypatch.setattr('amalgkit.getfastq.maybe_acquire_download_semaphore', fake_maybe_acquire)
+        monkeypatch.setattr('amalgkit.getfastq.urllib.request.urlretrieve', fake_urlretrieve)
+
+        download_sra(metadata=metadata, sra_stat=sra_stat, args=args, work_dir=str(tmp_path), overwrite=False)
+
+        assert observed['acquire_calls'] == [
+            ('aws_download_max_concurrency', 'aws_download', False),
+            ('gcp_download_max_concurrency', 'gcp_download', False),
+            ('ncbi_download_max_concurrency', 'ncbi_download', False),
+            ('ddbj_download_max_concurrency', 'ddbj_download', False),
+        ]
+        assert observed['download_urls'] == [
+            'https://ddbj.nig.ac.jp/public/ddbj_database/dra/sra/ByExp/sra/DRX/'
+            'DRX000/DRX000001/DRR000001/DRR000001.sra'
+        ]
+        assert (tmp_path / '{}.sra'.format(sra_id)).exists()
+
+    def test_waits_until_any_deferred_source_slot_opens(self, tmp_path, monkeypatch):
+        args = SimpleNamespace(
+            aws_download_max_concurrency=1,
+            ena_download_max_concurrency=1,
+        )
+        observed = {
+            'acquire_calls': [],
+            'download_sources': [],
+            'sleep_calls': 0,
+        }
+        retry_state = {'allow_ena': False}
+
+        @contextmanager
+        def fake_maybe_acquire(args, limit_attr, semaphore_name, lock_label, resolve_download_dir_fn=None, wait=True):
+            observed['acquire_calls'].append((limit_attr, wait, retry_state['allow_ena']))
+            if limit_attr == 'ena_download_max_concurrency' and retry_state['allow_ena']:
+                yield 'slot'
+                return
+            yield None
+
+        def fake_download(*, sra_id, sra_source_name, source_url_original, output_path, args, artifact_label):
+            observed['download_sources'].append(sra_source_name)
+            return True
+
+        def fake_sleep(_seconds):
+            observed['sleep_calls'] += 1
+            retry_state['allow_ena'] = True
+
+        monkeypatch.setattr('amalgkit.getfastq.maybe_acquire_download_semaphore', fake_maybe_acquire)
+        monkeypatch.setattr('amalgkit.getfastq._download_file_from_source_without_semaphore', fake_download)
+        monkeypatch.setattr('amalgkit.getfastq.time.sleep', fake_sleep)
+
+        is_downloaded = download_file_from_candidate_sources(
+            sra_id='SRR_WAIT',
+            source_candidates=[
+                {'source_name': 'AWS', 'url': 'https://example.invalid/aws.sra'},
+                {'source_name': 'ENA', 'url': 'ftp://ftp.sra.ebi.ac.uk/vol1/srr/SRR000/SRR_WAIT/SRR_WAIT.sra'},
+            ],
+            output_path=str(tmp_path / 'SRR_WAIT.sra'),
+            args=args,
+            artifact_label='SRA file',
+        )
+
+        assert is_downloaded is True
+        assert observed['sleep_calls'] == 1
+        assert observed['download_sources'] == ['ENA']
+
+    def test_derives_ena_sra_url_when_enabled(self, tmp_path, monkeypatch):
+        sra_id = 'SRR000001'
+        metadata = self._make_metadata(
+            sra_id=sra_id,
+            aws_link='',
+            gcp_link='',
+            ncbi_link='',
+        )
+        sra_stat = {'sra_id': sra_id}
+        args = self._make_args(ena=True)
+        args.aws = False
+        args.gcp = False
+        args.ncbi = False
+        called_urls = []
+
+        def fake_urlretrieve(url, path):
+            called_urls.append(url)
+            with open(path, 'w') as f:
+                f.write('ok')
+            return (path, None)
+
+        monkeypatch.setattr('amalgkit.getfastq.urllib.request.urlretrieve', fake_urlretrieve)
+
+        download_sra(metadata=metadata, sra_stat=sra_stat, args=args, work_dir=str(tmp_path), overwrite=False)
+
+        assert called_urls == ['ftp://ftp.sra.ebi.ac.uk/vol1/srr/SRR000/SRR000001/SRR000001.sra']
+        assert metadata.df.loc[0, 'ENA_SRA_Link'] == called_urls[0]
+        assert (tmp_path / '{}.sra'.format(sra_id)).exists()
+
+    def test_derives_ddbj_sra_url_when_enabled_for_drr(self, tmp_path, monkeypatch):
+        sra_id = 'DRR000001'
+        metadata = self._make_metadata(
+            sra_id=sra_id,
+            aws_link='',
+            gcp_link='',
+            ncbi_link='',
+            experiment='DRX000001',
+        )
+        sra_stat = {'sra_id': sra_id}
+        args = self._make_args(ddbj=True)
+        args.aws = False
+        args.gcp = False
+        args.ncbi = False
+        called_urls = []
+
+        def fake_urlretrieve(url, path):
+            called_urls.append(url)
+            with open(path, 'w') as f:
+                f.write('ok')
+            return (path, None)
+
+        monkeypatch.setattr('amalgkit.getfastq.urllib.request.urlretrieve', fake_urlretrieve)
+
+        download_sra(metadata=metadata, sra_stat=sra_stat, args=args, work_dir=str(tmp_path), overwrite=False)
+
+        assert called_urls == [
+            'https://ddbj.nig.ac.jp/public/ddbj_database/dra/sra/ByExp/sra/DRX/'
+            'DRX000/DRX000001/DRR000001/DRR000001.sra'
+        ]
+        assert metadata.df.loc[0, 'DDBJ_SRA_Link'] == called_urls[0]
         assert (tmp_path / '{}.sra'.format(sra_id)).exists()
 
 

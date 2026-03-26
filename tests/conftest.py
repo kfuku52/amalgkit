@@ -75,6 +75,8 @@ def sample_metadata_df():
         'NCBI_Link': ['', '', '', '', ''],
         'AWS_Link': ['', '', '', '', ''],
         'GCP_Link': ['', '', '', '', ''],
+        'ENA_SRA_Link': ['', '', '', '', ''],
+        'DDBJ_SRA_Link': ['', '', '', '', ''],
     }
     return pandas.DataFrame(data)
 

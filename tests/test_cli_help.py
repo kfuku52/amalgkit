@@ -115,6 +115,8 @@ def test_help_topic_getfastq_mentions_filter_runtime_costs():
     assert 'domain" is accepted as an alias for "superkingdom"' in merged
     assert 'first run also builds the silva db' in merged
     assert 'first run also downloads/builds the db' in merged
+    assert 'higher-priority sources are busy' in merged
+    assert 'tries the next enabled source before waiting' in merged
 
 
 def test_help_topic_integrate_mentions_download_dir():

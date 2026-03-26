@@ -44,6 +44,7 @@ from amalgkit.parallel_utils import (
 from amalgkit.output_utils import atomic_write_dataframe
 from amalgkit.prefix_utils import find_run_prefixed_entries
 from amalgkit.runtime_utils import get_getfastq_run_dir
+from amalgkit.sra_sources import DDBJ_SRA_LINK_COLUMN, ENA_SRA_LINK_COLUMN, normalize_sra_download_url
 from amalgkit.sra import fetch_sra_xml as shared_fetch_sra_xml
 from amalgkit.subprocess_utils import format_command, probe_dependency_command, run_checked_command, run_logged_command
 
@@ -124,6 +125,13 @@ GETFASTQ_STATS_COLUMNS = [
     'percent_rrna_filtered',
     'percent_contam_filtered',
 ]
+SRA_DOWNLOAD_SOURCE_PRIORITY = (
+    'AWS',
+    'GCP',
+    'NCBI',
+    'ENA',
+    'DDBJ',
+)
 
 def get_or_detect_intermediate_extension(sra_stat, work_dir, files=None, file_state=None):
     cached_ext = sra_stat.get('current_ext', None)
@@ -864,29 +872,114 @@ def normalize_url_for_urllib(source_name, source_url, gcp_project=''):
         return normalized
     return source_url
 
-def resolve_sra_download_sources(metadata, sra_stat, args):
+def _get_metadata_text_cell(metadata, row_index, column_name):
+    if column_name not in metadata.df.columns:
+        return ''
+    value = metadata.df.at[row_index, column_name]
+    if pandas.isna(value):
+        return ''
+    return str(value).strip()
+
+
+def _set_metadata_text_cell(metadata, row_index, column_name, value):
+    if column_name not in metadata.df.columns:
+        metadata.df.loc[:, column_name] = ''
+    metadata.df.at[row_index, column_name] = str(value or '').strip()
+
+
+def _resolve_cached_sra_download_source_url(metadata, row_index, source_name, sra_id, experiment_accession='', force_refresh=False):
+    source_name = str(source_name or '').strip().upper()
+    column_name = None
+    if source_name == 'ENA':
+        column_name = ENA_SRA_LINK_COLUMN
+    elif source_name == 'DDBJ':
+        column_name = DDBJ_SRA_LINK_COLUMN
+    if column_name is None:
+        return ''
+    cached_url = ''
+    if not force_refresh:
+        cached_url = _get_metadata_text_cell(metadata, row_index, column_name)
+    resolved_url = normalize_sra_download_url(
+        source_name=source_name,
+        source_url=cached_url,
+        run_accession=sra_id,
+        experiment_accession=experiment_accession,
+    )
+    if resolved_url != '':
+        _set_metadata_text_cell(metadata, row_index, column_name, resolved_url)
+    return resolved_url
+
+def resolve_sra_download_sources(metadata, sra_stat, args, force_refresh_dynamic=False):
     sra_sources = dict()
     sra_id = sra_stat['sra_id']
     ind_sra = sra_stat.get('metadata_idx', get_metadata_row_index_by_run(metadata, sra_id))
-    if args.aws:
+    if bool(getattr(args, 'aws', False)):
         aws_link = metadata.df.at[ind_sra, 'AWS_Link']
         if aws_link == '':
             sys.stderr.write('AWS_Link is empty and will be skipped.\n')
         else:
             sra_sources['AWS'] = aws_link
-    if args.gcp:
+    if bool(getattr(args, 'gcp', False)):
         gcp_link = metadata.df.at[ind_sra, 'GCP_Link']
         if gcp_link == '':
             sys.stderr.write('GCP_Link is empty and will be skipped.\n')
         else:
             sra_sources['GCP'] = gcp_link
-    if args.ncbi:
+    if bool(getattr(args, 'ncbi', False)):
         ncbi_link = metadata.df.at[ind_sra, 'NCBI_Link']
         if ncbi_link == '':
             sys.stderr.write('NCBI_Link is empty and will be skipped.\n')
         else:
             sra_sources['NCBI'] = ncbi_link
+    experiment_accession = _get_metadata_text_cell(metadata, ind_sra, 'experiment')
+    if bool(getattr(args, 'ena', False)):
+        ena_link = _resolve_cached_sra_download_source_url(
+            metadata=metadata,
+            row_index=ind_sra,
+            source_name='ENA',
+            sra_id=sra_id,
+            experiment_accession=experiment_accession,
+            force_refresh=force_refresh_dynamic,
+        )
+        if ena_link == '':
+            sys.stderr.write('{} is empty and will be skipped.\n'.format(ENA_SRA_LINK_COLUMN))
+        else:
+            sra_sources['ENA'] = ena_link
+    if bool(getattr(args, 'ddbj', False)):
+        ddbj_link = _resolve_cached_sra_download_source_url(
+            metadata=metadata,
+            row_index=ind_sra,
+            source_name='DDBJ',
+            sra_id=sra_id,
+            experiment_accession=experiment_accession,
+            force_refresh=force_refresh_dynamic,
+        )
+        if ddbj_link == '':
+            sys.stderr.write('{} is empty and will be skipped.\n'.format(DDBJ_SRA_LINK_COLUMN))
+        else:
+            sra_sources['DDBJ'] = ddbj_link
     return sra_sources
+
+
+def build_sra_source_candidates(sra_sources):
+    source_candidates = []
+    seen_source_names = set()
+    for prioritized_source_name in SRA_DOWNLOAD_SOURCE_PRIORITY:
+        if prioritized_source_name not in sra_sources:
+            continue
+        source_candidates.append({
+            'source_name': prioritized_source_name,
+            'url': str(sra_sources[prioritized_source_name]),
+        })
+        seen_source_names.add(prioritized_source_name)
+    for source_name, source_url_original in sra_sources.items():
+        if source_name in seen_source_names:
+            continue
+        source_candidates.append({
+            'source_name': source_name,
+            'url': str(source_url_original),
+        })
+    return source_candidates
 
 def normalize_sra_download_method(args):
     method_raw = str(getattr(args, 'sra_download_method', 'auto')).strip().lower()
@@ -902,6 +995,8 @@ def resolve_download_semaphore_spec(source_name):
         'NCBI': ('ncbi_download_max_concurrency', 'ncbi_download', 'NCBI download'),
         'AWS': ('aws_download_max_concurrency', 'aws_download', 'AWS download'),
         'GCP': ('gcp_download_max_concurrency', 'gcp_download', 'GCP download'),
+        'ENA': ('ena_download_max_concurrency', 'ena_download', 'ENA download'),
+        'DDBJ': ('ddbj_download_max_concurrency', 'ddbj_download', 'DDBJ download'),
     }
     return semaphore_specs.get(normalized)
 
@@ -1183,18 +1278,20 @@ def download_sra(metadata, sra_stat, args, work_dir, overwrite=False):
     else:
         print('Previously-downloaded sra file was not detected. New sra file will be downloaded.')
 
-    if (args.aws) or (args.ncbi) or (args.gcp):
+    if any(
+        bool(getattr(args, attr_name, False))
+        for attr_name in ['aws', 'ncbi', 'gcp', 'ena', 'ddbj']
+    ):
         sra_id = sra_stat['sra_id']
-        sra_sources = resolve_sra_download_sources(metadata=metadata, sra_stat=sra_stat, args=args)
+        sra_sources = resolve_sra_download_sources(
+            metadata=metadata,
+            sra_stat=sra_stat,
+            args=args,
+            force_refresh_dynamic=False,
+        )
         if len(sra_sources)==0:
-            print('No source URL is available. Check whether --aws, --gcp, and --ncbi are properly set.')
-        source_candidates = [
-            {
-                'source_name': sra_source_name,
-                'url': str(source_url_original),
-            }
-            for sra_source_name, source_url_original in sra_sources.items()
-        ]
+            print('No source URL is available. Check whether enabled download sources are properly set.')
+        source_candidates = build_sra_source_candidates(sra_sources)
         is_sra_download_completed = download_file_from_candidate_sources(
             sra_id=sra_id,
             source_candidates=source_candidates,
@@ -1203,13 +1300,35 @@ def download_sra(metadata, sra_stat, args, work_dir, overwrite=False):
             artifact_label='SRA file',
         )
         if not is_sra_download_completed:
-            sys.stderr.write("Exhausted all sources of download.\n")
+            has_dynamic_sources = bool(getattr(args, 'ena', False)) or bool(getattr(args, 'ddbj', False))
+            if has_dynamic_sources:
+                refreshed_sources = resolve_sra_download_sources(
+                    metadata=metadata,
+                    sra_stat=sra_stat,
+                    args=args,
+                    force_refresh_dynamic=True,
+                )
+                refreshed_candidates = build_sra_source_candidates(refreshed_sources)
+                if refreshed_candidates != source_candidates:
+                    print(
+                        'Refreshing accession-derived SRA URLs for {} after initial source exhaustion.'.format(sra_id),
+                        flush=True,
+                    )
+                    is_sra_download_completed = download_file_from_candidate_sources(
+                        sra_id=sra_id,
+                        source_candidates=refreshed_candidates,
+                        output_path=path_downloaded_sra,
+                        args=args,
+                        artifact_label='SRA file',
+                    )
+            if not is_sra_download_completed:
+                sys.stderr.write("Exhausted all sources of download.\n")
         else:
             if not os.path.exists(path_downloaded_sra):
                 raise FileNotFoundError('SRA file download failed: ' + sra_stat['sra_id'])
             return
     err_txt = 'SRA file download failed for {}. Expected PATH: {}. '
-    err_txt += 'Cloud URL download sources were exhausted.'
+    err_txt += 'Configured download sources were exhausted.'
     if not os.path.exists(path_downloaded_sra):
         raise FileNotFoundError(err_txt.format(sra_stat['sra_id'], path_downloaded_sra))
 
