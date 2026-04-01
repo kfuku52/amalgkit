@@ -9,7 +9,7 @@ from http.client import IncompleteRead
 
 from types import SimpleNamespace
 
-from amalgkit.metadata import fetch_sra_xml, metadata_main
+from amalgkit.metadata import _prepare_single_metadata, fetch_sra_xml, metadata_main
 from amalgkit.util import Metadata
 
 
@@ -857,3 +857,47 @@ class TestMetadataFromXmlRoots:
 
         assert metadata.df.loc[0, 'platform'] == 'PACBIO_SMRT'
         assert metadata.df.loc[0, 'instrument'] == 'Sequel II'
+
+
+def test_prepare_single_metadata_skips_taxonomy_lookup_when_resolve_names_disabled(monkeypatch):
+    metadata = Metadata.from_DataFrame(
+        pandas.DataFrame(
+            {
+                'scientific_name': ['Arabidopsis thaliana'],
+                'taxid': pandas.Series([3702], dtype='Int64'),
+                'tissue': ['leaf'],
+                'run': ['SRR000001'],
+            }
+        )
+    )
+
+    calls = {'add_standard_rank_taxids': 0, 'resolve_scientific_names': 0}
+
+    def fail_add_standard_rank_taxids(*_args, **_kwargs):
+        calls['add_standard_rank_taxids'] += 1
+        raise AssertionError('add_standard_rank_taxids should not be called when resolve_names is disabled')
+
+    def fail_resolve_scientific_names(*_args, **_kwargs):
+        calls['resolve_scientific_names'] += 1
+        raise AssertionError('resolve_scientific_names should not be called when resolve_names is disabled')
+
+    monkeypatch.setattr(metadata, 'add_standard_rank_taxids', fail_add_standard_rank_taxids)
+    monkeypatch.setattr(metadata, 'resolve_scientific_names', fail_resolve_scientific_names)
+
+    args = SimpleNamespace(resolve_names=False)
+    prepared = _prepare_single_metadata(metadata, args=args)
+
+    assert calls['add_standard_rank_taxids'] == 0
+    assert calls['resolve_scientific_names'] == 0
+    for column in [
+        'taxid_domain',
+        'taxid_kingdom',
+        'taxid_phylum',
+        'taxid_class',
+        'taxid_order',
+        'taxid_family',
+        'taxid_genus',
+        'taxid_species',
+    ]:
+        assert column in prepared.df.columns
+        assert prepared.df[column].isna().all()

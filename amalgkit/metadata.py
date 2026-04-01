@@ -401,6 +401,16 @@ def _read_metadata_from_path(metadata_path, context):
 
 
 def _prepare_single_metadata(metadata, args):
+    standard_rank_columns = [
+        'taxid_domain',
+        'taxid_kingdom',
+        'taxid_phylum',
+        'taxid_class',
+        'taxid_order',
+        'taxid_family',
+        'taxid_genus',
+        'taxid_species',
+    ]
     if 'tissue' not in metadata.df.columns:
         metadata.df['tissue'] = ''
     metadata.df['tissue'] = metadata.df['tissue'].fillna('').astype(str)
@@ -409,9 +419,15 @@ def _prepare_single_metadata(metadata, args):
         metadata.df['taxid'] = pandas.Series([pandas.NA] * metadata.df.shape[0], dtype='Int64')
     else:
         metadata.df['taxid'] = pandas.to_numeric(metadata.df['taxid'], errors='coerce').astype('Int64')
-    metadata.add_standard_rank_taxids(args=args)
     if getattr(args, 'resolve_names', False):
+        metadata.add_standard_rank_taxids(args=args)
         metadata.resolve_scientific_names(args=args)
+    else:
+        for col in standard_rank_columns:
+            if col not in metadata.df.columns:
+                metadata.df.loc[:, col] = pandas.Series([pandas.NA] * metadata.df.shape[0], dtype='Int64')
+            else:
+                metadata.df.loc[:, col] = pandas.to_numeric(metadata.df[col], errors='coerce').astype('Int64')
     metadata.reorder(omit_misc=False)
     metadata.df, missing_run_stats = _drop_rows_missing_run(
         df=metadata.df,
