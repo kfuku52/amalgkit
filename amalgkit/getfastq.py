@@ -24,6 +24,7 @@ from amalgkit.fastq_utils import (
     count_fastq_records as shared_count_fastq_records,
     map_seqkit_stats_rows,
     parse_seqkit_stats_row_records_and_bases as _parse_seqkit_stats_row_records_and_bases,
+    validate_fastq_structure as shared_validate_fastq_structure,
 )
 from amalgkit.metadata_utils import (
     Metadata,
@@ -3814,7 +3815,13 @@ def rename_reads(sra_stat, args, output_dir, files=None, file_state=None, return
         return run_file_state
     return run_file_state.to_set()
 
-def rename_fastq(sra_stat, output_dir, inext, outext):
+def rename_fastq(sra_stat, output_dir, inext, outext, validate_fastq=False):
+    def validate_single_file(path_fastq):
+        try:
+            shared_validate_fastq_structure(path_fastq)
+        except Exception as exc:
+            raise ValueError('FASTQ validation failed for {}. {}'.format(path_fastq, exc)) from exc
+
     def rename_single_file(in_path, out_path):
         if not os.path.exists(in_path):
             raise FileNotFoundError('Intermediate fastq file not found for renaming: {}'.format(in_path))
@@ -3826,10 +3833,15 @@ def rename_fastq(sra_stat, output_dir, inext, outext):
 
     if sra_stat['layout'] == 'single':
         inbase = os.path.join(output_dir, sra_stat['sra_id'])
+        if validate_fastq:
+            validate_single_file(inbase + inext)
         rename_single_file(inbase + inext, inbase + outext)
     elif sra_stat['layout'] == 'paired':
         inbase1 = os.path.join(output_dir, sra_stat['sra_id'] + '_1')
         inbase2 = os.path.join(output_dir, sra_stat['sra_id'] + '_2')
+        if validate_fastq:
+            validate_single_file(inbase1 + inext)
+            validate_single_file(inbase2 + inext)
         rename_single_file(inbase1 + inext, inbase1 + outext)
         rename_single_file(inbase2 + inext, inbase2 + outext)
     set_current_intermediate_extension(sra_stat, outext)
@@ -4332,7 +4344,7 @@ def sequence_extraction(args, sra_stat, metadata, g, start, end, runtime_context
         )
     inext = get_or_detect_intermediate_extension(sra_stat, work_dir=sra_stat['getfastq_sra_dir'])
     outext = '.amalgkit.fastq.gz'
-    rename_fastq(sra_stat, sra_stat['getfastq_sra_dir'], inext, outext)
+    rename_fastq(sra_stat, sra_stat['getfastq_sra_dir'], inext, outext, validate_fastq=True)
     metadata.df.at[ind_sra,'bp_still_available'] = sra_stat['spot_length'] * (sra_stat['total_spot'] - end)
     bp_specified_for_extraction = sra_stat['spot_length'] * (end - start)
     metadata.df.at[ind_sra, 'bp_specified_for_extraction'] += bp_specified_for_extraction
@@ -4525,7 +4537,7 @@ def sequence_extraction_private(metadata, sra_stat, args, runtime_context=None):
     if (inext=='no_extension_found')&(sra_stat['layout']=='paired'):
         raise ValueError('Paired-end file names may be invalid. They should contain _1 and _2 to indicate a pair: {}'.format(sra_stat['sra_id']))
     outext = '.amalgkit.fastq.gz'
-    rename_fastq(sra_stat, sra_stat['getfastq_sra_dir'], inext, outext)
+    rename_fastq(sra_stat, sra_stat['getfastq_sra_dir'], inext, outext, validate_fastq=True)
     write_getfastq_stats(sra_stat=sra_stat, metadata=metadata, output_dir=sra_stat['getfastq_sra_dir'])
     return metadata
 

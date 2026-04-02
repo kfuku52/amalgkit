@@ -2513,6 +2513,27 @@ class TestRenameFastq:
         with pytest.raises(IsADirectoryError, match='Intermediate path exists but is not a file'):
             rename_fastq(sra_stat, str(tmp_path), '.fastq.gz', '.amalgkit.fastq.gz')
 
+    def test_rejects_invalid_fastq_when_validation_enabled(self, tmp_path):
+        sra_stat = {'sra_id': 'SRR001', 'layout': 'single'}
+        input_path = tmp_path / 'SRR001.fastq.gz'
+        with gzip.open(input_path, 'wt') as handle:
+            handle.write('not-a-fastq-header\n')
+            handle.write('ACGT\n')
+            handle.write('+\n')
+            handle.write('IIII\n')
+
+        with pytest.raises(ValueError, match='FASTQ validation failed'):
+            rename_fastq(
+                sra_stat,
+                str(tmp_path),
+                '.fastq.gz',
+                '.amalgkit.fastq.gz',
+                validate_fastq=True,
+            )
+
+        assert input_path.exists()
+        assert not (tmp_path / 'SRR001.amalgkit.fastq.gz').exists()
+
 
 # ---------------------------------------------------------------------------
 # remove_old_intermediate_files (removes old files but keeps .sra)

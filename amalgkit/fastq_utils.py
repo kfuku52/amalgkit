@@ -101,6 +101,34 @@ def count_fastq_records_and_bases(path_fastq, warning_writer=None):
     return num_records, num_bases
 
 
+def validate_fastq_structure(path_fastq, max_records=None):
+    num_records = 0
+    with open_fastq_binary(path_fastq) as handle:
+        while True:
+            line1 = handle.readline()
+            if line1 == b'':
+                break
+            line2 = handle.readline()
+            line3 = handle.readline()
+            line4 = handle.readline()
+            if (line2 == b'') or (line3 == b'') or (line4 == b''):
+                raise ValueError('Malformed FASTQ (record truncated): {}'.format(path_fastq))
+            if not line1.startswith(b'@'):
+                raise ValueError('Malformed FASTQ header: {}'.format(path_fastq))
+            if not line3.startswith(b'+'):
+                raise ValueError('Malformed FASTQ separator: {}'.format(path_fastq))
+            seq = line2.rstrip(b'\r\n')
+            qual = line4.rstrip(b'\r\n')
+            if len(seq) != len(qual):
+                raise ValueError(
+                    'Malformed FASTQ (sequence and quality lengths differ): {}'.format(path_fastq)
+                )
+            num_records += 1
+            if (max_records is not None) and (num_records >= int(max_records)):
+                break
+    return num_records
+
+
 def parse_seqkit_stats_rows(stdout_txt, empty_data_message='seqkit stats output did not include data rows.'):
     lines = [line.rstrip('\n') for line in (stdout_txt or '').splitlines() if line.strip() != '']
     if len(lines) < 2:

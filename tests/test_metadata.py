@@ -580,6 +580,66 @@ class TestMetadataMain:
         assert merged_info['kind'] == 'merged'
         assert merged_info['source_query_labels'] == ['base']
 
+    def test_species_batch_mode_merged_metadata_unions_query_specific_columns(self, tmp_path, monkeypatch):
+        out_dir = tmp_path / 'out'
+        args = self._args(out_dir)
+        args.search_string = None
+        args.species_tsv = str(tmp_path / 'species.tsv')
+        args.mode = 'title_split'
+        args.title_terms = 'leaf,root'
+        pandas.DataFrame(
+            [
+                {'scientific_name': 'Species alpha'},
+            ]
+        ).to_csv(args.species_tsv, sep='\t', index=False)
+
+        def fake_run_single_query(args, out_dir=None, search_string=None, species_name=None, query_label=None, mode='single', allow_cached=False):
+            _ = (args, out_dir, search_string, mode, allow_cached)
+            token = query_label.upper()
+            row = {
+                'scientific_name': species_name,
+                'sample_group': query_label,
+                'tissue': query_label,
+                'experiment': 'SRX_' + token,
+                'run': 'SRR_' + token,
+                'taxid': '1001',
+            }
+            if query_label == 'leaf':
+                row['sample_attribute_leaf_stage'] = 'young'
+            else:
+                row['sample_attribute_root_zone'] = 'tip'
+            metadata = Metadata.from_DataFrame(pandas.DataFrame([row]))
+            query_dir = tmp_path / query_label
+            query_dir.mkdir(exist_ok=True)
+            metadata_path = query_dir / 'metadata.tsv'
+            metadata.df.to_csv(metadata_path, sep='\t', index=False)
+            query_info_path = query_dir / 'query_info.json'
+            query_info_path.write_text(json.dumps({'query_label': query_label}), encoding='utf-8')
+            return {
+                'metadata': metadata,
+                'paths': {
+                    'query_info_path': str(query_info_path),
+                    'metadata_path': str(metadata_path),
+                },
+                'query_info': {
+                    'record_id_count': 1,
+                    'missing_run_drop_count': 0,
+                },
+                'query_label': query_label,
+            }
+
+        monkeypatch.setattr('amalgkit.metadata._run_single_query', fake_run_single_query)
+
+        metadata_main(args)
+
+        merged_path = out_dir / 'metadata_specieswise' / 'Species_alpha' / 'Species_alpha.metadata.tsv'
+        merged_df = pandas.read_csv(merged_path, sep='\t')
+        assert set(merged_df['run'].tolist()) == {'SRR_FLOWER', 'SRR_LEAF', 'SRR_ROOT'}
+        assert 'sample_attribute_leaf_stage' in merged_df.columns
+        assert 'sample_attribute_root_zone' in merged_df.columns
+        assert merged_df.loc[merged_df['run'] == 'SRR_LEAF', 'sample_attribute_leaf_stage'].iat[0] == 'young'
+        assert merged_df.loc[merged_df['run'] == 'SRR_ROOT', 'sample_attribute_root_zone'].iat[0] == 'tip'
+
     def test_species_batch_mode_uses_parallel_workers(self, tmp_path, monkeypatch):
         out_dir = tmp_path / 'out'
         args = self._args(out_dir)

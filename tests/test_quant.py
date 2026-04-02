@@ -24,6 +24,7 @@ from amalgkit.quant import (
     call_kallisto,
     call_oarfish,
     run_quant,
+    run_quant_for_sra,
     pre_resolve_species_indices,
     prefetch_getfastq_run_files,
     build_quant_tasks,
@@ -791,6 +792,76 @@ class TestQuantEdgeCases:
                 index='dummy.idx',
             )
         assert renamed['called'] is False
+
+    def test_run_quant_uses_scientific_name_original_for_index_lookup(self, tmp_path, monkeypatch):
+        out_dir = tmp_path / 'out'
+        getfastq_dir = out_dir / 'getfastq' / 'SRR001'
+        index_dir = out_dir / 'index'
+        out_dir.mkdir()
+        getfastq_dir.mkdir(parents=True)
+        index_dir.mkdir(parents=True)
+        (index_dir / 'Pygsuia_biforma.idx').write_text('idx')
+        args = SimpleNamespace(
+            out_dir=str(out_dir),
+            redo=False,
+            clean_fastq=False,
+            threads=1,
+            build_index=False,
+            fasta_dir='inferred',
+            index_dir=None,
+            internal_jobs=1,
+            quant_backend='kallisto',
+            index_lock_poll=1,
+            index_lock_timeout=1,
+        )
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001'],
+            'scientific_name': ['unclassified eukaryotes'],
+            'scientific_name_original': ['Pygsuia biforma'],
+            'lib_layout': ['single'],
+            'total_spots': [10],
+            'spot_length': [100],
+            'total_bases': [1000],
+            'nominal_length': [200],
+            'exclusion': ['no'],
+        }))
+        runtime_context = QuantRuntimeContext(
+            run_files_by_run={'SRR001': {'SRR001.fastq.gz'}},
+            quant_backend_by_run={'SRR001': 'kallisto'},
+            species_identifier_values_by_run={
+                'SRR001': ['unclassified eukaryotes', 'Pygsuia biforma'],
+            },
+        )
+        observed = {}
+
+        monkeypatch.setattr(
+            'amalgkit.quant.get_newest_intermediate_file_extension',
+            lambda *_args, **_kwargs: '.fastq.gz',
+        )
+
+        def fake_call_kallisto(_args, in_files, _metadata, _sra_stat, _output_dir, index):
+            observed['in_files'] = list(in_files)
+            observed['index'] = index
+            return SimpleNamespace(returncode=0)
+
+        monkeypatch.setattr('amalgkit.quant.call_kallisto', fake_call_kallisto)
+
+        runtime_context.resolved_index_cache = pre_resolve_species_indices(
+            args,
+            [('SRR001', 'unclassified eukaryotes')],
+            runtime_context=runtime_context,
+        )
+
+        run_quant_for_sra(
+            args=args,
+            metadata=metadata,
+            sra_id='SRR001',
+            sci_name='unclassified eukaryotes',
+            runtime_context=runtime_context,
+        )
+
+        assert observed['in_files'] == [str(getfastq_dir / 'SRR001.fastq.gz')]
+        assert observed['index'] == str(index_dir / 'Pygsuia_biforma.idx')
 
     def test_get_index_raises_clear_error_for_multiple_fasta_candidates(self, tmp_path):
         out_dir = tmp_path / 'out'
@@ -1638,6 +1709,48 @@ class TestQuantEdgeCases:
 
         assert resolved == ['Species_A']
         assert out == {'Species_A': 'Species_A.idx'}
+
+    def test_pre_resolve_species_indices_keeps_alias_distinct_targets_separate(self, tmp_path, monkeypatch):
+        out_dir = tmp_path / 'out'
+        index_dir = out_dir / 'index'
+        out_dir.mkdir()
+        index_dir.mkdir(parents=True)
+        args = SimpleNamespace(
+            out_dir=str(out_dir),
+            build_index=False,
+            fasta_dir='inferred',
+            index_dir=None,
+            internal_jobs=1,
+        )
+        tasks = [
+            ('SRR001', 'unclassified eukaryotes'),
+            ('SRR002', 'unclassified eukaryotes'),
+        ]
+        runtime_context = QuantRuntimeContext(
+            species_identifier_values_by_run={
+                'SRR001': ['unclassified eukaryotes', 'Pygsuia biforma'],
+                'SRR002': ['unclassified eukaryotes', 'Thecamonas trahens'],
+            }
+        )
+        resolved = []
+
+        def fake_get_index(_args, sci_name, runtime_context=None, alias_names=None, backend=None, oarfish_seq_tech=None):
+            _ = (runtime_context, backend, oarfish_seq_tech)
+            resolved.append((sci_name, tuple(alias_names or ())))
+            return '{}__{}.idx'.format(
+                sci_name,
+                '_'.join([name.replace(' ', '_') for name in (alias_names or [])]),
+            )
+
+        monkeypatch.setattr('amalgkit.quant.get_index', fake_get_index)
+
+        out = pre_resolve_species_indices(args, tasks, runtime_context=runtime_context)
+
+        assert resolved == [
+            ('unclassified_eukaryotes', ('Pygsuia biforma',)),
+            ('unclassified_eukaryotes', ('Thecamonas trahens',)),
+        ]
+        assert len(out) == 2
 
     def test_pre_resolve_species_indices_uses_parallel_jobs(self, tmp_path, monkeypatch):
         out_dir = tmp_path / 'out'
