@@ -1313,6 +1313,7 @@ class TestSelectRuleApplication:
         assert 'dedup_redundant_biosample_1' in rule_ids
         assert 'exclude_single_cell_1' in rule_ids
         assert 'exclude_single_nucleus_1a' in rule_ids
+        assert 'exclude_three_prime_biased_8a' in rule_ids
         assert 'exclude_rnai_4' in rule_ids
         assert 'exclude_cage_8' in rule_ids
         assert 'control_mock_1' in rule_ids
@@ -1337,6 +1338,39 @@ class TestSelectRuleApplication:
         assert result['status'] == 'organ'
         assert result['organ'] == 'leaf'
         assert result['rule_id'] == 'normalize_leaf_safe_covering_inflorescence'
+
+    def test_default_plantae_excludes_quantseq_and_digital_gene_expression(self):
+        rules_path = Path(__file__).resolve().parents[1] / 'amalgkit' / 'select_rule_sets' / 'plantae' / 'select_rules.tsv'
+        select_rules = read_select_rules(str(rules_path))
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001', 'SRR002', 'SRR003'],
+            'scientific_name': ['Species A'] * 3,
+            'sample_group': ['leaf', 'leaf', 'leaf'],
+            'sample_title': ['leaf sample 1', 'leaf sample 2', 'leaf sample 3'],
+            'sample_description': ['', '', ''],
+            'study_title': ['', 'Digital Gene Expression Analysis during Floral Transition', ''],
+            'exp_title': ['RNA-seq of leaf with Lexogen QuantSeq 3 mRNA-Seq FWD', '', 'standard bulk RNA-seq'],
+            'design': ['', '', ''],
+            'lib_name': ['', '', ''],
+            'protocol': ['', '3 mRNA-Seq library', 'TruSeq stranded mRNA library'],
+            'bioproject': ['PRJ1'] * 3,
+            'biosample': ['SAM1', 'SAM2', 'SAM3'],
+            'total_spots': [100, 100, 100],
+            'exclusion': ['no', 'no', 'no'],
+        }))
+        args = SimpleNamespace(
+            min_nspots=0,
+            mark_missing_rank='none',
+            mark_redundant_biosamples=False,
+            max_sample=10,
+        )
+
+        metadata = prepare_select_metadata(metadata, select_rules)
+        out = apply_select_filters(metadata, args, select_rules)
+
+        assert out.df.loc[out.df['run'] == 'SRR001', 'exclusion'].iloc[0] == 'three_prime_biased'
+        assert out.df.loc[out.df['run'] == 'SRR002', 'exclusion'].iloc[0] == 'three_prime_biased'
+        assert out.df.loc[out.df['run'] == 'SRR003', 'exclusion'].iloc[0] == 'no'
 
     def test_review_rule_overrides_original_sample_group(self, tmp_path):
         rules_path = tmp_path / 'select_rules.tsv'
@@ -1625,24 +1659,34 @@ class TestSelectBatchMain:
         select_summary = tmp_path / 'select_batch' / 'select_summary.tsv'
         select_queue = tmp_path / 'select_batch' / 'select_queue.tsv'
         manifest = tmp_path / 'select_batch' / 'external_manifest.tsv'
-        manifest_strict = tmp_path / 'select_batch' / 'external_manifest_strict.tsv'
-        manifest_relaxed = tmp_path / 'select_batch' / 'external_manifest_relaxed.tsv'
+        manifest_all_tissues_ge30 = tmp_path / 'select_batch' / 'external_manifest_all_tissues_ge30.tsv'
+        manifest_all_tissues_ge20 = tmp_path / 'select_batch' / 'external_manifest_all_tissues_ge20.tsv'
+        manifest_all_tissues_ge1 = tmp_path / 'select_batch' / 'external_manifest_all_tissues_ge1.tsv'
+        manifest_any_tissues_ge1 = tmp_path / 'select_batch' / 'external_manifest_any_tissues_ge1.tsv'
 
         assert normalization_summary.exists()
         assert select_summary.exists()
         assert select_queue.exists()
         assert manifest.exists()
-        assert manifest_strict.exists()
-        assert manifest_relaxed.exists()
+        assert manifest_all_tissues_ge30.exists()
+        assert manifest_all_tissues_ge20.exists()
+        assert manifest_all_tissues_ge1.exists()
+        assert manifest_any_tissues_ge1.exists()
 
         summary_df = pandas.read_csv(select_summary, sep='\t')
         assert set(summary_df['species_token'].tolist()) == {'Species_alpha', 'Species_beta'}
         queue_by_species = summary_df.set_index('species_token')['queue_tier'].to_dict()
-        assert queue_by_species['Species_alpha'] == 'strict'
-        assert queue_by_species['Species_beta'] == 'defer'
+        any_tissues_ge1_by_species = summary_df.set_index('species_token')['any_tissues_ge1'].to_dict()
+        all_tissues_ge1_by_species = summary_df.set_index('species_token')['all_tissues_ge1'].to_dict()
+        assert queue_by_species['Species_alpha'] == 'all_tissues_ge30'
+        assert queue_by_species['Species_beta'] == 'all_tissues_ge1'
+        assert bool(any_tissues_ge1_by_species['Species_alpha']) is True
+        assert bool(any_tissues_ge1_by_species['Species_beta']) is True
+        assert bool(all_tissues_ge1_by_species['Species_alpha']) is True
+        assert bool(all_tissues_ge1_by_species['Species_beta']) is True
 
         manifest_df = pandas.read_csv(manifest, sep='\t')
-        assert set(manifest_df['queue_tier'].tolist()) == {'strict', 'defer'}
+        assert set(manifest_df['queue_tier'].tolist()) == {'all_tissues_ge30', 'all_tissues_ge1'}
         assert 'selected_metadata_path' in manifest_df.columns
 
     def test_batch_mode_uses_parallel_worker_path(self, tmp_path, monkeypatch):
