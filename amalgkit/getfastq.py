@@ -2881,6 +2881,49 @@ def write_getfastq_stats(sra_stat, metadata, output_dir):
     atomic_write_dataframe(out_df, out_path, sep='\t', index=False)
 
 
+def _read_getfastq_stats_row(output_dir, sra_id):
+    stats_path = os.path.join(output_dir, 'getfastq_stats.tsv')
+    if not os.path.isfile(stats_path):
+        return None
+    try:
+        stats_df = pandas.read_csv(stats_path, sep='\t')
+    except Exception as exc:
+        sys.stderr.write('Failed to read getfastq stats file {}: {}\n'.format(stats_path, exc))
+        return None
+    if 'run' not in stats_df.columns:
+        return None
+    matched = stats_df.loc[stats_df['run'].fillna('').astype(str).str.strip() == str(sra_id)]
+    if matched.empty:
+        return None
+    return matched.iloc[-1]
+
+
+def _detect_zero_output_stage_from_stats(output_dir, sra_id):
+    row = _read_getfastq_stats_row(output_dir, sra_id)
+    if row is None:
+        return None
+    if (_coerce_nonnegative_float(row.get('bp_contam_in')) > 0) and (_coerce_nonnegative_float(row.get('bp_contam_out')) <= 0):
+        return 'contam'
+    if (_coerce_nonnegative_float(row.get('bp_rrna_in')) > 0) and (_coerce_nonnegative_float(row.get('bp_rrna_out')) <= 0):
+        return 'rrna'
+    if (_coerce_nonnegative_float(row.get('bp_fastp_in')) > 0) and (_coerce_nonnegative_float(row.get('bp_fastp_out')) <= 0):
+        return 'fastp'
+    if (_coerce_nonnegative_float(row.get('bp_written')) <= 0) and (_coerce_nonnegative_float(row.get('num_written')) <= 0):
+        return 'fasterq'
+    return None
+
+
+def _remove_generated_output_files(output_dir, output_names, stage_label):
+    for output_name in output_names:
+        output_path = os.path.join(output_dir, output_name)
+        if not os.path.exists(output_path):
+            continue
+        if not os.path.isfile(output_path):
+            raise IsADirectoryError('{} output path exists but is not a file: {}'.format(stage_label, output_path))
+        print('{} produced zero retained reads. Removing output file: {}'.format(stage_label, output_path))
+        os.remove(output_path)
+
+
 def resolve_fastp_threads(num_threads):
     if num_threads > 16:
         print('Too many threads for fastp (--threads {}). Only 16 threads will be used.'.format(num_threads))
@@ -3008,7 +3051,15 @@ def run_fastp(
             for input_name in input_names:
                 run_file_state.discard(input_name)
     fp_stderr = fp_out.stderr.decode('utf8', errors='replace')
+    num_in, num_out, bp_in, bp_out = parse_fastp_summary_counts(fp_stderr)
     metadata = update_metadata_after_fastp(metadata, sra_stat, fp_stderr)
+    total_num_out = sum(num_out)
+    total_bp_out = sum(bp_out)
+    if (total_num_out <= 0) and (total_bp_out <= 0):
+        _remove_generated_output_files(output_dir, output_names, 'fastp')
+        if run_file_state is not None:
+            for output_name in output_names:
+                run_file_state.discard(output_name)
     metadata = accumulate_and_print_stage_duration(
         metadata=metadata,
         sra_stat=sra_stat,
@@ -3016,13 +3067,29 @@ def run_fastp(
         elapsed_seconds=(time.perf_counter() - started_at),
         stage_label='fastp',
     )
-    set_current_intermediate_extension(sra_stat, outext)
+    if (total_num_out > 0) or (total_bp_out > 0):
+        set_current_intermediate_extension(sra_stat, outext)
     return finalize_run_fastp_return(
         metadata=metadata,
         run_file_state=run_file_state,
         return_files=return_files,
         return_file_state=return_file_state,
     )
+
+
+def _stage_counts_indicate_no_reads(stage_counts):
+    if stage_counts is None:
+        return False
+    return (
+        _coerce_nonnegative_float(stage_counts.get('num_spots')) <= 0
+        and _coerce_nonnegative_float(stage_counts.get('bp_total')) <= 0
+    )
+
+
+def _stop_after_zero_output_stage(metadata, sra_stat, stage_name):
+    print('No reads remained after {} filtering. Writing getfastq stats and stopping: {}'.format(stage_name, sra_stat['sra_id']))
+    write_getfastq_stats(sra_stat=sra_stat, metadata=metadata, output_dir=sra_stat['getfastq_sra_dir'])
+    return metadata
 
 def parse_known_fastq_counts(known_counts):
     if known_counts is None:
@@ -4146,6 +4213,7 @@ def is_getfastq_output_present(sra_stat, files=None):
     if files is None:
         files = list_run_dir_files(sra_stat['getfastq_sra_dir'])
     sra_stat = detect_layout_from_file(sra_stat, files=files)
+    zero_output_stage = _detect_zero_output_stage_from_stats(sra_stat['getfastq_sra_dir'], sra_stat['sra_id'])
     prefixes = [sra_stat['sra_id'], ]
     if sra_stat['layout'] == 'single':
         sub_exts = ['', ]
@@ -4160,6 +4228,14 @@ def is_getfastq_output_present(sra_stat, files=None):
         out_path2 = os.path.join(sra_stat['getfastq_sra_dir'], out_name2)
         is_out1 = out_name1 in files
         is_out2 = out_name2 in files
+        if is_out1 and (not is_out2) and (zero_output_stage is not None):
+            print(
+                'Ignoring getfastq output because {} retained zero reads: {}'.format(
+                    zero_output_stage,
+                    out_path1,
+                )
+            )
+            is_out1 = False
         if is_out1:
             print('getfastq output detected: {}'.format(out_path1))
         if is_out2:
@@ -4285,6 +4361,8 @@ def sequence_extraction(args, sra_stat, metadata, g, start, end, runtime_context
                 'bp_total': max(0, int(delta_out)),
             }
             latest_stage_source = 'fastp'
+            if _stage_counts_indicate_no_reads(latest_stage_counts):
+                return _stop_after_zero_output_stage(metadata, sra_stat, 'fastp')
             continue
         if filter_name == 'rrna':
             prev_rrna_in = metadata.df.at[ind_sra, 'bp_rrna_in']
@@ -4309,6 +4387,8 @@ def sequence_extraction(args, sra_stat, metadata, g, start, end, runtime_context
                 'bp_total': max(0, int(delta_out)),
             }
             latest_stage_source = 'rrna'
+            if _stage_counts_indicate_no_reads(latest_stage_counts):
+                return _stop_after_zero_output_stage(metadata, sra_stat, 'rrna')
             continue
         if filter_name == 'contam':
             prev_contam_in = metadata.df.at[ind_sra, 'bp_contam_in']
@@ -4332,6 +4412,8 @@ def sequence_extraction(args, sra_stat, metadata, g, start, end, runtime_context
                 'bp_total': max(0, int(delta_out)),
             }
             latest_stage_source = 'contam'
+            if _stage_counts_indicate_no_reads(latest_stage_counts):
+                return _stop_after_zero_output_stage(metadata, sra_stat, 'contam')
             continue
         raise ValueError('Unsupported filter name in execution order: {}'.format(filter_name))
     if args.read_name == 'trinity':
@@ -4502,6 +4584,8 @@ def sequence_extraction_private(metadata, sra_stat, args, runtime_context=None):
                 'bp_total': max(0, int(delta_bp_out)),
             }
             latest_stage_source = 'fastp'
+            if _stage_counts_indicate_no_reads(latest_stage_counts):
+                return _stop_after_zero_output_stage(metadata, sra_stat, 'fastp')
             continue
         if filter_name == 'rrna':
             rrna_known_input_counts = latest_stage_counts if (latest_stage_source == 'fastp') else None

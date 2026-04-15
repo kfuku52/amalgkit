@@ -882,6 +882,68 @@ class TestQuantEdgeCases:
         with pytest.raises(ValueError, match='Found multiple reference fasta files'):
             get_index(args, 'Homo_sapiens')
 
+    def test_get_index_prefers_exact_fasta_stem_before_broad_prefix_matches(self, tmp_path, monkeypatch):
+        out_dir = tmp_path / 'out'
+        fasta_dir = tmp_path / 'fasta'
+        index_dir = tmp_path / 'index'
+        out_dir.mkdir()
+        fasta_dir.mkdir()
+        index_dir.mkdir()
+        exact_fasta = fasta_dir / 'Mayorella_for_kallisto_index.fasta'
+        broad_fasta = fasta_dir / 'Mayorella_sp_for_kallisto_index.fasta'
+        exact_fasta.write_text('>a\nAAAA\n')
+        broad_fasta.write_text('>b\nCCCC\n')
+        observed = {'fasta_file': None}
+
+        def fake_build(index_path, fasta_file, sci_name):
+            observed['fasta_file'] = fasta_file
+            open(index_path, 'w').write('idx')
+
+        monkeypatch.setattr('amalgkit.quant._build_kallisto_index', fake_build)
+
+        args = SimpleNamespace(
+            out_dir=str(out_dir),
+            index_dir=str(index_dir),
+            build_index=True,
+            fasta_dir=str(fasta_dir),
+        )
+
+        observed_index = get_index(args, 'Mayorella')
+
+        assert observed_index == str(index_dir / 'Mayorella.idx')
+        assert observed['fasta_file'] == str(exact_fasta)
+
+    def test_get_index_prefers_alias_exact_match_before_primary_broad_prefix_fallback(self, tmp_path, monkeypatch):
+        out_dir = tmp_path / 'out'
+        fasta_dir = tmp_path / 'fasta'
+        index_dir = tmp_path / 'index'
+        out_dir.mkdir()
+        fasta_dir.mkdir()
+        index_dir.mkdir()
+        alias_exact_fasta = fasta_dir / 'Mayorella_sp_for_kallisto_index.fasta'
+        ambiguous_broad_fasta = fasta_dir / 'Mayorella_marianaensis_for_kallisto_index.fasta'
+        alias_exact_fasta.write_text('>a\nAAAA\n')
+        ambiguous_broad_fasta.write_text('>b\nCCCC\n')
+        observed = {'fasta_file': None}
+
+        def fake_build(index_path, fasta_file, sci_name):
+            observed['fasta_file'] = fasta_file
+            open(index_path, 'w').write('idx')
+
+        monkeypatch.setattr('amalgkit.quant._build_kallisto_index', fake_build)
+
+        args = SimpleNamespace(
+            out_dir=str(out_dir),
+            index_dir=str(index_dir),
+            build_index=True,
+            fasta_dir=str(fasta_dir),
+        )
+
+        observed_index = get_index(args, 'Mayorella', alias_names=['Mayorella sp'])
+
+        assert observed_index == str(index_dir / 'Mayorella_sp.idx')
+        assert observed['fasta_file'] == str(alias_exact_fasta)
+
     def test_get_index_prefers_uncompressed_fasta_over_matching_gz_copy(self, tmp_path, monkeypatch):
         out_dir = tmp_path / 'out'
         fasta_dir = tmp_path / 'fasta'

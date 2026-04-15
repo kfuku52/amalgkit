@@ -33,6 +33,7 @@ INDEX_BUILD_LOCK_TIMEOUT_SECONDS = 3600
 INDEX_FASTA_SUFFIXES = ('.fa', '.fasta', '.fa.gz', '.fasta.gz')
 KALLISTO_INDEX_SUFFIX = '.idx'
 OARFISH_INDEX_SUFFIX = '.mmi'
+FASTA_REFERENCE_STEM_SUFFIXES = ('_for_kallisto_index',)
 QUANT_BACKENDS = ('auto', 'kallisto', 'oarfish')
 OARFISH_SEQ_TECHS = ('auto', 'ont-cdna', 'ont-drna', 'pac-bio', 'pac-bio-hifi')
 SHORT_READ_SPOT_LENGTH_THRESHOLD = 1000
@@ -584,6 +585,59 @@ def _normalize_index_suffixes(suffixes):
     return tuple([str(suffix).lower() for suffix in suffixes])
 
 
+def _strip_filename_suffix(filename, suffixes):
+    filename = str(filename)
+    filename_lower = filename.lower()
+    for suffix in sorted(suffixes, key=len, reverse=True):
+        suffix_lower = str(suffix).lower()
+        if filename_lower.endswith(suffix_lower):
+            return filename[:-len(suffix_lower)]
+    return filename
+
+
+def _normalize_species_stem_from_entry(entry_name, suffixes, trailing_suffixes=()):
+    stem = _strip_filename_suffix(os.path.basename(str(entry_name)), suffixes)
+    stem_lower = stem.lower()
+    for trailing_suffix in trailing_suffixes:
+        trailing_suffix_lower = str(trailing_suffix).lower()
+        if stem_lower.endswith(trailing_suffix_lower):
+            stem = stem[:-len(trailing_suffix_lower)]
+            break
+    return _normalize_species_identifier(stem)
+
+
+def _find_species_prefixed_files(
+    path_dir,
+    species_prefix,
+    entries=None,
+    suffixes=None,
+    exact_stem_suffixes=(),
+):
+    if entries is None:
+        entries = list_dir_entries(path_dir)
+    normalized_suffixes = _normalize_index_suffixes(suffixes)
+    matched_paths = [
+        os.path.join(path_dir, entry)
+        for entry in find_species_prefixed_entries(entries, species_prefix)
+        if (
+            (normalized_suffixes is None)
+            or str(entry).lower().endswith(normalized_suffixes)
+        )
+        and os.path.isfile(os.path.join(path_dir, entry))
+    ]
+    normalized_prefix = _normalize_species_identifier(species_prefix)
+    exact_paths = [
+        path
+        for path in matched_paths
+        if _normalize_species_stem_from_entry(
+            path,
+            suffixes=suffixes or (),
+            trailing_suffixes=exact_stem_suffixes,
+        ) == normalized_prefix
+    ]
+    return exact_paths, matched_paths
+
+
 def find_species_index_files(index_dir, sci_name, entries=None, suffixes=(KALLISTO_INDEX_SUFFIX,)):
     if entries is None:
         entries = list_dir_entries(index_dir)
@@ -616,14 +670,27 @@ def _find_species_fasta_files(path_fasta_dir, sci_name, entries=None, alias_name
         raise NotADirectoryError('Fasta path exists but is not a directory: {}'.format(path_fasta_dir))
     if entries is None:
         entries = list_dir_entries(path_fasta_dir)
-    for species_prefix in _build_species_identifier_candidates_from_values(sci_name, alias_names=alias_names):
-        matched = [
-            entry for entry in find_species_prefixed_entries(entries, species_prefix)
-            if entry.lower().endswith(INDEX_FASTA_SUFFIXES)
-            and os.path.isfile(os.path.join(path_fasta_dir, entry))
-        ]
-        if matched:
-            return species_prefix, [os.path.join(path_fasta_dir, entry) for entry in matched]
+    species_prefixes = _build_species_identifier_candidates_from_values(sci_name, alias_names=alias_names)
+    for species_prefix in species_prefixes:
+        exact_matches, _matched_paths = _find_species_prefixed_files(
+            path_fasta_dir,
+            species_prefix,
+            entries=entries,
+            suffixes=INDEX_FASTA_SUFFIXES,
+            exact_stem_suffixes=FASTA_REFERENCE_STEM_SUFFIXES,
+        )
+        if exact_matches:
+            return species_prefix, exact_matches
+    for species_prefix in species_prefixes:
+        _exact_matches, matched_paths = _find_species_prefixed_files(
+            path_fasta_dir,
+            species_prefix,
+            entries=entries,
+            suffixes=INDEX_FASTA_SUFFIXES,
+            exact_stem_suffixes=FASTA_REFERENCE_STEM_SUFFIXES,
+        )
+        if matched_paths:
+            return species_prefix, matched_paths
     return None, []
 
 
@@ -912,7 +979,35 @@ def _build_index_cache_key(backend, sci_name, oarfish_seq_tech=None, alias_names
 def _find_single_index_file(index_dir, sci_name, entries=None, backend='kallisto', oarfish_seq_tech=None, alias_names=None):
     backend_label = 'Kallisto' if backend == 'kallisto' else 'oarfish'
     index_suffix = _resolve_index_suffix(backend)
-    for species_prefix in _build_species_identifier_candidates_from_values(sci_name, alias_names=alias_names):
+    species_prefixes = _build_species_identifier_candidates_from_values(sci_name, alias_names=alias_names)
+    for species_prefix in species_prefixes:
+        prefix = _build_index_stem(species_prefix, backend=backend, oarfish_seq_tech=oarfish_seq_tech)
+        index_files, _matched_paths = _find_species_prefixed_files(
+            index_dir,
+            prefix,
+            entries=entries,
+            suffixes=(index_suffix,),
+        )
+        if len(index_files) > 1:
+            raise ValueError(
+                'Found multiple {} index files for species. Please make sure there is only one index file for this species.'.format(
+                    backend_label
+                )
+            )
+        if len(index_files) == 1:
+            index_file = index_files[0]
+            if species_prefix != sci_name:
+                print(
+                    "{} index fallback prefix '{}' was used for species '{}'.".format(
+                        backend_label,
+                        species_prefix,
+                        sci_name,
+                    ),
+                    flush=True,
+                )
+            print('{} index file found: {}'.format(backend_label, index_file), flush=True)
+            return index_file
+    for species_prefix in species_prefixes:
         prefix = _build_index_stem(species_prefix, backend=backend, oarfish_seq_tech=oarfish_seq_tech)
         index_files = find_species_index_files(
             index_dir=index_dir,
