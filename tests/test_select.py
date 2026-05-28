@@ -1435,6 +1435,80 @@ class TestSelectRuleApplication:
         assert out.df.loc[0, 'sample_group_normalization_status'] == 'organ'
         assert out.df.loc[0, 'sample_group_normalization_rule_id'] == 'normalize_leaf_safe_covering_inflorescence'
 
+    def test_default_plantae_medium_context_tissue_conflict_is_review(self):
+        rules_path = Path(__file__).resolve().parents[1] / 'amalgkit' / 'select_rule_sets' / 'plantae' / 'select_rules.tsv'
+        select_rules = read_select_rules(str(rules_path))
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRRROOTLIB'],
+            'scientific_name': ['Species A'],
+            'sample_group': [''],
+            'sample_attribute_tissue': ['Leaf'],
+            'lib_name': ['Species_A_RNA_root_rep1'],
+            'exp_title': ['RNA-seq of Species A root'],
+            'bioproject': ['PRJ1'],
+            'biosample': ['SAM1'],
+            'total_spots': [1000000],
+            'exclusion': ['no'],
+        }))
+
+        out = prepare_select_metadata(metadata, select_rules)
+
+        assert out.df.loc[0, 'sample_group'] == 'review'
+        assert out.df.loc[0, 'sample_group_normalization_status'] == 'review'
+        assert out.df.loc[0, 'sample_group_normalization_source'] == 'lib_name'
+        assert out.df.loc[0, 'sample_group_normalization_rule_id'] == 'normalize_review_cross_field_tissue_context_conflict'
+        assert 'previous_rule_id=normalize_leaf_sample_specific_text' in out.df.loc[0, 'sample_group_normalization_text']
+
+    def test_default_plantae_medium_context_conflict_without_strong_columns_is_review(self):
+        rules_path = Path(__file__).resolve().parents[1] / 'amalgkit' / 'select_rule_sets' / 'plantae' / 'select_rules.tsv'
+        select_rules = read_select_rules(str(rules_path))
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRRROOTLIB'],
+            'scientific_name': ['Species A'],
+            'sample_group': [''],
+            'sample_title': ['Leaf sample'],
+            'lib_name': ['Species_A_RNA_root_rep1'],
+            'bioproject': ['PRJ1'],
+            'biosample': ['SAM1'],
+            'total_spots': [1000000],
+            'exclusion': ['no'],
+        }))
+
+        out = prepare_select_metadata(metadata, select_rules)
+
+        assert out.df.loc[0, 'sample_group'] == 'review'
+        assert out.df.loc[0, 'sample_group_normalization_source'] == 'lib_name'
+        assert out.df.loc[0, 'sample_group_normalization_rule_id'] == 'normalize_review_cross_field_tissue_context_conflict'
+
+    def test_default_plantae_safe_leaf_development_context_is_not_reviewed(self):
+        rules_path = Path(__file__).resolve().parents[1] / 'amalgkit' / 'select_rule_sets' / 'plantae' / 'select_rules.tsv'
+        select_rules = read_select_rules(str(rules_path))
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRRINFLO', 'SRRPANICLE', 'SRRLAMINA'],
+            'scientific_name': ['Species A', 'Species A', 'Species A'],
+            'sample_group': ['', '', ''],
+            'sample_attribute_tissue': ['Leaf', 'FLAG LEAF', 'leaf'],
+            'sample_title': [
+                'Leaves from 1 meter inflorescence stage',
+                'RNA-seq of Flag leaf at Panicle emergence stage',
+                '2391567_lamina_T-4_1st_open_flower',
+            ],
+            'bioproject': ['PRJ1', 'PRJ1', 'PRJ1'],
+            'biosample': ['SAM1', 'SAM2', 'SAM3'],
+            'total_spots': [1000000, 1000000, 1000000],
+            'exclusion': ['no', 'no', 'no'],
+        }))
+
+        out = prepare_select_metadata(metadata, select_rules)
+
+        assert out.df['sample_group'].tolist() == ['leaf', 'leaf', 'leaf']
+        assert out.df['sample_group_normalization_status'].tolist() == ['organ', 'organ', 'organ']
+        assert out.df['sample_group_normalization_rule_id'].tolist() == [
+            'normalize_leaf_sample_specific_text',
+            'normalize_leaf_sample_specific_text',
+            'normalize_leaf_sample_specific_text',
+        ]
+
     def test_default_plantae_sample_specific_reproductive_suborgans_are_not_whole_flower(self):
         rules_path = Path(__file__).resolve().parents[1] / 'amalgkit' / 'select_rule_sets' / 'plantae' / 'select_rules.tsv'
         select_rules = read_select_rules(str(rules_path))
