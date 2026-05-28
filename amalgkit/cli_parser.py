@@ -116,7 +116,7 @@ def build_parser(command_handlers, command_names, version, prog=None):
     pse.add_argument('--manifest_tsv', metavar='PATH|inferred', default='inferred', type=str, required=False, action='store',
                      help='default=%(default)s: Batch external-manifest output path. '
                           '"inferred" = out_dir/external_manifest.tsv. '
-                          'Sidecars for all_tissues_ge30, all_tissues_ge20, all_tissues_ge1, and any_tissues_ge1 are written next to this path.')
+                          'Sidecars for all_tissues_ge30, all_tissues_ge3, all_tissues_ge1, and any_tissues_ge1 are written next to this path.')
     pse.add_argument('--batch_label', metavar='STR|inferred', default='inferred', type=str, required=False, action='store',
                      help='default=%(default)s: Label written to batch manifests in --species_tsv mode. '
                           '"inferred" = basename(out_dir).')

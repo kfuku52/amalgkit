@@ -1375,11 +1375,11 @@ def summarize_selected_metadata(species_name, species_token, metadata, selected_
         row['{}_sampled_yes'.format(organ)] = int((organ_mask & (sampled_series == 'yes')).sum())
     row['qualified_yes_total'] = int((qualified_series == 'yes').sum())
     row['sampled_yes_total'] = int((sampled_series == 'yes').sum())
-    strict_threshold, relaxed_threshold = resolve_select_queue_thresholds(max_sample)
+    strict_threshold, moderate_threshold = resolve_select_queue_thresholds(max_sample)
     row['any_tissues_ge1'] = any(row['{}_sampled_yes'.format(organ)] >= 1 for organ in organs)
     row['all_tissues_ge1'] = all(row['{}_sampled_yes'.format(organ)] >= 1 for organ in organs)
     row['all_tissues_ge30'] = all(row['{}_sampled_yes'.format(organ)] >= strict_threshold for organ in organs)
-    row['all_tissues_ge20'] = all(row['{}_sampled_yes'.format(organ)] >= relaxed_threshold for organ in organs)
+    row['all_tissues_ge3'] = all(row['{}_sampled_yes'.format(organ)] >= moderate_threshold for organ in organs)
     row['queue_tier'] = resolve_select_queue_tier(row)
     row['selected_metadata_path'] = selected_metadata_path
     return row
@@ -1387,14 +1387,14 @@ def summarize_selected_metadata(species_name, species_token, metadata, selected_
 
 def resolve_select_queue_thresholds(max_sample):
     max_sample_int = int(max_sample)
-    return min(max_sample_int, 30), min(max_sample_int, 20)
+    return min(max_sample_int, 30), min(max_sample_int, 3)
 
 
 def resolve_select_queue_tier(row):
     if row['all_tissues_ge30']:
         return 'all_tissues_ge30'
-    if row['all_tissues_ge20']:
-        return 'all_tissues_ge20'
+    if row['all_tissues_ge3']:
+        return 'all_tissues_ge3'
     if row['all_tissues_ge1']:
         return 'all_tissues_ge1'
     if row['any_tissues_ge1']:
@@ -1418,13 +1418,13 @@ def build_select_queue_df(summary_df):
         'any_tissues_ge1',
         'all_tissues_ge1',
         'all_tissues_ge30',
-        'all_tissues_ge20',
+        'all_tissues_ge3',
         'queue_tier',
         'selected_metadata_path',
     ]].copy(deep=True)
     queue_df['queue_sort'] = queue_df['queue_tier'].map({
         'all_tissues_ge30': 0,
-        'all_tissues_ge20': 1,
+        'all_tissues_ge3': 1,
         'all_tissues_ge1': 2,
         'any_tissues_ge1': 3,
         'no_tissues_ge1': 4,
@@ -1443,7 +1443,7 @@ def build_select_manifest_df(queue_df, batch_label):
         'recommended_action',
         manifest_df['queue_tier'].map({
             'all_tissues_ge30': 'external_run_now',
-            'all_tissues_ge20': 'external_run_if_capacity',
+            'all_tissues_ge3': 'external_run_if_capacity',
             'all_tissues_ge1': 'external_run_all_tissues_ge1_panel',
             'any_tissues_ge1': 'external_run_any_tissues_ge1_panel',
             'no_tissues_ge1': 'metadata_gap_review',
@@ -1460,7 +1460,7 @@ def manifest_sidecar_paths(manifest_tsv):
         ext = '.tsv'
     return (
         base + '_all_tissues_ge30' + ext,
-        base + '_all_tissues_ge20' + ext,
+        base + '_all_tissues_ge3' + ext,
         base + '_all_tissues_ge1' + ext,
         base + '_any_tissues_ge1' + ext,
     )
@@ -1659,7 +1659,7 @@ def select_batch_main(args):
             'any_tissues_ge1',
             'all_tissues_ge1',
             'all_tissues_ge30',
-            'all_tissues_ge20',
+            'all_tissues_ge3',
             'queue_tier',
         ]],
         summary_tsv,
@@ -1670,9 +1670,9 @@ def select_batch_main(args):
     atomic_write_dataframe(queue_df, queue_tsv, sep='\t', index=False)
     manifest_df = build_select_manifest_df(queue_df, batch_label=batch_label)
     atomic_write_dataframe(manifest_df, manifest_tsv, sep='\t', index=False)
-    ge30_manifest_tsv, ge20_manifest_tsv, all_ge1_manifest_tsv, any_ge1_manifest_tsv = manifest_sidecar_paths(manifest_tsv)
+    ge30_manifest_tsv, ge3_manifest_tsv, all_ge1_manifest_tsv, any_ge1_manifest_tsv = manifest_sidecar_paths(manifest_tsv)
     atomic_write_dataframe(manifest_df.loc[manifest_df['queue_tier'] == 'all_tissues_ge30', :], ge30_manifest_tsv, sep='\t', index=False)
-    atomic_write_dataframe(manifest_df.loc[manifest_df['queue_tier'] == 'all_tissues_ge20', :], ge20_manifest_tsv, sep='\t', index=False)
+    atomic_write_dataframe(manifest_df.loc[manifest_df['queue_tier'] == 'all_tissues_ge3', :], ge3_manifest_tsv, sep='\t', index=False)
     atomic_write_dataframe(manifest_df.loc[manifest_df['queue_tier'] == 'all_tissues_ge1', :], all_ge1_manifest_tsv, sep='\t', index=False)
     atomic_write_dataframe(manifest_df.loc[manifest_df['queue_tier'] == 'any_tissues_ge1', :], any_ge1_manifest_tsv, sep='\t', index=False)
     print('select batch complete: species_processed={}'.format(species_df.shape[0]), flush=True)

@@ -1046,7 +1046,7 @@ class TestSelectRuleApplication:
             min_nspots=0,
             mark_missing_rank='none',
             mark_redundant_biosamples=False,
-            max_sample=10,
+            max_sample=20,
         )
 
         metadata = prepare_select_metadata(metadata, select_rules)
@@ -1230,7 +1230,7 @@ class TestSelectRuleApplication:
             min_nspots=0,
             mark_missing_rank='none',
             mark_redundant_biosamples=False,
-            max_sample=10,
+            max_sample=20,
         )
 
         out = apply_select_filters(metadata, args, select_rules)
@@ -1280,10 +1280,155 @@ class TestSelectRuleApplication:
         assert out.df.loc[0, 'sample_group_normalization_status'] == 'non_target'
         assert out.df.loc[0, 'sample_group_normalization_rule_id'] == 'fruit_non_target'
 
+    def test_default_plantae_pooled_multi_tissue_is_review(self):
+        rules_path = Path(__file__).resolve().parents[1] / 'amalgkit' / 'select_rule_sets' / 'plantae' / 'select_rules.tsv'
+        select_rules = read_select_rules(str(rules_path))
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR037746'],
+            'scientific_name': ['Oryza sativa'],
+            'sample_group': [''],
+            'tissue': [
+                'sample pooled from callus,seedling shoot,seedling root,'
+                'tillering leaf,flowering panicle,flowering leaf,filling panicle'
+            ],
+            'sample_description': ['small RNA from mixture of 8 tissues'],
+            'bioproject': ['PRJ1'],
+            'biosample': ['SAM1'],
+            'total_spots': [1000000],
+            'exclusion': ['no'],
+        }))
+
+        out = prepare_select_metadata(metadata, select_rules)
+
+        assert out.df.loc[0, 'sample_group'] == 'review'
+        assert out.df.loc[0, 'sample_group_normalization_status'] == 'review'
+        assert out.df.loc[0, 'sample_group_normalization_rule_id'] == 'normalize_review_pooled_multi_tissue'
+
+    def test_default_plantae_same_organ_pooled_leaf_is_retained(self):
+        rules_path = Path(__file__).resolve().parents[1] / 'amalgkit' / 'select_rule_sets' / 'plantae' / 'select_rules.tsv'
+        select_rules = read_select_rules(str(rules_path))
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['ERR268475'],
+            'scientific_name': ['Quercus robur'],
+            'sample_group': [''],
+            'sample_description': ['pooled oligo-dt RNA from leaves of two Q. robur clones'],
+            'bioproject': ['PRJ1'],
+            'biosample': ['SAM1'],
+            'total_spots': [1000000],
+            'exclusion': ['no'],
+        }))
+
+        out = prepare_select_metadata(metadata, select_rules)
+
+        assert out.df.loc[0, 'sample_group'] == 'leaf'
+        assert out.df.loc[0, 'sample_group_normalization_status'] == 'organ'
+        assert out.df.loc[0, 'sample_group_normalization_rule_id'] == 'normalize_leaf_strict_sample_text'
+
+    def test_default_plantae_delimited_sample_text_is_recovered(self):
+        rules_path = Path(__file__).resolve().parents[1] / 'amalgkit' / 'select_rule_sets' / 'plantae' / 'select_rules.tsv'
+        select_rules = read_select_rules(str(rules_path))
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRRROOT', 'SRRLEAF', 'SRRFLOWER'],
+            'scientific_name': ['Species A', 'Species A', 'Species A'],
+            'sample_group': ['', '', ''],
+            'sample_description': [
+                'TRANSCRIPTOMIC RNA from Castanea dentata Ellis-1, Root JAQP-RNAseq',
+                'TRANSCRIPTOMIC RNA from Castanea dentata Ellis-1, Leaf JAQQ-RNAseq',
+                'RNA from Species A, Flower JAQF-RNAseq',
+            ],
+            'bioproject': ['PRJ1', 'PRJ1', 'PRJ1'],
+            'biosample': ['SAM1', 'SAM2', 'SAM3'],
+            'total_spots': [1000000, 1000000, 1000000],
+            'exclusion': ['no', 'no', 'no'],
+        }))
+
+        out = prepare_select_metadata(metadata, select_rules)
+
+        groups = dict(zip(out.df['run'], out.df['sample_group']))
+        rule_ids = dict(zip(out.df['run'], out.df['sample_group_normalization_rule_id']))
+        assert groups == {
+            'SRRROOT': 'root',
+            'SRRLEAF': 'leaf',
+            'SRRFLOWER': 'flower',
+        }
+        assert rule_ids == {
+            'SRRROOT': 'normalize_root_delimited_sample_text',
+            'SRRLEAF': 'normalize_leaf_delimited_sample_text',
+            'SRRFLOWER': 'normalize_flower_delimited_sample_text',
+        }
+
+    def test_default_plantae_sample_specific_tissue_overrides_project_level_group(self):
+        rules_path = Path(__file__).resolve().parents[1] / 'amalgkit' / 'select_rule_sets' / 'plantae' / 'select_rules.tsv'
+        select_rules = read_select_rules(str(rules_path))
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRRROOT', 'SRRLEAF', 'SRRFLOWER'],
+            'scientific_name': ['Species A', 'Species A', 'Species A'],
+            'sample_group': ['flower', 'flower', 'leaf'],
+            'sample_attribute_tissue': ['Root', 'Leaf', 'Inflorescence'],
+            'exp_title': [
+                'RNA-seq of Species A flower project',
+                'RNA-seq of Species A flower project',
+                'RNA-seq of Species A leaf project',
+            ],
+            'bioproject': ['PRJ1', 'PRJ1', 'PRJ1'],
+            'biosample': ['SAM1', 'SAM2', 'SAM3'],
+            'total_spots': [1000000, 1000000, 1000000],
+            'exclusion': ['no', 'no', 'no'],
+        }))
+
+        out = prepare_select_metadata(metadata, select_rules)
+
+        groups = dict(zip(out.df['run'], out.df['sample_group']))
+        rule_ids = dict(zip(out.df['run'], out.df['sample_group_normalization_rule_id']))
+        assert groups == {
+            'SRRROOT': 'root',
+            'SRRLEAF': 'leaf',
+            'SRRFLOWER': 'flower',
+        }
+        assert rule_ids == {
+            'SRRROOT': 'normalize_root_sample_specific_text',
+            'SRRLEAF': 'normalize_leaf_sample_specific_text',
+            'SRRFLOWER': 'normalize_flower_sample_specific_text',
+        }
+
+    def test_default_plantae_sample_specific_reproductive_suborgans_are_not_whole_flower(self):
+        rules_path = Path(__file__).resolve().parents[1] / 'amalgkit' / 'select_rule_sets' / 'plantae' / 'select_rules.tsv'
+        select_rules = read_select_rules(str(rules_path))
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRRPOLLEN', 'SRRSPIKELET'],
+            'scientific_name': ['Species A', 'Species A'],
+            'sample_group': ['leaf', 'leaf'],
+            'sample_attribute_tissue': ['pollen', 'Spikelet'],
+            'sample_title': ['Leaf sample collected after heat treatment', 'RNA-seq of rice spikelet'],
+            'exp_title': ['RNA-seq of pollen sample', 'RNA-seq of leaf project'],
+            'bioproject': ['PRJ1', 'PRJ1'],
+            'biosample': ['SAM1', 'SAM2'],
+            'total_spots': [1000000, 1000000],
+            'exclusion': ['no', 'no'],
+        }))
+
+        out = prepare_select_metadata(metadata, select_rules)
+
+        groups = dict(zip(out.df['run'], out.df['sample_group']))
+        statuses = dict(zip(out.df['run'], out.df['sample_group_normalization_status']))
+        rule_ids = dict(zip(out.df['run'], out.df['sample_group_normalization_rule_id']))
+        assert groups == {
+            'SRRPOLLEN': 'review',
+            'SRRSPIKELET': 'flower',
+        }
+        assert statuses == {
+            'SRRPOLLEN': 'review',
+            'SRRSPIKELET': 'organ',
+        }
+        assert rule_ids == {
+            'SRRPOLLEN': 'normalize_review_floral_suborgan_sample_specific_text',
+            'SRRSPIKELET': 'normalize_flower_sample_specific_text',
+        }
+
     def test_default_plantae_normalize_rules_use_whitelisted_columns(self):
         rules_path = Path(__file__).resolve().parents[1] / 'amalgkit' / 'select_rule_sets' / 'plantae' / 'select_rules.tsv'
         select_rules = read_select_rules(str(rules_path))
-        allowed = {
+        base_allowed = {
             'sample_attribute_tissue',
             'tissue',
             'sample_group',
@@ -1291,9 +1436,39 @@ class TestSelectRuleApplication:
             'source_name',
             'exp_title',
         }
+        sample_specific_allowed = {
+            'organism_part',
+            'organ',
+            'plant_structure',
+            'tissue_type',
+            'tissue_types',
+            'tissues',
+            'tissue_source',
+            'sample_attribute_source_name',
+            'isolation_source',
+            'sample_attribute_sample_title',
+            'sample_name',
+            'lib_name',
+        }
+        strict_sample_text_allowed = {
+            'sample_description',
+            'sample_attribute_sample_description',
+            'sample_attribute_source_name',
+            'sample_attribute_sample_title',
+            'isolation_source',
+            'sample_name',
+            'library_name',
+        }
         normalize_rules = [rule for rule in select_rules if rule['stage'] == 'normalize']
         assert len(normalize_rules) > 0
         for rule in normalize_rules:
+            allowed = base_allowed
+            if rule['rule_id'].endswith('_sample_specific_text'):
+                allowed = base_allowed | sample_specific_allowed
+            if rule['rule_id'].endswith(('_strict_sample_text', '_delimited_sample_text')):
+                allowed = base_allowed | strict_sample_text_allowed
+            if rule['rule_id'] == 'normalize_review_pooled_multi_tissue':
+                allowed = base_allowed | strict_sample_text_allowed
             assert set(rule['columns']).issubset(allowed), rule['rule_id']
 
     def test_default_plantae_config_contains_manual_recovery_and_filter_rules(self):
@@ -1307,15 +1482,32 @@ class TestSelectRuleApplication:
         assert 'normalize_leaf_safe_floral_induction_context' in rule_ids
         assert 'normalize_root_safe_leaf_stage_context' in rule_ids
         assert 'normalize_leaf_safe_leaf_blade_and_sheath' in rule_ids
+        assert 'normalize_review_pooled_multi_tissue' in rule_ids
+        assert 'normalize_flower_delimited_sample_text' in rule_ids
+        assert 'normalize_leaf_delimited_sample_text' in rule_ids
+        assert 'normalize_root_delimited_sample_text' in rule_ids
+        assert 'normalize_flower_sample_specific_text' in rule_ids
+        assert 'normalize_leaf_sample_specific_text' in rule_ids
+        assert 'normalize_root_sample_specific_text' in rule_ids
+        assert 'normalize_review_floral_suborgan_sample_specific_text' in rule_ids
         assert 'filter_low_nspots_1' in rule_ids
         assert 'filter_missing_taxid_2' in rule_ids
         assert 'filter_no_sample_group_3' in rule_ids
         assert 'dedup_redundant_biosample_1' in rule_ids
         assert 'exclude_single_cell_1' in rule_ids
+        assert 'exclude_single_cell_1b' in rule_ids
         assert 'exclude_single_nucleus_1a' in rule_ids
+        assert 'exclude_single_nucleus_1b' in rule_ids
+        assert 'exclude_protoplast_1c' in rule_ids
         assert 'exclude_three_prime_biased_8a' in rule_ids
+        assert 'exclude_three_prime_biased_8b' in rule_ids
+        assert 'exclude_ribosome_profiling_8c' in rule_ids
+        assert 'exclude_bisulfite_or_genome_8d' in rule_ids
+        assert 'exclude_non_rna_seq_library_selection_8e' in rule_ids
         assert 'exclude_rnai_4' in rule_ids
         assert 'exclude_cage_8' in rule_ids
+        assert 'exclude_cage_8b' in rule_ids
+        assert 'exclude_chip_or_rip_3b' in rule_ids
         assert 'control_mock_1' in rule_ids
         assert validate_rule_ids == {
             'validate_hint_flower_1',
@@ -1362,7 +1554,7 @@ class TestSelectRuleApplication:
             min_nspots=0,
             mark_missing_rank='none',
             mark_redundant_biosamples=False,
-            max_sample=10,
+            max_sample=20,
         )
 
         metadata = prepare_select_metadata(metadata, select_rules)
@@ -1371,6 +1563,163 @@ class TestSelectRuleApplication:
         assert out.df.loc[out.df['run'] == 'SRR001', 'exclusion'].iloc[0] == 'three_prime_biased'
         assert out.df.loc[out.df['run'] == 'SRR002', 'exclusion'].iloc[0] == 'three_prime_biased'
         assert out.df.loc[out.df['run'] == 'SRR003', 'exclusion'].iloc[0] == 'no'
+
+    def test_default_plantae_excludes_dge_abbreviation_as_three_prime_biased(self):
+        rules_path = Path(__file__).resolve().parents[1] / 'amalgkit' / 'select_rule_sets' / 'plantae' / 'select_rules.tsv'
+        select_rules = read_select_rules(str(rules_path))
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRRDGE'],
+            'scientific_name': ['Species A'],
+            'sample_group': ['leaf'],
+            'sample_title': ['DGE analysis of leaf'],
+            'sample_description': [''],
+            'study_title': [''],
+            'exp_title': ['GSM000000: leaf (DGE); Species A; RNA-Seq'],
+            'design': [''],
+            'lib_name': [''],
+            'protocol': [''],
+            'bioproject': ['PRJ1'],
+            'biosample': ['SAM1'],
+            'total_spots': [100],
+            'exclusion': ['no'],
+        }))
+        args = SimpleNamespace(
+            min_nspots=0,
+            mark_missing_rank='none',
+            mark_redundant_biosamples=False,
+            max_sample=10,
+        )
+
+        metadata = prepare_select_metadata(metadata, select_rules)
+        out = apply_select_filters(metadata, args, select_rules)
+
+        assert out.df.loc[out.df['run'] == 'SRRDGE', 'exclusion'].iloc[0] == 'three_prime_biased'
+
+    def test_default_plantae_excludes_single_cell_and_protoplast_without_excluding_lexogen_sense(self):
+        rules_path = Path(__file__).resolve().parents[1] / 'amalgkit' / 'select_rule_sets' / 'plantae' / 'select_rules.tsv'
+        select_rules = read_select_rules(str(rules_path))
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': [
+                'SRRSC',
+                'SRRPRO',
+                'SRR3P',
+                'SRRLEX',
+                'SRRSC_SOURCE',
+                'SRRPRO_CELL',
+                'SRRNUCLEI',
+                'SRRCAGE',
+                'SRRRNATAG',
+                'SRRRIBO',
+                'SRRCHIP',
+            'SRRWGBS',
+            'SRRRACE',
+            'SRRSMALL',
+        ],
+            'scientific_name': ['Species A'] * 14,
+            'sample_group': ['leaf'] * 14,
+            'sample_title': [
+                'leaf sample',
+                'leaf protoplast sample',
+                'leaf 3 prime sample',
+                'leaf bulk sample',
+                'leaf sample',
+                'leaf sample',
+                'sorted root nuclei',
+                'leaf sample',
+                'leaf sample',
+                'leaf sample',
+                'leaf sample',
+                'leaf sample',
+                'leaf sample',
+                'leaf small RNA',
+            ],
+            'sample_attribute_tissue': [
+                'leaf',
+                'Leaf protoplasts',
+                'leaf',
+                'leaf',
+                'leaf',
+                'leaf',
+                'root',
+                'leaf',
+                'leaf',
+                'leaf',
+                'leaf',
+                'leaf',
+                'leaf',
+                'leaf',
+            ],
+            'sample_description': [''] * 14,
+            'study_title': ['Single-cell transcriptome atlas of leaves', '', '', '', '', '', '', '', '', '', '', '', '', ''],
+            'exp_title': [
+                '',
+                '',
+                "3' RNA-seq of leaf",
+                'bulk RNA-seq',
+                'standard leaf RNA-seq',
+                'standard leaf RNA-seq',
+                'standard leaf RNA-seq',
+                'RAMPAGE of leaf sample',
+                '',
+                'Ribo-seq of leaf',
+                'standard leaf RNA-seq',
+                'WGBS sample',
+                'standard leaf RNA-seq',
+                'Catharanthus roseus leaf small RNA',
+            ],
+            'design': [
+                '',
+                '',
+                '',
+                'Library was prepared with Sense Total RNA-Seq Library Prep Kit, Lexogen',
+                '',
+                '',
+                '',
+                '',
+                'Libraries were generated using the RNAtag-seq protocol',
+                '',
+                '',
+                '',
+                '',
+                'Small RNA libraries were constructed using a small RNA sequencing kit',
+            ],
+            'lib_name': [''] * 14,
+            'protocol': [''] * 14,
+            'cell_type': ['', '', '', '', '', 'protoplast', '', '', '', '', '', '', '', ''],
+            'lib_source': ['', '', '', '', 'TRANSCRIPTOMIC SINGLE CELL', '', '', '', '', '', '', '', '', ''],
+            'lib_selection': ['', '', '', '', '', '', '', 'CAGE', '', '', 'ChIP', '', 'RACE', 'size fractionation'],
+            'bioproject': ['PRJ1'] * 14,
+            'biosample': [f'SAM{i}' for i in range(1, 15)],
+            'total_spots': [100] * 14,
+            'exclusion': ['no'] * 14,
+        }))
+        args = SimpleNamespace(
+            min_nspots=0,
+            mark_missing_rank='none',
+            mark_redundant_biosamples=False,
+            max_sample=20,
+        )
+
+        metadata = prepare_select_metadata(metadata, select_rules)
+        out = apply_select_filters(metadata, args, select_rules)
+
+        exclusions = dict(zip(out.df['run'], out.df['exclusion']))
+        assert exclusions == {
+            'SRRSC': 'single_cell',
+            'SRRPRO': 'protoplast',
+            'SRR3P': 'three_prime_biased',
+            'SRRLEX': 'no',
+            'SRRSC_SOURCE': 'single_cell',
+            'SRRPRO_CELL': 'protoplast',
+            'SRRNUCLEI': 'single_nucleus',
+            'SRRCAGE': 'cage',
+            'SRRRNATAG': 'three_prime_biased',
+            'SRRRIBO': 'ribosome_profiling',
+            'SRRCHIP': 'immunoprecipitation',
+            'SRRWGBS': 'non_rna_seq_library',
+            'SRRRACE': 'non_rna_seq_library',
+            'SRRSMALL': 'small_rna',
+        }
 
     def test_review_rule_overrides_original_sample_group(self, tmp_path):
         rules_path = tmp_path / 'select_rules.tsv'
@@ -1660,7 +2009,7 @@ class TestSelectBatchMain:
         select_queue = tmp_path / 'select_batch' / 'select_queue.tsv'
         manifest = tmp_path / 'select_batch' / 'external_manifest.tsv'
         manifest_all_tissues_ge30 = tmp_path / 'select_batch' / 'external_manifest_all_tissues_ge30.tsv'
-        manifest_all_tissues_ge20 = tmp_path / 'select_batch' / 'external_manifest_all_tissues_ge20.tsv'
+        manifest_all_tissues_ge3 = tmp_path / 'select_batch' / 'external_manifest_all_tissues_ge3.tsv'
         manifest_all_tissues_ge1 = tmp_path / 'select_batch' / 'external_manifest_all_tissues_ge1.tsv'
         manifest_any_tissues_ge1 = tmp_path / 'select_batch' / 'external_manifest_any_tissues_ge1.tsv'
 
@@ -1669,7 +2018,7 @@ class TestSelectBatchMain:
         assert select_queue.exists()
         assert manifest.exists()
         assert manifest_all_tissues_ge30.exists()
-        assert manifest_all_tissues_ge20.exists()
+        assert manifest_all_tissues_ge3.exists()
         assert manifest_all_tissues_ge1.exists()
         assert manifest_any_tissues_ge1.exists()
 
