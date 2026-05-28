@@ -1391,6 +1391,50 @@ class TestSelectRuleApplication:
             'SRRFLOWER': 'normalize_flower_sample_specific_text',
         }
 
+    def test_default_plantae_strong_tissue_conflict_is_review(self):
+        rules_path = Path(__file__).resolve().parents[1] / 'amalgkit' / 'select_rule_sets' / 'plantae' / 'select_rules.tsv'
+        select_rules = read_select_rules(str(rules_path))
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRRCONFLICT'],
+            'scientific_name': ['Species A'],
+            'sample_group': ['flower'],
+            'sample_attribute_tissue': ['Leaf'],
+            'lib_name': ['Species_A_RNA_flower_rep1'],
+            'exp_title': ['RNA-seq of Species A flower'],
+            'bioproject': ['PRJ1'],
+            'biosample': ['SAM1'],
+            'total_spots': [1000000],
+            'exclusion': ['no'],
+        }))
+
+        out = prepare_select_metadata(metadata, select_rules)
+
+        assert out.df.loc[0, 'sample_group'] == 'review'
+        assert out.df.loc[0, 'sample_group_normalization_status'] == 'review'
+        assert out.df.loc[0, 'sample_group_normalization_source'] == 'sample_attribute_tissue'
+        assert out.df.loc[0, 'sample_group_normalization_rule_id'] == 'normalize_review_cross_field_tissue_conflict'
+        assert 'previous_rule_id=normalize_flower_sample_specific_text' in out.df.loc[0, 'sample_group_normalization_text']
+
+    def test_default_plantae_assign_safe_source_is_not_cross_field_conflict(self):
+        rules_path = Path(__file__).resolve().parents[1] / 'amalgkit' / 'select_rule_sets' / 'plantae' / 'select_rules.tsv'
+        select_rules = read_select_rules(str(rules_path))
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRRSAFE'],
+            'scientific_name': ['Species A'],
+            'sample_group': [''],
+            'sample_attribute_tissue': ['leaves (covering the inflorescence)'],
+            'bioproject': ['PRJ1'],
+            'biosample': ['SAM1'],
+            'total_spots': [1000000],
+            'exclusion': ['no'],
+        }))
+
+        out = prepare_select_metadata(metadata, select_rules)
+
+        assert out.df.loc[0, 'sample_group'] == 'leaf'
+        assert out.df.loc[0, 'sample_group_normalization_status'] == 'organ'
+        assert out.df.loc[0, 'sample_group_normalization_rule_id'] == 'normalize_leaf_safe_covering_inflorescence'
+
     def test_default_plantae_sample_specific_reproductive_suborgans_are_not_whole_flower(self):
         rules_path = Path(__file__).resolve().parents[1] / 'amalgkit' / 'select_rule_sets' / 'plantae' / 'select_rules.tsv'
         select_rules = read_select_rules(str(rules_path))

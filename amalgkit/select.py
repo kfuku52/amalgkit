@@ -64,6 +64,37 @@ SELECT_NORMALIZE_ORGANS = {'flower', 'leaf', 'root'}
 SELECT_NORMALIZE_STATUSES = {'review', 'mixed', 'non_target'}
 SELECT_VALIDATION_STRONG_SPLIT_PATTERN = re.compile(r'\s*(?:/|&|\b(?:and|or|plus)\b)\s*', re.IGNORECASE)
 SELECT_VALIDATION_LIST_SPLIT_PATTERN = re.compile(r'\s*[;,]\s*')
+SELECT_CROSS_FIELD_TISSUE_CONFLICT_RULE_ID = 'normalize_review_cross_field_tissue_conflict'
+SELECT_CROSS_FIELD_STRONG_TISSUE_COLUMNS = [
+    'sample_attribute_tissue',
+    'tissue',
+    'organism_part',
+    'organ',
+    'plant_structure',
+    'plant_anatomical_entity',
+    'tissue_type',
+    'tissue_types',
+    'tissues',
+    'tissue_source',
+]
+SELECT_CROSS_FIELD_ORGAN_PATTERNS = {
+    'flower': re.compile(
+        r'\b(?:flower|flowers|inflorescence|inflorescences|catkin|catkins|'
+        r'panicle|panicles|spikelet|spikelets|floret|florets)\b',
+        re.IGNORECASE,
+    ),
+    'leaf': re.compile(
+        r'\b(?:flag leaf|flag leaves|leaf|leaves|foliar|foliage|trifoliate|'
+        r'lamina|laminae|leaflet|leaflets)\b',
+        re.IGNORECASE,
+    ),
+    'root': re.compile(
+        r'\b(?:root|roots|taproot|taproots|primary root|primary roots|'
+        r'lateral root|lateral roots|radicle|radicles|root[\s_-]?tip|'
+        r'root[\s_-]?tips|root hair|root hairs)\b',
+        re.IGNORECASE,
+    ),
+}
 SELECT_DEFAULT_SCOPE_COLUMN = 'bioproject'
 SELECT_DEFAULT_SCOPE_MODE = 'mark_other_rows_in_scope'
 SELECT_DEFAULT_TARGET_COLUMN = 'exclusion'
@@ -932,6 +963,61 @@ def normalize_select_metadata_frame(df, select_rules):
     out_df['sample_group_normalization_source'] = sources
     out_df['sample_group_normalization_text'] = source_texts
     out_df['sample_group_normalization_rule_id'] = rule_ids
+    out_df = review_select_cross_field_tissue_conflicts(out_df, normalize_rules)
+    return out_df
+
+
+def review_select_cross_field_tissue_conflicts(df, normalize_rules):
+    safe_rule_ids = {
+        rule['rule_id']
+        for rule in normalize_rules
+        if rule.get('skip_validation', False)
+    }
+    strong_columns = [
+        column
+        for column in SELECT_CROSS_FIELD_STRONG_TISSUE_COLUMNS
+        if column in df.columns
+    ]
+    if len(strong_columns) == 0:
+        return df
+    out_df = df.copy(deep=True)
+    assigned_groups = out_df['sample_group'].fillna('').astype(str).str.strip()
+    eligible_mask = assigned_groups.isin(SELECT_NORMALIZE_ORGANS)
+    if not eligible_mask.any():
+        return out_df
+    normalization_sources = out_df['sample_group_normalization_source'].fillna('').astype(str)
+    normalization_rule_ids = out_df['sample_group_normalization_rule_id'].fillna('').astype(str)
+    conflict_mask = pandas.Series(False, index=out_df.index)
+    conflict_sources = pandas.Series('', index=out_df.index, dtype=str)
+    conflict_texts = pandas.Series('', index=out_df.index, dtype=str)
+    for column in strong_columns:
+        text_series = normalize_select_series(out_df[column])
+        nonempty_mask = ~text_series.str.lower().isin(SELECT_IGNORE_VALUES)
+        if not nonempty_mask.any():
+            continue
+        safe_source_mask = (normalization_sources == column) & normalization_rule_ids.isin(safe_rule_ids)
+        for organ, pattern in SELECT_CROSS_FIELD_ORGAN_PATTERNS.items():
+            organ_mask = text_series.str.contains(pattern, regex=True).fillna(False)
+            current_mask = eligible_mask & nonempty_mask & organ_mask & (assigned_groups != organ)
+            current_mask = current_mask & (~safe_source_mask)
+            new_mask = current_mask & (~conflict_mask)
+            if not new_mask.any():
+                continue
+            conflict_mask.loc[new_mask] = True
+            conflict_sources.loc[new_mask] = column
+            previous_rule_ids = normalization_rule_ids.loc[new_mask]
+            conflict_texts.loc[new_mask] = (
+                'assigned=' + assigned_groups.loc[new_mask]
+                + '; conflict=' + column + '=' + text_series.loc[new_mask]
+                + '; previous_rule_id=' + previous_rule_ids
+            )
+    if not conflict_mask.any():
+        return out_df
+    out_df.loc[conflict_mask, 'sample_group'] = 'review'
+    out_df.loc[conflict_mask, 'sample_group_normalization_status'] = 'review'
+    out_df.loc[conflict_mask, 'sample_group_normalization_source'] = conflict_sources.loc[conflict_mask]
+    out_df.loc[conflict_mask, 'sample_group_normalization_text'] = conflict_texts.loc[conflict_mask]
+    out_df.loc[conflict_mask, 'sample_group_normalization_rule_id'] = SELECT_CROSS_FIELD_TISSUE_CONFLICT_RULE_ID
     return out_df
 
 
