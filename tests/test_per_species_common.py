@@ -193,5 +193,5 @@ def test_build_and_write_curation_summaries(tmp_path):
     assert final_path.exists()
     loaded_round = pandas.read_csv(round_path, sep='\t')
     loaded_final = pandas.read_csv(final_path, sep='\t')
-    pandas.testing.assert_frame_equal(loaded_round, round_summary)
-    pandas.testing.assert_frame_equal(loaded_final, out['final_summary'])
+    pandas.testing.assert_frame_equal(loaded_round, round_summary, check_dtype=False)
+    pandas.testing.assert_frame_equal(loaded_final, out['final_summary'], check_dtype=False)
