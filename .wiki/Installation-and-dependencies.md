@@ -3,6 +3,9 @@
 AMALGKIT runs on Python 3.9 or later.
 
 ```bash
+mamba install -c bioconda amalgkit
+
+# Or install the latest GitHub version:
 pip install git+https://github.com/kfuku52/amalgkit
 amalgkit -h
 ```
@@ -32,7 +35,8 @@ Current releases are Python-only. `R`, `Rscript`, and R packages are not require
 | [fasterq-dump](https://github.com/ncbi/sra-tools) | `amalgkit getfastq` | required for public SRA download |
 | [fastp](https://github.com/OpenGene/fastp) | `amalgkit getfastq` | required when `--fastp yes` (default) |
 | [MMseqs2](https://github.com/soedinglab/MMseqs2) | `amalgkit getfastq` | required when `--rrna_filter yes` or `--contam_filter yes` |
-| [kallisto](https://github.com/pachterlab/kallisto) | `amalgkit quant` | required |
+| [kallisto](https://github.com/pachterlab/kallisto) | `amalgkit quant` | required for short-read quantification |
+| [oarfish](https://github.com/COMBINE-lab/oarfish) | `amalgkit quant` | required for long-read quantification when `--quant_backend oarfish` or auto-selects oarfish |
 | [BUSCO](https://busco.ezlab.org/) | `amalgkit busco` | required when `--tool busco` |
 | [compleasm](https://github.com/huangnengCSU/compleasm) | `amalgkit busco` | required when `--tool compleasm` |
 
@@ -43,13 +47,17 @@ Beyond the Python packages above, these commands do not require additional execu
 - `amalgkit dataset`
 - `amalgkit metadata`
 - `amalgkit select`
-- `amalgkit config`
 - `amalgkit merge`
 - `amalgkit cstmm` if BUSCO or orthogroup inputs are already available
 - `amalgkit wsfilter`
 - `amalgkit csfilter`
 - `amalgkit finalize`
 - `amalgkit sanity`
+- `amalgkit rerun` for targets that do not invoke external download, quantification, or BUSCO tools
+
+## Selection rule files
+
+`amalgkit config` has been removed. Use `amalgkit dataset --rule_set base|test|plantae|vertebrate --out_dir ./ --overwrite yes` to export a bundled `select_rules.tsv`, then edit that TSV before running `amalgkit select`.
 
 ## Notes on batch correction
 

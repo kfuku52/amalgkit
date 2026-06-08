@@ -4,12 +4,28 @@
 
 ## Example
 
+Single query:
+
 ```bash
 amalgkit metadata \
     --out_dir ./ \
     --entrez_email example@email.com \
     --search_string '("platform illumina"[Properties]) AND ("type rnaseq"[Filter])'
 ```
+
+Species-wise batch query:
+
+```bash
+amalgkit dataset --name init --out_dir ./work
+amalgkit metadata \
+    --out_dir ./work \
+    --species_tsv ./work/species.tsv \
+    --organ_terms_tsv ./work/organ_terms.tsv \
+    --mode title_union \
+    --entrez_email example@email.com
+```
+
+`--species_tsv` requires a `scientific_name` column. `--organ_terms_tsv` can provide `sample_group` and semicolon-separated `title_terms` for `title_union` and `title_split` query modes.
 
 ## Important columns to review manually
 
@@ -46,6 +62,7 @@ Rows with `exclusion != no` are skipped by downstream processing.
 
 ## Related commands
 
+- [amalgkit dataset](https://github.com/kfuku52/amalgkit/wiki/amalgkit-dataset)
 - [amalgkit select](https://github.com/kfuku52/amalgkit/wiki/amalgkit-select)
 - [amalgkit integrate](https://github.com/kfuku52/amalgkit/wiki/amalgkit-integrate)
 - [amalgkit finalize](https://github.com/kfuku52/amalgkit/wiki/amalgkit-finalize)

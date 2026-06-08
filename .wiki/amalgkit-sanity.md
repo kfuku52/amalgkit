@@ -1,17 +1,61 @@
 ## Overview
-`amalgkit sanity` scans the working directory to verify the presence of all outputs for both quant and `amalgkit getfastq` for every sample listed in `metadata.tsv`. It also checks for the requisite index files for quantification. If any discrepancies are detected, such as a missing expression file for a sample from `amalgkit quant`, `amalgkit sanity` promptly notifies the user. This function proves particularly beneficial when handling vast numbers of samples, as manual verification of all outputs becomes cumbersome.
+
+`amalgkit sanity` scans a workspace and reports missing or ambiguous outputs for selected pipeline steps. It writes a machine-readable report that can be consumed by `amalgkit rerun`.
 
 ## Usage
-To check for the presence of FASTA index files, outputs from `amalgkit quant`, and outputs from `amalgkit getfastq`, use the following command. If certain checks are not required, simply omit the corresponding arguments.
 
-```
-amalgkit sanity --metadata /PATH/TO/metadata.tsv --out_dir /WORKING/DIRECTORY/ --index --quant --getfastq
-```
+Check all supported targets:
 
-For a comprehensive check, you can use the --all option:
-
-```
-amalgkit sanity --metadata /PATH/TO/metadata.tsv --out_dir /WORKING/DIRECTORY/ --all
+```bash
+amalgkit sanity --out_dir ./ --all
 ```
 
-STDOUT will display information about any missing files and suggest appropriate commands to rerun the missing samples.
+Check selected targets:
+
+```bash
+amalgkit sanity --out_dir ./ --check getfastq,quant,merge
+```
+
+Limit checks by run or species:
+
+```bash
+amalgkit sanity --out_dir ./ --run SRR000001,SRR000002 --check getfastq,quant
+amalgkit sanity --out_dir ./ --species "Homo sapiens,Mus musculus" --check merge,busco,finalize
+```
+
+## Targets
+
+Supported check targets are:
+
+- `getfastq`
+- `index`
+- `quant`
+- `merge`
+- `busco`
+- `finalize`
+- `all`
+
+If no target is specified, `--all` is assumed.
+
+## Strict mode
+
+Use strict mode in CI or cluster scripts:
+
+```bash
+amalgkit sanity --out_dir ./ --all --strict yes --strict_level error
+amalgkit sanity --out_dir ./ --all --strict_level warning
+```
+
+## Report and rerun
+
+The default report path is:
+
+```text
+out_dir/sanity/sanity_report.json
+```
+
+To preview reruns from that report:
+
+```bash
+amalgkit rerun --out_dir ./ --dry_run yes
+```

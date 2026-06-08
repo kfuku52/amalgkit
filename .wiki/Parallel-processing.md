@@ -47,3 +47,14 @@ amalgkit quant \
 - `getfastq` and `quant` parallelize over runs.
 - `merge`, `wsfilter`, `csfilter`, and `finalize` parallelize internally over larger work units while respecting the same CPU budget.
 - `cstmm` is usually lightweight compared with `getfastq` and `quant`, but still follows the same budget model where applicable.
+
+## Shared locks
+
+Large runs often start many AMALGKIT processes at once. The current CLI uses shared lock directories for resources that should not be duplicated:
+
+- `--download_dir`: shared download/cache directory, default `out_dir/downloads`
+- `--download_lock_dir`: lock and semaphore directory, default `download_dir/locks`
+- provider caps such as `--ncbi_download_max_concurrency` and `--ena_download_max_concurrency`
+- quant index build locks under the selected index directory
+
+Use the same `--download_dir` and `--download_lock_dir` for all jobs that share a workspace.

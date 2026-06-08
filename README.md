@@ -46,7 +46,7 @@ See [Wiki](https://github.com/kfuku52/amalgkit/wiki) for detailed examples and o
 
 - [`amalgkit getfastq`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-getfastq): Generating fastq files
 
-- [`amalgkit quant`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-quant): Transcript abundance estimation
+- [`amalgkit quant`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-quant): Transcript abundance estimation with auto-selected kallisto/oarfish backend
 
 - [`amalgkit merge`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-merge): Generating transcript abundance tables
 
@@ -62,9 +62,15 @@ See [Wiki](https://github.com/kfuku52/amalgkit/wiki) for detailed examples and o
 
 - [`amalgkit sanity`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-sanity): Checking the integrity of AMALGKIT input and output files
 
-- `amalgkit rerun`: Rerunning failed sanity targets from `sanity_report.json` and writing `rerun_manifest.json`
+- [`amalgkit rerun`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-rerun): Rerunning failed sanity targets from `sanity_report.json` and writing `rerun_manifest.json`
 
 - [`amalgkit dataset`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-dataset): Extracting bundled test datasets
+
+Legacy commands from earlier AMALGKIT releases have been replaced:
+
+- `amalgkit config` -> `amalgkit dataset --rule_set ...` plus `select_rules.tsv`
+- `amalgkit curate` -> `amalgkit wsfilter`, `amalgkit csfilter`, and `amalgkit finalize`
+- `amalgkit csca` -> `amalgkit csfilter` and downstream `amalgkit finalize` outputs
 
 ## Typical Workflows
 ### Initialize an empty workspace

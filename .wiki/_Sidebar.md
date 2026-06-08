@@ -7,7 +7,6 @@
   * [amalgkit dataset](./amalgkit-dataset)
   * [amalgkit metadata](./amalgkit-metadata)
   * [amalgkit integrate](./amalgkit-integrate)
-  * [amalgkit config](./amalgkit-config)
   * [amalgkit select](./amalgkit-select)
   * [amalgkit getfastq](./amalgkit-getfastq)
   * [amalgkit quant](./amalgkit-quant)
@@ -18,3 +17,8 @@
   * [amalgkit csfilter](./amalgkit-csfilter)
   * [amalgkit finalize](./amalgkit-finalize)
   * [amalgkit sanity](./amalgkit-sanity)
+  * [amalgkit rerun](./amalgkit-rerun)
+
+* Release
+  * [v0.16.25 notes](./Release-notes-v0.16.25)
+  * [Legacy config command](./amalgkit-config)

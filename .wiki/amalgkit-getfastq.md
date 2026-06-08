@@ -1,69 +1,97 @@
 ## Overview
 
-The `amalgkit getfastq` command serves three primary purposes:
+`amalgkit getfastq` downloads public SRA objects, extracts FASTQ files with `fasterq-dump`, optionally runs `fastp`, and can run MMseqs2-based rRNA or contaminant filters.
 
-1. Retrieving SRA data and extracting FASTQ files.
-2. Quality control of FASTQ files using [`fastp`](https://github.com/OpenGene/fastp).
-3. Optional filtering with MMseqs2:
-   - rRNA removal (`--rrna_filter yes`)
-   - taxonomy-aware contaminant removal (`--contam_filter yes`)
+Inputs can come from:
 
-To operate, `amalgkit getfastq` requires a metadata table (`--metadata`) produced from one or more of the following commands: [`amalgkit metadata`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-metadata), [`amalgkit integrate`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-integrate), or [`amalgkit select`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-select). Alternatively, you can input a specific BioProject, BioSample, or SRA ID directly using `--id`, which will generate the corresponding RNA-seq fastq files.
+- metadata produced by `amalgkit metadata`, `amalgkit integrate`, or `amalgkit select`
+- one explicit BioProject, BioSample, or run accession through `--id`
+- a file of accessions through `--id_list`
 
-The resulting fastq files are suitable for tasks like expression level quantification with [`amalgkit quant`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-quant) or for transcriptome assembly using tools such as [`Trinity`](https://github.com/trinityrnaseq/trinityrnaseq). 
+## Examples
 
-## Example command
+Use inferred `out_dir/metadata/metadata.tsv`:
 
-### Generating FASTQ files for all listed data in `metadata.tsv`
-If a `metadata/metadata.tsv` file exists in the same working directory where you are running `amalgkit getfastq` (this is the standard output of `both amalgkit metadata` and `amalgkit integrate`), AMALGKIT automatically recognizes it, eliminating the need to specify the `--metadata` option. This command will sequentially process each sample in the `metadata.tsv`. If you have access to a computer cluster, please refer to the relevant chapter.
-```
-amalgkit getfastq --metadata /PATH/TO/metadata.tsv
+```bash
+amalgkit getfastq --out_dir ./
 ```
 
-### Generating FASTQ files for one specified SRA data
+Use an explicit metadata table:
+
+```bash
+amalgkit getfastq --out_dir ./ --metadata /PATH/TO/metadata.tsv
 ```
-amalgkit getfastq --id DRR461654
+
+Generate FASTQ files for one accession:
+
+```bash
+amalgkit getfastq --out_dir ./ --id DRR461654
 ```
 
 ## Two-step FASTQ extraction
-With `amalgkit getfastq`, when a target FASTQ size is set using `--max_bp`, a unique two-step extraction process is initiated:
 
-1. **First-round extraction:** During this phase, AMALGKIT attempts to extract a FASTQ file that exactly matches the target size specified.
-2. **Second-round compensatory extraction:** Since there are inherent losses during processing by [fasterq-dump](https://github.com/ncbi/sra-tools), [fastp](https://github.com/OpenGene/fastp), and optional downstream filters (rRNA/contaminant removal), AMALGKIT factors in this loss. It then initiates a second round of extraction to supplement the FASTQ reads. This ensures the cumulative data size closely aligns with the target size.
+When `--max_bp` is set, AMALGKIT can perform a compensatory extraction workflow for SRA-derived runs:
 
-This two-fold approach ensures precision while maximizing data utility. This feature is available only for data derived from the SRA and not for private FASTQ files.
+1. First-round extraction targets the requested size.
+2. A second round can compensate for reads lost during `fasterq-dump`, `fastp`, rRNA filtering, or contaminant filtering.
+
+This feature is for public SRA-derived data, not private FASTQ files.
 
 ## Interpreting `getfastq_stats.tsv`
+
 `getfastq_stats.tsv` contains both count and base metrics. For paired-end libraries, count columns can use different units depending on the stage:
 
-- `num_dumped`, `num_written`, `num_rrna_in/out`, and `num_contam_in/out`: spot counts (paired-end spots = read pairs)
-- `num_fastp_in/out`: read counts reported by `fastp` (mates counted separately in paired-end data)
+- `num_dumped`, `num_written`, `num_rrna_in/out`, and `num_contam_in/out`: spot counts
+- `num_fastp_in/out`: read counts reported by `fastp`
 - `bp_*`: total bases
 
 For stage-by-stage removal fractions, `bp_*` columns are the safest values to compare across all stages.
 
-## Cloud options
-At present, `amalgkit getfastq` can retrieve samples from three cloud storage services: Amazon (AWS), Google (GCP), and NCBI. While AWS and GCP access might be subject to location constraints and other factors, by default, `amalgkit getfastq` will attempt to download a sample from one of these services. If the sample is not available from the initially chosen service, AMALGKIT will try the next one. If download fails from all configured cloud services, `amalgkit getfastq` exits with an error.
+## Download providers
+
+By default, `getfastq` tries enabled public providers and moves on when one provider is unavailable or throttled:
+
+- NCBI cloud objects: `--ncbi yes`
+- AWS: `--aws yes`
+- GCP: `--gcp yes`
+- ENA: `--ena yes`
+- DDBJ for DRA accessions: `--ddbj yes`
+
+Each provider has an optional shared concurrency limit such as `--ncbi_download_max_concurrency`, `--aws_download_max_concurrency`, `--ena_download_max_concurrency`, and `--ddbj_download_max_concurrency`. These limits use `--download_lock_dir`, which defaults to `out_dir/downloads/locks`.
+
+## Optional filters
+
+```bash
+amalgkit getfastq --out_dir ./ --rrna_filter yes
+amalgkit getfastq --out_dir ./ --contam_filter yes --contam_filter_rank superkingdom
+amalgkit getfastq --out_dir ./ --filter_order rrna,contam,fastp
+```
+
+`--rrna_filter yes` uses MMseqs2 with a SILVA database. `--contam_filter yes` uses MMseqs2 taxonomy against a downloadable database such as UniRef90.
 
 ## Local FASTQ files
-If you intend to use local FASTQ files that are not available on the SRA in conjunction with AMALGKIT, you must first utilize [`amalgkit integrate`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-integrate) to generate a `metadata.tsv` file containing all pertinent details. Once this is done, `amalgkit getfastq` will be able to process the local files using [fastp](https://github.com/OpenGene/fastp) and carry out other subsequent steps in the same manner as it would for FASTQ files derived from the SRA.
+
+If you use local FASTQ files that are not available in public SRA storage, first run [`amalgkit integrate`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-integrate). `getfastq` can then process those local entries through the same filtering and staging logic as public runs.
 
 ## Parallel processing
-The `--batch` option in various AMALGKIT functions is designed for straightforward parallel processing. This argument accepts integer values, where each integer corresponds to the row number of an entry in the `metadata.tsv`. In essence, `--batch 1` processes the first sample, `--batch 2` the second, and so on. For instance, if you wish to process the third sample from the `metadata.tsv`, the command would be:
 
-```
-amalgkit getfastq --out_dir "./" --batch 3
+`--batch` processes one selected metadata row by one-based index:
+
+```bash
+amalgkit getfastq --out_dir ./ --batch 3
 ```
 
-This option is particularly beneficial when paired with array jobs on computer clusters, such as those managed by SLURM. An example SLURM `sbatch` command to utilize this feature might look like:
+SLURM example:
 
-```
+```bash
 #!/bin/bash
 #SBATCH --cpus-per-task=2
 #SBATCH --array=1-3
 
-amalgkit getfastq --out_dir "./" --threads $SLURM_CPUS_PER_TASK --batch $SLURM_ARRAY_TASK_ID
+amalgkit getfastq \
+    --out_dir ./ \
+    --threads "$SLURM_CPUS_PER_TASK" \
+    --batch "$SLURM_ARRAY_TASK_ID"
 ```
 
-## Tips for subsequent transcriptome assembly
-When it comes to assembly, including more RNA-seq libraries generally yields more transcripts. However, handling an excessive amount of data can be computationally demanding. To address this, `amalgkit getfastq` offers an automatic subsampling feature for RNA-seq reads from various libraries. The volume of data necessary, denoted by the --max_bp parameter, can vary based on several factors, including the specific assembly program in use. For a deeper dive into this topic, you can refer to [this paper](https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0146062).
+For multi-process downloads on shared storage, keep `--download_dir` and `--download_lock_dir` shared across jobs.

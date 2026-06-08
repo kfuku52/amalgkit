@@ -2,7 +2,7 @@
 
 ## Overview
 
-This tutorial runs the current Python-only AMALGKIT workflow on the bundled yeast dataset:
+This tutorial runs the current Python-only AMALGKIT workflow with the bundled yeast assets:
 
 - *Saccharomyces cerevisiae*
 - *Schizosaccharomyces pombe*
@@ -16,9 +16,9 @@ dataset -> metadata -> select -> getfastq -> quant -> merge -> cstmm -> wsfilter
 ## Prerequisites
 
 - AMALGKIT installed
-- `fasterq-dump`
-- `fastp`
-- `kallisto`
+- `fasterq-dump` from `sra-tools >= 3`
+- `fastp` unless you pass `--fastp no`
+- `kallisto` for the short-read quantification step
 
 You do not need R.
 
@@ -40,15 +40,22 @@ This creates:
 ```text
 fasta/
 busco/
-config/
+downloads/
+metadata/
+metadata_specieswise/
+private_fastq/
+select_rules.tsv
 ```
 
-## 2. Create config files
+The yeast dataset includes small FASTA files, precomputed BUSCO tables, and a yeast-oriented `select_rules.tsv`.
+
+## 2. Review selection rules
 
 ```bash
-amalgkit config --out_dir ./ --config base --overwrite yes
-cp ./config/*.config ./config_base/
+less select_rules.tsv
 ```
+
+`amalgkit select` now reads `select_rules.tsv` directly. The old config-directory workflow is no longer part of the current CLI.
 
 ## 3. Retrieve metadata
 
@@ -80,12 +87,10 @@ PY
 ## 5. Select samples
 
 ```bash
-amalgkit select \
-    --out_dir ./ \
-    --config_dir ./config_base \
-    --min_nspots 100000 \
-    --max_sample 2
+amalgkit select --out_dir ./
 ```
+
+This writes the selected metadata back under `metadata/` and records selection/exclusion labels according to `select_rules.tsv`.
 
 ## 6. Download FASTQ files
 
@@ -105,6 +110,8 @@ amalgkit quant \
     --clean_fastq no \
     --threads 2
 ```
+
+With `--quant_backend auto`, AMALGKIT uses kallisto for short-read runs and oarfish for long-read runs. This tutorial uses kallisto.
 
 ## 8. Merge abundance tables
 
@@ -193,4 +200,10 @@ Top level:
 
 ```bash
 amalgkit sanity --out_dir ./ --all
+```
+
+If the sanity report records failed targets, inspect the dry-run plan before executing reruns:
+
+```bash
+amalgkit rerun --out_dir ./ --dry_run yes
 ```

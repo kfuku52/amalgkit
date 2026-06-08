@@ -8,9 +8,22 @@
 amalgkit integrate --fastq_dir /PATH/TO/FASTQ --out_dir ./ --metadata ./metadata/metadata.tsv
 ```
 
-## FASTQ naming
+Without `--metadata`, standalone mode writes a private FASTQ metadata table.
 
-Files in `--fastq_dir` must be stored directly in that directory.
+## FASTQ discovery
+
+Files in `--fastq_dir` are scanned recursively. The first subdirectory below `--fastq_dir` is parsed as `scientific_name`, with underscores converted to spaces.
+
+Example:
+
+```text
+/data/private_fastq/Homo_sapiens/brain/Sample1_1.fq.gz
+/data/private_fastq/Homo_sapiens/brain/Sample1_2.fq.gz
+```
+
+This assigns `scientific_name` to `Homo sapiens`. If the same FASTQ basename appears under multiple species directories, AMALGKIT prefixes the generated run ID with the species directory token.
+
+## FASTQ naming
 
 - paired-end: `Sample1_1.fq.gz` and `Sample1_2.fq.gz`
 - single-end: `Sample1.fq.gz`
@@ -22,7 +35,7 @@ Supported extensions:
 - `.fq`
 - `.fq.gz`
 
-## Metadata fields to fill manually
+## Metadata fields to review
 
 `integrate` cannot infer every biological label. After creating metadata, review at least:
 
@@ -42,9 +55,9 @@ Supported extensions:
 ## Downstream workflow
 
 ```bash
-amalgkit integrate ...
-amalgkit getfastq ...
-amalgkit quant ...
-amalgkit merge ...
-amalgkit finalize ...
+amalgkit integrate --fastq_dir ./private_fastq --out_dir ./
+amalgkit getfastq --out_dir ./
+amalgkit quant --out_dir ./
+amalgkit merge --out_dir ./
+amalgkit finalize --out_dir ./
 ```

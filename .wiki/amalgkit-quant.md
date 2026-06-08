@@ -1,39 +1,82 @@
 ## Overview
-`amalgkit quant` provides a seamless interface with the underlying [`kallisto`](https://github.com/pachterlab/kallisto) tool, an RNA-Seq quantification software. AMALGKIT automatically detects and handles single-end or paired-end reads and runs `kallisto` accordingly. `amalgkit quant` needs a kallisto index file for the reference transcriptome. Users can either provide this file or allow AMALGKIT to generate it.
 
-## Example command
+`amalgkit quant` estimates transcript abundance from `getfastq` outputs. The current CLI supports:
 
-Assuming you already have a folder containing the necessary index files for quantification:
-```
-amalgkit quant --out_dir "./" --index_dir "./index"
+- `--quant_backend kallisto` for short-read RNA-seq
+- `--quant_backend oarfish` for long-read RNA-seq
+- `--quant_backend auto` to choose from metadata
+
+## Examples
+
+Use auto backend selection:
+
+```bash
+amalgkit quant --out_dir ./ --threads 8
 ```
 
-Assuming you need `amalgkit` to create index files from cds sequences (fasta format):
-```
-amalgkit quant --out_dir "./" --fasta_dir "./fasta" --build_index yes
+Use existing indices:
+
+```bash
+amalgkit quant --out_dir ./ --index_dir ./index
 ```
 
-## Quantification from index files
-`kallisto` requires index files for quantification, which are created from CDS sequences in FASTA format for each species. For instance, if your `metadata.tsv` contains a sample with the scientific_name *Mus musculus*, AMALGKIT will search for a file prefixed with `Mus_musculus` in the specified index folder (e.g., `Mus_musculus_version1.0.fasta`). With `--build_index yes`, AMALGKIT generates index files with the `.idx` extension. All CDS sequences for species listed in `metadata.tsv` must be located in the same directory and be in the FASTA format.
+Build missing indices from FASTA files:
+
+```bash
+amalgkit quant --out_dir ./ --fasta_dir ./fasta --build_index yes
+```
+
+Force long-read quantification:
+
+```bash
+amalgkit quant \
+    --out_dir ./ \
+    --quant_backend oarfish \
+    --oarfish_seq_tech ont-cdna
+```
+
+## Reference FASTA and indices
+
+AMALGKIT expects one reference transcriptome FASTA per species when building indices. If `metadata.tsv` contains *Mus musculus*, AMALGKIT searches for a FASTA file prefixed with `Mus_musculus` under `--fasta_dir`.
+
+Generated index suffixes depend on the backend:
+
+- kallisto: `.idx`
+- oarfish: `.mmi`
+
+Shared index build locks prevent concurrent batch jobs from building the same species index at the same time. Tune lock waiting with `--index_lock_poll` and `--index_lock_timeout`.
+
+## Backend options
+
+- `--kallisto_options`: extra shell-style options passed to `kallisto quant`
+- `--oarfish_options`: extra shell-style options passed to `oarfish`
+- `--oarfish_seq_tech`: long-read sequencing technology preset
 
 ## Parallel processing
-The `--batch` option in various AMALGKIT functions is designed for straightforward parallel processing. This argument accepts integer values, where each integer corresponds to the row number of an entry in the `metadata.tsv`. In essence, `--batch 1` processes the first sample, `--batch 2` the second, and so on. For instance, if you wish to process the third sample from the `metadata.tsv`, the command would be:
 
-```
-amalgkit quant --out_dir "./" --batch 3
+`--batch` processes one selected metadata row by one-based index:
+
+```bash
+amalgkit quant --out_dir ./ --batch 3
 ```
 
-This option is particularly beneficial when paired with array jobs on computer clusters, such as those managed by SLURM. An example SLURM `sbatch` command to utilize this feature might look like:
+SLURM example:
 
-```
+```bash
 #!/bin/bash
 #SBATCH --cpus-per-task=2
 #SBATCH --array=1-3
 
-amalgkit quant --out_dir "./" --threads $SLURM_CPUS_PER_TASK --batch $SLURM_ARRAY_TASK_ID
+amalgkit quant \
+    --out_dir ./ \
+    --threads "$SLURM_CPUS_PER_TASK" \
+    --batch "$SLURM_ARRAY_TASK_ID"
 ```
 
 ## Output files
-* **SRR8819967_abundance.h5**: bootstrap results in `h5dump` format
-* **SRR8819967_run_info.json**: contains run info
-* **SRR8819967_abundance.tsv**: contains target_id, lentgh, eff_length, est_counts and tpm in human readable .tsv
+
+Typical per-run outputs include:
+
+- `<RUN>_abundance.tsv`: target ID, length, effective length, estimated counts, and TPM
+- `<RUN>_run_info.json`: quantification run information
+- backend-specific auxiliary files such as kallisto HDF5 output
