@@ -1,29 +1,36 @@
 ## Overview
 
-`amalgkit quant` estimates transcript abundance from `getfastq` outputs. The current CLI supports:
+`amalgkit quant` estimates transcript abundance from `getfastq` outputs.
 
-- `--quant_backend kallisto` for short-read RNA-seq
-- `--quant_backend oarfish` for long-read RNA-seq
-- `--quant_backend auto` to choose from metadata
+Supported backends:
 
-## Examples
+| Backend | Use |
+| --- | --- |
+| `--quant_backend auto` | choose from metadata |
+| `--quant_backend kallisto` | short-read RNA-seq |
+| `--quant_backend oarfish` | long-read RNA-seq |
 
-Use auto backend selection:
+## Basic Use
+
+Auto-select the backend:
 
 ```bash
 amalgkit quant --out_dir ./ --threads 8
 ```
 
-Use existing indices:
-
-```bash
-amalgkit quant --out_dir ./ --index_dir ./index
-```
-
 Build missing indices from FASTA files:
 
 ```bash
-amalgkit quant --out_dir ./ --fasta_dir ./fasta --build_index yes
+amalgkit quant \
+    --out_dir ./ \
+    --fasta_dir ./fasta \
+    --build_index yes
+```
+
+Use an existing index directory:
+
+```bash
+amalgkit quant --out_dir ./ --index_dir ./index
 ```
 
 Force long-read quantification:
@@ -35,24 +42,41 @@ amalgkit quant \
     --oarfish_seq_tech ont-cdna
 ```
 
-## Reference FASTA and indices
+## Reference FASTA and Indices
 
-AMALGKIT expects one reference transcriptome FASTA per species when building indices. If `metadata.tsv` contains *Mus musculus*, AMALGKIT searches for a FASTA file prefixed with `Mus_musculus` under `--fasta_dir`.
+When `--build_index yes` is set, AMALGKIT expects one reference transcriptome FASTA per species under `--fasta_dir`.
 
-Generated index suffixes depend on the backend:
+If metadata contains `Mus musculus`, AMALGKIT searches for a FASTA file prefixed with `Mus_musculus`.
+
+Accepted FASTA suffixes include:
+
+- `.fa`
+- `.fasta`
+- `.fa.gz`
+- `.fasta.gz`
+
+Generated index suffixes depend on the selected backend:
 
 - kallisto: `.idx`
 - oarfish: `.mmi`
 
-Shared index build locks prevent concurrent batch jobs from building the same species index at the same time. Tune lock waiting with `--index_lock_poll` and `--index_lock_timeout`.
+Shared index-build locks prevent concurrent batch jobs from building the same species/backend index. Tune waiting with:
 
-## Backend options
+- `--index_lock_poll`
+- `--index_lock_timeout`
 
-- `--kallisto_options`: extra shell-style options passed to `kallisto quant`
-- `--oarfish_options`: extra shell-style options passed to `oarfish`
-- `--oarfish_seq_tech`: long-read sequencing technology preset
+## Backend Options
 
-## Parallel processing
+| Option | Use |
+| --- | --- |
+| `--kallisto_options` | extra shell-style options passed to `kallisto quant` |
+| `--oarfish_options` | extra shell-style options passed to `oarfish` |
+| `--oarfish_seq_tech` | long-read sequencing technology preset |
+| `--clean_fastq yes/no` | remove processed FASTQ files after successful quantification |
+
+`--oarfish_seq_tech auto` infers ONT/PacBio subtype from metadata when possible.
+
+## Array Jobs
 
 `--batch` processes one selected metadata row by one-based index:
 
@@ -65,7 +89,7 @@ SLURM example:
 ```bash
 #!/bin/bash
 #SBATCH --cpus-per-task=2
-#SBATCH --array=1-3
+#SBATCH --array=1-100
 
 amalgkit quant \
     --out_dir ./ \
@@ -73,10 +97,19 @@ amalgkit quant \
     --batch "$SLURM_ARRAY_TASK_ID"
 ```
 
-## Output files
+## Main Outputs
 
 Typical per-run outputs include:
 
-- `<RUN>_abundance.tsv`: target ID, length, effective length, estimated counts, and TPM
-- `<RUN>_run_info.json`: quantification run information
-- backend-specific auxiliary files such as kallisto HDF5 output
+- `<RUN>_abundance.tsv`
+- `<RUN>_run_info.json`
+- backend-specific auxiliary files
+
+`<RUN>_abundance.tsv` contains target ID, length, effective length, estimated counts, and TPM.
+
+## Next Steps
+
+```bash
+amalgkit merge --out_dir ./
+amalgkit sanity --out_dir ./ --check quant
+```

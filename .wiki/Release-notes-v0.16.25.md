@@ -1,41 +1,45 @@
-## Draft release notes for v0.16.25
+## Release Notes for v0.16.25
 
-These notes summarize the `kfdevel` line prepared for merge into `master`.
+These notes summarize the CLI line merged into `master` through PR #166.
 
-## Major workflow changes
+## Major Workflow Changes
 
-- AMALGKIT is now Python-only for the main pipeline. R scripts and R smoke tests have been removed.
-- `amalgkit config` has been removed. Selection rules now live in one `select_rules.tsv` file.
+- AMALGKIT is Python-only for the main pipeline. R scripts and R smoke tests have been removed.
+- `amalgkit config` has been removed. Selection behavior now lives in one `select_rules.tsv` file.
 - `amalgkit curate` has been replaced by the split workflow `wsfilter -> csfilter -> finalize`.
-- `amalgkit csca` has been replaced by current cross-species filtering and finalization outputs.
-- `amalgkit rerun` was added to rerun failed targets from `sanity_report.json`.
+- `amalgkit csca` has been replaced by `csfilter` plus downstream `finalize` outputs.
+- `amalgkit rerun` has been added to rerun failed targets recorded by `sanity_report.json`.
 
-## Selection workflow
+## Workspace and Selection
 
-- `amalgkit dataset --rule_set base|test|plantae|vertebrate` exports bundled `select_rules.tsv`.
-- `amalgkit dataset --name init` creates an empty workspace scaffold.
-- `amalgkit select` supports species-wise batch mode and writes summary, queue, and manifest tables.
+- `amalgkit dataset --name init` creates a scaffold with `species.tsv`, `organ_terms.tsv`, `select_rules.tsv`, and standard workspace directories.
+- `amalgkit dataset --rule_set base|test|plantae|vertebrate` exports bundled selection rules to `out_dir/select_rules.tsv`.
+- `amalgkit select` reads `select_rules.tsv` through `--select_rules_tsv` and supports species-wise batch mode with summary, queue, and manifest outputs.
 
-## Download and quantification
+## Metadata, FASTQ, and Quantification
 
+- `metadata` supports one-off Entrez search strings and species-wise batch queries from `--species_tsv`.
+- `integrate` scans local FASTQ directories and appends private runs to AMALGKIT metadata.
 - `getfastq` supports NCBI, AWS, GCP, ENA, and DDBJ provider fallbacks.
-- Shared download locks and provider concurrency caps help large parallel runs.
+- Shared download locks and provider concurrency caps help large multi-process runs.
 - Optional MMseqs2 rRNA and contaminant filters can be ordered with `--filter_order`.
-- `quant` can auto-select kallisto for short-read data and oarfish for long-read data.
-- Quant index builds use shared locks to avoid duplicate builds under array jobs.
+- `quant` auto-selects kallisto for short-read runs and oarfish for long-read runs when `--quant_backend auto`.
+- Quant index builds use shared locks to avoid duplicate species/backend index builds under array jobs.
 
-## Filtering and final output
+## Filtering and Final Output
 
-- `wsfilter` performs within-species filtering and writes filtered metadata plus PDFs.
-- `csfilter` performs cross-species filtering with BUSCO or orthogroup inputs.
+- `merge` consolidates run-level abundance files into per-species count, effective-length, and TPM tables.
+- `cstmm` performs cross-species TMM normalization with BUSCO or orthogroup inputs.
+- `wsfilter` performs within-species outlier filtering and writes filtered metadata plus QC PDFs.
+- `csfilter` performs cross-species outlier filtering with BUSCO or orthogroup inputs.
 - `finalize` exports final per-species expression tables and supports Python backends for `no`, `sva`, `ruvseq`, `combatseq`, and `latent_glm`.
 
-## Validation and recovery
+## Validation and Recovery
 
-- `sanity` checks getfastq, index, quant, merge, busco, and finalize outputs.
-- `rerun` resolves missing or failed targets from sanity reports and writes `rerun_manifest.json`.
+- `sanity` checks `getfastq`, `index`, `quant`, `merge`, `busco`, and `finalize` outputs.
+- `rerun` resolves missing or failed targets from sanity reports and writes `rerun_manifest.json` unless disabled with `--manifest none`.
 
-## Migration summary
+## Migration Summary
 
 | Old command | Current replacement |
 | --- | --- |

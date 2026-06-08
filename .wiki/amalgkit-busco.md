@@ -1,29 +1,24 @@
 ## Overview
 
-`amalgkit busco` prepares per-species BUSCO tables used by ortholog-based downstream steps.
+`amalgkit busco` creates per-species BUSCO tables used by ortholog-aware downstream steps.
 
 Typical downstream uses:
 
 - `amalgkit cstmm`
 - `amalgkit csfilter`
 
-## Examples
+## Basic Use
 
-Using automatic tool selection:
+`--lineage` is required:
 
 ```bash
-amalgkit busco --out_dir ./ --tool auto --lineage eukaryota_odb12
+amalgkit busco --out_dir ./ --lineage eukaryota_odb12
 ```
 
-Using BUSCO:
+Choose the underlying tool explicitly if needed:
 
 ```bash
 amalgkit busco --out_dir ./ --tool busco --lineage eukaryota_odb12
-```
-
-Using compleasm:
-
-```bash
 amalgkit busco --out_dir ./ --tool compleasm --lineage eukaryota_odb12
 ```
 
@@ -31,7 +26,13 @@ With `--tool auto`, AMALGKIT prefers compleasm when available and falls back to 
 
 ## Input FASTA
 
-By default, AMALGKIT reads FASTA files from `out_dir/fasta`. File names should start with the species name using underscores, such as:
+By default, AMALGKIT reads transcriptome FASTA files from:
+
+```text
+out_dir/fasta
+```
+
+File names should start with the species name using underscores:
 
 ```text
 Arabidopsis_thaliana.v1.fa.gz
@@ -47,14 +48,28 @@ amalgkit busco \
     --lineage eukaryota_odb12
 ```
 
-## Main outputs
+## Useful Options
+
+| Option | Use |
+| --- | --- |
+| `--tool auto/busco/compleasm` | choose BUSCO implementation |
+| `--lineage` | lineage dataset, such as `eukaryota_odb12` |
+| `--fasta_dir` | directory of species FASTA files |
+| `--fasta` and `--species` | process one explicit FASTA |
+| `--tool_args` | pass additional arguments to the selected tool |
+| `--download_dir` and `--download_lock_dir` | share lineage/download locks across jobs |
+
+## Main Outputs
 
 - `busco/<Species>_busco.tsv`
 - `busco/busco_completeness.pdf`
-- summary files needed by `cstmm` and `csfilter`
+- summary files used by `cstmm` and `csfilter`
 
-## Notes
+## Existing BUSCO Tables
 
-- `busco` itself is a wrapper step; the required external executable depends on `--tool`.
-- If you already have compatible BUSCO full tables, skip this command and pass `--dir_busco` directly to downstream commands.
-- `--download_dir` and `--download_lock_dir` can be shared by parallel jobs to avoid duplicate lineage downloads.
+If you already have compatible per-species BUSCO full tables, you can skip this command and pass the table directory directly:
+
+```bash
+amalgkit cstmm --out_dir ./ --dir_busco ./busco
+amalgkit csfilter --out_dir ./ --dir_busco ./busco
+```

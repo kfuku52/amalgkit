@@ -1,7 +1,8 @@
-* [Home](./Home)
-* [Installation and dependencies](./Installation-and-dependencies)
-* [Parallel processing](./Parallel-processing)
-* [Tutorial 1](./Tutorial-1)
+* Start
+  * [Home](./Home)
+  * [Installation and dependencies](./Installation-and-dependencies)
+  * [Parallel processing](./Parallel-processing)
+  * [Tutorial 1](./Tutorial-1)
 
 * Active commands
   * [amalgkit dataset](./amalgkit-dataset)
@@ -19,7 +20,7 @@
   * [amalgkit sanity](./amalgkit-sanity)
   * [amalgkit rerun](./amalgkit-rerun)
 
-* Release
+* Migration and release
   * [v0.16.25 notes](./Release-notes-v0.16.25)
   * [Legacy config command](./amalgkit-config)
   * [Legacy curate command](./amalgkit-curate)

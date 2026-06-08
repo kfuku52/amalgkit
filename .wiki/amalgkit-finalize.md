@@ -1,19 +1,40 @@
 ## Overview
 
-`amalgkit finalize` exports final per-species tables from filtered metadata. It is Python-only and is the current place for optional batch correction.
+`amalgkit finalize` exports final per-species expression tables from metadata and merged abundance data.
 
-## Input
+It is also the current location for optional batch-effect correction. All current backends are Python implementations.
 
-- `--metadata`: usually `wsfilter/metadata.tsv` or `csfilter/metadata.tsv`
-- `--input_dir`: `merge` or `cstmm` output directory
+## Inputs
 
-If `--metadata inferred` is used, `finalize` automatically picks the newest of:
+`finalize` expects:
 
-- `out_dir/wsfilter/metadata.tsv`
-- `out_dir/csfilter/metadata.tsv`
-- otherwise `out_dir/metadata/metadata.tsv`
+- metadata, usually from `wsfilter/metadata.tsv` or `csfilter/metadata.tsv`
+- abundance tables from `merge` or `cstmm`
 
-## Batch-correction backends
+If `--input_dir inferred` is used, AMALGKIT reads:
+
+```text
+out_dir/cstmm if it exists, otherwise out_dir/merge
+```
+
+If `--metadata inferred` is used, AMALGKIT can reuse the newest prior filter metadata when available:
+
+```text
+out_dir/wsfilter/metadata.tsv
+out_dir/csfilter/metadata.tsv
+out_dir/metadata/metadata.tsv
+```
+
+For reproducible runs, pass the metadata path explicitly:
+
+```bash
+amalgkit finalize \
+    --out_dir ./ \
+    --metadata ./csfilter/metadata.tsv \
+    --batch_effect_alg no
+```
+
+## Batch-Correction Backends
 
 `--batch_effect_alg` supports:
 
@@ -23,17 +44,14 @@ If `--metadata inferred` is used, `finalize` automatically picks the newest of:
 - `combatseq`
 - `latent_glm`
 
-All backends are implemented in Python in current releases.
-
-## Example
-
-No batch correction:
+Examples:
 
 ```bash
-amalgkit finalize --out_dir ./ --metadata ./csfilter/metadata.tsv --batch_effect_alg no
+amalgkit finalize \
+    --out_dir ./ \
+    --metadata ./csfilter/metadata.tsv \
+    --batch_effect_alg sva
 ```
-
-Nonnegative latent-factor correction:
 
 ```bash
 amalgkit finalize \
@@ -44,7 +62,7 @@ amalgkit finalize \
     --latent_k auto
 ```
 
-## Main outputs
+## Main Outputs
 
 Top level:
 
@@ -66,14 +84,16 @@ Per species:
 - `<Species>_batch_compare_<alg>.pdf`
 - `<Species>_tau_hist_<alg>.pdf`
 
-## Useful options
+## General Options
 
-General:
+| Option | Default | Use |
+| --- | --- | --- |
+| `--norm` | `log2p1-fpkm` | expression transformation before optional batch correction |
+| `--clip_negative` | `yes` | clip negative corrected values to zero |
+| `--maintain_zero` | `yes` | preserve input zero values after correction |
+| `--seed` | `auto` | random seed for stochastic steps |
 
-- `--norm`
-- `--clip_negative`
-- `--maintain_zero`
-- `--seed`
+## Backend-Specific Options
 
 SVA:
 
@@ -86,6 +106,8 @@ RUVSeq:
 - `--ruvseq_control_genes`
 - `--ruvseq_k`
 - `--ruvseq_k_max`
+- `--ruvseq_control_top_n`
+- `--ruvseq_min_controls`
 
 latent_glm:
 
@@ -94,3 +116,17 @@ latent_glm:
 - `--latent_k_max INT`
 - `--latent_max_iter INT`
 - `--latent_tol FLOAT`
+
+Backend selectors:
+
+- `--sva_backend python`
+- `--combatseq_backend python`
+- `--ruvseq_backend python`
+
+## Next Steps
+
+Check outputs after a full run:
+
+```bash
+amalgkit sanity --out_dir ./ --check finalize
+```

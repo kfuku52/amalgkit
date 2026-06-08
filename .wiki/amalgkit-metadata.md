@@ -1,10 +1,13 @@
 ## Overview
 
-`amalgkit metadata` queries the NCBI SRA and writes `metadata.tsv`, the main sample sheet used by downstream AMALGKIT commands.
+`amalgkit metadata` queries the NCBI SRA and writes the metadata table used by downstream AMALGKIT commands.
 
-## Example
+Run it in one of two modes:
 
-Single query:
+- one Entrez query with `--search_string`
+- species-wise batch queries with `--species_tsv`
+
+## Single Query
 
 ```bash
 amalgkit metadata \
@@ -13,7 +16,13 @@ amalgkit metadata \
     --search_string '("platform illumina"[Properties]) AND ("type rnaseq"[Filter])'
 ```
 
-Species-wise batch query:
+Main output:
+
+- `metadata/metadata.tsv`
+
+## Species-Wise Batch Query
+
+Start from the scaffold files created by `dataset --name init`:
 
 ```bash
 amalgkit dataset --name init --out_dir ./work
@@ -25,44 +34,55 @@ amalgkit metadata \
     --entrez_email example@email.com
 ```
 
-`--species_tsv` requires a `scientific_name` column. `--organ_terms_tsv` can provide `sample_group` and semicolon-separated `title_terms` for `title_union` and `title_split` query modes.
+`--species_tsv` must contain a `scientific_name` column. `--organ_terms_tsv` can provide:
 
-## Important columns to review manually
+- `sample_group`
+- semicolon-separated `title_terms`
+
+`--mode title_union` and `--mode title_split` use those title terms to build organ- or tissue-aware queries.
+
+## Useful Options
+
+| Option | Use |
+| --- | --- |
+| `--search_string` | one Entrez query |
+| `--species_tsv` | species-wise batch queries |
+| `--mode base/title_union/title_split` | query construction mode for species-wise runs |
+| `--organ_terms_tsv` | sample group and title-term file |
+| `--species_limit` | process only the first N species from `--species_tsv` |
+| `--merge yes/no` | merge per-query outputs into a species-level table in batch mode |
+| `--resolve_names yes/no` | resolve scientific names through NCBI taxonomy IDs |
+| `--ncbi_metadata_max_concurrency` | throttle NCBI metadata requests across shared processes |
+
+## Columns to Review
+
+Review at least these columns before running `select`:
 
 - `scientific_name`
 - `sample_group`
 - `exclusion`
 - `bioproject`
+- `run`
 
-## Why `sample_group` matters
+`scientific_name` groups runs into species-level processing for `merge`, `cstmm`, `wsfilter`, `csfilter`, and `finalize`.
 
-`sample_group` is the main biological grouping column used by:
+`sample_group` is the main biological grouping column used by `select`, `wsfilter`, `csfilter`, and `finalize`.
 
-- `amalgkit select`
-- `amalgkit wsfilter`
-- `amalgkit csfilter`
-- `amalgkit finalize`
+Rows with `exclusion != no` are skipped by downstream commands.
 
-If multiple samples should be treated as the same biological group, make sure they share the same `sample_group` value.
-
-## Why `scientific_name` matters
-
-Samples with the same `scientific_name` are merged and processed together in species-level steps such as `merge`, `cstmm`, `wsfilter`, and `finalize`.
-
-## Why `exclusion` matters
-
-Rows with `exclusion != no` are skipped by downstream processing.
-
-## Example simplified columns
+## Example Rows
 
 | scientific_name | sample_group | bioproject | run | exclusion |
 | --- | --- | --- | --- | --- |
 | Nepenthes minima | flower_bud | PRJDB15224 | DRR461729 | no |
 | Nepenthes gracilis | root | PRJDB15224 | DRR461727 | no |
 
-## Related commands
+## Next Steps
 
-- [amalgkit dataset](https://github.com/kfuku52/amalgkit/wiki/amalgkit-dataset)
-- [amalgkit select](https://github.com/kfuku52/amalgkit/wiki/amalgkit-select)
-- [amalgkit integrate](https://github.com/kfuku52/amalgkit/wiki/amalgkit-integrate)
-- [amalgkit finalize](https://github.com/kfuku52/amalgkit/wiki/amalgkit-finalize)
+Export or review `select_rules.tsv`, then run:
+
+```bash
+amalgkit select --out_dir ./
+```
+
+For local FASTQ files, use [amalgkit integrate](https://github.com/kfuku52/amalgkit/wiki/amalgkit-integrate) before `getfastq`.

@@ -1,22 +1,27 @@
-# amalgkit dataset
-
 ## Overview
 
-`amalgkit dataset` extracts bundled test datasets for quick pipeline checks and tutorials.
-It also initializes empty workspaces and exports bundled `select_rules.tsv` rule sets.
+`amalgkit dataset` extracts bundled datasets, initializes empty workspaces, and exports bundled `select_rules.tsv` rule sets.
 
-## Usage
+Use it before `metadata` and `select` when you want a ready-made workspace or a starting rule file.
+
+## Quick Commands
 
 ```bash
 amalgkit dataset --list
 amalgkit dataset --name init --out_dir ./work
-amalgkit dataset --name yeast --out_dir ./test_run
+amalgkit dataset --name yeast --out_dir ./demo
 amalgkit dataset --rule_set base --out_dir ./work --overwrite yes
 ```
 
-## Workspace scaffold: `init`
+## Workspace Scaffold
 
-`amalgkit dataset --name init --out_dir ./work` creates a starter workspace:
+`--name init` creates an empty workspace:
+
+```bash
+amalgkit dataset --name init --out_dir ./work
+```
+
+Main files and directories:
 
 - `species.tsv`
 - `organ_terms.tsv`
@@ -28,49 +33,64 @@ amalgkit dataset --rule_set base --out_dir ./work --overwrite yes
 - `metadata/`
 - `metadata_specieswise/`
 
-## Available dataset: `yeast`
+Use this mode for species-wise metadata collection or private FASTQ projects.
 
-The bundled yeast dataset contains:
+## Bundled Dataset
 
-- FASTA files for *Saccharomyces cerevisiae* and *Schizosaccharomyces pombe*
-- precomputed BUSCO full tables
-- a yeast-oriented `select_rules.tsv` for `amalgkit select`
-
-## Extracted structure
-
-```text
-out_dir/
-|-- fasta/
-|-- busco/
-|-- downloads/
-|-- metadata/
-|-- metadata_specieswise/
-|-- private_fastq/
-`-- select_rules.tsv
-```
-
-## Rule sets
-
-Bundled rule sets can be exported without extracting a dataset:
-
-```bash
-amalgkit dataset --rule_set base --out_dir ./work --overwrite yes
-amalgkit dataset --rule_set plantae --out_dir ./plant_run --overwrite yes
-```
-
-Available rule sets are listed by `amalgkit dataset --list`.
-
-## Example pipeline after extraction
+`--name yeast` extracts a compact tutorial dataset:
 
 ```bash
 amalgkit dataset --name yeast --out_dir ./test_run
-amalgkit metadata --out_dir ./test_run --entrez_email your@email.com --search_string '("ERP109456"[Accession] AND "Saccharomyces cerevisiae"[Organism]) OR ("SRP565465"[Accession] AND "Schizosaccharomyces pombe"[Organism])'
-amalgkit select --out_dir ./test_run
-amalgkit getfastq --out_dir ./test_run
-amalgkit quant --out_dir ./test_run
-amalgkit merge --out_dir ./test_run
-amalgkit cstmm --out_dir ./test_run --dir_busco ./test_run/busco
-amalgkit wsfilter --out_dir ./test_run
-amalgkit csfilter --out_dir ./test_run --metadata ./test_run/wsfilter/metadata.tsv --dir_busco ./test_run/busco
-amalgkit finalize --out_dir ./test_run --metadata ./test_run/csfilter/metadata.tsv --batch_effect_alg no
 ```
+
+It includes:
+
+- small FASTA files for *Saccharomyces cerevisiae* and *Schizosaccharomyces pombe*
+- precomputed BUSCO full tables
+- a yeast-oriented `select_rules.tsv`
+- standard workspace directories
+
+## Rule Sets
+
+`--rule_set` writes a bundled `select_rules.tsv` without extracting a dataset:
+
+```bash
+amalgkit dataset --rule_set plantae --out_dir ./plant_run --overwrite yes
+```
+
+Available rule sets are:
+
+- `base`
+- `test`
+- `plantae`
+- `vertebrate`
+
+Run `amalgkit dataset --list` to show available datasets and rule sets in the installed version.
+
+## Output Behavior
+
+By default, `dataset` does not overwrite existing files. Add `--overwrite yes` when intentionally replacing `select_rules.tsv` or an existing scaffold file.
+
+## Next Steps
+
+After `--name init`:
+
+```bash
+amalgkit metadata \
+    --out_dir ./work \
+    --species_tsv ./work/species.tsv \
+    --entrez_email example@email.com
+amalgkit select --out_dir ./work/batch --species_tsv ./work/species.tsv
+```
+
+After `--rule_set base`:
+
+```bash
+amalgkit metadata \
+    --out_dir ./work \
+    --entrez_email example@email.com \
+    --search_string '("type rnaseq"[Filter])'
+amalgkit select --out_dir ./work
+```
+
+After `--name yeast`, continue with [Tutorial 1](https://github.com/kfuku52/amalgkit/wiki/Tutorial-1).

@@ -1,16 +1,22 @@
 ## Overview
 
-`amalgkit getfastq` downloads public SRA objects, extracts FASTQ files with `fasterq-dump`, optionally runs `fastp`, and can run MMseqs2-based rRNA or contaminant filters.
+`amalgkit getfastq` turns selected metadata rows into processed FASTQ files. For public data, it downloads SRA objects and extracts FASTQ with `fasterq-dump`. For private data prepared by `integrate`, it stages local FASTQ files into the same workflow.
 
-Inputs can come from:
+Optional processing includes:
 
-- metadata produced by `amalgkit metadata`, `amalgkit integrate`, or `amalgkit select`
-- one explicit BioProject, BioSample, or run accession through `--id`
+- `fastp`
+- MMseqs2 rRNA filtering
+- MMseqs2 contaminant filtering
+
+## Inputs
+
+`getfastq` can start from:
+
+- metadata from `metadata`, `integrate`, or `select`
+- one BioProject, BioSample, or run accession through `--id`
 - a file of accessions through `--id_list`
 
-## Examples
-
-Use inferred `out_dir/metadata/metadata.tsv`:
+Use inferred metadata:
 
 ```bash
 amalgkit getfastq --out_dir ./
@@ -19,7 +25,7 @@ amalgkit getfastq --out_dir ./
 Use an explicit metadata table:
 
 ```bash
-amalgkit getfastq --out_dir ./ --metadata /PATH/TO/metadata.tsv
+amalgkit getfastq --out_dir ./ --metadata ./metadata/metadata.tsv
 ```
 
 Generate FASTQ files for one accession:
@@ -28,38 +34,51 @@ Generate FASTQ files for one accession:
 amalgkit getfastq --out_dir ./ --id DRR461654
 ```
 
-## Two-step FASTQ extraction
+## Download Providers
 
-When `--max_bp` is set, AMALGKIT can perform a compensatory extraction workflow for SRA-derived runs:
+By default, public downloads try enabled providers and continue to the next provider when one is unavailable or throttled.
 
-1. First-round extraction targets the requested size.
-2. A second round can compensate for reads lost during `fasterq-dump`, `fastp`, rRNA filtering, or contaminant filtering.
+| Provider | Option |
+| --- | --- |
+| NCBI cloud objects | `--ncbi yes` |
+| AWS | `--aws yes` |
+| GCP | `--gcp yes` |
+| ENA | `--ena yes` |
+| DDBJ for DRA accessions | `--ddbj yes` |
 
-This feature is for public SRA-derived data, not private FASTQ files.
+Provider concurrency caps use `--download_lock_dir`, which defaults to `out_dir/downloads/locks`.
 
-## Interpreting `getfastq_stats.tsv`
+| Provider cap | Meaning |
+| --- | --- |
+| `--ncbi_download_max_concurrency` | cap concurrent NCBI downloads across processes |
+| `--aws_download_max_concurrency` | cap concurrent AWS downloads across processes |
+| `--gcp_download_max_concurrency` | cap concurrent GCP downloads across processes |
+| `--ena_download_max_concurrency` | cap concurrent ENA downloads across processes |
+| `--ddbj_download_max_concurrency` | cap concurrent DDBJ downloads across processes |
 
-`getfastq_stats.tsv` contains both count and base metrics. For paired-end libraries, count columns can use different units depending on the stage:
+Set a cap to `0` or `auto` to disable throttling.
 
-- `num_dumped`, `num_written`, `num_rrna_in/out`, and `num_contam_in/out`: spot counts
-- `num_fastp_in/out`: read counts reported by `fastp`
-- `bp_*`: total bases
+## FASTQ Processing
 
-For stage-by-stage removal fractions, `bp_*` columns are the safest values to compare across all stages.
+Common options:
 
-## Download providers
+| Option | Default | Use |
+| --- | --- | --- |
+| `--layout single/paired/auto` | `auto` | choose library layout |
+| `--max_bp` | very large | target number of bases to extract |
+| `--min_read_length` | `25` | minimum read length forwarded through processing |
+| `--fastp yes/no` | `yes` | run `fastp` |
+| `--remove_sra yes/no` | `yes` | remove downloaded SRA files after extraction |
+| `--remove_tmp yes/no` | `yes` | remove temporary files |
 
-By default, `getfastq` tries enabled public providers and moves on when one provider is unavailable or throttled:
+When `--max_bp` is set, AMALGKIT can run a compensatory two-step extraction for public SRA-derived data:
 
-- NCBI cloud objects: `--ncbi yes`
-- AWS: `--aws yes`
-- GCP: `--gcp yes`
-- ENA: `--ena yes`
-- DDBJ for DRA accessions: `--ddbj yes`
+1. first-round extraction targets the requested size
+2. a second round compensates for reads lost during extraction or filtering
 
-Each provider has an optional shared concurrency limit such as `--ncbi_download_max_concurrency`, `--aws_download_max_concurrency`, `--ena_download_max_concurrency`, and `--ddbj_download_max_concurrency`. These limits use `--download_lock_dir`, which defaults to `out_dir/downloads/locks`.
+This compensation is for public SRA-derived runs, not private FASTQ files.
 
-## Optional filters
+## Optional MMseqs2 Filters
 
 ```bash
 amalgkit getfastq --out_dir ./ --rrna_filter yes
@@ -67,13 +86,23 @@ amalgkit getfastq --out_dir ./ --contam_filter yes --contam_filter_rank superkin
 amalgkit getfastq --out_dir ./ --filter_order rrna,contam,fastp
 ```
 
-`--rrna_filter yes` uses MMseqs2 with a SILVA database. `--contam_filter yes` uses MMseqs2 taxonomy against a downloadable database such as UniRef90.
+`--rrna_filter yes` uses MMseqs2 with a SILVA database.
 
-## Local FASTQ files
+`--contam_filter yes` uses MMseqs2 taxonomy against a database such as UniRef90.
 
-If you use local FASTQ files that are not available in public SRA storage, first run [`amalgkit integrate`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-integrate). `getfastq` can then process those local entries through the same filtering and staging logic as public runs.
+`--filter_order` accepts comma or `>` separators, such as `fastp,rrna,contam` or `rrna>contam>fastp`.
 
-## Parallel processing
+## Output Statistics
+
+`getfastq_stats.tsv` contains count and base metrics. For paired-end libraries, count columns can use different units depending on stage:
+
+- `num_dumped`, `num_written`, `num_rrna_in/out`, and `num_contam_in/out`: spot counts
+- `num_fastp_in/out`: read counts reported by `fastp`
+- `bp_*`: total bases
+
+For stage-by-stage removal fractions, compare `bp_*` columns.
+
+## Array Jobs
 
 `--batch` processes one selected metadata row by one-based index:
 
@@ -86,7 +115,7 @@ SLURM example:
 ```bash
 #!/bin/bash
 #SBATCH --cpus-per-task=2
-#SBATCH --array=1-3
+#SBATCH --array=1-100
 
 amalgkit getfastq \
     --out_dir ./ \
@@ -95,3 +124,10 @@ amalgkit getfastq \
 ```
 
 For multi-process downloads on shared storage, keep `--download_dir` and `--download_lock_dir` shared across jobs.
+
+## Next Steps
+
+```bash
+amalgkit quant --out_dir ./ --build_index yes
+amalgkit sanity --out_dir ./ --check getfastq
+```

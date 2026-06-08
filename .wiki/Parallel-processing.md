@@ -1,35 +1,40 @@
 ## Overview
 
-AMALGKIT uses a shared CPU-budget model across commands. In most cases, you only need to set `--threads`.
+AMALGKIT uses a shared CPU-budget model. In most runs, set only `--threads` and leave the advanced worker options on `auto`.
 
-## Key options
+`--threads` is the total CPU budget for one AMALGKIT process. It is not a per-worker thread count. Commands that can parallelize divide that budget across internal workers and per-worker work.
+
+## Key Options
 
 | Option | Meaning |
 | --- | --- |
-| `--threads` | total CPU budget for one AMALGKIT process |
-| `--internal_jobs` | override the number of internal workers derived from `--threads` |
-| `--internal_cpu_budget` | cap the CPU budget used for automatic worker selection |
-| `--batch` | one-based metadata row selector for array-job style execution |
+| `--threads INT or auto` | total CPU budget for one AMALGKIT process |
+| `--internal_jobs INT or auto` | advanced override for internal worker count |
+| `--internal_cpu_budget INT or auto` | advanced cap used when automatic worker counts are chosen |
+| `--batch INT` | one-based metadata row selector for array-job execution |
 
-`--threads` is a global budget, not a per-worker thread count. AMALGKIT splits it internally across workers and per-worker CPU use.
+When `--batch` is set, AMALGKIT processes one metadata row and forces `--internal_jobs` to `1`. Total CPU demand then scales with the number of concurrent array tasks.
 
-When `--batch` is set, `--internal_jobs` is forced to `1`.
+## Practical Defaults
 
-## Practical guidance
+- Use `--threads auto` for local exploratory runs.
+- Use `--threads N` on a shared node or scheduler allocation.
+- Keep `--internal_jobs auto` unless you need to limit AMALGKIT's internal concurrency.
+- Keep `--internal_cpu_budget auto` unless a cluster policy requires a hard cap below the visible CPU count.
 
-- Start with `--threads auto` unless you are on a shared node.
-- Use `--internal_jobs auto` unless you need to cap concurrent workers manually.
-- Prefer `--threads N` over trying to tune every command separately.
-
-## Example: single process with a fixed CPU budget
+## Single-Process Example
 
 ```bash
 amalgkit getfastq --out_dir ./ --threads 8
 amalgkit quant --out_dir ./ --threads 8
+amalgkit merge --out_dir ./ --threads 8
 amalgkit wsfilter --out_dir ./ --threads 8
+amalgkit finalize --out_dir ./ --threads 8
 ```
 
-## Example: array jobs
+## Array-Job Example
+
+`getfastq`, `quant`, `wsfilter`, `csfilter`, and `finalize` accept `--batch`.
 
 ```bash
 #!/bin/bash
@@ -42,19 +47,28 @@ amalgkit quant \
     --batch "$SLURM_ARRAY_TASK_ID"
 ```
 
-## Notes by command family
+If 20 array tasks run at the same time with `--threads 4`, the job may use up to about 80 cores across the cluster.
 
-- `getfastq` and `quant` parallelize over runs.
-- `merge`, `wsfilter`, `csfilter`, and `finalize` parallelize internally over larger work units while respecting the same CPU budget.
-- `cstmm` is usually lightweight compared with `getfastq` and `quant`, but still follows the same budget model where applicable.
+## Shared Downloads and Locks
 
-## Shared locks
+Large projects often start many AMALGKIT processes against the same workspace. Use shared cache and lock paths so downloads and database/index builds are not duplicated.
 
-Large runs often start many AMALGKIT processes at once. The current CLI uses shared lock directories for resources that should not be duplicated:
+| Option | Default | Role |
+| --- | --- | --- |
+| `--download_dir` | `out_dir/downloads` | shared download/cache directory |
+| `--download_lock_dir` | `download_dir/locks` | filesystem locks and provider semaphores |
+| `--ncbi_download_max_concurrency` | `auto` | optional cap for NCBI cloud-object downloads |
+| `--aws_download_max_concurrency` | `auto` | optional cap for AWS downloads |
+| `--gcp_download_max_concurrency` | `auto` | optional cap for GCP downloads |
+| `--ena_download_max_concurrency` | `auto` | optional cap for ENA downloads |
+| `--ddbj_download_max_concurrency` | `auto` | optional cap for DDBJ downloads |
 
-- `--download_dir`: shared download/cache directory, default `out_dir/downloads`
-- `--download_lock_dir`: lock and semaphore directory, default `download_dir/locks`
-- provider caps such as `--ncbi_download_max_concurrency` and `--ena_download_max_concurrency`
-- quant index build locks under the selected index directory
+For `quant`, shared index-build locks are created under the selected `--index_dir`. This prevents multiple array tasks from building the same species/backend index at the same time.
 
-Use the same `--download_dir` and `--download_lock_dir` for all jobs that share a workspace.
+## Command Families
+
+- `metadata` can parallelize species-wise batch queries and throttle NCBI metadata requests through `--ncbi_metadata_max_concurrency`.
+- `getfastq` parallelizes run processing and uses provider fallbacks plus shared download locks.
+- `quant` parallelizes run processing and uses shared index locks.
+- `merge`, `wsfilter`, `csfilter`, and `finalize` parallelize internal work units while respecting the same CPU budget.
+- `cstmm` is usually lighter than download or quantification steps, but still follows its declared resource options.

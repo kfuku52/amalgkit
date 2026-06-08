@@ -4,65 +4,82 @@ AMALGKIT runs on Python 3.9 or later.
 
 ```bash
 mamba install -c bioconda amalgkit
-
-# Or install the latest GitHub version:
-pip install git+https://github.com/kfuku52/amalgkit
 amalgkit -h
 ```
 
-## Runtime model
+For the latest GitHub revision:
 
-Current releases are Python-only. `R`, `Rscript`, and R packages are not required for `merge`, `cstmm`, `wsfilter`, `csfilter`, or `finalize`.
+```bash
+pip install git+https://github.com/kfuku52/amalgkit
+amalgkit help metadata
+```
 
-## Python packages installed with AMALGKIT
+## Runtime Model
 
-| Package | Used for | Required when |
+Current AMALGKIT releases are Python-only. The main pipeline does not require `R`, `Rscript`, or R packages, including the former merge, curation, and batch-correction stages.
+
+Python package dependencies are installed with AMALGKIT. Important runtime libraries include `numpy`, `pandas`, `scipy`, `matplotlib`, `statsmodels`, `inmoose`, `biopython`, and `ete4`.
+
+## External Tools
+
+Some commands call external bioinformatics tools. Install only the tools needed for the workflow you run.
+
+| Tool | Used by | Required when |
 | --- | --- | --- |
-| [numpy](https://github.com/numpy/numpy) | core array operations | always |
-| [pandas](https://github.com/pandas-dev/pandas) | metadata and table I/O | always |
-| [scipy](https://scipy.org/) | statistics and linear algebra | always |
-| [matplotlib](https://matplotlib.org/) | PDF and figure generation | always |
-| [statsmodels](https://www.statsmodels.org/) | GLM fitting for `ruvseq` and `latent_glm` backends | always |
-| [inmoose](https://inmoose.readthedocs.io/) | `combatseq` backend | always |
-| [biopython](https://biopython.org/) | sequence utilities | always |
-| [ete4](https://github.com/etetoolkit/ete) | taxonomy utilities used by `getfastq` | always |
+| [sra-tools / fasterq-dump](https://github.com/ncbi/sra-tools) | `getfastq` | public SRA extraction |
+| [SeqKit](https://github.com/shenwei356/seqkit) | `integrate`, `getfastq` | FASTQ statistics and compression workflows |
+| [fastp](https://github.com/OpenGene/fastp) | `getfastq` | `--fastp yes`, which is the default |
+| [MMseqs2](https://github.com/soedinglab/MMseqs2) | `getfastq` | `--rrna_filter yes` or `--contam_filter yes` |
+| [kallisto](https://github.com/pachterlab/kallisto) | `quant` | short-read quantification |
+| [oarfish](https://github.com/COMBINE-lab/oarfish) | `quant` | long-read quantification |
+| [BUSCO](https://busco.ezlab.org/) | `busco` | `--tool busco` |
+| [compleasm](https://github.com/huangnengCSU/compleasm) | `busco` | `--tool compleasm`, or `--tool auto` when compleasm is selected |
 
-## External tools
+Example environment for a short-read public-SRA workflow:
 
-| Tool | Used in step(s) | Required when |
-| --- | --- | --- |
-| [SeqKit](https://github.com/shenwei356/seqkit) | `amalgkit integrate`, `amalgkit getfastq` | recommended for `integrate`; used by `getfastq` workflows |
-| [fasterq-dump](https://github.com/ncbi/sra-tools) | `amalgkit getfastq` | required for public SRA download |
-| [fastp](https://github.com/OpenGene/fastp) | `amalgkit getfastq` | required when `--fastp yes` (default) |
-| [MMseqs2](https://github.com/soedinglab/MMseqs2) | `amalgkit getfastq` | required when `--rrna_filter yes` or `--contam_filter yes` |
-| [kallisto](https://github.com/pachterlab/kallisto) | `amalgkit quant` | required for short-read quantification |
-| [oarfish](https://github.com/COMBINE-lab/oarfish) | `amalgkit quant` | required for long-read quantification when `--quant_backend oarfish` or auto-selects oarfish |
-| [BUSCO](https://busco.ezlab.org/) | `amalgkit busco` | required when `--tool busco` |
-| [compleasm](https://github.com/huangnengCSU/compleasm) | `amalgkit busco` | required when `--tool compleasm` |
+```bash
+mamba create -n amalgkit -c conda-forge -c bioconda \
+    amalgkit "sra-tools>=3" seqkit fastp kallisto
+mamba activate amalgkit
+```
 
-## Commands with no extra external tool requirement
+Add optional tools as needed:
 
-Beyond the Python packages above, these commands do not require additional executables:
+```bash
+mamba install -c conda-forge -c bioconda mmseqs2 busco compleasm
+```
+
+## Commands Without Extra Executables
+
+Beyond AMALGKIT's Python dependencies, these commands do not require separate command-line programs:
 
 - `amalgkit dataset`
 - `amalgkit metadata`
 - `amalgkit select`
 - `amalgkit merge`
-- `amalgkit cstmm` if BUSCO or orthogroup inputs are already available
+- `amalgkit cstmm` when BUSCO or orthogroup inputs already exist
 - `amalgkit wsfilter`
 - `amalgkit csfilter`
 - `amalgkit finalize`
 - `amalgkit sanity`
-- `amalgkit rerun` for targets that do not invoke external download, quantification, or BUSCO tools
+- `amalgkit rerun`, except for rerun targets that invoke `getfastq`, `quant`, or `busco`
 
-## Selection rule files
+## Selection Rules
 
-`amalgkit config` has been removed. Use `amalgkit dataset --rule_set base|test|plantae|vertebrate --out_dir ./ --overwrite yes` to export a bundled `select_rules.tsv`, then edit that TSV before running `amalgkit select`.
+The former `amalgkit config` command has been replaced by `select_rules.tsv`.
 
-## Notes on batch correction
+```bash
+amalgkit dataset --rule_set base --out_dir ./ --overwrite yes
+amalgkit select --out_dir ./
+```
 
-`amalgkit finalize` provides Python implementations for:
+Available bundled rule sets are `base`, `test`, `plantae`, and `vertebrate`. Use `amalgkit dataset --list` to inspect available datasets and rule sets.
 
+## Batch Correction
+
+`amalgkit finalize` provides Python implementations for all current batch-correction choices:
+
+- `--batch_effect_alg no`
 - `--batch_effect_alg sva`
 - `--batch_effect_alg ruvseq`
 - `--batch_effect_alg combatseq`
@@ -71,5 +88,8 @@ Beyond the Python packages above, these commands do not require additional execu
 Example:
 
 ```bash
-amalgkit finalize --out_dir ./ --metadata ./csfilter/metadata.tsv --batch_effect_alg latent_glm
+amalgkit finalize \
+    --out_dir ./ \
+    --metadata ./csfilter/metadata.tsv \
+    --batch_effect_alg latent_glm
 ```
