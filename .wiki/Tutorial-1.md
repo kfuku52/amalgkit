@@ -192,7 +192,7 @@ Batch-correction choices are:
 - `--batch_effect_alg no`
 - `--batch_effect_alg sva`
 - `--batch_effect_alg ruvseq`
-- `--batch_effect_alg combatseq`
+- `--batch_effect_alg combatseq`, after installing optional `inmoose`
 - `--batch_effect_alg latent_glm`
 
 ## Final Outputs

@@ -18,9 +18,9 @@ amalgkit help metadata
 
 Current AMALGKIT releases are Python-only. The main pipeline does not require `R`, `Rscript`, or R packages, including the former merge, curation, and batch-correction stages.
 
-Python package dependencies are installed with AMALGKIT. Important runtime libraries include `numpy`, `pandas`, `scipy`, `matplotlib`, `statsmodels`, `inmoose`, `biopython`, and `ete4`.
+Python package dependencies are installed with AMALGKIT. Important runtime libraries include `numpy`, `pandas`, `scipy`, `matplotlib`, `statsmodels`, `scikit-learn`, `biopython`, and `ete4`.
 
-## External Tools
+## Core External Tools
 
 Some commands call external bioinformatics tools. Install only the tools needed for the workflow you run.
 
@@ -29,11 +29,7 @@ Some commands call external bioinformatics tools. Install only the tools needed 
 | [sra-tools / fasterq-dump](https://github.com/ncbi/sra-tools) | `getfastq` | public SRA extraction |
 | [SeqKit](https://github.com/shenwei356/seqkit) | `integrate`, `getfastq` | FASTQ statistics and compression workflows |
 | [fastp](https://github.com/OpenGene/fastp) | `getfastq` | `--fastp yes`, which is the default |
-| [MMseqs2](https://github.com/soedinglab/MMseqs2) | `getfastq` | `--rrna_filter yes` or `--contam_filter yes` |
 | [kallisto](https://github.com/pachterlab/kallisto) | `quant` | short-read quantification |
-| [oarfish](https://github.com/COMBINE-lab/oarfish) | `quant` | long-read quantification |
-| [BUSCO](https://busco.ezlab.org/) | `busco` | `--tool busco` |
-| [compleasm](https://github.com/huangnengCSU/compleasm) | `busco` | `--tool compleasm`, or `--tool auto` when compleasm is selected |
 
 Example environment for a short-read public-SRA workflow:
 
@@ -43,10 +39,22 @@ mamba create -n amalgkit -c conda-forge -c bioconda \
 mamba activate amalgkit
 ```
 
-Add optional tools as needed:
+## Optional Dependencies
+
+Install these only when using the corresponding feature:
+
+| Dependency | Required when |
+| --- | --- |
+| [inmoose](https://inmoose.readthedocs.io/) | `amalgkit finalize --batch_effect_alg combatseq` |
+| [oarfish](https://github.com/COMBINE-lab/oarfish) | `amalgkit quant --quant_backend oarfish` |
+| [MMseqs2](https://github.com/soedinglab/MMseqs2) | `amalgkit getfastq --rrna_filter yes` or `--contam_filter yes` |
+| [BUSCO](https://busco.ezlab.org/) | `amalgkit busco --tool busco` |
+| [compleasm](https://github.com/huangnengCSU/compleasm) | `amalgkit busco --tool compleasm`, or `--tool auto` when compleasm is selected |
+
+Example:
 
 ```bash
-mamba install -c conda-forge -c bioconda mmseqs2 busco compleasm
+mamba install -c conda-forge -c bioconda inmoose oarfish mmseqs2 busco compleasm
 ```
 
 ## Commands Without Extra Executables
@@ -82,7 +90,7 @@ Available bundled rule sets are `base`, `test`, `plantae`, and `vertebrate`. Use
 - `--batch_effect_alg no`
 - `--batch_effect_alg sva`
 - `--batch_effect_alg ruvseq`
-- `--batch_effect_alg combatseq`
+- `--batch_effect_alg combatseq`, which requires optional `inmoose`
 - `--batch_effect_alg latent_glm`
 
 Example:

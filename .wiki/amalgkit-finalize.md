@@ -38,11 +38,13 @@ amalgkit finalize \
 
 `--batch_effect_alg` supports:
 
-- `no`
-- `sva`
-- `ruvseq`
-- `combatseq`
-- `latent_glm`
+| Algorithm | Extra dependency |
+| --- | --- |
+| `no` | none |
+| `sva` | none beyond AMALGKIT Python dependencies |
+| `ruvseq` | none beyond AMALGKIT Python dependencies |
+| `combatseq` | optional `inmoose` |
+| `latent_glm` | none beyond AMALGKIT Python dependencies |
 
 Examples:
 
@@ -122,6 +124,8 @@ Backend selectors:
 - `--sva_backend python`
 - `--combatseq_backend python`
 - `--ruvseq_backend python`
+
+`combatseq` imports `inmoose.pycombat` at runtime. Install `inmoose` before using `--batch_effect_alg combatseq`.
 
 ## Next Steps
 

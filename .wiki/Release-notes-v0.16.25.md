@@ -32,7 +32,7 @@ These notes summarize the CLI line merged into `master` through PR #166.
 - `cstmm` performs cross-species TMM normalization with BUSCO or orthogroup inputs.
 - `wsfilter` performs within-species outlier filtering and writes filtered metadata plus QC PDFs.
 - `csfilter` performs cross-species outlier filtering with BUSCO or orthogroup inputs.
-- `finalize` exports final per-species expression tables and supports Python backends for `no`, `sva`, `ruvseq`, `combatseq`, and `latent_glm`.
+- `finalize` exports final per-species expression tables and supports Python backends for `no`, `sva`, `ruvseq`, `combatseq`, and `latent_glm`; `combatseq` requires optional `inmoose`.
 
 ## Validation and Recovery
 
