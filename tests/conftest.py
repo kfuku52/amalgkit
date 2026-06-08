@@ -75,6 +75,8 @@ def sample_metadata_df():
         'NCBI_Link': ['', '', '', '', ''],
         'AWS_Link': ['', '', '', '', ''],
         'GCP_Link': ['', '', '', '', ''],
+        'ENA_SRA_Link': ['', '', '', '', ''],
+        'DDBJ_SRA_Link': ['', '', '', '', ''],
     }
     return pandas.DataFrame(data)
 
@@ -83,21 +85,3 @@ def sample_metadata_df():
 def sample_metadata(sample_metadata_df):
     """A Metadata object built from sample data."""
     return Metadata.from_DataFrame(sample_metadata_df)
-
-
-@pytest.fixture
-def tmp_config_dir(tmp_path):
-    """Temporary directory with mock config files."""
-    # group_attribute.config: aggregate 'source_name' into 'tissue'
-    ga = tmp_path / 'group_attribute.config'
-    ga.write_text('tissue\tsource_name\n')
-
-    # exclude_keyword.config: exclude samples with 'cancer' in sample_description
-    ek = tmp_path / 'exclude_keyword.config'
-    ek.write_text('sample_description\tdisease\tcancer\n')
-
-    # control_term.config: mark 'wild type' as control in treatment column
-    ct = tmp_path / 'control_term.config'
-    ct.write_text('treatment\twild.type\n')
-
-    return str(tmp_path)

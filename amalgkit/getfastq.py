@@ -1,13 +1,54 @@
 from Bio import Entrez
+from contextlib import contextmanager
 import itertools
 import numpy
 import gzip
 import pandas
 import shlex
 
-from amalgkit.util import *
+from amalgkit.arg_utils import clone_namespace
+from amalgkit.command_context import GetfastqRuntimeContext
+from amalgkit.download_utils import (
+    DOWNLOAD_LOCK_POLL_SECONDS,
+    acquire_exclusive_lock,
+    get_ete_ncbitaxa,
+    maybe_acquire_download_semaphore,
+    resolve_download_dir,
+    resolve_download_lock_path,
+    resolve_optional_download_concurrency_limit,
+    resolve_resource_lock_path,
+)
+from amalgkit.exceptions import AmalgkitExit
+from amalgkit.fastq_utils import (
+    count_fastq_records_and_bases as shared_count_fastq_records_and_bases,
+    count_fastq_records as shared_count_fastq_records,
+    map_seqkit_stats_rows,
+    parse_seqkit_stats_row_records_and_bases as _parse_seqkit_stats_row_records_and_bases,
+    validate_fastq_structure as shared_validate_fastq_structure,
+)
+from amalgkit.metadata_utils import (
+    Metadata,
+    detect_layout_from_file,
+    get_metadata_row_index_by_run,
+    get_newest_intermediate_file_extension,
+    get_sra_stat,
+    load_metadata,
+    strtobool,
+)
+from amalgkit.parallel_utils import (
+    is_auto_parallel_option,
+    resolve_thread_worker_allocation,
+    resolve_worker_allocation,
+    run_tasks_with_optional_threads,
+    validate_positive_int_option,
+)
+from amalgkit.output_utils import atomic_write_dataframe
+from amalgkit.prefix_utils import find_run_prefixed_entries
+from amalgkit.runtime_utils import get_getfastq_run_dir
+from amalgkit.sra_sources import DDBJ_SRA_LINK_COLUMN, ENA_SRA_LINK_COLUMN, normalize_sra_download_url
+from amalgkit.sra import fetch_sra_xml as shared_fetch_sra_xml
+from amalgkit.subprocess_utils import format_command, probe_dependency_command, run_checked_command, run_logged_command
 
-import xml.etree.ElementTree as ET
 import os
 import re
 import shutil
@@ -16,13 +57,12 @@ import sys
 import time
 import urllib.parse
 import urllib.request
-from urllib.error import HTTPError, URLError
+import xml.etree.ElementTree as ET  # noqa: F401
 
 IDENTICAL_PAIRED_RATIO_THRESHOLD = 0.99
 IDENTICAL_PAIRED_CHECKED_READS = 2000
 ID_LIST_METADATA_MAX_WORKERS = 4
 ID_LIST_VERBOSE_LIMIT = 20
-FASTQ_RECORD_COUNT_CHUNK_BYTES = 16 * 1024 * 1024
 RRNA_REFERENCE_SPECS = [
     {
         'label': 'SILVA SSU',
@@ -37,8 +77,21 @@ RRNA_REFERENCE_SPECS = [
         'fasta_filename': 'silva_lsu.fasta',
     },
 ]
-CONTAM_FILTER_SUPPORTED_RANKS = ['domain', 'kingdom', 'phylum', 'class', 'order', 'family', 'genus', 'species']
+CONTAM_FILTER_SUPPORTED_RANKS = ['superkingdom', 'kingdom', 'phylum', 'class', 'order', 'family', 'genus', 'species']
+CONTAM_FILTER_RANK_ALIASES = {'domain': 'superkingdom'}
 CONTAM_FILTER_DEFAULT_DB_NAME = 'UniRef90'
+FILTER_ORDER_SUPPORTED_FILTERS = ['fastp', 'rrna', 'contam']
+TRACE_RUN_XML_URL_TEMPLATE = 'https://trace.ncbi.nlm.nih.gov/Traces/sra-db-be/run_new?acc={}'
+GETFASTQ_DURATION_COLUMNS = [
+    'sec_sra_download',
+    'sec_fasterq_dump',
+    'sec_fastp',
+    'sec_rrna_filter',
+    'sec_rrna_search',
+    'sec_rrna_rewrite',
+    'sec_contam_filter',
+    'sec_ete_taxonomy',
+]
 GETFASTQ_STATS_COLUMNS = [
     'num_dumped',
     'num_rejected',
@@ -59,9 +112,27 @@ GETFASTQ_STATS_COLUMNS = [
     'bp_contam_in',
     'bp_contam_out',
     'bp_discarded',
+    'sec_sra_download',
+    'sec_fasterq_dump',
+    'sec_fastp',
+    'sec_rrna_filter',
+    'sec_rrna_search',
+    'sec_rrna_rewrite',
+    'sec_contam_filter',
+    'sec_ete_taxonomy',
     'fastp_duplication_rate',
     'fastp_insert_size_peak',
+    'percent_fastp_filtered',
+    'percent_rrna_filtered',
+    'percent_contam_filtered',
 ]
+SRA_DOWNLOAD_SOURCE_PRIORITY = (
+    'AWS',
+    'GCP',
+    'NCBI',
+    'ENA',
+    'DDBJ',
+)
 
 def get_or_detect_intermediate_extension(sra_stat, work_dir, files=None, file_state=None):
     cached_ext = sra_stat.get('current_ext', None)
@@ -75,6 +146,70 @@ def get_or_detect_intermediate_extension(sra_stat, work_dir, files=None, file_st
 
 def set_current_intermediate_extension(sra_stat, ext):
     sra_stat['current_ext'] = ext
+
+
+def _coerce_nonnegative_float(value):
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    if not numpy.isfinite(numeric):
+        return 0.0
+    return max(0.0, numeric)
+
+
+def accumulate_stage_duration(metadata, sra_stat, column_name, elapsed_seconds):
+    ind_sra = sra_stat.get('metadata_idx', get_metadata_row_index_by_run(metadata, sra_stat['sra_id']))
+    if column_name not in metadata.df.columns:
+        metadata.df.loc[:, column_name] = 0.0
+    current_value = _coerce_nonnegative_float(metadata.df.at[ind_sra, column_name])
+    metadata.df.at[ind_sra, column_name] = current_value + _coerce_nonnegative_float(elapsed_seconds)
+    return metadata
+
+
+def sum_metadata_numeric_column(df, column_name):
+    if column_name not in df.columns:
+        return 0.0
+    values = pandas.to_numeric(df.loc[:, column_name], errors='coerce').fillna(0.0)
+    return float(values.sum())
+
+
+def get_metadata_numeric_column_values(df, column_name):
+    if column_name not in df.columns:
+        return numpy.zeros(df.shape[0], dtype=float)
+    series = pandas.to_numeric(df.loc[:, column_name], errors='coerce').fillna(0.0)
+    return series.to_numpy(dtype=float)
+
+
+def format_duration_seconds(seconds):
+    seconds = _coerce_nonnegative_float(seconds)
+    if seconds >= 3600.0:
+        return '{:,.1f} sec ({:,.2f} h)'.format(seconds, seconds / 3600.0)
+    if seconds >= 60.0:
+        return '{:,.1f} sec ({:,.2f} min)'.format(seconds, seconds / 60.0)
+    return '{:,.1f} sec'.format(seconds)
+
+
+def print_stage_duration(stage_label, elapsed_seconds, sra_id=None):
+    if sra_id is None:
+        target_label = stage_label
+    else:
+        target_label = '{} ({})'.format(stage_label, sra_id)
+    print(
+        'Time elapsed for {}: {}'.format(target_label, format_duration_seconds(elapsed_seconds)),
+        flush=True,
+    )
+
+
+def accumulate_and_print_stage_duration(metadata, sra_stat, column_name, elapsed_seconds, stage_label):
+    metadata = accumulate_stage_duration(
+        metadata=metadata,
+        sra_stat=sra_stat,
+        column_name=column_name,
+        elapsed_seconds=elapsed_seconds,
+    )
+    print_stage_duration(stage_label=stage_label, elapsed_seconds=elapsed_seconds, sra_id=sra_stat.get('sra_id'))
+    return metadata
 
 def append_file_binary(src_path, dst_path, chunk_size=8 * 1024 * 1024):
     if chunk_size is None:
@@ -167,9 +302,9 @@ def _fetch_single_sra_metadata_frame(args, sra_id, log_details=True):
     search_term = getfastq_search_term(sra_id, args.entrez_additional_search_term)
     if log_details:
         print('Entrez search term:', search_term)
-        xml_root = getfastq_getxml(search_term)
+        xml_root = _call_getfastq_getxml(search_term, args=args, verbose=True)
     else:
-        xml_root = getfastq_getxml(search_term, verbose=False)
+        xml_root = _call_getfastq_getxml(search_term, args=args, verbose=False)
     metadata_dict_tmp = Metadata.from_xml(xml_root)
     if metadata_dict_tmp.df.shape[0] == 0:
         if log_details:
@@ -236,85 +371,37 @@ def _fetch_id_list_metadata_frames(args, sra_id_list):
         metadata_frames.append(metadata_frame)
     return metadata_frames
 
-def getfastq_getxml(search_term, retmax=1000, verbose=True):
-    def merge_xml_chunk(root, chunk):
-        # Merge package-set chunks directly to avoid nested container nodes.
-        if (chunk.tag == root.tag) and root.tag.endswith('_SET'):
-            root.extend(list(chunk))
-            return root
-        if root.tag.endswith('_SET'):
-            root.append(chunk)
-            return root
-        # If roots are non-container records, wrap them to preserve all entries.
-        container_tag = root.tag + '_SET'
-        wrapped = ET.Element(container_tag)
-        wrapped.append(root)
-        if (chunk.tag == root.tag) and (not chunk.tag.endswith('_SET')):
-            wrapped.append(chunk)
-        elif chunk.tag == container_tag:
-            wrapped.extend(list(chunk))
-        else:
-            wrapped.append(chunk)
-        return wrapped
+def getfastq_getxml(search_term, retmax=1000, verbose=True, args=None):
+    return shared_fetch_sra_xml(
+        search_term=search_term,
+        retmax=retmax,
+        verbose=verbose,
+        timestamp_logs=False,
+        progress_label='processing SRA records',
+        args=args,
+    )
 
-    def fetch_xml_chunk(record_ids, start, end, retmax, max_retry=10):
-        for _ in range(max_retry):
-            try:
-                handle = Entrez.efetch(
-                    db="sra",
-                    id=record_ids[start:end],
-                    rettype="full",
-                    retmode="xml",
-                    retmax=retmax,
-                )
-            except (HTTPError, URLError) as e:
-                if verbose:
-                    print(e, '- Trying Entrez.efetch() again...')
-                continue
-            try:
-                return ET.parse(handle).getroot()
-            except ET.ParseError:
-                if verbose:
-                    print('XML may be truncated. Retrying...', flush=True)
-                continue
-        raise RuntimeError(
-            'Failed to parse Entrez XML chunk after {} retries (records {}-{}).'.format(
-                max_retry,
-                start,
-                end - 1,
-            )
-        )
 
-    entrez_db = 'sra'
-    try:
-        sra_handle = Entrez.esearch(db=entrez_db, term=search_term, retmax=10000000)
-    except (HTTPError, URLError) as e:
-        print(e, '- Trying Entrez.esearch() again...')
-        sra_handle = Entrez.esearch(db=entrez_db, term=search_term, retmax=10000000)
-    sra_record = Entrez.read(sra_handle)
-    record_ids = sra_record["IdList"]
-    num_record = len(record_ids)
-    if verbose:
-        print('Number of SRA records:', num_record)
-    if num_record == 0:
-        return ET.Element('EXPERIMENT_PACKAGE_SET')
-    root = None
-    for start in range(0, num_record, retmax):
-        end = min(start + retmax, num_record)
-        if verbose:
-            print('processing SRA records:', start, '-', end - 1, flush=True)
-        chunk = fetch_xml_chunk(record_ids=record_ids, start=start, end=end, retmax=retmax, max_retry=10)
-        if root is None:
-            root = chunk
-        else:
-            root = merge_xml_chunk(root, chunk)
-    error_node = root.find('.//Error')
-    if error_node is not None:
-        error_text = ''.join(error_node.itertext()).strip()
-        if error_text != '':
-            print(error_text)
-        raise RuntimeError('Error found in Entrez XML response. Search term: ' + search_term)
-    return root
+def _call_getfastq_getxml(search_term, args, verbose=True):
+    call_variants = [
+        {'search_term': search_term, 'verbose': verbose, 'args': args},
+        {'search_term': search_term, 'args': args},
+        {'search_term': search_term, 'verbose': verbose},
+        {'search_term': search_term},
+    ]
+    last_type_error = None
+    for kwargs in call_variants:
+        try:
+            return getfastq_getxml(**kwargs)
+        except TypeError as exc:
+            if 'unexpected keyword argument' not in str(exc):
+                raise
+            last_type_error = exc
+            continue
+    if last_type_error is not None:
+        raise last_type_error
+    raise RuntimeError('Failed to call getfastq_getxml().')
+
 
 def get_range(sra_stat, offset, total_sra_bp, max_bp):
     if (total_sra_bp <= max_bp):
@@ -428,7 +515,17 @@ def concatenate_files_with_system_cat(infile_paths, outfile_path):
     if cat_exe is None:
         return False
     with open(outfile_path, 'wb') as out_handle:
-        cat_out = subprocess.run([cat_exe] + infile_paths, stdout=out_handle, stderr=subprocess.PIPE)
+        def cat_runner(command, stdout=None, stderr=None):
+            _ = stdout
+            return subprocess.run(command, stdout=out_handle, stderr=stderr)
+
+        cat_out, _stdout_txt, _stderr_txt = run_logged_command(
+            command=[cat_exe] + infile_paths,
+            runner=cat_runner,
+            print_command=False,
+            print_output=False,
+            not_found_label='cat',
+        )
     if cat_out.returncode == 0:
         return True
     if os.path.exists(outfile_path):
@@ -623,6 +720,138 @@ def remove_intermediate_files(sra_stat, ext, work_dir):
         else:
             print('Tried to delete but file not found:', file_path)
 
+
+def build_trace_run_xml_url(sra_id):
+    return TRACE_RUN_XML_URL_TEMPLATE.format(urllib.parse.quote(str(sra_id).strip()))
+
+
+def fetch_trace_run_xml_root(sra_id, timeout=30):
+    trace_url = build_trace_run_xml_url(sra_id)
+    with urllib.request.urlopen(trace_url, timeout=timeout) as response:
+        return ET.fromstring(response.read())
+
+
+def _normalize_public_original_fastq_source_name(raw_name):
+    source_name = str(raw_name or '').strip()
+    if source_name == '':
+        return 'TRACE'
+    return source_name
+
+
+def _append_public_original_fastq_source(source_list, seen_sources, source_name, url):
+    source_name = _normalize_public_original_fastq_source_name(source_name)
+    url = str(url or '').strip()
+    if url == '':
+        return
+    scheme = urllib.parse.urlparse(url).scheme.lower()
+    if scheme not in ('http', 'https', 'ftp'):
+        return
+    source_key = (source_name, url)
+    if source_key in seen_sources:
+        return
+    source_list.append({'source_name': source_name, 'url': url})
+    seen_sources.add(source_key)
+
+
+def resolve_public_original_fastq_sources_from_xml_root(xml_root):
+    if xml_root is None:
+        return []
+    public_original_fastqs = []
+    for sra_file in xml_root.findall('.//SRAFile'):
+        semantic_name = str(sra_file.get('semantic_name', '')).strip().lower()
+        supertype = str(sra_file.get('supertype', '')).strip().lower()
+        if (semantic_name != 'fastq') or (supertype != 'original'):
+            continue
+        filename = str(sra_file.get('filename', '')).strip()
+        sources = []
+        seen_sources = set()
+        for alternative in sra_file.findall('./Alternatives'):
+            _append_public_original_fastq_source(
+                source_list=sources,
+                seen_sources=seen_sources,
+                source_name=alternative.get('org', 'TRACE'),
+                url=alternative.get('url', ''),
+            )
+        _append_public_original_fastq_source(
+            source_list=sources,
+            seen_sources=seen_sources,
+            source_name='TRACE',
+            url=sra_file.get('url', ''),
+        )
+        if len(sources) == 0:
+            continue
+        public_original_fastqs.append({
+            'filename': filename,
+            'sources': sources,
+        })
+    return public_original_fastqs
+
+
+def fetch_public_original_fastq_sources(sra_id):
+    xml_root = fetch_trace_run_xml_root(sra_id=sra_id)
+    return resolve_public_original_fastq_sources_from_xml_root(xml_root)
+
+
+def _detect_public_original_fastq_read_index(filename):
+    filename = os.path.basename(str(filename or '')).lower()
+    if re.search(r'(^|[._-])(read1|r1|forward|fwd|1)([._-]|$)', filename):
+        return 1
+    if re.search(r'(^|[._-])(read2|r2|reverse|rev|2)([._-]|$)', filename):
+        return 2
+    return None
+
+
+def assign_public_original_fastq_suffixes(public_original_fastqs, sra_id):
+    if len(public_original_fastqs) == 0:
+        return []
+    if len(public_original_fastqs) == 1:
+        return [(public_original_fastqs[0], '')]
+    if len(public_original_fastqs) != 2:
+        raise RuntimeError(
+            'Expected 1 or 2 public original FASTQ files for {} but found {}.'.format(
+                sra_id,
+                len(public_original_fastqs),
+            )
+        )
+    read1_entries = []
+    read2_entries = []
+    unknown_entries = []
+    for fastq_entry in public_original_fastqs:
+        read_index = _detect_public_original_fastq_read_index(fastq_entry.get('filename', ''))
+        if read_index == 1:
+            read1_entries.append(fastq_entry)
+        elif read_index == 2:
+            read2_entries.append(fastq_entry)
+        else:
+            unknown_entries.append(fastq_entry)
+    if (len(read1_entries) == 1) and (len(read2_entries) == 1) and (len(unknown_entries) == 0):
+        return [
+            (read1_entries[0], '_1'),
+            (read2_entries[0], '_2'),
+        ]
+    ordered_entries = sorted(
+        public_original_fastqs,
+        key=lambda entry: str(entry.get('filename', '')).lower(),
+    )
+    return [
+        (ordered_entries[0], '_1'),
+        (ordered_entries[1], '_2'),
+    ]
+
+
+def remove_raw_fastq_artifacts(sra_stat):
+    work_dir = sra_stat['getfastq_sra_dir']
+    sra_id = sra_stat['sra_id']
+    for suffix in ['', '_1', '_2']:
+        for ext in ['.fastq', '.fastq.gz']:
+            path_fastq = os.path.join(work_dir, sra_id + suffix + ext)
+            if not os.path.exists(path_fastq):
+                continue
+            if not os.path.isfile(path_fastq):
+                raise IsADirectoryError('FASTQ artifact exists but is not a file: {}'.format(path_fastq))
+            print('Removing failed fasterq-dump artifact: {}'.format(path_fastq), flush=True)
+            os.remove(path_fastq)
+
 def normalize_url_for_urllib(source_name, source_url, gcp_project=''):
     source_url = str(source_url).strip()
     parsed = urllib.parse.urlparse(source_url)
@@ -644,29 +873,114 @@ def normalize_url_for_urllib(source_name, source_url, gcp_project=''):
         return normalized
     return source_url
 
-def resolve_sra_download_sources(metadata, sra_stat, args):
+def _get_metadata_text_cell(metadata, row_index, column_name):
+    if column_name not in metadata.df.columns:
+        return ''
+    value = metadata.df.at[row_index, column_name]
+    if pandas.isna(value):
+        return ''
+    return str(value).strip()
+
+
+def _set_metadata_text_cell(metadata, row_index, column_name, value):
+    if column_name not in metadata.df.columns:
+        metadata.df.loc[:, column_name] = ''
+    metadata.df.at[row_index, column_name] = str(value or '').strip()
+
+
+def _resolve_cached_sra_download_source_url(metadata, row_index, source_name, sra_id, experiment_accession='', force_refresh=False):
+    source_name = str(source_name or '').strip().upper()
+    column_name = None
+    if source_name == 'ENA':
+        column_name = ENA_SRA_LINK_COLUMN
+    elif source_name == 'DDBJ':
+        column_name = DDBJ_SRA_LINK_COLUMN
+    if column_name is None:
+        return ''
+    cached_url = ''
+    if not force_refresh:
+        cached_url = _get_metadata_text_cell(metadata, row_index, column_name)
+    resolved_url = normalize_sra_download_url(
+        source_name=source_name,
+        source_url=cached_url,
+        run_accession=sra_id,
+        experiment_accession=experiment_accession,
+    )
+    if resolved_url != '':
+        _set_metadata_text_cell(metadata, row_index, column_name, resolved_url)
+    return resolved_url
+
+def resolve_sra_download_sources(metadata, sra_stat, args, force_refresh_dynamic=False):
     sra_sources = dict()
     sra_id = sra_stat['sra_id']
     ind_sra = sra_stat.get('metadata_idx', get_metadata_row_index_by_run(metadata, sra_id))
-    if args.aws:
+    if bool(getattr(args, 'aws', False)):
         aws_link = metadata.df.at[ind_sra, 'AWS_Link']
         if aws_link == '':
             sys.stderr.write('AWS_Link is empty and will be skipped.\n')
         else:
             sra_sources['AWS'] = aws_link
-    if args.gcp:
+    if bool(getattr(args, 'gcp', False)):
         gcp_link = metadata.df.at[ind_sra, 'GCP_Link']
         if gcp_link == '':
             sys.stderr.write('GCP_Link is empty and will be skipped.\n')
         else:
             sra_sources['GCP'] = gcp_link
-    if args.ncbi:
+    if bool(getattr(args, 'ncbi', False)):
         ncbi_link = metadata.df.at[ind_sra, 'NCBI_Link']
         if ncbi_link == '':
             sys.stderr.write('NCBI_Link is empty and will be skipped.\n')
         else:
             sra_sources['NCBI'] = ncbi_link
+    experiment_accession = _get_metadata_text_cell(metadata, ind_sra, 'experiment')
+    if bool(getattr(args, 'ena', False)):
+        ena_link = _resolve_cached_sra_download_source_url(
+            metadata=metadata,
+            row_index=ind_sra,
+            source_name='ENA',
+            sra_id=sra_id,
+            experiment_accession=experiment_accession,
+            force_refresh=force_refresh_dynamic,
+        )
+        if ena_link == '':
+            sys.stderr.write('{} is empty and will be skipped.\n'.format(ENA_SRA_LINK_COLUMN))
+        else:
+            sra_sources['ENA'] = ena_link
+    if bool(getattr(args, 'ddbj', False)):
+        ddbj_link = _resolve_cached_sra_download_source_url(
+            metadata=metadata,
+            row_index=ind_sra,
+            source_name='DDBJ',
+            sra_id=sra_id,
+            experiment_accession=experiment_accession,
+            force_refresh=force_refresh_dynamic,
+        )
+        if ddbj_link == '':
+            sys.stderr.write('{} is empty and will be skipped.\n'.format(DDBJ_SRA_LINK_COLUMN))
+        else:
+            sra_sources['DDBJ'] = ddbj_link
     return sra_sources
+
+
+def build_sra_source_candidates(sra_sources):
+    source_candidates = []
+    seen_source_names = set()
+    for prioritized_source_name in SRA_DOWNLOAD_SOURCE_PRIORITY:
+        if prioritized_source_name not in sra_sources:
+            continue
+        source_candidates.append({
+            'source_name': prioritized_source_name,
+            'url': str(sra_sources[prioritized_source_name]),
+        })
+        seen_source_names.add(prioritized_source_name)
+    for source_name, source_url_original in sra_sources.items():
+        if source_name in seen_source_names:
+            continue
+        source_candidates.append({
+            'source_name': source_name,
+            'url': str(source_url_original),
+        })
+    return source_candidates
 
 def normalize_sra_download_method(args):
     method_raw = str(getattr(args, 'sra_download_method', 'auto')).strip().lower()
@@ -675,11 +989,45 @@ def normalize_sra_download_method(args):
     sys.stderr.write('Unknown --sra_download_method "{}". Falling back to "auto".\n'.format(method_raw))
     return 'auto'
 
-def download_with_curl(source_url, path_downloaded_sra, args, sra_source_name):
+
+def resolve_download_semaphore_spec(source_name):
+    normalized = str(source_name).strip().upper()
+    semaphore_specs = {
+        'NCBI': ('ncbi_download_max_concurrency', 'ncbi_download', 'NCBI download'),
+        'AWS': ('aws_download_max_concurrency', 'aws_download', 'AWS download'),
+        'GCP': ('gcp_download_max_concurrency', 'gcp_download', 'GCP download'),
+        'ENA': ('ena_download_max_concurrency', 'ena_download', 'ENA download'),
+        'DDBJ': ('ddbj_download_max_concurrency', 'ddbj_download', 'DDBJ download'),
+    }
+    return semaphore_specs.get(normalized)
+
+
+@contextmanager
+def maybe_acquire_source_download_slot(args, sra_source_name, wait=True):
+    semaphore_spec = resolve_download_semaphore_spec(sra_source_name)
+    if semaphore_spec is None:
+        yield False, None
+        return
+    limit_attr, semaphore_name, lock_label = semaphore_spec
+    max_concurrency = resolve_optional_download_concurrency_limit(args, limit_attr)
+    if max_concurrency is None:
+        yield False, None
+        return
+    with maybe_acquire_download_semaphore(
+        args=args,
+        limit_attr=limit_attr,
+        semaphore_name=semaphore_name,
+        lock_label=lock_label,
+        wait=wait,
+    ) as slot_path:
+        yield True, slot_path
+
+
+def download_with_curl(source_url, output_path, args, sra_source_name, artifact_label='file'):
     curl_exe = shutil.which('curl')
     if curl_exe is None:
         return False
-    tmp_path = path_downloaded_sra + '.curltmp.{}'.format(time.time_ns())
+    tmp_path = output_path + '.curltmp.{}'.format(time.time_ns())
     command = [
         curl_exe,
         '-L',
@@ -690,33 +1038,41 @@ def download_with_curl(source_url, path_downloaded_sra, args, sra_source_name):
         '-o', tmp_path,
         source_url,
     ]
-    print('Command:', ' '.join(command))
-    out = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if should_print_getfastq_command_output(args):
-        print('curl stdout:')
-        print(out.stdout.decode('utf8', errors='replace'))
-        print('curl stderr:')
-        print(out.stderr.decode('utf8', errors='replace'))
+    out, _stdout_txt, _stderr_txt = run_logged_command(
+        command=command,
+        runner=subprocess.run,
+        print_command=True,
+        print_output=should_print_getfastq_command_output(args),
+        stdout_label='curl stdout:',
+        stderr_label='curl stderr:',
+    )
     if out.returncode != 0:
         if os.path.exists(tmp_path):
             os.remove(tmp_path)
-        sys.stderr.write('curl failed SRA download from {}.\n'.format(sra_source_name))
+        sys.stderr.write('curl failed {} download from {}.\n'.format(str(artifact_label).lower(), sra_source_name))
         return False
     if not os.path.exists(tmp_path):
         sys.stderr.write('curl download did not create output file for {}.\n'.format(sra_source_name))
         return False
-    os.replace(tmp_path, path_downloaded_sra)
-    print('SRA file was downloaded with curl from {}'.format(sra_source_name), flush=True)
+    os.replace(tmp_path, output_path)
+    print('{} was downloaded with curl from {}'.format(artifact_label, sra_source_name), flush=True)
     return True
 
 
-def download_sra_from_source(sra_id, sra_source_name, source_url_original, path_downloaded_sra, args):
+def _download_file_from_source_without_semaphore(
+    sra_id,
+    sra_source_name,
+    source_url_original,
+    output_path,
+    args,
+    artifact_label,
+):
     source_url = normalize_url_for_urllib(
         source_name=sra_source_name,
         source_url=source_url_original,
         gcp_project=getattr(args, 'gcp_project', ''),
     )
-    print("Trying to fetch {} from {}: {}".format(sra_id, sra_source_name, source_url_original))
+    print("Trying to fetch {} for {} from {}: {}".format(artifact_label, sra_id, sra_source_name, source_url_original))
     if source_url != source_url_original:
         print("Converted {} URL for urllib: {}".format(sra_source_name, source_url))
     if source_url == 'nan':
@@ -731,17 +1087,18 @@ def download_sra_from_source(sra_id, sra_source_name, source_url_original, path_
     if method in ['auto', 'curl']:
         if download_with_curl(
             source_url=source_url,
-            path_downloaded_sra=path_downloaded_sra,
+            output_path=output_path,
             args=args,
             sra_source_name=sra_source_name,
+            artifact_label=artifact_label,
         ):
             return True
         if method == 'curl':
             sys.stderr.write('Falling back to urllib.request after curl failure.\n')
     try:
-        urllib.request.urlretrieve(source_url, path_downloaded_sra)
-        if os.path.exists(path_downloaded_sra):
-            print('SRA file was downloaded with urllib.request from {}'.format(sra_source_name), flush=True)
+        urllib.request.urlretrieve(source_url, output_path)
+        if os.path.exists(output_path):
+            print('{} was downloaded with urllib.request from {}'.format(artifact_label, sra_source_name), flush=True)
             return True
     except urllib.error.HTTPError as e:
         if (sra_source_name == 'GCP') and (e.code == 400):
@@ -754,10 +1111,157 @@ def download_sra_from_source(sra_id, sra_source_name, source_url_original, path_
                 txt = 'GCP requester-pays bucket requires --gcp_project for billing context. '
                 txt += 'Continuing with other download sources.\n'
                 sys.stderr.write(txt)
-        sys.stderr.write("urllib.request failed SRA download from {}.\n".format(sra_source_name))
+        sys.stderr.write("urllib.request failed {} download from {}.\n".format(str(artifact_label).lower(), sra_source_name))
     except urllib.error.URLError:
-        sys.stderr.write("urllib.request failed SRA download from {}.\n".format(sra_source_name))
+        sys.stderr.write("urllib.request failed {} download from {}.\n".format(str(artifact_label).lower(), sra_source_name))
     return False
+
+
+def download_file_from_source(sra_id, sra_source_name, source_url_original, output_path, args, artifact_label):
+    with maybe_acquire_source_download_slot(args=args, sra_source_name=sra_source_name, wait=True):
+        return _download_file_from_source_without_semaphore(
+            sra_id=sra_id,
+            sra_source_name=sra_source_name,
+            source_url_original=source_url_original,
+            output_path=output_path,
+            args=args,
+            artifact_label=artifact_label,
+        )
+
+
+def download_file_from_candidate_sources(sra_id, source_candidates, output_path, args, artifact_label):
+    pending_sources = list(source_candidates)
+    wait_reported_for = None
+    while len(pending_sources) > 0:
+        deferred_sources = []
+        for source in pending_sources:
+            source_name = source['source_name']
+            source_url = source['url']
+            with maybe_acquire_source_download_slot(
+                args=args,
+                sra_source_name=source_name,
+                wait=False,
+            ) as (is_limited, slot_path):
+                if is_limited and (slot_path is None):
+                    deferred_sources.append(source)
+                    continue
+                is_downloaded = _download_file_from_source_without_semaphore(
+                    sra_id=sra_id,
+                    sra_source_name=source_name,
+                    source_url_original=source_url,
+                    output_path=output_path,
+                    args=args,
+                    artifact_label=artifact_label,
+                )
+            if is_downloaded:
+                return True
+        if len(deferred_sources) == 0:
+            return False
+        deferred_source_names = tuple(source['source_name'] for source in deferred_sources)
+        if deferred_source_names != wait_reported_for:
+            print(
+                'All remaining {} sources for {} are at concurrency limit. Waiting for the first available slot among: {}.'.format(
+                    str(artifact_label).lower(),
+                    sra_id,
+                    ', '.join(deferred_source_names),
+                ),
+                flush=True,
+            )
+            wait_reported_for = deferred_source_names
+        time.sleep(DOWNLOAD_LOCK_POLL_SECONDS)
+        pending_sources = deferred_sources
+    return False
+
+
+def download_sra_from_source(sra_id, sra_source_name, source_url_original, path_downloaded_sra, args):
+    return download_file_from_source(
+        sra_id=sra_id,
+        sra_source_name=sra_source_name,
+        source_url_original=source_url_original,
+        output_path=path_downloaded_sra,
+        args=args,
+        artifact_label='SRA file',
+    )
+
+
+def download_public_original_fastq_files(sra_stat, args, start, end):
+    sra_id = sra_stat['sra_id']
+    work_dir = sra_stat['getfastq_sra_dir']
+    print('Attempting public original FASTQ fallback for {}.'.format(sra_id), flush=True)
+    try:
+        public_original_fastqs = fetch_public_original_fastq_sources(sra_id=sra_id)
+    except Exception as exc:
+        sys.stderr.write('Failed to retrieve Trace XML for {}: {}\n'.format(sra_id, exc))
+        return None
+    if len(public_original_fastqs) == 0:
+        sys.stderr.write('No public original FASTQ files were listed in Trace XML for {}.\n'.format(sra_id))
+        return None
+    try:
+        assigned_fastqs = assign_public_original_fastq_suffixes(
+            public_original_fastqs=public_original_fastqs,
+            sra_id=sra_id,
+        )
+    except Exception as exc:
+        sys.stderr.write('Failed to assign public original FASTQ files for {}: {}\n'.format(sra_id, exc))
+        return None
+    remove_raw_fastq_artifacts(sra_stat=sra_stat)
+    start, end = normalize_requested_spot_range(start=start, end=end)
+    created_paths = []
+    tmp_paths = []
+    try:
+        for fastq_entry, suffix in assigned_fastqs:
+            output_filename = sra_id + suffix + '.fastq.gz'
+            output_path = os.path.join(work_dir, output_filename)
+            tmp_path = output_path + '.downloadtmp.{}'.format(time.time_ns())
+            tmp_paths.append(tmp_path)
+            if os.path.exists(output_path):
+                if not os.path.isfile(output_path):
+                    raise IsADirectoryError('Fallback FASTQ path exists but is not a file: {}'.format(output_path))
+                os.remove(output_path)
+            is_downloaded = download_file_from_candidate_sources(
+                sra_id=sra_id,
+                source_candidates=fastq_entry['sources'],
+                output_path=tmp_path,
+                args=args,
+                artifact_label='Original FASTQ file',
+            )
+            if not is_downloaded:
+                raise FileNotFoundError(
+                    'Original FASTQ file download failed for {} ({})'.format(
+                        sra_id,
+                        fastq_entry.get('filename', 'unknown'),
+                    )
+                )
+            if is_full_requested_spot_range(sra_stat=sra_stat, start=start, end=end):
+                os.replace(tmp_path, output_path)
+            else:
+                run_seqkit_range_command(
+                    input_path=tmp_path,
+                    output_path=output_path,
+                    start=start,
+                    end=end,
+                    args=args,
+                    command_label='Original FASTQ spot-range trim with seqkit',
+                )
+                os.remove(tmp_path)
+            created_paths.append(output_path)
+        print(
+            'Public original FASTQ fallback succeeded for {} with {:,} file(s).'.format(
+                sra_id,
+                len(created_paths),
+            ),
+            flush=True,
+        )
+        return RunFileState(work_dir=work_dir)
+    except Exception as exc:
+        sys.stderr.write('Public original FASTQ fallback failed for {}: {}\n'.format(sra_id, exc))
+        for tmp_path in tmp_paths:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        for output_path in created_paths:
+            if os.path.exists(output_path):
+                os.remove(output_path)
+        return None
 
 
 def download_sra(metadata, sra_stat, args, work_dir, overwrite=False):
@@ -775,31 +1279,57 @@ def download_sra(metadata, sra_stat, args, work_dir, overwrite=False):
     else:
         print('Previously-downloaded sra file was not detected. New sra file will be downloaded.')
 
-    if (args.aws) or (args.ncbi) or (args.gcp):
+    if any(
+        bool(getattr(args, attr_name, False))
+        for attr_name in ['aws', 'ncbi', 'gcp', 'ena', 'ddbj']
+    ):
         sra_id = sra_stat['sra_id']
-        sra_sources = resolve_sra_download_sources(metadata=metadata, sra_stat=sra_stat, args=args)
+        sra_sources = resolve_sra_download_sources(
+            metadata=metadata,
+            sra_stat=sra_stat,
+            args=args,
+            force_refresh_dynamic=False,
+        )
         if len(sra_sources)==0:
-            print('No source URL is available. Check whether --aws, --gcp, and --ncbi are properly set.')
-        is_sra_download_completed = False
-        for sra_source_name in sra_sources.keys():
-            source_url_original = str(sra_sources[sra_source_name])
-            is_sra_download_completed = download_sra_from_source(
-                sra_id=sra_id,
-                sra_source_name=sra_source_name,
-                source_url_original=source_url_original,
-                path_downloaded_sra=path_downloaded_sra,
-                args=args,
-            )
-            if is_sra_download_completed:
-                break
+            print('No source URL is available. Check whether enabled download sources are properly set.')
+        source_candidates = build_sra_source_candidates(sra_sources)
+        is_sra_download_completed = download_file_from_candidate_sources(
+            sra_id=sra_id,
+            source_candidates=source_candidates,
+            output_path=path_downloaded_sra,
+            args=args,
+            artifact_label='SRA file',
+        )
         if not is_sra_download_completed:
-            sys.stderr.write("Exhausted all sources of download.\n")
+            has_dynamic_sources = bool(getattr(args, 'ena', False)) or bool(getattr(args, 'ddbj', False))
+            if has_dynamic_sources:
+                refreshed_sources = resolve_sra_download_sources(
+                    metadata=metadata,
+                    sra_stat=sra_stat,
+                    args=args,
+                    force_refresh_dynamic=True,
+                )
+                refreshed_candidates = build_sra_source_candidates(refreshed_sources)
+                if refreshed_candidates != source_candidates:
+                    print(
+                        'Refreshing accession-derived SRA URLs for {} after initial source exhaustion.'.format(sra_id),
+                        flush=True,
+                    )
+                    is_sra_download_completed = download_file_from_candidate_sources(
+                        sra_id=sra_id,
+                        source_candidates=refreshed_candidates,
+                        output_path=path_downloaded_sra,
+                        args=args,
+                        artifact_label='SRA file',
+                    )
+            if not is_sra_download_completed:
+                sys.stderr.write("Exhausted all sources of download.\n")
         else:
             if not os.path.exists(path_downloaded_sra):
                 raise FileNotFoundError('SRA file download failed: ' + sra_stat['sra_id'])
             return
     err_txt = 'SRA file download failed for {}. Expected PATH: {}. '
-    err_txt += 'Cloud URL download sources were exhausted and prefetch fallback is obsolete.'
+    err_txt += 'Configured download sources were exhausted.'
     if not os.path.exists(path_downloaded_sra):
         raise FileNotFoundError(err_txt.format(sra_stat['sra_id'], path_downloaded_sra))
 
@@ -813,26 +1343,22 @@ def check_getfastq_dependency(args):
         sys.stderr.write('--pfd_exe is obsolete and ignored.\n')
     if obsolete_fastq_dump_exe:
         sys.stderr.write('--fastq_dump_exe is obsolete and ignored.\n')
-    obsolete_prefetch_exe = getattr(args, 'obsolete_prefetch_exe', getattr(args, 'prefetch_exe', None))
-    if obsolete_prefetch_exe:
-        sys.stderr.write('--prefetch_exe is obsolete and ignored.\n')
 
     def probe_command(command, label):
-        try:
-            out = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        except FileNotFoundError as exc:
-            raise FileNotFoundError('{} executable not found: {}'.format(label, command[0])) from exc
-        if out.returncode != 0:
-            raise RuntimeError(
-                '{} dependency probe failed with exit code {}: {}'.format(
-                    label,
-                    out.returncode,
-                    ' '.join(command),
-                )
-            )
+        out, _stdout_txt, _stderr_txt = probe_dependency_command(
+            command=command,
+            label=label,
+            runner=subprocess.run,
+        )
         return out
 
     fasterq_dump_exe = getattr(args, 'fasterq_dump_exe', 'fasterq-dump')
+    fasterq_version = probe_command([fasterq_dump_exe, '--version'], 'fasterq-dump')
+    ensure_supported_fasterq_dump_version(
+        version_stdout_txt=fasterq_version.stdout.decode('utf8', errors='replace'),
+        version_stderr_txt=fasterq_version.stderr.decode('utf8', errors='replace'),
+        executable_name=fasterq_dump_exe,
+    )
     fasterq_help = probe_command([fasterq_dump_exe, '-h'], 'fasterq-dump')
     help_stdout_txt = fasterq_help.stdout.decode('utf8', errors='replace')
     help_stderr_txt = fasterq_help.stderr.decode('utf8', errors='replace')
@@ -850,11 +1376,15 @@ def check_getfastq_dependency(args):
         ensure_shared_download_dir_exists(resolve_shared_download_dir(args))
         mmseqs_exe = resolve_mmseqs_exe(args)
         probe_command([mmseqs_exe, '--help'], 'mmseqs')
+        started_at = time.perf_counter()
         ensure_mmseqs_rrna_reference_db_exists(args)
+        print_stage_duration('ensuring MMseqs rRNA DB', time.perf_counter() - started_at)
     if is_contam_filter_enabled(args):
         mmseqs_exe = resolve_mmseqs_exe(args)
         probe_command([mmseqs_exe, '--help'], 'mmseqs')
+        started_at = time.perf_counter()
         ensure_mmseqs_contam_taxonomy_db_exists(args)
+        print_stage_duration('ensuring MMseqs contaminant DB', time.perf_counter() - started_at)
     return None
 
 def remove_sra_path(path_downloaded_sra):
@@ -906,15 +1436,15 @@ def run_seqkit_seq_command(input_paths, output_path, args, command_label, seqkit
         seqkit_threads = resolve_seqkit_threads(args)
     seqkit_threads = normalize_seqkit_threads(seqkit_threads)
     command = [seqkit_exe, 'seq', '-j', str(seqkit_threads), '-w', '0', '-o', output_path] + list(input_paths)
-    print('Command:', ' '.join(command))
-    out = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if should_print_getfastq_command_output(args):
-        print('{} stdout:'.format(command_label))
-        print(out.stdout.decode('utf8', errors='replace'))
-        print('{} stderr:'.format(command_label))
-        print(out.stderr.decode('utf8', errors='replace'))
-    if out.returncode != 0:
-        raise RuntimeError('{} failed.'.format(command_label))
+    out, _stdout_txt, _stderr_txt = run_checked_command(
+        command=command,
+        runner=subprocess.run,
+        print_command=True,
+        print_output=should_print_getfastq_command_output(args),
+        stdout_label='{} stdout:'.format(command_label),
+        stderr_label='{} stderr:'.format(command_label),
+        failure_message='{} failed.'.format(command_label),
+    )
     return out
 
 def run_seqkit_range_command(input_path, output_path, start, end, args, command_label, seqkit_threads=None):
@@ -938,15 +1468,15 @@ def run_seqkit_range_command(input_path, output_path, start, end, args, command_
         '-o', output_path,
         input_path,
     ]
-    print('Command:', ' '.join(command))
-    out = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if should_print_getfastq_command_output(args):
-        print('{} stdout:'.format(command_label))
-        print(out.stdout.decode('utf8', errors='replace'))
-        print('{} stderr:'.format(command_label))
-        print(out.stderr.decode('utf8', errors='replace'))
-    if out.returncode != 0:
-        raise RuntimeError('{} failed.'.format(command_label))
+    out, _stdout_txt, _stderr_txt = run_checked_command(
+        command=command,
+        runner=subprocess.run,
+        print_command=True,
+        print_output=should_print_getfastq_command_output(args),
+        stdout_label='{} stdout:'.format(command_label),
+        stderr_label='{} stderr:'.format(command_label),
+        failure_message='{} failed.'.format(command_label),
+    )
     return out
 
 def run_seqkit_replace_command(input_path, output_path, suffix, args, command_label, seqkit_threads=None):
@@ -971,52 +1501,16 @@ def run_seqkit_replace_command(input_path, output_path, suffix, args, command_la
         '-o', output_path,
         input_path,
     ]
-    print('Command:', ' '.join(command))
-    out = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if should_print_getfastq_command_output(args):
-        print('{} stdout:'.format(command_label))
-        print(out.stdout.decode('utf8', errors='replace'))
-        print('{} stderr:'.format(command_label))
-        print(out.stderr.decode('utf8', errors='replace'))
-    if out.returncode != 0:
-        raise RuntimeError('{} failed.'.format(command_label))
+    out, _stdout_txt, _stderr_txt = run_checked_command(
+        command=command,
+        runner=subprocess.run,
+        print_command=True,
+        print_output=should_print_getfastq_command_output(args),
+        stdout_label='{} stdout:'.format(command_label),
+        stderr_label='{} stderr:'.format(command_label),
+        failure_message='{} failed.'.format(command_label),
+    )
     return out
-
-def _parse_seqkit_stats_rows(stdout_txt):
-    lines = [line.rstrip('\n') for line in (stdout_txt or '').splitlines() if line.strip() != '']
-    if len(lines) < 2:
-        raise RuntimeError('seqkit stats output was empty.')
-    header_fields = lines[0].split('\t')
-    rows = []
-    for line in lines[1:]:
-        value_fields = line.split('\t')
-        row = {}
-        for idx, field_name in enumerate(header_fields):
-            row[field_name] = value_fields[idx] if idx < len(value_fields) else ''
-        rows.append(row)
-    if len(rows) == 0:
-        raise RuntimeError('seqkit stats output did not include data rows.')
-    return rows
-
-def _parse_seqkit_stats_numeric(row, key, path_fastq):
-    if key not in row:
-        raise RuntimeError('seqkit stats output is missing "{}" for {}'.format(key, path_fastq))
-    raw = str(row.get(key, '')).strip().replace(',', '')
-    if raw == '':
-        raise RuntimeError('seqkit stats output has an empty "{}" value for {}'.format(key, path_fastq))
-    try:
-        return int(float(raw))
-    except (TypeError, ValueError) as exc:
-        raise RuntimeError('Failed to parse seqkit stats "{}" for {}'.format(key, path_fastq)) from exc
-
-def _parse_seqkit_stats_row_records_and_bases(row, path_fastq):
-    num_records = _parse_seqkit_stats_numeric(row=row, key='num_seqs', path_fastq=path_fastq)
-    if ('sum_len' in row) and (str(row.get('sum_len', '')).strip() not in ['', 'NA', 'nan', 'NaN']):
-        num_bases = _parse_seqkit_stats_numeric(row=row, key='sum_len', path_fastq=path_fastq)
-    else:
-        avg_len = _parse_seqkit_stats_numeric(row=row, key='avg_len', path_fastq=path_fastq)
-        num_bases = int(num_records * avg_len)
-    return num_records, num_bases
 
 def scan_fastq_records_and_bases_with_seqkit_batch(path_fastq_paths, args, seqkit_threads=None):
     if path_fastq_paths is None:
@@ -1043,37 +1537,23 @@ def scan_fastq_records_and_bases_with_seqkit_batch(path_fastq_paths, args, seqki
         '-a',
         '-j', str(seqkit_threads),
     ] + list(deduplicated_paths)
-    print('Command:', ' '.join(command))
-    out = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if should_print_getfastq_command_output(args):
-        print('FASTQ stats scan with seqkit stdout:')
-        print(out.stdout.decode('utf8', errors='replace'))
-        print('FASTQ stats scan with seqkit stderr:')
-        print(out.stderr.decode('utf8', errors='replace'))
-    if out.returncode != 0:
-        stderr_txt = out.stderr.decode('utf8', errors='replace')
-        raise RuntimeError('FASTQ stats scan with seqkit failed (exit code {}): {}'.format(out.returncode, stderr_txt))
-    rows = _parse_seqkit_stats_rows(out.stdout.decode('utf8', errors='replace'))
-    stats_by_path = {}
-    fallback_idx = 0
-    fallback_paths = [os.path.abspath(path_fastq) for path_fastq in deduplicated_paths]
-    for row in rows:
-        row_path = None
-        for key in ['file', 'path', 'filename']:
-            raw_path = str(row.get(key, '')).strip()
-            if raw_path != '':
-                row_path = os.path.abspath(raw_path)
-                break
-        if (row_path is None) and (fallback_idx < len(fallback_paths)):
-            row_path = fallback_paths[fallback_idx]
-            fallback_idx += 1
-        if row_path is None:
-            continue
-        stats_by_path[row_path] = _parse_seqkit_stats_row_records_and_bases(row=row, path_fastq=row_path)
-    missing_paths = [path_fastq for path_fastq in fallback_paths if path_fastq not in stats_by_path]
-    if len(missing_paths) > 0:
-        raise RuntimeError('seqkit stats output did not include all requested FASTQ files: {}'.format(missing_paths))
-    return stats_by_path
+    out, stdout_txt, stderr_txt = run_checked_command(
+        command=command,
+        runner=subprocess.run,
+        print_command=True,
+        print_output=should_print_getfastq_command_output(args),
+        stdout_label='FASTQ stats scan with seqkit stdout:',
+        stderr_label='FASTQ stats scan with seqkit stderr:',
+        failure_message=lambda result, _stdout, stderr, _command_txt: (
+            'FASTQ stats scan with seqkit failed (exit code {}): {}'.format(result.returncode, stderr)
+        ),
+    )
+    return map_seqkit_stats_rows(
+        stdout_txt=stdout_txt,
+        requested_paths=deduplicated_paths,
+        row_parser=_parse_seqkit_stats_row_records_and_bases,
+        missing_message='seqkit stats output did not include all requested FASTQ files: {}',
+    )
 
 def compress_fastq_with_seqkit(
     path_fastq,
@@ -1100,38 +1580,10 @@ def compress_fastq_with_seqkit(
     os.remove(path_fastq)
 
 def count_fastq_records(path_fastq):
-    num_lines = 0
-    open_func = gzip.open if path_fastq.endswith('.gz') else open
-    with open_func(path_fastq, 'rb') as f:
-        while True:
-            chunk = f.read(FASTQ_RECORD_COUNT_CHUNK_BYTES)
-            if not chunk:
-                break
-            num_lines += chunk.count(b'\n')
-    if (num_lines % 4) != 0:
-        txt = 'FASTQ line count is not divisible by 4 and may be truncated: {}\n'
-        sys.stderr.write(txt.format(path_fastq))
-    return num_lines // 4
+    return shared_count_fastq_records(path_fastq, warning_writer=sys.stderr.write)
 
 def count_fastq_records_and_bases(path_fastq):
-    num_records = 0
-    num_bases = 0
-    open_func = gzip.open if path_fastq.endswith('.gz') else open
-    with open_func(path_fastq, 'rb') as fin:
-        while True:
-            line1 = fin.readline()
-            if line1 == b'':
-                break
-            line2 = fin.readline()
-            line3 = fin.readline()
-            line4 = fin.readline()
-            if (line2 == b'') or (line3 == b'') or (line4 == b''):
-                txt = 'FASTQ record seems truncated while counting bases: {}\n'
-                sys.stderr.write(txt.format(path_fastq))
-                break
-            num_records += 1
-            num_bases += len(line2.rstrip(b'\r\n'))
-    return num_records, num_bases
+    return shared_count_fastq_records_and_bases(path_fastq, warning_writer=sys.stderr.write)
 
 def summarize_layout_fastq_records_and_bases(layout, single_path=None, pair1_path=None, pair2_path=None, args=None):
     num_single, bp_single = (0, 0)
@@ -1193,45 +1645,80 @@ def is_contam_filter_enabled(args):
     return bool(raw)
 
 def resolve_contam_filter_rank(args):
-    raw_rank = getattr(args, 'contam_filter_rank', 'phylum')
+    raw_rank = getattr(args, 'contam_filter_rank', 'superkingdom')
     if raw_rank is None:
-        rank = 'phylum'
+        rank = 'superkingdom'
     else:
         rank = str(raw_rank).strip().lower()
+    rank = CONTAM_FILTER_RANK_ALIASES.get(rank, rank)
     if rank not in CONTAM_FILTER_SUPPORTED_RANKS:
         raise ValueError(
-            '--contam_filter_rank must be one of: {}.'.format(', '.join(CONTAM_FILTER_SUPPORTED_RANKS))
+            '--contam_filter_rank must be one of: {}. Alias accepted: domain -> superkingdom.'.format(
+                ', '.join(CONTAM_FILTER_SUPPORTED_RANKS)
+            )
         )
     return rank
 
+def get_contam_filter_metadata_rank_columns(rank_name):
+    canonical_rank = CONTAM_FILTER_RANK_ALIASES.get(rank_name, rank_name)
+    if canonical_rank == 'superkingdom':
+        return ['taxid_superkingdom', 'taxid_domain']
+    return ['taxid_' + canonical_rank]
+
 def resolve_filter_order(args):
-    raw_order = getattr(args, 'filter_order', 'fastp_first')
+    raw_order = getattr(args, 'filter_order', 'fastp,rrna,contam')
     if raw_order is None:
-        return 'fastp_first'
+        return list(FILTER_ORDER_SUPPORTED_FILTERS)
     order = str(raw_order).strip().lower()
     if order == '':
-        return 'fastp_first'
-    if order in ['fastp_first', 'rrna_first']:
-        return order
-    raise ValueError('--filter_order must be "fastp_first" or "rrna_first".')
+        return list(FILTER_ORDER_SUPPORTED_FILTERS)
+    order_tokens = [token for token in re.split(r'[\s,>]+', order) if token != '']
+    if len(order_tokens) == 0:
+        return list(FILTER_ORDER_SUPPORTED_FILTERS)
+    duplicated_tokens = [token for token in order_tokens if order_tokens.count(token) > 1]
+    if len(duplicated_tokens) > 0:
+        duplicated_tokens = list(dict.fromkeys(duplicated_tokens))
+        raise ValueError(
+            '--filter_order contains duplicate filter name(s): {}.'.format(', '.join(duplicated_tokens))
+        )
+    invalid_tokens = [token for token in order_tokens if token not in FILTER_ORDER_SUPPORTED_FILTERS]
+    if len(invalid_tokens) > 0:
+        raise ValueError(
+            '--filter_order supports only: {}.'.format(', '.join(FILTER_ORDER_SUPPORTED_FILTERS))
+        )
+    return order_tokens
 
 def get_filter_execution_order(args):
     fastp_enabled = bool(getattr(args, 'fastp', False))
     rrna_enabled = is_rrna_filter_enabled(args)
     contam_enabled = is_contam_filter_enabled(args)
-    filter_order = []
-    if fastp_enabled and rrna_enabled:
-        if resolve_filter_order(args) == 'rrna_first':
-            filter_order = ['rrna', 'fastp']
-        else:
-            filter_order = ['fastp', 'rrna']
-    elif rrna_enabled:
-        filter_order = ['rrna']
-    elif fastp_enabled:
-        filter_order = ['fastp']
+    enabled_filters = []
+    if fastp_enabled:
+        enabled_filters.append('fastp')
+    if rrna_enabled:
+        enabled_filters.append('rrna')
     if contam_enabled:
-        filter_order.append('contam')
-    return filter_order
+        enabled_filters.append('contam')
+    if len(enabled_filters) == 0:
+        return []
+    requested_order = resolve_filter_order(args)
+    requested_set = set(requested_order)
+    enabled_set = set(enabled_filters)
+    if requested_set == set(FILTER_ORDER_SUPPORTED_FILTERS):
+        return [filter_name for filter_name in requested_order if filter_name in enabled_set]
+    if requested_set == enabled_set:
+        return list(requested_order)
+    missing_enabled = [filter_name for filter_name in enabled_filters if filter_name not in requested_set]
+    extra_disabled = [filter_name for filter_name in requested_order if filter_name not in enabled_set]
+    message = '--filter_order must list either all filters ({}) or exactly the enabled filters ({}).'.format(
+        ', '.join(FILTER_ORDER_SUPPORTED_FILTERS),
+        ', '.join(enabled_filters),
+    )
+    if len(missing_enabled) > 0:
+        message += ' Missing enabled filter(s): {}.'.format(', '.join(missing_enabled))
+    if len(extra_disabled) > 0:
+        message += ' Listed but disabled: {}.'.format(', '.join(extra_disabled))
+    raise ValueError(message)
 
 def resolve_bp_amalgkit_source_column(args):
     filter_order = get_filter_execution_order(args)
@@ -1255,6 +1742,26 @@ def ensure_shared_download_dir_exists(download_dir):
     os.makedirs(download_dir, exist_ok=True)
     return download_dir
 
+def resolve_silva_download_dir(args):
+    return os.path.join(resolve_shared_download_dir(args), 'silva')
+
+def resolve_silva_lock_path(args):
+    return resolve_download_lock_path(
+        args=args,
+        lock_name='silva_refs',
+        resolve_download_dir_fn=resolve_shared_download_dir,
+    )
+
+def resolve_silva_ready_path(args):
+    return os.path.join(resolve_silva_download_dir(args), 'silva.ready')
+
+def write_ready_marker(path):
+    parent = os.path.dirname(path)
+    if parent != '':
+        os.makedirs(parent, exist_ok=True)
+    with open(path, 'wt') as fout:
+        fout.write('ready\n')
+
 def resolve_mmseqs_exe(args):
     raw = getattr(args, 'mmseqs_exe', 'mmseqs')
     if raw is None:
@@ -1265,35 +1772,55 @@ def resolve_mmseqs_exe(args):
     return exe
 
 
-def resolve_mmseqs_dbtype(args, target_db):
+def resolve_mmseqs_dbtype_cache(runtime_context=None):
+    if runtime_context is None:
+        return None
+    cache = getattr(runtime_context, 'mmseqs_dbtype_cache', None)
+    if not isinstance(cache, dict):
+        raise TypeError('runtime_context.mmseqs_dbtype_cache must be a dict.')
+    return cache
+
+
+def ensure_getfastq_runtime_context(runtime_context=None):
+    if runtime_context is None:
+        return GetfastqRuntimeContext()
+    if not isinstance(runtime_context, GetfastqRuntimeContext):
+        raise TypeError('runtime_context must be a GetfastqRuntimeContext instance.')
+    return runtime_context
+
+
+def resolve_mmseqs_dbtype(args, target_db, runtime_context=None):
     if target_db is None:
         return ''
     target_db = str(target_db).strip()
     if target_db == '':
         return ''
-    cache = getattr(args, '_mmseqs_dbtype_cache', None)
-    if not isinstance(cache, dict):
-        cache = {}
-        setattr(args, '_mmseqs_dbtype_cache', cache)
-    if target_db in cache:
+    cache = resolve_mmseqs_dbtype_cache(runtime_context=runtime_context)
+    if (cache is not None) and (target_db in cache):
         return cache[target_db]
     mmseqs_exe = resolve_mmseqs_exe(args)
-    out = subprocess.run([mmseqs_exe, 'dbtype', target_db], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if out.returncode != 0:
-        raise RuntimeError(
+    out, stdout_txt, stderr_txt = run_checked_command(
+        command=[mmseqs_exe, 'dbtype', target_db],
+        runner=subprocess.run,
+        print_command=False,
+        print_output=False,
+        failure_message=lambda result, _stdout, stderr, _command_txt: (
             'mmseqs dbtype failed (exit code {}) for DB {}: {}'.format(
-                out.returncode,
+                result.returncode,
                 target_db,
-                out.stderr.decode('utf8', errors='replace'),
+                stderr,
             )
-        )
-    dbtype_txt = out.stdout.decode('utf8', errors='replace').strip().lower()
-    cache[target_db] = dbtype_txt
+        ),
+    )
+    _ = out
+    dbtype_txt = stdout_txt.strip().lower()
+    if cache is not None:
+        cache[target_db] = dbtype_txt
     return dbtype_txt
 
 
-def resolve_mmseqs_easy_taxonomy_search_type(args, target_db):
-    dbtype_txt = resolve_mmseqs_dbtype(args=args, target_db=target_db)
+def resolve_mmseqs_easy_taxonomy_search_type(args, target_db, runtime_context=None):
+    dbtype_txt = resolve_mmseqs_dbtype(args=args, target_db=target_db, runtime_context=runtime_context)
     if 'nucleotide' in dbtype_txt:
         return '3'
     return None
@@ -1314,7 +1841,7 @@ def resolve_contam_filter_db_path(args):
     normalized = str(raw).strip()
     if normalized.lower() in ['', 'inferred']:
         db_name = resolve_contam_filter_db_name(args).replace('/', '_')
-        return os.path.join(resolve_shared_download_dir(args), 'mmseqs_{}'.format(db_name.lower()))
+        return os.path.join(resolve_shared_download_dir(args), 'mmseqs2', '{}_DB'.format(db_name))
     return os.path.realpath(normalized)
 
 def ensure_contam_filter_db_parent_dir_exists(db_path):
@@ -1326,23 +1853,38 @@ def ensure_contam_filter_db_parent_dir_exists(db_path):
     os.makedirs(parent, exist_ok=True)
     return parent
 
+def resolve_mmseqs_db_ready_path(db_path):
+    return db_path + '.ready'
+
+def resolve_mmseqs_db_lock_path(db_path):
+    return resolve_resource_lock_path(
+        resource_path=db_path,
+        trim_suffixes=['_DB'],
+        lowercase=True,
+    )
+
 def ensure_mmseqs_contam_taxonomy_db_exists(args):
     db_path = resolve_contam_filter_db_path(args)
     dbtype_path = db_path + '.dbtype'
-    if os.path.exists(dbtype_path):
-        if not os.path.isfile(dbtype_path):
-            raise IsADirectoryError('MMseqs taxonomy DB path exists but is not a file: {}'.format(dbtype_path))
+    ready_path = resolve_mmseqs_db_ready_path(db_path)
+    if os.path.exists(db_path) and (not os.path.isfile(db_path)):
+        raise IsADirectoryError('MMseqs taxonomy DB path exists but is not a file: {}'.format(db_path))
+    if os.path.exists(dbtype_path) and (not os.path.isfile(dbtype_path)):
+        raise IsADirectoryError('MMseqs taxonomy DB path exists but is not a file: {}'.format(dbtype_path))
+    if os.path.exists(db_path) and os.path.exists(dbtype_path) and os.path.exists(ready_path):
         return db_path
-    lock_path = db_path + '.download.lock'
+    lock_path = resolve_mmseqs_db_lock_path(db_path)
     with acquire_exclusive_lock(lock_path=lock_path, lock_label='MMseqs taxonomy DB download'):
-        if os.path.exists(dbtype_path):
-            if not os.path.isfile(dbtype_path):
-                raise IsADirectoryError('MMseqs taxonomy DB path exists but is not a file: {}'.format(dbtype_path))
+        if os.path.exists(db_path) and (not os.path.isfile(db_path)):
+            raise IsADirectoryError('MMseqs taxonomy DB path exists but is not a file: {}'.format(db_path))
+        if os.path.exists(dbtype_path) and (not os.path.isfile(dbtype_path)):
+            raise IsADirectoryError('MMseqs taxonomy DB path exists but is not a file: {}'.format(dbtype_path))
+        if os.path.exists(db_path) and os.path.exists(dbtype_path) and os.path.exists(ready_path):
             return db_path
-        ensure_contam_filter_db_parent_dir_exists(db_path=db_path)
-        download_dir = ensure_shared_download_dir_exists(resolve_shared_download_dir(args))
-        tmp_dir = os.path.join(download_dir, 'mmseqs_databases_tmp')
-        os.makedirs(tmp_dir, exist_ok=True)
+        db_dir = ensure_contam_filter_db_parent_dir_exists(db_path=db_path)
+        if os.path.exists(db_path) and os.path.exists(dbtype_path) and (not os.path.exists(ready_path)):
+            write_ready_marker(ready_path)
+            return db_path
         mmseqs_exe = resolve_mmseqs_exe(args)
         db_name = resolve_contam_filter_db_name(args)
         db_cmd = [
@@ -1350,29 +1892,35 @@ def ensure_mmseqs_contam_taxonomy_db_exists(args):
             'databases',
             db_name,
             db_path,
-            tmp_dir,
+            db_dir,
             '--threads',
             str(max(1, int(getattr(args, 'threads', 1)))),
         ]
-        print('Downloading MMseqs taxonomy DB with command: {}'.format(' '.join(db_cmd)), flush=True)
-        out = subprocess.run(db_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        if should_print_getfastq_command_output(args):
-            print('mmseqs databases stdout:')
-            print(out.stdout.decode('utf8', errors='replace'))
-            print('mmseqs databases stderr:')
-            print(out.stderr.decode('utf8', errors='replace'))
-        if out.returncode != 0:
-            raise RuntimeError(
+        run_checked_command(
+            command=db_cmd,
+            runner=subprocess.run,
+            print_command=True,
+            command_prefix='Downloading MMseqs taxonomy DB with command',
+            print_output=should_print_getfastq_command_output(args),
+            stdout_label='mmseqs databases stdout:',
+            stderr_label='mmseqs databases stderr:',
+            failure_message=lambda result, _stdout, stderr, command_txt: (
                 'mmseqs databases failed (exit code {}). Command: {}\n{}'.format(
-                    out.returncode,
-                    ' '.join(db_cmd),
-                    out.stderr.decode('utf8', errors='replace'),
+                    result.returncode,
+                    command_txt,
+                    stderr,
                 )
-            )
+            ),
+        )
+        if not os.path.exists(db_path):
+            raise FileNotFoundError('MMseqs taxonomy DB was not generated: {}'.format(db_path))
+        if not os.path.isfile(db_path):
+            raise IsADirectoryError('MMseqs taxonomy DB path exists but is not a file: {}'.format(db_path))
         if not os.path.exists(dbtype_path):
             raise FileNotFoundError('MMseqs taxonomy DB was not generated: {}'.format(dbtype_path))
         if not os.path.isfile(dbtype_path):
             raise IsADirectoryError('MMseqs taxonomy DB path exists but is not a file: {}'.format(dbtype_path))
+        write_ready_marker(ready_path)
     return db_path
 
 def download_rrna_reference_gz(url, gz_path, label):
@@ -1401,13 +1949,20 @@ def expand_rrna_reference_gz(gz_path, fasta_path):
     os.replace(tmp_path, fasta_path)
 
 def ensure_rrna_reference_files_exist(args):
-    download_dir = ensure_shared_download_dir_exists(resolve_shared_download_dir(args))
-    lock_path = os.path.join(download_dir, '.rrna_refs.download.lock')
+    silva_dir = ensure_shared_download_dir_exists(resolve_silva_download_dir(args))
+    ready_path = resolve_silva_ready_path(args)
+    expected_refs = [
+        os.path.join(silva_dir, ref_spec['fasta_filename'])
+        for ref_spec in RRNA_REFERENCE_SPECS
+    ]
+    if all(os.path.isfile(ref_path) for ref_path in expected_refs) and os.path.exists(ready_path):
+        return expected_refs
+    lock_path = resolve_silva_lock_path(args)
     with acquire_exclusive_lock(lock_path=lock_path, lock_label='rRNA reference download'):
         refs = []
         for ref_spec in RRNA_REFERENCE_SPECS:
-            fasta_path = os.path.join(download_dir, ref_spec['fasta_filename'])
-            gz_path = os.path.join(download_dir, ref_spec['gz_filename'])
+            fasta_path = os.path.join(silva_dir, ref_spec['fasta_filename'])
+            gz_path = os.path.join(silva_dir, ref_spec['gz_filename'])
             if os.path.exists(fasta_path):
                 if not os.path.isfile(fasta_path):
                     raise IsADirectoryError('rRNA reference path exists but is not a file: {}'.format(fasta_path))
@@ -1424,11 +1979,12 @@ def ensure_rrna_reference_files_exist(args):
             print('Expanding rRNA reference: {}'.format(gz_path), flush=True)
             expand_rrna_reference_gz(gz_path=gz_path, fasta_path=fasta_path)
             refs.append(fasta_path)
+        write_ready_marker(ready_path)
         return refs
 
 def resolve_mmseqs_rrna_reference_db_path(args):
     download_dir = resolve_shared_download_dir(args)
-    return os.path.join(download_dir, 'mmseqs_rrna_silva')
+    return os.path.join(download_dir, 'mmseqs2', 'SILVA_DB')
 
 def write_mmseqs_rrna_reference_fasta(rrna_refs, fasta_path):
     tmp_path = fasta_path + '.tmp.{}'.format(time.time_ns())
@@ -1462,44 +2018,57 @@ def remove_mmseqs_db_artifacts(db_prefix):
                 os.remove(path)
 
 def ensure_mmseqs_rrna_reference_db_exists(args):
-    download_dir = ensure_shared_download_dir_exists(resolve_shared_download_dir(args))
     db_path = resolve_mmseqs_rrna_reference_db_path(args)
     dbtype_path = db_path + '.dbtype'
-    if os.path.exists(dbtype_path):
-        if not os.path.isfile(dbtype_path):
-            raise IsADirectoryError('MMseqs rRNA DB path exists but is not a file: {}'.format(dbtype_path))
+    ready_path = resolve_mmseqs_db_ready_path(db_path)
+    if os.path.exists(db_path) and (not os.path.isfile(db_path)):
+        raise IsADirectoryError('MMseqs rRNA DB path exists but is not a file: {}'.format(db_path))
+    if os.path.exists(dbtype_path) and (not os.path.isfile(dbtype_path)):
+        raise IsADirectoryError('MMseqs rRNA DB path exists but is not a file: {}'.format(dbtype_path))
+    if os.path.exists(db_path) and os.path.exists(dbtype_path) and os.path.exists(ready_path):
         return db_path
-    lock_path = db_path + '.build.lock'
+    lock_path = resolve_mmseqs_db_lock_path(db_path)
     with acquire_exclusive_lock(lock_path=lock_path, lock_label='MMseqs rRNA DB build'):
-        if os.path.exists(dbtype_path):
-            if not os.path.isfile(dbtype_path):
-                raise IsADirectoryError('MMseqs rRNA DB path exists but is not a file: {}'.format(dbtype_path))
+        if os.path.exists(db_path) and (not os.path.isfile(db_path)):
+            raise IsADirectoryError('MMseqs rRNA DB path exists but is not a file: {}'.format(db_path))
+        if os.path.exists(dbtype_path) and (not os.path.isfile(dbtype_path)):
+            raise IsADirectoryError('MMseqs rRNA DB path exists but is not a file: {}'.format(dbtype_path))
+        if os.path.exists(db_path) and os.path.exists(dbtype_path) and os.path.exists(ready_path):
+            return db_path
+        if os.path.exists(db_path) and os.path.exists(dbtype_path) and (not os.path.exists(ready_path)):
+            write_ready_marker(ready_path)
             return db_path
         rrna_refs = ensure_rrna_reference_files_exist(args)
-        combined_fasta = os.path.join(download_dir, 'mmseqs_rrna_silva_refs.fasta')
+        combined_fasta = os.path.join(resolve_silva_download_dir(args), 'silva_refs.fasta')
         write_mmseqs_rrna_reference_fasta(rrna_refs=rrna_refs, fasta_path=combined_fasta)
         remove_mmseqs_db_artifacts(db_prefix=db_path)
         mmseqs_exe = resolve_mmseqs_exe(args)
         command = [mmseqs_exe, 'createdb', combined_fasta, db_path]
-        print('Building MMseqs rRNA DB with command: {}'.format(' '.join(command)), flush=True)
-        out = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        if should_print_getfastq_command_output(args):
-            print('mmseqs createdb stdout:')
-            print(out.stdout.decode('utf8', errors='replace'))
-            print('mmseqs createdb stderr:')
-            print(out.stderr.decode('utf8', errors='replace'))
-        if out.returncode != 0:
-            raise RuntimeError(
+        run_checked_command(
+            command=command,
+            runner=subprocess.run,
+            print_command=True,
+            command_prefix='Building MMseqs rRNA DB with command',
+            print_output=should_print_getfastq_command_output(args),
+            stdout_label='mmseqs createdb stdout:',
+            stderr_label='mmseqs createdb stderr:',
+            failure_message=lambda result, _stdout, stderr, command_txt: (
                 'mmseqs createdb failed (exit code {}). Command: {}\n{}'.format(
-                    out.returncode,
-                    ' '.join(command),
-                    out.stderr.decode('utf8', errors='replace'),
+                    result.returncode,
+                    command_txt,
+                    stderr,
                 )
-            )
+            ),
+        )
+        if not os.path.exists(db_path):
+            raise FileNotFoundError('MMseqs rRNA DB was not generated: {}'.format(db_path))
+        if not os.path.isfile(db_path):
+            raise IsADirectoryError('MMseqs rRNA DB path exists but is not a file: {}'.format(db_path))
         if not os.path.exists(dbtype_path):
             raise FileNotFoundError('MMseqs rRNA DB was not generated: {}'.format(dbtype_path))
         if not os.path.isfile(dbtype_path):
             raise IsADirectoryError('MMseqs rRNA DB path exists but is not a file: {}'.format(dbtype_path))
+        write_ready_marker(ready_path)
     return db_path
 
 def estimate_num_written_spots_from_fastq(sra_stat, files=None, file_state=None):
@@ -1629,6 +2198,33 @@ def detect_fasterq_spot_range_support(help_stdout_txt, help_stderr_txt=''):
     has_start = ('-N|' in combined) or ('--minSpotId' in combined) or ('--min-spot-id' in combined.lower())
     has_end = ('-X|' in combined) or ('--maxSpotId' in combined) or ('--max-spot-id' in combined.lower())
     return bool(has_start and has_end)
+
+
+def parse_fasterq_dump_version(version_stdout_txt, version_stderr_txt=''):
+    combined = '\n'.join([str(version_stdout_txt or ''), str(version_stderr_txt or '')])
+    matched = re.search(r'\b([0-9]+)\.([0-9]+)(?:\.([0-9]+))?\b', combined)
+    if matched is None:
+        return None
+    major = int(matched.group(1))
+    minor = int(matched.group(2))
+    patch = int(matched.group(3) or 0)
+    return (major, minor, patch)
+
+
+def ensure_supported_fasterq_dump_version(version_stdout_txt, version_stderr_txt='', executable_name='fasterq-dump'):
+    version_parts = parse_fasterq_dump_version(version_stdout_txt, version_stderr_txt)
+    if version_parts is None:
+        raise RuntimeError(
+            'Could not determine fasterq-dump version from {} output. '
+            'sra-tools >= 3 is required for amalgkit getfastq.'.format(executable_name)
+        )
+    if version_parts[0] < 3:
+        version_txt = '{}.{}.{}'.format(*version_parts)
+        raise RuntimeError(
+            'Unsupported fasterq-dump version detected: {} from {}. '
+            'sra-tools >= 3 is required for amalgkit getfastq.'.format(version_txt, executable_name)
+        )
+    return version_parts
 
 
 def resolve_fasterq_spot_range_support(args):
@@ -1771,28 +2367,63 @@ def build_fasterq_dump_command(args, sra_stat, path_downloaded_sra, size_check, 
 
 
 def execute_fasterq_dump_command(fasterq_dump_command, args, prefix='Command'):
-    print('{}: {}'.format(prefix, ' '.join(fasterq_dump_command)))
-    fqd_out = subprocess.run(fasterq_dump_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if should_print_getfastq_command_output(args):
-        print('fasterq-dump stdout:')
-        print(fqd_out.stdout.decode('utf8', errors='replace'))
-        print('fasterq-dump stderr:')
-        print(fqd_out.stderr.decode('utf8', errors='replace'))
-    return fqd_out
+    fqd_out, stdout_txt, stderr_txt = run_logged_command(
+        command=fasterq_dump_command,
+        runner=subprocess.run,
+        print_command=True,
+        command_prefix=prefix,
+        print_output=should_print_getfastq_command_output(args),
+        stdout_label='fasterq-dump stdout:',
+        stderr_label='fasterq-dump stderr:',
+    )
+    return fqd_out, stdout_txt, stderr_txt
+
+
+def emit_fasterq_dump_failure_details(fasterq_dump_command, result, stdout_txt, stderr_txt, prefix):
+    command_txt = format_command(fasterq_dump_command)
+    sys.stderr.write('{} failed with exit code {}: {}\n'.format(prefix, result.returncode, command_txt))
+    if stdout_txt.strip() != '':
+        sys.stderr.write('fasterq-dump stdout:\n')
+        sys.stderr.write(stdout_txt if stdout_txt.endswith('\n') else stdout_txt + '\n')
+    if stderr_txt.strip() != '':
+        sys.stderr.write('fasterq-dump stderr:\n')
+        sys.stderr.write(stderr_txt if stderr_txt.endswith('\n') else stderr_txt + '\n')
 
 
 def run_fasterq_dump_with_retry(fasterq_dump_command, path_downloaded_sra, metadata, sra_stat, args):
-    fqd_out = execute_fasterq_dump_command(fasterq_dump_command, args, prefix='Command')
+    fqd_out, stdout_txt, stderr_txt = execute_fasterq_dump_command(fasterq_dump_command, args, prefix='Command')
     if fqd_out.returncode == 0:
         return fqd_out
+    emit_fasterq_dump_failure_details(
+        fasterq_dump_command=fasterq_dump_command,
+        result=fqd_out,
+        stdout_txt=stdout_txt,
+        stderr_txt=stderr_txt,
+        prefix='Command',
+    )
 
     sys.stderr.write("fasterq-dump did not finish safely. Removing the cached SRA file and retrying once.\n")
     remove_sra_path(path_downloaded_sra)
+    redownload_started_at = time.perf_counter()
     download_sra(metadata=metadata, sra_stat=sra_stat, args=args, work_dir=sra_stat['getfastq_sra_dir'], overwrite=True)
-    fqd_out = execute_fasterq_dump_command(fasterq_dump_command, args, prefix='Retry command')
+    accumulate_and_print_stage_duration(
+        metadata=metadata,
+        sra_stat=sra_stat,
+        column_name='sec_sra_download',
+        elapsed_seconds=(time.perf_counter() - redownload_started_at),
+        stage_label='SRA re-download',
+    )
+    fqd_out, stdout_txt, stderr_txt = execute_fasterq_dump_command(fasterq_dump_command, args, prefix='Retry command')
     if fqd_out.returncode != 0:
+        emit_fasterq_dump_failure_details(
+            fasterq_dump_command=fasterq_dump_command,
+            result=fqd_out,
+            stdout_txt=stdout_txt,
+            stderr_txt=stderr_txt,
+            prefix='Retry command',
+        )
         sys.stderr.write("fasterq-dump did not finish safely after re-download.\n")
-        sys.exit(1)
+        raise RuntimeError('fasterq-dump did not finish safely after re-download.')
     return fqd_out
 
 
@@ -1881,6 +2512,7 @@ def update_extraction_counts(metadata, ind_sra, written_spots, dumped_spots, spo
 
 
 def run_fasterq_dump(sra_stat, args, metadata, start, end, return_files=False, return_file_state=False):
+    started_at = time.perf_counter()
     path_downloaded_sra = os.path.join(sra_stat['getfastq_sra_dir'], sra_stat['sra_id'] + '.sra')
     start, end = normalize_requested_spot_range(start=start, end=end)
     is_partial_range = not is_full_requested_spot_range(sra_stat=sra_stat, start=start, end=end)
@@ -1905,52 +2537,69 @@ def run_fasterq_dump(sra_stat, args, metadata, start, end, return_files=False, r
         end=command_end,
     )
     print('Total sampled bases:', "{:,}".format(sra_stat['spot_length'] * (end - start + 1)), 'bp')
-    fqd_out = run_fasterq_dump_with_retry(
-        fasterq_dump_command=fasterq_dump_command,
-        path_downloaded_sra=path_downloaded_sra,
-        metadata=metadata,
-        sra_stat=sra_stat,
-        args=args,
-    )
-    ensure_fasterq_output_files_exist(sra_stat=sra_stat)
-    run_file_state = RunFileState(work_dir=sra_stat['getfastq_sra_dir'])
-    if trim_after_dump:
-        trimmed_counts, run_file_state = trim_fasterq_output_files(
-            sra_stat=sra_stat,
-            start=start,
-            end=end,
-            file_state=run_file_state,
-            args=args,
-            compress_to_gz=False,
-            return_file_state=True,
-        )
-        written_spots = calculate_written_spots_from_trim_counts(trimmed_counts)
-        if written_spots is not None:
-            print('Using trimmed FASTQ spot count after fallback extraction: {:,}'.format(written_spots))
-    else:
-        written_spots, run_file_state = resolve_written_spots_from_fasterq_output(
-            sra_stat=sra_stat,
-            start=start,
-            end=end,
-            fqd_out=fqd_out,
-            run_file_state=run_file_state,
-        )
-    should_compress = should_compress_fasterq_output_before_filters(args)
-    if should_compress:
-        updated_file_state = compress_fasterq_output_files(
+    used_original_fastq_fallback = False
+    try:
+        fqd_out = run_fasterq_dump_with_retry(
+            fasterq_dump_command=fasterq_dump_command,
+            path_downloaded_sra=path_downloaded_sra,
+            metadata=metadata,
             sra_stat=sra_stat,
             args=args,
-            file_state=run_file_state,
-            return_file_state=True,
         )
-        if isinstance(updated_file_state, RunFileState):
-            run_file_state = updated_file_state
-        else:
-            run_file_state = RunFileState(work_dir=sra_stat['getfastq_sra_dir'])
+    except RuntimeError:
+        run_file_state = download_public_original_fastq_files(
+            sra_stat=sra_stat,
+            args=args,
+            start=start,
+            end=end,
+        )
+        if not isinstance(run_file_state, RunFileState):
+            raise
+        fqd_out = None
+        used_original_fastq_fallback = True
+    if used_original_fastq_fallback:
         set_current_intermediate_extension(sra_stat, '.fastq.gz')
+        written_spots = None
     else:
-        print('Skipping seqkit compression after fasterq-dump because downstream filtering is enabled.')
-        set_current_intermediate_extension(sra_stat, '.fastq')
+        ensure_fasterq_output_files_exist(sra_stat=sra_stat)
+        run_file_state = RunFileState(work_dir=sra_stat['getfastq_sra_dir'])
+        if trim_after_dump:
+            trimmed_counts, run_file_state = trim_fasterq_output_files(
+                sra_stat=sra_stat,
+                start=start,
+                end=end,
+                file_state=run_file_state,
+                args=args,
+                compress_to_gz=False,
+                return_file_state=True,
+            )
+            written_spots = calculate_written_spots_from_trim_counts(trimmed_counts)
+            if written_spots is not None:
+                print('Using trimmed FASTQ spot count after fallback extraction: {:,}'.format(written_spots))
+        else:
+            written_spots, run_file_state = resolve_written_spots_from_fasterq_output(
+                sra_stat=sra_stat,
+                start=start,
+                end=end,
+                fqd_out=fqd_out,
+                run_file_state=run_file_state,
+            )
+        should_compress = should_compress_fasterq_output_before_filters(args)
+        if should_compress:
+            updated_file_state = compress_fasterq_output_files(
+                sra_stat=sra_stat,
+                args=args,
+                file_state=run_file_state,
+                return_file_state=True,
+            )
+            if isinstance(updated_file_state, RunFileState):
+                run_file_state = updated_file_state
+            else:
+                run_file_state = RunFileState(work_dir=sra_stat['getfastq_sra_dir'])
+            set_current_intermediate_extension(sra_stat, '.fastq.gz')
+        else:
+            print('Skipping seqkit compression after fasterq-dump because downstream filtering is enabled.')
+            set_current_intermediate_extension(sra_stat, '.fastq')
     if written_spots is None:
         written_spots = estimate_num_written_spots_from_fastq(sra_stat, file_state=run_file_state)
     ind_sra = sra_stat.get('metadata_idx', get_metadata_row_index_by_run(metadata, sra_stat['sra_id']))
@@ -1967,6 +2616,13 @@ def run_fasterq_dump(sra_stat, args, metadata, start, end, return_files=False, r
     if isinstance(updated_file_state, RunFileState):
         run_file_state = updated_file_state
     metadata.df.at[ind_sra,'layout_amalgkit'] = sra_stat['layout']
+    metadata = accumulate_and_print_stage_duration(
+        metadata=metadata,
+        sra_stat=sra_stat,
+        column_name='sec_fasterq_dump',
+        elapsed_seconds=(time.perf_counter() - started_at),
+        stage_label='fasterq-dump',
+    )
     if return_file_state:
         return metadata, sra_stat, run_file_state
     if return_files:
@@ -1993,7 +2649,7 @@ def remove_unpaired_files(sra_stat, files=None, file_state=None, return_file_sta
     )
     if (sra_stat['layout']=='paired'):
         # Order is important in this list. More downstream should come first.
-        extensions = ['.amalgkit.fastq.gz', '.rename.fastq.gz', '.contam.fastq.gz', '.rrna.fastq.gz', '.fastp.fastq.gz', '.fastq.gz', '.fastq']
+        extensions = ['.amalgkit.fastq.gz', '.rename.fastq.gz', '.contam-filtered.fastq.gz', '.rrna-filtered.fastq.gz', '.fastp.fastq.gz', '.fastq.gz', '.fastq']
         for ext in extensions:
             single_filename = sra_stat['sra_id'] + ext
             if run_file_state.has(single_filename):
@@ -2196,19 +2852,17 @@ def update_fastp_metrics(metadata, ind_sra, current_num_in, duplication_rate, in
             weighted_mean = ((previous_value * previous_num_in) + (current_value * current_num_in)) / total_num_in
             metadata.df.at[ind_sra, metric_key] = weighted_mean
 
+def calculate_filtered_percent(input_bp, output_bp):
+    input_bp = _coerce_nonnegative_float(input_bp)
+    output_bp = _coerce_nonnegative_float(output_bp)
+    if input_bp <= 0.0:
+        return numpy.nan
+    filtered_bp = max(0.0, input_bp - output_bp)
+    return (filtered_bp / input_bp) * 100.0
+
+
 def write_fastp_stats(sra_stat, metadata, output_dir):
-    ind_sra = sra_stat.get('metadata_idx', get_metadata_row_index_by_run(metadata, sra_stat['sra_id']))
-    out_df = pandas.DataFrame([{
-        'run': sra_stat['sra_id'],
-        'fastp_duplication_rate': metadata.df.at[ind_sra, 'fastp_duplication_rate'],
-        'fastp_insert_size_peak': metadata.df.at[ind_sra, 'fastp_insert_size_peak'],
-        'num_fastp_in': metadata.df.at[ind_sra, 'num_fastp_in'],
-        'num_fastp_out': metadata.df.at[ind_sra, 'num_fastp_out'],
-        'bp_fastp_in': metadata.df.at[ind_sra, 'bp_fastp_in'],
-        'bp_fastp_out': metadata.df.at[ind_sra, 'bp_fastp_out'],
-    }])
-    out_path = os.path.join(output_dir, 'fastp_stats.tsv')
-    out_df.to_csv(out_path, sep='\t', index=False)
+    write_getfastq_stats(sra_stat=sra_stat, metadata=metadata, output_dir=output_dir)
 
 
 def write_getfastq_stats(sra_stat, metadata, output_dir):
@@ -2219,9 +2873,55 @@ def write_getfastq_stats(sra_stat, metadata, output_dir):
             row[col] = metadata.df.at[ind_sra, col]
         else:
             row[col] = numpy.nan
+    row['percent_fastp_filtered'] = calculate_filtered_percent(row.get('bp_fastp_in'), row.get('bp_fastp_out'))
+    row['percent_rrna_filtered'] = calculate_filtered_percent(row.get('bp_rrna_in'), row.get('bp_rrna_out'))
+    row['percent_contam_filtered'] = calculate_filtered_percent(row.get('bp_contam_in'), row.get('bp_contam_out'))
     out_df = pandas.DataFrame([row])
     out_path = os.path.join(output_dir, 'getfastq_stats.tsv')
-    out_df.to_csv(out_path, sep='\t', index=False)
+    atomic_write_dataframe(out_df, out_path, sep='\t', index=False)
+
+
+def _read_getfastq_stats_row(output_dir, sra_id):
+    stats_path = os.path.join(output_dir, 'getfastq_stats.tsv')
+    if not os.path.isfile(stats_path):
+        return None
+    try:
+        stats_df = pandas.read_csv(stats_path, sep='\t')
+    except Exception as exc:
+        sys.stderr.write('Failed to read getfastq stats file {}: {}\n'.format(stats_path, exc))
+        return None
+    if 'run' not in stats_df.columns:
+        return None
+    matched = stats_df.loc[stats_df['run'].fillna('').astype(str).str.strip() == str(sra_id)]
+    if matched.empty:
+        return None
+    return matched.iloc[-1]
+
+
+def _detect_zero_output_stage_from_stats(output_dir, sra_id):
+    row = _read_getfastq_stats_row(output_dir, sra_id)
+    if row is None:
+        return None
+    if (_coerce_nonnegative_float(row.get('bp_contam_in')) > 0) and (_coerce_nonnegative_float(row.get('bp_contam_out')) <= 0):
+        return 'contam'
+    if (_coerce_nonnegative_float(row.get('bp_rrna_in')) > 0) and (_coerce_nonnegative_float(row.get('bp_rrna_out')) <= 0):
+        return 'rrna'
+    if (_coerce_nonnegative_float(row.get('bp_fastp_in')) > 0) and (_coerce_nonnegative_float(row.get('bp_fastp_out')) <= 0):
+        return 'fastp'
+    if (_coerce_nonnegative_float(row.get('bp_written')) <= 0) and (_coerce_nonnegative_float(row.get('num_written')) <= 0):
+        return 'fasterq'
+    return None
+
+
+def _remove_generated_output_files(output_dir, output_names, stage_label):
+    for output_name in output_names:
+        output_path = os.path.join(output_dir, output_name)
+        if not os.path.exists(output_path):
+            continue
+        if not os.path.isfile(output_path):
+            raise IsADirectoryError('{} output path exists but is not a file: {}'.format(stage_label, output_path))
+        print('{} produced zero retained reads. Removing output file: {}'.format(stage_label, output_path))
+        os.remove(output_path)
 
 
 def resolve_fastp_threads(num_threads):
@@ -2272,21 +2972,21 @@ def finalize_run_fastp_return(metadata, run_file_state, return_files=False, retu
 
 
 def execute_fastp_command(fp_command, fastp_print=False):
-    print('Command:', ' '.join(fp_command))
-    fp_out = subprocess.run(fp_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if fastp_print:
-        print('fastp stdout:')
-        print(fp_out.stdout.decode('utf8', errors='replace'))
-        print('fastp stderr:')
-        print(fp_out.stderr.decode('utf8', errors='replace'))
-    if fp_out.returncode != 0:
-        raise RuntimeError(
+    fp_out, _stdout_txt, _stderr_txt = run_checked_command(
+        command=fp_command,
+        runner=subprocess.run,
+        print_command=True,
+        print_output=fastp_print,
+        stdout_label='fastp stdout:',
+        stderr_label='fastp stderr:',
+        failure_message=lambda result, _stdout, stderr, command_txt: (
             'fastp did not finish safely (exit code {}). Command: {}\n{}'.format(
-                fp_out.returncode,
-                ' '.join(fp_command),
-                fp_out.stderr.decode('utf8', errors='replace'),
+                result.returncode,
+                command_txt,
+                stderr,
             )
-        )
+        ),
+    )
     return fp_out
 
 
@@ -2299,7 +2999,7 @@ def ensure_fastp_output_files(output_dir, output_names):
             raise IsADirectoryError('fastp output path exists but is not a file: {}'.format(output_path))
 
 
-def update_metadata_after_fastp(metadata, sra_stat, output_dir, fp_stderr):
+def update_metadata_after_fastp(metadata, sra_stat, fp_stderr):
     num_in, num_out, bp_in, bp_out = parse_fastp_summary_counts(fp_stderr)
     ind_sra = sra_stat.get('metadata_idx', get_metadata_row_index_by_run(metadata, sra_stat['sra_id']))
     current_num_in = sum(num_in)
@@ -2309,7 +3009,6 @@ def update_metadata_after_fastp(metadata, sra_stat, output_dir, fp_stderr):
     metadata.df.at[ind_sra, 'num_fastp_out'] += sum(num_out)
     metadata.df.at[ind_sra, 'bp_fastp_in'] += sum(bp_in)
     metadata.df.at[ind_sra, 'bp_fastp_out'] += sum(bp_out)
-    write_fastp_stats(sra_stat, metadata, output_dir)
     return metadata
 
 
@@ -2323,6 +3022,7 @@ def run_fastp(
     return_files=False,
     return_file_state=False,
 ):
+    started_at = time.perf_counter()
     run_file_state = None
     if (files is not None) or isinstance(file_state, RunFileState):
         run_file_state = _resolve_run_file_state(work_dir=output_dir, files=files, file_state=file_state)
@@ -2351,14 +3051,45 @@ def run_fastp(
             for input_name in input_names:
                 run_file_state.discard(input_name)
     fp_stderr = fp_out.stderr.decode('utf8', errors='replace')
-    metadata = update_metadata_after_fastp(metadata, sra_stat, output_dir, fp_stderr)
-    set_current_intermediate_extension(sra_stat, outext)
+    num_in, num_out, bp_in, bp_out = parse_fastp_summary_counts(fp_stderr)
+    metadata = update_metadata_after_fastp(metadata, sra_stat, fp_stderr)
+    total_num_out = sum(num_out)
+    total_bp_out = sum(bp_out)
+    if (total_num_out <= 0) and (total_bp_out <= 0):
+        _remove_generated_output_files(output_dir, output_names, 'fastp')
+        if run_file_state is not None:
+            for output_name in output_names:
+                run_file_state.discard(output_name)
+    metadata = accumulate_and_print_stage_duration(
+        metadata=metadata,
+        sra_stat=sra_stat,
+        column_name='sec_fastp',
+        elapsed_seconds=(time.perf_counter() - started_at),
+        stage_label='fastp',
+    )
+    if (total_num_out > 0) or (total_bp_out > 0):
+        set_current_intermediate_extension(sra_stat, outext)
     return finalize_run_fastp_return(
         metadata=metadata,
         run_file_state=run_file_state,
         return_files=return_files,
         return_file_state=return_file_state,
     )
+
+
+def _stage_counts_indicate_no_reads(stage_counts):
+    if stage_counts is None:
+        return False
+    return (
+        _coerce_nonnegative_float(stage_counts.get('num_spots')) <= 0
+        and _coerce_nonnegative_float(stage_counts.get('bp_total')) <= 0
+    )
+
+
+def _stop_after_zero_output_stage(metadata, sra_stat, stage_name):
+    print('No reads remained after {} filtering. Writing getfastq stats and stopping: {}'.format(stage_name, sra_stat['sra_id']))
+    write_getfastq_stats(sra_stat=sra_stat, metadata=metadata, output_dir=sra_stat['getfastq_sra_dir'])
+    return metadata
 
 def parse_known_fastq_counts(known_counts):
     if known_counts is None:
@@ -2521,7 +3252,44 @@ def ensure_empty_workdir(path_dir):
     os.makedirs(path_dir, exist_ok=True)
     return path_dir
 
-def run_mmseqs_easy_taxonomy_single_fastq(args, input_path, target_db, result_prefix, tmp_dir):
+def build_mmseqs_query_input(query_root, query_tag, input_path_by_suffix):
+    ordered_input_paths = [input_path_by_suffix[suffix] for suffix in sorted(input_path_by_suffix.keys())]
+    if len(ordered_input_paths) <= 1:
+        return ordered_input_paths[0]
+    compressed_flags = {str(path).endswith('.gz') for path in ordered_input_paths}
+    if len(compressed_flags) != 1:
+        raise ValueError('MMseqs query inputs must be consistently compressed or uncompressed.')
+    ext = '.fastq.gz' if compressed_flags.pop() else '.fastq'
+    combined_path = os.path.join(query_root, query_tag + '_combined' + ext)
+    if os.path.exists(combined_path):
+        if not os.path.isfile(combined_path):
+            raise IsADirectoryError('MMseqs combined query path exists but is not a file: {}'.format(combined_path))
+        os.remove(combined_path)
+    for input_path in ordered_input_paths:
+        append_file_binary(input_path, combined_path)
+    return combined_path
+
+
+def append_mmseqs_sensitivity_option(command, raw_value):
+    if is_auto_parallel_option(raw_value):
+        return command
+    sensitivity = float(raw_value)
+    if sensitivity <= 0.0:
+        raise ValueError('MMseqs sensitivity must be > 0.')
+    command.extend(['-s', '{:g}'.format(sensitivity)])
+    return command
+
+
+def append_mmseqs_positive_int_option(command, option_name, raw_value):
+    if is_auto_parallel_option(raw_value):
+        return command
+    int_value = int(raw_value)
+    if int_value <= 0:
+        raise ValueError('MMseqs option {} must be > 0.'.format(option_name))
+    command.extend([option_name, str(int_value)])
+    return command
+
+def run_mmseqs_easy_taxonomy_single_fastq(args, input_path, target_db, result_prefix, tmp_dir, runtime_context=None):
     mmseqs_exe = resolve_mmseqs_exe(args)
     command = [
         mmseqs_exe,
@@ -2535,24 +3303,38 @@ def run_mmseqs_easy_taxonomy_single_fastq(args, input_path, target_db, result_pr
         '--orf-filter',
         '0',
     ]
-    search_type = resolve_mmseqs_easy_taxonomy_search_type(args=args, target_db=target_db)
+    command = append_mmseqs_sensitivity_option(
+        command=command,
+        raw_value=getattr(args, 'contam_filter_sensitivity', 'auto'),
+    )
+    command = append_mmseqs_positive_int_option(
+        command=command,
+        option_name='--max-seqs',
+        raw_value=getattr(args, 'contam_filter_max_seqs', 'auto'),
+    )
+    search_type = resolve_mmseqs_easy_taxonomy_search_type(
+        args=args,
+        target_db=target_db,
+        runtime_context=runtime_context,
+    )
     if search_type is not None:
         command.extend(['--search-type', str(search_type)])
-    print('Command:', ' '.join(command))
-    out = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if should_print_getfastq_command_output(args):
-        print('mmseqs easy-taxonomy stdout:')
-        print(out.stdout.decode('utf8', errors='replace'))
-        print('mmseqs easy-taxonomy stderr:')
-        print(out.stderr.decode('utf8', errors='replace'))
-    if out.returncode != 0:
-        raise RuntimeError(
+    command.extend(['--report-mode', '2'])
+    run_checked_command(
+        command=command,
+        runner=subprocess.run,
+        print_command=True,
+        print_output=should_print_getfastq_command_output(args),
+        stdout_label='mmseqs easy-taxonomy stdout:',
+        stderr_label='mmseqs easy-taxonomy stderr:',
+        failure_message=lambda result, _stdout, stderr, command_txt: (
             'mmseqs easy-taxonomy failed (exit code {}). Command: {}\n{}'.format(
-                out.returncode,
-                ' '.join(command),
-                out.stderr.decode('utf8', errors='replace'),
+                result.returncode,
+                command_txt,
+                stderr,
             )
-        )
+        ),
+    )
     return result_prefix + '_lca.tsv'
 
 def run_mmseqs_easy_search_single_fastq(args, input_path, target_db, result_tsv, tmp_dir):
@@ -2571,21 +3353,31 @@ def run_mmseqs_easy_search_single_fastq(args, input_path, target_db, result_tsv,
         '--format-output',
         'query',
     ]
-    print('Command:', ' '.join(command))
-    out = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if should_print_getfastq_command_output(args):
-        print('mmseqs easy-search stdout:')
-        print(out.stdout.decode('utf8', errors='replace'))
-        print('mmseqs easy-search stderr:')
-        print(out.stderr.decode('utf8', errors='replace'))
-    if out.returncode != 0:
-        raise RuntimeError(
+    command = append_mmseqs_sensitivity_option(
+        command=command,
+        raw_value=getattr(args, 'rrna_filter_sensitivity', 'auto'),
+    )
+    command = append_mmseqs_positive_int_option(
+        command=command,
+        option_name='--max-seqs',
+        raw_value=getattr(args, 'rrna_filter_max_seqs', 'auto'),
+    )
+    command.extend(['--max-accept', '1'])
+    run_checked_command(
+        command=command,
+        runner=subprocess.run,
+        print_command=True,
+        print_output=should_print_getfastq_command_output(args),
+        stdout_label='mmseqs easy-search stdout:',
+        stderr_label='mmseqs easy-search stderr:',
+        failure_message=lambda result, _stdout, stderr, command_txt: (
             'mmseqs easy-search failed (exit code {}). Command: {}\n{}'.format(
-                out.returncode,
-                ' '.join(command),
-                out.stderr.decode('utf8', errors='replace'),
+                result.returncode,
+                command_txt,
+                stderr,
             )
-        )
+        ),
+    )
     return result_tsv
 
 def parse_mmseqs_search_matched_cores(result_tsv_path):
@@ -2665,18 +3457,19 @@ def run_mmseqs_rrna_filter(
             return_files=return_files,
             return_file_state=return_file_state,
         )
+    started_at = time.perf_counter()
     run_file_state = _resolve_run_file_state(work_dir=output_dir, files=files, file_state=file_state)
     inext = get_or_detect_intermediate_extension(sra_stat, work_dir=output_dir, file_state=run_file_state)
     sra_id = sra_stat['sra_id']
     layout = sra_stat['layout']
     if layout == 'single':
         input_names = [sra_id + inext]
-        output_name_by_suffix = {'': sra_id + '.rrna.fastq.gz'}
+        output_name_by_suffix = {'': sra_id + '.rrna-filtered.fastq.gz'}
     elif layout == 'paired':
         input_names = [sra_id + '_1' + inext, sra_id + '_2' + inext]
         output_name_by_suffix = {
-            '_1': sra_id + '_1.rrna.fastq.gz',
-            '_2': sra_id + '_2.rrna.fastq.gz',
+            '_1': sra_id + '_1.rrna-filtered.fastq.gz',
+            '_2': sra_id + '_2.rrna-filtered.fastq.gz',
         }
     else:
         raise ValueError('Unsupported library layout for MMseqs rRNA filtering: {}'.format(layout))
@@ -2698,24 +3491,36 @@ def run_mmseqs_rrna_filter(
     mmseqs_root = os.path.join(output_dir, 'mmseqs_rrna_work')
     ensure_empty_workdir(mmseqs_root)
     remove_cores = set()
-    for suffix, input_path in input_path_by_suffix.items():
-        query_tag = '{}{}'.format(sra_id, suffix)
-        query_root = os.path.join(mmseqs_root, query_tag)
-        result_tsv = os.path.join(query_root, 'result.tsv')
-        tmp_dir = os.path.join(query_root, 'tmp')
-        os.makedirs(query_root, exist_ok=True)
-        os.makedirs(tmp_dir, exist_ok=True)
-        result_path = run_mmseqs_easy_search_single_fastq(
-            args=args,
-            input_path=input_path,
-            target_db=target_db,
-            result_tsv=result_tsv,
-            tmp_dir=tmp_dir,
-        )
-        remove_cores.update(parse_mmseqs_search_matched_cores(result_tsv_path=result_path))
+    search_started_at = time.perf_counter()
+    query_root = os.path.join(mmseqs_root, sra_id)
+    result_tsv = os.path.join(query_root, 'result.tsv')
+    tmp_dir = os.path.join(query_root, 'tmp')
+    os.makedirs(query_root, exist_ok=True)
+    os.makedirs(tmp_dir, exist_ok=True)
+    query_input_path = build_mmseqs_query_input(
+        query_root=query_root,
+        query_tag=sra_id,
+        input_path_by_suffix=input_path_by_suffix,
+    )
+    result_path = run_mmseqs_easy_search_single_fastq(
+        args=args,
+        input_path=query_input_path,
+        target_db=target_db,
+        result_tsv=result_tsv,
+        tmp_dir=tmp_dir,
+    )
+    remove_cores.update(parse_mmseqs_search_matched_cores(result_tsv_path=result_path))
+    metadata = accumulate_and_print_stage_duration(
+        metadata=metadata,
+        sra_stat=sra_stat,
+        column_name='sec_rrna_search',
+        elapsed_seconds=(time.perf_counter() - search_started_at),
+        stage_label='MMseqs rRNA search',
+    )
 
     output_path_by_suffix = {}
     counts_by_suffix = {}
+    rewrite_started_at = time.perf_counter()
     for suffix, input_path in input_path_by_suffix.items():
         output_name = output_name_by_suffix[suffix]
         output_path = os.path.join(output_dir, output_name)
@@ -2727,6 +3532,13 @@ def run_mmseqs_rrna_filter(
         output_path_by_suffix[suffix] = output_path
         counts_by_suffix[suffix] = (num_in, num_out, bp_in, bp_out)
         run_file_state.add(output_name)
+    metadata = accumulate_and_print_stage_duration(
+        metadata=metadata,
+        sra_stat=sra_stat,
+        column_name='sec_rrna_rewrite',
+        elapsed_seconds=(time.perf_counter() - rewrite_started_at),
+        stage_label='rRNA FASTQ rewrite',
+    )
 
     if layout == 'single':
         num_in, num_out, bp_in, bp_out = counts_by_suffix['']
@@ -2755,13 +3567,20 @@ def run_mmseqs_rrna_filter(
         known_input_counts=effective_input_counts,
         known_output_counts=known_output_counts,
     )
+    metadata = accumulate_and_print_stage_duration(
+        metadata=metadata,
+        sra_stat=sra_stat,
+        column_name='sec_rrna_filter',
+        elapsed_seconds=(time.perf_counter() - started_at),
+        stage_label='MMseqs rRNA filter',
+    )
     if bool(getattr(args, 'remove_tmp', False)):
         remove_intermediate_files(sra_stat, ext=inext, work_dir=output_dir)
         for input_name in input_names:
             run_file_state.discard(input_name)
         if os.path.isdir(mmseqs_root):
             shutil.rmtree(mmseqs_root)
-    set_current_intermediate_extension(sra_stat, '.rrna.fastq.gz')
+    set_current_intermediate_extension(sra_stat, '.rrna-filtered.fastq.gz')
     return finalize_run_fastp_return(
         metadata=metadata,
         run_file_state=run_file_state,
@@ -2793,25 +3612,36 @@ def run_rrna_filter(
     )
 
 def resolve_run_target_rank_taxid(metadata, sra_stat, rank_name):
-    rank_col = 'taxid_' + rank_name
-    if rank_col not in metadata.df.columns:
-        raise ValueError('Column "{}" is required in metadata for contaminant filtering.'.format(rank_col))
+    rank_cols = get_contam_filter_metadata_rank_columns(rank_name)
+    present_rank_cols = [col for col in rank_cols if col in metadata.df.columns]
+    expected_cols = ', '.join(rank_cols)
+    if len(present_rank_cols) == 0:
+        raise ValueError(
+            'One of the columns "{}" is required in metadata for contaminant filtering.'.format(expected_cols)
+        )
     ind_sra = sra_stat.get('metadata_idx', get_metadata_row_index_by_run(metadata, sra_stat['sra_id']))
-    raw_taxid = metadata.df.at[ind_sra, rank_col]
+    raw_taxid = pandas.NA
+    selected_rank_col = present_rank_cols[0]
+    for rank_col in present_rank_cols:
+        candidate_taxid = metadata.df.at[ind_sra, rank_col]
+        if not pandas.isna(candidate_taxid):
+            raw_taxid = candidate_taxid
+            selected_rank_col = rank_col
+            break
     if pandas.isna(raw_taxid):
         raise ValueError(
             'Missing metadata {} for run {}. Disable --contam_filter or use metadata with taxid lineage.'.format(
-                rank_col,
+                expected_cols,
                 sra_stat['sra_id'],
             )
         )
     try:
         target_rank_taxid = int(raw_taxid)
     except (TypeError, ValueError) as exc:
-        raise ValueError('Invalid {} value for run {}: {}'.format(rank_col, sra_stat['sra_id'], raw_taxid)) from exc
+        raise ValueError('Invalid {} value for run {}: {}'.format(selected_rank_col, sra_stat['sra_id'], raw_taxid)) from exc
     if target_rank_taxid <= 0:
         raise ValueError(
-            'Invalid metadata {} value for run {}: {}'.format(rank_col, sra_stat['sra_id'], raw_taxid)
+            'Invalid metadata {} value for run {}: {}'.format(selected_rank_col, sra_stat['sra_id'], raw_taxid)
         )
     return ind_sra, target_rank_taxid
 
@@ -2820,6 +3650,7 @@ def run_mmseqs_contam_filter(
     args,
     output_dir,
     metadata,
+    runtime_context=None,
     files=None,
     file_state=None,
     known_input_counts=None,
@@ -2835,6 +3666,7 @@ def run_mmseqs_contam_filter(
             return_files=return_files,
             return_file_state=return_file_state,
         )
+    started_at = time.perf_counter()
     run_file_state = _resolve_run_file_state(work_dir=output_dir, files=files, file_state=file_state)
     inext = get_or_detect_intermediate_extension(sra_stat, work_dir=output_dir, file_state=run_file_state)
     sra_id = sra_stat['sra_id']
@@ -2848,12 +3680,12 @@ def run_mmseqs_contam_filter(
     target_db = ensure_mmseqs_contam_taxonomy_db_exists(args)
     if layout == 'single':
         input_names = [sra_id + inext]
-        output_name_by_suffix = {'': sra_id + '.contam.fastq.gz'}
+        output_name_by_suffix = {'': sra_id + '.contam-filtered.fastq.gz'}
     elif layout == 'paired':
         input_names = [sra_id + '_1' + inext, sra_id + '_2' + inext]
         output_name_by_suffix = {
-            '_1': sra_id + '_1.contam.fastq.gz',
-            '_2': sra_id + '_2.contam.fastq.gz',
+            '_1': sra_id + '_1.contam-filtered.fastq.gz',
+            '_2': sra_id + '_2.contam-filtered.fastq.gz',
         }
     else:
         raise ValueError('Unsupported library layout for contaminant filtering: {}'.format(layout))
@@ -2873,32 +3705,44 @@ def run_mmseqs_contam_filter(
 
     mmseqs_root = os.path.join(output_dir, 'mmseqs_contam_work')
     ensure_empty_workdir(mmseqs_root)
+    ete_started_at = time.perf_counter()
     ncbi = get_ete_ncbitaxa(args=args)
+    metadata = accumulate_and_print_stage_duration(
+        metadata=metadata,
+        sra_stat=sra_stat,
+        column_name='sec_ete_taxonomy',
+        elapsed_seconds=(time.perf_counter() - ete_started_at),
+        stage_label='ETE taxonomy initialization',
+    )
     rank_cache = {}
     remove_cores = set()
-    for suffix, input_path in input_path_by_suffix.items():
-        query_tag = '{}{}'.format(sra_id, suffix)
-        query_root = os.path.join(mmseqs_root, query_tag)
-        result_prefix = os.path.join(query_root, 'result')
-        tmp_dir = os.path.join(query_root, 'tmp')
-        os.makedirs(query_root, exist_ok=True)
-        os.makedirs(tmp_dir, exist_ok=True)
-        lca_tsv = run_mmseqs_easy_taxonomy_single_fastq(
-            args=args,
-            input_path=input_path,
-            target_db=target_db,
-            result_prefix=result_prefix,
-            tmp_dir=tmp_dir,
+    query_root = os.path.join(mmseqs_root, sra_id)
+    result_prefix = os.path.join(query_root, 'result')
+    tmp_dir = os.path.join(query_root, 'tmp')
+    os.makedirs(query_root, exist_ok=True)
+    os.makedirs(tmp_dir, exist_ok=True)
+    query_input_path = build_mmseqs_query_input(
+        query_root=query_root,
+        query_tag=sra_id,
+        input_path_by_suffix=input_path_by_suffix,
+    )
+    lca_tsv = run_mmseqs_easy_taxonomy_single_fastq(
+        args=args,
+        input_path=query_input_path,
+        target_db=target_db,
+        result_prefix=result_prefix,
+        tmp_dir=tmp_dir,
+        runtime_context=runtime_context,
+    )
+    remove_cores.update(
+        parse_mmseqs_lca_mismatched_cores(
+            lca_tsv_path=lca_tsv,
+            target_rank=rank_name,
+            target_rank_taxid=target_rank_taxid,
+            ncbi=ncbi,
+            rank_cache=rank_cache,
         )
-        remove_cores.update(
-            parse_mmseqs_lca_mismatched_cores(
-                lca_tsv_path=lca_tsv,
-                target_rank=rank_name,
-                target_rank_taxid=target_rank_taxid,
-                ncbi=ncbi,
-                rank_cache=rank_cache,
-            )
-        )
+    )
     output_path_by_suffix = {}
     counts_by_suffix = {}
     for suffix, input_path in input_path_by_suffix.items():
@@ -2926,6 +3770,13 @@ def run_mmseqs_contam_filter(
     metadata.df.at[ind_sra, 'num_contam_out'] += int(num_out)
     metadata.df.at[ind_sra, 'bp_contam_in'] += int(bp_in)
     metadata.df.at[ind_sra, 'bp_contam_out'] += int(bp_out)
+    metadata = accumulate_and_print_stage_duration(
+        metadata=metadata,
+        sra_stat=sra_stat,
+        column_name='sec_contam_filter',
+        elapsed_seconds=(time.perf_counter() - started_at),
+        stage_label='contaminant filter',
+    )
 
     if bool(getattr(args, 'remove_tmp', False)):
         remove_intermediate_files(sra_stat, ext=inext, work_dir=output_dir)
@@ -2933,7 +3784,7 @@ def run_mmseqs_contam_filter(
             run_file_state.discard(input_name)
         if os.path.isdir(mmseqs_root):
             shutil.rmtree(mmseqs_root)
-    set_current_intermediate_extension(sra_stat, '.contam.fastq.gz')
+    set_current_intermediate_extension(sra_stat, '.contam-filtered.fastq.gz')
     return finalize_run_fastp_return(
         metadata=metadata,
         run_file_state=run_file_state,
@@ -3031,7 +3882,13 @@ def rename_reads(sra_stat, args, output_dir, files=None, file_state=None, return
         return run_file_state
     return run_file_state.to_set()
 
-def rename_fastq(sra_stat, output_dir, inext, outext):
+def rename_fastq(sra_stat, output_dir, inext, outext, validate_fastq=False):
+    def validate_single_file(path_fastq):
+        try:
+            shared_validate_fastq_structure(path_fastq)
+        except Exception as exc:
+            raise ValueError('FASTQ validation failed for {}. {}'.format(path_fastq, exc)) from exc
+
     def rename_single_file(in_path, out_path):
         if not os.path.exists(in_path):
             raise FileNotFoundError('Intermediate fastq file not found for renaming: {}'.format(in_path))
@@ -3043,10 +3900,15 @@ def rename_fastq(sra_stat, output_dir, inext, outext):
 
     if sra_stat['layout'] == 'single':
         inbase = os.path.join(output_dir, sra_stat['sra_id'])
+        if validate_fastq:
+            validate_single_file(inbase + inext)
         rename_single_file(inbase + inext, inbase + outext)
     elif sra_stat['layout'] == 'paired':
         inbase1 = os.path.join(output_dir, sra_stat['sra_id'] + '_1')
         inbase2 = os.path.join(output_dir, sra_stat['sra_id'] + '_2')
+        if validate_fastq:
+            validate_single_file(inbase1 + inext)
+            validate_single_file(inbase2 + inext)
         rename_single_file(inbase1 + inext, inbase1 + outext)
         rename_single_file(inbase2 + inext, inbase2 + outext)
     set_current_intermediate_extension(sra_stat, outext)
@@ -3151,6 +4013,10 @@ def print_read_stats(args, metadata, g, sra_stat=None, individual=False):
     rrna_filter = is_rrna_filter_enabled(args)
     contam_filter = is_contam_filter_enabled(args)
     rrna_label = 'MMseqs2 rRNA filter'
+    duration_specs = [
+        ('sec_sra_download', 'SRA download wall time'),
+        ('sec_fasterq_dump', 'fasterq-dump wall time'),
+    ]
     if sra_stat is None:
         df = metadata.df
         print('Target size (--max_bp): {:,} bp'.format(g['max_bp']))
@@ -3169,6 +4035,17 @@ def print_read_stats(args, metadata, g, sra_stat=None, individual=False):
     if contam_filter:
         print('Sum of contaminant-filter input reads: {:,} bp'.format(df['bp_contam_in'].sum()))
         print('Sum of contaminant-filter output reads: {:,} bp'.format(df['bp_contam_out'].sum()))
+    if args.fastp:
+        duration_specs.append(('sec_fastp', 'fastp wall time'))
+    if rrna_filter:
+        duration_specs.append(('sec_rrna_filter', '{} wall time'.format(rrna_label)))
+        duration_specs.append(('sec_rrna_search', 'MMseqs rRNA search wall time'))
+        duration_specs.append(('sec_rrna_rewrite', 'rRNA FASTQ rewrite wall time'))
+    if contam_filter:
+        duration_specs.append(('sec_contam_filter', 'contaminant-filter wall time'))
+        duration_specs.append(('sec_ete_taxonomy', 'ETE taxonomy wall time'))
+    for column_name, label in duration_specs:
+        print('Sum of {}: {}'.format(label, format_duration_seconds(sum_metadata_numeric_column(df, column_name))))
     if individual:
         print('Individual SRA IDs:', ' '.join(df['run'].values))
         read_types = list()
@@ -3190,6 +4067,9 @@ def print_read_stats(args, metadata, g, sra_stat=None, individual=False):
                 values = ['{:,}'.format(s) for s in df[key].values]
                 txt = ' '.join(values)
                 print('Individual {} (bp): {}'.format(rt, txt))
+        for column_name, label in duration_specs:
+            values = ['{:.1f}'.format(seconds) for seconds in get_metadata_numeric_column_values(df, column_name)]
+            print('Individual {} (sec): {}'.format(label, ' '.join(values)))
     print('')
 
 
@@ -3207,8 +4087,7 @@ def _apply_batch_to_entrez_metadata(metadata, args):
     txt = 'This is {:,}th job. In total, {:,} jobs will be necessary for this metadata table.'
     print(txt.format(batch, total_rows), flush=True)
     if batch > total_rows:
-        sys.stderr.write('--batch {} is too large. Exiting.\n'.format(batch_value))
-        sys.exit(0)
+        raise AmalgkitExit('--batch {} is too large. Exiting.'.format(batch_value), exit_code=0)
     metadata.df = metadata.df.reset_index(drop=True).loc[[batch - 1], :].copy()
     return metadata
 
@@ -3222,17 +4101,50 @@ def ensure_contam_filter_metadata_rank_taxids(metadata, args):
             'Use metadata generated by `amalgkit metadata` or provide taxid values.'
         )
     metadata.df['taxid'] = pandas.to_numeric(metadata.df['taxid'], errors='coerce').astype('Int64')
-    rank_cols = ['taxid_' + rank for rank in CONTAM_FILTER_SUPPORTED_RANKS]
-    missing_rank_cols = [col for col in rank_cols if col not in metadata.df.columns]
-    if len(missing_rank_cols) > 0:
-        metadata.add_standard_rank_taxids(args=args)
-    else:
-        for col in rank_cols:
+    rank_cols_by_rank = {
+        supported_rank: get_contam_filter_metadata_rank_columns(supported_rank)
+        for supported_rank in CONTAM_FILTER_SUPPORTED_RANKS
+    }
+    rank_cols = list(dict.fromkeys([
+        col
+        for column_group in rank_cols_by_rank.values()
+        for col in column_group
+    ]))
+    missing_rank_names = [
+        supported_rank
+        for supported_rank, column_group in rank_cols_by_rank.items()
+        if not any(col in metadata.df.columns for col in column_group)
+    ]
+    for col in rank_cols:
+        if col in metadata.df.columns:
             metadata.df[col] = pandas.to_numeric(metadata.df[col], errors='coerce').astype('Int64')
-    required_col = 'taxid_' + rank_name
-    if required_col not in metadata.df.columns:
-        raise ValueError('Failed to resolve metadata taxonomy rank column: {}'.format(required_col))
-    missing_mask = metadata.df[required_col].isna()
+
+    required_cols = get_contam_filter_metadata_rank_columns(rank_name)
+
+    def get_required_missing_mask():
+        available_required_cols = [col for col in required_cols if col in metadata.df.columns]
+        if len(available_required_cols) == 0:
+            return metadata.df['taxid'].notna()
+        has_required_taxid = pandas.Series(False, index=metadata.df.index)
+        for col in available_required_cols:
+            has_required_taxid = has_required_taxid | metadata.df[col].notna()
+        return metadata.df['taxid'].notna() & (~has_required_taxid)
+
+    should_refresh_rank_taxids = (len(missing_rank_names) > 0)
+    if not should_refresh_rank_taxids:
+        required_missing_mask = get_required_missing_mask()
+        should_refresh_rank_taxids = bool(required_missing_mask.any())
+    if should_refresh_rank_taxids:
+        started_at = time.perf_counter()
+        metadata.add_standard_rank_taxids(args=args)
+        print_stage_duration('preparing metadata taxonomy ranks', time.perf_counter() - started_at)
+        for col in rank_cols:
+            if col in metadata.df.columns:
+                metadata.df[col] = pandas.to_numeric(metadata.df[col], errors='coerce').astype('Int64')
+    available_required_cols = [col for col in required_cols if col in metadata.df.columns]
+    if len(available_required_cols) == 0:
+        raise ValueError('Failed to resolve metadata taxonomy rank column: {}'.format(' / '.join(required_cols)))
+    missing_mask = get_required_missing_mask()
     if missing_mask.any():
         run_values = metadata.df.loc[missing_mask, 'run'].fillna('').astype(str).tolist() if 'run' in metadata.df.columns else []
         run_values = [run_id for run_id in run_values if run_id.strip() != '']
@@ -3258,7 +4170,7 @@ def getfastq_metadata(args):
         sra_id = args.id
         search_term = getfastq_search_term(sra_id, args.entrez_additional_search_term)
         print('Entrez search term:', search_term)
-        xml_root = getfastq_getxml(search_term=search_term)
+        xml_root = _call_getfastq_getxml(search_term=search_term, args=args, verbose=True)
         metadata = Metadata.from_xml(xml_root=xml_root)
         print('Filtering SRA entry with --layout:', args.layout)
         layout = get_layout(args, metadata)
@@ -3279,8 +4191,7 @@ def getfastq_metadata(args):
         sra_id_list = _read_sra_id_list(id_list_path)
         metadata_frames = _fetch_id_list_metadata_frames(args, sra_id_list)
         if len(metadata_frames)==0:
-            print('No associated SRA is found with --id_list. Exiting.')
-            sys.exit(1)
+            raise RuntimeError('No associated SRA is found with --id_list.')
         metadata = Metadata.from_DataFrame(pandas.concat(metadata_frames, ignore_index=True))
         print('Filtering SRA entries with --layout:', args.layout)
         layout = get_layout(args, metadata)
@@ -3302,6 +4213,7 @@ def is_getfastq_output_present(sra_stat, files=None):
     if files is None:
         files = list_run_dir_files(sra_stat['getfastq_sra_dir'])
     sra_stat = detect_layout_from_file(sra_stat, files=files)
+    zero_output_stage = _detect_zero_output_stage_from_stats(sra_stat['getfastq_sra_dir'], sra_stat['sra_id'])
     prefixes = [sra_stat['sra_id'], ]
     if sra_stat['layout'] == 'single':
         sub_exts = ['', ]
@@ -3316,6 +4228,14 @@ def is_getfastq_output_present(sra_stat, files=None):
         out_path2 = os.path.join(sra_stat['getfastq_sra_dir'], out_name2)
         is_out1 = out_name1 in files
         is_out2 = out_name2 in files
+        if is_out1 and (not is_out2) and (zero_output_stage is not None):
+            print(
+                'Ignoring getfastq output because {} retained zero reads: {}'.format(
+                    zero_output_stage,
+                    out_path1,
+                )
+            )
+            is_out1 = False
         if is_out1:
             print('getfastq output detected: {}'.format(out_path1))
         if is_out2:
@@ -3352,6 +4272,7 @@ def collect_valid_run_ids(run_values, unique=False):
 
 def initialize_columns(metadata, g):
     time_keys = ['time_start_1st', 'time_end_1st', 'time_start_2nd', 'time_end_2nd',]
+    duration_keys = list(GETFASTQ_DURATION_COLUMNS)
     spot_keys = ['spot_start_1st', 'spot_end_1st', 'spot_start_2nd', 'spot_end_2nd',]
     keys = (['num_dumped', 'num_rejected', 'num_written', 'num_fastp_in', 'num_fastp_out',
              'num_rrna_in', 'num_rrna_out', 'num_contam_in', 'num_contam_out', 'bp_amalgkit',
@@ -3359,12 +4280,14 @@ def initialize_columns(metadata, g):
              'bp_rrna_in', 'bp_rrna_out', 'bp_contam_in', 'bp_contam_out', 'bp_discarded', 'spot_length_amalgkit',
              'bp_still_available', 'bp_specified_for_extraction','rate_obtained','layout_amalgkit',
              'fastp_duplication_rate', 'fastp_insert_size_peak',]
-            + time_keys + spot_keys)
+            + time_keys + duration_keys + spot_keys)
     for key in keys:
         if key=='layout_amalgkit':
             metadata.df.loc[:,key] = ''
         elif key in ['rate_obtained', 'fastp_duplication_rate', 'fastp_insert_size_peak']:
             metadata.df.loc[:, key] = numpy.nan
+        elif key in (time_keys + duration_keys):
+            metadata.df.loc[:, key] = 0.0
         else:
             metadata.df.loc[:,key] = 0
     metadata.df.loc[:, 'bp_until_target_size'] = g['num_bp_per_sra']
@@ -3372,11 +4295,12 @@ def initialize_columns(metadata, g):
     for col in cols:
         if any([ dtype in str(metadata.df[col].dtype) for dtype in ['str','object'] ]):
             metadata.df[col] = metadata.df.loc[:,col].astype(str).str.replace('^$', 'nan', regex=True).astype(float)
-    for col in time_keys:
+    for col in (time_keys + duration_keys):
         metadata.df[col] = metadata.df[col].astype(float)
     return metadata
 
-def sequence_extraction(args, sra_stat, metadata, g, start, end):
+def sequence_extraction(args, sra_stat, metadata, g, start, end, runtime_context=None):
+    runtime_context = ensure_getfastq_runtime_context(runtime_context)
     sra_id = sra_stat['sra_id']
     ind_sra = sra_stat.get('metadata_idx', get_metadata_row_index_by_run(metadata, sra_id))
     prev_num_written = metadata.df.at[ind_sra, 'num_written']
@@ -3437,6 +4361,8 @@ def sequence_extraction(args, sra_stat, metadata, g, start, end):
                 'bp_total': max(0, int(delta_out)),
             }
             latest_stage_source = 'fastp'
+            if _stage_counts_indicate_no_reads(latest_stage_counts):
+                return _stop_after_zero_output_stage(metadata, sra_stat, 'fastp')
             continue
         if filter_name == 'rrna':
             prev_rrna_in = metadata.df.at[ind_sra, 'bp_rrna_in']
@@ -3461,6 +4387,8 @@ def sequence_extraction(args, sra_stat, metadata, g, start, end):
                 'bp_total': max(0, int(delta_out)),
             }
             latest_stage_source = 'rrna'
+            if _stage_counts_indicate_no_reads(latest_stage_counts):
+                return _stop_after_zero_output_stage(metadata, sra_stat, 'rrna')
             continue
         if filter_name == 'contam':
             prev_contam_in = metadata.df.at[ind_sra, 'bp_contam_in']
@@ -3471,6 +4399,7 @@ def sequence_extraction(args, sra_stat, metadata, g, start, end):
                 args=args,
                 output_dir=sra_stat['getfastq_sra_dir'],
                 metadata=metadata,
+                runtime_context=runtime_context,
                 file_state=run_file_state,
                 return_file_state=True,
             )
@@ -3483,6 +4412,8 @@ def sequence_extraction(args, sra_stat, metadata, g, start, end):
                 'bp_total': max(0, int(delta_out)),
             }
             latest_stage_source = 'contam'
+            if _stage_counts_indicate_no_reads(latest_stage_counts):
+                return _stop_after_zero_output_stage(metadata, sra_stat, 'contam')
             continue
         raise ValueError('Unsupported filter name in execution order: {}'.format(filter_name))
     if args.read_name == 'trinity':
@@ -3495,7 +4426,7 @@ def sequence_extraction(args, sra_stat, metadata, g, start, end):
         )
     inext = get_or_detect_intermediate_extension(sra_stat, work_dir=sra_stat['getfastq_sra_dir'])
     outext = '.amalgkit.fastq.gz'
-    rename_fastq(sra_stat, sra_stat['getfastq_sra_dir'], inext, outext)
+    rename_fastq(sra_stat, sra_stat['getfastq_sra_dir'], inext, outext, validate_fastq=True)
     metadata.df.at[ind_sra,'bp_still_available'] = sra_stat['spot_length'] * (sra_stat['total_spot'] - end)
     bp_specified_for_extraction = sra_stat['spot_length'] * (end - start)
     metadata.df.at[ind_sra, 'bp_specified_for_extraction'] += bp_specified_for_extraction
@@ -3506,7 +4437,8 @@ def sequence_extraction(args, sra_stat, metadata, g, start, end):
     write_getfastq_stats(sra_stat=sra_stat, metadata=metadata, output_dir=sra_stat['getfastq_sra_dir'])
     return metadata
 
-def sequence_extraction_1st_round(args, sra_stat, metadata, g):
+def sequence_extraction_1st_round(args, sra_stat, metadata, g, runtime_context=None):
+    runtime_context = ensure_getfastq_runtime_context(runtime_context)
     offset = 10000
     ind_sra = sra_stat.get('metadata_idx', get_metadata_row_index_by_run(metadata, sra_stat['sra_id']))
     metadata.df.at[ind_sra, 'time_start_1st'] = time.time()
@@ -3514,7 +4446,7 @@ def sequence_extraction_1st_round(args, sra_stat, metadata, g):
     metadata.df.at[ind_sra, 'spot_length_amalgkit'] = sra_stat['spot_length']
     metadata.df.at[ind_sra,'spot_start_1st'] = start
     metadata.df.at[ind_sra,'spot_end_1st'] = end
-    metadata = sequence_extraction(args, sra_stat, metadata, g, start, end)
+    metadata = sequence_extraction(args, sra_stat, metadata, g, start, end, runtime_context=runtime_context)
     txt = 'Time elapsed for 1st-round sequence extraction: {}, {:,.1f} sec'
     print(txt.format(sra_stat['sra_id'], int(time.time() - g['start_time'])))
     print('\n--- getfastq 1st-round sequence generation report ---')
@@ -3530,7 +4462,8 @@ def sequence_extraction_1st_round(args, sra_stat, metadata, g):
     print('')
     return metadata
 
-def sequence_extraction_2nd_round(args, sra_stat, metadata, g):
+def sequence_extraction_2nd_round(args, sra_stat, metadata, g, runtime_context=None):
+    runtime_context = ensure_getfastq_runtime_context(runtime_context)
     print('Starting the 2nd-round sequence extraction.')
     ind_sra = sra_stat.get('metadata_idx', get_metadata_row_index_by_run(metadata, sra_stat['sra_id']))
     metadata.df.at[ind_sra,'time_start_2nd'] = time.time()
@@ -3551,7 +4484,7 @@ def sequence_extraction_2nd_round(args, sra_stat, metadata, g):
         return metadata
     else:
         rename_fastq(sra_stat, sra_stat['getfastq_sra_dir'], inext=ext_main, outext=ext_1st_tmp)
-    metadata = sequence_extraction(args, sra_stat, metadata, g, start, end)
+    metadata = sequence_extraction(args, sra_stat, metadata, g, start, end, runtime_context=runtime_context)
     if (layout == 'single'):
         subexts = ['']
     elif (layout == 'paired'):
@@ -3605,7 +4538,8 @@ def sequence_extraction_2nd_round(args, sra_stat, metadata, g):
     print('')
     return metadata
 
-def sequence_extraction_private(metadata, sra_stat, args):
+def sequence_extraction_private(metadata, sra_stat, args, runtime_context=None):
+    runtime_context = ensure_getfastq_runtime_context(runtime_context)
     ind_sra = sra_stat.get('metadata_idx', get_metadata_row_index_by_run(metadata, sra_stat['sra_id']))
     for col in ['read1_path','read2_path']:
         path_from_raw = metadata.df.at[ind_sra, col]
@@ -3616,10 +4550,10 @@ def sequence_extraction_private(metadata, sra_stat, args):
         if path_from == '' or path_from.lower() == 'nan':
             sys.stderr.write('Private fastq file path is missing in metadata column "{}".\n'.format(col))
             continue
-        path_to = os.path.join(sra_stat['getfastq_sra_dir'], os.path.basename(path_from))
-        path_to = path_to.replace('.fq', '.fastq')
-        if not path_to.endswith('.gz'):
-            path_to = path_to+'.gz' # .gz is necessary even if the original file is not compressed.
+        suffix = ''
+        if sra_stat['layout'] == 'paired':
+            suffix = '_1' if col == 'read1_path' else '_2'
+        path_to = os.path.join(sra_stat['getfastq_sra_dir'], sra_stat['sra_id'] + suffix + '.fastq.gz')
         if os.path.isfile(path_from):
             if os.path.lexists(path_to):
                 if os.path.isdir(path_to) and (not os.path.islink(path_to)):
@@ -3650,6 +4584,8 @@ def sequence_extraction_private(metadata, sra_stat, args):
                 'bp_total': max(0, int(delta_bp_out)),
             }
             latest_stage_source = 'fastp'
+            if _stage_counts_indicate_no_reads(latest_stage_counts):
+                return _stop_after_zero_output_stage(metadata, sra_stat, 'fastp')
             continue
         if filter_name == 'rrna':
             rrna_known_input_counts = latest_stage_counts if (latest_stage_source == 'fastp') else None
@@ -3670,6 +4606,7 @@ def sequence_extraction_private(metadata, sra_stat, args):
                 args=args,
                 output_dir=sra_stat['getfastq_sra_dir'],
                 metadata=metadata,
+                runtime_context=runtime_context,
             )
             delta_num_out = metadata.df.at[ind_sra, 'num_contam_out'] - prev_num_contam_out
             delta_bp_out = metadata.df.at[ind_sra, 'bp_contam_out'] - prev_bp_contam_out
@@ -3684,7 +4621,7 @@ def sequence_extraction_private(metadata, sra_stat, args):
     if (inext=='no_extension_found')&(sra_stat['layout']=='paired'):
         raise ValueError('Paired-end file names may be invalid. They should contain _1 and _2 to indicate a pair: {}'.format(sra_stat['sra_id']))
     outext = '.amalgkit.fastq.gz'
-    rename_fastq(sra_stat, sra_stat['getfastq_sra_dir'], inext, outext)
+    rename_fastq(sra_stat, sra_stat['getfastq_sra_dir'], inext, outext, validate_fastq=True)
     write_getfastq_stats(sra_stat=sra_stat, metadata=metadata, output_dir=sra_stat['getfastq_sra_dir'])
     return metadata
 
@@ -3762,7 +4699,8 @@ def initialize_global_params(args, metadata):
     print('Target size per SRA: {:,} bp'.format(g['num_bp_per_sra']))
     return g
 
-def process_getfastq_run(args, row_index, sra_id, run_row_df, g):
+def process_getfastq_run(args, row_index, sra_id, run_row_df, g, runtime_context=None):
+    runtime_context = ensure_getfastq_runtime_context(runtime_context)
     print('')
     print('Processing SRA ID: {}'.format(sra_id))
     run_metadata = Metadata.from_DataFrame(run_row_df)
@@ -3791,11 +4729,19 @@ def process_getfastq_run(args, row_index, sra_id, run_row_df, g):
         if run_metadata.df.at[0, 'private_file'] == 'yes':
             print('Processing {} as private data. --max_bp is disabled.'.format(sra_id), flush=True)
             flag_private_file = True
-            sequence_extraction_private(run_metadata, sra_stat, args)
+            sequence_extraction_private(run_metadata, sra_stat, args, runtime_context=runtime_context)
     if not flag_private_file:
         print('Processing {} as publicly available data from SRA.'.format(sra_id), flush=True)
+        download_started_at = time.perf_counter()
         download_sra(run_metadata, sra_stat, args, sra_stat['getfastq_sra_dir'], overwrite=False)
-        run_metadata = sequence_extraction_1st_round(args, sra_stat, run_metadata, g)
+        run_metadata = accumulate_and_print_stage_duration(
+            metadata=run_metadata,
+            sra_stat=sra_stat,
+            column_name='sec_sra_download',
+            elapsed_seconds=(time.perf_counter() - download_started_at),
+            stage_label='SRA download',
+        )
+        run_metadata = sequence_extraction_1st_round(args, sra_stat, run_metadata, g, runtime_context=runtime_context)
     return {
         'row_index': row_index,
         'sra_id': sra_id,
@@ -3806,8 +4752,22 @@ def process_getfastq_run(args, row_index, sra_id, run_row_df, g):
     }
 
 
-def run_first_round_getfastq(args, metadata, run_rows, g, jobs):
+def _build_run_runtime_context_map(run_rows, runtime_context=None):
+    if runtime_context is not None:
+        shared_context = ensure_getfastq_runtime_context(runtime_context)
+        return {
+            sra_id: shared_context
+            for _row_index, sra_id in run_rows
+        }
+    return {
+        sra_id: GetfastqRuntimeContext()
+        for _row_index, sra_id in run_rows
+    }
+
+
+def run_first_round_getfastq(args, metadata, run_rows, g, jobs, runtime_context=None):
     run_results_by_id = dict()
+    runtime_context_by_run = _build_run_runtime_context_map(run_rows, runtime_context=runtime_context)
     if (jobs == 1) or (len(run_rows) <= 1):
         for row_index, sra_id in run_rows:
             run_results_by_id[sra_id] = process_getfastq_run(
@@ -3816,6 +4776,7 @@ def run_first_round_getfastq(args, metadata, run_rows, g, jobs):
                 sra_id=sra_id,
                 run_row_df=metadata.df.loc[[row_index], :].copy(),
                 g=g,
+                runtime_context=runtime_context_by_run[sra_id],
             )
         return run_results_by_id
 
@@ -3829,6 +4790,7 @@ def run_first_round_getfastq(args, metadata, run_rows, g, jobs):
             run_row[1],
             metadata.df.loc[[run_row[0]], :].copy(),
             g,
+            runtime_context_by_run[run_row[1]],
         ),
         max_workers=max_workers,
     )
@@ -3858,7 +4820,16 @@ def apply_first_round_getfastq_results(metadata, run_rows, run_results_by_id):
     return metadata, flag_private_file, flag_any_output_file_present, last_getfastq_sra_dir
 
 
-def maybe_run_getfastq_second_round(args, metadata, run_rows, g, flag_private_file, flag_any_output_file_present):
+def maybe_run_getfastq_second_round(
+    args,
+    metadata,
+    run_rows,
+    g,
+    flag_private_file,
+    flag_any_output_file_present,
+    runtime_context=None,
+):
+    runtime_context = ensure_getfastq_runtime_context(runtime_context)
     if flag_private_file or flag_any_output_file_present:
         return metadata
     g['rate_obtained_1st'] = metadata.df.loc[:, 'bp_amalgkit'].sum() / g['max_bp']
@@ -3872,7 +4843,13 @@ def maybe_run_getfastq_second_round(args, metadata, run_rows, g, flag_private_fi
             for _, sra_id in run_rows:
                 sra_stat = get_sra_stat(sra_id, metadata, g['num_bp_per_sra'])
                 sra_stat['getfastq_sra_dir'] = get_getfastq_run_dir(args, sra_id)
-                metadata = sequence_extraction_2nd_round(args, sra_stat, metadata, g)
+                metadata = sequence_extraction_2nd_round(
+                    args,
+                    sra_stat,
+                    metadata,
+                    g,
+                    runtime_context=runtime_context,
+                )
     else:
         print('Sufficient data were obtained in the 1st-round sequence extraction. Proceeding without the 2nd round.')
     g['rate_obtained_2nd'] = metadata.df.loc[:, 'bp_amalgkit'].sum() / g['max_bp']
@@ -3896,6 +4873,14 @@ def run_getfastq_postprocessing(args, metadata, last_getfastq_sra_dir, flag_any_
 
 
 def getfastq_main(args):
+    if not is_auto_parallel_option(getattr(args, 'threads', 'auto')):
+        validate_positive_int_option(getattr(args, 'threads', 'auto'), 'threads')
+    if not is_auto_parallel_option(getattr(args, 'internal_jobs', 'auto')):
+        validate_positive_int_option(getattr(args, 'internal_jobs', 'auto'), 'internal_jobs')
+    metadata_args = clone_namespace(args)
+    metadata = getfastq_metadata(metadata_args)
+    metadata = remove_experiment_without_run(metadata)
+    run_rows = list(zip(metadata.df.index.tolist(), metadata.df['run'].tolist()))
     threads, jobs, _ = resolve_thread_worker_allocation(
         requested_threads=getattr(args, 'threads', 'auto'),
         requested_workers=getattr(args, 'internal_jobs', 'auto'),
@@ -3903,25 +4888,28 @@ def getfastq_main(args):
         worker_option_name='internal_jobs',
         context='getfastq:',
         disable_workers=(getattr(args, 'batch', None) is not None),
+        task_count=len(run_rows),
     )
-    args.threads = threads
-    args.internal_jobs = jobs
-    check_getfastq_dependency(args)
-    metadata = getfastq_metadata(args)
-    metadata = remove_experiment_without_run(metadata)
-    metadata = ensure_contam_filter_metadata_rank_taxids(metadata, args)
+    runtime_args = clone_namespace(args, threads=threads, internal_jobs=jobs)
+    check_getfastq_dependency(runtime_args)
+    metadata = ensure_contam_filter_metadata_rank_taxids(metadata, runtime_args)
     metadata = check_metadata_validity(metadata)
-    g = initialize_global_params(args, metadata)
+    g = initialize_global_params(runtime_args, metadata)
     metadata = initialize_columns(metadata, g)
-    run_rows = list(zip(metadata.df.index.tolist(), metadata.df['run'].tolist()))
-    run_results_by_id = run_first_round_getfastq(args=args, metadata=metadata, run_rows=run_rows, g=g, jobs=jobs)
+    run_results_by_id = run_first_round_getfastq(
+        args=runtime_args,
+        metadata=metadata,
+        run_rows=run_rows,
+        g=g,
+        jobs=jobs,
+    )
     metadata, flag_private_file, flag_any_output_file_present, last_getfastq_sra_dir = apply_first_round_getfastq_results(
         metadata=metadata,
         run_rows=run_rows,
         run_results_by_id=run_results_by_id,
     )
     metadata = maybe_run_getfastq_second_round(
-        args=args,
+        args=runtime_args,
         metadata=metadata,
         run_rows=run_rows,
         g=g,
@@ -3929,7 +4917,7 @@ def getfastq_main(args):
         flag_any_output_file_present=flag_any_output_file_present,
     )
     run_getfastq_postprocessing(
-        args=args,
+        args=runtime_args,
         metadata=metadata,
         last_getfastq_sra_dir=last_getfastq_sra_dir,
         flag_any_output_file_present=flag_any_output_file_present,

@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 from amalgkit.merge import (
     collect_valid_run_ids,
+    generate_merge_plot_pdfs,
     merge_fastp_stats_into_metadata,
     merge_species_quant_tables,
     merge_main,
@@ -57,8 +58,19 @@ class TestMergeFastpStatsIntoMetadata:
             'bp_rejected': 300,
             'bp_written': 700,
             'bp_discarded': 500,
+            'sec_sra_download': 0.5,
+            'sec_fasterq_dump': 1.5,
+            'sec_fastp': 2.5,
+            'sec_rrna_filter': 3.5,
+            'sec_rrna_search': 3.0,
+            'sec_rrna_rewrite': 0.5,
+            'sec_contam_filter': 4.5,
+            'sec_ete_taxonomy': 1.25,
             'fastp_duplication_rate': 12.5,
             'fastp_insert_size_peak': 250.0,
+            'percent_fastp_filtered': 14.2857,
+            'percent_rrna_filtered': 16.6667,
+            'percent_contam_filtered': 10.0,
         }]).to_csv(srr001_dir / 'getfastq_stats.tsv', sep='\t', index=False)
 
         metadata = merge_fastp_stats_into_metadata(metadata, str(tmp_path))
@@ -68,8 +80,19 @@ class TestMergeFastpStatsIntoMetadata:
         assert metadata.df.loc[0, 'bp_dumped'] == 1000
         assert metadata.df.loc[0, 'bp_rejected'] == 300
         assert metadata.df.loc[0, 'bp_discarded'] == 500
+        assert metadata.df.loc[0, 'sec_sra_download'] == 0.5
+        assert metadata.df.loc[0, 'sec_fasterq_dump'] == 1.5
+        assert metadata.df.loc[0, 'sec_fastp'] == 2.5
+        assert metadata.df.loc[0, 'sec_rrna_filter'] == 3.5
+        assert metadata.df.loc[0, 'sec_rrna_search'] == 3.0
+        assert metadata.df.loc[0, 'sec_rrna_rewrite'] == 0.5
+        assert metadata.df.loc[0, 'sec_contam_filter'] == 4.5
+        assert metadata.df.loc[0, 'sec_ete_taxonomy'] == 1.25
         assert metadata.df.loc[0, 'fastp_duplication_rate'] == 12.5
         assert metadata.df.loc[0, 'fastp_insert_size_peak'] == 250.0
+        assert metadata.df.loc[0, 'percent_fastp_filtered'] == pytest.approx(14.2857)
+        assert metadata.df.loc[0, 'percent_rrna_filtered'] == pytest.approx(16.6667)
+        assert metadata.df.loc[0, 'percent_contam_filtered'] == pytest.approx(10.0)
 
     def test_rejects_metadata_without_run_column(self, tmp_path):
         metadata = Metadata.from_DataFrame(pandas.DataFrame({
@@ -122,8 +145,26 @@ class TestMergeFastpStatsIntoMetadata:
         assert 'fastp_insert_size_peak' in metadata.df.columns
         assert 'num_rejected' in metadata.df.columns
         assert 'bp_rejected' in metadata.df.columns
+        assert 'sec_sra_download' in metadata.df.columns
+        assert 'sec_fasterq_dump' in metadata.df.columns
+        assert 'sec_fastp' in metadata.df.columns
+        assert 'sec_rrna_search' in metadata.df.columns
+        assert 'sec_rrna_rewrite' in metadata.df.columns
+        assert 'sec_ete_taxonomy' in metadata.df.columns
+        assert 'percent_fastp_filtered' in metadata.df.columns
+        assert 'percent_rrna_filtered' in metadata.df.columns
+        assert 'percent_contam_filtered' in metadata.df.columns
         assert numpy.isnan(metadata.df.loc[0, 'fastp_duplication_rate'])
         assert numpy.isnan(metadata.df.loc[0, 'fastp_insert_size_peak'])
+        assert numpy.isnan(metadata.df.loc[0, 'sec_sra_download'])
+        assert numpy.isnan(metadata.df.loc[0, 'sec_fasterq_dump'])
+        assert numpy.isnan(metadata.df.loc[0, 'sec_fastp'])
+        assert numpy.isnan(metadata.df.loc[0, 'sec_rrna_search'])
+        assert numpy.isnan(metadata.df.loc[0, 'sec_rrna_rewrite'])
+        assert numpy.isnan(metadata.df.loc[0, 'sec_ete_taxonomy'])
+        assert numpy.isnan(metadata.df.loc[0, 'percent_fastp_filtered'])
+        assert numpy.isnan(metadata.df.loc[0, 'percent_rrna_filtered'])
+        assert numpy.isnan(metadata.df.loc[0, 'percent_contam_filtered'])
 
     def test_rejects_getfastq_file_path(self, tmp_path):
         metadata = Metadata.from_DataFrame(pandas.DataFrame({
@@ -506,7 +547,6 @@ def test_scan_quant_abundance_paths_rejects_file_path(tmp_path):
 
 def test_merge_main_rejects_nonpositive_species_jobs(tmp_path, monkeypatch):
     args = SimpleNamespace(out_dir=str(tmp_path), internal_jobs=0, metadata='inferred')
-    monkeypatch.setattr('amalgkit.merge.check_rscript', lambda: None)
     with pytest.raises(ValueError, match='--internal_jobs must be > 0'):
         merge_main(args)
 
@@ -515,7 +555,6 @@ def test_merge_main_rejects_out_dir_file_path(tmp_path, monkeypatch):
     out_path = tmp_path / 'out_path'
     out_path.write_text('not a directory')
     args = SimpleNamespace(out_dir=str(out_path), internal_jobs=1, metadata='inferred')
-    monkeypatch.setattr('amalgkit.merge.check_rscript', lambda: None)
 
     with pytest.raises(NotADirectoryError, match='Output path exists but is not a directory'):
         merge_main(args)
@@ -526,7 +565,6 @@ def test_merge_main_rejects_merge_path_file(tmp_path, monkeypatch):
     out_dir.mkdir()
     (out_dir / 'merge').write_text('not a directory')
     args = SimpleNamespace(out_dir=str(out_dir), internal_jobs=1, metadata='inferred')
-    monkeypatch.setattr('amalgkit.merge.check_rscript', lambda: None)
 
     with pytest.raises(NotADirectoryError, match='Merge path exists but is not a directory'):
         merge_main(args)
@@ -541,7 +579,6 @@ def test_merge_main_rejects_metadata_without_valid_scientific_name(tmp_path, mon
         'exclusion': ['no'],
     }))
     args = SimpleNamespace(out_dir=str(out_dir), internal_jobs=1, metadata='inferred')
-    monkeypatch.setattr('amalgkit.merge.check_rscript', lambda: None)
     monkeypatch.setattr('amalgkit.merge.load_metadata', lambda _args: metadata)
 
     with pytest.raises(ValueError, match='No valid scientific_name entries were found'):
@@ -557,7 +594,6 @@ def test_merge_main_rejects_metadata_without_run_column(tmp_path, monkeypatch):
     }))
     metadata.df = metadata.df.drop(columns=['run'])
     args = SimpleNamespace(out_dir=str(out_dir), internal_jobs=1, metadata='inferred')
-    monkeypatch.setattr('amalgkit.merge.check_rscript', lambda: None)
     monkeypatch.setattr('amalgkit.merge.load_metadata', lambda _args: metadata)
 
     with pytest.raises(ValueError, match='Missing required metadata column\\(s\\) for merge: run'):
@@ -574,7 +610,6 @@ def test_merge_main_raises_when_no_quant_abundance_detected(tmp_path, monkeypatc
     }))
     args = SimpleNamespace(out_dir=str(out_dir), internal_jobs=1, metadata='inferred')
 
-    monkeypatch.setattr('amalgkit.merge.check_rscript', lambda: None)
     monkeypatch.setattr('amalgkit.merge.load_metadata', lambda _args: metadata)
     monkeypatch.setattr('amalgkit.merge.merge_species_quant_tables', lambda **_kwargs: 0)
     monkeypatch.setattr(
@@ -601,12 +636,11 @@ def test_merge_main_parallel_species_jobs(tmp_path, monkeypatch):
         processed.append(sp)
         return 1
 
-    monkeypatch.setattr('amalgkit.merge.check_rscript', lambda: None)
     monkeypatch.setattr('amalgkit.merge.load_metadata', lambda _args: metadata)
     monkeypatch.setattr('amalgkit.merge.merge_species_quant_tables', fake_merge_species)
     monkeypatch.setattr('amalgkit.merge.merge_fastp_stats_into_metadata', lambda m, _d, max_workers='auto': m)
     monkeypatch.setattr('amalgkit.merge.write_updated_metadata', lambda _m, _p, _a, max_workers='auto': None)
-    monkeypatch.setattr('amalgkit.merge.subprocess.check_call', lambda _cmd: 0)
+    monkeypatch.setattr('amalgkit.merge.generate_merge_plot_pdfs', lambda merge_dir, path_metadata_merge: None)
 
     merge_main(args)
 
@@ -631,20 +665,19 @@ def test_merge_main_cpu_budget_caps_species_jobs_to_serial(tmp_path, monkeypatch
     def fail_if_called(*_args, **_kwargs):
         raise AssertionError('run_tasks_with_optional_threads should not be used when --internal_cpu_budget caps internal_jobs to 1.')
 
-    monkeypatch.setattr('amalgkit.merge.check_rscript', lambda: None)
     monkeypatch.setattr('amalgkit.merge.load_metadata', lambda _args: metadata)
     monkeypatch.setattr('amalgkit.merge.merge_species_quant_tables', fake_merge_species)
     monkeypatch.setattr('amalgkit.merge.run_tasks_with_optional_threads', fail_if_called)
     monkeypatch.setattr('amalgkit.merge.merge_fastp_stats_into_metadata', lambda m, _d, max_workers='auto': m)
     monkeypatch.setattr('amalgkit.merge.write_updated_metadata', lambda _m, _p, _a, max_workers='auto': None)
-    monkeypatch.setattr('amalgkit.merge.subprocess.check_call', lambda _cmd: 0)
+    monkeypatch.setattr('amalgkit.merge.generate_merge_plot_pdfs', lambda merge_dir, path_metadata_merge: None)
 
     merge_main(args)
 
     assert set(processed) == {'Species A', 'Species B'}
 
 
-def test_merge_main_calls_check_rscript(tmp_path, monkeypatch):
+def test_merge_main_runs_without_legacy_r_hooks(tmp_path, monkeypatch):
     out_dir = tmp_path / 'out'
     out_dir.mkdir()
     metadata = Metadata.from_DataFrame(pandas.DataFrame({
@@ -653,18 +686,98 @@ def test_merge_main_calls_check_rscript(tmp_path, monkeypatch):
         'exclusion': ['no'],
     }))
     args = SimpleNamespace(out_dir=str(out_dir), internal_jobs=1, metadata='inferred')
-    called = {'check_rscript': 0}
-
-    def fake_check_rscript():
-        called['check_rscript'] += 1
-
-    monkeypatch.setattr('amalgkit.merge.check_rscript', fake_check_rscript)
     monkeypatch.setattr('amalgkit.merge.load_metadata', lambda _args: metadata)
     monkeypatch.setattr('amalgkit.merge.merge_species_quant_tables', lambda **_kwargs: 1)
     monkeypatch.setattr('amalgkit.merge.merge_fastp_stats_into_metadata', lambda m, _d, max_workers='auto': m)
     monkeypatch.setattr('amalgkit.merge.write_updated_metadata', lambda _m, _p, _a, max_workers='auto': None)
-    monkeypatch.setattr('amalgkit.merge.subprocess.check_call', lambda _cmd: 0)
+    monkeypatch.setattr('amalgkit.merge.generate_merge_plot_pdfs', lambda merge_dir, path_metadata_merge: None)
 
     merge_main(args)
 
-    assert called['check_rscript'] == 1
+
+def test_merge_main_prunes_stale_species_outputs(tmp_path, monkeypatch):
+    out_dir = tmp_path / 'out'
+    out_dir.mkdir()
+    stale_dir = out_dir / 'merge' / 'Stale_Species'
+    stale_dir.mkdir(parents=True)
+    (stale_dir / 'stale.tsv').write_text('old')
+    metadata = Metadata.from_DataFrame(pandas.DataFrame({
+        'run': ['R1'],
+        'scientific_name': ['Species A'],
+        'exclusion': ['no'],
+    }))
+    args = SimpleNamespace(out_dir=str(out_dir), internal_jobs=1, metadata='inferred')
+
+    def fake_merge_species(sp, metadata=None, quant_dir=None, merge_dir=None, run_abundance_paths=None):
+        _ = (metadata, quant_dir, run_abundance_paths)
+        species_dir = os.path.join(merge_dir, sp.replace(' ', '_'))
+        os.makedirs(species_dir, exist_ok=True)
+        pandas.DataFrame({'target_id': ['G1'], 'R1': [1.0]}).to_csv(
+            os.path.join(species_dir, 'Species_A_tpm.tsv'),
+            sep='\t',
+            index=False,
+        )
+        return 1
+
+    monkeypatch.setattr('amalgkit.merge.load_metadata', lambda _args: metadata)
+    monkeypatch.setattr('amalgkit.merge.merge_species_quant_tables', fake_merge_species)
+    monkeypatch.setattr('amalgkit.merge.merge_fastp_stats_into_metadata', lambda m, _d, max_workers='auto': m)
+    monkeypatch.setattr(
+        'amalgkit.merge.write_updated_metadata',
+        lambda _m, path, _a, max_workers='auto': pandas.DataFrame({'run': ['R1']}).to_csv(path, sep='\t', index=False),
+    )
+    monkeypatch.setattr(
+        'amalgkit.merge.generate_merge_plot_pdfs',
+        lambda merge_dir, path_metadata_merge: (open(os.path.join(merge_dir, 'merge_summary.pdf'), 'w').write('ok'), path_metadata_merge),
+    )
+
+    merge_main(args)
+
+    assert not stale_dir.exists()
+    assert (out_dir / 'merge' / 'Species_A' / 'Species_A_tpm.tsv').exists()
+    assert (out_dir / 'merge' / 'metadata.tsv').exists()
+    assert (out_dir / 'merge' / 'merge_summary.pdf').exists()
+
+
+def test_generate_merge_plot_pdfs_writes_python_pdf_outputs(tmp_path):
+    merge_dir = tmp_path / 'merge'
+    merge_dir.mkdir()
+    species_dir = merge_dir / 'Species_A'
+    species_dir.mkdir()
+    pandas.DataFrame(
+        {
+            'target_id': ['G1', 'G2'],
+            'RUN1': [10.0, 20.0],
+            'RUN2': [30.0, 40.0],
+        }
+    ).to_csv(species_dir / 'Species_A_est_counts.tsv', sep='\t', index=False)
+    metadata_path = merge_dir / 'metadata.tsv'
+    pandas.DataFrame(
+        {
+            'run': ['RUN1', 'RUN2', 'RUN3', 'RUN4'],
+            'scientific_name': ['Species A', 'Species A', 'Species B', 'Species B'],
+            'exclusion': ['no', 'no', 'no', 'yes'],
+            'mapping_rate': [80.0, 90.0, 75.0, 50.0],
+            'total_spots': [1000.0, 1200.0, 900.0, 800.0],
+            'total_bases': [2000.0, 2400.0, 1800.0, 1600.0],
+            'lib_layout': ['single', 'paired', 'single', 'paired'],
+            'fastp_duplication_rate': [10.0, 20.0, 15.0, 25.0],
+            'fastp_insert_size_peak': [180.0, 220.0, 200.0, 260.0],
+        }
+    ).to_csv(metadata_path, sep='\t', index=False)
+
+    generate_merge_plot_pdfs(str(merge_dir), str(metadata_path))
+
+    expected_paths = [
+        merge_dir / 'merge_mapping_rate.pdf',
+        merge_dir / 'merge_total_spots.pdf',
+        merge_dir / 'merge_total_bases.pdf',
+        merge_dir / 'merge_library_layout.pdf',
+        merge_dir / 'merge_mean_expression_boxplot.pdf',
+        merge_dir / 'merge_fastp_duplication_rate_histogram.pdf',
+        merge_dir / 'merge_fastp_insert_size_peak_histogram.pdf',
+        merge_dir / 'merge_exclusion.pdf',
+    ]
+    for path in expected_paths:
+        assert path.exists()
+        assert path.stat().st_size > 0

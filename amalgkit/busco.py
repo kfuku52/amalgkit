@@ -4,17 +4,25 @@ import re
 import shlex
 import shutil
 import subprocess
-import sys
+import warnings
 
 import pandas
 
-from amalgkit.util import (
+from amalgkit.arg_utils import clone_namespace
+from amalgkit.download_utils import (
     acquire_exclusive_lock,
-    find_species_prefixed_entries,
-    load_metadata,
-    run_tasks_with_optional_threads,
-    resolve_thread_worker_allocation,
+    resolve_download_dir,
+    resolve_download_lock_path,
 )
+from amalgkit.filter_utils import staged_output_dir
+from amalgkit.metadata_utils import (
+    is_private_fastq_scientific_name_placeholder,
+    load_metadata,
+)
+from amalgkit.orthology_utils import parse_busco_species_name
+from amalgkit.parallel_utils import resolve_thread_worker_allocation, run_tasks_with_optional_threads
+from amalgkit.prefix_utils import find_species_prefixed_entries
+from amalgkit.subprocess_utils import run_checked_command
 
 
 REQUIRED_COLUMNS = [
@@ -29,6 +37,47 @@ REQUIRED_COLUMNS = [
 
 
 FASTA_SUFFIXES = ('.fa', '.fasta', '.fa.gz', '.fasta.gz')
+BUSCO_OPTION_VALUE_ARITY = {
+    '-i': 1,
+    '--in': 1,
+    '-o': 1,
+    '--out': 1,
+    '-m': 1,
+    '--mode': 1,
+    '-l': 1,
+    '--lineage_dataset': 1,
+    '-c': 1,
+    '--cpu': 1,
+    '--out_path': 1,
+    '--download_path': 1,
+    '--download': 1,
+    '--download_base_url': 1,
+    '--datasets_version': 1,
+    '--config': 1,
+}
+BUSCO_ANALYSIS_RESERVED_OPTIONS = {
+    '-i',
+    '--in',
+    '-o',
+    '--out',
+    '-m',
+    '--mode',
+    '-l',
+    '--lineage_dataset',
+    '-c',
+    '--cpu',
+    '--out_path',
+    '--download_path',
+    '--download',
+    '--offline',
+}
+BUSCO_DOWNLOAD_FORWARD_OPTIONS = {
+    '--config',
+    '--datasets_version',
+    '--download_base_url',
+    '-q',
+    '--quiet',
+}
 
 
 def validate_busco_metadata_columns(metadata, required_columns):
@@ -127,6 +176,195 @@ def normalize_busco_table(src_path, dest_path):
     with open(dest_path, 'w') as f:
         f.write('# Busco id\tStatus\tSequence\tScore\tLength\tOrthoDB url\tDescription\n')
         df.to_csv(f, sep='\t', index=False, header=False)
+
+
+def _load_pyplot():
+    try:
+        import matplotlib
+        matplotlib.use('Agg', force=True)
+        from matplotlib import pyplot
+    except Exception as exc:
+        warnings.warn('matplotlib is required to generate BUSCO completeness plot: {}'.format(exc))
+        return None
+    return pyplot
+
+
+def _normalize_busco_id_series(series):
+    return (
+        series.fillna('')
+        .astype(str)
+        .str.lower()
+        .str.replace(r'[^a-z0-9]', '', regex=True)
+    )
+
+
+def _list_normalized_busco_tables(busco_dir):
+    tables = []
+    with os.scandir(busco_dir) as entries:
+        for entry in entries:
+            if not entry.is_file():
+                continue
+            if not entry.name.lower().endswith('_busco.tsv'):
+                continue
+            tables.append(entry.name)
+    return sorted(tables)
+
+
+def summarize_busco_species_tables(busco_dir, species_order=None):
+    table_names = _list_normalized_busco_tables(busco_dir)
+    if len(table_names) == 0:
+        return pandas.DataFrame(columns=['species', 'status', 'count']), 0
+    frames = []
+    for table_name in table_names:
+        path = os.path.join(busco_dir, table_name)
+        tmp = pandas.read_table(
+            path,
+            sep='\t',
+            header=None,
+            comment='#',
+            names=REQUIRED_COLUMNS,
+            dtype=str,
+            low_memory=False,
+        )
+        tmp = tmp.loc[_normalize_busco_id_series(tmp.loc[:, 'busco_id']) != 'buscoid', ['busco_id', 'status']].copy()
+        if tmp.empty:
+            continue
+        tmp.loc[:, 'species'] = parse_busco_species_name(table_name).replace('_', ' ')
+        tmp.loc[:, 'status'] = tmp.loc[:, 'status'].fillna('').astype(str).str.strip()
+        tmp.loc[tmp.loc[:, 'status'] == 'Complete', 'status'] = 'Single'
+        tmp = tmp.loc[tmp.loc[:, 'status'].isin(['Single', 'Duplicated', 'Fragmented', 'Missing']), :]
+        if tmp.empty:
+            continue
+        frames.append(tmp.loc[:, ['species', 'status', 'busco_id']].drop_duplicates())
+    if len(frames) == 0:
+        return pandas.DataFrame(columns=['species', 'status', 'count']), 0
+    combined = pandas.concat(frames, axis=0, ignore_index=True)
+    summary = (
+        combined.groupby(['species', 'status'], sort=False)['busco_id']
+        .nunique()
+        .reset_index(name='count')
+    )
+    expected_statuses = ['Single', 'Duplicated', 'Fragmented', 'Missing']
+    species_seen = list(dict.fromkeys(summary.loc[:, 'species'].tolist()))
+    ordered_species = []
+    if species_order is not None:
+        ordered_species.extend(
+            sp for sp in [str(species).strip() for species in species_order]
+            if (sp != '') and (sp in species_seen)
+        )
+    ordered_species.extend([sp for sp in species_seen if sp not in ordered_species])
+    full_index = pandas.MultiIndex.from_product(
+        [ordered_species, expected_statuses],
+        names=['species', 'status'],
+    )
+    summary = (
+        summary.set_index(['species', 'status'])
+        .reindex(full_index, fill_value=0)
+        .reset_index()
+    )
+    total_buscos = int(
+        summary.loc[summary.loc[:, 'status'].isin(expected_statuses), :]
+        .groupby('species', sort=False)['count']
+        .sum()
+        .max()
+    )
+    return summary, total_buscos
+
+
+def generate_busco_species_plot(busco_dir, species_order=None, out_path=None, font_size=8):
+    if out_path is None:
+        out_path = os.path.join(busco_dir, 'busco_completeness.pdf')
+    summary, total_buscos = summarize_busco_species_tables(busco_dir, species_order=species_order)
+    if summary.empty:
+        print('No normalized BUSCO tables were found for plot generation at: {}'.format(busco_dir), flush=True)
+        return None
+    pyplot = _load_pyplot()
+    if pyplot is None:
+        return None
+    colors = {
+        'Single': '#000000',
+        'Duplicated': '#b22222',
+        'Fragmented': '#666666',
+        'Missing': '#cccccc',
+    }
+    status_order = ['Single', 'Duplicated', 'Fragmented', 'Missing']
+    species_labels = list(dict.fromkeys(summary.loc[:, 'species'].tolist()))
+    plot_height = max(0.72, 0.12 * len(species_labels) + 0.34)
+    legend_height = 0.74
+    figure = pyplot.figure(figsize=(3.6, plot_height + legend_height))
+    left_margin = min(0.78, max(0.50, 0.18 + 0.013 * max(len(label) for label in species_labels)))
+    plot_bottom = 0.54
+    plot_top = 0.74
+    axis = figure.add_axes([left_margin, plot_bottom, 0.96 - left_margin, plot_top - plot_bottom])
+    positions = list(range(len(species_labels)))
+    bottoms = [0.0] * len(species_labels)
+    pivot = (
+        summary.pivot(index='species', columns='status', values='count')
+        .reindex(index=species_labels, columns=status_order)
+        .fillna(0.0)
+    )
+    for status in status_order:
+        values = pivot.loc[:, status].to_numpy(dtype=float)
+        axis.barh(
+            positions,
+            values,
+            left=bottoms,
+            color=colors[status],
+            label=status,
+            height=0.544,
+        )
+        bottoms = [bottoms[i] + values[i] for i in range(len(values))]
+    axis.set_yticks(positions)
+    axis.set_yticklabels(species_labels, fontsize=float(font_size))
+    axis.set_xlabel('BUSCO count', fontsize=float(font_size))
+    axis.tick_params(axis='x', labelsize=float(font_size))
+    axis.tick_params(axis='y', length=0)
+    axis.spines['top'].set_visible(False)
+    axis.spines['right'].set_visible(False)
+    axis.set_ylim(-0.5, max(positions) + 0.5)
+    if total_buscos > 0:
+        axis.set_xlim(0.0, float(total_buscos))
+        top_axis = axis.secondary_xaxis(
+            'top',
+            functions=(
+                lambda value: value / float(total_buscos) * 100.0,
+                lambda value: value / 100.0 * float(total_buscos),
+            ),
+        )
+        top_axis.set_xlabel('Percent', fontsize=float(font_size))
+        top_axis.tick_params(axis='x', labelsize=float(font_size))
+    legend_axis = figure.add_axes([left_margin, 0.08, 0.96 - left_margin, 0.18])
+    legend_axis.set_axis_off()
+    legend_layout = [
+        ('Single', 0.02, 0.64),
+        ('Fragmented', 0.54, 0.64),
+        ('Duplicated', 0.02, 0.18),
+        ('Missing', 0.54, 0.18),
+    ]
+    for label, x_pos, y_pos in legend_layout:
+        legend_axis.add_patch(
+            pyplot.Rectangle(
+                (x_pos, y_pos),
+                0.10,
+                0.20,
+                transform=legend_axis.transAxes,
+                facecolor=colors[label],
+                edgecolor='none',
+            )
+        )
+        legend_axis.text(
+            x_pos + 0.14,
+            y_pos + 0.10,
+            label,
+            transform=legend_axis.transAxes,
+            va='center',
+            ha='left',
+            fontsize=float(font_size),
+        )
+    figure.savefig(os.path.realpath(out_path), format='pdf')
+    pyplot.close(figure)
+    print('BUSCO completeness plot written: {}'.format(out_path), flush=True)
+    return out_path
 
 
 def find_full_table(output_dir):
@@ -249,28 +487,84 @@ def ensure_clean_dir(path, redo):
 
 
 def run_command(cmd):
-    print('Command: {}'.format(' '.join(cmd)), flush=True)
-    out = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    print(out.stdout.decode('utf8', errors='replace'))
-    print(out.stderr.decode('utf8', errors='replace'))
-    if out.returncode != 0:
-        raise RuntimeError('Command failed with exit code {}: {}'.format(out.returncode, ' '.join(cmd)))
-
-def resolve_download_dir(args):
-    raw_dir = getattr(args, 'download_dir', 'inferred')
-    if raw_dir is None:
-        return os.path.join(os.path.realpath(args.out_dir), 'downloads')
-    normalized = str(raw_dir).strip()
-    if normalized.lower() in ['', 'inferred']:
-        return os.path.join(os.path.realpath(args.out_dir), 'downloads')
-    return os.path.realpath(normalized)
+    run_checked_command(
+        command=cmd,
+        runner=subprocess.run,
+        print_command=True,
+        print_output=True,
+    )
 
 
-def _sanitize_lock_suffix(text):
-    normalized = re.sub(r'[^A-Za-z0-9._-]+', '_', str(text).strip())
-    if normalized == '':
-        return 'lineage'
-    return normalized
+def _consume_busco_extra_arg(extra_args, start_index):
+    token = extra_args[start_index]
+    if not token.startswith('-'):
+        return [token], None
+    option_name = token.split('=', 1)[0]
+    if '=' in token:
+        return [token], option_name
+    arity = BUSCO_OPTION_VALUE_ARITY.get(option_name, 0)
+    end_index = min(len(extra_args), start_index + 1 + arity)
+    return extra_args[start_index:end_index], option_name
+
+
+def split_busco_extra_args(extra_args):
+    analysis_args = []
+    download_args = []
+    index = 0
+    while index < len(extra_args):
+        tokens, option_name = _consume_busco_extra_arg(extra_args, index)
+        if option_name in BUSCO_DOWNLOAD_FORWARD_OPTIONS:
+            download_args.extend(tokens)
+        if option_name is None:
+            analysis_args.extend(tokens)
+        elif option_name not in BUSCO_ANALYSIS_RESERVED_OPTIONS:
+            analysis_args.extend(tokens)
+        index += len(tokens)
+    return analysis_args, download_args
+
+
+def build_busco_analysis_command(fasta_path, sci_name, output_root, args, extra_args):
+    out_name = sci_name.replace(' ', '_')
+    download_path = resolve_busco_download_path(args)
+    analysis_extra_args, _ = split_busco_extra_args(extra_args)
+    cmd = [
+        args.busco_exe,
+        '-i', fasta_path,
+        '-o', out_name,
+        '-l', args.lineage,
+        '-m', 'transcriptome',
+        '--out_path', output_root,
+        '--download_path', download_path,
+        '--cpu', str(args.threads),
+    ]
+    if args.redo:
+        cmd.append('--force')
+    cmd.extend(analysis_extra_args)
+    cmd.append('--offline')
+    return cmd
+
+
+def build_busco_download_command(args, extra_args):
+    _, download_extra_args = split_busco_extra_args(extra_args)
+    download_path = resolve_busco_download_path(args)
+    cmd = [args.busco_exe]
+    cmd.extend(download_extra_args)
+    cmd.extend([
+        '--download_path', download_path,
+        '--download', args.lineage,
+    ])
+    return cmd
+
+
+def resolve_busco_download_path(args):
+    return os.path.join(resolve_download_dir(args), 'busco_downloads')
+
+
+def resolve_busco_download_lock_path(args, lineage):
+    return resolve_download_lock_path(
+        args=args,
+        lock_name='busco_{}'.format(lineage),
+    )
 
 
 def _dir_has_entries(path_dir):
@@ -307,40 +601,34 @@ def has_busco_lineage_cache(download_path, lineage):
 
 def run_busco(fasta_path, sci_name, output_root, args, extra_args):
     out_name = sci_name.replace(' ', '_')
-    download_path = resolve_download_dir(args)
+    download_root = resolve_download_dir(args)
+    if os.path.exists(download_root) and (not os.path.isdir(download_root)):
+        raise NotADirectoryError(
+            'BUSCO download path exists but is not a directory: {}'.format(download_root)
+        )
+    os.makedirs(download_root, exist_ok=True)
+    download_path = resolve_busco_download_path(args)
     if os.path.exists(download_path) and (not os.path.isdir(download_path)):
         raise NotADirectoryError(
             'BUSCO download path exists but is not a directory: {}'.format(download_path)
         )
     os.makedirs(download_path, exist_ok=True)
-    cmd = [
-        args.busco_exe,
-        '-i', fasta_path,
-        '-o', out_name,
-        '-l', args.lineage,
-        '-m', 'transcriptome',
-        '--out_path', output_root,
-        '--download_path', download_path,
-        '--cpu', str(args.threads),
-    ]
-    if args.redo:
-        cmd.append('--force')
-    cmd.extend(extra_args)
+    analysis_cmd = build_busco_analysis_command(
+        fasta_path=fasta_path,
+        sci_name=sci_name,
+        output_root=output_root,
+        args=args,
+        extra_args=extra_args,
+    )
     if has_busco_lineage_cache(download_path=download_path, lineage=args.lineage):
-        run_command(cmd)
+        run_command(analysis_cmd)
         return os.path.join(output_root, out_name)
 
-    lock_filename = '.busco_{}.download.lock'.format(_sanitize_lock_suffix(args.lineage))
-    lock_path = os.path.join(download_path, lock_filename)
-    cache_ready_from_other_process = False
+    lock_path = resolve_busco_download_lock_path(args, args.lineage)
     with acquire_exclusive_lock(lock_path=lock_path, lock_label='BUSCO lineage download'):
-        if has_busco_lineage_cache(download_path=download_path, lineage=args.lineage):
-            cache_ready_from_other_process = True
-        else:
-            run_command(cmd)
-            return os.path.join(output_root, out_name)
-    if cache_ready_from_other_process:
-        run_command(cmd)
+        if not has_busco_lineage_cache(download_path=download_path, lineage=args.lineage):
+            run_command(build_busco_download_command(args=args, extra_args=extra_args))
+    run_command(analysis_cmd)
     return os.path.join(output_root, out_name)
 
 
@@ -368,6 +656,11 @@ def collect_species(args, metadata):
         species_name = str(args.species).strip()
         if species_name == '':
             raise ValueError('--species must not be empty when --fasta is provided.')
+        if is_private_fastq_scientific_name_placeholder(species_name):
+            raise ValueError(
+                'Placeholder scientific_name from amalgkit integrate cannot be used for busco. '
+                'Edit --species before running busco.'
+            )
         fasta_path = os.path.realpath(args.fasta)
         if not os.path.exists(fasta_path):
             raise FileNotFoundError('FASTA file not found: {}'.format(fasta_path))
@@ -390,6 +683,11 @@ def collect_species(args, metadata):
         normalized = str(species_name).strip()
         if normalized == '':
             continue
+        if is_private_fastq_scientific_name_placeholder(normalized):
+            raise ValueError(
+                'Placeholder scientific_name from amalgkit integrate was found in metadata. '
+                'Edit the "scientific_name" column before running busco.'
+            )
         species.append(normalized)
     # Preserve order while de-duplicating.
     species = list(dict.fromkeys(species))
@@ -459,7 +757,6 @@ def busco_main(args):
     lineage = str(getattr(args, 'lineage', '')).strip()
     if lineage == '':
         raise ValueError('--lineage is required.')
-    args.lineage = lineage
     threads, species_jobs, _ = resolve_thread_worker_allocation(
         requested_threads=getattr(args, 'threads', 'auto'),
         requested_workers=getattr(args, 'internal_jobs', 'auto'),
@@ -467,25 +764,29 @@ def busco_main(args):
         worker_option_name='internal_jobs',
         context='busco:',
     )
-    args.threads = threads
-    args.internal_jobs = species_jobs
     out_dir = os.path.realpath(args.out_dir)
     if os.path.exists(out_dir) and (not os.path.isdir(out_dir)):
         raise NotADirectoryError('Output path exists but is not a directory: {}'.format(out_dir))
     busco_dir = os.path.join(out_dir, 'busco')
     if os.path.exists(busco_dir) and (not os.path.isdir(busco_dir)):
         raise NotADirectoryError('BUSCO path exists but is not a directory: {}'.format(busco_dir))
-    tool = select_tool(args)
-    extra_args = shlex.split(args.tool_args) if args.tool_args else []
-    metadata = load_metadata_if_needed_for_busco(args)
-    species, fasta_map = collect_species(args, metadata)
-    os.makedirs(busco_dir, exist_ok=True)
-    run_busco_species_jobs(
-        species=species,
-        fasta_map=fasta_map,
-        busco_dir=busco_dir,
-        tool=tool,
-        args=args,
-        extra_args=extra_args,
-        species_jobs=species_jobs,
-    )
+    runtime_args = clone_namespace(args, lineage=lineage, threads=threads, internal_jobs=species_jobs, out_dir=out_dir)
+    tool = select_tool(runtime_args)
+    extra_args = shlex.split(runtime_args.tool_args) if runtime_args.tool_args else []
+    metadata = load_metadata_if_needed_for_busco(runtime_args)
+    species, fasta_map = collect_species(runtime_args, metadata)
+    with staged_output_dir(busco_dir, redo=runtime_args.redo, prefix='amalgkit_busco_stage_') as stage_dir:
+        run_busco_species_jobs(
+            species=species,
+            fasta_map=fasta_map,
+            busco_dir=stage_dir,
+            tool=tool,
+            args=runtime_args,
+            extra_args=extra_args,
+            species_jobs=species_jobs,
+        )
+        generate_busco_species_plot(
+            busco_dir=stage_dir,
+            species_order=species,
+            out_path=os.path.join(stage_dir, 'busco_completeness.pdf'),
+        )

@@ -1,8 +1,22 @@
-import os
+import numpy
 import pytest
+import pandas
 from types import SimpleNamespace
 
 from amalgkit.cstmm import filepath2spp, get_count_files, cstmm_main
+from amalgkit.normalization_tmm import run_tmm_rounds_for_cstmm
+
+
+def _read_dcf(path):
+    config = {}
+    with open(path, encoding='utf-8') as handle:
+        for raw_line in handle:
+            line = raw_line.rstrip('\n')
+            if line == '':
+                continue
+            key, value = line.split(':', 1)
+            config[key] = value.lstrip()
+    return config
 
 
 class TestFilepath2spp:
@@ -121,6 +135,49 @@ class TestGetCountFiles:
 
 
 class TestCstmmMain:
+    @staticmethod
+    def _write_multi_species_fixture(base_dir):
+        merge_dir = base_dir / 'merge'
+        species_a_dir = merge_dir / 'Species_A'
+        species_b_dir = merge_dir / 'Species_B'
+        species_a_dir.mkdir(parents=True)
+        species_b_dir.mkdir(parents=True)
+        (merge_dir / 'metadata.tsv').write_text(
+            'run\tscientific_name\texclusion\tsample_group\tmapping_rate\n'
+            'R1\tSpecies A\tno\tleaf\t100\n'
+            'R2\tSpecies A\tno\troot\t100\n'
+            'R1\tSpecies B\tno\tleaf\t100\n'
+            'R2\tSpecies B\tno\troot\t100\n'
+        )
+        (species_a_dir / 'Species_A_est_counts.tsv').write_text(
+            'target_id\tR1\tR2\n'
+            'geneA1\t100\t120\n'
+            'geneA2\t50\t60\n'
+            'geneA3\t30\t40\n'
+            'geneA4\t5\t8\n'
+        )
+        (species_b_dir / 'Species_B_est_counts.tsv').write_text(
+            'target_id\tR1\tR2\n'
+            'geneB1\t80\t0\n'
+            'geneB2\t60\t0\n'
+            'geneB3\t20\t0\n'
+            'geneB4\t7\t0\n'
+        )
+        for species_name, genes in [
+            ('Species_A', ['geneA1', 'geneA2', 'geneA3', 'geneA4']),
+            ('Species_B', ['geneB1', 'geneB2', 'geneB3', 'geneB4']),
+        ]:
+            eff_length_rows = ['target_id\tR1\tR2'] + ['{}\t1000\t1000'.format(gene_id) for gene_id in genes]
+            (merge_dir / species_name / '{}_eff_length.tsv'.format(species_name)).write_text('\n'.join(eff_length_rows) + '\n')
+        orthogroup = base_dir / 'orthogroup.tsv'
+        orthogroup.write_text(
+            'busco_id\tSpecies_A\tSpecies_B\n'
+            'OG1\tgeneA1\tgeneB1\n'
+            'OG2\tgeneA2\tgeneB2\n'
+            'OG3\tgeneA3\tgeneB3\n'
+        )
+        return merge_dir, orthogroup
+
     def test_rejects_out_dir_file_path(self, tmp_path):
         out_path = tmp_path / 'out_path'
         out_path.write_text('not a directory')
@@ -151,18 +208,18 @@ class TestCstmmMain:
         merge_dir = out_dir / 'merge'
         species_dir = merge_dir / 'Species_A'
         species_dir.mkdir(parents=True)
+        (merge_dir / 'metadata.tsv').write_text(
+            'run\tscientific_name\texclusion\tsample_group\tmapping_rate\n'
+            'R1\tSpecies A\tno\tleaf\t100\n'
+        )
         (species_dir / 'Species_A_est_counts.tsv').write_text('target_id\tR1\nG1\t1\n')
+        (species_dir / 'Species_A_eff_length.tsv').write_text('target_id\tR1\nG1\t1000\n')
         args = SimpleNamespace(
             out_dir=str(out_dir),
             dir_count='inferred',
             dir_busco=None,
             orthogroup_table=None,
         )
-        captured = {}
-
-        monkeypatch.setattr('amalgkit.cstmm.check_rscript', lambda: None)
-        monkeypatch.setattr('amalgkit.cstmm.cleanup_tmp_amalgkit_files', lambda work_dir: None)
-        monkeypatch.setattr('amalgkit.cstmm.subprocess.check_call', lambda cmd: captured.setdefault('cmd', cmd))
         monkeypatch.setattr(
             'amalgkit.cstmm.orthogroup2genecount',
             lambda **_kwargs: (_ for _ in ()).throw(AssertionError('orthogroup2genecount should not run for single species')),
@@ -170,9 +227,8 @@ class TestCstmmMain:
 
         cstmm_main(args)
 
-        assert captured['cmd'][6] == 'single_species'
-        assert captured['cmd'][3] == ''
-        assert captured['cmd'][4] == ''
+        assert (out_dir / 'cstmm' / 'Species_A' / 'Species_A_cstmm_counts.tsv').is_file()
+        assert (out_dir / 'cstmm' / 'metadata.tsv').is_file()
 
     def test_multi_species_requires_ortholog_inputs(self, tmp_path, monkeypatch):
         out_dir = tmp_path / 'out'
@@ -188,7 +244,6 @@ class TestCstmmMain:
             orthogroup_table=None,
         )
 
-        monkeypatch.setattr('amalgkit.cstmm.check_rscript', lambda: None)
         with pytest.raises(ValueError, match='One of --orthogroup_table and --dir_busco should be specified'):
             cstmm_main(args)
 
@@ -206,7 +261,6 @@ class TestCstmmMain:
             orthogroup_table=str(tmp_path / 'missing.tsv'),
         )
 
-        monkeypatch.setattr('amalgkit.cstmm.check_rscript', lambda: None)
         with pytest.raises(FileNotFoundError, match='Orthogroup table not found'):
             cstmm_main(args)
 
@@ -226,7 +280,6 @@ class TestCstmmMain:
             orthogroup_table=str(og_dir),
         )
 
-        monkeypatch.setattr('amalgkit.cstmm.check_rscript', lambda: None)
         with pytest.raises(IsADirectoryError, match='Orthogroup table path exists but is not a file'):
             cstmm_main(args)
 
@@ -246,6 +299,217 @@ class TestCstmmMain:
             orthogroup_table=None,
         )
 
-        monkeypatch.setattr('amalgkit.cstmm.check_rscript', lambda: None)
         with pytest.raises(FileNotFoundError, match='No est_counts.tsv file found for species directory\\(ies\\): Species_B'):
             cstmm_main(args)
+
+    def test_existing_output_requires_redo(self, tmp_path, monkeypatch):
+        out_dir = tmp_path / 'out'
+        merge_dir = out_dir / 'merge'
+        for species in ['Species_A', 'Species_B']:
+            species_dir = merge_dir / species
+            species_dir.mkdir(parents=True)
+            (species_dir / f'{species}_est_counts.tsv').write_text('target_id\tR1\nG1\t1\n')
+        (out_dir / 'cstmm').mkdir()
+        orthogroup = tmp_path / 'orthogroup.tsv'
+        orthogroup.write_text('busco_id\tSpecies_A\tSpecies_B\nOG1\tgene1\tgene2\n')
+        args = SimpleNamespace(
+            out_dir=str(out_dir),
+            dir_count='inferred',
+            dir_busco=None,
+            orthogroup_table=str(orthogroup),
+            redo=False,
+        )
+
+        with pytest.raises(FileExistsError, match='Use --redo yes to overwrite'):
+            cstmm_main(args)
+
+    def test_restores_existing_output_when_staged_run_fails(self, tmp_path, monkeypatch):
+        out_dir = tmp_path / 'out'
+        merge_dir = out_dir / 'merge'
+        for species in ['Species_A', 'Species_B']:
+            species_dir = merge_dir / species
+            species_dir.mkdir(parents=True)
+            (species_dir / f'{species}_est_counts.tsv').write_text('target_id\tR1\nG1\t1\n')
+        existing_dir = out_dir / 'cstmm'
+        existing_dir.mkdir()
+        (existing_dir / 'old.txt').write_text('old')
+        orthogroup = tmp_path / 'orthogroup.tsv'
+        orthogroup.write_text('busco_id\tSpecies_A\tSpecies_B\nOG1\tgene1\tgene2\n')
+        args = SimpleNamespace(
+            out_dir=str(out_dir),
+            dir_count='inferred',
+            dir_busco=None,
+            orthogroup_table=str(orthogroup),
+            redo=True,
+        )
+
+        monkeypatch.setattr(
+            'amalgkit.cstmm.orthogroup2genecount',
+            lambda **_kwargs: (_ for _ in ()).throw(RuntimeError('boom')),
+        )
+
+        with pytest.raises(RuntimeError, match='boom'):
+            cstmm_main(args)
+
+        assert (existing_dir / 'old.txt').read_text() == 'old'
+
+    def test_python_single_species_backend_writes_counts_metadata_and_plots(self, tmp_path, monkeypatch):
+        out_dir = tmp_path / 'out'
+        merge_dir = out_dir / 'merge'
+        species_dir = merge_dir / 'Species_A'
+        species_dir.mkdir(parents=True)
+        (merge_dir / 'metadata.tsv').write_text(
+            'run\tscientific_name\texclusion\tsample_group\tmapping_rate\n'
+            'R1\tSpecies A\tno\tleaf\t100\n'
+            'R2\tSpecies A\tno\troot\t100\n'
+        )
+        (species_dir / 'Species_A_est_counts.tsv').write_text(
+            'target_id\tR1\tR2\n'
+            'G1\t100\t90\n'
+            'G2\t110\t100\n'
+            'G3\t120\t110\n'
+            'G4\t130\t120\n'
+            'G5\t10\t20\n'
+            'G6\t11\t21\n'
+        )
+        (species_dir / 'Species_A_eff_length.tsv').write_text(
+            'target_id\tR1\tR2\n'
+            'G1\t1000\t1000\n'
+            'G2\t1000\t1000\n'
+            'G3\t1000\t1000\n'
+            'G4\t1000\t1000\n'
+            'G5\t1000\t1000\n'
+            'G6\t1000\t1000\n'
+        )
+        args = SimpleNamespace(
+            out_dir=str(out_dir),
+            dir_count='inferred',
+            dir_busco=None,
+            orthogroup_table=None,
+            redo=False,
+            tmm_backend='python',
+        )
+        cleaned = {}
+        monkeypatch.setattr('amalgkit.cstmm.cleanup_tmp_amalgkit_files', lambda work_dir: cleaned.setdefault('work_dir', work_dir))
+
+        cstmm_main(args)
+
+        counts_path = out_dir / 'cstmm' / 'Species_A' / 'Species_A_cstmm_counts.tsv'
+        metadata_path = out_dir / 'cstmm' / 'metadata.tsv'
+        eff_length_path = out_dir / 'cstmm' / 'Species_A' / 'Species_A_eff_length.tsv'
+        assert counts_path.is_file()
+        assert metadata_path.is_file()
+        assert eff_length_path.is_file()
+        assert (out_dir / 'cstmm' / 'cstmm_normalization_factor_histogram.scientific_name.pdf').is_file()
+        assert (out_dir / 'cstmm' / 'cstmm_normalization_factor_histogram.sample_group.pdf').is_file()
+        assert (out_dir / 'cstmm' / 'cstmm_normalization_factor_scatter.pdf').is_file()
+        assert (out_dir / 'cstmm' / 'cstmm_mean_expression_boxplot.pdf').is_file()
+        assert (out_dir / 'cstmm' / 'cstmm_exclusion.pdf').is_file()
+        assert cleaned['work_dir'] == '.'
+
+        corrected = pandas.read_csv(counts_path, sep='\t')
+        corrected_matrix = corrected.set_index('target_id')
+        original = pandas.DataFrame(
+            {'Species_A_R1': [100, 110, 120, 130, 10, 11], 'Species_A_R2': [90, 100, 110, 120, 20, 21]},
+            index=['G1', 'G2', 'G3', 'G4', 'G5', 'G6'],
+        ).astype(float)
+        roundtrip = run_tmm_rounds_for_cstmm(original)
+        expected = original.copy()
+        for sample_id, factor in roundtrip.round2_factors.items():
+            expected.loc[:, sample_id] = expected.loc[:, sample_id] / factor
+        expected.columns = ['R1', 'R2']
+        expected.index.name = 'target_id'
+        pandas.testing.assert_frame_equal(corrected_matrix, expected)
+
+        metadata_df = pandas.read_csv(metadata_path, sep='\t')
+        assert 'tmm_library_size' in metadata_df.columns
+        assert 'tmm_normalization_factor' in metadata_df.columns
+        assert set(metadata_df['exclusion']) == {'no'}
+
+    def test_python_multi_species_backend_writes_counts_metadata_and_plots(self, tmp_path, monkeypatch):
+        out_dir = tmp_path / 'out'
+        merge_dir, orthogroup = self._write_multi_species_fixture(out_dir)
+        args = SimpleNamespace(
+            out_dir=str(out_dir),
+            dir_count='inferred',
+            dir_busco=None,
+            orthogroup_table=str(orthogroup),
+            redo=False,
+            tmm_backend='python',
+        )
+        cleaned = {}
+        monkeypatch.setattr('amalgkit.cstmm.cleanup_tmp_amalgkit_files', lambda work_dir: cleaned.setdefault('work_dir', work_dir))
+
+        cstmm_main(args)
+
+        metadata_path = out_dir / 'cstmm' / 'metadata.tsv'
+        species_a_counts_path = out_dir / 'cstmm' / 'Species_A' / 'Species_A_cstmm_counts.tsv'
+        species_b_counts_path = out_dir / 'cstmm' / 'Species_B' / 'Species_B_cstmm_counts.tsv'
+        assert metadata_path.is_file()
+        assert species_a_counts_path.is_file()
+        assert species_b_counts_path.is_file()
+        assert (out_dir / 'cstmm' / 'Species_A' / 'Species_A_eff_length.tsv').is_file()
+        assert (out_dir / 'cstmm' / 'Species_B' / 'Species_B_eff_length.tsv').is_file()
+        assert (out_dir / 'cstmm' / 'cstmm_normalization_factor_histogram.scientific_name.pdf').is_file()
+        assert (out_dir / 'cstmm' / 'cstmm_normalization_factor_histogram.sample_group.pdf').is_file()
+        assert (out_dir / 'cstmm' / 'cstmm_normalization_factor_scatter.pdf').is_file()
+        assert (out_dir / 'cstmm' / 'cstmm_mean_expression_boxplot.pdf').is_file()
+        assert (out_dir / 'cstmm' / 'cstmm_exclusion.pdf').is_file()
+        assert cleaned['work_dir'] == '.'
+
+        df_sog = pandas.DataFrame(
+            {
+                'Species_A_R1': [100.0, 50.0, 30.0],
+                'Species_A_R2': [120.0, 60.0, 40.0],
+                'Species_B_R1': [80.0, 60.0, 20.0],
+            },
+            index=['OG1', 'OG2', 'OG3'],
+        )
+        library_sizes = pandas.Series(
+            {
+                'Species_A_R1': 185.0,
+                'Species_A_R2': 228.0,
+                'Species_B_R1': 167.0,
+            }
+        )
+        roundtrip = run_tmm_rounds_for_cstmm(counts=df_sog, lib_size=library_sizes)
+
+        expected_species_a = pandas.DataFrame(
+            {
+                'R1': [100.0, 50.0, 30.0, 5.0],
+                'R2': [120.0, 60.0, 40.0, 8.0],
+            },
+            index=['geneA1', 'geneA2', 'geneA3', 'geneA4'],
+        )
+        expected_species_b = pandas.DataFrame(
+            {
+                'R1': [80.0, 60.0, 20.0, 7.0],
+                'R2': [0.0, 0.0, 0.0, 0.0],
+            },
+            index=['geneB1', 'geneB2', 'geneB3', 'geneB4'],
+        )
+        expected_species_a.loc[:, 'R1'] = expected_species_a.loc[:, 'R1'] / roundtrip.round2_factors['Species_A_R1']
+        expected_species_a.loc[:, 'R2'] = expected_species_a.loc[:, 'R2'] / roundtrip.round2_factors['Species_A_R2']
+        expected_species_b.loc[:, 'R1'] = expected_species_b.loc[:, 'R1'] / roundtrip.round2_factors['Species_B_R1']
+        expected_species_a.index.name = 'target_id'
+        expected_species_b.index.name = 'target_id'
+
+        pandas.testing.assert_frame_equal(
+            pandas.read_csv(species_a_counts_path, sep='\t').set_index('target_id'),
+            expected_species_a,
+        )
+        pandas.testing.assert_frame_equal(
+            pandas.read_csv(species_b_counts_path, sep='\t').set_index('target_id'),
+            expected_species_b,
+        )
+
+        metadata_df = pandas.read_csv(metadata_path, sep='\t')
+        assert 'tmm_library_size' in metadata_df.columns
+        assert 'tmm_normalization_factor' in metadata_df.columns
+        retained = metadata_df.loc[metadata_df['scientific_name'] != 'Species B', 'exclusion']
+        assert set(retained) == {'no'}
+        excluded = metadata_df.loc[
+            (metadata_df['scientific_name'] == 'Species B') & (metadata_df['run'] == 'R2'),
+            'exclusion',
+        ]
+        assert excluded.tolist() == ['no_cstmm_output']

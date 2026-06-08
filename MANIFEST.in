@@ -1,4 +1,13 @@
-recursive-include amalgkit *
-#include README.md
-#recursive-include /amalgkit/transcriptome_curation.R
-include *.md
+graft amalgkit
+graft tests
+include README.md
+include LICENSE
+include pyproject.toml
+include setup.py
+include IMPLEMENTATION_PLAN_PYTHON_BATCH_EFFECT.md
+prune build
+prune dist
+prune artifacts
+prune tests/tmp
+global-exclude __pycache__
+global-exclude *.py[cod]

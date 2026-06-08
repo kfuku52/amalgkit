@@ -3,9 +3,22 @@ import numpy
 
 import os
 import warnings
-from amalgkit.util import *
+from amalgkit.filter_utils import staged_output_dir
+from amalgkit.merge_plots import generate_merge_plots
+from amalgkit.metadata_utils import load_metadata, write_updated_metadata
+from amalgkit.parallel_utils import (
+    is_auto_parallel_option,
+    resolve_worker_allocation,
+    run_tasks_with_optional_threads,
+    validate_positive_int_option,
+)
 
 FASTP_STATS_COLUMNS = ['fastp_duplication_rate', 'fastp_insert_size_peak']
+GETFASTQ_PERCENT_COLUMNS = [
+    'percent_fastp_filtered',
+    'percent_rrna_filtered',
+    'percent_contam_filtered',
+]
 GETFASTQ_STAGE_COLUMNS = [
     'num_dumped',
     'num_rejected',
@@ -22,8 +35,16 @@ GETFASTQ_STAGE_COLUMNS = [
     'bp_rrna_in',
     'bp_rrna_out',
     'bp_discarded',
+    'sec_sra_download',
+    'sec_fasterq_dump',
+    'sec_fastp',
+    'sec_rrna_filter',
+    'sec_rrna_search',
+    'sec_rrna_rewrite',
+    'sec_contam_filter',
+    'sec_ete_taxonomy',
 ]
-GETFASTQ_MERGE_COLUMNS = FASTP_STATS_COLUMNS + GETFASTQ_STAGE_COLUMNS
+GETFASTQ_MERGE_COLUMNS = FASTP_STATS_COLUMNS + GETFASTQ_PERCENT_COLUMNS + GETFASTQ_STAGE_COLUMNS
 MERGE_QUANT_READ_MAX_WORKERS = 4
 
 
@@ -358,17 +379,15 @@ def run_merge_species_jobs(metadata, quant_dir, merge_dir, run_abundance_paths, 
         raise FileNotFoundError('No quant abundance file was detected for any species.')
 
 
-def run_merge_plot_rscript(merge_dir, path_metadata_merge):
-    script_dir = os.path.dirname(os.path.realpath(__file__))
-    r_merge_path = os.path.join(script_dir, 'merge.r')
-    r_util_path = os.path.join(script_dir, 'util.r')
-    r_command = ['Rscript', r_merge_path, merge_dir, path_metadata_merge, r_util_path]
-    print('Starting R script for plot generation: {}'.format(' '.join(r_command)), flush=True)
-    subprocess.check_call(r_command)
+def generate_merge_plot_pdfs(merge_dir, path_metadata_merge):
+    generate_merge_plots(
+        merge_dir=os.path.realpath(merge_dir),
+        metadata_path=os.path.realpath(path_metadata_merge),
+        font_size=8,
+    )
 
 
 def merge_main(args):
-    check_rscript()
     species_jobs, _ = resolve_worker_allocation(
         requested_workers=getattr(args, 'internal_jobs', 'auto'),
         requested_threads=getattr(args, 'threads', 'auto'),
@@ -390,7 +409,6 @@ def merge_main(args):
     merge_dir = os.path.realpath(os.path.join(out_dir, 'merge'))
     if os.path.exists(merge_dir) and (not os.path.isdir(merge_dir)):
         raise NotADirectoryError('Merge path exists but is not a directory: {}'.format(merge_dir))
-    os.makedirs(merge_dir, exist_ok=True)
     metadata = load_metadata(args)
     validate_metadata_columns(
         metadata=metadata,
@@ -402,15 +420,16 @@ def merge_main(args):
         target_runs=set(collect_valid_run_ids(metadata.df.loc[:, 'run'].values)),
     )
     print('Detected {:,} quant abundance files across all runs.'.format(len(run_abundance_paths)), flush=True)
-    run_merge_species_jobs(
-        metadata=metadata,
-        quant_dir=quant_dir,
-        merge_dir=merge_dir,
-        run_abundance_paths=run_abundance_paths,
-        species_jobs=species_jobs,
-    )
-    print('Getting mapping rate from quant output and write new metadata file into merge directory.', flush=True)
-    metadata = merge_fastp_stats_into_metadata(metadata, out_dir, max_workers=postprocess_workers)
-    path_metadata_merge = os.path.realpath(os.path.join(out_dir, 'merge', 'metadata.tsv'))
-    write_updated_metadata(metadata, path_metadata_merge, args, max_workers=postprocess_workers)
-    run_merge_plot_rscript(merge_dir=merge_dir, path_metadata_merge=path_metadata_merge)
+    with staged_output_dir(merge_dir, redo=True, prefix='amalgkit_merge_stage_') as stage_dir:
+        run_merge_species_jobs(
+            metadata=metadata,
+            quant_dir=quant_dir,
+            merge_dir=stage_dir,
+            run_abundance_paths=run_abundance_paths,
+            species_jobs=species_jobs,
+        )
+        print('Getting mapping rate from quant output and write new metadata file into merge directory.', flush=True)
+        metadata = merge_fastp_stats_into_metadata(metadata, out_dir, max_workers=postprocess_workers)
+        path_metadata_merge = os.path.join(stage_dir, 'metadata.tsv')
+        write_updated_metadata(metadata, path_metadata_merge, args, max_workers=postprocess_workers)
+        generate_merge_plot_pdfs(merge_dir=stage_dir, path_metadata_merge=path_metadata_merge)

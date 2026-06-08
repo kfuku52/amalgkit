@@ -1,6 +1,8 @@
 import json
 import os
-import warnings
+import socket
+import threading
+import time
 import warnings
 import pytest
 import pandas
@@ -8,25 +10,24 @@ import numpy
 import xml.etree.ElementTree as ET
 from types import SimpleNamespace
 
+from amalgkit.exceptions import AmalgkitExit
 from amalgkit.util import (
     acquire_exclusive_lock,
     strtobool,
     parse_bool_flags,
     Metadata,
-    read_config_file,
     get_sra_stat,
     check_ortholog_parameter_compatibility,
     orthogroup2genecount,
-    check_config_dir,
     load_metadata,
     detect_layout_from_file,
     is_there_unpaired_file,
     get_newest_intermediate_file_extension,
     get_mapping_rate,
     get_getfastq_run_dir,
+    get_ete_ncbitaxa,
     generate_multisp_busco_table,
     cleanup_tmp_amalgkit_files,
-    check_rscript,
     run_tasks_with_optional_threads,
     validate_positive_int_option,
     resolve_cpu_budget,
@@ -253,7 +254,7 @@ class TestMetadataInit:
     def test_column_names_present(self):
         m = Metadata()
         for col in ['tissue', 'sample_group', 'bioproject', 'biosample',
-                     'lib_layout', 'total_spots', 'exclusion']:
+                     'lib_layout', 'total_spots', 'exclusion', 'ENA_SRA_Link', 'DDBJ_SRA_Link']:
             assert col in m.df.columns
 
 
@@ -405,8 +406,52 @@ class TestMetadataFromXml:
         assert m.df.loc[0, 'run'] == 'SRR000001'
         assert m.df.loc[0, 'lib_layout'] == 'paired'
         assert m.df.loc[0, 'bioproject'] == 'PRJNA000001'
+        assert m.df.loc[0, 'ENA_SRA_Link'] == 'ftp://ftp.sra.ebi.ac.uk/vol1/srr/SRR000/SRR000001/SRR000001.sra'
+        assert m.df.loc[0, 'DDBJ_SRA_Link'] == ''
         for col in Metadata.removed_metadata_columns:
             assert col not in m.df.columns
+
+    def test_parse_drr_xml_derives_ddbj_sra_link(self):
+        xml_str = b"""<?xml version="1.0" encoding="UTF-8"?>
+        <EXPERIMENT_PACKAGE_SET>
+          <EXPERIMENT_PACKAGE>
+            <EXPERIMENT>
+              <IDENTIFIERS><PRIMARY_ID>DRX000001</PRIMARY_ID></IDENTIFIERS>
+              <DESIGN>
+                <LIBRARY_DESCRIPTOR>
+                  <LIBRARY_LAYOUT><SINGLE/></LIBRARY_LAYOUT>
+                </LIBRARY_DESCRIPTOR>
+              </DESIGN>
+            </EXPERIMENT>
+            <SUBMISSION>
+              <IDENTIFIERS><PRIMARY_ID>DRA000001</PRIMARY_ID></IDENTIFIERS>
+            </SUBMISSION>
+            <STUDY>
+              <DESCRIPTOR><STUDY_TITLE>Test Study</STUDY_TITLE></DESCRIPTOR>
+            </STUDY>
+            <SAMPLE>
+              <IDENTIFIERS><PRIMARY_ID>DRS000001</PRIMARY_ID></IDENTIFIERS>
+              <SAMPLE_NAME>
+                <SCIENTIFIC_NAME>Test species</SCIENTIFIC_NAME>
+                <TAXON_ID>1234</TAXON_ID>
+              </SAMPLE_NAME>
+            </SAMPLE>
+            <RUN_SET>
+              <RUN accession="DRR000001" total_spots="10" total_bases="100" size="1000">
+                <IDENTIFIERS><PRIMARY_ID>DRR000001</PRIMARY_ID></IDENTIFIERS>
+              </RUN>
+            </RUN_SET>
+          </EXPERIMENT_PACKAGE>
+        </EXPERIMENT_PACKAGE_SET>"""
+        root = ET.fromstring(xml_str)
+        tree = ET.ElementTree(root)
+        m = Metadata.from_xml(tree)
+
+        assert m.df.loc[0, 'ENA_SRA_Link'] == 'ftp://ftp.sra.ebi.ac.uk/vol1/drr/DRR000/DRR000001/DRR000001.sra'
+        assert m.df.loc[0, 'DDBJ_SRA_Link'] == (
+            'https://ddbj.nig.ac.jp/public/ddbj_database/dra/sra/ByExp/sra/DRX/'
+            'DRX000/DRX000001/DRR000001/DRR000001.sra'
+        )
 
     def test_parse_empty_xml(self):
         xml_str = b"""<EXPERIMENT_PACKAGE_SET></EXPERIMENT_PACKAGE_SET>"""
@@ -414,169 +459,6 @@ class TestMetadataFromXml:
         tree = ET.ElementTree(root)
         m = Metadata.from_xml(tree)
         assert m.df.shape[0] == 0
-
-
-class TestMetadataNspotCutoff:
-    def test_marks_low_spots(self, sample_metadata):
-        m = sample_metadata
-        m.nspot_cutoff(1000000)
-        # SRR003 has 100 spots, SRR005 has 200 spots - both below cutoff
-        low = m.df.loc[m.df['run'].isin(['SRR003', 'SRR005']), 'exclusion']
-        assert (low == 'low_nspots').all()
-        # SRR001 has 10M spots - should remain 'no'
-        high = m.df.loc[m.df['run'] == 'SRR001', 'exclusion'].values[0]
-        assert high == 'no'
-
-
-class TestMetadataMarkExcludeKeywords:
-    def test_marks_matching_keyword(self, sample_metadata, tmp_config_dir):
-        m = sample_metadata
-        m.df.loc[0, 'sample_description'] = 'cancer tissue sample'
-        m.mark_exclude_keywords(tmp_config_dir)
-        assert m.df.loc[0, 'exclusion'] == 'disease'
-
-    def test_no_false_positives(self, sample_metadata, tmp_config_dir):
-        m = sample_metadata
-        m.mark_exclude_keywords(tmp_config_dir)
-        assert (m.df['exclusion'] == 'no').all()
-
-    def test_strips_config_column_tokens(self, sample_metadata, tmp_path):
-        (tmp_path / 'exclude_keyword.config').write_text('sample_description, tissue\tdisease\tcancer\n')
-        m = sample_metadata
-        m.df.loc[0, 'tissue'] = 'cancer tissue'
-        m.mark_exclude_keywords(str(tmp_path))
-        assert m.df.loc[0, 'exclusion'] == 'disease'
-
-    def test_raises_for_unknown_config_column(self, sample_metadata, tmp_path):
-        (tmp_path / 'exclude_keyword.config').write_text('unknown_column\tdisease\tcancer\n')
-        m = sample_metadata
-        with pytest.raises(ValueError, match='exclude_keyword.config were not found in metadata'):
-            m.mark_exclude_keywords(str(tmp_path))
-
-    def test_raises_for_invalid_keyword_regex(self, sample_metadata, tmp_path):
-        (tmp_path / 'exclude_keyword.config').write_text('sample_description\tdisease\t[invalid\n')
-        m = sample_metadata
-        with pytest.raises(ValueError, match='Invalid regex pattern in exclude_keyword.config row 1'):
-            m.mark_exclude_keywords(str(tmp_path))
-
-    def test_ignores_empty_keyword_row_without_mass_exclusion(self, sample_metadata, tmp_path):
-        (tmp_path / 'exclude_keyword.config').write_text('sample_description\tdisease\t\n')
-        m = sample_metadata
-        m.mark_exclude_keywords(str(tmp_path))
-        assert (m.df['exclusion'] == 'no').all()
-
-    def test_ignores_empty_reason_row_without_mass_exclusion(self, sample_metadata, tmp_path):
-        (tmp_path / 'exclude_keyword.config').write_text('sample_description\t\tcancer\n')
-        m = sample_metadata
-        m.df.loc[0, 'sample_description'] = 'cancer tissue sample'
-        m.mark_exclude_keywords(str(tmp_path))
-        assert (m.df['exclusion'] == 'no').all()
-
-    def test_raises_when_exclude_keyword_config_path_is_directory(self, sample_metadata, tmp_path):
-        (tmp_path / 'exclude_keyword.config').mkdir()
-        m = sample_metadata
-        with pytest.raises(IsADirectoryError, match='Config path exists but is not a file'):
-            m.mark_exclude_keywords(str(tmp_path))
-
-    def test_raises_for_malformed_config_with_too_few_columns(self, sample_metadata, tmp_path):
-        (tmp_path / 'exclude_keyword.config').write_text('sample_description_only\n')
-        m = sample_metadata
-        with pytest.raises(ValueError, match='exclude_keyword.config must contain at least 3'):
-            m.mark_exclude_keywords(str(tmp_path))
-
-
-class TestMetadataMarkTreatmentTerms:
-    def test_marks_non_control(self, tmp_config_dir):
-        data = {
-            'scientific_name': ['Sp1'] * 4,
-            'sample_group': ['leaf'] * 4,
-            'treatment': ['wild type', 'wild type', 'drought', 'heat'],
-            'bioproject': ['PRJ1'] * 4,
-            'biosample': ['S1', 'S2', 'S3', 'S4'],
-            'run': ['R1', 'R2', 'R3', 'R4'],
-            'exclusion': ['no'] * 4,
-        }
-        df = pandas.DataFrame(data)
-        m = Metadata.from_DataFrame(df)
-        m.mark_treatment_terms(tmp_config_dir)
-        assert m.df.loc[m.df['run'] == 'R1', 'exclusion'].values[0] == 'no'
-        assert m.df.loc[m.df['run'] == 'R2', 'exclusion'].values[0] == 'no'
-        assert m.df.loc[m.df['run'] == 'R3', 'exclusion'].values[0] == 'non_control'
-        assert m.df.loc[m.df['run'] == 'R4', 'exclusion'].values[0] == 'non_control'
-
-    def test_raises_for_malformed_config_with_too_few_columns(self, sample_metadata, tmp_path):
-        (tmp_path / 'control_term.config').write_text('treatment_only\n')
-        m = sample_metadata
-        with pytest.raises(ValueError, match='control_term.config must contain at least 2'):
-            m.mark_treatment_terms(str(tmp_path))
-
-    def test_strips_control_term_config_column_tokens(self, tmp_path):
-        (tmp_path / 'control_term.config').write_text('treatment, source_name\twild.type\n')
-        data = {
-            'scientific_name': ['Sp1', 'Sp1', 'Sp1'],
-            'sample_group': ['leaf', 'leaf', 'leaf'],
-            'treatment': ['drought', 'heat', 'drought'],
-            'source_name': ['wild type', '', ''],
-            'bioproject': ['PRJ1', 'PRJ1', 'PRJ2'],
-            'biosample': ['S1', 'S2', 'S3'],
-            'run': ['R1', 'R2', 'R3'],
-            'exclusion': ['no', 'no', 'no'],
-        }
-        m = Metadata.from_DataFrame(pandas.DataFrame(data))
-        m.mark_treatment_terms(str(tmp_path))
-        assert m.df.loc[m.df['run'] == 'R1', 'exclusion'].values[0] == 'no'
-        assert m.df.loc[m.df['run'] == 'R2', 'exclusion'].values[0] == 'non_control'
-        assert m.df.loc[m.df['run'] == 'R3', 'exclusion'].values[0] == 'no'
-
-    def test_raises_for_unknown_control_term_config_column(self, tmp_path):
-        (tmp_path / 'control_term.config').write_text('unknown_column\twild.type\n')
-        data = {
-            'scientific_name': ['Sp1'],
-            'sample_group': ['leaf'],
-            'treatment': ['wild type'],
-            'bioproject': ['PRJ1'],
-            'biosample': ['S1'],
-            'run': ['R1'],
-            'exclusion': ['no'],
-        }
-        m = Metadata.from_DataFrame(pandas.DataFrame(data))
-        with pytest.raises(ValueError, match='control_term.config were not found in metadata'):
-            m.mark_treatment_terms(str(tmp_path))
-
-    def test_raises_for_invalid_control_term_regex(self, tmp_path):
-        (tmp_path / 'control_term.config').write_text('treatment\t[invalid\n')
-        data = {
-            'scientific_name': ['Sp1'],
-            'sample_group': ['leaf'],
-            'treatment': ['wild type'],
-            'bioproject': ['PRJ1'],
-            'biosample': ['S1'],
-            'run': ['R1'],
-            'exclusion': ['no'],
-        }
-        m = Metadata.from_DataFrame(pandas.DataFrame(data))
-        with pytest.raises(ValueError, match='Invalid regex pattern in control_term.config row 1'):
-            m.mark_treatment_terms(str(tmp_path))
-
-
-class TestMetadataMarkRedundantBiosample:
-    def test_marks_duplicates(self, sample_metadata_df):
-        df = sample_metadata_df.copy()
-        # Add a duplicate biosample within same bioproject
-        new_row = df.iloc[0].copy()
-        new_row['run'] = 'SRR006'
-        new_row['experiment'] = 'SRX6'
-        # same bioproject PRJNA1, same biosample SAMN1
-        df = pandas.concat([df, pandas.DataFrame([new_row])], ignore_index=True)
-        m = Metadata.from_DataFrame(df)
-        m.mark_redundant_biosample(True)
-        dup = m.df.loc[m.df['run'] == 'SRR006', 'exclusion'].values[0]
-        assert dup == 'redundant_biosample'
-
-    def test_no_action_when_disabled(self, sample_metadata):
-        m = sample_metadata
-        m.mark_redundant_biosample(False)
-        assert (m.df['exclusion'] == 'no').all()
 
 
 class TestMetadataRemoveSpecialchars:
@@ -742,37 +624,6 @@ class TestMaximizeBioprojSampling:
 # Utility functions
 # ---------------------------------------------------------------------------
 
-class TestReadConfigFile:
-    def test_reads_config(self, tmp_path):
-        config = tmp_path / 'test.config'
-        config.write_text('col1\tcol2\tcol3\n')
-        df = read_config_file('test.config', str(tmp_path))
-        assert df.shape == (1, 3)
-
-    def test_missing_file_returns_empty(self, tmp_path):
-        df = read_config_file('nonexistent.config', str(tmp_path))
-        assert isinstance(df, pandas.DataFrame)
-        assert df.empty
-
-    def test_single_column_returns_series(self, tmp_path):
-        config = tmp_path / 'single.config'
-        config.write_text('value1\nvalue2\nvalue3\n')
-        result = read_config_file('single.config', str(tmp_path))
-        assert isinstance(result, pandas.Series)
-        assert len(result) == 3
-
-    def test_malformed_config_raises_parser_error(self, tmp_path):
-        config = tmp_path / 'bad.config'
-        config.write_text('"unterminated\nvalue2\n')
-        with pytest.raises(pandas.errors.ParserError):
-            read_config_file('bad.config', str(tmp_path))
-
-    def test_raises_when_config_path_is_directory(self, tmp_path):
-        (tmp_path / 'dir.config').mkdir()
-        with pytest.raises(IsADirectoryError, match='Config path exists but is not a file'):
-            read_config_file('dir.config', str(tmp_path))
-
-
 class TestCleanupTmpAmalgkitFiles:
     def test_removes_matching_files_and_directories(self, tmp_path):
         (tmp_path / 'tmp.amalgkit.file1').write_text('x')
@@ -807,34 +658,6 @@ class TestCleanupTmpAmalgkitFiles:
 
         assert not disappearing.exists()
         assert not stable.exists()
-
-
-class TestCheckRscript:
-    def test_exits_when_rscript_missing(self, monkeypatch):
-        monkeypatch.setattr(
-            'amalgkit.util.subprocess.run',
-            lambda *_args, **_kwargs: (_ for _ in ()).throw(FileNotFoundError('Rscript')),
-        )
-        with pytest.raises(SystemExit) as exc:
-            check_rscript()
-        assert exc.value.code == 1
-
-    def test_exits_when_rscript_probe_returns_nonzero(self, monkeypatch):
-        monkeypatch.setattr(
-            'amalgkit.util.subprocess.run',
-            lambda *_args, **_kwargs: SimpleNamespace(returncode=127, stdout=b'', stderr=b''),
-        )
-        with pytest.raises(SystemExit) as exc:
-            check_rscript()
-        assert exc.value.code == 1
-
-    def test_passes_when_rscript_probe_returns_zero(self, monkeypatch):
-        monkeypatch.setattr(
-            'amalgkit.util.subprocess.run',
-            lambda *_args, **_kwargs: SimpleNamespace(returncode=0, stdout=b'', stderr=b''),
-        )
-        check_rscript()
-
 
 class TestGetSraStat:
     def test_basic_stats(self, sample_metadata):
@@ -973,13 +796,13 @@ class TestCheckOrthologParameterCompatibility:
         class Args:
             orthogroup_table = 'table.tsv'
             dir_busco = None
-        check_ortholog_parameter_compatibility(Args())  # should not raise
+        assert check_ortholog_parameter_compatibility(Args()) == ('table.tsv', None)
 
     def test_only_busco_ok(self):
         class Args:
             orthogroup_table = None
             dir_busco = '/path/to/busco'
-        check_ortholog_parameter_compatibility(Args())  # should not raise
+        assert check_ortholog_parameter_compatibility(Args()) == (None, '/path/to/busco')
 
     def test_blank_orthogroup_table_is_treated_as_none(self):
         class Args:
@@ -987,6 +810,18 @@ class TestCheckOrthologParameterCompatibility:
             dir_busco = None
         with pytest.raises(ValueError, match='One of'):
             check_ortholog_parameter_compatibility(Args())
+
+    def test_does_not_mutate_args(self):
+        class Args:
+            orthogroup_table = ' table.tsv '
+            dir_busco = None
+
+        args = Args()
+        normalized = check_ortholog_parameter_compatibility(args)
+
+        assert normalized == ('table.tsv', None)
+        assert args.orthogroup_table == ' table.tsv '
+        assert args.dir_busco is None
 
 
 class TestOrthogroup2Genecount:
@@ -1065,120 +900,12 @@ class TestOrthogroup2Genecount:
 
 
 # ---------------------------------------------------------------------------
-# group_attributes (wiki: column merging via group_attribute.config)
-# ---------------------------------------------------------------------------
-
-class TestMetadataGroupAttributes:
-    def test_aggregates_source_to_target(self, tmp_path):
-        """Wiki: group_attribute.config merges heterogeneous SRA attribute columns."""
-        ga = tmp_path / 'group_attribute.config'
-        ga.write_text('tissue\tsource_name\n')
-        data = {
-            'scientific_name': ['Sp1'],
-            'sample_group': [''],
-            'tissue': [''],
-            'source_name': ['brain cortex'],
-            'run': ['R1'],
-            'exclusion': ['no'],
-        }
-        m = Metadata.from_DataFrame(pandas.DataFrame(data))
-        m.group_attributes(str(tmp_path))
-        assert 'brain cortex[source_name]' in m.df.loc[0, 'tissue']
-
-    def test_aggregates_appends_to_nonempty_target(self, tmp_path):
-        """When target already has a value, append with semicolon separator."""
-        ga = tmp_path / 'group_attribute.config'
-        ga.write_text('tissue\tsource_name\n')
-        data = {
-            'scientific_name': ['Sp1'],
-            'sample_group': [''],
-            'tissue': ['brain'],
-            'source_name': ['frontal lobe'],
-            'run': ['R1'],
-            'exclusion': ['no'],
-        }
-        m = Metadata.from_DataFrame(pandas.DataFrame(data))
-        m.group_attributes(str(tmp_path))
-        assert 'brain' in m.df.loc[0, 'tissue']
-        assert 'frontal lobe[source_name]' in m.df.loc[0, 'tissue']
-
-    def test_missing_config_no_error(self, tmp_path):
-        """Issue #108: Missing config should not raise error."""
-        m = Metadata.from_DataFrame(pandas.DataFrame({
-            'scientific_name': ['Sp1'], 'run': ['R1'], 'exclusion': ['no'],
-        }))
-        m.group_attributes(str(tmp_path))  # no config file present
-
-    def test_no_futurewarning_when_target_column_is_float(self, tmp_path):
-        """String aggregation into float target must not emit pandas FutureWarning."""
-        ga = tmp_path / 'group_attribute.config'
-        ga.write_text('treatment\tgrowth_condition\n')
-        data = {
-            'scientific_name': ['Sp1', 'Sp1'],
-            'sample_group': ['g1', 'g2'],
-            'run': ['R1', 'R2'],
-            'exclusion': ['no', 'no'],
-            'growth_condition': ['sd medium', 'sd medium'],
-            # Simulate dtype inferred from all-missing values at file-load time.
-            'treatment': [numpy.nan, numpy.nan],
-        }
-        m = Metadata.from_DataFrame(pandas.DataFrame(data))
-        with warnings.catch_warnings(record=True) as captured:
-            warnings.simplefilter('always')
-            m.group_attributes(str(tmp_path))
-        future_warnings = [w for w in captured if issubclass(w.category, FutureWarning)]
-        assert len(future_warnings) == 0
-
-    def test_raises_for_malformed_config_with_too_few_columns(self, tmp_path):
-        ga = tmp_path / 'group_attribute.config'
-        ga.write_text('tissue_only\n')
-        m = Metadata.from_DataFrame(pandas.DataFrame({
-            'scientific_name': ['Sp1'],
-            'run': ['R1'],
-            'exclusion': ['no'],
-        }))
-        with pytest.raises(ValueError, match='group_attribute.config must contain at least 2'):
-            m.group_attributes(str(tmp_path))
-
-
-# ---------------------------------------------------------------------------
-# mark_missing_rank
-# ---------------------------------------------------------------------------
-
-class TestMetadataMarkMissingRank:
-    def test_marks_missing_taxid(self):
-        data = {
-            'scientific_name': ['Sp1', 'Sp2'],
-            'run': ['R1', 'R2'],
-            'exclusion': ['no', 'no'],
-            'taxid_species': [9606, pandas.NA],
-        }
-        df = pandas.DataFrame(data)
-        df['taxid_species'] = df['taxid_species'].astype('Int64')
-        m = Metadata.from_DataFrame(df)
-        m.mark_missing_rank('species')
-        assert m.df.loc[m.df['run'] == 'R1', 'exclusion'].values[0] == 'no'
-        assert m.df.loc[m.df['run'] == 'R2', 'exclusion'].values[0] == 'missing_taxid'
-
-    def test_none_rank_skips(self, sample_metadata):
-        """rank_name='none' should do nothing."""
-        m = sample_metadata
-        m.mark_missing_rank('none')
-        assert (m.df['exclusion'] == 'no').all()
-
-    def test_raises_when_required_rank_column_missing(self, sample_metadata):
-        m = sample_metadata
-        with pytest.raises(ValueError, match='Column \"taxid_species\" is required'):
-            m.mark_missing_rank('species')
-
-
-# ---------------------------------------------------------------------------
 # label_sampled_data: empty sample_group handling (wiki: select)
 # ---------------------------------------------------------------------------
 
 class TestMetadataLabelSampledDataEdgeCases:
     def test_empty_sample_group_marked_unqualified(self):
-        """Wiki/select: samples with empty sample_group get exclusion=no_tissue_label."""
+        """Empty sample_group rows remain unqualified and are not auto-assigned an exclusion label."""
         data = {
             'scientific_name': ['Sp1', 'Sp1'],
             'sample_group': ['brain', ''],
@@ -1190,7 +917,7 @@ class TestMetadataLabelSampledDataEdgeCases:
         m = Metadata.from_DataFrame(pandas.DataFrame(data))
         m.label_sampled_data(max_sample=10)
         empty_sg = m.df.loc[m.df['run'] == 'R2']
-        assert empty_sg['exclusion'].values[0] == 'no_tissue_label'
+        assert empty_sg['exclusion'].values[0] == 'no'
         assert empty_sg['is_qualified'].values[0] == 'no'
 
     def test_no_futurewarning_when_is_qualified_starts_float(self):
@@ -1323,46 +1050,6 @@ class TestMetadataFromXmlAttributes:
 
 
 # ---------------------------------------------------------------------------
-# check_config_dir (issue #108: missing configs should warn, not crash)
-# ---------------------------------------------------------------------------
-
-class TestCheckConfigDir:
-    def test_all_configs_present(self, tmp_config_dir):
-        """No error when all config files are present."""
-        check_config_dir(tmp_config_dir, mode='select')
-
-    def test_missing_config_warns(self, tmp_path):
-        """Issue #108: Missing config files should print warning, not raise."""
-        # Create only one of the three required files
-        ga = tmp_path / 'group_attribute.config'
-        ga.write_text('tissue\tsource_name\n')
-        # Should not raise an exception
-        check_config_dir(str(tmp_path), mode='select')
-
-    def test_invalid_mode_raises(self, tmp_path):
-        with pytest.raises(ValueError, match='Unsupported config check mode'):
-            check_config_dir(str(tmp_path), mode='unknown')
-
-    def test_missing_config_dir_raises(self, tmp_path):
-        missing_dir = tmp_path / 'missing'
-        with pytest.raises(FileNotFoundError, match='Config directory not found'):
-            check_config_dir(str(missing_dir), mode='select')
-
-    def test_config_dir_file_path_raises(self, tmp_path):
-        file_path = tmp_path / 'config_path'
-        file_path.write_text('not a directory')
-        with pytest.raises(NotADirectoryError, match='not a directory'):
-            check_config_dir(str(file_path), mode='select')
-
-    def test_config_entry_directory_is_treated_as_missing(self, tmp_path, capsys):
-        (tmp_path / 'group_attribute.config').write_text('tissue\tsource_name\n')
-        (tmp_path / 'exclude_keyword.config').mkdir()
-        check_config_dir(str(tmp_path), mode='select')
-        captured = capsys.readouterr()
-        assert 'Config entry exists but is not a file: exclude_keyword.config' in captured.err
-
-
-# ---------------------------------------------------------------------------
 # Metadata.reorder: extra columns preserved
 # ---------------------------------------------------------------------------
 
@@ -1383,38 +1070,6 @@ class TestMetadataReorderExtraCols:
         original_rows = sample_metadata.df.shape[0]
         sample_metadata.reorder()
         assert sample_metadata.df.shape[0] == original_rows
-
-
-# ---------------------------------------------------------------------------
-# Metadata.nspot_cutoff edge cases (issue #96, #110)
-# ---------------------------------------------------------------------------
-
-class TestMetadataNspotCutoffEdgeCases:
-    def test_zero_spots_not_marked(self):
-        """Rows with total_spots=0 should NOT be marked low_nspots (they are unknown)."""
-        data = {
-            'scientific_name': ['Sp1'],
-            'run': ['R1'],
-            'exclusion': ['no'],
-            'total_spots': [0],
-        }
-        m = Metadata.from_DataFrame(pandas.DataFrame(data))
-        m.nspot_cutoff(1000000)
-        # Zero spots: the negation -(0==0) is False, so row is NOT marked
-        assert m.df.loc[0, 'exclusion'] == 'no'
-
-    def test_empty_string_spots(self):
-        """Empty string total_spots should be handled gracefully."""
-        data = {
-            'scientific_name': ['Sp1'],
-            'run': ['R1'],
-            'exclusion': ['no'],
-            'total_spots': [''],
-        }
-        m = Metadata.from_DataFrame(pandas.DataFrame(data))
-        m.nspot_cutoff(1000000)
-        # Empty string -> converted to 0, not marked
-        assert m.df.loc[0, 'exclusion'] == 'no'
 
 
 # ---------------------------------------------------------------------------
@@ -1549,11 +1204,10 @@ class TestLoadMetadata:
             out_dir = str(tmp_path)
             batch = 1
 
-        with pytest.raises(SystemExit) as exc:
+        with pytest.raises(ValueError, match='No sample is "sampled"'):
             load_metadata(Args())
-        assert exc.value.code == 1
 
-    def test_batch_mode_handles_missing_caller_module(self, tmp_path, monkeypatch):
+    def test_batch_mode_uses_explicit_run_scope(self, tmp_path):
         path = tmp_path / 'metadata.tsv'
         pandas.DataFrame({
             'run': ['R1', 'R2'],
@@ -1567,12 +1221,11 @@ class TestLoadMetadata:
             out_dir = str(tmp_path)
             batch = 1
 
-        monkeypatch.setattr('amalgkit.util.inspect.getmodule', lambda *_args, **_kwargs: None)
-        m = load_metadata(Args())
+        m = load_metadata(Args(), batch_scope='run')
         assert m.df.shape[0] == 1
         assert m.df.iloc[0]['run'] == 'R1'
 
-    def test_curate_batch_ignores_missing_species_names(self, tmp_path, monkeypatch):
+    def test_species_batch_ignores_missing_species_names(self, tmp_path):
         path = tmp_path / 'metadata.tsv'
         pandas.DataFrame({
             'run': ['R1', 'R2', 'R3'],
@@ -1586,15 +1239,11 @@ class TestLoadMetadata:
             out_dir = str(tmp_path)
             batch = 1
 
-        monkeypatch.setattr(
-            'amalgkit.util.inspect.getmodule',
-            lambda *_args, **_kwargs: type('DummyModule', (), {'__name__': 'amalgkit.curate'})(),
-        )
-        m = load_metadata(Args())
+        m = load_metadata(Args(), batch_scope='species')
         assert m.df.shape[0] == 1
         assert m.df.iloc[0]['scientific_name'] == 'Sp1'
 
-    def test_curate_batch_raises_when_no_valid_species(self, tmp_path, monkeypatch):
+    def test_species_batch_raises_when_no_valid_species(self, tmp_path):
         path = tmp_path / 'metadata.tsv'
         pandas.DataFrame({
             'run': ['R1', 'R2'],
@@ -1608,12 +1257,26 @@ class TestLoadMetadata:
             out_dir = str(tmp_path)
             batch = 1
 
-        monkeypatch.setattr(
-            'amalgkit.util.inspect.getmodule',
-            lambda *_args, **_kwargs: type('DummyModule', (), {'__name__': 'amalgkit.curate'})(),
-        )
         with pytest.raises(ValueError, match='No valid scientific_name'):
+            load_metadata(Args(), batch_scope='species')
+
+    def test_batch_mode_raises_amalgkit_exit_when_batch_too_large(self, tmp_path):
+        path = tmp_path / 'metadata.tsv'
+        pandas.DataFrame({
+            'run': ['R1'],
+            'scientific_name': ['Sp1'],
+            'is_sampled': ['yes'],
+            'exclusion': ['no'],
+        }).to_csv(str(path), sep='\t', index=False)
+
+        class Args:
+            metadata = str(path)
+            out_dir = str(tmp_path)
+            batch = 2
+
+        with pytest.raises(AmalgkitExit) as exc:
             load_metadata(Args())
+        assert exc.value.exit_code == 0
 
 
 # ---------------------------------------------------------------------------
@@ -2164,7 +1827,7 @@ class TestMetadataTaxidValidation:
         def fail_if_called():
             raise AssertionError('NCBITaxa should not be initialized for invalid taxid dtype.')
 
-        monkeypatch.setattr('amalgkit.util.ete4.NCBITaxa', fail_if_called)
+        monkeypatch.setattr('amalgkit.download_utils.ete4.NCBITaxa', fail_if_called)
 
         with pytest.raises(TypeError, match='taxid column must be Int64 dtype'):
             metadata.add_standard_rank_taxids()
@@ -2180,7 +1843,7 @@ class TestMetadataTaxidValidation:
         def fail_if_called():
             raise AssertionError('NCBITaxa should not be initialized for invalid taxid dtype.')
 
-        monkeypatch.setattr('amalgkit.util.ete4.NCBITaxa', fail_if_called)
+        monkeypatch.setattr('amalgkit.download_utils.ete4.NCBITaxa', fail_if_called)
 
         with pytest.raises(TypeError, match='taxid column must be Int64 dtype'):
             metadata.resolve_scientific_names()
@@ -2201,7 +1864,7 @@ class TestMetadataTaxidValidation:
             def get_rank(self, _lineage):
                 return {}
 
-        monkeypatch.setattr('amalgkit.util.ete4.NCBITaxa', lambda: InterruptingNcbi())
+        monkeypatch.setattr('amalgkit.download_utils.ete4.NCBITaxa', lambda: InterruptingNcbi())
 
         with pytest.raises(KeyboardInterrupt):
             metadata.add_standard_rank_taxids()
@@ -2222,14 +1885,103 @@ class TestMetadataTaxidValidation:
             def get_rank(self, _lineage):
                 return {}
 
-        monkeypatch.setattr('amalgkit.util.ete4.NCBITaxa', lambda: FailingNcbi())
+        monkeypatch.setattr('amalgkit.download_utils.ete4.NCBITaxa', lambda: FailingNcbi())
 
         with pytest.warns(UserWarning, match='Failed to resolve NCBI lineage'):
             metadata.add_standard_rank_taxids()
         assert 'taxid_species' in metadata.df.columns
         assert metadata.df['taxid_species'].isna().all()
 
-    def test_add_standard_rank_taxids_uses_download_dir_for_ete4_cache(self, tmp_path, monkeypatch):
+    def test_add_standard_rank_taxids_batches_lineage_lookup_when_supported(self, monkeypatch):
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001', 'SRR002'],
+            'scientific_name': ['Homo sapiens', 'Mus musculus'],
+            'exclusion': ['no', 'no'],
+            'taxid': [9606, 10090],
+        }))
+        metadata.df['taxid'] = metadata.df['taxid'].astype('Int64')
+        captured = {'lineage_translator_calls': 0, 'rank_calls': 0}
+
+        class BatchNcbi:
+            def get_lineage_translator(self, taxids):
+                captured['lineage_translator_calls'] += 1
+                assert sorted(taxids) == [9606, 10090]
+                return {
+                    9606: [1, 2759, 9605, 9606],
+                    10090: [1, 2759, 10088, 10090],
+                }
+
+            def get_lineage(self, _taxid):
+                raise AssertionError('Per-taxid lineage lookup should not be used when batch API is available.')
+
+            def get_rank(self, taxids):
+                captured['rank_calls'] += 1
+                assert set(taxids) == {1, 2759, 9605, 9606, 10088, 10090}
+                return {
+                    1: 'domain',
+                    2759: 'kingdom',
+                    9605: 'genus',
+                    9606: 'species',
+                    10088: 'genus',
+                    10090: 'species',
+                }
+
+        monkeypatch.setattr('amalgkit.download_utils.ete4.NCBITaxa', lambda: BatchNcbi())
+
+        metadata.add_standard_rank_taxids()
+
+        assert captured['lineage_translator_calls'] == 1
+        assert captured['rank_calls'] == 1
+        assert metadata.df.loc[0, 'taxid_species'] == 9606
+        assert metadata.df.loc[1, 'taxid_species'] == 10090
+        assert metadata.df.loc[0, 'taxid_genus'] == 9605
+        assert metadata.df.loc[1, 'taxid_genus'] == 10088
+
+    def test_add_standard_rank_taxids_reuses_cached_lineage_and_rank_results(self, monkeypatch):
+        metadata1 = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001'],
+            'scientific_name': ['Homo sapiens'],
+            'exclusion': ['no'],
+            'taxid': [9606],
+        }))
+        metadata2 = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR002'],
+            'scientific_name': ['Homo sapiens'],
+            'exclusion': ['no'],
+            'taxid': [9606],
+        }))
+        metadata1.df['taxid'] = metadata1.df['taxid'].astype('Int64')
+        metadata2.df['taxid'] = metadata2.df['taxid'].astype('Int64')
+        captured = {'lineage_translator_calls': 0, 'rank_calls': 0}
+
+        class BatchNcbi:
+            def get_lineage_translator(self, taxids):
+                captured['lineage_translator_calls'] += 1
+                assert list(taxids) == [9606]
+                return {9606: [1, 2759, 9605, 9606]}
+
+            def get_lineage(self, _taxid):
+                raise AssertionError('Per-taxid lineage lookup should not be needed.')
+
+            def get_rank(self, taxids):
+                captured['rank_calls'] += 1
+                assert set(taxids) == {1, 2759, 9605, 9606}
+                return {
+                    1: 'domain',
+                    2759: 'kingdom',
+                    9605: 'genus',
+                    9606: 'species',
+                }
+
+        monkeypatch.setattr('amalgkit.download_utils.ete4.NCBITaxa', lambda: BatchNcbi())
+
+        metadata1.add_standard_rank_taxids()
+        metadata2.add_standard_rank_taxids()
+
+        assert captured['lineage_translator_calls'] == 1
+        assert captured['rank_calls'] == 1
+
+    def test_add_standard_rank_taxids_uses_download_dir_for_shared_ete_taxonomy_cache(self, tmp_path, monkeypatch):
         metadata = Metadata.from_DataFrame(pandas.DataFrame({
             'run': ['SRR001'],
             'scientific_name': ['Homo sapiens'],
@@ -2237,7 +1989,7 @@ class TestMetadataTaxidValidation:
             'taxid': [9606],
         }))
         metadata.df['taxid'] = metadata.df['taxid'].astype('Int64')
-        captured = {'lock_path': None}
+        captured = {'lock_path': None, 'urlretrieve': None}
 
         class DummyLock:
             def __init__(self, lock_path, lock_label='Lock', poll_seconds=5, timeout_seconds=3600):
@@ -2260,41 +2012,362 @@ class TestMetadataTaxidValidation:
             def get_rank(self, _lineage):
                 return {1: 'domain', 9606: 'species'}
 
-        monkeypatch.setattr('amalgkit.util.acquire_exclusive_lock', DummyLock)
-        monkeypatch.setattr('amalgkit.util.ete4.NCBITaxa', RecordingNcbi)
+        def fake_urlretrieve(url, out_path):
+            captured['urlretrieve'] = (url, out_path)
+            with open(out_path, 'wb') as fout:
+                fout.write(b'taxdump')
+
+        monkeypatch.setattr('amalgkit.download_utils.acquire_exclusive_lock', DummyLock)
+        monkeypatch.setattr('amalgkit.download_utils.ete4.NCBITaxa', RecordingNcbi)
+        monkeypatch.setattr('amalgkit.download_utils.urllib.request.urlretrieve', fake_urlretrieve)
         args = SimpleNamespace(
             out_dir=str(tmp_path / 'out'),
             download_dir=str(tmp_path / 'shared_downloads'),
         )
         metadata.add_standard_rank_taxids(args=args)
 
-        expected_ete_dir = os.path.join(os.path.realpath(args.download_dir), 'ete4')
+        expected_download_dir = os.path.realpath(args.download_dir)
+        expected_ete_dir = os.path.join(expected_download_dir, 'ete_taxonomy')
+        expected_lock_path = os.path.join(expected_download_dir, 'locks', 'ete_taxonomy.lock')
         assert captured['kwargs']['dbfile'] == os.path.join(expected_ete_dir, 'taxa.sqlite')
         assert captured['kwargs']['taxdump_file'] == os.path.join(expected_ete_dir, 'taxdump.tar.gz')
         assert os.path.isdir(expected_ete_dir)
-        assert captured['lock_path'] == os.path.join(expected_ete_dir, '.ete4_taxonomy.lock')
+        assert os.path.isfile(os.path.join(expected_ete_dir, 'taxdump.tar.gz'))
+        assert captured['lock_path'] == expected_lock_path
+        assert captured['urlretrieve'][0].endswith('/taxdump.tar.gz')
+        assert captured['urlretrieve'][1] == os.path.join(expected_ete_dir, 'taxdump.tar.gz.tmp')
+
+    def test_add_standard_rank_taxids_replaces_existing_lineage_columns(self, monkeypatch):
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001'],
+            'scientific_name': ['Homo sapiens'],
+            'exclusion': ['no'],
+            'taxid': [9606],
+            'taxid_domain': [999],
+            'taxid_kingdom': [999],
+            'taxid_phylum': [pandas.NA],
+            'taxid_class': [pandas.NA],
+            'taxid_order': [pandas.NA],
+            'taxid_family': [pandas.NA],
+            'taxid_genus': [999],
+            'taxid_species': [999],
+        }))
+        metadata.df['taxid'] = metadata.df['taxid'].astype('Int64')
+        for col in [col for col in metadata.df.columns if col.startswith('taxid_') and col != 'taxid']:
+            metadata.df[col] = pandas.to_numeric(metadata.df[col], errors='coerce').astype('Int64')
+
+        class RecordingNcbi:
+            def get_lineage(self, _taxid):
+                return [1, 2759, 9605, 9606]
+
+            def get_rank(self, taxids):
+                assert set(taxids) == {1, 2759, 9605, 9606}
+                return {
+                    1: 'domain',
+                    2759: 'kingdom',
+                    9605: 'genus',
+                    9606: 'species',
+                }
+
+        monkeypatch.setattr('amalgkit.download_utils.ete4.NCBITaxa', lambda: RecordingNcbi())
+
+        metadata.add_standard_rank_taxids()
+
+        assert 'taxid_domain_x' not in metadata.df.columns
+        assert 'taxid_domain_y' not in metadata.df.columns
+        assert metadata.df.loc[0, 'taxid_domain'] == 1
+        assert metadata.df.loc[0, 'taxid_kingdom'] == 2759
+        assert metadata.df.loc[0, 'taxid_genus'] == 9605
+        assert metadata.df.loc[0, 'taxid_species'] == 9606
+
+    def test_resolve_scientific_names_reuses_cached_translator_results(self, monkeypatch):
+        metadata1 = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001'],
+            'scientific_name': ['H. sapiens'],
+            'exclusion': ['no'],
+            'taxid': [9606],
+        }))
+        metadata2 = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR002'],
+            'scientific_name': ['human'],
+            'exclusion': ['no'],
+            'taxid': [9606],
+        }))
+        metadata1.df['taxid'] = metadata1.df['taxid'].astype('Int64')
+        metadata2.df['taxid'] = metadata2.df['taxid'].astype('Int64')
+        captured = {'translator_calls': 0}
+
+        class RecordingNcbi:
+            def get_taxid_translator(self, taxids):
+                captured['translator_calls'] += 1
+                assert list(taxids) == [9606]
+                return {9606: 'Homo sapiens'}
+
+        monkeypatch.setattr('amalgkit.download_utils.ete4.NCBITaxa', lambda: RecordingNcbi())
+
+        metadata1.resolve_scientific_names()
+        metadata2.resolve_scientific_names()
+
+        assert captured['translator_calls'] == 1
+        assert metadata1.df.loc[0, 'scientific_name'] == 'Homo sapiens'
+        assert metadata2.df.loc[0, 'scientific_name'] == 'Homo sapiens'
+
+    def test_get_ete_ncbitaxa_bootstraps_fresh_custom_download_dir(self, tmp_path, monkeypatch):
+        captured = {'lock_path': None, 'urlretrieve': None}
+
+        class DummyLock:
+            def __init__(self, lock_path, lock_label='Lock', poll_seconds=5, timeout_seconds=3600):
+                _ = (lock_label, poll_seconds, timeout_seconds)
+                captured['lock_path'] = lock_path
+
+            def __enter__(self):
+                return None
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        class RecordingNcbi:
+            def __init__(self, **kwargs):
+                captured['kwargs'] = kwargs
+
+        def fake_urlretrieve(url, out_path):
+            captured['urlretrieve'] = (url, out_path)
+            with open(out_path, 'wb') as fout:
+                fout.write(b'taxdump')
+
+        args = SimpleNamespace(
+            out_dir=str(tmp_path / 'out'),
+            download_dir=str(tmp_path / 'fresh_downloads'),
+        )
+        expected_download_dir = os.path.realpath(args.download_dir)
+        expected_ete_dir = os.path.join(expected_download_dir, 'ete_taxonomy')
+        expected_lock_path = os.path.join(expected_download_dir, 'locks', 'ete_taxonomy.lock')
+
+        assert not os.path.exists(args.download_dir)
+        monkeypatch.setattr('amalgkit.util.acquire_exclusive_lock', DummyLock)
+        monkeypatch.setattr('amalgkit.download_utils.ete4.NCBITaxa', RecordingNcbi)
+        monkeypatch.setattr('amalgkit.download_utils.urllib.request.urlretrieve', fake_urlretrieve)
+
+        result = get_ete_ncbitaxa(args=args)
+
+        assert isinstance(result, RecordingNcbi)
+        assert os.path.isdir(expected_ete_dir)
+        assert captured['kwargs']['dbfile'] == os.path.join(expected_ete_dir, 'taxa.sqlite')
+        assert captured['kwargs']['taxdump_file'] == os.path.join(expected_ete_dir, 'taxdump.tar.gz')
+        assert os.path.isfile(os.path.join(expected_ete_dir, 'taxdump.tar.gz'))
+        assert captured['lock_path'] == expected_lock_path
+        assert captured['urlretrieve'][0].endswith('/taxdump.tar.gz')
+        assert captured['urlretrieve'][1] == os.path.join(expected_ete_dir, 'taxdump.tar.gz.tmp')
+
+    def test_get_ete_ncbitaxa_reuses_existing_custom_db_without_taxdump_refresh(self, tmp_path, monkeypatch):
+        captured = {'lock_path': None}
+
+        class DummyLock:
+            def __init__(self, lock_path, lock_label='Lock', poll_seconds=5, timeout_seconds=3600):
+                _ = (lock_label, poll_seconds, timeout_seconds)
+                captured['lock_path'] = lock_path
+
+            def __enter__(self):
+                return None
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        class RecordingNcbi:
+            def __init__(self, **kwargs):
+                captured['kwargs'] = kwargs
+
+        def fail_urlretrieve(*_args, **_kwargs):
+            raise AssertionError('urlretrieve should not be called when a usable custom ETE DB already exists.')
+
+        args = SimpleNamespace(
+            out_dir=str(tmp_path / 'out'),
+            download_dir=str(tmp_path / 'shared_downloads'),
+        )
+        expected_download_dir = os.path.realpath(args.download_dir)
+        expected_ete_dir = os.path.join(expected_download_dir, 'ete_taxonomy')
+        expected_lock_path = os.path.join(expected_download_dir, 'locks', 'ete_taxonomy.lock')
+        os.makedirs(expected_ete_dir, exist_ok=True)
+        dbfile = os.path.join(expected_ete_dir, 'taxa.sqlite')
+        with open(dbfile, 'wb') as fout:
+            fout.write(b'sqlite')
+
+        monkeypatch.setattr('amalgkit.util.acquire_exclusive_lock', DummyLock)
+        monkeypatch.setattr('amalgkit.download_utils.ete4.NCBITaxa', RecordingNcbi)
+        monkeypatch.setattr('amalgkit.download_utils.ete4.is_taxadb_up_to_date', lambda path: path == dbfile)
+        monkeypatch.setattr('amalgkit.download_utils.urllib.request.urlretrieve', fail_urlretrieve)
+
+        result = get_ete_ncbitaxa(args=args)
+
+        assert isinstance(result, RecordingNcbi)
+        assert captured['kwargs']['dbfile'] == dbfile
+        assert captured['kwargs']['update'] is False
+        assert 'taxdump_file' not in captured['kwargs']
+        assert captured['lock_path'] == expected_lock_path
+
+    def test_get_ete_ncbitaxa_caches_instances_per_custom_db(self, tmp_path, monkeypatch):
+        captured = {'init_calls': 0, 'lock_calls': 0}
+
+        class DummyLock:
+            def __init__(self, lock_path, lock_label='Lock', poll_seconds=5, timeout_seconds=3600):
+                _ = (lock_path, lock_label, poll_seconds, timeout_seconds)
+
+            def __enter__(self):
+                captured['lock_calls'] += 1
+                return None
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        class RecordingNcbi:
+            def __init__(self, **kwargs):
+                captured['init_calls'] += 1
+                captured.setdefault('kwargs', kwargs)
+
+        args = SimpleNamespace(
+            out_dir=str(tmp_path / 'out'),
+            download_dir=str(tmp_path / 'shared_downloads'),
+        )
+        expected_download_dir = os.path.realpath(args.download_dir)
+        expected_ete_dir = os.path.join(expected_download_dir, 'ete_taxonomy')
+        dbfile = os.path.join(expected_ete_dir, 'taxa.sqlite')
+        os.makedirs(expected_ete_dir, exist_ok=True)
+        with open(dbfile, 'wb') as fout:
+            fout.write(b'sqlite')
+
+        monkeypatch.setattr('amalgkit.util.acquire_exclusive_lock', DummyLock)
+        monkeypatch.setattr('amalgkit.download_utils.ete4.NCBITaxa', RecordingNcbi)
+        monkeypatch.setattr('amalgkit.download_utils.ete4.is_taxadb_up_to_date', lambda path: path == dbfile)
+
+        first = get_ete_ncbitaxa(args=args)
+        second = get_ete_ncbitaxa(args=args)
+
+        assert first is second
+        assert captured['init_calls'] == 1
+        assert captured['lock_calls'] == 1
+
+    def test_get_ete_ncbitaxa_default_cache_ignores_constructor_id_collisions(self, monkeypatch):
+        import builtins
+        import amalgkit.download_utils as download_utils
+
+        class FirstNcbi:
+            pass
+
+        class SecondNcbi:
+            pass
+
+        cache = download_utils._get_thread_local_ete_ncbitaxa_cache()
+        cache.clear()
+        original_id = builtins.id
+
+        def fake_id(value):
+            if value in {FirstNcbi, SecondNcbi}:
+                return 424242
+            return original_id(value)
+
+        monkeypatch.setattr(builtins, 'id', fake_id)
+        try:
+            first = download_utils.get_ete_ncbitaxa(ncbitaxa_cls=FirstNcbi)
+            second = download_utils.get_ete_ncbitaxa(ncbitaxa_cls=SecondNcbi)
+        finally:
+            cache.clear()
+
+        assert isinstance(first, FirstNcbi)
+        assert isinstance(second, SecondNcbi)
+        assert first is not second
+
+    def test_get_ete_ncbitaxa_serializes_custom_constructor_across_threads(self, tmp_path, monkeypatch):
+        captured = {'active': 0, 'max_active': 0, 'init_calls': 0}
+        state_lock = threading.Lock()
+
+        class DummyLock:
+            def __init__(self, lock_path, lock_label='Lock', poll_seconds=5, timeout_seconds=3600):
+                _ = (lock_path, lock_label, poll_seconds, timeout_seconds)
+
+            def __enter__(self):
+                return None
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        class RecordingNcbi:
+            def __init__(self, **kwargs):
+                _ = kwargs
+                with state_lock:
+                    captured['active'] += 1
+                    captured['max_active'] = max(captured['max_active'], captured['active'])
+                    captured['init_calls'] += 1
+                    current_active = captured['active']
+                if current_active > 1:
+                    raise RuntimeError('constructor entered concurrently')
+                time.sleep(0.05)
+                with state_lock:
+                    captured['active'] -= 1
+
+        monkeypatch.setattr('amalgkit.util.acquire_exclusive_lock', DummyLock)
+        monkeypatch.setattr('amalgkit.download_utils.ete4.NCBITaxa', RecordingNcbi)
+        monkeypatch.setattr('amalgkit.download_utils.should_refresh_custom_ete_taxonomy_db', lambda *args, **kwargs: False)
+
+        args_by_label = {
+            'first': SimpleNamespace(out_dir=str(tmp_path / 'out1'), download_dir=str(tmp_path / 'shared1')),
+            'second': SimpleNamespace(out_dir=str(tmp_path / 'out2'), download_dir=str(tmp_path / 'shared2')),
+        }
+        results, failures = run_tasks_with_optional_threads(
+            task_items=list(args_by_label),
+            task_fn=lambda label: get_ete_ncbitaxa(args=args_by_label[label]),
+            max_workers=2,
+        )
+
+        assert failures == []
+        assert len(results) == 2
+        assert captured['init_calls'] == 2
+        assert captured['max_active'] == 1
 
 
 class TestDownloadLockRecovery:
-    def test_acquire_exclusive_lock_reclaims_stale_pid_lock(self, tmp_path, monkeypatch):
+    def test_acquire_exclusive_lock_rejects_symlink_lock_path(self, tmp_path):
         lock_path = tmp_path / 'download.lock'
-        lock_path.write_text('999999\n')
+        os.symlink(tmp_path / 'dangling.lock.target', lock_path)
+
+        with pytest.raises(IsADirectoryError, match='test lock path exists but is not a file'):
+            with acquire_exclusive_lock(str(lock_path), lock_label='test lock', poll_seconds=1, timeout_seconds=2):
+                pass
+
+    def test_acquire_exclusive_lock_reclaims_stale_same_host_lock(self, tmp_path, monkeypatch):
+        lock_path = tmp_path / 'download.lock'
+        lock_path.write_text(json.dumps({
+            'format': 'amalgkit-lock-v2',
+            'hostname': socket.gethostname(),
+            'boot_id': 'boot-1',
+            'pid': 999999,
+            'created_at': time.time(),
+        }) + '\n')
 
         def fake_kill(_pid, _sig):
             raise ProcessLookupError()
 
+        monkeypatch.setattr('amalgkit.download_utils._resolve_local_boot_id', lambda: 'boot-1')
         monkeypatch.setattr('amalgkit.util.os.kill', fake_kill)
 
         with acquire_exclusive_lock(str(lock_path), lock_label='test lock', poll_seconds=1, timeout_seconds=2):
             assert lock_path.exists()
-            assert lock_path.read_text().strip() == str(os.getpid())
+            metadata = json.loads(lock_path.read_text())
+            assert metadata['pid'] == os.getpid()
+            assert metadata['hostname'] == socket.gethostname()
 
         assert not lock_path.exists()
 
-    def test_acquire_exclusive_lock_times_out_when_owner_pid_is_alive(self, tmp_path, monkeypatch):
+    def test_acquire_exclusive_lock_times_out_when_same_host_owner_pid_is_alive(self, tmp_path, monkeypatch):
         lock_path = tmp_path / 'download.lock'
-        lock_path.write_text('12345\n')
+        lock_path.write_text(json.dumps({
+            'format': 'amalgkit-lock-v2',
+            'hostname': socket.gethostname(),
+            'boot_id': 'boot-2',
+            'pid': 12345,
+            'created_at': time.time(),
+        }) + '\n')
 
+        monkeypatch.setattr('amalgkit.download_utils._resolve_local_boot_id', lambda: 'boot-2')
         monkeypatch.setattr('amalgkit.util.os.kill', lambda _pid, _sig: None)
 
         with pytest.raises(TimeoutError, match='Timed out'):
@@ -2302,3 +2375,131 @@ class TestDownloadLockRecovery:
                 pass
 
         assert lock_path.exists()
+
+    def test_acquire_exclusive_lock_reclaims_stale_cross_host_lock_after_heartbeat_timeout(self, tmp_path, monkeypatch):
+        lock_path = tmp_path / 'download.lock'
+        lock_path.write_text(json.dumps({
+            'format': 'amalgkit-lock-v2',
+            'hostname': 'remote-node-01',
+            'boot_id': 'remote-boot',
+            'pid': 321,
+            'created_at': time.time() - 30,
+        }) + '\n')
+        stale_at = time.time() - 10
+        os.utime(lock_path, (stale_at, stale_at))
+
+        monkeypatch.setattr('amalgkit.download_utils.DOWNLOAD_LOCK_STALE_SECONDS', 1)
+
+        with acquire_exclusive_lock(str(lock_path), lock_label='test lock', poll_seconds=1, timeout_seconds=2):
+            metadata = json.loads(lock_path.read_text())
+            assert metadata['pid'] == os.getpid()
+
+        assert not lock_path.exists()
+
+    def test_acquire_exclusive_lock_waits_for_fresh_cross_host_lock(self, tmp_path, monkeypatch):
+        lock_path = tmp_path / 'download.lock'
+        lock_path.write_text(json.dumps({
+            'format': 'amalgkit-lock-v2',
+            'hostname': 'remote-node-02',
+            'boot_id': 'remote-boot',
+            'pid': 654,
+            'created_at': time.time(),
+        }) + '\n')
+
+        monkeypatch.setattr('amalgkit.download_utils.DOWNLOAD_LOCK_STALE_SECONDS', 60)
+
+        with pytest.raises(TimeoutError, match='Timed out'):
+            with acquire_exclusive_lock(str(lock_path), lock_label='test lock', poll_seconds=1, timeout_seconds=1):
+                pass
+
+        assert lock_path.exists()
+
+    def test_acquire_exclusive_lock_updates_lock_heartbeat(self, tmp_path, monkeypatch):
+        lock_path = tmp_path / 'download.lock'
+
+        monkeypatch.setattr('amalgkit.download_utils.DOWNLOAD_LOCK_HEARTBEAT_SECONDS', 0.05)
+
+        with acquire_exclusive_lock(str(lock_path), lock_label='test lock', poll_seconds=1, timeout_seconds=2):
+            first_mtime = os.stat(lock_path).st_mtime_ns
+            time.sleep(0.2)
+            second_mtime = os.stat(lock_path).st_mtime_ns
+            assert second_mtime > first_mtime
+
+
+class TestDownloadSemaphoreRecovery:
+    def test_acquire_counting_semaphore_wait_false_returns_none_when_all_slots_busy(self, tmp_path):
+        from amalgkit.download_utils import acquire_counting_semaphore
+
+        semaphore_dir = tmp_path / 'semaphore'
+        semaphore_dir.mkdir()
+        slot_path = semaphore_dir / 'slot-0001.lock'
+        slot_path.write_text(json.dumps({
+            'format': 'amalgkit-lock-v2',
+            'hostname': socket.gethostname(),
+            'pid': os.getpid(),
+            'created_at': time.time(),
+        }) + '\n')
+
+        with acquire_counting_semaphore(
+            semaphore_dir=str(semaphore_dir),
+            max_concurrency=1,
+            lock_label='test semaphore',
+            poll_seconds=1,
+            timeout_seconds=2,
+            wait=False,
+        ) as acquired_slot_path:
+            assert acquired_slot_path is None
+
+        assert slot_path.exists()
+
+    def test_acquire_counting_semaphore_reclaims_stale_same_host_slot(self, tmp_path, monkeypatch):
+        from amalgkit.download_utils import acquire_counting_semaphore
+
+        semaphore_dir = tmp_path / 'semaphore'
+        semaphore_dir.mkdir()
+        slot_path = semaphore_dir / 'slot-0001.lock'
+        slot_path.write_text(json.dumps({
+            'format': 'amalgkit-lock-v2',
+            'hostname': socket.gethostname(),
+            'boot_id': 'boot-semaphore',
+            'pid': 999999,
+            'created_at': time.time(),
+        }) + '\n')
+
+        def fake_kill(_pid, _sig):
+            raise ProcessLookupError()
+
+        monkeypatch.setattr('amalgkit.download_utils._resolve_local_boot_id', lambda: 'boot-semaphore')
+        monkeypatch.setattr('amalgkit.download_utils.os.kill', fake_kill)
+
+        with acquire_counting_semaphore(
+            semaphore_dir=str(semaphore_dir),
+            max_concurrency=1,
+            lock_label='test semaphore',
+            poll_seconds=1,
+            timeout_seconds=2,
+        ) as acquired_slot_path:
+            assert acquired_slot_path == str(slot_path)
+            metadata = json.loads(slot_path.read_text())
+            assert metadata['pid'] == os.getpid()
+            assert metadata['hostname'] == socket.gethostname()
+
+        assert not slot_path.exists()
+
+    def test_acquire_counting_semaphore_updates_slot_heartbeat(self, tmp_path, monkeypatch):
+        from amalgkit.download_utils import acquire_counting_semaphore
+
+        semaphore_dir = tmp_path / 'semaphore'
+        monkeypatch.setattr('amalgkit.download_utils.DOWNLOAD_LOCK_HEARTBEAT_SECONDS', 0.05)
+
+        with acquire_counting_semaphore(
+            semaphore_dir=str(semaphore_dir),
+            max_concurrency=1,
+            lock_label='test semaphore',
+            poll_seconds=1,
+            timeout_seconds=2,
+        ) as acquired_slot_path:
+            first_mtime = os.stat(acquired_slot_path).st_mtime_ns
+            time.sleep(0.2)
+            second_mtime = os.stat(acquired_slot_path).st_mtime_ns
+            assert second_mtime > first_mtime

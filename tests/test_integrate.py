@@ -107,6 +107,39 @@ class TestIntegrateGetFastqStats:
             fh.write('+\n')
             fh.write('IIII\n')
 
+    @staticmethod
+    def _fake_ncbi_for_species(name_to_taxid):
+        lineage_map = {
+            9606: [1, 2759, 9605, 9606],
+            3702: [1, 2759, 3701, 3702],
+        }
+        rank_map = {
+            2759: 'domain',
+            9605: 'genus',
+            9606: 'species',
+            3701: 'genus',
+            3702: 'species',
+        }
+
+        class FakeNcbi:
+            def get_name_translator(self, names):
+                translated = {}
+                for name in names:
+                    if name in name_to_taxid:
+                        translated[name] = [name_to_taxid[name]]
+                return translated
+
+            def get_lineage_translator(self, taxids):
+                return {int(taxid): lineage_map[int(taxid)] for taxid in taxids if int(taxid) in lineage_map}
+
+            def get_lineage(self, taxid):
+                return lineage_map[int(taxid)]
+
+            def get_rank(self, taxids):
+                return {int(taxid): rank_map[int(taxid)] for taxid in taxids if int(taxid) in rank_map}
+
+        return FakeNcbi()
+
     def test_keeps_dotted_sample_ids_distinct(self, tmp_path):
         fastq_dir = tmp_path / 'fq'
         out_dir = tmp_path / 'out'
@@ -121,6 +154,122 @@ class TestIntegrateGetFastqStats:
         assert set(df['run'].tolist()) == {'sample.v1', 'sample.v2'}
         assert set(df['lib_layout'].tolist()) == {'single'}
         assert all(df['read2_path'] == 'unavailable')
+
+    def test_does_not_infer_private_taxonomy_from_unique_existing_species(self, tmp_path, monkeypatch):
+        fastq_dir = tmp_path / 'fq'
+        out_dir = tmp_path / 'out'
+        fastq_dir.mkdir()
+        out_dir.mkdir()
+        self._write_one_read_fastq(str(fastq_dir / 'alpha.fastq'))
+        monkeypatch.setattr(
+            'amalgkit.integrate.get_ete_ncbitaxa',
+            lambda args=None: self._fake_ncbi_for_species({'Homo sapiens': 9606}),
+        )
+        args = SimpleNamespace(fastq_dir=str(fastq_dir), accurate_size=True, out_dir=str(out_dir))
+        existing_df = pandas.DataFrame({'scientific_name': ['Homo sapiens']})
+
+        df = get_fastq_stats(args, existing_df=existing_df)
+
+        assert df.loc[0, 'scientific_name'] == 'Please add in format: Genus species'
+        assert pandas.isna(df.loc[0, 'taxid'])
+        assert 'taxid_species' not in df.columns
+        assert 'taxid_genus' not in df.columns
+        assert df.loc[0, 'data_available'] == 'yes'
+
+    def test_recurses_nested_species_directories_and_qualifies_duplicate_run_ids(self, tmp_path, monkeypatch):
+        fastq_dir = tmp_path / 'fq'
+        out_dir = tmp_path / 'out'
+        (fastq_dir / 'Arabidopsis_thaliana').mkdir(parents=True)
+        (fastq_dir / 'Homo_sapiens').mkdir(parents=True)
+        out_dir.mkdir()
+        with gzip.open(str(fastq_dir / 'Arabidopsis_thaliana' / 'sample1.fq.gz'), 'wt') as fh:
+            fh.write('@r0\nAAAA\n+\nIIII\n')
+        with gzip.open(str(fastq_dir / 'Homo_sapiens' / 'sample1.fq.gz'), 'wt') as fh:
+            fh.write('@r0\nAAAA\n+\nIIII\n')
+        monkeypatch.setattr(
+            'amalgkit.integrate.get_ete_ncbitaxa',
+            lambda args=None: self._fake_ncbi_for_species({'Homo sapiens': 9606, 'Arabidopsis thaliana': 3702}),
+        )
+        args = SimpleNamespace(fastq_dir=str(fastq_dir), accurate_size=True, out_dir=str(out_dir))
+
+        df = get_fastq_stats(args)
+
+        assert set(df['run'].tolist()) == {'Arabidopsis_thaliana_sample1', 'Homo_sapiens_sample1'}
+        assert set(df['scientific_name'].tolist()) == {'Arabidopsis thaliana', 'Homo sapiens'}
+        assert set(df['taxid'].astype(int).tolist()) == {3702, 9606}
+
+    def test_recurses_below_species_directory_for_scientific_name(self, tmp_path, monkeypatch):
+        fastq_dir = tmp_path / 'fq'
+        out_dir = tmp_path / 'out'
+        (fastq_dir / 'Homo_sapiens' / 'brain').mkdir(parents=True)
+        out_dir.mkdir()
+        with gzip.open(str(fastq_dir / 'Homo_sapiens' / 'brain' / 'sample2.fq.gz'), 'wt') as fh:
+            fh.write('@r0\nAAAA\n+\nIIII\n')
+        monkeypatch.setattr(
+            'amalgkit.integrate.get_ete_ncbitaxa',
+            lambda args=None: self._fake_ncbi_for_species({'Homo sapiens': 9606}),
+        )
+        args = SimpleNamespace(fastq_dir=str(fastq_dir), accurate_size=True, out_dir=str(out_dir))
+
+        df = get_fastq_stats(args)
+
+        assert df.loc[0, 'run'] == 'sample2'
+        assert df.loc[0, 'scientific_name'] == 'Homo sapiens'
+        assert int(df.loc[0, 'taxid']) == 9606
+
+    def test_uses_fastq_dir_basename_for_direct_fastq_species_inference(self, tmp_path, monkeypatch):
+        fastq_dir = tmp_path / 'Arabidopsis_thaliana'
+        out_dir = tmp_path / 'out'
+        fastq_dir.mkdir()
+        out_dir.mkdir()
+        with gzip.open(str(fastq_dir / 'sample3.fq.gz'), 'wt') as fh:
+            fh.write('@r0\nAAAA\n+\nIIII\n')
+        monkeypatch.setattr(
+            'amalgkit.integrate.get_ete_ncbitaxa',
+            lambda args=None: self._fake_ncbi_for_species({'Arabidopsis thaliana': 3702}),
+        )
+        args = SimpleNamespace(fastq_dir=str(fastq_dir), accurate_size=True, out_dir=str(out_dir))
+
+        df = get_fastq_stats(args)
+
+        assert df.loc[0, 'run'] == 'sample3'
+        assert df.loc[0, 'scientific_name'] == 'Arabidopsis thaliana'
+        assert int(df.loc[0, 'taxid']) == 3702
+
+    def test_folder_candidate_is_used_even_when_existing_metadata_has_other_species(self, tmp_path, monkeypatch):
+        fastq_dir = tmp_path / 'Arabidopsis_thaliana'
+        out_dir = tmp_path / 'out'
+        fastq_dir.mkdir()
+        out_dir.mkdir()
+        self._write_one_read_fastq(str(fastq_dir / 'alpha.fastq'))
+        monkeypatch.setattr(
+            'amalgkit.integrate.get_ete_ncbitaxa',
+            lambda args=None: self._fake_ncbi_for_species({'Homo sapiens': 9606, 'Arabidopsis thaliana': 3702}),
+        )
+        args = SimpleNamespace(fastq_dir=str(fastq_dir), accurate_size=True, out_dir=str(out_dir))
+        existing_df = pandas.DataFrame({'scientific_name': ['Homo sapiens']})
+
+        df = get_fastq_stats(args, existing_df=existing_df)
+
+        assert df.loc[0, 'scientific_name'] == 'Arabidopsis thaliana'
+        assert int(df.loc[0, 'taxid']) == 3702
+
+    def test_unresolved_folder_candidate_keeps_placeholder_scientific_name(self, tmp_path, monkeypatch):
+        fastq_dir = tmp_path / 'Unknown_species'
+        out_dir = tmp_path / 'out'
+        fastq_dir.mkdir()
+        out_dir.mkdir()
+        self._write_one_read_fastq(str(fastq_dir / 'alpha.fastq'))
+        monkeypatch.setattr(
+            'amalgkit.integrate.get_ete_ncbitaxa',
+            lambda args=None: self._fake_ncbi_for_species({}),
+        )
+        args = SimpleNamespace(fastq_dir=str(fastq_dir), accurate_size=True, out_dir=str(out_dir))
+
+        df = get_fastq_stats(args)
+
+        assert df.loc[0, 'scientific_name'] == 'Please add in format: Genus species'
+        assert pandas.isna(df.loc[0, 'taxid'])
 
     def test_paired_mates_are_assigned_to_read1_read2(self, tmp_path):
         fastq_dir = tmp_path / 'fq'
@@ -157,8 +306,112 @@ class TestIntegrateGetFastqStats:
 
         assert df.shape[0] == 1
         assert int(df.loc[0, 'total_spots']) == 1
-        assert int(df.loc[0, 'spot_length']) == 4
+        assert int(df.loc[0, 'spot_length']) == 6
         assert int(df.loc[0, 'total_bases']) == 6
+
+    def test_accurate_mode_uses_seqkit_sum_len_for_single_total_bases(self, tmp_path, monkeypatch):
+        fastq_dir = tmp_path / 'fq'
+        out_dir = tmp_path / 'out'
+        fastq_dir.mkdir()
+        out_dir.mkdir()
+        self._write_one_read_fastq(str(fastq_dir / 'single.fastq'))
+
+        def fake_run(cmd, stdout=None, stderr=None):
+            input_paths = cmd[cmd.index('-j') + 2:]
+            rows = ['file\tformat\ttype\tnum_seqs\tsum_len\tavg_len']
+            for path_fastq in input_paths:
+                rows.append('{}\tFASTQ\tDNA\t2\t3\t1.5'.format(os.path.abspath(path_fastq)))
+            return subprocess.CompletedProcess(
+                cmd,
+                0,
+                stdout=('\n'.join(rows) + '\n').encode('utf8'),
+                stderr=b'',
+            )
+
+        monkeypatch.setattr('amalgkit.integrate.subprocess.run', fake_run)
+        args = SimpleNamespace(
+            fastq_dir=str(fastq_dir),
+            accurate_size=True,
+            out_dir=str(out_dir),
+            seqkit_exe='seqkit',
+        )
+
+        df = get_fastq_stats(args)
+
+        assert df.shape[0] == 1
+        assert int(df.loc[0, 'spot_length']) == 2
+        assert int(df.loc[0, 'total_spots']) == 2
+        assert int(df.loc[0, 'total_bases']) == 3
+
+    def test_accurate_mode_uses_seqkit_sum_len_for_paired_total_bases(self, tmp_path, monkeypatch):
+        fastq_dir = tmp_path / 'fq'
+        out_dir = tmp_path / 'out'
+        fastq_dir.mkdir()
+        out_dir.mkdir()
+        self._write_one_read_fastq(str(fastq_dir / 'paired_1.fastq'))
+        self._write_one_read_fastq(str(fastq_dir / 'paired_2.fastq'))
+
+        def fake_run(cmd, stdout=None, stderr=None):
+            input_paths = cmd[cmd.index('-j') + 2:]
+            rows = ['file\tformat\ttype\tnum_seqs\tsum_len\tavg_len']
+            for path_fastq in input_paths:
+                abs_path = os.path.abspath(path_fastq)
+                if abs_path.endswith('_1.fastq'):
+                    rows.append('{}\tFASTQ\tDNA\t2\t3\t1.5'.format(abs_path))
+                else:
+                    rows.append('{}\tFASTQ\tDNA\t2\t5\t2.5'.format(abs_path))
+            return subprocess.CompletedProcess(
+                cmd,
+                0,
+                stdout=('\n'.join(rows) + '\n').encode('utf8'),
+                stderr=b'',
+            )
+
+        monkeypatch.setattr('amalgkit.integrate.subprocess.run', fake_run)
+        args = SimpleNamespace(
+            fastq_dir=str(fastq_dir),
+            accurate_size=True,
+            out_dir=str(out_dir),
+            seqkit_exe='seqkit',
+        )
+
+        df = get_fastq_stats(args)
+
+        assert df.shape[0] == 1
+        assert int(df.loc[0, 'spot_length']) == 5
+        assert int(df.loc[0, 'total_spots']) == 2
+        assert int(df.loc[0, 'total_bases']) == 8
+
+    def test_accurate_mode_python_fallback_rounds_average_and_keeps_exact_bases(self, tmp_path, monkeypatch):
+        fastq_dir = tmp_path / 'fq'
+        out_dir = tmp_path / 'out'
+        fastq_dir.mkdir()
+        out_dir.mkdir()
+        with open(str(fastq_dir / 'fallback.fastq'), 'wt') as fh:
+            fh.write('@r0\nA\n+\nI\n')
+            fh.write('@r1\nAA\n+\nII\n')
+
+        monkeypatch.setattr(
+            'amalgkit.integrate.scan_fastq_stats_with_seqkit_batch_detailed',
+            lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError('seqkit unavailable')),
+        )
+        monkeypatch.setattr(
+            'amalgkit.integrate.scan_fastq_stats_with_seqkit_detailed',
+            lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError('seqkit unavailable')),
+        )
+        args = SimpleNamespace(
+            fastq_dir=str(fastq_dir),
+            accurate_size=True,
+            out_dir=str(out_dir),
+            seqkit_exe='seqkit',
+        )
+
+        df = get_fastq_stats(args)
+
+        assert df.shape[0] == 1
+        assert int(df.loc[0, 'spot_length']) == 2
+        assert int(df.loc[0, 'total_spots']) == 2
+        assert int(df.loc[0, 'total_bases']) == 3
 
     def test_raises_when_only_read2_file_is_present(self, tmp_path):
         fastq_dir = tmp_path / 'fq'
@@ -394,6 +647,46 @@ class TestIntegrateGetFastqStats:
 
 
 class TestIntegrateMain:
+    def test_resolves_taxid_for_existing_and_private_rows(self, tmp_path, monkeypatch):
+        metadata_dir = tmp_path / 'metadata'
+        metadata_dir.mkdir()
+        (metadata_dir / 'metadata.tsv').write_text('dummy\n')
+        fastq_dir = tmp_path / 'Arabidopsis_thaliana'
+        fastq_dir.mkdir()
+        TestIntegrateGetFastqStats._write_one_read_fastq(str(fastq_dir / 'alpha.fastq'))
+        args = SimpleNamespace(
+            metadata='inferred',
+            out_dir=str(tmp_path),
+            fastq_dir=str(fastq_dir),
+            accurate_size=True,
+        )
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001'],
+            'scientific_name': ['Arabidopsis thaliana'],
+            'exclusion': ['no'],
+        }))
+
+        monkeypatch.setattr('amalgkit.integrate.load_metadata', lambda _args: metadata)
+        monkeypatch.setattr('amalgkit.integrate.check_getfastq_outputs', lambda *_args, **_kwargs: (['SRR001'], []))
+        monkeypatch.setattr(
+            'amalgkit.integrate.get_ete_ncbitaxa',
+            lambda args=None: TestIntegrateGetFastqStats._fake_ncbi_for_species({'Arabidopsis thaliana': 3702}),
+        )
+
+        integrate_main(args)
+
+        out_path = metadata_dir / 'metadata_updated_for_private_fastq.tsv'
+        out_df = pandas.read_csv(str(out_path), sep='\t')
+        existing_row = out_df.loc[out_df['run'] == 'SRR001'].iloc[0]
+        private_row = out_df.loc[out_df['run'] == 'alpha'].iloc[0]
+        assert int(existing_row['taxid']) == 3702
+        assert int(private_row['taxid']) == 3702
+        assert int(private_row['taxid_species']) == 3702
+        assert int(private_row['taxid_genus']) == 3701
+        assert private_row['scientific_name'] == 'Arabidopsis thaliana'
+        assert existing_row['data_available'] == 'yes'
+        assert private_row['data_available'] == 'yes'
+
     def test_marks_data_available_with_whitespace_run_ids(self, tmp_path, monkeypatch):
         metadata_dir = tmp_path / 'metadata'
         metadata_dir.mkdir()
@@ -403,6 +696,7 @@ class TestIntegrateMain:
             out_dir=str(tmp_path),
             fastq_dir=str(tmp_path / 'fq'),
             accurate_size=True,
+            output_metadata=None,
         )
         metadata = Metadata.from_DataFrame(pandas.DataFrame({
             'run': [' SRR001 '],
@@ -419,7 +713,7 @@ class TestIntegrateMain:
         monkeypatch.setattr('amalgkit.integrate.check_getfastq_outputs', fake_check_getfastq_outputs)
         monkeypatch.setattr(
             'amalgkit.integrate.get_fastq_stats',
-            lambda _args: pandas.DataFrame(columns=['run', 'scientific_name', 'exclusion']),
+            lambda _args, existing_df=None: pandas.DataFrame(columns=['run', 'scientific_name', 'exclusion']),
         )
 
         integrate_main(args)
@@ -428,6 +722,73 @@ class TestIntegrateMain:
         out_df = pandas.read_csv(str(out_path), sep='\t')
         assert out_df.loc[0, 'run'] == 'SRR001'
         assert out_df.loc[0, 'data_available'] == 'yes'
+
+    def test_writes_merged_metadata_to_explicit_output_path(self, tmp_path, monkeypatch):
+        metadata_dir = tmp_path / 'metadata'
+        metadata_dir.mkdir()
+        (metadata_dir / 'metadata.tsv').write_text('dummy\n')
+        explicit_out = tmp_path / 'custom' / 'integrated.tsv'
+        args = SimpleNamespace(
+            metadata='inferred',
+            out_dir=str(tmp_path),
+            fastq_dir=str(tmp_path / 'fq'),
+            accurate_size=True,
+            output_metadata=str(explicit_out),
+        )
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001'],
+            'scientific_name': ['Sp1'],
+            'exclusion': ['no'],
+        }))
+
+        monkeypatch.setattr('amalgkit.integrate.load_metadata', lambda _args: metadata)
+        monkeypatch.setattr('amalgkit.integrate.check_getfastq_outputs', lambda *_args, **_kwargs: (['SRR001'], []))
+        monkeypatch.setattr(
+            'amalgkit.integrate.get_fastq_stats',
+            lambda _args, existing_df=None: pandas.DataFrame({
+                'run': ['private001'],
+                'scientific_name': ['Sp2'],
+                'exclusion': ['no'],
+            }),
+        )
+
+        integrate_main(args)
+
+        assert explicit_out.exists()
+        out_df = pandas.read_csv(str(explicit_out), sep='\t')
+        assert set(out_df['run']) == {'SRR001', 'private001'}
+        assert not (metadata_dir / 'metadata_updated_for_private_fastq.tsv').exists()
+
+    def test_writes_new_private_metadata_to_explicit_output_path(self, tmp_path, monkeypatch):
+        explicit_out = tmp_path / 'custom' / 'private_metadata.tsv'
+        args = SimpleNamespace(
+            metadata='inferred',
+            out_dir=str(tmp_path),
+            fastq_dir=str(tmp_path / 'fq'),
+            accurate_size=True,
+            output_metadata=str(explicit_out),
+        )
+        expected_df = pandas.DataFrame({
+            'run': ['private001'],
+            'scientific_name': ['Sp2'],
+            'exclusion': ['no'],
+        })
+
+        def fake_get_fastq_stats(_args, existing_df=None, output_path=None):
+            assert existing_df is None
+            assert os.path.realpath(output_path) == os.path.realpath(str(explicit_out))
+            explicit_out.parent.mkdir(parents=True, exist_ok=True)
+            expected_df.to_csv(str(explicit_out), sep='\t', index=False)
+            return expected_df
+
+        monkeypatch.setattr('amalgkit.integrate.get_fastq_stats', fake_get_fastq_stats)
+
+        integrate_main(args)
+
+        assert explicit_out.exists()
+        out_df = pandas.read_csv(str(explicit_out), sep='\t')
+        pandas.testing.assert_frame_equal(out_df, expected_df)
+        assert not (tmp_path / 'metadata_private_fastq.tsv').exists()
 
     def test_rejects_missing_run_ids_in_existing_metadata(self, tmp_path, monkeypatch):
         metadata_dir = tmp_path / 'metadata'
@@ -524,7 +885,7 @@ class TestIntegrateMain:
         monkeypatch.setattr('amalgkit.integrate.check_getfastq_outputs', lambda *_args, **_kwargs: (['SRR001'], []))
         monkeypatch.setattr(
             'amalgkit.integrate.get_fastq_stats',
-            lambda _args: pandas.DataFrame({
+            lambda _args, existing_df=None: pandas.DataFrame({
                 'run': [' SRR001 '],
                 'scientific_name': ['Sp1'],
                 'exclusion': ['no'],
@@ -554,6 +915,7 @@ class TestIntegrateMain:
             out_dir=str(tmp_path),
             fastq_dir=str(tmp_path / 'fq'),
             accurate_size=True,
+            output_metadata=None,
         )
 
         with pytest.raises(FileNotFoundError, match='Metadata file not found'):
