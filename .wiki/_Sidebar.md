@@ -22,3 +22,5 @@
 * Release
   * [v0.16.25 notes](./Release-notes-v0.16.25)
   * [Legacy config command](./amalgkit-config)
+  * [Legacy curate command](./amalgkit-curate)
+  * [Legacy csca command](./amalgkit-csca)
