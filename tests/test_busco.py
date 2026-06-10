@@ -277,7 +277,7 @@ def test_resolve_species_fasta_multiple_raises(tmp_path):
     fasta_dir = tmp_path / "fasta"
     fasta_dir.mkdir()
     (fasta_dir / "Homo_sapiens.fa").write_text(">seq1\nATGC\n")
-    (fasta_dir / "Homo_sapiens.v1.fa").write_text(">seq2\nATGC\n")
+    (fasta_dir / "Homo_sapiens.fasta").write_text(">seq2\nATGC\n")
     with pytest.raises(ValueError, match="Found multiple reference fasta files"):
         resolve_species_fasta("Homo sapiens", str(fasta_dir))
 
@@ -286,12 +286,12 @@ def test_resolve_species_fasta_multiple_raises_with_unsorted_prefetched_names(tm
     fasta_dir = tmp_path / "fasta"
     fasta_dir.mkdir()
     (fasta_dir / "Homo_sapiens.fa").write_text(">seq1\nATGC\n")
-    (fasta_dir / "Homo_sapiens.v1.fa").write_text(">seq2\nATGC\n")
+    (fasta_dir / "Homo_sapiens.fasta").write_text(">seq2\nATGC\n")
     unsorted_names = [
         "Aardvark.fa",
         "Homo_sapiens.fa",
         "Mus_musculus.fa",
-        "Homo_sapiens.v1.fa",
+        "Homo_sapiens.fasta",
     ]
     with pytest.raises(ValueError, match="Found multiple reference fasta files"):
         resolve_species_fasta(
@@ -311,28 +311,28 @@ def test_resolve_species_fasta_ignores_similar_species_prefix(tmp_path):
     assert os.path.realpath(result) == os.path.realpath(str(target))
 
 
-def test_resolve_species_fasta_fallback_strips_dot_in_prefix(tmp_path):
+def test_resolve_species_fasta_preserves_dot_in_prefix(tmp_path):
     fasta_dir = tmp_path / "fasta"
     fasta_dir.mkdir()
-    target = fasta_dir / "C_elegans.fa"
+    target = fasta_dir / "C._elegans.fa"
     target.write_text(">seq\nATGC\n")
     result = resolve_species_fasta("C. elegans", str(fasta_dir))
     assert os.path.realpath(result) == os.path.realpath(str(target))
 
 
-def test_resolve_species_fasta_fallback_uses_genus_species_prefix(tmp_path):
+def test_resolve_species_fasta_requires_exact_species_stem(tmp_path):
     fasta_dir = tmp_path / "fasta"
     fasta_dir.mkdir()
     target = fasta_dir / "Canis_lupus.fa"
     target.write_text(">seq\nATGC\n")
-    result = resolve_species_fasta("Canis lupus familiaris", str(fasta_dir))
-    assert os.path.realpath(result) == os.path.realpath(str(target))
+    with pytest.raises(FileNotFoundError, match="Could not find reference fasta file"):
+        resolve_species_fasta("Canis lupus familiaris", str(fasta_dir))
 
 
-def test_resolve_species_fasta_fallback_handles_redundant_spaces(tmp_path):
+def test_resolve_species_fasta_normalizes_redundant_spaces_without_shortening(tmp_path):
     fasta_dir = tmp_path / "fasta"
     fasta_dir.mkdir()
-    target = fasta_dir / "Canis_lupus.fa"
+    target = fasta_dir / "Canis_lupus_familiaris.fa"
     target.write_text(">seq\nATGC\n")
     result = resolve_species_fasta("Canis   lupus familiaris", str(fasta_dir))
     assert os.path.realpath(result) == os.path.realpath(str(target))

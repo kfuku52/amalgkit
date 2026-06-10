@@ -331,14 +331,13 @@ class TestResolveInputFastqFiles:
 
 
 class TestIndexDiscoveryHelpers:
-    def test_find_species_index_files_filters_prefix(self, tmp_path):
+    def test_find_species_index_files_requires_exact_stem(self, tmp_path):
         (tmp_path / 'Homo_sapiens.idx').write_text('idx')
         (tmp_path / 'Homo_sapiens.v2.idx').write_text('idx')
         (tmp_path / 'Mus_musculus.idx').write_text('idx')
         result = find_species_index_files(str(tmp_path), 'Homo_sapiens')
         assert result == [
             str(tmp_path / 'Homo_sapiens.idx'),
-            str(tmp_path / 'Homo_sapiens.v2.idx'),
         ]
 
     def test_find_species_fasta_files_filters_suffix(self, tmp_path):
@@ -376,7 +375,7 @@ class TestIndexDiscoveryHelpers:
         (tmp_path / 'Homo_sapiens.idx').mkdir()
         (tmp_path / 'Homo_sapiens.v2.idx').write_text('idx')
         result = find_species_index_files(str(tmp_path), 'Homo_sapiens')
-        assert result == [str(tmp_path / 'Homo_sapiens.v2.idx')]
+        assert result == []
 
     def test_find_species_fasta_files_raises_for_file_path(self, tmp_path):
         fasta_path = tmp_path / 'fasta_path'
@@ -390,15 +389,15 @@ class TestIndexDiscoveryHelpers:
         result = find_species_fasta_files(str(tmp_path), 'Homo_sapiens')
         assert result == [str(tmp_path / 'Homo_sapiens.fasta')]
 
-    def test_find_species_fasta_files_uses_subspecies_fallback_prefix(self, tmp_path):
+    def test_find_species_fasta_files_requires_exact_species_stem(self, tmp_path):
         (tmp_path / 'Gorilla_gorilla.fa').write_text('>a\nAAAA\n')
         result = find_species_fasta_files(str(tmp_path), 'Gorilla_gorilla_gorilla')
-        assert result == [str(tmp_path / 'Gorilla_gorilla.fa')]
+        assert result == []
 
-    def test_find_species_fasta_files_normalizes_redundant_underscores_for_subspecies_fallback(self, tmp_path):
-        (tmp_path / 'Canis_lupus.fa').write_text('>a\nAAAA\n')
+    def test_find_species_fasta_files_normalizes_redundant_underscores_without_shortening(self, tmp_path):
+        (tmp_path / 'Canis_lupus_familiaris.fa').write_text('>a\nAAAA\n')
         result = find_species_fasta_files(str(tmp_path), 'Canis__lupus_familiaris')
-        assert result == [str(tmp_path / 'Canis_lupus.fa')]
+        assert result == [str(tmp_path / 'Canis_lupus_familiaris.fa')]
 
 
 class TestGetfastqPrefetch:
@@ -793,12 +792,10 @@ class TestQuantEdgeCases:
             )
         assert renamed['called'] is False
 
-    def test_run_quant_uses_scientific_name_original_for_index_lookup(self, tmp_path, monkeypatch):
+    def test_run_quant_ignores_scientific_name_original_for_index_lookup(self, tmp_path):
         out_dir = tmp_path / 'out'
-        getfastq_dir = out_dir / 'getfastq' / 'SRR001'
         index_dir = out_dir / 'index'
         out_dir.mkdir()
-        getfastq_dir.mkdir(parents=True)
         index_dir.mkdir(parents=True)
         (index_dir / 'Pygsuia_biforma.idx').write_text('idx')
         args = SimpleNamespace(
@@ -814,17 +811,6 @@ class TestQuantEdgeCases:
             index_lock_poll=1,
             index_lock_timeout=1,
         )
-        metadata = Metadata.from_DataFrame(pandas.DataFrame({
-            'run': ['SRR001'],
-            'scientific_name': ['unclassified eukaryotes'],
-            'scientific_name_original': ['Pygsuia biforma'],
-            'lib_layout': ['single'],
-            'total_spots': [10],
-            'spot_length': [100],
-            'total_bases': [1000],
-            'nominal_length': [200],
-            'exclusion': ['no'],
-        }))
         runtime_context = QuantRuntimeContext(
             run_files_by_run={'SRR001': {'SRR001.fastq.gz'}},
             quant_backend_by_run={'SRR001': 'kallisto'},
@@ -832,36 +818,13 @@ class TestQuantEdgeCases:
                 'SRR001': ['unclassified eukaryotes', 'Pygsuia biforma'],
             },
         )
-        observed = {}
 
-        monkeypatch.setattr(
-            'amalgkit.quant.get_newest_intermediate_file_extension',
-            lambda *_args, **_kwargs: '.fastq.gz',
-        )
-
-        def fake_call_kallisto(_args, in_files, _metadata, _sra_stat, _output_dir, index):
-            observed['in_files'] = list(in_files)
-            observed['index'] = index
-            return SimpleNamespace(returncode=0)
-
-        monkeypatch.setattr('amalgkit.quant.call_kallisto', fake_call_kallisto)
-
-        runtime_context.resolved_index_cache = pre_resolve_species_indices(
-            args,
-            [('SRR001', 'unclassified eukaryotes')],
-            runtime_context=runtime_context,
-        )
-
-        run_quant_for_sra(
-            args=args,
-            metadata=metadata,
-            sra_id='SRR001',
-            sci_name='unclassified eukaryotes',
-            runtime_context=runtime_context,
-        )
-
-        assert observed['in_files'] == [str(getfastq_dir / 'SRR001.fastq.gz')]
-        assert observed['index'] == str(index_dir / 'Pygsuia_biforma.idx')
+        with pytest.raises(FileNotFoundError, match='Could not find index file'):
+            pre_resolve_species_indices(
+                args,
+                [('SRR001', 'unclassified eukaryotes')],
+                runtime_context=runtime_context,
+            )
 
     def test_get_index_raises_clear_error_for_multiple_fasta_candidates(self, tmp_path):
         out_dir = tmp_path / 'out'
@@ -870,8 +833,8 @@ class TestQuantEdgeCases:
         out_dir.mkdir()
         fasta_dir.mkdir()
         index_dir.mkdir()
-        (fasta_dir / 'Homo_sapiens_a.fa').write_text('>a\nAAAA\n')
-        (fasta_dir / 'Homo_sapiens_b.fasta').write_text('>b\nCCCC\n')
+        (fasta_dir / 'Homo_sapiens.fa').write_text('>a\nAAAA\n')
+        (fasta_dir / 'Homo_sapiens_for_kallisto_index.fasta').write_text('>b\nCCCC\n')
 
         args = SimpleNamespace(
             out_dir=str(out_dir),
@@ -913,7 +876,7 @@ class TestQuantEdgeCases:
         assert observed_index == str(index_dir / 'Mayorella.idx')
         assert observed['fasta_file'] == str(exact_fasta)
 
-    def test_get_index_prefers_alias_exact_match_before_primary_broad_prefix_fallback(self, tmp_path, monkeypatch):
+    def test_get_index_ignores_alias_exact_match(self, tmp_path):
         out_dir = tmp_path / 'out'
         fasta_dir = tmp_path / 'fasta'
         index_dir = tmp_path / 'index'
@@ -924,14 +887,6 @@ class TestQuantEdgeCases:
         ambiguous_broad_fasta = fasta_dir / 'Mayorella_marianaensis_for_kallisto_index.fasta'
         alias_exact_fasta.write_text('>a\nAAAA\n')
         ambiguous_broad_fasta.write_text('>b\nCCCC\n')
-        observed = {'fasta_file': None}
-
-        def fake_build(index_path, fasta_file, sci_name):
-            observed['fasta_file'] = fasta_file
-            open(index_path, 'w').write('idx')
-
-        monkeypatch.setattr('amalgkit.quant._build_kallisto_index', fake_build)
-
         args = SimpleNamespace(
             out_dir=str(out_dir),
             index_dir=str(index_dir),
@@ -939,10 +894,26 @@ class TestQuantEdgeCases:
             fasta_dir=str(fasta_dir),
         )
 
-        observed_index = get_index(args, 'Mayorella', alias_names=['Mayorella sp'])
+        with pytest.raises(FileNotFoundError, match='Could not find reference fasta file'):
+            get_index(args, 'Mayorella', alias_names=['Mayorella sp'])
 
-        assert observed_index == str(index_dir / 'Mayorella_sp.idx')
-        assert observed['fasta_file'] == str(alias_exact_fasta)
+    def test_get_index_does_not_use_variety_fasta_as_base_species_fallback(self, tmp_path):
+        out_dir = tmp_path / 'out'
+        fasta_dir = tmp_path / 'fasta'
+        index_dir = tmp_path / 'index'
+        out_dir.mkdir()
+        fasta_dir.mkdir()
+        index_dir.mkdir()
+        (fasta_dir / 'Asimitellaria_furusei_var._furusei_for_kallisto_index.fasta').write_text('>a\nAAAA\n')
+        args = SimpleNamespace(
+            out_dir=str(out_dir),
+            index_dir=str(index_dir),
+            build_index=True,
+            fasta_dir=str(fasta_dir),
+        )
+
+        with pytest.raises(FileNotFoundError, match='Could not find reference fasta file'):
+            get_index(args, 'Asimitellaria_furusei')
 
     def test_get_index_prefers_uncompressed_fasta_over_matching_gz_copy(self, tmp_path, monkeypatch):
         out_dir = tmp_path / 'out'
@@ -976,7 +947,7 @@ class TestQuantEdgeCases:
         assert observed_index == str(index_dir / 'Homo_sapiens.idx')
         assert observed['fasta_file'] == str(fasta_plain)
 
-    def test_get_index_uses_subspecies_fasta_fallback_prefix_when_building_index(self, tmp_path, monkeypatch):
+    def test_get_index_requires_exact_fasta_stem_when_building_index(self, tmp_path):
         out_dir = tmp_path / 'out'
         fasta_dir = tmp_path / 'fasta'
         index_dir = tmp_path / 'index'
@@ -985,26 +956,15 @@ class TestQuantEdgeCases:
         index_dir.mkdir()
         fasta_path = fasta_dir / 'Gorilla_gorilla.fa'
         fasta_path.write_text('>a\nAAAA\n')
-        index_path = index_dir / 'Gorilla_gorilla_gorilla.idx'
         args = SimpleNamespace(
             out_dir=str(out_dir),
             index_dir=str(index_dir),
             build_index=True,
             fasta_dir=str(fasta_dir),
         )
-        captured = {}
 
-        def fake_run(cmd, stdout, stderr):
-            captured['cmd'] = cmd
-            index_path.write_text('built')
-            return SimpleNamespace(returncode=0, stdout=b'', stderr=b'')
-
-        monkeypatch.setattr(subprocess, 'run', fake_run)
-
-        observed = get_index(args, 'Gorilla_gorilla_gorilla')
-
-        assert observed == str(index_path)
-        assert captured['cmd'][-1] == str(fasta_path)
+        with pytest.raises(FileNotFoundError, match='Could not find reference fasta file'):
+            get_index(args, 'Gorilla_gorilla_gorilla')
 
     def test_get_index_uses_shared_lock_and_rechecks_after_acquire(self, tmp_path, monkeypatch):
         out_dir = tmp_path / 'out'
@@ -1190,7 +1150,7 @@ class TestQuantEdgeCases:
 
         assert observed == str(index_path)
 
-    def test_get_index_uses_subspecies_fallback_prefix(self, tmp_path):
+    def test_get_index_requires_exact_index_stem(self, tmp_path):
         out_dir = tmp_path / 'out'
         index_dir = tmp_path / 'index'
         out_dir.mkdir()
@@ -1204,16 +1164,15 @@ class TestQuantEdgeCases:
             fasta_dir='inferred',
         )
 
-        observed = get_index(args, 'Gorilla_gorilla_gorilla')
+        with pytest.raises(FileNotFoundError, match='Could not find index file'):
+            get_index(args, 'Gorilla_gorilla_gorilla')
 
-        assert observed == str(index_path)
-
-    def test_get_index_normalizes_redundant_underscores_for_subspecies_fallback(self, tmp_path):
+    def test_get_index_normalizes_redundant_underscores_without_shortening(self, tmp_path):
         out_dir = tmp_path / 'out'
         index_dir = tmp_path / 'index'
         out_dir.mkdir()
         index_dir.mkdir()
-        index_path = index_dir / 'Canis_lupus.idx'
+        index_path = index_dir / 'Canis_lupus_familiaris.idx'
         index_path.write_text('ready')
         args = SimpleNamespace(
             out_dir=str(out_dir),
@@ -1772,7 +1731,7 @@ class TestQuantEdgeCases:
         assert resolved == ['Species_A']
         assert out == {'Species_A': 'Species_A.idx'}
 
-    def test_pre_resolve_species_indices_keeps_alias_distinct_targets_separate(self, tmp_path, monkeypatch):
+    def test_pre_resolve_species_indices_ignores_runtime_alias_values(self, tmp_path, monkeypatch):
         out_dir = tmp_path / 'out'
         index_dir = out_dir / 'index'
         out_dir.mkdir()
@@ -1796,23 +1755,17 @@ class TestQuantEdgeCases:
         )
         resolved = []
 
-        def fake_get_index(_args, sci_name, runtime_context=None, alias_names=None, backend=None, oarfish_seq_tech=None):
-            _ = (runtime_context, backend, oarfish_seq_tech)
-            resolved.append((sci_name, tuple(alias_names or ())))
-            return '{}__{}.idx'.format(
-                sci_name,
-                '_'.join([name.replace(' ', '_') for name in (alias_names or [])]),
-            )
+        def fake_get_index(_args, sci_name, runtime_context=None):
+            _ = runtime_context
+            resolved.append(sci_name)
+            return '{}.idx'.format(sci_name)
 
         monkeypatch.setattr('amalgkit.quant.get_index', fake_get_index)
 
         out = pre_resolve_species_indices(args, tasks, runtime_context=runtime_context)
 
-        assert resolved == [
-            ('unclassified_eukaryotes', ('Pygsuia biforma',)),
-            ('unclassified_eukaryotes', ('Thecamonas trahens',)),
-        ]
-        assert len(out) == 2
+        assert resolved == ['unclassified_eukaryotes']
+        assert out == {'unclassified_eukaryotes': 'unclassified_eukaryotes.idx'}
 
     def test_pre_resolve_species_indices_uses_parallel_jobs(self, tmp_path, monkeypatch):
         out_dir = tmp_path / 'out'

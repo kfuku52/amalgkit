@@ -37,7 +37,6 @@ FASTA_REFERENCE_STEM_SUFFIXES = ('_for_kallisto_index',)
 QUANT_BACKENDS = ('auto', 'kallisto', 'oarfish')
 OARFISH_SEQ_TECHS = ('auto', 'ont-cdna', 'ont-drna', 'pac-bio', 'pac-bio-hifi')
 SHORT_READ_SPOT_LENGTH_THRESHOLD = 1000
-SPECIES_IDENTIFIER_ALIAS_COLUMNS = ('scientific_name_original',)
 
 PLATFORM_REGEX_BY_FAMILY = {
     'ont': (
@@ -642,16 +641,21 @@ def find_species_index_files(index_dir, sci_name, entries=None, suffixes=(KALLIS
     if entries is None:
         entries = list_dir_entries(index_dir)
     normalized_suffixes = _normalize_index_suffixes(suffixes)
-    matched = find_species_prefixed_entries(entries, sci_name)
-    if normalized_suffixes is not None:
-        matched = [
-            entry for entry in matched
-            if str(entry).lower().endswith(normalized_suffixes)
-        ]
+    normalized_prefix = _normalize_species_identifier(sci_name)
     return [
         os.path.join(index_dir, entry)
-        for entry in matched
-        if os.path.isfile(os.path.join(index_dir, entry))
+        for entry in entries
+        if (
+            (normalized_suffixes is None)
+            or str(entry).lower().endswith(normalized_suffixes)
+        )
+        and (
+            _normalize_species_stem_from_entry(
+                entry,
+                suffixes=suffixes or (),
+            ) == normalized_prefix
+        )
+        and os.path.isfile(os.path.join(index_dir, entry))
     ]
 
 
@@ -666,11 +670,12 @@ def find_species_fasta_files(path_fasta_dir, sci_name, entries=None, alias_names
 
 
 def _find_species_fasta_files(path_fasta_dir, sci_name, entries=None, alias_names=None):
+    _ = alias_names
     if os.path.exists(path_fasta_dir) and (not os.path.isdir(path_fasta_dir)):
         raise NotADirectoryError('Fasta path exists but is not a directory: {}'.format(path_fasta_dir))
     if entries is None:
         entries = list_dir_entries(path_fasta_dir)
-    species_prefixes = _build_species_identifier_candidates_from_values(sci_name, alias_names=alias_names)
+    species_prefixes = _build_species_identifier_candidates_from_values(sci_name)
     for species_prefix in species_prefixes:
         exact_matches, _matched_paths = _find_species_prefixed_files(
             path_fasta_dir,
@@ -681,16 +686,6 @@ def _find_species_fasta_files(path_fasta_dir, sci_name, entries=None, alias_name
         )
         if exact_matches:
             return species_prefix, exact_matches
-    for species_prefix in species_prefixes:
-        _exact_matches, matched_paths = _find_species_prefixed_files(
-            path_fasta_dir,
-            species_prefix,
-            entries=entries,
-            suffixes=INDEX_FASTA_SUFFIXES,
-            exact_stem_suffixes=FASTA_REFERENCE_STEM_SUFFIXES,
-        )
-        if matched_paths:
-            return species_prefix, matched_paths
     return None, []
 
 
@@ -863,15 +858,8 @@ def _normalize_species_identifier(text):
     return normalized
 
 
-def _coerce_species_identifier_iterable(alias_names):
-    if alias_names is None:
-        return []
-    if isinstance(alias_names, (list, tuple, set, pandas.Series, numpy.ndarray)):
-        return list(alias_names)
-    return [alias_names]
-
-
 def _collect_species_identifier_values(sci_name, alias_names=None):
+    _ = alias_names
     values = []
 
     def add(value):
@@ -880,70 +868,31 @@ def _collect_species_identifier_values(sci_name, alias_names=None):
             values.append(text)
 
     add(sci_name)
-    for alias_name in _coerce_species_identifier_iterable(alias_names):
-        add(alias_name)
     return values
 
 
 def _build_species_identifier_candidates(sci_name):
-    candidates = []
-    raw = str(sci_name).strip()
-    normalized = _normalize_species_identifier(raw)
-    for prefix in [raw, normalized]:
-        if (prefix != '') and (prefix not in candidates):
-            candidates.append(prefix)
-        prefix_no_dot = prefix.replace('.', '')
-        if (prefix_no_dot != '') and (prefix_no_dot != prefix) and (prefix_no_dot not in candidates):
-            candidates.append(prefix_no_dot)
-    normalized_parts = [part for part in normalized.split('_') if part != '']
-    if len(normalized_parts) > 2:
-        fallback = '_'.join(normalized_parts[:2])
-        if fallback not in candidates:
-            candidates.append(fallback)
-        fallback_no_dot = fallback.replace('.', '')
-        if (fallback_no_dot != fallback) and (fallback_no_dot not in candidates):
-            candidates.append(fallback_no_dot)
-    return candidates
+    normalized = _normalize_species_identifier(sci_name)
+    if normalized == '':
+        return []
+    return [normalized]
 
 
 def _build_species_identifier_candidates_from_values(sci_name, alias_names=None):
-    candidates = []
-    for value in _collect_species_identifier_values(sci_name, alias_names=alias_names):
-        for candidate in _build_species_identifier_candidates(value):
-            if candidate not in candidates:
-                candidates.append(candidate)
-    return candidates
-
-
-def _build_species_alias_signature(sci_name, alias_names=None):
-    primary_normalized = _normalize_species_identifier(sci_name)
-    signature = []
-    seen = {primary_normalized}
-    for alias_name in _coerce_species_identifier_iterable(alias_names):
-        normalized = _normalize_species_identifier(_normalize_metadata_text(alias_name))
-        if (normalized == '') or (normalized in seen):
-            continue
-        seen.add(normalized)
-        signature.append(normalized)
-    return tuple(signature)
+    _ = alias_names
+    return _build_species_identifier_candidates(sci_name)
 
 
 def _resolve_task_species_identifier_values(sra_id, sci_name, runtime_context=None):
-    if isinstance(runtime_context, QuantRuntimeContext):
-        stored_values = runtime_context.species_identifier_values_by_run.get(sra_id, None)
-        if stored_values is not None:
-            return _collect_species_identifier_values(sci_name, alias_names=stored_values)
+    _ = (sra_id, runtime_context)
     return _collect_species_identifier_values(sci_name)
 
 
 def _resolve_quant_species_identifier_values(metadata, tasks):
+    _ = metadata
     species_identifier_values_by_run = {}
     for sra_id, sci_name in tasks:
-        alias_values = []
-        if metadata is not None:
-            for column_name in SPECIES_IDENTIFIER_ALIAS_COLUMNS:
-                alias_values.append(_metadata_value(metadata, sra_id, column_name, default=''))
-        species_identifier_values_by_run[sra_id] = _collect_species_identifier_values(sci_name, alias_values)
+        species_identifier_values_by_run[sra_id] = _collect_species_identifier_values(sci_name)
     return species_identifier_values_by_run
 
 
@@ -965,21 +914,18 @@ def _build_index_stem(sci_name, backend='kallisto', oarfish_seq_tech=None):
 
 
 def _build_index_cache_key(backend, sci_name, oarfish_seq_tech=None, alias_names=None):
+    _ = alias_names
     normalized_sci_name = _normalize_species_identifier(sci_name)
-    alias_signature = _build_species_alias_signature(sci_name, alias_names=alias_names)
     if backend == 'kallisto':
-        if len(alias_signature) == 0:
-            return normalized_sci_name
-        return ('kallisto', normalized_sci_name, alias_signature)
-    if len(alias_signature) == 0:
-        return (backend, normalized_sci_name, str(oarfish_seq_tech))
-    return (backend, normalized_sci_name, str(oarfish_seq_tech), alias_signature)
+        return normalized_sci_name
+    return (backend, normalized_sci_name, str(oarfish_seq_tech))
 
 
 def _find_single_index_file(index_dir, sci_name, entries=None, backend='kallisto', oarfish_seq_tech=None, alias_names=None):
+    _ = alias_names
     backend_label = 'Kallisto' if backend == 'kallisto' else 'oarfish'
     index_suffix = _resolve_index_suffix(backend)
-    species_prefixes = _build_species_identifier_candidates_from_values(sci_name, alias_names=alias_names)
+    species_prefixes = _build_species_identifier_candidates_from_values(sci_name)
     for species_prefix in species_prefixes:
         prefix = _build_index_stem(species_prefix, backend=backend, oarfish_seq_tech=oarfish_seq_tech)
         index_files, _matched_paths = _find_species_prefixed_files(
@@ -996,42 +942,6 @@ def _find_single_index_file(index_dir, sci_name, entries=None, backend='kallisto
             )
         if len(index_files) == 1:
             index_file = index_files[0]
-            if species_prefix != sci_name:
-                print(
-                    "{} index fallback prefix '{}' was used for species '{}'.".format(
-                        backend_label,
-                        species_prefix,
-                        sci_name,
-                    ),
-                    flush=True,
-                )
-            print('{} index file found: {}'.format(backend_label, index_file), flush=True)
-            return index_file
-    for species_prefix in species_prefixes:
-        prefix = _build_index_stem(species_prefix, backend=backend, oarfish_seq_tech=oarfish_seq_tech)
-        index_files = find_species_index_files(
-            index_dir=index_dir,
-            sci_name=prefix,
-            entries=entries,
-            suffixes=(index_suffix,),
-        )
-        if len(index_files) > 1:
-            raise ValueError(
-                'Found multiple {} index files for species. Please make sure there is only one index file for this species.'.format(
-                    backend_label
-                )
-            )
-        if len(index_files) == 1:
-            index_file = index_files[0]
-            if species_prefix != sci_name:
-                print(
-                    "{} index fallback prefix '{}' was used for species '{}'.".format(
-                        backend_label,
-                        species_prefix,
-                        sci_name,
-                    ),
-                    flush=True,
-                )
             print('{} index file found: {}'.format(backend_label, index_file), flush=True)
             return index_file
     return None
@@ -1075,11 +985,6 @@ def _find_single_fasta_match(args, sci_name, runtime_context=None, alias_names=N
         txt = 'Could not find reference fasta file for this species: {}\n'.format(sci_name)
         txt += 'If the reference fasta file is correctly placed, the column "scientific_name" of the --metadata file may need to be edited.'
         raise FileNotFoundError(txt)
-    if matched_prefix != sci_name:
-        print(
-            "Reference fasta fallback prefix '{}' was used for species '{}'.".format(matched_prefix, sci_name),
-            flush=True,
-        )
     return matched_prefix, fasta_files[0]
 
 
@@ -1136,21 +1041,13 @@ def _build_oarfish_index(args, index_path, fasta_file, sci_name, seq_tech):
 
 
 def get_index(args, sci_name, runtime_context=None, backend=None, oarfish_seq_tech=None, alias_names=None):
+    _ = alias_names
     backend = str(backend if backend is not None else getattr(args, 'quant_backend', 'kallisto')).strip().lower()
     if backend == 'auto':
         backend = 'kallisto'
     lock_poll_seconds, lock_timeout_seconds = _resolve_index_lock_options(args)
     index_dir = _resolve_index_dir(args)
     build_sci_name = sci_name
-    if args.build_index and (len(_coerce_species_identifier_iterable(alias_names)) > 0):
-        matched_prefix, _fasta_file = _find_single_fasta_match(
-            args,
-            sci_name,
-            runtime_context=runtime_context,
-            alias_names=alias_names,
-        )
-        if matched_prefix not in [None, '']:
-            build_sci_name = matched_prefix
     index_stem = _build_index_stem(build_sci_name, backend=backend, oarfish_seq_tech=oarfish_seq_tech)
     index_suffix = _resolve_index_suffix(backend)
     index_path = os.path.join(index_dir, index_stem + index_suffix)
@@ -1165,7 +1062,6 @@ def get_index(args, sci_name, runtime_context=None, backend=None, oarfish_seq_te
             entries=prefetched_index_lookup_entries,
             backend=backend,
             oarfish_seq_tech=oarfish_seq_tech,
-            alias_names=alias_names,
         )
     else:
         index = _find_single_index_file(
@@ -1173,7 +1069,6 @@ def get_index(args, sci_name, runtime_context=None, backend=None, oarfish_seq_te
             sci_name=sci_name,
             backend=backend,
             oarfish_seq_tech=oarfish_seq_tech,
-            alias_names=alias_names,
         )
     if index is not None:
         return index
@@ -1195,7 +1090,6 @@ def get_index(args, sci_name, runtime_context=None, backend=None, oarfish_seq_te
             entries=prefetched_index_lookup_entries,
             backend=backend,
             oarfish_seq_tech=oarfish_seq_tech,
-            alias_names=alias_names,
         )
         if index is not None:
             print('Detected completed index after lock acquisition: {}'.format(index), flush=True)
@@ -1206,14 +1100,7 @@ def get_index(args, sci_name, runtime_context=None, backend=None, oarfish_seq_te
             args,
             sci_name,
             runtime_context=runtime_context,
-            alias_names=alias_names,
         )
-        if (len(_coerce_species_identifier_iterable(alias_names)) > 0) and (matched_prefix not in [None, '']):
-            build_sci_name = matched_prefix
-            index_path = os.path.join(
-                index_dir,
-                _build_index_stem(build_sci_name, backend=backend, oarfish_seq_tech=oarfish_seq_tech) + index_suffix,
-            )
         if backend == 'kallisto':
             _build_kallisto_index(index_path=index_path, fasta_file=fasta_file, sci_name=build_sci_name)
         elif backend == 'oarfish':
@@ -1231,20 +1118,7 @@ def get_index(args, sci_name, runtime_context=None, backend=None, oarfish_seq_te
 
 
 def _get_index_for_backend(args, sci_name, runtime_context=None, backend='kallisto', oarfish_seq_tech=None, alias_names=None):
-    try:
-        if (backend == 'kallisto') and (oarfish_seq_tech in {None, ''}):
-            return get_index(args, sci_name, runtime_context=runtime_context, alias_names=alias_names)
-        return get_index(
-            args,
-            sci_name,
-            runtime_context=runtime_context,
-            backend=backend,
-            oarfish_seq_tech=oarfish_seq_tech,
-            alias_names=alias_names,
-        )
-    except TypeError as exc:
-        if ('unexpected keyword argument' not in str(exc)) or ('alias_names' not in str(exc)):
-            raise
+    _ = alias_names
     if (backend == 'kallisto') and (oarfish_seq_tech in {None, ''}):
         return get_index(args, sci_name, runtime_context=runtime_context)
     return get_index(
@@ -1261,8 +1135,6 @@ def run_quant_for_sra(args, metadata, sra_id, sci_name, runtime_context=None):
     print('Species: {}'.format(sci_name))
     print('SRA Run ID: {}'.format(sra_id))
     normalized_sci_name = _normalize_species_identifier(sci_name)
-    species_identifier_values = _resolve_task_species_identifier_values(sra_id, sci_name, runtime_context=runtime_context)
-    alias_names = species_identifier_values[1:]
     backend = None
     oarfish_seq_tech = None
     index_cache = None
@@ -1278,7 +1150,6 @@ def run_quant_for_sra(args, metadata, sra_id, sci_name, runtime_context=None):
         backend,
         normalized_sci_name,
         oarfish_seq_tech=oarfish_seq_tech,
-        alias_names=alias_names,
     )
     if isinstance(index_cache, dict) and (index_cache_key in index_cache):
         index = index_cache[index_cache_key]
@@ -1291,7 +1162,6 @@ def run_quant_for_sra(args, metadata, sra_id, sci_name, runtime_context=None):
             runtime_context=runtime_context,
             backend=backend,
             oarfish_seq_tech=oarfish_seq_tech,
-            alias_names=alias_names,
         )
     run_quant(
         args,
@@ -1309,7 +1179,6 @@ def _resolve_task_backend_info(args, tasks, runtime_context=None):
     for sra_id, sci_name in tasks:
         backend = 'kallisto'
         oarfish_seq_tech = None
-        species_identifier_values = _resolve_task_species_identifier_values(sra_id, sci_name, runtime_context=runtime_context)
         if isinstance(runtime_context, QuantRuntimeContext):
             backend = runtime_context.quant_backend_by_run.get(sra_id, backend)
             oarfish_seq_tech = runtime_context.oarfish_seq_tech_by_run.get(sra_id, None)
@@ -1327,7 +1196,6 @@ def _resolve_task_backend_info(args, tasks, runtime_context=None):
             _normalize_species_identifier(sci_name),
             backend,
             oarfish_seq_tech,
-            tuple(species_identifier_values[1:]),
         ))
     return task_info
 
@@ -1337,8 +1205,8 @@ def pre_resolve_species_indices(args, tasks, runtime_context=None):
         runtime_context = QuantRuntimeContext()
     target_info = _resolve_task_backend_info(args, tasks, runtime_context=runtime_context)
     unique_targets = sorted(set([
-        (backend, sci_name, '' if oarfish_seq_tech is None else oarfish_seq_tech, alias_names)
-        for _sra_id, sci_name, backend, oarfish_seq_tech, alias_names in target_info
+        (backend, sci_name, '' if oarfish_seq_tech is None else oarfish_seq_tech)
+        for _sra_id, sci_name, backend, oarfish_seq_tech in target_info
     ]))
     if len(unique_targets) == 0:
         return {}
@@ -1380,7 +1248,7 @@ def pre_resolve_species_indices(args, tasks, runtime_context=None):
         max_workers = 1
 
     def resolve_one_target(target):
-        backend, sci_name, oarfish_seq_tech, alias_names = target
+        backend, sci_name, oarfish_seq_tech = target
         seq_tech_arg = None if oarfish_seq_tech == '' else oarfish_seq_tech
         return _get_index_for_backend(
             args,
@@ -1388,20 +1256,18 @@ def pre_resolve_species_indices(args, tasks, runtime_context=None):
             runtime_context=runtime_context,
             backend=backend,
             oarfish_seq_tech=seq_tech_arg,
-            alias_names=alias_names,
         )
 
     if max_workers <= 1:
         resolved = dict()
-        for backend, sci_name, oarfish_seq_tech, alias_names in unique_targets:
+        for backend, sci_name, oarfish_seq_tech in unique_targets:
             print('Pre-resolving index for {} ({})'.format(sci_name, backend), flush=True)
             cache_key = _build_index_cache_key(
                 backend,
                 sci_name,
                 oarfish_seq_tech=None if oarfish_seq_tech == '' else oarfish_seq_tech,
-                alias_names=alias_names,
             )
-            resolved[cache_key] = resolve_one_target((backend, sci_name, oarfish_seq_tech, alias_names))
+            resolved[cache_key] = resolve_one_target((backend, sci_name, oarfish_seq_tech))
         return resolved
 
     print('Pre-resolving indices with {:,} parallel jobs.'.format(max_workers), flush=True)
@@ -1423,14 +1289,13 @@ def pre_resolve_species_indices(args, tasks, runtime_context=None):
             )
         )
     resolved = dict()
-    for backend, sci_name, oarfish_seq_tech, alias_names in unique_targets:
+    for backend, sci_name, oarfish_seq_tech in unique_targets:
         cache_key = _build_index_cache_key(
             backend,
             sci_name,
             oarfish_seq_tech=None if oarfish_seq_tech == '' else oarfish_seq_tech,
-            alias_names=alias_names,
         )
-        resolved[cache_key] = resolved_by_target[(backend, sci_name, oarfish_seq_tech, alias_names)]
+        resolved[cache_key] = resolved_by_target[(backend, sci_name, oarfish_seq_tech)]
     return resolved
 
 

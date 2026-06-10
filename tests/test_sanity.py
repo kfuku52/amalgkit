@@ -647,7 +647,7 @@ class TestCheckGetfastqOutputs:
 
 
 # ---------------------------------------------------------------------------
-# check_quant_index (issue #72: subspecies fallback)
+# check_quant_index
 # ---------------------------------------------------------------------------
 
 class TestCheckQuantIndex:
@@ -667,8 +667,8 @@ class TestCheckQuantIndex:
         assert 'Homo sapiens' in avail
         assert unavail == []
 
-    def test_subspecies_fallback(self, tmp_path):
-        """Issue #72: If Gorilla_gorilla_gorilla.idx not found, try Gorilla_gorilla.idx."""
+    def test_subspecies_index_requires_exact_stem(self, tmp_path):
+        """Gorilla_gorilla.idx must not satisfy Gorilla_gorilla_gorilla."""
         class Args:
             out_dir = str(tmp_path)
             index_dir = None
@@ -680,7 +680,8 @@ class TestCheckQuantIndex:
         output_dir.mkdir()
         avail, unavail = check_quant_index(
             Args(), np.array(['Gorilla gorilla gorilla']), str(output_dir))
-        assert 'Gorilla gorilla gorilla' in avail
+        assert avail == []
+        assert unavail == ['Gorilla gorilla gorilla']
 
     def test_index_not_found(self, tmp_path):
         """Missing index for a species."""
@@ -711,16 +712,16 @@ class TestCheckQuantIndex:
         assert avail == []
         assert unavail == ['Homo sapiens']
 
-    def test_marks_species_unavailable_when_multiple_index_files_match_prefix(self, tmp_path):
-        """Ambiguous prefix matches should be treated as unavailable."""
+    def test_marks_species_unavailable_when_multiple_exact_index_files_match(self, tmp_path):
+        """Ambiguous exact species index matches should be treated as unavailable."""
         class Args:
             out_dir = str(tmp_path)
             index_dir = None
             metadata = 'metadata.tsv'
         index_dir = tmp_path / 'index'
         index_dir.mkdir()
-        (index_dir / 'Homo_sapiens_k31.idx').write_text('')
-        (index_dir / 'Homo_sapiens_k63.idx').write_text('')
+        (index_dir / 'Homo_sapiens.idx').write_text('')
+        (index_dir / 'Homo_sapiens.mmi').write_text('')
         output_dir = tmp_path / 'sanity'
         output_dir.mkdir()
         avail, unavail = check_quant_index(
@@ -788,14 +789,14 @@ class TestCheckQuantIndex:
         assert avail == ['Candidatus sp. X']
         assert unavail == []
 
-    def test_species_with_redundant_spaces_uses_normalized_fallback_prefix(self, tmp_path):
+    def test_species_with_redundant_spaces_uses_normalized_exact_stem(self, tmp_path):
         class Args:
             out_dir = str(tmp_path)
             index_dir = None
             metadata = 'metadata.tsv'
         index_dir = tmp_path / 'index'
         index_dir.mkdir()
-        (index_dir / 'Canis_lupus.idx').write_text('')
+        (index_dir / 'Canis_lupus_familiaris.idx').write_text('')
         output_dir = tmp_path / 'sanity'
         output_dir.mkdir()
 

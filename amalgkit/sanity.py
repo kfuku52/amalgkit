@@ -19,7 +19,7 @@ from amalgkit.parallel_utils import (
     run_tasks_with_optional_threads,
     validate_positive_int_option,
 )
-from amalgkit.prefix_utils import find_run_prefixed_entries, find_species_prefixed_entries
+from amalgkit.prefix_utils import find_run_prefixed_entries
 
 MERGE_ROOT_OUTPUT_FILENAMES = [
     'merge_mapping_rate.pdf',
@@ -31,6 +31,9 @@ MERGE_ROOT_OUTPUT_FILENAMES = [
     'merge_fastp_insert_size_peak_histogram.pdf',
     'merge_exclusion.pdf',
 ]
+
+QUANT_INDEX_SUFFIXES = ('.idx', '.mmi')
+QUANT_INDEX_TRAILING_STEM_SUFFIXES = ('.ont-cdna', '.ont-drna', '.pac-bio', '.pac-bio-hifi')
 
 
 def list_duplicates(seq):
@@ -78,18 +81,7 @@ def _get_species_prefix_candidates(species_or_prefix):
     if prefix == '':
         return []
     normalized = _normalize_species_prefix(prefix)
-    candidates = [normalized]
-    no_dot = normalized.replace(".", "")
-    if no_dot != normalized:
-        candidates.append(no_dot)
-    # Preserve order while de-duplicating.
-    return list(dict.fromkeys(candidates))
-
-def _get_species_fallback_prefix(species):
-    parts = str(species).strip().split()
-    if len(parts) <= 2:
-        return None
-    return _normalize_species_prefix(' '.join(parts[0:2]))
+    return [normalized]
 
 def _should_log_per_item(args, num_items):
     if bool(getattr(args, 'quiet', False)):
@@ -406,8 +398,30 @@ def check_getfastq_outputs(args, sra_ids, metadata, output_dir):
 
     return data_available, data_unavailable
 
+def _strip_quant_index_stem(entry_name):
+    stem = str(entry_name)
+    stem_lower = stem.lower()
+    for suffix in sorted(QUANT_INDEX_SUFFIXES, key=len, reverse=True):
+        if stem_lower.endswith(suffix):
+            stem = stem[:-len(suffix)]
+            stem_lower = stem_lower[:-len(suffix)]
+            break
+    for trailing_suffix in QUANT_INDEX_TRAILING_STEM_SUFFIXES:
+        if stem_lower.endswith(trailing_suffix):
+            stem = stem[:-len(trailing_suffix)]
+            break
+    return _normalize_species_prefix(stem)
+
+
+def _entry_matches_species_index(entry_name, prefix):
+    return _strip_quant_index_stem(entry_name) == _normalize_species_prefix(prefix)
+
+
 def _find_index_files(index_entries, index_dir_path, prefix):
-    matched = find_species_prefixed_entries(index_entries, prefix, entries_sorted=True)
+    matched = [
+        entry for entry in index_entries
+        if _entry_matches_species_index(entry, prefix)
+    ]
     return [
         os.path.join(index_dir_path, entry)
         for entry in matched
@@ -428,27 +442,6 @@ def _resolve_species_index_files(species, index_entries, index_dir_path, verbose
                 print("Found ", index_files, "!")
             return index_files
 
-    if verbose_run_logs:
-        print("could not find anything in", index_path)
-    # Deprecate subspecies or variants and look again
-    # I.e. if Gorilla_gorilla_gorilla.idx was not found, we look for Gorilla_gorilla.idx instead.
-    fallback_prefix = _get_species_fallback_prefix(species)
-    if fallback_prefix is None:
-        if verbose_run_logs:
-            print("Could not find any index files for ", species)
-        return []
-    if verbose_run_logs:
-        print("Ignoring subspecies.")
-    fallback_candidates = _get_species_prefix_candidates(fallback_prefix)
-    index_path = os.path.join(index_dir_path, fallback_candidates[0] + "*")
-    if verbose_run_logs:
-        print("Looking for {}".format(index_path))
-    for candidate in fallback_candidates:
-        index_files = _find_index_files(index_entries, index_dir_path, candidate)
-        if index_files:
-            if verbose_run_logs:
-                print("Found ", index_files, "!")
-            return index_files
     if verbose_run_logs:
         print("Could not find any index files for ", species)
     return []
@@ -1530,12 +1523,8 @@ def run_sanity_check_quant(args, metadata, uni_species, sra_ids, output_dir, met
 def _matches_any_species_index(entry_name, species_values):
     for species in species_values:
         candidates = _get_species_prefix_candidates(species)
-        fallback_prefix = _get_species_fallback_prefix(species)
-        if fallback_prefix is not None:
-            candidates.extend(_get_species_prefix_candidates(fallback_prefix))
-        candidates = list(dict.fromkeys(candidates))
         for candidate in candidates:
-            if find_species_prefixed_entries([entry_name], candidate):
+            if _entry_matches_species_index(entry_name, candidate):
                 return True
     return False
 

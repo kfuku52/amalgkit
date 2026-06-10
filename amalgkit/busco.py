@@ -21,7 +21,6 @@ from amalgkit.metadata_utils import (
 )
 from amalgkit.orthology_utils import parse_busco_species_name
 from amalgkit.parallel_utils import resolve_thread_worker_allocation, run_tasks_with_optional_threads
-from amalgkit.prefix_utils import find_species_prefixed_entries
 from amalgkit.subprocess_utils import run_checked_command
 
 
@@ -408,22 +407,17 @@ def _species_prefix_candidates(sci_name):
         return []
     normalized = re.sub(r'\s+', '_', raw)
     normalized = re.sub(r'_+', '_', normalized)
-    candidates = [normalized]
-    raw_underscored = raw.replace(' ', '_')
-    if raw_underscored != normalized:
-        candidates.append(raw_underscored)
-    normalized_no_dot = normalized.replace('.', '')
-    if normalized_no_dot != normalized:
-        candidates.append(normalized_no_dot)
-    normalized_parts = [part for part in normalized.split('_') if part != '']
-    if len(normalized_parts) > 2:
-        fallback = '_'.join(normalized_parts[0:2])
-        if fallback not in candidates:
-            candidates.append(fallback)
-        fallback_no_dot = fallback.replace('.', '')
-        if fallback_no_dot not in candidates:
-            candidates.append(fallback_no_dot)
-    return candidates
+    return [normalized]
+
+
+def _strip_fasta_stem(filename):
+    stem = str(filename)
+    stem_lower = stem.lower()
+    for suffix in sorted(FASTA_SUFFIXES, key=len, reverse=True):
+        if stem_lower.endswith(suffix):
+            stem = stem[:-len(suffix)]
+            break
+    return re.sub(r'_+', '_', re.sub(r'\s+', '_', stem.strip()))
 
 
 def resolve_species_fasta(sci_name, fasta_dir, fasta_filenames=None):
@@ -434,19 +428,15 @@ def resolve_species_fasta(sci_name, fasta_dir, fasta_filenames=None):
     primary = candidates[0] if len(candidates) > 0 else sci_name.replace(' ', '_')
     for prefix in candidates:
         fasta_files = []
-        for filename in find_species_prefixed_entries(fasta_filenames, prefix):
+        for filename in fasta_filenames:
             if not filename.lower().endswith(FASTA_SUFFIXES):
                 continue
-            fasta_files.append(os.path.join(fasta_dir, filename))
+            if _strip_fasta_stem(filename) == prefix:
+                fasta_files.append(os.path.join(fasta_dir, filename))
         fasta_files = sorted(set(fasta_files))
         if len(fasta_files) > 1:
             raise ValueError('Found multiple reference fasta files for {}: {}'.format(prefix, ', '.join(fasta_files)))
         if len(fasta_files) == 1:
-            if prefix != primary:
-                print(
-                    "Reference fasta fallback prefix '{}' was used for species '{}'.".format(prefix, sci_name),
-                    flush=True,
-                )
             return fasta_files[0]
     raise FileNotFoundError('Could not find reference fasta file for {} in: {}'.format(primary, fasta_dir))
 
