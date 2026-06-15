@@ -133,6 +133,13 @@ SRA_DOWNLOAD_SOURCE_PRIORITY = (
     'ENA',
     'DDBJ',
 )
+SRA_DOWNLOAD_LINK_COLUMNS = (
+    'AWS_Link',
+    'GCP_Link',
+    'NCBI_Link',
+    ENA_SRA_LINK_COLUMN,
+    DDBJ_SRA_LINK_COLUMN,
+)
 
 def get_or_detect_intermediate_extension(sra_stat, work_dir, files=None, file_state=None):
     cached_ext = sra_stat.get('current_ext', None)
@@ -882,10 +889,23 @@ def _get_metadata_text_cell(metadata, row_index, column_name):
     return str(value).strip()
 
 
-def _set_metadata_text_cell(metadata, row_index, column_name, value):
+def _ensure_metadata_text_column(metadata, column_name):
     if column_name not in metadata.df.columns:
-        metadata.df.loc[:, column_name] = ''
+        metadata.df[column_name] = pandas.Series([''] * metadata.df.shape[0], index=metadata.df.index, dtype=object)
+        return metadata
+    metadata.df[column_name] = metadata.df[column_name].where(metadata.df[column_name].notna(), '').astype(object)
+    return metadata
+
+
+def _set_metadata_text_cell(metadata, row_index, column_name, value):
+    _ensure_metadata_text_column(metadata, column_name)
     metadata.df.at[row_index, column_name] = str(value or '').strip()
+
+
+def normalize_sra_download_link_columns(metadata):
+    for column_name in SRA_DOWNLOAD_LINK_COLUMNS:
+        _ensure_metadata_text_column(metadata, column_name)
+    return metadata
 
 
 def _resolve_cached_sra_download_source_url(metadata, row_index, source_name, sra_id, experiment_accession='', force_refresh=False):
@@ -911,23 +931,24 @@ def _resolve_cached_sra_download_source_url(metadata, row_index, source_name, sr
     return resolved_url
 
 def resolve_sra_download_sources(metadata, sra_stat, args, force_refresh_dynamic=False):
+    normalize_sra_download_link_columns(metadata)
     sra_sources = dict()
     sra_id = sra_stat['sra_id']
     ind_sra = sra_stat.get('metadata_idx', get_metadata_row_index_by_run(metadata, sra_id))
     if bool(getattr(args, 'aws', False)):
-        aws_link = metadata.df.at[ind_sra, 'AWS_Link']
+        aws_link = _get_metadata_text_cell(metadata, ind_sra, 'AWS_Link')
         if aws_link == '':
             sys.stderr.write('AWS_Link is empty and will be skipped.\n')
         else:
             sra_sources['AWS'] = aws_link
     if bool(getattr(args, 'gcp', False)):
-        gcp_link = metadata.df.at[ind_sra, 'GCP_Link']
+        gcp_link = _get_metadata_text_cell(metadata, ind_sra, 'GCP_Link')
         if gcp_link == '':
             sys.stderr.write('GCP_Link is empty and will be skipped.\n')
         else:
             sra_sources['GCP'] = gcp_link
     if bool(getattr(args, 'ncbi', False)):
-        ncbi_link = metadata.df.at[ind_sra, 'NCBI_Link']
+        ncbi_link = _get_metadata_text_cell(metadata, ind_sra, 'NCBI_Link')
         if ncbi_link == '':
             sys.stderr.write('NCBI_Link is empty and will be skipped.\n')
         else:
@@ -1096,11 +1117,25 @@ def _download_file_from_source_without_semaphore(
         if method == 'curl':
             sys.stderr.write('Falling back to urllib.request after curl failure.\n')
     try:
-        urllib.request.urlretrieve(source_url, output_path)
-        if os.path.exists(output_path):
+        tmp_path = output_path + '.urllibtmp.{}'.format(time.time_ns())
+        if os.path.exists(tmp_path):
+            if not os.path.isfile(tmp_path):
+                raise IsADirectoryError('Temporary download path exists but is not a file: {}'.format(tmp_path))
+            os.remove(tmp_path)
+        urllib.request.urlretrieve(source_url, tmp_path)
+        if os.path.exists(tmp_path):
+            if not os.path.isfile(tmp_path):
+                raise IsADirectoryError('Temporary download path exists but is not a file: {}'.format(tmp_path))
+            if os.path.getsize(tmp_path) <= 0:
+                os.remove(tmp_path)
+                sys.stderr.write("urllib.request produced an empty {} from {}.\n".format(str(artifact_label).lower(), sra_source_name))
+                return False
+            os.replace(tmp_path, output_path)
             print('{} was downloaded with urllib.request from {}'.format(artifact_label, sra_source_name), flush=True)
             return True
     except urllib.error.HTTPError as e:
+        if 'tmp_path' in locals() and os.path.exists(tmp_path):
+            os.remove(tmp_path)
         if (sra_source_name == 'GCP') and (e.code == 400):
             details = ''
             try:
@@ -1113,7 +1148,13 @@ def _download_file_from_source_without_semaphore(
                 sys.stderr.write(txt)
         sys.stderr.write("urllib.request failed {} download from {}.\n".format(str(artifact_label).lower(), sra_source_name))
     except urllib.error.URLError:
+        if 'tmp_path' in locals() and os.path.exists(tmp_path):
+            os.remove(tmp_path)
         sys.stderr.write("urllib.request failed {} download from {}.\n".format(str(artifact_label).lower(), sra_source_name))
+    except Exception:
+        if 'tmp_path' in locals() and os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        raise
     return False
 
 
@@ -1511,6 +1552,46 @@ def run_seqkit_replace_command(input_path, output_path, suffix, args, command_la
         failure_message='{} failed.'.format(command_label),
     )
     return out
+
+
+def rewrite_fastq_headers_python(input_path, output_path, suffix):
+    if not os.path.exists(input_path):
+        raise FileNotFoundError('FASTQ input not found: {}'.format(input_path))
+    if not os.path.isfile(input_path):
+        raise IsADirectoryError('FASTQ input path exists but is not a file: {}'.format(input_path))
+    if os.path.exists(output_path) and (not os.path.isfile(output_path)):
+        raise IsADirectoryError('FASTQ output path exists but is not a file: {}'.format(output_path))
+    tmp_path = output_path + '.pyrewritetmp.{}'.format(time.time_ns())
+    if os.path.exists(output_path):
+        os.remove(output_path)
+    input_open = gzip.open if str(input_path).endswith('.gz') else open
+    suffix_bytes = str(suffix).encode('utf-8')
+    try:
+        with input_open(input_path, 'rb') as fin, gzip.open(tmp_path, 'wb') as fout:
+            while True:
+                line1 = fin.readline()
+                if line1 == b'':
+                    break
+                line2 = fin.readline()
+                line3 = fin.readline()
+                line4 = fin.readline()
+                if (line2 == b'') or (line3 == b'') or (line4 == b''):
+                    raise ValueError('Malformed FASTQ (record truncated): {}'.format(input_path))
+                if not line1.startswith(b'@'):
+                    raise ValueError('Malformed FASTQ header: {}'.format(input_path))
+                if not line3.startswith(b'+'):
+                    raise ValueError('Malformed FASTQ separator: {}'.format(input_path))
+                read_name = line1[1:].strip().split()[0]
+                fout.write(b'@' + read_name + suffix_bytes + b'\n')
+                fout.write(line2)
+                fout.write(line3)
+                fout.write(line4)
+    except Exception:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        raise
+    os.replace(tmp_path, output_path)
+
 
 def scan_fastq_records_and_bases_with_seqkit_batch(path_fastq_paths, args, seqkit_threads=None):
     if path_fastq_paths is None:
@@ -3797,14 +3878,21 @@ def rename_reads(sra_stat, args, output_dir, files=None, file_state=None, return
     inext = get_or_detect_intermediate_extension(sra_stat, work_dir=output_dir, file_state=run_file_state)
     outext = '.rename.fastq.gz'
     def rewrite_headers(infile, outfile, suffix, seqkit_threads):
-        run_seqkit_replace_command(
-            input_path=infile,
-            output_path=outfile,
-            suffix=suffix,
-            args=args,
-            command_label='Trinity read-header rewrite with seqkit',
-            seqkit_threads=seqkit_threads,
-        )
+        try:
+            run_seqkit_replace_command(
+                input_path=infile,
+                output_path=outfile,
+                suffix=suffix,
+                args=args,
+                command_label='Trinity read-header rewrite with seqkit',
+                seqkit_threads=seqkit_threads,
+            )
+        except Exception as exc:
+            sys.stderr.write(
+                'Trinity read-header rewrite with seqkit failed for {}. '
+                'Falling back to Python FASTQ header rewrite. {}\n'.format(infile, exc)
+            )
+            rewrite_fastq_headers_python(input_path=infile, output_path=outfile, suffix=suffix)
 
     total_seqkit_threads = resolve_seqkit_threads(args)
     if sra_stat['layout'] == 'single':
@@ -3882,6 +3970,26 @@ def rename_reads(sra_stat, args, output_dir, files=None, file_state=None, return
         return run_file_state
     return run_file_state.to_set()
 
+def validate_paired_fastq_record_counts(sra_stat, output_dir, ext):
+    if sra_stat['layout'] != 'paired':
+        return None
+    sra_id = sra_stat['sra_id']
+    path1 = os.path.join(output_dir, sra_id + '_1' + ext)
+    path2 = os.path.join(output_dir, sra_id + '_2' + ext)
+    count1 = count_fastq_records(path1)
+    count2 = count_fastq_records(path2)
+    if count1 != count2:
+        raise ValueError(
+            'Paired FASTQ read count mismatch for {}: {} has {:,} records, {} has {:,} records.'.format(
+                sra_id,
+                path1,
+                count1,
+                path2,
+                count2,
+            )
+        )
+    return count1, count2
+
 def rename_fastq(sra_stat, output_dir, inext, outext, validate_fastq=False):
     def validate_single_file(path_fastq):
         try:
@@ -3909,6 +4017,7 @@ def rename_fastq(sra_stat, output_dir, inext, outext, validate_fastq=False):
         if validate_fastq:
             validate_single_file(inbase1 + inext)
             validate_single_file(inbase2 + inext)
+            validate_paired_fastq_record_counts(sra_stat, output_dir, inext)
         rename_single_file(inbase1 + inext, inbase1 + outext)
         rename_single_file(inbase2 + inext, inbase2 + outext)
     set_current_intermediate_extension(sra_stat, outext)
@@ -4531,6 +4640,8 @@ def sequence_extraction_2nd_round(args, sra_stat, metadata, g, runtime_context=N
         if failures:
             details = '; '.join(['{}: {}'.format(subext, exc) for subext, exc in failures])
             raise RuntimeError('2nd-round FASTQ merge failed for {}. {}'.format(sra_id, details))
+    if layout == 'paired':
+        validate_paired_fastq_record_counts(sra_stat, sra_stat['getfastq_sra_dir'], ext_main)
     metadata.df.at[ind_sra, 'time_end_2nd'] = time.time()
     elapsed_time = metadata.df.at[ind_sra, 'time_end_2nd'] - metadata.df.at[ind_sra, 'time_start_2nd']
     txt = 'Time elapsed for 2nd-round sequence extraction: {}, {:,} sec'

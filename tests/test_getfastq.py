@@ -2487,6 +2487,15 @@ class TestInitializeGlobalParams:
 # ---------------------------------------------------------------------------
 
 class TestRenameFastq:
+    @staticmethod
+    def _write_fastq_gz(path, seqs):
+        with gzip.open(path, 'wt') as handle:
+            for idx, seq in enumerate(seqs, start=1):
+                handle.write('@read{}\n'.format(idx))
+                handle.write(seq + '\n')
+                handle.write('+\n')
+                handle.write('I' * len(seq) + '\n')
+
     def test_rename_single(self, tmp_path):
         """Renames single-end fastq file."""
         sra_stat = {'sra_id': 'SRR001', 'layout': 'single'}
@@ -2533,6 +2542,27 @@ class TestRenameFastq:
 
         assert input_path.exists()
         assert not (tmp_path / 'SRR001.amalgkit.fastq.gz').exists()
+
+    def test_rejects_paired_record_count_mismatch_when_validation_enabled(self, tmp_path):
+        sra_stat = {'sra_id': 'SRR001', 'layout': 'paired'}
+        path1 = tmp_path / 'SRR001_1.fastq.gz'
+        path2 = tmp_path / 'SRR001_2.fastq.gz'
+        self._write_fastq_gz(str(path1), ['AAAA', 'CCCC'])
+        self._write_fastq_gz(str(path2), ['TTTT'])
+
+        with pytest.raises(ValueError, match='Paired FASTQ read count mismatch'):
+            rename_fastq(
+                sra_stat,
+                str(tmp_path),
+                '.fastq.gz',
+                '.amalgkit.fastq.gz',
+                validate_fastq=True,
+            )
+
+        assert path1.exists()
+        assert path2.exists()
+        assert not (tmp_path / 'SRR001_1.amalgkit.fastq.gz').exists()
+        assert not (tmp_path / 'SRR001_2.amalgkit.fastq.gz').exists()
 
 
 # ---------------------------------------------------------------------------
@@ -5502,8 +5532,20 @@ class TestSequenceExtractionSecondRound:
 
     def test_paired_2nd_round_merges_subexts_with_parallel_workers(self, tmp_path, monkeypatch):
         sra_id = 'SRR001'
-        (tmp_path / '{}_1.amalgkit.fastq.gz'.format(sra_id)).write_bytes(b'FIRST1')
-        (tmp_path / '{}_2.amalgkit.fastq.gz'.format(sra_id)).write_bytes(b'FIRST2')
+
+        def write_fastq_gz(path, read_name, seq):
+            with gzip.open(path, 'wt') as handle:
+                handle.write('@{}\n'.format(read_name))
+                handle.write(seq + '\n')
+                handle.write('+\n')
+                handle.write('I' * len(seq) + '\n')
+
+        def read_fastq_gz(path):
+            with gzip.open(path, 'rt') as handle:
+                return handle.read()
+
+        write_fastq_gz(tmp_path / '{}_1.amalgkit.fastq.gz'.format(sra_id), 'first1', 'FIRST1')
+        write_fastq_gz(tmp_path / '{}_2.amalgkit.fastq.gz'.format(sra_id), 'first2', 'FIRST2')
         metadata = Metadata.from_DataFrame(pandas.DataFrame({
             'run': [sra_id],
             'lib_layout': ['paired'],
@@ -5526,8 +5568,8 @@ class TestSequenceExtractionSecondRound:
         observed = {'max_workers': None, 'task_items': None}
 
         def fake_sequence_extraction(*_args, **_kwargs):
-            (tmp_path / '{}_1.amalgkit.fastq.gz'.format(sra_id)).write_bytes(b'SECOND1')
-            (tmp_path / '{}_2.amalgkit.fastq.gz'.format(sra_id)).write_bytes(b'SECOND2')
+            write_fastq_gz(tmp_path / '{}_1.amalgkit.fastq.gz'.format(sra_id), 'second1', 'SECOND1')
+            write_fastq_gz(tmp_path / '{}_2.amalgkit.fastq.gz'.format(sra_id), 'second2', 'SECOND2')
             return metadata
 
         def fake_run_tasks(task_items, task_fn, max_workers):
@@ -5549,8 +5591,14 @@ class TestSequenceExtractionSecondRound:
 
         assert observed['max_workers'] == 2
         assert set(observed['task_items']) == {'_1', '_2'}
-        assert (tmp_path / '{}_1.amalgkit.fastq.gz'.format(sra_id)).read_bytes() == b'FIRST1SECOND1'
-        assert (tmp_path / '{}_2.amalgkit.fastq.gz'.format(sra_id)).read_bytes() == b'FIRST2SECOND2'
+        assert read_fastq_gz(tmp_path / '{}_1.amalgkit.fastq.gz'.format(sra_id)) == (
+            '@first1\nFIRST1\n+\nIIIIII\n'
+            '@second1\nSECOND1\n+\nIIIIIII\n'
+        )
+        assert read_fastq_gz(tmp_path / '{}_2.amalgkit.fastq.gz'.format(sra_id)) == (
+            '@first2\nFIRST2\n+\nIIIIII\n'
+            '@second2\nSECOND2\n+\nIIIIIII\n'
+        )
 
 
 class TestDownloadSraUrlSchemes:
@@ -5996,6 +6044,41 @@ class TestDownloadSraUrlSchemes:
 
         assert called_urls == ['ftp://ftp.sra.ebi.ac.uk/vol1/srr/SRR000/SRR000001/SRR000001.sra']
         assert metadata.df.loc[0, 'ENA_SRA_Link'] == called_urls[0]
+        assert (tmp_path / '{}.sra'.format(sra_id)).exists()
+
+    def test_derives_ena_sra_url_when_link_column_is_float_nan(self, tmp_path, monkeypatch):
+        sra_id = 'SRR000001'
+        metadata = self._make_metadata(
+            sra_id=sra_id,
+            aws_link=numpy.nan,
+            gcp_link=numpy.nan,
+            ncbi_link=numpy.nan,
+            ena_sra_link=numpy.nan,
+        )
+        metadata.df['AWS_Link'] = pandas.Series([numpy.nan], dtype='float64')
+        metadata.df['GCP_Link'] = pandas.Series([numpy.nan], dtype='float64')
+        metadata.df['NCBI_Link'] = pandas.Series([numpy.nan], dtype='float64')
+        metadata.df['ENA_SRA_Link'] = pandas.Series([numpy.nan], dtype='float64')
+        sra_stat = {'sra_id': sra_id}
+        args = self._make_args(ena=True)
+        args.aws = True
+        args.gcp = True
+        args.ncbi = True
+        called_urls = []
+
+        def fake_urlretrieve(url, path):
+            called_urls.append(url)
+            with open(path, 'w') as f:
+                f.write('ok')
+            return (path, None)
+
+        monkeypatch.setattr('amalgkit.getfastq.urllib.request.urlretrieve', fake_urlretrieve)
+
+        download_sra(metadata=metadata, sra_stat=sra_stat, args=args, work_dir=str(tmp_path), overwrite=False)
+
+        assert called_urls == ['ftp://ftp.sra.ebi.ac.uk/vol1/srr/SRR000/SRR000001/SRR000001.sra']
+        assert metadata.df.loc[0, 'ENA_SRA_Link'] == called_urls[0]
+        assert metadata.df['ENA_SRA_Link'].dtype == object
         assert (tmp_path / '{}.sra'.format(sra_id)).exists()
 
     def test_derives_ddbj_sra_url_when_enabled_for_drr(self, tmp_path, monkeypatch):
@@ -6952,6 +7035,36 @@ class TestRenameReadsSeqkitCompression:
         with gzip.open(str(out_path), 'rt') as f:
             lines = [f.readline().rstrip('\n') for _ in range(4)]
         assert lines[0] == '@r0/1'
+
+    def test_single_end_trinity_rename_falls_back_to_python_when_seqkit_fails(self, tmp_path, monkeypatch):
+        sra_id = 'SRR779'
+        in_path = tmp_path / '{}.fastq.gz'.format(sra_id)
+        self._write_fastq_gz(str(in_path), [('@r0 comment', 'ACGT'), ('@r1 x', 'TGCA')])
+        sra_stat = {
+            'sra_id': sra_id,
+            'layout': 'single',
+            'getfastq_sra_dir': str(tmp_path),
+        }
+
+        class Args:
+            threads = 1
+            remove_tmp = False
+            dump_print = False
+            seqkit_exe = 'seqkit'
+
+        def fake_seqkit_run(cmd, stdout=None, stderr=None):
+            return subprocess.CompletedProcess(cmd, 1, stdout=b'', stderr=b'seqkit failed')
+
+        monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_seqkit_run)
+
+        rename_reads(sra_stat=sra_stat, args=Args(), output_dir=str(tmp_path))
+
+        out_path = tmp_path / '{}.rename.fastq.gz'.format(sra_id)
+        assert out_path.exists()
+        with gzip.open(str(out_path), 'rt') as f:
+            lines = [f.readline().rstrip('\n') for _ in range(8)]
+        assert lines[0] == '@r0/1'
+        assert lines[4] == '@r1/1'
 
     def test_paired_end_trinity_rename_uses_parallel_seqkit_workers(self, tmp_path, monkeypatch):
         sra_id = 'SRR778'
