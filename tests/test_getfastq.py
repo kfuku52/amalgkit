@@ -2761,6 +2761,27 @@ class TestInitializeColumns:
         assert numpy.isnan(m.df.loc[0, 'fastp_duplication_rate'])
         assert numpy.isnan(m.df.loc[0, 'fastp_insert_size_peak'])
 
+    def test_layout_amalgkit_column_is_dtype_safe_when_preexisting_float(self):
+        data = {
+            'run': ['SRR001'],
+            'scientific_name': ['Sp1'],
+            'exclusion': ['no'],
+            'total_spots': [10000000],
+            'total_bases': [2000000000],
+            'size': [500000000],
+            'nominal_length': [200],
+            'nominal_sdev': [0],
+            'spot_length': [200],
+            'layout_amalgkit': [numpy.nan],
+        }
+        m = Metadata.from_DataFrame(pandas.DataFrame(data))
+        m.df['layout_amalgkit'] = pandas.Series([numpy.nan], dtype='float64')
+
+        m = initialize_columns(m, {'num_bp_per_sra': 1000000})
+
+        assert m.df.loc[0, 'layout_amalgkit'] == ''
+        assert m.df['layout_amalgkit'].dtype == object
+
 
 # ---------------------------------------------------------------------------
 # is_2nd_round_needed (triggers compensatory extraction based on tolerated loss)

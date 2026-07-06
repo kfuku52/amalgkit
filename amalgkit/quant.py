@@ -4,6 +4,7 @@ import re
 import shlex
 import subprocess
 import sys
+import tempfile
 
 import numpy
 import pandas
@@ -637,6 +638,22 @@ def _find_species_prefixed_files(
     return exact_paths, matched_paths
 
 
+def _is_nonempty_regular_file(path):
+    try:
+        return os.path.isfile(path) and os.path.getsize(path) > 0
+    except OSError:
+        return False
+
+
+def _remove_empty_regular_file(path):
+    try:
+        if os.path.isfile(path) and os.path.getsize(path) == 0:
+            os.remove(path)
+            print('Removed empty index file before rebuilding: {}'.format(path), flush=True)
+    except OSError as exc:
+        raise RuntimeError('Failed to remove empty index file {}: {}'.format(path, exc)) from exc
+
+
 def find_species_index_files(index_dir, sci_name, entries=None, suffixes=(KALLISTO_INDEX_SUFFIX,)):
     if entries is None:
         entries = list_dir_entries(index_dir)
@@ -655,7 +672,7 @@ def find_species_index_files(index_dir, sci_name, entries=None, suffixes=(KALLIS
                 suffixes=suffixes or (),
             ) == normalized_prefix
         )
-        and os.path.isfile(os.path.join(index_dir, entry))
+        and _is_nonempty_regular_file(os.path.join(index_dir, entry))
     ]
 
 
@@ -934,6 +951,7 @@ def _find_single_index_file(index_dir, sci_name, entries=None, backend='kallisto
             entries=entries,
             suffixes=(index_suffix,),
         )
+        index_files = [path for path in index_files if _is_nonempty_regular_file(path)]
         if len(index_files) > 1:
             raise ValueError(
                 'Found multiple {} index files for species. Please make sure there is only one index file for this species.'.format(
@@ -999,20 +1017,35 @@ def _resolve_single_fasta_file(args, sci_name, runtime_context=None, alias_names
 
 
 def _build_kallisto_index(index_path, fasta_file, sci_name):
+    index_path = os.path.realpath(index_path)
+    fasta_file = os.path.realpath(fasta_file)
+    index_dir = os.path.dirname(index_path)
     print('Reference fasta file found: {}'.format(fasta_file), flush=True)
     print('Building index: {}'.format(index_path), flush=True)
     kallisto_build_cmd = ['kallisto', 'index', '-i', index_path, fasta_file]
-    index_out, _stdout_txt, _stderr_txt = run_logged_command(
-        command=kallisto_build_cmd,
-        runner=subprocess.run,
-        print_command=True,
-        print_output=True,
-        stdout_label='kallisto index stdout:',
-        stderr_label='kallisto index stderr:',
-    )
+
+    with tempfile.TemporaryDirectory(prefix='amalgkit_kallisto_index_', dir=index_dir) as build_cwd:
+        print('Using isolated kallisto index work directory: {}'.format(build_cwd), flush=True)
+
+        def run_in_build_cwd(command, stdout, stderr):
+            try:
+                return subprocess.run(command, stdout=stdout, stderr=stderr, cwd=build_cwd)
+            except TypeError as exc:
+                if 'cwd' not in str(exc):
+                    raise
+                return subprocess.run(command, stdout=stdout, stderr=stderr)
+
+        index_out, _stdout_txt, _stderr_txt = run_logged_command(
+            command=kallisto_build_cmd,
+            runner=run_in_build_cwd,
+            print_command=True,
+            print_output=True,
+            stdout_label='kallisto index stdout:',
+            stderr_label='kallisto index stderr:',
+        )
     if index_out.returncode != 0:
         raise RuntimeError('kallisto index failed for {}.'.format(sci_name))
-    if not os.path.isfile(index_path):
+    if not _is_nonempty_regular_file(index_path):
         raise RuntimeError('Index file was not generated: {}'.format(index_path))
 
 
@@ -1036,7 +1069,7 @@ def _build_oarfish_index(args, index_path, fasta_file, sci_name, seq_tech):
     )
     if index_out.returncode != 0:
         raise RuntimeError('oarfish index failed for {}.'.format(sci_name))
-    if not os.path.isfile(index_path):
+    if not _is_nonempty_regular_file(index_path):
         raise RuntimeError('Index file was not generated: {}'.format(index_path))
 
 
@@ -1096,6 +1129,7 @@ def get_index(args, sci_name, runtime_context=None, backend=None, oarfish_seq_te
             return index
 
         print('--build_index set. Building index for {}'.format(sci_name))
+        _remove_empty_regular_file(index_path)
         matched_prefix, fasta_file = _find_single_fasta_match(
             args,
             sci_name,

@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 from amalgkit.command_context import PrefetchedDirEntries, QuantRuntimeContext
 from amalgkit.quant import (
+    _build_kallisto_index,
     build_kallisto_quant_command,
     build_oarfish_quant_command,
     quant_output_exists,
@@ -374,6 +375,11 @@ class TestIndexDiscoveryHelpers:
     def test_find_species_index_files_ignores_directories(self, tmp_path):
         (tmp_path / 'Homo_sapiens.idx').mkdir()
         (tmp_path / 'Homo_sapiens.v2.idx').write_text('idx')
+        result = find_species_index_files(str(tmp_path), 'Homo_sapiens')
+        assert result == []
+
+    def test_find_species_index_files_ignores_empty_index_files(self, tmp_path):
+        (tmp_path / 'Homo_sapiens.idx').touch()
         result = find_species_index_files(str(tmp_path), 'Homo_sapiens')
         assert result == []
 
@@ -1273,6 +1279,69 @@ class TestQuantEdgeCases:
 
         with pytest.raises(RuntimeError, match='Index file was not generated'):
             get_index(args, 'Homo_sapiens')
+
+    def test_get_index_rebuilds_empty_index_file(self, tmp_path, monkeypatch):
+        out_dir = tmp_path / 'out'
+        fasta_dir = tmp_path / 'fasta'
+        index_dir = tmp_path / 'index'
+        out_dir.mkdir()
+        fasta_dir.mkdir()
+        index_dir.mkdir()
+        (fasta_dir / 'Homo_sapiens.fa').write_text('>a\nAAAA\n')
+        stale_index = index_dir / 'Homo_sapiens.idx'
+        stale_index.touch()
+        built = []
+
+        args = SimpleNamespace(
+            out_dir=str(out_dir),
+            index_dir=str(index_dir),
+            build_index=True,
+            fasta_dir=str(fasta_dir),
+            index_lock_poll=1,
+            index_lock_timeout=10,
+        )
+
+        def fake_build(index_path, fasta_file, sci_name):
+            built.append((index_path, fasta_file, sci_name))
+            with open(index_path, 'w') as handle:
+                handle.write('idx')
+
+        monkeypatch.setattr('amalgkit.quant._build_kallisto_index', fake_build)
+
+        observed = get_index(args, 'Homo_sapiens')
+
+        assert observed == str(stale_index)
+        assert built == [(str(stale_index), str(fasta_dir / 'Homo_sapiens.fa'), 'Homo_sapiens')]
+        assert stale_index.read_text() == 'idx'
+
+    def test_build_kallisto_index_uses_isolated_workdir(self, tmp_path, monkeypatch):
+        index_dir = tmp_path / 'index'
+        fasta_dir = tmp_path / 'fasta'
+        index_dir.mkdir()
+        fasta_dir.mkdir()
+        index_path = index_dir / 'Homo_sapiens.idx'
+        fasta_file = fasta_dir / 'Homo_sapiens.fa'
+        fasta_file.write_text('>a\nAAAA\n')
+        observed_cwds = []
+
+        def fake_run(cmd, stdout, stderr, cwd=None):
+            observed_cwds.append(cwd)
+            assert cwd is not None
+            assert os.path.isdir(cwd)
+            assert os.path.dirname(cwd) == str(index_dir)
+            assert cmd[:3] == ['kallisto', 'index', '-i']
+            with open(cmd[3], 'w') as handle:
+                handle.write('idx')
+            return SimpleNamespace(returncode=0, stdout=b'', stderr=b'')
+
+        monkeypatch.setattr(subprocess, 'run', fake_run)
+
+        _build_kallisto_index(str(index_path), str(fasta_file), 'Homo_sapiens')
+
+        assert index_path.read_text() == 'idx'
+        assert len(observed_cwds) == 1
+        assert observed_cwds[0] != os.getcwd()
+        assert not os.path.exists(observed_cwds[0])
 
     def test_call_kallisto_rejects_unsupported_layout(self, tmp_path):
         args = SimpleNamespace(threads=1)

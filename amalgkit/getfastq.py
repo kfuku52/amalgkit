@@ -4392,7 +4392,7 @@ def initialize_columns(metadata, g):
             + time_keys + duration_keys + spot_keys)
     for key in keys:
         if key=='layout_amalgkit':
-            metadata.df.loc[:,key] = ''
+            metadata.df[key] = pandas.Series([''] * metadata.df.shape[0], index=metadata.df.index, dtype=object)
         elif key in ['rate_obtained', 'fastp_duplication_rate', 'fastp_insert_size_peak']:
             metadata.df.loc[:, key] = numpy.nan
         elif key in (time_keys + duration_keys):
