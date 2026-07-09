@@ -4920,6 +4920,9 @@ def apply_first_round_getfastq_results(metadata, run_rows, run_results_by_id):
     if len(run_rows) == 0:
         return metadata, flag_private_file, flag_any_output_file_present, last_getfastq_sra_dir
     first_row_series = run_results_by_id[run_rows[0][1]]['row']
+    for column_name in SRA_DOWNLOAD_LINK_COLUMNS:
+        if column_name in metadata.df.columns and column_name in first_row_series.index:
+            _ensure_metadata_text_column(metadata, column_name)
     common_cols = [col for col in metadata.df.columns if col in first_row_series.index]
     for row_index, sra_id in run_rows:
         run_result = run_results_by_id[sra_id]

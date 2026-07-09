@@ -85,6 +85,7 @@ from amalgkit.getfastq import (
     remove_sra_path,
     resolve_public_original_fastq_sources_from_xml_root,
     assign_public_original_fastq_suffixes,
+    apply_first_round_getfastq_results,
 )
 from amalgkit.util import Metadata
 
@@ -6134,6 +6135,40 @@ class TestDownloadSraUrlSchemes:
         ]
         assert metadata.df.loc[0, 'DDBJ_SRA_Link'] == called_urls[0]
         assert (tmp_path / '{}.sra'.format(sra_id)).exists()
+
+    def test_apply_first_round_results_writes_dynamic_sra_links_to_float_columns(self):
+        sra_id = 'SRR000001'
+        ena_url = 'ftp://ftp.sra.ebi.ac.uk/vol1/srr/SRR000/SRR000001/SRR000001.sra'
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': [sra_id],
+            'lib_layout': ['paired'],
+            'total_spots': [10],
+            'total_bases': [1000],
+            'spot_length': [100],
+            'scientific_name': ['sp1'],
+            'exclusion': ['no'],
+            'ENA_SRA_Link': pandas.Series([numpy.nan], dtype='float64'),
+        }))
+        row_series = metadata.df.iloc[0].copy()
+        row_series['ENA_SRA_Link'] = ena_url
+        run_results_by_id = {
+            sra_id: {
+                'row': row_series,
+                'flag_any_output_file_present': False,
+                'flag_private_file': False,
+                'getfastq_sra_dir': '/tmp/getfastq/{}'.format(sra_id),
+            },
+        }
+
+        metadata, flag_private_file, flag_any_output_file_present, last_getfastq_sra_dir = (
+            apply_first_round_getfastq_results(metadata, [(0, sra_id)], run_results_by_id)
+        )
+
+        assert metadata.df.loc[0, 'ENA_SRA_Link'] == ena_url
+        assert metadata.df['ENA_SRA_Link'].dtype == object
+        assert flag_private_file is False
+        assert flag_any_output_file_present is False
+        assert last_getfastq_sra_dir == '/tmp/getfastq/{}'.format(sra_id)
 
 
 class TestSequenceExtractionPrivate:
