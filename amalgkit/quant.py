@@ -12,7 +12,9 @@ import pandas
 from amalgkit.arg_utils import clone_namespace
 from amalgkit.command_context import PrefetchedDirEntries, QuantRuntimeContext
 from amalgkit.download_utils import acquire_exclusive_lock
+from amalgkit.getfastq_stats import read_getfastq_stats_row
 from amalgkit.metadata_utils import (
+    Metadata,
     get_metadata_row_index_by_run,
     get_newest_intermediate_file_extension,
     get_sra_stat,
@@ -147,6 +149,96 @@ def _metadata_numeric_value(metadata, sra_id, column_name):
     if column_name not in metadata.df.columns:
         return numpy.nan
     return pandas.to_numeric(metadata.df.at[_metadata_row_index(metadata, sra_id), column_name], errors='coerce')
+
+
+def _is_positive_finite_number(value):
+    try:
+        numeric_value = float(value)
+    except (TypeError, ValueError):
+        return False
+    return numpy.isfinite(numeric_value) and (numeric_value > 0)
+
+
+def _metadata_with_quant_input_sra_stats(metadata, sra_id, output_dir_getfastq):
+    total_spots = _metadata_numeric_value(metadata, sra_id, 'total_spots')
+    total_bases = _metadata_numeric_value(metadata, sra_id, 'total_bases')
+    spot_length = _metadata_numeric_value(metadata, sra_id, 'spot_length')
+    needs_total_spots = not _is_positive_finite_number(total_spots)
+    needs_total_bases = not _is_positive_finite_number(total_bases)
+    needs_spot_length = not _is_positive_finite_number(spot_length)
+    if not (needs_total_spots or needs_total_bases or needs_spot_length):
+        return metadata
+
+    stats_path = os.path.join(output_dir_getfastq, 'getfastq_stats.tsv')
+    stats_row = read_getfastq_stats_row(output_dir_getfastq, sra_id)
+    if stats_row is None or ('num_written' not in stats_row.index):
+        return metadata
+    extracted_spots = pandas.to_numeric(stats_row.get('num_written'), errors='coerce')
+    if not _is_positive_finite_number(extracted_spots):
+        return metadata
+    extracted_spots = int(extracted_spots)
+
+    extracted_base_candidates = []
+    for column_name in ('bp_fastp_in', 'bp_rrna_in', 'bp_contam_in'):
+        value = pandas.to_numeric(stats_row.get(column_name), errors='coerce')
+        if _is_positive_finite_number(value):
+            extracted_base_candidates.append((int(value), column_name))
+    extracted_bases = numpy.nan
+    extracted_bases_source = ''
+    if extracted_base_candidates:
+        extracted_bases, extracted_bases_source = max(extracted_base_candidates)
+
+    resolved_total_spots = total_spots
+    if needs_total_spots:
+        resolved_total_spots = extracted_spots
+
+    resolved_spot_length = spot_length
+    if needs_spot_length:
+        if _is_positive_finite_number(extracted_bases):
+            resolved_spot_length = float(extracted_bases) / float(extracted_spots)
+        elif _is_positive_finite_number(total_spots) and _is_positive_finite_number(total_bases):
+            resolved_spot_length = float(total_bases) / float(total_spots)
+
+    resolved_total_bases = total_bases
+    if (
+        needs_total_bases
+        and _is_positive_finite_number(resolved_total_spots)
+        and _is_positive_finite_number(resolved_spot_length)
+    ):
+        resolved_total_bases = int(round(float(resolved_total_spots) * float(resolved_spot_length)))
+
+    replacements = {}
+    if needs_total_spots and _is_positive_finite_number(resolved_total_spots):
+        replacements['total_spots'] = int(resolved_total_spots)
+    if needs_total_bases and _is_positive_finite_number(resolved_total_bases):
+        replacements['total_bases'] = int(resolved_total_bases)
+    if needs_spot_length and _is_positive_finite_number(resolved_spot_length):
+        replacements['spot_length'] = float(resolved_spot_length)
+    if not replacements:
+        return metadata
+
+    quant_metadata = Metadata.from_DataFrame(metadata.df)
+    idx = _metadata_row_index(quant_metadata, sra_id)
+    recovered = []
+    for column_name, value in replacements.items():
+        quant_metadata.df.at[idx, column_name] = value
+        if column_name in {'total_spots', 'total_bases'}:
+            recovered.append('{}={:,}'.format(column_name, value))
+        else:
+            recovered.append('{}={:g}'.format(column_name, value))
+    source_description = 'num_written'
+    if extracted_bases_source != '':
+        source_description += ' and {}'.format(extracted_bases_source)
+    sys.stderr.write(
+        'Using extracted-read statistics as a quant-only fallback for missing SRA metadata in {}. '
+        'The source metadata is unchanged. Source: {} ({}); {}\n'.format(
+            sra_id,
+            stats_path,
+            source_description,
+            ', '.join(recovered),
+        )
+    )
+    return quant_metadata
 
 
 def _collect_metadata_text_fragments(metadata, sra_id):
@@ -788,7 +880,8 @@ def run_quant(args, metadata, sra_id, index, runtime_context=None, backend=None,
         raise NotADirectoryError(
             'getfastq run path exists but is not a directory: {}'.format(output_dir_getfastq)
         )
-    sra_stat = get_sra_stat(sra_id, metadata, num_bp_per_sra=None)
+    quant_metadata = _metadata_with_quant_input_sra_stats(metadata, sra_id, output_dir_getfastq)
+    sra_stat = get_sra_stat(sra_id, quant_metadata, num_bp_per_sra=None)
     if backend is None:
         if isinstance(runtime_context, QuantRuntimeContext) and (sra_id in runtime_context.quant_backend_by_run):
             backend = runtime_context.quant_backend_by_run[sra_id]

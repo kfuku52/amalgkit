@@ -26,6 +26,7 @@ from amalgkit.fastq_utils import (
     parse_seqkit_stats_row_records_and_bases as _parse_seqkit_stats_row_records_and_bases,
     validate_fastq_structure as shared_validate_fastq_structure,
 )
+from amalgkit.getfastq_stats import read_getfastq_stats_row
 from amalgkit.metadata_utils import (
     Metadata,
     detect_layout_from_file,
@@ -2962,25 +2963,8 @@ def write_getfastq_stats(sra_stat, metadata, output_dir):
     atomic_write_dataframe(out_df, out_path, sep='\t', index=False)
 
 
-def _read_getfastq_stats_row(output_dir, sra_id):
-    stats_path = os.path.join(output_dir, 'getfastq_stats.tsv')
-    if not os.path.isfile(stats_path):
-        return None
-    try:
-        stats_df = pandas.read_csv(stats_path, sep='\t')
-    except Exception as exc:
-        sys.stderr.write('Failed to read getfastq stats file {}: {}\n'.format(stats_path, exc))
-        return None
-    if 'run' not in stats_df.columns:
-        return None
-    matched = stats_df.loc[stats_df['run'].fillna('').astype(str).str.strip() == str(sra_id)]
-    if matched.empty:
-        return None
-    return matched.iloc[-1]
-
-
 def _detect_zero_output_stage_from_stats(output_dir, sra_id):
-    row = _read_getfastq_stats_row(output_dir, sra_id)
+    row = read_getfastq_stats_row(output_dir, sra_id)
     if row is None:
         return None
     if (_coerce_nonnegative_float(row.get('bp_contam_in')) > 0) and (_coerce_nonnegative_float(row.get('bp_contam_out')) <= 0):

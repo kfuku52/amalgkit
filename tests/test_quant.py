@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from amalgkit.command_context import PrefetchedDirEntries, QuantRuntimeContext
 from amalgkit.quant import (
     _build_kallisto_index,
+    _metadata_with_quant_input_sra_stats,
     build_kallisto_quant_command,
     build_oarfish_quant_command,
     quant_output_exists,
@@ -498,6 +499,201 @@ class TestGetfastqPrefetch:
         run_quant(args, metadata, 'SRR001', 'dummy.idx', runtime_context=runtime_context)
 
         assert called['kallisto'] == 1
+
+    def test_run_quant_uses_getfastq_stats_without_mutating_source_metadata(self, tmp_path, monkeypatch, capsys):
+        out_dir = tmp_path / 'out'
+        run_dir = out_dir / 'getfastq' / 'SRR001'
+        run_dir.mkdir(parents=True)
+        pandas.DataFrame([{
+            'run': 'SRR001',
+            'num_written': 12,
+            'bp_fastp_in': 2400,
+        }]).to_csv(run_dir / 'getfastq_stats.tsv', sep='\t', index=False)
+        args = SimpleNamespace(
+            out_dir=str(out_dir),
+            redo=False,
+            clean_fastq=False,
+            threads=1,
+        )
+        runtime_context = QuantRuntimeContext(run_files_by_run={'SRR001': {'SRR001_1.fastq.gz', 'SRR001_2.fastq.gz'}})
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001'],
+            'scientific_name': ['Species A'],
+            'platform': ['ILLUMINA'],
+            'lib_layout': ['paired'],
+            'total_spots': [numpy.nan],
+            'spot_length': [numpy.nan],
+            'total_bases': [numpy.nan],
+            'nominal_length': [100],
+            'exclusion': ['no'],
+        }))
+        observed = {}
+
+        def fake_call_kallisto(_args, in_files, _metadata, sra_stat, _output_dir, _index):
+            observed['in_files'] = in_files
+            observed['sra_stat'] = sra_stat
+            return SimpleNamespace(returncode=0)
+
+        monkeypatch.setattr('amalgkit.quant.call_kallisto', fake_call_kallisto)
+
+        run_quant(args, metadata, 'SRR001', 'dummy.idx', runtime_context=runtime_context)
+
+        assert observed['in_files'] == [
+            str(run_dir / 'SRR001_1.fastq.gz'),
+            str(run_dir / 'SRR001_2.fastq.gz'),
+        ]
+        assert observed['sra_stat']['total_spot'] == 12
+        assert observed['sra_stat']['spot_length'] == 200
+        assert pandas.isna(metadata.df.loc[0, 'total_spots'])
+        assert pandas.isna(metadata.df.loc[0, 'total_bases'])
+        assert pandas.isna(metadata.df.loc[0, 'spot_length'])
+        stderr = capsys.readouterr().err
+        assert 'Using extracted-read statistics as a quant-only fallback' in stderr
+        assert 'The source metadata is unchanged.' in stderr
+
+    def test_quant_stats_fallback_supports_single_end_runs(self, tmp_path):
+        pandas.DataFrame([{
+            'run': 'SRR001',
+            'num_written': 10,
+            'bp_fastp_in': 1000,
+        }]).to_csv(tmp_path / 'getfastq_stats.tsv', sep='\t', index=False)
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001'],
+            'scientific_name': ['Species A'],
+            'lib_layout': ['single'],
+            'total_spots': [numpy.nan],
+            'spot_length': [numpy.nan],
+            'total_bases': [numpy.nan],
+            'exclusion': ['no'],
+        }))
+
+        quant_metadata = _metadata_with_quant_input_sra_stats(metadata, 'SRR001', str(tmp_path))
+
+        assert int(quant_metadata.df.loc[0, 'total_spots']) == 10
+        assert int(quant_metadata.df.loc[0, 'total_bases']) == 1000
+        assert int(quant_metadata.df.loc[0, 'spot_length']) == 100
+        assert pandas.isna(metadata.df.loc[0, 'total_spots'])
+        assert pandas.isna(metadata.df.loc[0, 'total_bases'])
+        assert pandas.isna(metadata.df.loc[0, 'spot_length'])
+
+    def test_run_quant_preserves_valid_sra_stats_when_getfastq_stats_differ(self, tmp_path, monkeypatch, capsys):
+        out_dir = tmp_path / 'out'
+        run_dir = out_dir / 'getfastq' / 'SRR001'
+        run_dir.mkdir(parents=True)
+        pandas.DataFrame([{
+            'run': 'SRR001',
+            'num_written': 12,
+            'bp_fastp_in': 2400,
+        }]).to_csv(run_dir / 'getfastq_stats.tsv', sep='\t', index=False)
+        args = SimpleNamespace(
+            out_dir=str(out_dir),
+            redo=False,
+            clean_fastq=False,
+            threads=1,
+        )
+        runtime_context = QuantRuntimeContext(run_files_by_run={'SRR001': {'SRR001_1.fastq.gz', 'SRR001_2.fastq.gz'}})
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001'],
+            'scientific_name': ['Species A'],
+            'platform': ['ILLUMINA'],
+            'lib_layout': ['paired'],
+            'total_spots': [100],
+            'spot_length': [150],
+            'total_bases': [15000],
+            'nominal_length': [200],
+            'exclusion': ['no'],
+        }))
+        observed = {}
+
+        def fake_call_kallisto(_args, _in_files, _metadata, sra_stat, _output_dir, _index):
+            observed['sra_stat'] = sra_stat
+            return SimpleNamespace(returncode=0)
+
+        monkeypatch.setattr('amalgkit.quant.call_kallisto', fake_call_kallisto)
+
+        run_quant(args, metadata, 'SRR001', 'dummy.idx', runtime_context=runtime_context)
+
+        assert observed['sra_stat']['total_spot'] == 100
+        assert observed['sra_stat']['spot_length'] == 150
+        assert 'quant-only fallback' not in capsys.readouterr().err
+
+    def test_run_quant_combines_raw_total_spots_with_extracted_spot_length(self, tmp_path, monkeypatch):
+        out_dir = tmp_path / 'out'
+        run_dir = out_dir / 'getfastq' / 'SRR001'
+        run_dir.mkdir(parents=True)
+        pandas.DataFrame([{
+            'run': 'SRR001',
+            'num_written': 12,
+            'bp_fastp_in': 1800,
+            'bp_rrna_in': 2400,
+        }]).to_csv(run_dir / 'getfastq_stats.tsv', sep='\t', index=False)
+        args = SimpleNamespace(
+            out_dir=str(out_dir),
+            redo=False,
+            clean_fastq=False,
+            threads=1,
+        )
+        runtime_context = QuantRuntimeContext(run_files_by_run={'SRR001': {'SRR001_1.fastq.gz', 'SRR001_2.fastq.gz'}})
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001'],
+            'scientific_name': ['Species A'],
+            'platform': ['ILLUMINA'],
+            'lib_layout': ['paired'],
+            'total_spots': [100],
+            'spot_length': [numpy.nan],
+            'total_bases': [numpy.nan],
+            'nominal_length': [200],
+            'exclusion': ['no'],
+        }))
+        observed = {}
+
+        def fake_call_kallisto(_args, _in_files, _metadata, sra_stat, _output_dir, _index):
+            observed['sra_stat'] = sra_stat
+            return SimpleNamespace(returncode=0)
+
+        monkeypatch.setattr('amalgkit.quant.call_kallisto', fake_call_kallisto)
+
+        run_quant(args, metadata, 'SRR001', 'dummy.idx', runtime_context=runtime_context)
+
+        assert observed['sra_stat']['total_spot'] == 100
+        assert observed['sra_stat']['spot_length'] == 200
+        assert pandas.isna(metadata.df.loc[0, 'spot_length'])
+        assert pandas.isna(metadata.df.loc[0, 'total_bases'])
+
+    def test_run_quant_rejects_mismatched_getfastq_stats_run(self, tmp_path, monkeypatch):
+        out_dir = tmp_path / 'out'
+        run_dir = out_dir / 'getfastq' / 'SRR001'
+        run_dir.mkdir(parents=True)
+        pandas.DataFrame([{
+            'run': 'SRR999',
+            'num_written': 12,
+            'bp_fastp_in': 2400,
+        }]).to_csv(run_dir / 'getfastq_stats.tsv', sep='\t', index=False)
+        args = SimpleNamespace(
+            out_dir=str(out_dir),
+            redo=False,
+            clean_fastq=False,
+            threads=1,
+        )
+        runtime_context = QuantRuntimeContext(run_files_by_run={'SRR001': {'SRR001_1.fastq.gz', 'SRR001_2.fastq.gz'}})
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001'],
+            'scientific_name': ['Species A'],
+            'platform': ['ILLUMINA'],
+            'lib_layout': ['paired'],
+            'total_spots': [numpy.nan],
+            'spot_length': [numpy.nan],
+            'total_bases': [numpy.nan],
+            'nominal_length': [200],
+            'exclusion': ['no'],
+        }))
+        monkeypatch.setattr(
+            'amalgkit.quant.call_kallisto',
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError('call_kallisto should not be called')),
+        )
+
+        with pytest.raises(ValueError, match='total_spots must be > 0'):
+            run_quant(args, metadata, 'SRR001', 'dummy.idx', runtime_context=runtime_context)
 
     def test_run_quant_redo_purges_stale_outputs_before_call(self, tmp_path, monkeypatch):
         out_dir = tmp_path / 'out'
