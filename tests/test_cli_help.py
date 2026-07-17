@@ -3,12 +3,13 @@ import sys
 from pathlib import Path
 
 
-CLI_PATH = Path(__file__).resolve().parents[1] / 'amalgkit' / 'amalgkit'
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def run_cli(*args):
     return subprocess.run(
-        [sys.executable, str(CLI_PATH)] + list(args),
+        [sys.executable, '-m', 'amalgkit'] + list(args),
+        cwd=REPO_ROOT,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,

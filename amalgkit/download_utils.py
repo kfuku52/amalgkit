@@ -1,4 +1,5 @@
 import errno
+import hashlib
 import json
 import os
 import re
@@ -27,6 +28,7 @@ DOWNLOAD_LOCK_TIMEOUT_SECONDS = 3600
 DOWNLOAD_LOCK_HEARTBEAT_SECONDS = 60
 DOWNLOAD_LOCK_STALE_SECONDS = 900
 NCBI_TAXDUMP_URL = 'https://ftp.ncbi.nlm.nih.gov/pub/taxonomy/taxdump.tar.gz'
+NCBI_TAXDUMP_MD5_URL = NCBI_TAXDUMP_URL + '.md5'
 _BUILTIN_NCBI_TAXONOMY_CLASS = NcbiTaxonomy
 _NCBI_TAXONOMY_THREAD_LOCAL = threading.local()
 _NCBI_TAXONOMY_INIT_LOCK = threading.Lock()
@@ -665,9 +667,61 @@ def maybe_acquire_download_semaphore(
         yield slot_path
 
 
-def ensure_ncbi_taxdump_file(taxdump_path, urlretrieve_fn=None):
+def read_published_md5(checksum_url, expected_filename, urlopen_fn):
+    with urlopen_fn(checksum_url, timeout=30) as response:
+        checksum_bytes = response.read(4097)
+    if len(checksum_bytes) > 4096:
+        raise ValueError('Checksum response is unexpectedly large: {}'.format(checksum_url))
+    checksum_text = checksum_bytes.decode('ascii', errors='strict').strip()
+    pattern = r'([0-9a-fA-F]{{32}})(?:\s+\*?{})?'.format(re.escape(expected_filename))
+    match = re.fullmatch(pattern, checksum_text)
+    if match is None:
+        raise ValueError('Invalid checksum response from {}'.format(checksum_url))
+    return match.group(1).lower()
+
+
+def calculate_file_md5(path):
+    try:
+        digest = hashlib.md5(usedforsecurity=False)  # noqa: S324 - upstream publishes MD5 for integrity checks
+    except TypeError:  # pragma: no cover - compatibility with non-CPython implementations
+        digest = hashlib.md5()  # noqa: S324 - upstream publishes MD5 for integrity checks
+    flags = os.O_RDONLY
+    if hasattr(os, 'O_NOFOLLOW'):
+        flags |= os.O_NOFOLLOW
+    fd = os.open(path, flags)
+    with os.fdopen(fd, 'rb') as handle:
+        before = os.fstat(handle.fileno())
+        if not stat.S_ISREG(before.st_mode):
+            raise OSError('Path is not a regular file: {}'.format(path))
+        while True:
+            block = handle.read(1024 * 1024)
+            if not block:
+                break
+            digest.update(block)
+        after = os.fstat(handle.fileno())
+    if (
+        before.st_dev,
+        before.st_ino,
+        before.st_size,
+        before.st_mtime_ns,
+        before.st_ctime_ns,
+    ) != (
+        after.st_dev,
+        after.st_ino,
+        after.st_size,
+        after.st_mtime_ns,
+        after.st_ctime_ns,
+    ):
+        raise RuntimeError('File changed while it was being read: {}'.format(path))
+    return digest.hexdigest()
+
+
+def ensure_ncbi_taxdump_file(taxdump_path, urlretrieve_fn=None, checksum_urlopen_fn=None):
+    use_published_checksum = urlretrieve_fn is None
     if urlretrieve_fn is None:
         urlretrieve_fn = urllib.request.urlretrieve
+    if checksum_urlopen_fn is None and use_published_checksum:
+        checksum_urlopen_fn = urllib.request.urlopen
     taxdump_path = os.path.abspath(os.fspath(taxdump_path))
     taxdump_dir = os.path.dirname(taxdump_path)
     if taxdump_dir != '':
@@ -704,6 +758,20 @@ def ensure_ncbi_taxdump_file(taxdump_path, urlretrieve_fn=None):
             tmp_path, label='Downloaded NCBI taxdump temporary path'
         )
         validate_taxonomy_dump(tmp_path)
+        if checksum_urlopen_fn is not None:
+            expected_md5 = read_published_md5(
+                checksum_url=NCBI_TAXDUMP_MD5_URL,
+                expected_filename='taxdump.tar.gz',
+                urlopen_fn=checksum_urlopen_fn,
+            )
+            actual_md5 = calculate_file_md5(tmp_path)
+            if actual_md5 != expected_md5:
+                raise ValueError(
+                    'NCBI taxonomy dump checksum mismatch: expected {}, got {}'.format(
+                        expected_md5,
+                        actual_md5,
+                    )
+                )
         _prepare_regular_file_for_replace(tmp_path, mode=previous_mode)
         _assert_regular_file_or_absent(taxdump_path, label='NCBI taxdump path')
         os.replace(tmp_path, taxdump_path)
@@ -716,10 +784,11 @@ def ensure_ncbi_taxdump_file(taxdump_path, urlretrieve_fn=None):
     return taxdump_path
 
 
-def ensure_ete_taxdump_file(taxdump_path, urlretrieve_fn=None):
+def ensure_ete_taxdump_file(taxdump_path, urlretrieve_fn=None, checksum_urlopen_fn=None):
     return ensure_ncbi_taxdump_file(
         taxdump_path=taxdump_path,
         urlretrieve_fn=urlretrieve_fn,
+        checksum_urlopen_fn=checksum_urlopen_fn,
     )
 
 

@@ -151,11 +151,9 @@ def _save_species_boxplot_pdf(df, value_col, out_path, y_label, font_size=8, y_l
         return
     pyplot = _load_pyplot()
     figure, axis = pyplot.subplots(figsize=(_resolve_plot_width(len(species_order)), 3.6))
-    axis.boxplot(
-        grouped,
-        tick_labels=[_format_species_label(species) for species in species_order],
-        patch_artist=False,
-    )
+    axis.boxplot(grouped, patch_artist=False)
+    axis.set_xticks(numpy.arange(1, len(species_order) + 1))
+    axis.set_xticklabels([_format_species_label(species) for species in species_order])
     axis.set_xlabel('')
     axis.set_ylabel(str(y_label), fontsize=float(font_size))
     axis.tick_params(axis='x', labelrotation=90, labelsize=float(font_size))
@@ -408,10 +406,9 @@ def _save_mean_expression_boxplot(metadata_df, merge_dir, out_path, font_size=8)
     mean_after = mean_before / scale_factor.to_numpy(dtype=float)
     pyplot = _load_pyplot()
     figure, axis = pyplot.subplots(figsize=(2.6, 3.6))
-    axis.boxplot(
-        [mean_before[numpy.isfinite(mean_before)], mean_after[numpy.isfinite(mean_after)]],
-        tick_labels=['Raw\ncounts', 'Library-size\ncorrected\ncounts'],
-    )
+    axis.boxplot([mean_before[numpy.isfinite(mean_before)], mean_after[numpy.isfinite(mean_after)]])
+    axis.set_xticks([1, 2])
+    axis.set_xticklabels(['Raw\ncounts', 'Library-size\ncorrected\ncounts'])
     finite_values = numpy.concatenate([
         mean_before[numpy.isfinite(mean_before)],
         mean_after[numpy.isfinite(mean_after)],

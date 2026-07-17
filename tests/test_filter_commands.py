@@ -8,7 +8,6 @@ from amalgkit.util import Metadata
 from amalgkit import wsfilter as wsfilter_module
 from amalgkit import csfilter as csfilter_module
 from amalgkit import finalize as finalize_module
-from amalgkit import per_species_tables as per_species_tables_module
 
 
 def _base_metadata():

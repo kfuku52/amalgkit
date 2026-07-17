@@ -4,7 +4,6 @@ import os
 import re
 import sys
 import time  # noqa: F401
-import xml.etree.ElementTree as ET  # noqa: F401
 
 import pandas
 

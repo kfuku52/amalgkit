@@ -1,6 +1,12 @@
 *.pyc
 *.pyo
 __pycache__/
+.DS_Store
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
 /data
 test_out/
 

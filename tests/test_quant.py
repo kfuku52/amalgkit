@@ -26,7 +26,6 @@ from amalgkit.quant import (
     call_kallisto,
     call_oarfish,
     run_quant,
-    run_quant_for_sra,
     pre_resolve_species_indices,
     prefetch_getfastq_run_files,
     build_quant_tasks,

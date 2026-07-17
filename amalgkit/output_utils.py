@@ -3,9 +3,6 @@ import re
 import tempfile
 from contextlib import contextmanager
 
-import pandas
-
-
 _DELIMITED_TEXT_UNSAFE_PATTERN = re.compile(r'[\r\n\t]+')
 
 

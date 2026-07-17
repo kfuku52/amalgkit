@@ -1,7 +1,5 @@
-import os
 import pytest
 import pandas
-import numpy
 
 from amalgkit.util import Metadata
 

@@ -69,7 +69,7 @@ class TestFetchSraXml:
 
         monkeypatch.setattr('amalgkit.metadata.Entrez.efetch', flaky_efetch)
         monkeypatch.setattr(
-            'amalgkit.metadata.ET.parse',
+            'amalgkit.sra.parse_untrusted_xml',
             lambda handle: self._DummyTree(ET.Element('EXPERIMENT_PACKAGE'))
         )
         monkeypatch.setattr('amalgkit.metadata.time.sleep', lambda *_args, **_kwargs: None)
@@ -91,7 +91,7 @@ class TestFetchSraXml:
                 raise IncompleteRead(b'partial-xml', len(b'partial-xml') + 10)
             return self._DummyTree(ET.Element('EXPERIMENT_PACKAGE'))
 
-        monkeypatch.setattr('amalgkit.metadata.ET.parse', flaky_parse)
+        monkeypatch.setattr('amalgkit.sra.parse_untrusted_xml', flaky_parse)
         monkeypatch.setattr('amalgkit.metadata.time.sleep', lambda *_args, **_kwargs: None)
 
         root = fetch_sra_xml(search_term='SRR000000', retmax=1000)
@@ -112,7 +112,7 @@ class TestFetchSraXml:
 
         monkeypatch.setattr('amalgkit.metadata.Entrez.efetch', fake_efetch)
         monkeypatch.setattr(
-            'amalgkit.metadata.ET.parse',
+            'amalgkit.sra.parse_untrusted_xml',
             lambda handle: self._DummyTree(ET.Element('EXPERIMENT_PACKAGE'))
         )
 
@@ -133,7 +133,7 @@ class TestFetchSraXml:
             ET.SubElement(root, 'EXPERIMENT_PACKAGE')
             return self._DummyTree(root)
 
-        monkeypatch.setattr('amalgkit.metadata.ET.parse', fake_parse)
+        monkeypatch.setattr('amalgkit.sra.parse_untrusted_xml', fake_parse)
 
         root = fetch_sra_xml(search_term='SRR000000', retmax=1000)
 
@@ -152,7 +152,7 @@ class TestFetchSraXml:
             ET.SubElement(root, 'RUN_SET')
             return self._DummyTree(root)
 
-        monkeypatch.setattr('amalgkit.metadata.ET.parse', fake_parse)
+        monkeypatch.setattr('amalgkit.sra.parse_untrusted_xml', fake_parse)
 
         root = fetch_sra_xml(search_term='SRR000000', retmax=1000)
 
@@ -163,7 +163,7 @@ class TestFetchSraXml:
         monkeypatch.setattr('amalgkit.metadata.Entrez.esearch', lambda **kwargs: object())
         monkeypatch.setattr('amalgkit.metadata.Entrez.read', lambda handle: {'IdList': ['ID1']})
         monkeypatch.setattr('amalgkit.metadata.Entrez.efetch', lambda **kwargs: object())
-        monkeypatch.setattr('amalgkit.metadata.ET.parse', lambda handle: (_ for _ in ()).throw(ET.ParseError('broken xml')))
+        monkeypatch.setattr('amalgkit.sra.parse_untrusted_xml', lambda handle: (_ for _ in ()).throw(ET.ParseError('broken xml')))
 
         with pytest.raises(RuntimeError, match='Failed to parse Entrez XML chunk'):
             fetch_sra_xml(search_term='SRR000000', retmax=1000)
@@ -172,7 +172,7 @@ class TestFetchSraXml:
         monkeypatch.setattr('amalgkit.metadata.Entrez.esearch', lambda **kwargs: object())
         monkeypatch.setattr('amalgkit.metadata.Entrez.read', lambda handle: {'IdList': ['ID1']})
         monkeypatch.setattr('amalgkit.metadata.Entrez.efetch', lambda **kwargs: object())
-        monkeypatch.setattr('amalgkit.metadata.ET.parse', lambda handle: (_ for _ in ()).throw(ValueError('unexpected')))
+        monkeypatch.setattr('amalgkit.sra.parse_untrusted_xml', lambda handle: (_ for _ in ()).throw(ValueError('unexpected')))
 
         with pytest.raises(ValueError, match='unexpected'):
             fetch_sra_xml(search_term='SRR000000', retmax=1000)
@@ -185,7 +185,7 @@ class TestFetchSraXml:
         err = ET.SubElement(err_root, 'Error')
         err.text = 'Entrez error'
         monkeypatch.setattr(
-            'amalgkit.metadata.ET.parse',
+            'amalgkit.sra.parse_untrusted_xml',
             lambda handle: self._DummyTree(err_root)
         )
 
@@ -212,7 +212,7 @@ class TestFetchSraXml:
         monkeypatch.setattr('amalgkit.metadata.Entrez.read', lambda handle: {'IdList': ['ID1']})
         monkeypatch.setattr('amalgkit.metadata.Entrez.efetch', lambda **kwargs: object())
         monkeypatch.setattr(
-            'amalgkit.metadata.ET.parse',
+            'amalgkit.sra.parse_untrusted_xml',
             lambda handle: self._DummyTree(ET.Element('EXPERIMENT_PACKAGE'))
         )
 

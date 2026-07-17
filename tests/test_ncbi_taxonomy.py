@@ -1,4 +1,5 @@
 import io
+import hashlib
 import os
 import shutil
 import sqlite3
@@ -446,6 +447,57 @@ def test_invalid_download_is_not_installed(tmp_path):
     with pytest.raises(ValueError, match="not a readable tar archive"):
         download_utils.ensure_ncbi_taxdump_file(
             destination, urlretrieve_fn=write_invalid_dump
+        )
+
+    assert not destination.exists()
+    assert list(tmp_path.glob("taxdump.tar.gz.*.tmp")) == []
+
+
+def test_default_download_validates_published_checksum(tmp_path, monkeypatch):
+    source = write_tiny_taxdump(tmp_path / "source.tar.gz")
+    destination = tmp_path / "taxdump.tar.gz"
+    expected_md5 = hashlib.md5(  # noqa: S324 - mirrors the upstream integrity checksum
+        source.read_bytes(),
+        usedforsecurity=False,
+    ).hexdigest()
+    requested = []
+
+    def copy_valid_dump(url, out_path):
+        requested.append(url)
+        shutil.copyfile(source, out_path)
+
+    def serve_checksum(url, timeout):
+        requested.append((url, timeout))
+        return io.BytesIO("{}  taxdump.tar.gz\n".format(expected_md5).encode("ascii"))
+
+    monkeypatch.setattr(download_utils.urllib.request, "urlretrieve", copy_valid_dump)
+    monkeypatch.setattr(download_utils.urllib.request, "urlopen", serve_checksum)
+
+    result = download_utils.ensure_ncbi_taxdump_file(destination)
+
+    assert result == str(destination)
+    assert requested == [
+        download_utils.NCBI_TAXDUMP_URL,
+        (download_utils.NCBI_TAXDUMP_MD5_URL, 30),
+    ]
+
+
+def test_checksum_mismatch_is_not_installed(tmp_path):
+    source = write_tiny_taxdump(tmp_path / "source.tar.gz")
+    destination = tmp_path / "taxdump.tar.gz"
+
+    def copy_valid_dump(_url, out_path):
+        shutil.copyfile(source, out_path)
+
+    def serve_wrong_checksum(_url, timeout):
+        assert timeout == 30
+        return io.BytesIO(b"00000000000000000000000000000000  taxdump.tar.gz\n")
+
+    with pytest.raises(ValueError, match="checksum mismatch"):
+        download_utils.ensure_ncbi_taxdump_file(
+            destination,
+            urlretrieve_fn=copy_valid_dump,
+            checksum_urlopen_fn=serve_wrong_checksum,
         )
 
     assert not destination.exists()

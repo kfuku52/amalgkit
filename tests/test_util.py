@@ -406,7 +406,7 @@ class TestMetadataFromXml:
         assert m.df.loc[0, 'run'] == 'SRR000001'
         assert m.df.loc[0, 'lib_layout'] == 'paired'
         assert m.df.loc[0, 'bioproject'] == 'PRJNA000001'
-        assert m.df.loc[0, 'ENA_SRA_Link'] == 'ftp://ftp.sra.ebi.ac.uk/vol1/srr/SRR000/SRR000001/SRR000001.sra'
+        assert m.df.loc[0, 'ENA_SRA_Link'] == 'https://ftp.sra.ebi.ac.uk/vol1/srr/SRR000/SRR000001/SRR000001.sra'
         assert m.df.loc[0, 'DDBJ_SRA_Link'] == ''
         for col in Metadata.removed_metadata_columns:
             assert col not in m.df.columns
@@ -447,7 +447,7 @@ class TestMetadataFromXml:
         tree = ET.ElementTree(root)
         m = Metadata.from_xml(tree)
 
-        assert m.df.loc[0, 'ENA_SRA_Link'] == 'ftp://ftp.sra.ebi.ac.uk/vol1/drr/DRR000/DRR000001/DRR000001.sra'
+        assert m.df.loc[0, 'ENA_SRA_Link'] == 'https://ftp.sra.ebi.ac.uk/vol1/drr/DRR000/DRR000001/DRR000001.sra'
         assert m.df.loc[0, 'DDBJ_SRA_Link'] == (
             'https://ddbj.nig.ac.jp/public/ddbj_database/dra/sra/ByExp/sra/DRX/'
             'DRX000/DRX000001/DRR000001/DRR000001.sra'

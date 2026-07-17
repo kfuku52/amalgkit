@@ -757,7 +757,6 @@ def run_finalize_python_worker(args, metadata, species_tag, input_dir):
         file_path=os.path.join(dir_tsv, '{}.uncorrected.tc.tsv'.format(species_tag)),
         index_name='target_id',
     )
-    original_sample_groups = list(selected_sample_groups)
     sample_group_out = sample_group_mean(tc_tmp, sra, selected_sample_groups)
     tc_sample_group_uncorrected = sample_group_out['tc_ave']
     selected_sample_groups = sample_group_out['selected_sample_groups']

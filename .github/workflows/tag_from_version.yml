@@ -1,70 +1,96 @@
-name: Create GitHub Tag from __version__
+name: Create GitHub Release from __version__
 
 on:
-  push:
-    branches:
-      - main
+  workflow_run:
+    workflows: [Tests]
+    types: [completed]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.event.workflow_run.head_sha || github.sha }}
+  cancel-in-progress: false
+
 jobs:
-  create_tag:
-    if: ${{ false }} # Temporarily disabled on master prior to kfdevel merge
+  release:
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master') ||
+      (github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'master')
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
+      - name: Checkout code and tags
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
-      - name: Detect version using AST
-        id: get_version
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+
+      - name: Read and validate package version
+        id: package
+        shell: bash
         run: |
-          echo "🔍 Searching for __init__.py that contains __version__..."
+          VERSION=$(python - <<'PY'
+          import ast
+          import pathlib
+          import re
 
-          # Search for the correct __init__.py
-          INIT_PATH=$(grep -rl '__version__' . --include='__init__.py' | head -n1)
+          init_path = pathlib.Path('amalgkit/__init__.py')
+          tree = ast.parse(init_path.read_text(encoding='utf-8'), filename=str(init_path))
+          version = None
+          for node in tree.body:
+              if not isinstance(node, ast.Assign):
+                  continue
+              if any(isinstance(target, ast.Name) and target.id == '__version__' for target in node.targets):
+                  version = ast.literal_eval(node.value)
+                  break
+          if not isinstance(version, str) or not re.fullmatch(r'\d+\.\d+\.\d+(?:[a-z]+\d+)?', version):
+              raise SystemExit('Invalid or missing __version__ in {}'.format(init_path))
+          print(version)
+          PY
+          )
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
 
-          if [ -z "$INIT_PATH" ]; then
-            echo "❌ __version__ not found in any __init__.py"
-            exit 1
-          fi
-
-          echo "✅ Found: $INIT_PATH"
-
-          # Create Python script line by line
-          echo 'import ast'                         >  get_version.py
-          echo 'import sys'                        >> get_version.py
-          echo 'with open(sys.argv[1]) as f:'      >> get_version.py
-          echo '    tree = ast.parse(f.read())'    >> get_version.py
-          echo 'for node in ast.walk(tree):'       >> get_version.py
-          echo '    if isinstance(node, ast.Assign):' >> get_version.py
-          echo '        if getattr(node.targets[0], "id", None) == "__version__":' >> get_version.py
-          echo '            print(node.value.s)'   >> get_version.py
-          echo '            break'                 >> get_version.py
-
-          # Extract version
-          VERSION=$(python3 get_version.py "$INIT_PATH")
-          PACKAGE=$(basename $(dirname "$INIT_PATH"))
-
-          if [ -z "$VERSION" ]; then
-            echo "❌ Failed to extract __version__ from $INIT_PATH"
-            exit 1
-          fi
-
-          echo "📦 PACKAGE: $PACKAGE"
-          echo "📌 VERSION: $VERSION"
-
-          echo "PACKAGE=$PACKAGE" >> $GITHUB_ENV
-          echo "VERSION=$VERSION" >> $GITHUB_ENV
-
-      - name: Create tag if not exists
+      - name: Create version tag
+        id: tag
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          TAG: ${{ steps.package.outputs.tag }}
         run: |
-          git fetch --tags
-          if git rev-parse "v$VERSION" >/dev/null 2>&1; then
-            echo "✅ Tag v$VERSION already exists. Skipping."
+          TARGET_COMMIT=$(git rev-parse HEAD)
+          if git rev-parse --verify --quiet "refs/tags/$TAG"; then
+            TAGGED_COMMIT=$(git rev-list -n 1 "$TAG")
+            if [ "$TAGGED_COMMIT" != "$TARGET_COMMIT" ]; then
+              if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+                echo "Tag $TAG already points to $TAGGED_COMMIT, not $TARGET_COMMIT" >&2
+                exit 1
+              fi
+              echo "Version $TAG was already released from $TAGGED_COMMIT; nothing to do."
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
           else
-            echo "🏷 Creating new tag v$VERSION"
-            git config user.name "github-actions"
-            git config user.email "actions@github.com"
-            git tag "v$VERSION"
-            git push origin "v$VERSION"
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag --annotate "$TAG" --message "Release $TAG"
+            git push origin "$TAG"
+          fi
+
+      - name: Create GitHub Release if missing
+        if: steps.tag.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.package.outputs.tag }}
+        run: |
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --verify-tag --generate-notes --title "$TAG"
           fi

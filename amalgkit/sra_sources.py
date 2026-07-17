@@ -8,7 +8,7 @@ _RUN_ACCESSION_PATTERN = re.compile(r'^(?:SRR|ERR|DRR)\d+$', re.IGNORECASE)
 _DDBJ_RUN_ACCESSION_PATTERN = re.compile(r'^DRR\d+$', re.IGNORECASE)
 _DDBJ_EXPERIMENT_ACCESSION_PATTERN = re.compile(r'^DRX\d+$', re.IGNORECASE)
 
-_ENA_SRA_FTP_ROOT = 'ftp://ftp.sra.ebi.ac.uk/vol1'
+_ENA_SRA_ROOT = 'https://ftp.sra.ebi.ac.uk/vol1'
 _DDBJ_DRA_PUBLIC_ROOT = 'https://ddbj.nig.ac.jp/public/ddbj_database/dra'
 
 
@@ -25,7 +25,7 @@ def build_ena_sra_download_url(run_accession):
     run_prefix = run_accession[:3].lower()
     accession_prefix = run_accession[:6]
     return '{}/{}/{}/{}/{}.sra'.format(
-        _ENA_SRA_FTP_ROOT,
+        _ENA_SRA_ROOT,
         run_prefix,
         accession_prefix,
         run_accession,
@@ -59,7 +59,9 @@ def normalize_sra_download_url(source_name, source_url, run_accession='', experi
         if source_url == '':
             return build_ena_sra_download_url(run_accession)
         if '://' not in source_url:
-            source_url = 'ftp://' + source_url.lstrip('/')
+            source_url = 'https://' + source_url.lstrip('/')
+        elif source_url.lower().startswith('ftp://ftp.sra.ebi.ac.uk/'):
+            source_url = 'https://' + source_url[len('ftp://'):]
         source_url = source_url.rstrip('/')
         if (run_accession != '') and (not source_url.lower().endswith('.sra')):
             last_component = source_url.rsplit('/', 1)[-1]

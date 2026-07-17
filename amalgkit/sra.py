@@ -1,5 +1,6 @@
 from Bio import Entrez
 import datetime
+from defusedxml.ElementTree import parse as parse_untrusted_xml
 from http.client import IncompleteRead
 import re
 import time
@@ -10,6 +11,12 @@ from urllib.error import HTTPError, URLError
 from amalgkit.download_utils import maybe_acquire_download_semaphore
 
 SRA_ACCESSION_PATTERN = re.compile(r'\b(?:[SED](?:RR|RP|RS|RX)\d+)\b', re.IGNORECASE)
+
+
+def _close_entrez_handle(handle):
+    close = getattr(handle, 'close', None)
+    if callable(close):
+        close()
 
 
 def merge_xml_chunk(root, chunk):
@@ -40,7 +47,10 @@ def esearch_sra_with_retry(search_term, args=None):
             lock_label='NCBI metadata download',
         ):
             sra_handle = Entrez.esearch(db='sra', term=search_term, retmax=10000000)
-            return Entrez.read(sra_handle)
+            try:
+                return Entrez.read(sra_handle)
+            finally:
+                _close_entrez_handle(sra_handle)
     except (HTTPError, URLError) as exc:
         print(exc, '- Trying Entrez.esearch() again...')
         with maybe_acquire_download_semaphore(
@@ -50,7 +60,10 @@ def esearch_sra_with_retry(search_term, args=None):
             lock_label='NCBI metadata download',
         ):
             sra_handle = Entrez.esearch(db='sra', term=search_term, retmax=10000000)
-            return Entrez.read(sra_handle)
+            try:
+                return Entrez.read(sra_handle)
+            finally:
+                _close_entrez_handle(sra_handle)
 
 
 def fetch_sra_xml_chunk(record_ids, start, end, retmax, max_retry=10, verbose=True, retry_sleep_second=60, args=None):
@@ -63,7 +76,10 @@ def fetch_sra_xml_chunk(record_ids, start, end, retmax, max_retry=10, verbose=Tr
                 lock_label='NCBI metadata download',
             ):
                 handle = Entrez.efetch(db='sra', id=record_ids[start:end], rettype='full', retmode='xml', retmax=retmax)
-                return ET.parse(handle).getroot()
+                try:
+                    return parse_untrusted_xml(handle).getroot()
+                finally:
+                    _close_entrez_handle(handle)
         except (HTTPError, URLError) as exc:
             if verbose:
                 print(

@@ -1,5 +1,6 @@
 from Bio import Entrez
 from contextlib import contextmanager
+from defusedxml.ElementTree import fromstring as parse_untrusted_xml_string
 import itertools
 import numpy
 import gzip
@@ -11,11 +12,13 @@ from amalgkit.command_context import GetfastqRuntimeContext
 from amalgkit.download_utils import (
     DOWNLOAD_LOCK_POLL_SECONDS,
     acquire_exclusive_lock,
+    calculate_file_md5,
     get_ncbi_taxonomy,
     maybe_acquire_download_semaphore,
     resolve_download_dir,
     resolve_download_lock_path,
     resolve_optional_download_concurrency_limit,
+    read_published_md5,
     resolve_resource_lock_path,
 )
 from amalgkit.exceptions import AmalgkitExit
@@ -58,7 +61,6 @@ import sys
 import time
 import urllib.parse
 import urllib.request
-import xml.etree.ElementTree as ET  # noqa: F401
 
 IDENTICAL_PAIRED_RATIO_THRESHOLD = 0.99
 IDENTICAL_PAIRED_CHECKED_READS = 2000
@@ -525,7 +527,11 @@ def concatenate_files_with_system_cat(infile_paths, outfile_path):
     with open(outfile_path, 'wb') as out_handle:
         def cat_runner(command, stdout=None, stderr=None):
             _ = stdout
-            return subprocess.run(command, stdout=out_handle, stderr=stderr)
+            return subprocess.run(  # noqa: S603 - command is an argv list headed by resolved system cat
+                command,
+                stdout=out_handle,
+                stderr=stderr,
+            )
 
         cat_out, _stdout_txt, _stderr_txt = run_logged_command(
             command=[cat_exe] + infile_paths,
@@ -735,8 +741,11 @@ def build_trace_run_xml_url(sra_id):
 
 def fetch_trace_run_xml_root(sra_id, timeout=30):
     trace_url = build_trace_run_xml_url(sra_id)
-    with urllib.request.urlopen(trace_url, timeout=timeout) as response:
-        return ET.fromstring(response.read())
+    with urllib.request.urlopen(  # noqa: S310 - URL comes from a fixed HTTPS NCBI template
+        trace_url,
+        timeout=timeout,
+    ) as response:
+        return parse_untrusted_xml_string(response.read())
 
 
 def _normalize_public_original_fastq_source_name(raw_name):
@@ -1123,7 +1132,10 @@ def _download_file_from_source_without_semaphore(
             if not os.path.isfile(tmp_path):
                 raise IsADirectoryError('Temporary download path exists but is not a file: {}'.format(tmp_path))
             os.remove(tmp_path)
-        urllib.request.urlretrieve(source_url, tmp_path)
+        urllib.request.urlretrieve(  # noqa: S310 - scheme is allowlisted immediately above
+            source_url,
+            tmp_path,
+        )
         if os.path.exists(tmp_path):
             if not os.path.isfile(tmp_path):
                 raise IsADirectoryError('Temporary download path exists but is not a file: {}'.format(tmp_path))
@@ -2005,20 +2017,44 @@ def ensure_mmseqs_contam_taxonomy_db_exists(args):
         write_ready_marker(ready_path)
     return db_path
 
-def download_rrna_reference_gz(url, gz_path, label):
+def download_rrna_reference_gz(url, gz_path, label, urlretrieve_fn=None, checksum_urlopen_fn=None):
+    use_published_checksum = urlretrieve_fn is None
+    if urlretrieve_fn is None:
+        urlretrieve_fn = urllib.request.urlretrieve
+    if checksum_urlopen_fn is None and use_published_checksum:
+        checksum_urlopen_fn = urllib.request.urlopen
+    if urllib.parse.urlparse(url).scheme.lower() != 'https':
+        raise ValueError('rRNA reference URL must use HTTPS: {}'.format(url))
     tmp_path = gz_path + '.tmp.{}'.format(time.time_ns())
-    if os.path.exists(tmp_path):
-        if os.path.isdir(tmp_path):
+    if os.path.lexists(tmp_path):
+        if os.path.isdir(tmp_path) and not os.path.islink(tmp_path):
             raise IsADirectoryError('Temporary rRNA reference download path is a directory: {}'.format(tmp_path))
         os.remove(tmp_path)
     print('Downloading {} reference: {}'.format(label, url), flush=True)
     try:
-        urllib.request.urlretrieve(url, tmp_path)
-    except Exception as e:
-        if os.path.exists(tmp_path):
+        urlretrieve_fn(url, tmp_path)
+        if os.path.islink(tmp_path) or not os.path.isfile(tmp_path):
+            raise OSError('Downloaded rRNA reference is not a regular file: {}'.format(tmp_path))
+        if checksum_urlopen_fn is not None:
+            expected_md5 = read_published_md5(
+                checksum_url=url + '.md5',
+                expected_filename=os.path.basename(url),
+                urlopen_fn=checksum_urlopen_fn,
+            )
+            actual_md5 = calculate_file_md5(tmp_path)
+            if actual_md5 != expected_md5:
+                raise ValueError(
+                    '{} reference checksum mismatch: expected {}, got {}'.format(
+                        label,
+                        expected_md5,
+                        actual_md5,
+                    )
+                )
+        os.replace(tmp_path, gz_path)
+    except BaseException:
+        if os.path.lexists(tmp_path) and (os.path.isfile(tmp_path) or os.path.islink(tmp_path)):
             os.remove(tmp_path)
-        raise RuntimeError('Failed to download {} reference: {}'.format(label, url)) from e
-    os.replace(tmp_path, gz_path)
+        raise
 
 def expand_rrna_reference_gz(gz_path, fasta_path):
     tmp_path = fasta_path + '.tmp.{}'.format(time.time_ns())
@@ -4235,9 +4271,10 @@ def ensure_contam_filter_metadata_rank_taxids(metadata, args):
         for col in rank_cols:
             if col in metadata.df.columns:
                 metadata.df[col] = pandas.to_numeric(metadata.df[col], errors='coerce').astype('Int64')
+    required_col_label = ' / '.join(required_cols)
     available_required_cols = [col for col in required_cols if col in metadata.df.columns]
     if len(available_required_cols) == 0:
-        raise ValueError('Failed to resolve metadata taxonomy rank column: {}'.format(' / '.join(required_cols)))
+        raise ValueError('Failed to resolve metadata taxonomy rank column: {}'.format(required_col_label))
     missing_mask = get_required_missing_mask()
     if missing_mask.any():
         run_values = metadata.df.loc[missing_mask, 'run'].fillna('').astype(str).tolist() if 'run' in metadata.df.columns else []
@@ -4247,7 +4284,7 @@ def ensure_contam_filter_metadata_rank_taxids(metadata, args):
             preview += ', ...'
         raise ValueError(
             'Missing {} in metadata for {} run(s): {}'.format(
-                required_col,
+                required_col_label,
                 int(missing_mask.sum()),
                 preview if preview != '' else '(run IDs unavailable)',
             )

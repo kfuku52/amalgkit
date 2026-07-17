@@ -1,9 +1,25 @@
 import xml.etree.ElementTree as ET
+from io import BytesIO
+
+import pytest
+from defusedxml.common import EntitiesForbidden
 
 from amalgkit.sra import (
+    esearch_sra_with_retry,
     extract_sra_accessions,
+    fetch_sra_xml_chunk,
     inspect_accession_search_mismatches,
 )
+
+
+class RecordingBytesIO(BytesIO):
+    def __init__(self, value):
+        super().__init__(value)
+        self.was_closed = False
+
+    def close(self):
+        self.was_closed = True
+        super().close()
 
 
 class TestExtractSraAccessions:
@@ -14,6 +30,35 @@ class TestExtractSraAccessions:
     def test_returns_empty_for_blank_query(self):
         assert extract_sra_accessions('') == []
         assert extract_sra_accessions(None) == []
+
+
+def test_fetch_sra_xml_chunk_rejects_xml_entities(monkeypatch):
+    malicious_xml = b'<!DOCTYPE root [<!ENTITY xxe SYSTEM "file:///etc/passwd">]><root>&xxe;</root>'
+    handle = RecordingBytesIO(malicious_xml)
+    monkeypatch.setattr(
+        'amalgkit.sra.Entrez.efetch',
+        lambda **_kwargs: handle,
+    )
+
+    with pytest.raises(EntitiesForbidden):
+        fetch_sra_xml_chunk(
+            record_ids=['ID1'],
+            start=0,
+            end=1,
+            retmax=1,
+            max_retry=1,
+            retry_sleep_second=0,
+        )
+    assert handle.was_closed
+
+
+def test_esearch_closes_entrez_handle(monkeypatch):
+    handle = RecordingBytesIO(b'ignored')
+    monkeypatch.setattr('amalgkit.sra.Entrez.esearch', lambda **_kwargs: handle)
+    monkeypatch.setattr('amalgkit.sra.Entrez.read', lambda _handle: {'IdList': ['ID1']})
+
+    assert esearch_sra_with_retry('SRR000001') == {'IdList': ['ID1']}
+    assert handle.was_closed
 
 
 class TestInspectAccessionSearchMismatches:

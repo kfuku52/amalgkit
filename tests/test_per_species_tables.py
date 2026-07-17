@@ -1,5 +1,4 @@
 import os
-import sys
 import pytest
 import pandas
 from types import SimpleNamespace

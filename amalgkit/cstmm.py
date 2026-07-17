@@ -63,7 +63,6 @@ def cstmm_main(args):
     dir_cstmm = os.path.join(dir_out, 'cstmm')
     if os.path.exists(dir_cstmm) and (not os.path.isdir(dir_cstmm)):
         raise NotADirectoryError('cstmm path exists but is not a directory: {}'.format(dir_cstmm))
-    tmm_backend = 'python'
     if args.dir_count=='inferred':
         dir_count = os.path.join(dir_out, 'merge')
     else:

@@ -2,13 +2,17 @@ import pytest
 import pandas
 import numpy
 import gzip
+import hashlib
 import subprocess
 import xml.etree.ElementTree as ET
 from contextlib import contextmanager
+from io import BytesIO
 
 import os
 import urllib.error
 from types import SimpleNamespace
+
+from defusedxml.common import EntitiesForbidden
 
 from amalgkit.command_context import GetfastqRuntimeContext
 from amalgkit.exceptions import AmalgkitExit
@@ -81,6 +85,8 @@ from amalgkit.getfastq import (
     ensure_mmseqs_rrna_reference_db_exists,
     count_fastq_records,
     collect_valid_run_ids,
+    download_rrna_reference_gz,
+    fetch_trace_run_xml_root,
     remove_sra_files,
     remove_sra_path,
     resolve_public_original_fastq_sources_from_xml_root,
@@ -805,6 +811,30 @@ class TestEnsureContamFilterMetadataRankTaxids:
         assert captured['called'] == 1
         assert out.df.loc[0, 'taxid_phylum'] == 35493
 
+    def test_reports_unresolved_required_rank_after_rebuild(self, monkeypatch):
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR-unresolved'],
+            'scientific_name': ['Unknown species'],
+            'taxid': [999999999],
+            'taxid_phylum': [pandas.NA],
+        }))
+
+        def fake_add_standard_rank_taxids(self, args=None):
+            _ = args
+            self.df['taxid_phylum'] = pandas.Series([pandas.NA], dtype='Int64')
+
+        monkeypatch.setattr(Metadata, 'add_standard_rank_taxids', fake_add_standard_rank_taxids)
+
+        class Args:
+            contam_filter = True
+            contam_filter_rank = 'phylum'
+
+        with pytest.raises(
+            ValueError,
+            match=r'Missing taxid_phylum in metadata for 1 run\(s\): SRR-unresolved',
+        ):
+            ensure_contam_filter_metadata_rank_taxids(metadata, Args())
+
 
 class TestRunMmseqsEasyTaxonomy:
     def test_adds_search_type_for_nucleotide_db(self, monkeypatch):
@@ -1122,6 +1152,16 @@ class TestContamFilterDbPathResolution:
         assert os.path.isfile(db_path + '.ready')
 
 class TestGetfastqXmlRetrieval:
+    def test_trace_run_xml_rejects_entities(self, monkeypatch):
+        malicious_xml = b'<!DOCTYPE root [<!ENTITY xxe SYSTEM "file:///etc/passwd">]><root>&xxe;</root>'
+        monkeypatch.setattr(
+            'amalgkit.getfastq.urllib.request.urlopen',
+            lambda *_args, **_kwargs: BytesIO(malicious_xml),
+        )
+
+        with pytest.raises(EntitiesForbidden):
+            fetch_trace_run_xml_root('SRR000000')
+
     class _DummyTree:
         def __init__(self, root):
             self._root = root
@@ -1169,9 +1209,10 @@ class TestGetfastqXmlRetrieval:
 
         monkeypatch.setattr('amalgkit.getfastq.Entrez.efetch', flaky_efetch)
         monkeypatch.setattr(
-            'amalgkit.getfastq.ET.parse',
+            'amalgkit.sra.parse_untrusted_xml',
             lambda handle: self._DummyTree(ET.Element('EXPERIMENT_PACKAGE'))
         )
+        monkeypatch.setattr('amalgkit.getfastq.time.sleep', lambda *_args, **_kwargs: None)
 
         root = getfastq_getxml(search_term='SRR000000', retmax=1000)
 
@@ -1191,7 +1232,7 @@ class TestGetfastqXmlRetrieval:
 
         monkeypatch.setattr('amalgkit.getfastq.Entrez.efetch', fake_efetch)
         monkeypatch.setattr(
-            'amalgkit.getfastq.ET.parse',
+            'amalgkit.sra.parse_untrusted_xml',
             lambda handle: self._DummyTree(ET.Element('EXPERIMENT_PACKAGE'))
         )
 
@@ -1213,7 +1254,7 @@ class TestGetfastqXmlRetrieval:
                 raise ET.ParseError('truncated xml')
             return self._DummyTree(ET.Element('EXPERIMENT_PACKAGE'))
 
-        monkeypatch.setattr('amalgkit.getfastq.ET.parse', flaky_parse)
+        monkeypatch.setattr('amalgkit.sra.parse_untrusted_xml', flaky_parse)
 
         root = getfastq_getxml(search_term='SRR000000', retmax=1000)
 
@@ -1225,7 +1266,7 @@ class TestGetfastqXmlRetrieval:
         monkeypatch.setattr('amalgkit.getfastq.Entrez.read', lambda handle: {'IdList': ['ID1']})
         monkeypatch.setattr('amalgkit.getfastq.Entrez.efetch', lambda **kwargs: object())
         monkeypatch.setattr(
-            'amalgkit.getfastq.ET.parse',
+            'amalgkit.sra.parse_untrusted_xml',
             lambda _handle: (_ for _ in ()).throw(ET.ParseError('broken xml')),
         )
 
@@ -1243,7 +1284,7 @@ class TestGetfastqXmlRetrieval:
             ET.SubElement(root, 'EXPERIMENT_PACKAGE')
             return self._DummyTree(root)
 
-        monkeypatch.setattr('amalgkit.getfastq.ET.parse', fake_parse)
+        monkeypatch.setattr('amalgkit.sra.parse_untrusted_xml', fake_parse)
 
         root = getfastq_getxml(search_term='SRR000000', retmax=1000)
 
@@ -1262,7 +1303,7 @@ class TestGetfastqXmlRetrieval:
             ET.SubElement(root, 'RUN_SET')
             return self._DummyTree(root)
 
-        monkeypatch.setattr('amalgkit.getfastq.ET.parse', fake_parse)
+        monkeypatch.setattr('amalgkit.sra.parse_untrusted_xml', fake_parse)
 
         root = getfastq_getxml(search_term='SRR000000', retmax=1000)
 
@@ -1277,7 +1318,7 @@ class TestGetfastqXmlRetrieval:
         err = ET.SubElement(err_root, 'Error')
         err.text = 'SRA error'
         monkeypatch.setattr(
-            'amalgkit.getfastq.ET.parse',
+            'amalgkit.sra.parse_untrusted_xml',
             lambda handle: self._DummyTree(err_root)
         )
 
@@ -5932,7 +5973,7 @@ class TestDownloadSraUrlSchemes:
             ('ena_download_max_concurrency', 'ena_download', False),
         ]
         assert observed['download_urls'] == [
-            'ftp://ftp.sra.ebi.ac.uk/vol1/srr/SRR123/SRR123456/SRR123456.sra'
+            'https://ftp.sra.ebi.ac.uk/vol1/srr/SRR123/SRR123456/SRR123456.sra'
         ]
         assert (tmp_path / '{}.sra'.format(sra_id)).exists()
 
@@ -6028,7 +6069,7 @@ class TestDownloadSraUrlSchemes:
             sra_id='SRR_WAIT',
             source_candidates=[
                 {'source_name': 'AWS', 'url': 'https://example.invalid/aws.sra'},
-                {'source_name': 'ENA', 'url': 'ftp://ftp.sra.ebi.ac.uk/vol1/srr/SRR000/SRR_WAIT/SRR_WAIT.sra'},
+                {'source_name': 'ENA', 'url': 'https://ftp.sra.ebi.ac.uk/vol1/srr/SRR000/SRR_WAIT/SRR_WAIT.sra'},
             ],
             output_path=str(tmp_path / 'SRR_WAIT.sra'),
             args=args,
@@ -6064,7 +6105,7 @@ class TestDownloadSraUrlSchemes:
 
         download_sra(metadata=metadata, sra_stat=sra_stat, args=args, work_dir=str(tmp_path), overwrite=False)
 
-        assert called_urls == ['ftp://ftp.sra.ebi.ac.uk/vol1/srr/SRR000/SRR000001/SRR000001.sra']
+        assert called_urls == ['https://ftp.sra.ebi.ac.uk/vol1/srr/SRR000/SRR000001/SRR000001.sra']
         assert metadata.df.loc[0, 'ENA_SRA_Link'] == called_urls[0]
         assert (tmp_path / '{}.sra'.format(sra_id)).exists()
 
@@ -6098,7 +6139,7 @@ class TestDownloadSraUrlSchemes:
 
         download_sra(metadata=metadata, sra_stat=sra_stat, args=args, work_dir=str(tmp_path), overwrite=False)
 
-        assert called_urls == ['ftp://ftp.sra.ebi.ac.uk/vol1/srr/SRR000/SRR000001/SRR000001.sra']
+        assert called_urls == ['https://ftp.sra.ebi.ac.uk/vol1/srr/SRR000/SRR000001/SRR000001.sra']
         assert metadata.df.loc[0, 'ENA_SRA_Link'] == called_urls[0]
         assert metadata.df['ENA_SRA_Link'].dtype == object
         assert (tmp_path / '{}.sra'.format(sra_id)).exists()
@@ -6138,7 +6179,7 @@ class TestDownloadSraUrlSchemes:
 
     def test_apply_first_round_results_writes_dynamic_sra_links_to_float_columns(self):
         sra_id = 'SRR000001'
-        ena_url = 'ftp://ftp.sra.ebi.ac.uk/vol1/srr/SRR000/SRR000001/SRR000001.sra'
+        ena_url = 'https://ftp.sra.ebi.ac.uk/vol1/srr/SRR000/SRR000001/SRR000001.sra'
         metadata = Metadata.from_DataFrame(pandas.DataFrame({
             'run': [sra_id],
             'lib_layout': ['paired'],
@@ -6867,14 +6908,27 @@ class TestRrnaReferenceDownload:
     def test_downloads_silva_refs_to_default_out_dir_downloads(self, tmp_path, monkeypatch):
         out_dir = tmp_path / 'out'
         calls = {'n': 0}
+        checksums = {}
 
-        def fake_urlretrieve(_url, out_path):
+        def fake_urlretrieve(url, out_path):
             calls['n'] += 1
             with gzip.open(out_path, 'wt') as fout:
                 fout.write('>rRNA\nACGT\n')
+            with open(out_path, 'rb') as fin:
+                downloaded_bytes = fin.read()
+            checksums[url + '.md5'] = hashlib.md5(  # noqa: S324 - mirrors the upstream integrity checksum
+                downloaded_bytes,
+                usedforsecurity=False,
+            ).hexdigest()
             return (out_path, None)
 
+        def fake_urlopen(url, timeout):
+            assert timeout == 30
+            filename = os.path.basename(url.removesuffix('.md5'))
+            return BytesIO('{}  {}\n'.format(checksums[url], filename).encode('ascii'))
+
         monkeypatch.setattr('amalgkit.getfastq.urllib.request.urlretrieve', fake_urlretrieve)
+        monkeypatch.setattr('amalgkit.getfastq.urllib.request.urlopen', fake_urlopen)
 
         args = SimpleNamespace(
             out_dir=str(out_dir),
@@ -6896,6 +6950,7 @@ class TestRrnaReferenceDownload:
     def test_downloads_silva_refs_to_custom_download_dir(self, tmp_path, monkeypatch):
         custom_dir = tmp_path / 'custom_downloads'
         captured = {'lock_path': None}
+        checksums = {}
 
         class DummyLock:
             def __init__(self, lock_path, lock_label='Lock', poll_seconds=5, timeout_seconds=3600):
@@ -6908,13 +6963,25 @@ class TestRrnaReferenceDownload:
             def __exit__(self, exc_type, exc, tb):
                 return False
 
-        def fake_urlretrieve(_url, out_path):
+        def fake_urlretrieve(url, out_path):
             with gzip.open(out_path, 'wt') as fout:
                 fout.write('>rRNA\nACGT\n')
+            with open(out_path, 'rb') as fin:
+                downloaded_bytes = fin.read()
+            checksums[url + '.md5'] = hashlib.md5(  # noqa: S324 - mirrors the upstream integrity checksum
+                downloaded_bytes,
+                usedforsecurity=False,
+            ).hexdigest()
             return (out_path, None)
+
+        def fake_urlopen(url, timeout):
+            assert timeout == 30
+            filename = os.path.basename(url.removesuffix('.md5'))
+            return BytesIO('{}  {}\n'.format(checksums[url], filename).encode('ascii'))
 
         monkeypatch.setattr('amalgkit.getfastq.acquire_exclusive_lock', DummyLock)
         monkeypatch.setattr('amalgkit.getfastq.urllib.request.urlretrieve', fake_urlretrieve)
+        monkeypatch.setattr('amalgkit.getfastq.urllib.request.urlopen', fake_urlopen)
 
         args = SimpleNamespace(
             out_dir=str(tmp_path / 'out'),
@@ -6928,6 +6995,30 @@ class TestRrnaReferenceDownload:
             assert os.path.exists(ref_path)
         assert os.path.isfile(custom_dir / 'silva' / 'silva.ready')
         assert captured['lock_path'] == os.path.join(str(custom_dir), 'locks', 'silva_refs.lock')
+
+    def test_checksum_mismatch_is_not_cached(self, tmp_path):
+        gz_path = tmp_path / 'silva_ssu.fasta.gz'
+        url = 'https://example.test/silva_ssu.fasta.gz'
+
+        def fake_urlretrieve(_url, out_path):
+            with gzip.open(out_path, 'wt') as fout:
+                fout.write('>rRNA\nACGT\n')
+
+        def fake_urlopen(_url, timeout):
+            assert timeout == 30
+            return BytesIO(b'00000000000000000000000000000000  silva_ssu.fasta.gz\n')
+
+        with pytest.raises(ValueError, match='checksum mismatch'):
+            download_rrna_reference_gz(
+                url=url,
+                gz_path=str(gz_path),
+                label='SILVA SSU',
+                urlretrieve_fn=fake_urlretrieve,
+                checksum_urlopen_fn=fake_urlopen,
+            )
+
+        assert not gz_path.exists()
+        assert list(tmp_path.glob('silva_ssu.fasta.gz.tmp.*')) == []
 
 
 class TestMmseqsRrnaDbPreparation:

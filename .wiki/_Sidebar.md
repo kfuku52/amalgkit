@@ -21,7 +21,8 @@
   * [amalgkit rerun](./amalgkit-rerun)
 
 * Migration and release
-  * [v0.16.25 notes](./Release-notes-v0.16.25)
+  * [GitHub releases](https://github.com/kfuku52/amalgkit/releases)
+  * [v0.16.25 notes (historical)](./Release-notes-v0.16.25)
   * [Legacy config command](./amalgkit-config)
   * [Legacy curate command](./amalgkit-curate)
   * [Legacy csca command](./amalgkit-csca)

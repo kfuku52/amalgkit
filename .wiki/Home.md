@@ -7,7 +7,7 @@ Good first pages:
 - [Installation and dependencies](https://github.com/kfuku52/amalgkit/wiki/Installation-and-dependencies)
 - [Tutorial 1](https://github.com/kfuku52/amalgkit/wiki/Tutorial-1)
 - [Parallel processing](https://github.com/kfuku52/amalgkit/wiki/Parallel-processing)
-- [v0.16.25 notes](https://github.com/kfuku52/amalgkit/wiki/Release-notes-v0.16.25)
+- [GitHub releases](https://github.com/kfuku52/amalgkit/releases)
 
 ## Workflow Map
 
