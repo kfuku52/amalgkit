@@ -1827,7 +1827,7 @@ class TestMetadataTaxidValidation:
         def fail_if_called():
             raise AssertionError('NCBITaxa should not be initialized for invalid taxid dtype.')
 
-        monkeypatch.setattr('amalgkit.download_utils.ete4.NCBITaxa', fail_if_called)
+        monkeypatch.setattr('amalgkit.download_utils.NcbiTaxonomy', fail_if_called)
 
         with pytest.raises(TypeError, match='taxid column must be Int64 dtype'):
             metadata.add_standard_rank_taxids()
@@ -1843,7 +1843,7 @@ class TestMetadataTaxidValidation:
         def fail_if_called():
             raise AssertionError('NCBITaxa should not be initialized for invalid taxid dtype.')
 
-        monkeypatch.setattr('amalgkit.download_utils.ete4.NCBITaxa', fail_if_called)
+        monkeypatch.setattr('amalgkit.download_utils.NcbiTaxonomy', fail_if_called)
 
         with pytest.raises(TypeError, match='taxid column must be Int64 dtype'):
             metadata.resolve_scientific_names()
@@ -1864,7 +1864,7 @@ class TestMetadataTaxidValidation:
             def get_rank(self, _lineage):
                 return {}
 
-        monkeypatch.setattr('amalgkit.download_utils.ete4.NCBITaxa', lambda: InterruptingNcbi())
+        monkeypatch.setattr('amalgkit.download_utils.NcbiTaxonomy', lambda: InterruptingNcbi())
 
         with pytest.raises(KeyboardInterrupt):
             metadata.add_standard_rank_taxids()
@@ -1885,7 +1885,7 @@ class TestMetadataTaxidValidation:
             def get_rank(self, _lineage):
                 return {}
 
-        monkeypatch.setattr('amalgkit.download_utils.ete4.NCBITaxa', lambda: FailingNcbi())
+        monkeypatch.setattr('amalgkit.download_utils.NcbiTaxonomy', lambda: FailingNcbi())
 
         with pytest.warns(UserWarning, match='Failed to resolve NCBI lineage'):
             metadata.add_standard_rank_taxids()
@@ -1926,7 +1926,7 @@ class TestMetadataTaxidValidation:
                     10090: 'species',
                 }
 
-        monkeypatch.setattr('amalgkit.download_utils.ete4.NCBITaxa', lambda: BatchNcbi())
+        monkeypatch.setattr('amalgkit.download_utils.NcbiTaxonomy', lambda: BatchNcbi())
 
         metadata.add_standard_rank_taxids()
 
@@ -1973,7 +1973,7 @@ class TestMetadataTaxidValidation:
                     9606: 'species',
                 }
 
-        monkeypatch.setattr('amalgkit.download_utils.ete4.NCBITaxa', lambda: BatchNcbi())
+        monkeypatch.setattr('amalgkit.download_utils.NcbiTaxonomy', lambda: BatchNcbi())
 
         metadata1.add_standard_rank_taxids()
         metadata2.add_standard_rank_taxids()
@@ -2018,8 +2018,9 @@ class TestMetadataTaxidValidation:
                 fout.write(b'taxdump')
 
         monkeypatch.setattr('amalgkit.download_utils.acquire_exclusive_lock', DummyLock)
-        monkeypatch.setattr('amalgkit.download_utils.ete4.NCBITaxa', RecordingNcbi)
+        monkeypatch.setattr('amalgkit.download_utils.NcbiTaxonomy', RecordingNcbi)
         monkeypatch.setattr('amalgkit.download_utils.urllib.request.urlretrieve', fake_urlretrieve)
+        monkeypatch.setattr('amalgkit.download_utils.validate_taxonomy_dump', lambda path: path)
         args = SimpleNamespace(
             out_dir=str(tmp_path / 'out'),
             download_dir=str(tmp_path / 'shared_downloads'),
@@ -2035,7 +2036,9 @@ class TestMetadataTaxidValidation:
         assert os.path.isfile(os.path.join(expected_ete_dir, 'taxdump.tar.gz'))
         assert captured['lock_path'] == expected_lock_path
         assert captured['urlretrieve'][0].endswith('/taxdump.tar.gz')
-        assert captured['urlretrieve'][1] == os.path.join(expected_ete_dir, 'taxdump.tar.gz.tmp')
+        assert os.path.dirname(captured['urlretrieve'][1]) == expected_ete_dir
+        assert os.path.basename(captured['urlretrieve'][1]).startswith('taxdump.tar.gz.')
+        assert captured['urlretrieve'][1].endswith('.tmp')
 
     def test_add_standard_rank_taxids_replaces_existing_lineage_columns(self, monkeypatch):
         metadata = Metadata.from_DataFrame(pandas.DataFrame({
@@ -2069,7 +2072,7 @@ class TestMetadataTaxidValidation:
                     9606: 'species',
                 }
 
-        monkeypatch.setattr('amalgkit.download_utils.ete4.NCBITaxa', lambda: RecordingNcbi())
+        monkeypatch.setattr('amalgkit.download_utils.NcbiTaxonomy', lambda: RecordingNcbi())
 
         metadata.add_standard_rank_taxids()
 
@@ -2103,7 +2106,7 @@ class TestMetadataTaxidValidation:
                 assert list(taxids) == [9606]
                 return {9606: 'Homo sapiens'}
 
-        monkeypatch.setattr('amalgkit.download_utils.ete4.NCBITaxa', lambda: RecordingNcbi())
+        monkeypatch.setattr('amalgkit.download_utils.NcbiTaxonomy', lambda: RecordingNcbi())
 
         metadata1.resolve_scientific_names()
         metadata2.resolve_scientific_names()
@@ -2145,8 +2148,9 @@ class TestMetadataTaxidValidation:
 
         assert not os.path.exists(args.download_dir)
         monkeypatch.setattr('amalgkit.util.acquire_exclusive_lock', DummyLock)
-        monkeypatch.setattr('amalgkit.download_utils.ete4.NCBITaxa', RecordingNcbi)
+        monkeypatch.setattr('amalgkit.download_utils.NcbiTaxonomy', RecordingNcbi)
         monkeypatch.setattr('amalgkit.download_utils.urllib.request.urlretrieve', fake_urlretrieve)
+        monkeypatch.setattr('amalgkit.download_utils.validate_taxonomy_dump', lambda path: path)
 
         result = get_ete_ncbitaxa(args=args)
 
@@ -2157,7 +2161,9 @@ class TestMetadataTaxidValidation:
         assert os.path.isfile(os.path.join(expected_ete_dir, 'taxdump.tar.gz'))
         assert captured['lock_path'] == expected_lock_path
         assert captured['urlretrieve'][0].endswith('/taxdump.tar.gz')
-        assert captured['urlretrieve'][1] == os.path.join(expected_ete_dir, 'taxdump.tar.gz.tmp')
+        assert os.path.dirname(captured['urlretrieve'][1]) == expected_ete_dir
+        assert os.path.basename(captured['urlretrieve'][1]).startswith('taxdump.tar.gz.')
+        assert captured['urlretrieve'][1].endswith('.tmp')
 
     def test_get_ete_ncbitaxa_reuses_existing_custom_db_without_taxdump_refresh(self, tmp_path, monkeypatch):
         captured = {'lock_path': None}
@@ -2193,8 +2199,8 @@ class TestMetadataTaxidValidation:
             fout.write(b'sqlite')
 
         monkeypatch.setattr('amalgkit.util.acquire_exclusive_lock', DummyLock)
-        monkeypatch.setattr('amalgkit.download_utils.ete4.NCBITaxa', RecordingNcbi)
-        monkeypatch.setattr('amalgkit.download_utils.ete4.is_taxadb_up_to_date', lambda path: path == dbfile)
+        monkeypatch.setattr('amalgkit.download_utils.NcbiTaxonomy', RecordingNcbi)
+        monkeypatch.setattr('amalgkit.download_utils.is_taxonomy_database_compatible', lambda path: path == dbfile)
         monkeypatch.setattr('amalgkit.download_utils.urllib.request.urlretrieve', fail_urlretrieve)
 
         result = get_ete_ncbitaxa(args=args)
@@ -2236,8 +2242,8 @@ class TestMetadataTaxidValidation:
             fout.write(b'sqlite')
 
         monkeypatch.setattr('amalgkit.util.acquire_exclusive_lock', DummyLock)
-        monkeypatch.setattr('amalgkit.download_utils.ete4.NCBITaxa', RecordingNcbi)
-        monkeypatch.setattr('amalgkit.download_utils.ete4.is_taxadb_up_to_date', lambda path: path == dbfile)
+        monkeypatch.setattr('amalgkit.download_utils.NcbiTaxonomy', RecordingNcbi)
+        monkeypatch.setattr('amalgkit.download_utils.is_taxonomy_database_compatible', lambda path: path == dbfile)
 
         first = get_ete_ncbitaxa(args=args)
         second = get_ete_ncbitaxa(args=args)
@@ -2305,8 +2311,8 @@ class TestMetadataTaxidValidation:
                     captured['active'] -= 1
 
         monkeypatch.setattr('amalgkit.util.acquire_exclusive_lock', DummyLock)
-        monkeypatch.setattr('amalgkit.download_utils.ete4.NCBITaxa', RecordingNcbi)
-        monkeypatch.setattr('amalgkit.download_utils.should_refresh_custom_ete_taxonomy_db', lambda *args, **kwargs: False)
+        monkeypatch.setattr('amalgkit.download_utils.NcbiTaxonomy', RecordingNcbi)
+        monkeypatch.setattr('amalgkit.download_utils.should_build_ncbi_taxonomy_db', lambda *args, **kwargs: False)
 
         args_by_label = {
             'first': SimpleNamespace(out_dir=str(tmp_path / 'out1'), download_dir=str(tmp_path / 'shared1')),

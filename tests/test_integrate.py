@@ -162,7 +162,7 @@ class TestIntegrateGetFastqStats:
         out_dir.mkdir()
         self._write_one_read_fastq(str(fastq_dir / 'alpha.fastq'))
         monkeypatch.setattr(
-            'amalgkit.integrate.get_ete_ncbitaxa',
+            'amalgkit.integrate.get_ncbi_taxonomy',
             lambda args=None: self._fake_ncbi_for_species({'Homo sapiens': 9606}),
         )
         args = SimpleNamespace(fastq_dir=str(fastq_dir), accurate_size=True, out_dir=str(out_dir))
@@ -187,7 +187,7 @@ class TestIntegrateGetFastqStats:
         with gzip.open(str(fastq_dir / 'Homo_sapiens' / 'sample1.fq.gz'), 'wt') as fh:
             fh.write('@r0\nAAAA\n+\nIIII\n')
         monkeypatch.setattr(
-            'amalgkit.integrate.get_ete_ncbitaxa',
+            'amalgkit.integrate.get_ncbi_taxonomy',
             lambda args=None: self._fake_ncbi_for_species({'Homo sapiens': 9606, 'Arabidopsis thaliana': 3702}),
         )
         args = SimpleNamespace(fastq_dir=str(fastq_dir), accurate_size=True, out_dir=str(out_dir))
@@ -206,7 +206,7 @@ class TestIntegrateGetFastqStats:
         with gzip.open(str(fastq_dir / 'Homo_sapiens' / 'brain' / 'sample2.fq.gz'), 'wt') as fh:
             fh.write('@r0\nAAAA\n+\nIIII\n')
         monkeypatch.setattr(
-            'amalgkit.integrate.get_ete_ncbitaxa',
+            'amalgkit.integrate.get_ncbi_taxonomy',
             lambda args=None: self._fake_ncbi_for_species({'Homo sapiens': 9606}),
         )
         args = SimpleNamespace(fastq_dir=str(fastq_dir), accurate_size=True, out_dir=str(out_dir))
@@ -225,7 +225,7 @@ class TestIntegrateGetFastqStats:
         with gzip.open(str(fastq_dir / 'sample3.fq.gz'), 'wt') as fh:
             fh.write('@r0\nAAAA\n+\nIIII\n')
         monkeypatch.setattr(
-            'amalgkit.integrate.get_ete_ncbitaxa',
+            'amalgkit.integrate.get_ncbi_taxonomy',
             lambda args=None: self._fake_ncbi_for_species({'Arabidopsis thaliana': 3702}),
         )
         args = SimpleNamespace(fastq_dir=str(fastq_dir), accurate_size=True, out_dir=str(out_dir))
@@ -243,7 +243,7 @@ class TestIntegrateGetFastqStats:
         out_dir.mkdir()
         self._write_one_read_fastq(str(fastq_dir / 'alpha.fastq'))
         monkeypatch.setattr(
-            'amalgkit.integrate.get_ete_ncbitaxa',
+            'amalgkit.integrate.get_ncbi_taxonomy',
             lambda args=None: self._fake_ncbi_for_species({'Homo sapiens': 9606, 'Arabidopsis thaliana': 3702}),
         )
         args = SimpleNamespace(fastq_dir=str(fastq_dir), accurate_size=True, out_dir=str(out_dir))
@@ -261,7 +261,7 @@ class TestIntegrateGetFastqStats:
         out_dir.mkdir()
         self._write_one_read_fastq(str(fastq_dir / 'alpha.fastq'))
         monkeypatch.setattr(
-            'amalgkit.integrate.get_ete_ncbitaxa',
+            'amalgkit.integrate.get_ncbi_taxonomy',
             lambda args=None: self._fake_ncbi_for_species({}),
         )
         args = SimpleNamespace(fastq_dir=str(fastq_dir), accurate_size=True, out_dir=str(out_dir))
@@ -669,7 +669,7 @@ class TestIntegrateMain:
         monkeypatch.setattr('amalgkit.integrate.load_metadata', lambda _args: metadata)
         monkeypatch.setattr('amalgkit.integrate.check_getfastq_outputs', lambda *_args, **_kwargs: (['SRR001'], []))
         monkeypatch.setattr(
-            'amalgkit.integrate.get_ete_ncbitaxa',
+            'amalgkit.integrate.get_ncbi_taxonomy',
             lambda args=None: TestIntegrateGetFastqStats._fake_ncbi_for_species({'Arabidopsis thaliana': 3702}),
         )
 

@@ -36,7 +36,6 @@ setup(
         'statsmodels',
         'scikit-learn',
         'biopython',
-        'ete4',
     ],
     entry_points            = {
         'console_scripts': [

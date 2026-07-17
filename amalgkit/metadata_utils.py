@@ -10,7 +10,7 @@ import xml.etree.ElementTree as ET
 import numpy
 import pandas
 
-from amalgkit.download_utils import get_ete_ncbitaxa
+from amalgkit.download_utils import get_ncbi_taxonomy
 from amalgkit.exceptions import AmalgkitExit
 from amalgkit.output_utils import atomic_write_dataframe
 from amalgkit.parallel_utils import (
@@ -424,7 +424,7 @@ class Metadata:
     def add_standard_rank_taxids(self, args=None):
         self._require_nullable_int_taxid()
         standard_ranks = ['domain', 'kingdom', 'phylum', 'class', 'order', 'family', 'genus', 'species']
-        ncbi = get_ete_ncbitaxa(args=args)
+        ncbi = get_ncbi_taxonomy(args=args)
         cache_namespace = _taxonomy_cache_namespace(ncbi)
         lineage_columns = ['taxid_' + rank for rank in standard_ranks]
         unique_taxids = [int(taxid) for taxid in self.df['taxid'].dropna().unique().tolist()]
@@ -554,7 +554,7 @@ class Metadata:
     def resolve_scientific_names(self, args=None):
         self._require_nullable_int_taxid()
         self.df['scientific_name_original'] = self.df['scientific_name']
-        ncbi = get_ete_ncbitaxa(args=args)
+        ncbi = get_ncbi_taxonomy(args=args)
         cache_namespace = _taxonomy_cache_namespace(ncbi)
         unique_taxids = [int(taxid) for taxid in self.df['taxid'].dropna().unique().tolist()]
         taxid2sciname, missing_taxids = _get_cached_taxonomy_entries(

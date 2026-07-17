@@ -5,7 +5,7 @@ import re
 import subprocess
 import warnings
 
-from amalgkit.download_utils import get_ete_ncbitaxa
+from amalgkit.download_utils import get_ncbi_taxonomy
 from amalgkit.fastq_utils import (
     count_fastq_lines,
     map_seqkit_stats_rows,
@@ -757,7 +757,7 @@ def ensure_taxonomy_columns(df, args):
         if len(name_to_rows) == 0:
             return unresolved_rows
         if ncbi is None:
-            ncbi = get_ete_ncbitaxa(args=args)
+            ncbi = get_ncbi_taxonomy(args=args)
         try:
             translated = ncbi.get_name_translator(list(name_to_rows.keys()))
         except KeyboardInterrupt:
@@ -802,7 +802,7 @@ def ensure_taxonomy_columns(df, args):
     if metadata.df['taxid'].notna().any():
         rank_cols = ['taxid_' + rank for rank in STANDARD_TAXONOMIC_RANKS]
         if ncbi is None:
-            ncbi = get_ete_ncbitaxa(args=args)
+            ncbi = get_ncbi_taxonomy(args=args)
         lineage_taxid_df = build_lineage_taxid_df(metadata.df['taxid'], ncbi)
         metadata.df = metadata.df.drop(columns=rank_cols, errors='ignore')
         metadata.df = metadata.df.merge(lineage_taxid_df, on='taxid', how='left')

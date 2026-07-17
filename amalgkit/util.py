@@ -1,12 +1,11 @@
-import ete4
+import os  # noqa: F401 - compatibility export used by downstream monkeypatches
 
-import os
 from amalgkit.download_utils import (
     acquire_exclusive_lock as _acquire_exclusive_lock,
-    get_ete_ncbitaxa as _get_ete_ncbitaxa,
+    get_ncbi_taxonomy as _get_ncbi_taxonomy,
     resolve_download_dir as _resolve_download_dir,
-    resolve_ete_data_dir as _resolve_ete_data_dir,
-    resolve_ete_lock_path as _resolve_ete_lock_path,
+    resolve_ncbi_taxonomy_data_dir as _resolve_ncbi_taxonomy_data_dir,
+    resolve_ncbi_taxonomy_lock_path as _resolve_ncbi_taxonomy_lock_path,
 )
 from amalgkit.metadata_utils import (
     Metadata as _Metadata,
@@ -74,25 +73,39 @@ get_getfastq_run_dir = _get_getfastq_run_dir
 def resolve_download_dir(args):
     return _resolve_download_dir(args)
 
+
+def resolve_ncbi_taxonomy_data_dir(args):
+    return _resolve_ncbi_taxonomy_data_dir(args, resolve_download_dir_fn=resolve_download_dir)
+
+
 def resolve_ete_data_dir(args):
-    return _resolve_ete_data_dir(args, resolve_download_dir_fn=resolve_download_dir)
+    return resolve_ncbi_taxonomy_data_dir(args)
+
+
+def resolve_ncbi_taxonomy_lock_path(args):
+    return _resolve_ncbi_taxonomy_lock_path(args, resolve_download_dir_fn=resolve_download_dir)
 
 
 def resolve_ete_lock_path(args):
-    return _resolve_ete_lock_path(args, resolve_download_dir_fn=resolve_download_dir)
+    return resolve_ncbi_taxonomy_lock_path(args)
 
 
 acquire_exclusive_lock = _acquire_exclusive_lock
 
 
-def get_ete_ncbitaxa(args=None):
-    return _get_ete_ncbitaxa(
+def get_ncbi_taxonomy(args=None):
+    return _get_ncbi_taxonomy(
         args=args,
         acquire_exclusive_lock_fn=acquire_exclusive_lock,
-        ncbitaxa_cls=ete4.NCBITaxa,
-        resolve_ete_data_dir_fn=resolve_ete_data_dir,
-        resolve_ete_lock_path_fn=resolve_ete_lock_path,
+        resolve_taxonomy_data_dir_fn=resolve_ncbi_taxonomy_data_dir,
+        resolve_taxonomy_lock_path_fn=resolve_ncbi_taxonomy_lock_path,
     )
+
+
+def get_ete_ncbitaxa(args=None):
+    return get_ncbi_taxonomy(args=args)
+
+
 get_newest_intermediate_file_extension = _get_newest_intermediate_file_extension
 is_there_unpaired_file = _is_there_unpaired_file
 detect_layout_from_file = _detect_layout_from_file

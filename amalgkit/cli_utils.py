@@ -13,7 +13,6 @@ DEPENDENCY_SPECS = [
     ('numpy', 'numpy'),
     ('pandas', 'pandas'),
     ('biopython', 'Bio'),
-    ('ete4', 'ete4'),
 ]
 
 EXTERNAL_TOOL_SPECS = [

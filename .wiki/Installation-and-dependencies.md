@@ -18,7 +18,9 @@ amalgkit help metadata
 
 Current AMALGKIT releases are Python-only. The main pipeline does not require `R`, `Rscript`, or R packages, including the former merge, curation, and batch-correction stages.
 
-Python package dependencies are installed with AMALGKIT. Important runtime libraries include `numpy`, `pandas`, `scipy`, `matplotlib`, `statsmodels`, `scikit-learn`, `biopython`, and `ete4`.
+Python package dependencies are installed with AMALGKIT. Important runtime libraries include `numpy`, `pandas`, `scipy`, `matplotlib`, `statsmodels`, `scikit-learn`, and `biopython`.
+
+AMALGKIT handles NCBI taxonomy lookups with its built-in SQLite backend. The NCBI taxonomy dump is downloaded automatically when a local taxonomy database is not available.
 
 ## Core External Tools
 

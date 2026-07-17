@@ -3,12 +3,23 @@ import json
 import os
 import re
 import socket
+import stat
+import tempfile
 import threading
 import time
 import urllib.request
 from contextlib import contextmanager
 
-import ete4
+from amalgkit.ncbi_taxonomy import (
+    NcbiTaxonomy,
+    _fsync_parent_directory,
+    _prepare_regular_file_for_replace,
+    cleanup_stale_taxonomy_build_files,
+    is_taxonomy_dump_usable,
+    is_taxonomy_database_compatible,
+    native_database_matches_taxdump,
+    validate_taxonomy_dump,
+)
 
 
 DOWNLOAD_LOCK_POLL_SECONDS = 5
@@ -16,24 +27,36 @@ DOWNLOAD_LOCK_TIMEOUT_SECONDS = 3600
 DOWNLOAD_LOCK_HEARTBEAT_SECONDS = 60
 DOWNLOAD_LOCK_STALE_SECONDS = 900
 NCBI_TAXDUMP_URL = 'https://ftp.ncbi.nlm.nih.gov/pub/taxonomy/taxdump.tar.gz'
-_ETE_NCBITAXA_THREAD_LOCAL = threading.local()
-_ETE_NCBITAXA_INIT_LOCK = threading.Lock()
+_BUILTIN_NCBI_TAXONOMY_CLASS = NcbiTaxonomy
+_NCBI_TAXONOMY_THREAD_LOCAL = threading.local()
+_NCBI_TAXONOMY_INIT_LOCK = threading.Lock()
+# Compatibility aliases for callers that imported these private names.
+_ETE_NCBITAXA_THREAD_LOCAL = _NCBI_TAXONOMY_THREAD_LOCAL
+_ETE_NCBITAXA_INIT_LOCK = _NCBI_TAXONOMY_INIT_LOCK
 
 
-def _get_thread_local_ete_ncbitaxa_cache():
-    cache = getattr(_ETE_NCBITAXA_THREAD_LOCAL, 'cache', None)
+def _get_thread_local_ncbi_taxonomy_cache():
+    cache = getattr(_NCBI_TAXONOMY_THREAD_LOCAL, 'cache', None)
     if cache is None:
         cache = {}
-        _ETE_NCBITAXA_THREAD_LOCAL.cache = cache
+        _NCBI_TAXONOMY_THREAD_LOCAL.cache = cache
     return cache
 
 
-def _build_ete_ncbitaxa_cache_key(scope, ncbitaxa_cls, dbfile=None):
+def _get_thread_local_ete_ncbitaxa_cache():
+    return _get_thread_local_ncbi_taxonomy_cache()
+
+
+def _build_ncbi_taxonomy_cache_key(scope, taxonomy_cls, dbfile=None):
     # Keep the constructor object itself in the key so monkeypatched callables
     # cannot alias through recycled integer ids across tests or repeated setup.
-    if scope == 'default':
-        return ('default', ncbitaxa_cls)
-    return ('custom', ncbitaxa_cls, dbfile)
+    if scope == 'default' and dbfile is None:
+        return ('default', taxonomy_cls)
+    return (scope, taxonomy_cls, dbfile)
+
+
+def _build_ete_ncbitaxa_cache_key(scope, ncbitaxa_cls, dbfile=None):
+    return _build_ncbi_taxonomy_cache_key(scope, ncbitaxa_cls, dbfile=dbfile)
 
 
 def resolve_download_dir(args):
@@ -100,13 +123,21 @@ def resolve_resource_lock_path(resource_path, lock_name=None, default_name='reso
     return resolve_lock_path(lock_dir=lock_dir, lock_name=lock_name, default_name=default_name)
 
 
-def resolve_ete_data_dir(args, resolve_download_dir_fn=None):
+def resolve_ncbi_taxonomy_data_dir(args, resolve_download_dir_fn=None):
     if resolve_download_dir_fn is None:
         resolve_download_dir_fn = resolve_download_dir
+    # Preserve the existing on-disk location so upgrades reuse ETE-built DBs.
     return os.path.join(resolve_download_dir_fn(args), 'ete_taxonomy')
 
 
-def resolve_ete_lock_path(args, resolve_download_dir_fn=None):
+def resolve_ete_data_dir(args, resolve_download_dir_fn=None):
+    return resolve_ncbi_taxonomy_data_dir(
+        args,
+        resolve_download_dir_fn=resolve_download_dir_fn,
+    )
+
+
+def resolve_ncbi_taxonomy_lock_path(args, resolve_download_dir_fn=None):
     return resolve_download_lock_path(
         args=args,
         lock_name='ete_taxonomy',
@@ -114,11 +145,85 @@ def resolve_ete_lock_path(args, resolve_download_dir_fn=None):
     )
 
 
+def resolve_ete_lock_path(args, resolve_download_dir_fn=None):
+    return resolve_ncbi_taxonomy_lock_path(
+        args,
+        resolve_download_dir_fn=resolve_download_dir_fn,
+    )
+
+
+def resolve_default_ncbi_taxonomy_data_dir():
+    xdg_data_home = os.environ.get('XDG_DATA_HOME')
+    if xdg_data_home is None or str(xdg_data_home).strip() == '':
+        xdg_data_home = os.path.expanduser(os.path.join('~', '.local', 'share'))
+    xdg_data_home = os.path.realpath(xdg_data_home)
+    preferred_dir = os.path.join(xdg_data_home, 'amalgkit', 'ncbi_taxonomy')
+    legacy_ete_dir = os.path.join(xdg_data_home, 'ete')
+    preferred_db = os.path.join(preferred_dir, 'taxa.sqlite')
+    legacy_db = os.path.join(legacy_ete_dir, 'taxa.sqlite')
+    if is_taxonomy_database_compatible(preferred_db):
+        return preferred_dir
+    if is_taxonomy_database_compatible(legacy_db):
+        return legacy_ete_dir
+    return preferred_dir
+
+
 def _assert_regular_file_or_absent(path, label='Path'):
     if not os.path.lexists(path):
         return
     if os.path.islink(path) or (not os.path.isfile(path)):
         raise IsADirectoryError('{} exists but is not a file: {}'.format(label, path))
+
+
+def _ensure_regular_directory(path, label='Directory'):
+    path = os.path.abspath(os.fspath(path))
+    if os.path.lexists(path):
+        if os.path.islink(path) or not os.path.isdir(path):
+            raise NotADirectoryError(
+                '{} exists but is not a regular directory: {}'.format(label, path)
+            )
+    else:
+        os.makedirs(path, exist_ok=False)
+    return path
+
+
+def _resource_signature(*paths):
+    signature = []
+    for path in paths:
+        try:
+            result = os.stat(path, follow_symlinks=False)
+        except FileNotFoundError:
+            signature.append(None)
+            continue
+        signature.append(
+            (
+                stat.S_IFMT(result.st_mode),
+                result.st_dev,
+                result.st_ino,
+                result.st_size,
+                result.st_mtime_ns,
+                result.st_ctime_ns,
+            )
+        )
+    return tuple(signature)
+
+
+def _cached_taxonomy_is_usable(cached, resource_paths=()):
+    marker = object()
+    db = getattr(cached, 'db', marker)
+    if db is None:
+        return False
+    stored_signature = getattr(cached, '_amalgkit_resource_signature', marker)
+    if stored_signature is not marker:
+        return stored_signature == _resource_signature(*resource_paths)
+    return True
+
+
+def _discard_cached_taxonomy(cache, cache_key, cached):
+    cache.pop(cache_key, None)
+    close = getattr(cached, 'close', None)
+    if callable(close):
+        close()
 
 
 def _assert_lock_path_is_regular_file(lock_path, lock_label='Lock'):
@@ -560,49 +665,192 @@ def maybe_acquire_download_semaphore(
         yield slot_path
 
 
-def ensure_ete_taxdump_file(taxdump_path, urlretrieve_fn=None):
+def ensure_ncbi_taxdump_file(taxdump_path, urlretrieve_fn=None):
     if urlretrieve_fn is None:
         urlretrieve_fn = urllib.request.urlretrieve
-    taxdump_path = os.path.realpath(taxdump_path)
+    taxdump_path = os.path.abspath(os.fspath(taxdump_path))
     taxdump_dir = os.path.dirname(taxdump_path)
     if taxdump_dir != '':
-        if os.path.exists(taxdump_dir) and (not os.path.isdir(taxdump_dir)):
-            raise NotADirectoryError(
-                'ETE4 taxdump parent path exists but is not a directory: {}'.format(taxdump_dir)
-            )
-        os.makedirs(taxdump_dir, exist_ok=True)
-    _assert_regular_file_or_absent(taxdump_path, label='ETE4 taxdump path')
-    if os.path.exists(taxdump_path):
+        _ensure_regular_directory(taxdump_dir, label='NCBI taxdump parent path')
+    _assert_regular_file_or_absent(taxdump_path, label='NCBI taxdump path')
+    if os.path.exists(taxdump_path) and is_taxonomy_dump_usable(taxdump_path):
         return taxdump_path
-    tmp_path = taxdump_path + '.tmp'
-    if os.path.lexists(tmp_path):
-        _assert_regular_file_or_absent(tmp_path, label='ETE4 taxdump temporary path')
-        os.remove(tmp_path)
-    print('Downloading ETE4 taxonomy dump: {}'.format(NCBI_TAXDUMP_URL), flush=True)
+    previous_mode = None
+    if os.path.exists(taxdump_path):
+        previous_mode = stat.S_IMODE(os.stat(taxdump_path, follow_symlinks=False).st_mode)
+        print(
+            'Existing NCBI taxonomy dump is invalid; downloading a replacement.',
+            flush=True,
+        )
+    legacy_tmp_path = taxdump_path + '.tmp'
+    if os.path.lexists(legacy_tmp_path):
+        _assert_regular_file_or_absent(
+            legacy_tmp_path, label='NCBI taxdump temporary path'
+        )
+        os.remove(legacy_tmp_path)
+    tmp_fd, tmp_path = tempfile.mkstemp(
+        prefix=os.path.basename(taxdump_path) + '.',
+        suffix='.tmp',
+        dir=taxdump_dir or '.',
+    )
+    os.close(tmp_fd)
+    os.unlink(tmp_path)
+    tmp_fd = os.open(tmp_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o666)
+    os.close(tmp_fd)
+    print('Downloading NCBI taxonomy dump: {}'.format(NCBI_TAXDUMP_URL), flush=True)
     try:
         urlretrieve_fn(NCBI_TAXDUMP_URL, tmp_path)
+        _assert_regular_file_or_absent(
+            tmp_path, label='Downloaded NCBI taxdump temporary path'
+        )
+        validate_taxonomy_dump(tmp_path)
+        _prepare_regular_file_for_replace(tmp_path, mode=previous_mode)
+        _assert_regular_file_or_absent(taxdump_path, label='NCBI taxdump path')
         os.replace(tmp_path, taxdump_path)
-    except Exception:
+        _fsync_parent_directory(taxdump_path)
+    except BaseException:
         if os.path.lexists(tmp_path):
-            _assert_regular_file_or_absent(tmp_path, label='ETE4 taxdump temporary path')
+            _assert_regular_file_or_absent(tmp_path, label='NCBI taxdump temporary path')
             os.remove(tmp_path)
         raise
     return taxdump_path
 
 
-def should_refresh_custom_ete_taxonomy_db(dbfile, is_taxadb_up_to_date_fn=None):
-    dbfile = os.path.realpath(dbfile)
-    _assert_regular_file_or_absent(dbfile, label='ETE4 taxonomy DB path')
+def ensure_ete_taxdump_file(taxdump_path, urlretrieve_fn=None):
+    return ensure_ncbi_taxdump_file(
+        taxdump_path=taxdump_path,
+        urlretrieve_fn=urlretrieve_fn,
+    )
+
+
+def should_build_ncbi_taxonomy_db(
+    dbfile, taxdump_file=None, is_database_compatible_fn=None
+):
+    dbfile = os.path.abspath(os.fspath(dbfile))
+    _assert_regular_file_or_absent(dbfile, label='NCBI taxonomy DB path')
     if not os.path.exists(dbfile):
         return True
-    if is_taxadb_up_to_date_fn is None:
-        is_taxadb_up_to_date_fn = getattr(ete4, 'is_taxadb_up_to_date', None)
-    if is_taxadb_up_to_date_fn is None:
-        return False
+    if is_database_compatible_fn is None:
+        is_database_compatible_fn = is_taxonomy_database_compatible
     try:
-        return (not is_taxadb_up_to_date_fn(dbfile))
+        if not is_database_compatible_fn(dbfile):
+            return True
     except Exception:
         return True
+    if taxdump_file is None:
+        return False
+    taxdump_file = os.path.abspath(os.fspath(taxdump_file))
+    _assert_regular_file_or_absent(taxdump_file, label='NCBI taxdump path')
+    if not os.path.exists(taxdump_file):
+        return False
+    matches = native_database_matches_taxdump(dbfile, taxdump_file)
+    return matches is False
+
+
+def should_refresh_custom_ete_taxonomy_db(
+    dbfile, is_taxadb_up_to_date_fn=None, taxdump_file=None
+):
+    return should_build_ncbi_taxonomy_db(
+        dbfile=dbfile,
+        taxdump_file=taxdump_file,
+        is_database_compatible_fn=is_taxadb_up_to_date_fn,
+    )
+
+
+def get_ncbi_taxonomy(
+    args=None,
+    acquire_exclusive_lock_fn=None,
+    taxonomy_cls=None,
+    resolve_taxonomy_data_dir_fn=None,
+    resolve_taxonomy_lock_path_fn=None,
+    urlretrieve_fn=None,
+    is_database_compatible_fn=None,
+):
+    if acquire_exclusive_lock_fn is None:
+        acquire_exclusive_lock_fn = acquire_exclusive_lock
+    injected_cls = taxonomy_cls is not None
+    if taxonomy_cls is None:
+        taxonomy_cls = NcbiTaxonomy
+    if resolve_taxonomy_data_dir_fn is None:
+        resolve_taxonomy_data_dir_fn = resolve_ncbi_taxonomy_data_dir
+    if resolve_taxonomy_lock_path_fn is None:
+        resolve_taxonomy_lock_path_fn = resolve_ncbi_taxonomy_lock_path
+    if urlretrieve_fn is None:
+        urlretrieve_fn = urllib.request.urlretrieve
+    if is_database_compatible_fn is None:
+        is_database_compatible_fn = is_taxonomy_database_compatible
+
+    # Preserve the constructor-injection behavior used by callers and tests.
+    if args is None and (injected_cls or taxonomy_cls is not _BUILTIN_NCBI_TAXONOMY_CLASS):
+        cache_key = _build_ncbi_taxonomy_cache_key('default', taxonomy_cls)
+        cache = _get_thread_local_ncbi_taxonomy_cache()
+        cached = cache.get(cache_key)
+        if cached is not None:
+            if _cached_taxonomy_is_usable(cached):
+                return cached
+            _discard_cached_taxonomy(cache, cache_key, cached)
+        with _NCBI_TAXONOMY_INIT_LOCK:
+            ncbi = taxonomy_cls()
+        setattr(ncbi, '_amalgkit_cache_key', cache_key)
+        cache[cache_key] = ncbi
+        return ncbi
+
+    if args is None:
+        taxonomy_data_dir = resolve_default_ncbi_taxonomy_data_dir()
+        lock_path = os.path.join(taxonomy_data_dir, 'taxonomy.lock')
+        cache_scope = 'default'
+    else:
+        taxonomy_data_dir = resolve_taxonomy_data_dir_fn(args)
+        lock_path = resolve_taxonomy_lock_path_fn(args)
+        cache_scope = 'custom'
+    taxonomy_data_dir = _ensure_regular_directory(
+        taxonomy_data_dir, label='NCBI taxonomy data directory'
+    )
+    lock_path = os.path.abspath(os.fspath(lock_path))
+    lock_dir = os.path.dirname(lock_path)
+    if lock_dir != '':
+        _ensure_regular_directory(lock_dir, label='NCBI taxonomy lock directory')
+    dbfile = os.path.abspath(os.path.join(taxonomy_data_dir, 'taxa.sqlite'))
+    taxdump_file = os.path.abspath(os.path.join(taxonomy_data_dir, 'taxdump.tar.gz'))
+    _assert_regular_file_or_absent(dbfile, label='NCBI taxonomy DB path')
+    _assert_regular_file_or_absent(taxdump_file, label='NCBI taxdump path')
+    resource_paths = (dbfile, taxdump_file)
+    cache_key = _build_ncbi_taxonomy_cache_key(cache_scope, taxonomy_cls, dbfile=dbfile)
+    cache = _get_thread_local_ncbi_taxonomy_cache()
+    cached = cache.get(cache_key)
+    if cached is not None:
+        if _cached_taxonomy_is_usable(cached, resource_paths=resource_paths):
+            return cached
+        _discard_cached_taxonomy(cache, cache_key, cached)
+    with acquire_exclusive_lock_fn(lock_path=lock_path, lock_label='NCBI taxonomy DB'):
+        _ensure_regular_directory(
+            taxonomy_data_dir, label='NCBI taxonomy data directory'
+        )
+        _assert_regular_file_or_absent(dbfile, label='NCBI taxonomy DB path')
+        _assert_regular_file_or_absent(taxdump_file, label='NCBI taxdump path')
+        cleanup_stale_taxonomy_build_files(dbfile, stale_seconds=0)
+        kwargs = {'dbfile': dbfile}
+        if should_build_ncbi_taxonomy_db(
+            dbfile=dbfile,
+            taxdump_file=taxdump_file,
+            is_database_compatible_fn=is_database_compatible_fn,
+        ):
+            kwargs['taxdump_file'] = ensure_ncbi_taxdump_file(
+                taxdump_path=taxdump_file,
+                urlretrieve_fn=urlretrieve_fn,
+            )
+        else:
+            kwargs['update'] = False
+        with _NCBI_TAXONOMY_INIT_LOCK:
+            ncbi = taxonomy_cls(**kwargs)
+        setattr(ncbi, '_amalgkit_cache_key', cache_key)
+        setattr(
+            ncbi,
+            '_amalgkit_resource_signature',
+            _resource_signature(*resource_paths),
+        )
+        cache[cache_key] = ncbi
+        return ncbi
 
 
 def get_ete_ncbitaxa(
@@ -614,56 +862,12 @@ def get_ete_ncbitaxa(
     urlretrieve_fn=None,
     is_taxadb_up_to_date_fn=None,
 ):
-    if acquire_exclusive_lock_fn is None:
-        acquire_exclusive_lock_fn = acquire_exclusive_lock
-    if ncbitaxa_cls is None:
-        ncbitaxa_cls = ete4.NCBITaxa
-    if resolve_ete_data_dir_fn is None:
-        resolve_ete_data_dir_fn = resolve_ete_data_dir
-    if resolve_ete_lock_path_fn is None:
-        resolve_ete_lock_path_fn = resolve_ete_lock_path
-    if urlretrieve_fn is None:
-        urlretrieve_fn = urllib.request.urlretrieve
-    if is_taxadb_up_to_date_fn is None:
-        is_taxadb_up_to_date_fn = getattr(ete4, 'is_taxadb_up_to_date', None)
-    if args is None:
-        cache_key = _build_ete_ncbitaxa_cache_key('default', ncbitaxa_cls)
-        cache = _get_thread_local_ete_ncbitaxa_cache()
-        cached = cache.get(cache_key)
-        if cached is not None:
-            return cached
-        with _ETE_NCBITAXA_INIT_LOCK:
-            ncbi = ncbitaxa_cls()
-        setattr(ncbi, '_amalgkit_cache_key', cache_key)
-        cache[cache_key] = ncbi
-        return ncbi
-    ete_data_dir = resolve_ete_data_dir_fn(args)
-    os.makedirs(ete_data_dir, exist_ok=True)
-    lock_path = resolve_ete_lock_path_fn(args)
-    lock_dir = os.path.dirname(lock_path)
-    if lock_dir != '':
-        os.makedirs(lock_dir, exist_ok=True)
-    dbfile = os.path.realpath(os.path.join(ete_data_dir, 'taxa.sqlite'))
-    taxdump_file = os.path.realpath(os.path.join(ete_data_dir, 'taxdump.tar.gz'))
-    cache_key = _build_ete_ncbitaxa_cache_key('custom', ncbitaxa_cls, dbfile=dbfile)
-    cache = _get_thread_local_ete_ncbitaxa_cache()
-    cached = cache.get(cache_key)
-    if cached is not None:
-        return cached
-    with acquire_exclusive_lock_fn(lock_path=lock_path, lock_label='ETE4 taxonomy DB'):
-        kwargs = {'dbfile': dbfile}
-        if should_refresh_custom_ete_taxonomy_db(
-            dbfile=dbfile,
-            is_taxadb_up_to_date_fn=is_taxadb_up_to_date_fn,
-        ):
-            kwargs['taxdump_file'] = ensure_ete_taxdump_file(
-                taxdump_path=taxdump_file,
-                urlretrieve_fn=urlretrieve_fn,
-            )
-        else:
-            kwargs['update'] = False
-        with _ETE_NCBITAXA_INIT_LOCK:
-            ncbi = ncbitaxa_cls(**kwargs)
-        setattr(ncbi, '_amalgkit_cache_key', cache_key)
-        cache[cache_key] = ncbi
-        return ncbi
+    return get_ncbi_taxonomy(
+        args=args,
+        acquire_exclusive_lock_fn=acquire_exclusive_lock_fn,
+        taxonomy_cls=ncbitaxa_cls,
+        resolve_taxonomy_data_dir_fn=resolve_ete_data_dir_fn,
+        resolve_taxonomy_lock_path_fn=resolve_ete_lock_path_fn,
+        urlretrieve_fn=urlretrieve_fn,
+        is_database_compatible_fn=is_taxadb_up_to_date_fn,
+    )

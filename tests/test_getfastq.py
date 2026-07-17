@@ -670,7 +670,7 @@ class TestRunMmseqsContamFilter:
             lambda taxid, rank_name, ncbi, rank_cache: 500 if int(taxid) == 11 else (600 if int(taxid) == 22 else None),
         )
         monkeypatch.setattr('amalgkit.getfastq.run_mmseqs_easy_taxonomy_single_fastq', fake_run_mmseqs)
-        monkeypatch.setattr('amalgkit.getfastq.get_ete_ncbitaxa', lambda args=None: object())
+        monkeypatch.setattr('amalgkit.getfastq.get_ncbi_taxonomy', lambda args=None: object())
         perf_counter_values = iter([20.0, 21.0, 23.5, 24.5])
         monkeypatch.setattr('amalgkit.getfastq.time.perf_counter', lambda: next(perf_counter_values))
 
@@ -700,7 +700,7 @@ class TestRunMmseqsContamFilter:
         assert run_file_state.has('{}_1.contam-filtered.fastq.gz'.format(sra_id))
         assert run_file_state.has('{}_2.contam-filtered.fastq.gz'.format(sra_id))
         out = capsys.readouterr().out
-        assert 'Time elapsed for ETE taxonomy initialization ({}):'.format(sra_id) in out
+        assert 'Time elapsed for NCBI taxonomy initialization ({}):'.format(sra_id) in out
         assert 'Time elapsed for contaminant filter ({}):'.format(sra_id) in out
 
 
@@ -3130,7 +3130,7 @@ class TestPrintReadStats:
         assert 'Sum of MMseqs rRNA search wall time: 9.0 sec' in out
         assert 'Sum of rRNA FASTQ rewrite wall time: 2.0 sec' in out
         assert 'Sum of contaminant-filter wall time: 15.0 sec' in out
-        assert 'Sum of ETE taxonomy wall time: 2.0 sec' in out
+        assert 'Sum of NCBI taxonomy wall time: 2.0 sec' in out
         assert 'Individual SRA download wall time (sec): 0.5 1.0' in out
         assert 'Individual fasterq-dump wall time (sec): 1.5 2.0' in out
         assert 'Individual fastp wall time (sec): 3.0 4.0' in out

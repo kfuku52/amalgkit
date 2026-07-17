@@ -11,7 +11,7 @@ from amalgkit.command_context import GetfastqRuntimeContext
 from amalgkit.download_utils import (
     DOWNLOAD_LOCK_POLL_SECONDS,
     acquire_exclusive_lock,
-    get_ete_ncbitaxa,
+    get_ncbi_taxonomy,
     maybe_acquire_download_semaphore,
     resolve_download_dir,
     resolve_download_lock_path,
@@ -3770,14 +3770,14 @@ def run_mmseqs_contam_filter(
 
     mmseqs_root = os.path.join(output_dir, 'mmseqs_contam_work')
     ensure_empty_workdir(mmseqs_root)
-    ete_started_at = time.perf_counter()
-    ncbi = get_ete_ncbitaxa(args=args)
+    taxonomy_started_at = time.perf_counter()
+    ncbi = get_ncbi_taxonomy(args=args)
     metadata = accumulate_and_print_stage_duration(
         metadata=metadata,
         sra_stat=sra_stat,
         column_name='sec_ete_taxonomy',
-        elapsed_seconds=(time.perf_counter() - ete_started_at),
-        stage_label='ETE taxonomy initialization',
+        elapsed_seconds=(time.perf_counter() - taxonomy_started_at),
+        stage_label='NCBI taxonomy initialization',
     )
     rank_cache = {}
     remove_cores = set()
@@ -4136,7 +4136,8 @@ def print_read_stats(args, metadata, g, sra_stat=None, individual=False):
         duration_specs.append(('sec_rrna_rewrite', 'rRNA FASTQ rewrite wall time'))
     if contam_filter:
         duration_specs.append(('sec_contam_filter', 'contaminant-filter wall time'))
-        duration_specs.append(('sec_ete_taxonomy', 'ETE taxonomy wall time'))
+        # Keep the metadata column name for backward compatibility.
+        duration_specs.append(('sec_ete_taxonomy', 'NCBI taxonomy wall time'))
     for column_name, label in duration_specs:
         print('Sum of {}: {}'.format(label, format_duration_seconds(sum_metadata_numeric_column(df, column_name))))
     if individual:
