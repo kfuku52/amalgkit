@@ -8,3 +8,5 @@ prune build
 prune dist
 prune artifacts
 prune tests/tmp
+global-exclude .DS_Store
+global-exclude *.py[cod]

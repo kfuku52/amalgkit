@@ -1,4 +1,5 @@
 import re
+from urllib.parse import urlsplit, urlunsplit
 
 
 ENA_SRA_LINK_COLUMN = 'ENA_SRA_Link'
@@ -8,7 +9,8 @@ _RUN_ACCESSION_PATTERN = re.compile(r'^(?:SRR|ERR|DRR)\d+$', re.IGNORECASE)
 _DDBJ_RUN_ACCESSION_PATTERN = re.compile(r'^DRR\d+$', re.IGNORECASE)
 _DDBJ_EXPERIMENT_ACCESSION_PATTERN = re.compile(r'^DRX\d+$', re.IGNORECASE)
 
-_ENA_SRA_ROOT = 'https://ftp.sra.ebi.ac.uk/vol1'
+_ENA_SRA_HOST = 'ftp.sra.ebi.ac.uk'
+_ENA_SRA_ROOT = 'https://{}/vol1'.format(_ENA_SRA_HOST)
 _DDBJ_DRA_PUBLIC_ROOT = 'https://ddbj.nig.ac.jp/public/ddbj_database/dra'
 
 
@@ -60,8 +62,19 @@ def normalize_sra_download_url(source_name, source_url, run_accession='', experi
             return build_ena_sra_download_url(run_accession)
         if '://' not in source_url:
             source_url = 'https://' + source_url.lstrip('/')
-        elif source_url.lower().startswith('ftp://ftp.sra.ebi.ac.uk/'):
-            source_url = 'https://' + source_url[len('ftp://'):]
+        else:
+            try:
+                parsed_url = urlsplit(source_url)
+            except ValueError:
+                parsed_url = None
+            if (
+                parsed_url is not None
+                and parsed_url.scheme.casefold() == 'ftp'
+                and parsed_url.netloc.casefold() == _ENA_SRA_HOST
+            ):
+                source_url = urlunsplit(
+                    ('https', _ENA_SRA_HOST, parsed_url.path, parsed_url.query, parsed_url.fragment)
+                )
         source_url = source_url.rstrip('/')
         if (run_accession != '') and (not source_url.lower().endswith('.sra')):
             last_component = source_url.rsplit('/', 1)[-1]
