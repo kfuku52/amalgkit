@@ -131,6 +131,29 @@ class TestRunTasksWithOptionalThreads:
         with pytest.raises(ValueError, match='max_workers must be an integer'):
             run_tasks_with_optional_threads([1], lambda x: x, max_workers='two')
 
+    def test_fail_fast_does_not_start_tasks_beyond_initial_workers(self):
+        started = []
+        started_lock = threading.Lock()
+
+        def worker(x):
+            with started_lock:
+                started.append(x)
+            if x == 1:
+                raise RuntimeError('stop')
+            time.sleep(0.02)
+            return x
+
+        _results, failures = run_tasks_with_optional_threads(
+            [1, 2, 3, 4],
+            worker,
+            max_workers=2,
+            fail_fast=True,
+        )
+
+        assert len(failures) == 1
+        assert failures[0][0] == 1
+        assert set(started).issubset({1, 2})
+
 class TestValidatePositiveIntOption:
     def test_accepts_positive(self):
         assert validate_positive_int_option(3, 'internal_jobs') == 3

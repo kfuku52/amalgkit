@@ -100,21 +100,25 @@ def test_dataset_list_skips_runtime_banner():
     assert 'amalgkit tool' not in out.stdout.lower()
 
 
-def test_help_topic_getfastq_mentions_filter_runtime_costs():
+def test_help_topic_getfastq_mentions_filter_runtime_safeguards():
     out = run_cli('help', 'getfastq')
     assert out.returncode == 0
     merged = ' '.join((out.stdout + '\n' + out.stderr).lower().split())
     assert '--rrna_filter_sensitivity' in merged
     assert '--rrna_filter_max_seqs' in merged
+    assert '--rrna_filter_chunk_spots' in merged
+    assert '--rrna_filter_memory_limit' in merged
+    assert '--rrna_filter_jobs' in merged
     assert 'default=1.0' in merged
     assert 'default=20' in merged
     assert '--contam_filter_sensitivity' in merged
     assert '--contam_filter_max_seqs' in merged
-    assert '2-8 gb ram' in merged
+    assert 'default=5000000' in merged
+    assert 'default=32g' in merged
     assert '32-128 gb ram' in merged
     assert 'default=superkingdom' in merged
     assert 'domain" is accepted as an alias for "superkingdom"' in merged
-    assert 'first run also builds the silva db' in merged
+    assert 'builds both the silva sequence db and its reusable mmseqs search index' in merged
     assert 'first run also downloads/builds the db' in merged
     assert 'higher-priority sources are busy' in merged
     assert 'tries the next enabled source before waiting' in merged

@@ -78,6 +78,22 @@ When `--max_bp` is set, AMALGKIT can run a compensatory two-step extraction for 
 
 This compensation is for public SRA-derived runs, not private FASTQ files.
 
+## Restarting an Interrupted Run
+
+With the default `--redo no`, `getfastq` resumes independently for each SRA run. A run is skipped only
+when its final FASTQ files, paired-record counts, `getfastq_stats.tsv`, saved processing phase, and an
+execution fingerprint covering target size, filters, and relevant run metadata are consistent. Legacy
+outputs produced by the same resumable format but interrupted before the state file was written are
+fully validated once and then adopted.
+
+The first-round and complete phases are written atomically to `getfastq_run_state.json` inside each run
+directory. An interrupted second round is deliberately restarted for that run because its FASTQ merge
+may be partial. Changing a semantic option invalidates only affected run directories; downloaded `.sra`
+files and valid outputs for other runs remain available. After every requested run reaches the complete
+phase, `getfastq/getfastq_completion.json` records the validated run set for workflow-level checks.
+
+Use `--redo yes` to discard the resumable products and reprocess every requested run.
+
 ## Optional MMseqs2 Filters
 
 ```bash
@@ -86,7 +102,18 @@ amalgkit getfastq --out_dir ./ --contam_filter yes --contam_filter_rank superkin
 amalgkit getfastq --out_dir ./ --filter_order rrna,contam,fastp
 ```
 
-`--rrna_filter yes` uses MMseqs2 with a SILVA database.
+`--rrna_filter yes` uses MMseqs2 with a SILVA database. After `mmseqs createdb`, AMALGKIT also runs
+`mmseqs createindex` and reuses that search index across runs. Before every rRNA search it verifies the
+index data, offset table, database type, and parameter marker. If any part is missing or incompatible,
+one process acquires a shared index lock, checks again, and rebuilds it while other processes wait.
+
+Large FASTQ inputs are searched in synchronized spot chunks (`--rrna_filter_chunk_spots`, default
+5,000,000), so paired mates remain together and are removed together. Successful chunks are rewritten
+immediately and their MMseqs query databases are deleted. `--rrna_filter_memory_limit` (default `32G`)
+is forwarded to MMseqs `--split-memory-limit` for both index creation and search; this limits target-DB
+splitting rather than imposing a hard whole-process RSS limit. `--rrna_filter_jobs` defaults to 1 and may
+be set to 2 to cap the number of simultaneously processed runs. On the first failed run, runs that have
+not started are not submitted.
 
 `--contam_filter yes` uses MMseqs2 taxonomy against a database such as UniRef90.
 

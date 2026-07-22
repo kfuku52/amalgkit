@@ -1,8 +1,9 @@
+import itertools
 import os
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, as_completed, wait
 
 
-def run_tasks_with_optional_threads(task_items, task_fn, max_workers=1):
+def run_tasks_with_optional_threads(task_items, task_fn, max_workers=1, fail_fast=False):
     tasks = list(task_items)
     results = dict()
     failures = list()
@@ -27,8 +28,36 @@ def run_tasks_with_optional_threads(task_items, task_fn, max_workers=1):
                 failures.append((task, RuntimeError('Task requested exit with code {}.'.format(exc.code))))
             except Exception as exc:
                 failures.append((task, exc))
+            if fail_fast and failures:
+                break
         return results, failures
     worker_count = min(worker_limit, len(tasks))
+    if fail_fast:
+        task_iter = iter(tasks)
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            futures = {
+                executor.submit(task_fn, task): task
+                for task in itertools.islice(task_iter, worker_count)
+            }
+            while futures:
+                completed, _pending = wait(futures, return_when=FIRST_COMPLETED)
+                completed_without_failure = 0
+                for future in completed:
+                    task = futures.pop(future)
+                    try:
+                        results[task] = future.result()
+                        completed_without_failure += 1
+                    except SystemExit as exc:
+                        failures.append((task, RuntimeError('Task requested exit with code {}.'.format(exc.code))))
+                    except Exception as exc:
+                        failures.append((task, exc))
+                if failures:
+                    for future in futures:
+                        future.cancel()
+                    break
+                for task in itertools.islice(task_iter, completed_without_failure):
+                    futures[executor.submit(task_fn, task)] = task
+        return results, failures
     with ThreadPoolExecutor(max_workers=worker_count) as executor:
         futures = {
             executor.submit(task_fn, task): task

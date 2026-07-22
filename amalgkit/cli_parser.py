@@ -172,8 +172,7 @@ def build_parser(command_handlers, command_names, version, prog=None):
                           'It can be specified throught --min_read_length in amalgkit. ')
     pge.add_argument('--rrna_filter', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
                      help='default=%(default)s: Remove rRNA reads using MMseqs2 before final FASTQ output. '
-                          'Typical cost: minutes to tens of minutes per SRA, ~2-8 GB RAM; first run also builds '
-                          'the SILVA DB.')
+                          'The first run builds both the SILVA sequence DB and its reusable MMseqs search index.')
     pge.add_argument('--rrna_filter_sensitivity', metavar='FLOAT|auto', default=1.0, type=positive_float_or_auto,
                      required=False, action='store',
                      help='default=%(default)s: MMseqs2 sensitivity (-s) for rRNA filtering. '
@@ -182,6 +181,20 @@ def build_parser(command_handlers, command_names, version, prog=None):
                      required=False, action='store',
                      help='default=%(default)s: MMseqs2 --max-seqs for rRNA filtering. '
                           '"auto" keeps the MMseqs2 default; lower values are faster but less sensitive.')
+    pge.add_argument('--rrna_filter_chunk_spots', metavar='INT', default=5000000, type=int,
+                     required=False, action='store',
+                     help='default=%(default)s: Maximum spots per MMseqs rRNA query chunk. Paired mates stay in '
+                          'the same chunk and are removed together.')
+    pge.add_argument('--rrna_filter_memory_limit', metavar='SIZE|auto', default='32G', type=str,
+                     required=False, action='store',
+                     help='default=%(default)s: Value forwarded to MMseqs --split-memory-limit for SILVA index '
+                          'creation and each rRNA search. This controls target-DB splitting, not total process RSS. '
+                          '"auto" keeps the MMseqs default.')
+    pge.add_argument('--rrna_filter_jobs', metavar='1|2|auto', default=1, type=int_or_auto,
+                     required=False, action='store',
+                     help='default=%(default)s: Maximum concurrently processed SRA runs while rRNA filtering is '
+                          'enabled. "auto" resolves conservatively to 1. Values are limited to 1 or 2; remaining '
+                          '--threads are assigned to each MMseqs search.')
     pge.add_argument('--filter_order', metavar='ORDER',
                      default='fastp,rrna,contam', type=str, required=False, action='store',
                      help='default=%(default)s: Order of optional filters. Use comma or ">" separators, for example '
