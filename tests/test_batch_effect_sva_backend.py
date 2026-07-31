@@ -175,6 +175,16 @@ def test_f_pvalue_returns_valid_probabilities():
     assert numpy.all((p_values >= 0.0) & (p_values <= 1.0))
 
 
+def test_f_pvalue_maps_perfect_full_model_fit_to_zero_probability():
+    data = numpy.array([[1.0, 1.0, 10.0, 10.0]])
+    mod, _ = build_sample_group_design_matrix(['A', 'A', 'B', 'B'])
+    mod0, _ = build_intercept_only_design_matrix(4)
+
+    p_values = f_pvalue(data, mod, mod0)
+
+    assert p_values[0] == 0.0
+
+
 def test_irwsva_build_returns_expected_shapes():
     data = numpy.array([
         [10.0, 12.0, 40.0, 42.0],
@@ -225,6 +235,49 @@ def test_run_sva_backend_supports_positive_manual_nsv():
     assert summary['resolved_sva_B'] == 5
     assert summary['skip_reason'] == ''
     assert summary['corrected_run_ids'] == ['RUN1', 'RUN2', 'RUN3', 'RUN4']
+
+
+def test_run_sva_backend_aligns_shuffled_metadata_by_run_and_ignores_extra_rows():
+    counts = pandas.DataFrame(
+        {
+            'RUN1': [12.0, 2.0, 9.0, 1.0, 7.0, 3.0],
+            'RUN2': [11.0, 3.0, 8.0, 2.0, 6.0, 4.0],
+            'RUN3': [2.0, 12.0, 1.0, 9.0, 3.0, 7.0],
+            'RUN4': [3.0, 11.0, 2.0, 8.0, 4.0, 6.0],
+        },
+        index=['G1', 'G2', 'G3', 'G4', 'G5', 'G6'],
+    )
+    aligned_metadata = pandas.DataFrame(
+        {
+            'run': ['RUN1', 'RUN2', 'RUN3', 'RUN4'],
+            'sample_group': ['A', 'A', 'B', 'B'],
+        }
+    )
+    shuffled_metadata = pandas.concat(
+        [
+            aligned_metadata.iloc[[2, 0, 3, 1], :],
+            pandas.DataFrame({'run': ['EXCLUDED'], 'sample_group': ['C']}),
+        ],
+        ignore_index=True,
+    )
+
+    aligned_counts, aligned_sv, _aligned_summary = run_sva_backend(
+        counts_df=counts,
+        metadata_df=aligned_metadata,
+        nsv_setting='1',
+        B_setting='2',
+        random_seed=1,
+    )
+    shuffled_counts, shuffled_sv, _shuffled_summary = run_sva_backend(
+        counts_df=counts,
+        metadata_df=shuffled_metadata,
+        nsv_setting='1',
+        B_setting='2',
+        random_seed=1,
+    )
+
+    pandas.testing.assert_frame_equal(shuffled_counts, aligned_counts)
+    pandas.testing.assert_frame_equal(shuffled_sv, aligned_sv)
 
 
 def test_run_sva_backend_supports_positive_manual_nsv_on_transformed_duplicate_groups():

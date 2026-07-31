@@ -82,6 +82,10 @@ Useful batch options:
 | `--manifest_tsv` | `out_dir/external_manifest.tsv` |
 | `--batch_label` | `basename(out_dir)` |
 
+Sampling is reproducible. Use `--random_seed INT` (default `0`) to control
+tie-breaking and the `random` strategy. The selected metadata records the
+effective values in `sampling_strategy` and `sampling_seed`.
+
 Batch mode writes:
 
 - `select_summary.tsv`
@@ -101,6 +105,11 @@ For batch mode:
 - species-specific selected metadata in batch workspaces
 
 Rows with `exclusion != no` or `is_sampled != yes` are skipped by downstream commands.
+
+In regular inferred-metadata mode, the first run creates
+`metadata/metadata_original.tsv`; later runs preserve and reload that baseline.
+Aggregate rules deduplicate semicolon-separated values, so rerunning `select`
+does not repeatedly append the same text.
 
 ## Next Steps
 

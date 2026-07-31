@@ -59,6 +59,11 @@ amalgkit busco \
 | `--tool_args` | pass additional arguments to the selected tool |
 | `--download_dir` and `--download_lock_dir` | share lineage/download locks across jobs |
 
+An existing lineage download is reused only when it contains both a nonempty
+`dataset.cfg` and lineage payload data (`hmms/` entries or `ancestral`).
+Partial downloads are retried instead of being treated as a valid offline
+cache.
+
 ## Main Outputs
 
 - `busco/<Species>_busco.tsv`

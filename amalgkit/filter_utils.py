@@ -7,6 +7,8 @@ from contextlib import contextmanager
 
 import pandas
 
+from amalgkit.output_utils import get_default_creation_mode
+
 
 def merge_metadata_by_run(source_df, update_df):
     if 'run' not in source_df.columns:
@@ -80,8 +82,11 @@ def prepare_output_dir(path_dir, redo=False):
 
 @contextmanager
 def staged_output_dir(target_dir, redo=False, prefix='amalgkit_stage_'):
-    target_dir = os.path.realpath(target_dir)
-    parent_dir = os.path.dirname(target_dir)
+    absolute_target_dir = os.path.abspath(target_dir)
+    if os.path.lexists(absolute_target_dir) and os.path.islink(absolute_target_dir):
+        raise ValueError('Refusing to replace symbolic-link output directory: {}'.format(absolute_target_dir))
+    parent_dir = os.path.realpath(os.path.dirname(absolute_target_dir))
+    target_dir = os.path.join(parent_dir, os.path.basename(absolute_target_dir))
     if parent_dir != '':
         if os.path.exists(parent_dir) and (not os.path.isdir(parent_dir)):
             raise NotADirectoryError('Output parent path exists but is not a directory: {}'.format(parent_dir))
@@ -93,6 +98,10 @@ def staged_output_dir(target_dir, redo=False, prefix='amalgkit_stage_'):
     committed = False
     try:
         yield stage_dir
+        target_mode = get_default_creation_mode(parent_dir, is_directory=True)
+        if os.path.isdir(target_dir):
+            target_mode = os.stat(target_dir, follow_symlinks=False).st_mode & 0o777
+        os.chmod(stage_dir, target_mode)
         if os.path.lexists(target_dir):
             backup_path = tempfile.mkdtemp(prefix=prefix + 'backup_', dir=parent_dir if parent_dir != '' else None)
             os.rmdir(backup_path)

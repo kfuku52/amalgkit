@@ -82,10 +82,24 @@ def run_combatseq_backend(
         }
         return counts_df.copy(), summary
 
-    pycombat_seq = _load_pycombat_seq()
     combat_counts = counts_df.loc[:, corrected_run_ids]
     combat_metadata = aligned_metadata.set_index('run').loc[corrected_run_ids, :]
     combat_batches = combat_metadata.loc[:, batch_column].astype(str).tolist()
+    if len(set(combat_batches)) < 2:
+        summary = {
+            'backend': 'combatseq',
+            'method': 'insufficient_batches',
+            'skip_reason': 'combatseq_insufficient_batches',
+            'stable': None,
+            'corrected_run_ids': [],
+            'uncorrected_run_ids': [str(run_id) for run_id in counts_df.columns],
+            'batch_column': batch_column,
+            'group_model_used': False,
+            'group_fallback_used': False,
+        }
+        return counts_df.copy(), summary
+
+    pycombat_seq = _load_pycombat_seq()
 
     group_model_used = False
     group_fallback_used = False

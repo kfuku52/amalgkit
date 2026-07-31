@@ -20,6 +20,10 @@ class TestMergeFastpStatsIntoMetadata:
         run_ids = collect_valid_run_ids([numpy.nan, 'SRR001', ' SRR001 ', '', 'SRR002'])
         assert run_ids == ['SRR001', 'SRR002']
 
+    def test_collect_valid_run_ids_rejects_unsafe_identifier(self):
+        with pytest.raises(ValueError, match='run ID'):
+            collect_valid_run_ids(['../escape'])
+
     def test_merges_fastp_stats_tsv(self, tmp_path):
         metadata = Metadata.from_DataFrame(pandas.DataFrame({
             'run': ['SRR001', 'SRR002'],
@@ -175,6 +179,25 @@ class TestMergeFastpStatsIntoMetadata:
         (tmp_path / 'getfastq').write_text('not a directory')
 
         with pytest.raises(NotADirectoryError, match='getfastq path exists but is not a directory'):
+            merge_fastp_stats_into_metadata(metadata, str(tmp_path))
+
+    def test_rejects_symbolic_link_getfastq_run_directory(self, tmp_path):
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001'],
+            'scientific_name': ['sp1'],
+            'exclusion': ['no'],
+        }))
+        getfastq_dir = tmp_path / 'getfastq'
+        getfastq_dir.mkdir()
+        outside = tmp_path / 'outside'
+        outside.mkdir()
+        pandas.DataFrame([{
+            'run': 'SRR001',
+            'fastp_duplication_rate': 99,
+        }]).to_csv(outside / 'fastp_stats.tsv', sep='\t', index=False)
+        (getfastq_dir / 'SRR001').symlink_to(outside, target_is_directory=True)
+
+        with pytest.raises(ValueError, match='symbolic-link run ID'):
             merge_fastp_stats_into_metadata(metadata, str(tmp_path))
 
     def test_keeps_nan_when_column_missing_in_tsv(self, tmp_path):
@@ -346,6 +369,24 @@ def test_merge_species_quant_tables_single_pass_reads(tmp_path, monkeypatch):
     assert (merge_dir / 'Species_A' / 'Species_A_tpm.tsv').exists()
     eff = pandas.read_csv(merge_dir / 'Species_A' / 'Species_A_eff_length.tsv', sep='\t')
     assert list(eff.columns) == ['target_id', 'SRR001', 'SRR002']
+
+
+def test_merge_species_quant_tables_rejects_unsafe_species_token(tmp_path):
+    metadata = Metadata.from_DataFrame(pandas.DataFrame({
+        'run': ['SRR001'],
+        'scientific_name': ['../escape'],
+        'exclusion': ['no'],
+    }))
+
+    with pytest.raises(ValueError, match='merge token'):
+        merge_species_quant_tables(
+            '../escape',
+            metadata,
+            str(tmp_path / 'quant'),
+            str(tmp_path / 'merge'),
+        )
+
+    assert not (tmp_path / 'escape').exists()
 
 
 def test_merge_species_quant_tables_parallel_reads(tmp_path, monkeypatch):

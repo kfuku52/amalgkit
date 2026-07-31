@@ -8,6 +8,9 @@ from types import SimpleNamespace
 from amalgkit.exceptions import AmalgkitExit
 from amalgkit.sanity import (
     _build_sanity_summary_row,
+    _validate_fastq_file,
+    _validate_nonempty_table,
+    _validate_quant_run_info_json,
     list_duplicates,
     parse_metadata,
     check_quant_output,
@@ -15,6 +18,7 @@ from amalgkit.sanity import (
     check_getfastq_outputs,
     run_sanity_check_busco,
     run_sanity_check_finalize,
+    run_sanity_check_index,
     run_sanity_check_merge,
     run_sanity_check_quant,
     sanity_main,
@@ -50,6 +54,16 @@ def make_sanity_args(tmp_path, **overrides):
     }
     defaults.update(overrides)
     return SimpleNamespace(**defaults)
+
+
+def test_sanity_main_rejects_symbolic_link_output_root(tmp_path):
+    outside = tmp_path / 'outside'
+    outside.mkdir()
+    linked_out = tmp_path / 'linked'
+    linked_out.symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ValueError, match='symbolic-link sanity output root'):
+        sanity_main(make_sanity_args(tmp_path, out_dir=str(linked_out)))
 
 
 class TestListDuplicates:
@@ -94,6 +108,63 @@ class TestSanitySummaryRow:
         assert row['checked_count'] == 2
         assert row['unavailable_count'] == 2
         assert row['available_count'] == 0
+
+
+def test_content_validators_reject_nonfinite_quant_values(tmp_path):
+    abundance_path = tmp_path / 'abundance.tsv'
+    pandas.DataFrame(
+        [
+            {
+                'target_id': 'tx1',
+                'length': 100,
+                'eff_length': 90,
+                'est_counts': 1,
+                'tpm': float('nan'),
+            }
+        ]
+    ).to_csv(abundance_path, sep='\t', index=False)
+    error = _validate_nonempty_table(
+        str(abundance_path),
+        required_columns=['target_id', 'length', 'eff_length', 'est_counts', 'tpm'],
+        context='quant abundance',
+        numeric_nonnegative_columns=['length', 'eff_length', 'est_counts', 'tpm'],
+    )
+    assert 'non-finite values' in error
+
+    run_info_path = tmp_path / 'run_info.json'
+    run_info_path.write_text('{"p_pseudoaligned": NaN}', encoding='utf-8')
+    assert 'out-of-range' in _validate_quant_run_info_json(str(run_info_path))
+    run_info_path.write_text('null', encoding='utf-8')
+    assert 'must contain an object' in _validate_quant_run_info_json(str(run_info_path))
+
+
+def test_table_validator_scans_numeric_values_after_first_five_rows(tmp_path):
+    abundance_path = tmp_path / 'abundance.tsv'
+    pandas.DataFrame({
+        'target_id': ['tx{}'.format(index) for index in range(1, 7)],
+        'length': [100] * 6,
+        'eff_length': [90] * 6,
+        'est_counts': [1] * 6,
+        'tpm': [1, 1, 1, 1, 1, float('inf')],
+    }).to_csv(abundance_path, sep='\t', index=False)
+
+    error = _validate_nonempty_table(
+        str(abundance_path),
+        required_columns=['target_id', 'length', 'eff_length', 'est_counts', 'tpm'],
+        context='quant abundance',
+        numeric_nonnegative_columns=['length', 'eff_length', 'est_counts', 'tpm'],
+    )
+
+    assert 'non-finite values in "tpm"' in error
+
+
+def test_fastq_validator_rejects_structurally_invalid_record(tmp_path):
+    fastq_path = tmp_path / 'bad.fastq'
+    fastq_path.write_text('@read1\nACGT\n-\nIII\n', encoding='utf-8')
+
+    error = _validate_fastq_file(str(fastq_path))
+
+    assert 'FASTQ stream validation failed' in error
 
 
 # ---------------------------------------------------------------------------
@@ -178,6 +249,19 @@ class TestParseMetadata:
         with pytest.raises(ValueError, match='Missing required metadata column\\(s\\): run'):
             parse_metadata(Args(), m)
 
+    def test_rejects_unsafe_run_identifier(self):
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'scientific_name': ['Sp1'],
+            'run': ['../escape'],
+            'exclusion': ['no'],
+        }))
+
+        class Args:
+            metadata = 'metadata.tsv'
+
+        with pytest.raises(ValueError, match='run ID'):
+            parse_metadata(Args(), metadata)
+
 
 # ---------------------------------------------------------------------------
 # check_quant_output (filesystem checks)
@@ -203,6 +287,30 @@ class TestCheckQuantOutput:
         avail, unavail = check_quant_output(Args(), sra_ids, str(output_dir))
         assert avail == ['SRR001', 'SRR002']
         assert unavail == []
+
+    def test_success_clears_stale_unavailable_report(self, tmp_path):
+        class Args:
+            out_dir = str(tmp_path)
+            metadata = 'metadata.tsv'
+
+        run_dir = tmp_path / 'quant' / 'SRR001'
+        run_dir.mkdir(parents=True)
+        (run_dir / 'SRR001_abundance.tsv').write_text('data', encoding='utf-8')
+        (run_dir / 'SRR001_run_info.json').write_text('{}', encoding='utf-8')
+        output_dir = tmp_path / 'sanity'
+        output_dir.mkdir()
+        report = output_dir / 'SRA_IDs_without_quant.txt'
+        report.write_text('STALE_RUN\n', encoding='utf-8')
+
+        available, unavailable = check_quant_output(
+            Args(),
+            pandas.Series(['SRR001']),
+            str(output_dir),
+        )
+
+        assert available == ['SRR001']
+        assert unavailable == []
+        assert report.read_text(encoding='utf-8') == ''
 
     def test_missing_outputs(self, tmp_path):
         """Missing quant output should be reported as unavailable."""
@@ -659,13 +767,59 @@ class TestCheckQuantIndex:
             metadata = 'metadata.tsv'
         index_dir = tmp_path / 'index'
         index_dir.mkdir()
-        (index_dir / 'Homo_sapiens.idx').write_text('')
+        (index_dir / 'Homo_sapiens.idx').write_text('ready')
         output_dir = tmp_path / 'sanity'
         output_dir.mkdir()
         avail, unavail = check_quant_index(
             Args(), np.array(['Homo sapiens']), str(output_dir))
         assert 'Homo sapiens' in avail
         assert unavail == []
+
+    def test_success_clears_stale_unavailable_report(self, tmp_path):
+        class Args:
+            out_dir = str(tmp_path)
+            index_dir = None
+            metadata = 'metadata.tsv'
+
+        index_dir = tmp_path / 'index'
+        index_dir.mkdir()
+        (index_dir / 'Homo_sapiens.idx').write_text('ready', encoding='utf-8')
+        output_dir = tmp_path / 'sanity'
+        output_dir.mkdir()
+        report = output_dir / 'species_without_index.txt'
+        report.write_text('STALE_SPECIES\n', encoding='utf-8')
+
+        available, unavailable = check_quant_index(
+            Args(),
+            np.array(['Homo sapiens']),
+            str(output_dir),
+        )
+
+        assert available == ['Homo sapiens']
+        assert unavailable == []
+        assert report.read_text(encoding='utf-8') == ''
+
+    def test_symbolic_link_index_is_not_accepted(self, tmp_path):
+        class Args:
+            out_dir = str(tmp_path)
+            index_dir = None
+            metadata = 'metadata.tsv'
+
+        outside = tmp_path / 'outside.idx'
+        outside.write_text('ready', encoding='utf-8')
+        index_dir = tmp_path / 'index'
+        index_dir.mkdir()
+        (index_dir / 'Homo_sapiens.idx').symlink_to(outside)
+        output_dir = tmp_path / 'sanity'
+
+        available, unavailable = check_quant_index(
+            Args(),
+            np.array(['Homo sapiens']),
+            str(output_dir),
+        )
+
+        assert available == []
+        assert unavailable == ['Homo sapiens']
 
     def test_subspecies_index_requires_exact_stem(self, tmp_path):
         """Gorilla_gorilla.idx must not satisfy Gorilla_gorilla_gorilla."""
@@ -720,8 +874,8 @@ class TestCheckQuantIndex:
             metadata = 'metadata.tsv'
         index_dir = tmp_path / 'index'
         index_dir.mkdir()
-        (index_dir / 'Homo_sapiens.idx').write_text('')
-        (index_dir / 'Homo_sapiens.mmi').write_text('')
+        (index_dir / 'Homo_sapiens.idx').write_text('ready')
+        (index_dir / 'Homo_sapiens.mmi').write_text('ready')
         output_dir = tmp_path / 'sanity'
         output_dir.mkdir()
         avail, unavail = check_quant_index(
@@ -779,7 +933,7 @@ class TestCheckQuantIndex:
             metadata = 'metadata.tsv'
         index_dir = tmp_path / 'index'
         index_dir.mkdir()
-        (index_dir / 'Candidatus_sp._X.idx').write_text('')
+        (index_dir / 'Candidatus_sp._X.idx').write_text('ready')
         output_dir = tmp_path / 'sanity'
         output_dir.mkdir()
 
@@ -796,7 +950,7 @@ class TestCheckQuantIndex:
             metadata = 'metadata.tsv'
         index_dir = tmp_path / 'index'
         index_dir.mkdir()
-        (index_dir / 'Canis_lupus_familiaris.idx').write_text('')
+        (index_dir / 'Canis_lupus_familiaris.idx').write_text('ready')
         output_dir = tmp_path / 'sanity'
         output_dir.mkdir()
 
@@ -815,8 +969,8 @@ class TestCheckQuantIndex:
             verbose_runs = 1
         index_dir = tmp_path / 'index'
         index_dir.mkdir()
-        (index_dir / 'Species_alpha.idx').write_text('')
-        (index_dir / 'Species_beta.idx').write_text('')
+        (index_dir / 'Species_alpha.idx').write_text('ready')
+        (index_dir / 'Species_beta.idx').write_text('ready')
         output_dir = tmp_path / 'sanity'
         output_dir.mkdir()
 
@@ -837,8 +991,8 @@ class TestCheckQuantIndex:
 
         index_dir = tmp_path / 'index'
         index_dir.mkdir()
-        (index_dir / 'Species_alpha.idx').write_text('')
-        (index_dir / 'Species_beta.idx').write_text('')
+        (index_dir / 'Species_alpha.idx').write_text('ready')
+        (index_dir / 'Species_beta.idx').write_text('ready')
         output_dir = tmp_path / 'sanity'
         output_dir.mkdir()
         observed = {'max_workers': None}
@@ -1324,3 +1478,44 @@ def _setup_finalize_global_manifest_workspace(root):
     pandas.DataFrame({'scientific_name': ['Species A']}).to_csv(species_dir / 'Species_A_batch_effect_summary.tsv', sep='\t', index=False)
     pandas.DataFrame({'scientific_name': ['Species A']}).to_csv(species_dir / 'Species_A_curation_final_summary.tsv', sep='\t', index=False)
     return metadata_path, Metadata.from_DataFrame(metadata_df)
+def test_index_sanity_honors_explicit_species_token_and_ready_marker(tmp_path):
+    index_dir = tmp_path / 'index'
+    output_dir = tmp_path / 'sanity'
+    index_dir.mkdir()
+    output_dir.mkdir()
+    index_path = index_dir / 'custom-token.idx'
+    index_path.write_text('index', encoding='utf-8')
+    stat_result = index_path.stat()
+    marker_path = index_dir / 'custom-token.idx.amalgkit.ready.json'
+    marker_path.write_text(
+        json.dumps({
+            'schema_version': 1,
+            'backend': 'kallisto',
+            'index_size': stat_result.st_size,
+            'index_mtime_ns': stat_result.st_mtime_ns,
+        }),
+        encoding='utf-8',
+    )
+    metadata_path = tmp_path / 'metadata.tsv'
+    metadata_path.write_text(
+        'run\tscientific_name\tspecies_token\nR1\tSpecies A\tcustom-token\n',
+        encoding='utf-8',
+    )
+    metadata = Metadata.from_DataFrame(pandas.DataFrame([{
+        'run': 'R1',
+        'scientific_name': 'Species A',
+        'species_token': 'custom-token',
+    }]))
+    args = make_sanity_args(tmp_path, index_dir=str(index_dir))
+
+    _row, issues = run_sanity_check_index(
+        args=args,
+        metadata=metadata,
+        uni_species=['Species A'],
+        sra_ids=['R1'],
+        output_dir=str(output_dir),
+        metadata_path=str(metadata_path),
+    )
+
+    assert not [issue for issue in issues if issue['severity'] == 'error']
+    assert not [issue for issue in issues if issue['issue_type'] == 'orphan_output']

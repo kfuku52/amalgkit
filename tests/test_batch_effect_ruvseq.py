@@ -143,3 +143,60 @@ def test_run_ruvseq_backend_single_group_design_skip():
     assert pandas.isna(summary['resolved_ruv_k'])
     assert pandas.isna(summary['resolved_ruv_controls'])
     assert w_df.shape == (counts_df.shape[1], 0)
+
+
+def test_run_ruvseq_backend_rank_zero_returns_raw_counts_and_reports_k_zero():
+    counts_df = pandas.DataFrame(
+        {
+            'RUN1': [10.0, 20.0, 30.0],
+            'RUN2': [10.0, 20.0, 30.0],
+            'RUN3': [10.0, 20.0, 30.0],
+            'RUN4': [10.0, 20.0, 30.0],
+        },
+        index=['G1', 'G2', 'G3'],
+    )
+    metadata_df = pandas.DataFrame(
+        {
+            'run': list(counts_df.columns),
+            'sample_group': ['A', 'A', 'B', 'B'],
+            'bioproject': ['BP1', 'BP1', 'BP2', 'BP2'],
+        }
+    )
+
+    for k_setting in ('1', 'auto'):
+        corrected_df, w_df, summary = run_ruvseq_backend(
+            counts_df=counts_df,
+            metadata_df=metadata_df,
+            k_setting=k_setting,
+            k_max=2,
+            min_controls=2,
+        )
+
+        pandas.testing.assert_frame_equal(corrected_df, counts_df)
+        assert w_df.shape == (counts_df.shape[1], 0)
+        assert summary['resolved_ruv_k'] == 0
+        assert summary['skip_reason'] == 'ruvseq_k_zero'
+        assert summary['corrected_run_ids'] == []
+
+
+def test_run_ruvseq_backend_empty_gene_table_returns_no_expressed_genes_skip():
+    counts_df = pandas.DataFrame(columns=['RUN1', 'RUN2'], dtype=float)
+    metadata_df = pandas.DataFrame(
+        {
+            'run': ['RUN1', 'RUN2'],
+            'sample_group': ['A', 'B'],
+            'bioproject': ['BP1', 'BP2'],
+        }
+    )
+
+    corrected_df, w_df, summary = run_ruvseq_backend(
+        counts_df=counts_df,
+        metadata_df=metadata_df,
+    )
+
+    pandas.testing.assert_frame_equal(corrected_df, counts_df)
+    assert list(w_df.index) == ['RUN1', 'RUN2']
+    assert w_df.shape == (2, 0)
+    assert summary['skip_reason'] == 'no_expressed_genes'
+    assert summary['corrected_run_ids'] == []
+    assert summary['uncorrected_run_ids'] == ['RUN1', 'RUN2']

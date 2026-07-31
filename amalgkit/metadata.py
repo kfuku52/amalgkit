@@ -1,4 +1,5 @@
 import datetime
+import hashlib
 import json
 import os
 import re
@@ -14,6 +15,13 @@ from amalgkit.arg_utils import clone_namespace
 from amalgkit.exceptions import AmalgkitExit
 from amalgkit.metadata_utils import Metadata
 from amalgkit.output_utils import atomic_output_path, sanitize_dataframe_for_tsv
+from amalgkit.runtime_utils import (
+    normalize_species_token,
+    resolve_species_token,
+    safe_join_component,
+    validate_safe_path_component,
+    validate_unique_species_tokens,
+)
 from amalgkit.parallel_utils import (
     is_auto_parallel_option,
     resolve_worker_allocation,
@@ -98,6 +106,19 @@ def _normalize_search_string(search_term_raw):
     return str(search_term_raw).strip()
 
 
+def _build_metadata_cache_fingerprint(args, search_string, species_name, query_label, mode):
+    fingerprint_payload = {
+        'amalgkit_version': __version__,
+        'search_string': str(search_string),
+        'species': species_name,
+        'query_label': query_label,
+        'mode': mode,
+        'resolve_names': bool(getattr(args, 'resolve_names', False)),
+    }
+    serialized = json.dumps(fingerprint_payload, sort_keys=True, separators=(',', ':'))
+    return hashlib.sha256(serialized.encode('utf-8')).hexdigest()
+
+
 def _realpath_or_empty(path):
     if path in [None, '']:
         return ''
@@ -105,7 +126,12 @@ def _realpath_or_empty(path):
 
 
 def _ensure_directory(path, label):
-    real_path = os.path.realpath(path)
+    absolute_path = os.path.abspath(path)
+    if os.path.lexists(absolute_path) and os.path.islink(absolute_path):
+        raise ValueError(
+            'Refusing symbolic-link {}: {}'.format(label, absolute_path)
+        )
+    real_path = os.path.realpath(absolute_path)
     if os.path.exists(real_path) and (not os.path.isdir(real_path)):
         raise NotADirectoryError('{} exists but is not a directory: {}'.format(label, real_path))
     os.makedirs(real_path, exist_ok=True)
@@ -313,6 +339,7 @@ def _build_query_info(
     previous_info=None,
     kind='query',
     extra=None,
+    cache_fingerprint=None,
 ):
     payload = {}
     if isinstance(previous_info, dict):
@@ -344,10 +371,15 @@ def _build_query_info(
     record_id_count = payload.get('record_id_count')
     if record_ids is not None:
         record_id_count = len(record_ids)
+    now = datetime.datetime.now().isoformat(timespec='seconds')
+    created_at = payload.get('created_at') if used_cached_metadata else None
+    if created_at in [None, '']:
+        created_at = now
     payload.update(
         {
             'amalgkit_version': __version__,
-            'created_at': datetime.datetime.now().isoformat(timespec='seconds'),
+            'created_at': created_at,
+            'last_accessed_at': now if used_cached_metadata else None,
             'kind': kind,
             'mode': mode,
             'species': species_name,
@@ -358,6 +390,7 @@ def _build_query_info(
             'resolve_names': bool(getattr(args, 'resolve_names', False)),
             'redo': bool(getattr(args, 'redo', False)),
             'used_cached_metadata': bool(used_cached_metadata),
+            'cache_fingerprint': cache_fingerprint,
             'metadata_path': _realpath_or_empty(metadata_path),
             'summary_path': _realpath_or_empty(summary_path),
             'query_info_path': _realpath_or_empty(query_info_path),
@@ -506,16 +539,39 @@ def _run_single_query(
     if search_term == '':
         raise ValueError('--search_string is required.')
 
-    used_cached_metadata = bool(os.path.exists(metadata_path) and (not getattr(args, 'redo', False)) and allow_cached)
     previous_info = _read_json_if_exists(paths['query_info_path'])
+    cache_fingerprint = _build_metadata_cache_fingerprint(
+        args=args,
+        search_string=search_term,
+        species_name=species_name,
+        query_label=query_label,
+        mode=mode,
+    )
+    used_cached_metadata = bool(
+        os.path.exists(metadata_path)
+        and (not getattr(args, 'redo', False))
+        and allow_cached
+        and isinstance(previous_info, dict)
+        and previous_info.get('cache_fingerprint') == cache_fingerprint
+    )
 
     if used_cached_metadata:
-        metadata = _read_metadata_from_path(
-            metadata_path=metadata_path,
-            context='cached metadata {}'.format(species_name if species_name else search_term),
-        )
-        record_ids = None
-    else:
+        try:
+            metadata = _read_metadata_from_path(
+                metadata_path=metadata_path,
+                context='cached metadata {}'.format(species_name if species_name else search_term),
+            )
+            record_ids = None
+        except Exception as exc:
+            print(
+                'Cached metadata is invalid and will be refreshed: {} ({})'.format(
+                    metadata_path,
+                    exc,
+                ),
+                flush=True,
+            )
+            used_cached_metadata = False
+    if not used_cached_metadata:
         print('Entrez search term:', search_term)
         record_ids = _call_search_sra_record_ids(search_term, args=args)
         metadata = Metadata.from_xml_roots(_call_iter_sra_xml_chunks(record_ids=record_ids, args=args))
@@ -527,8 +583,9 @@ def _run_single_query(
             source_metadata=metadata,
         )
 
-    summary_df = _build_metadata_summary(metadata.df)
-    _write_tsv_atomic(summary_df, paths['summary_path'])
+    if (not used_cached_metadata) or (not os.path.isfile(paths['summary_path'])):
+        summary_df = _build_metadata_summary(metadata.df)
+        _write_tsv_atomic(summary_df, paths['summary_path'])
     query_info = _build_query_info(
         args=args,
         metadata=metadata,
@@ -542,6 +599,7 @@ def _run_single_query(
         mode=mode,
         used_cached_metadata=used_cached_metadata,
         previous_info=previous_info,
+        cache_fingerprint=cache_fingerprint,
     )
     _write_json_atomic(query_info, paths['query_info_path'])
     return {
@@ -554,14 +612,21 @@ def _run_single_query(
 
 
 def _sanitize_species_token(species_name):
-    token = re.sub(r'[^0-9A-Za-z._-]+', '_', species_name.strip())
+    return normalize_species_token(species_name, label='species token')
+
+
+def _query_output_token(query_label):
+    raw_label = str(query_label).strip()
+    if ('/' in raw_label) or ('\\' in raw_label):
+        raise ValueError(
+            'metadata query label must not contain path separators: {}'.format(query_label)
+        )
+    token = re.sub(r'[^0-9A-Za-z._-]+', '_', raw_label)
     token = re.sub(r'_+', '_', token).strip('_.')
-    if token == '':
-        raise ValueError('Could not derive a filesystem-safe token from species name: {}'.format(species_name))
-    return token
+    return validate_safe_path_component(token, label='metadata query label')
 
 
-def _load_species_list(species_tsv, limit=None):
+def _load_species_list(species_tsv, limit=None, include_tokens=False):
     species_df = pandas.read_csv(
         species_tsv,
         sep='\t',
@@ -571,18 +636,48 @@ def _load_species_list(species_tsv, limit=None):
     )
     if 'scientific_name' not in species_df.columns:
         raise ValueError('species_tsv must contain a scientific_name column.')
+    if (limit is not None) and (int(limit) <= 0):
+        raise ValueError('--species_limit must be >= 1.')
     species = []
+    species_pairs = []
     seen = set()
-    for raw_name in species_df['scientific_name'].tolist():
+    seen_tokens = set()
+    token_by_species = {}
+    has_species_token = 'species_token' in species_df.columns
+    for _, row in species_df.iterrows():
+        raw_name = row['scientific_name']
         normalized = str(raw_name).strip()
-        if (normalized == '') or (normalized in seen):
+        if normalized == '':
             continue
+        raw_token = str(row['species_token']).strip() if has_species_token else ''
+        species_token = (
+            _sanitize_species_token(normalized)
+            if raw_token == ''
+            else resolve_species_token(normalized, raw_token, label='species_token')
+        )
+        previous_token = token_by_species.get(normalized)
+        if previous_token is not None:
+            if previous_token != species_token:
+                raise ValueError(
+                    'Scientific name has conflicting species_token values in species_tsv: '
+                    '{} ({}, {})'.format(normalized, previous_token, species_token)
+                )
+            continue
+        if species_token in seen_tokens:
+            raise ValueError('Duplicate species_token detected in species_tsv: {}'.format(species_token))
         seen.add(normalized)
-        species.append(normalized)
+        seen_tokens.add(species_token)
+        token_by_species[normalized] = species_token
+        species_pairs.append((normalized, species_token))
+        species.append((normalized, species_token) if include_tokens else normalized)
         if (limit is not None) and (len(species) >= limit):
             break
     if len(species) == 0:
         raise ValueError('No scientific_name entries were found in species_tsv.')
+    validate_unique_species_tokens(
+        species_pairs,
+        context='metadata species batch',
+    )
     return species
 
 
@@ -694,6 +789,7 @@ def _merge_metadata_results(query_results):
 
 def _write_species_merged_metadata(args, species_name, species_dir, species_token, query_results):
     merged_metadata = _merge_metadata_results(query_results)
+    merged_metadata.df['species_token'] = species_token
     merged_path = os.path.join(species_dir, '{}.metadata.tsv'.format(species_token))
     merged_query_info_path = os.path.join(species_dir, '{}.query_info.json'.format(species_token))
     merged_summary_path = os.path.join(species_dir, '{}.summary.tsv'.format(species_token))
@@ -740,13 +836,17 @@ def _write_species_merged_metadata(args, species_name, species_dir, species_toke
         species_name=species_name,
         query_label=None,
         mode=getattr(args, 'mode', 'base'),
-        used_cached_metadata=any(info.get('used_cached_metadata', False) for info in source_query_infos),
+        used_cached_metadata=False,
         previous_info=_read_json_if_exists(merged_query_info_path),
         kind='merged',
         extra={
             'source_query_labels': [result['query_label'] for result in query_results],
             'source_query_info_paths': [result['paths']['query_info_path'] for result in query_results],
             'source_metadata_paths': [result['paths']['metadata_path'] for result in query_results],
+            'source_used_cached_metadata': [
+                bool(info.get('used_cached_metadata', False))
+                for info in source_query_infos
+            ],
             'source_record_id_count_total': source_record_id_total,
             'missing_run_drop_count': source_missing_run_drop_total,
             'missing_run_drop_examples': source_missing_run_drop_examples,
@@ -764,21 +864,37 @@ def _run_species_batch_task(
     organ_terms,
     metadata_specieswise_dir,
 ):
-    index, species_name = task
+    index, species_name, species_token = task
     print('[{}/{}] {}'.format(index, species_count, species_name), flush=True)
-    species_token = _sanitize_species_token(species_name)
     species_dir = _ensure_directory(
-        os.path.join(metadata_specieswise_dir, species_token),
+        safe_join_component(
+            metadata_specieswise_dir,
+            species_token,
+            label='species_token',
+        ),
         'species metadata path',
     )
     query_results = []
+    seen_query_tokens = set()
     for query_label, search_string in _build_species_queries(
         species_name=species_name,
         mode=mode,
         title_terms=getattr(args, 'title_terms', 'flower,leaf,root'),
         organ_terms=organ_terms,
     ):
-        query_out_dir = os.path.join(species_dir, query_label)
+        query_token = _query_output_token(query_label)
+        if query_token in seen_query_tokens:
+            raise ValueError(
+                'Metadata query labels resolve to a duplicate output token: {}'.format(
+                    query_token
+                )
+            )
+        seen_query_tokens.add(query_token)
+        query_out_dir = safe_join_component(
+            species_dir,
+            query_token,
+            label='metadata query label',
+        )
         query_args = clone_namespace(
             args,
             out_dir=query_out_dir,
@@ -811,16 +927,20 @@ def _run_species_batch(args):
     species_list = _load_species_list(
         species_tsv=getattr(args, 'species_tsv', None),
         limit=getattr(args, 'species_limit', None),
+        include_tokens=True,
     )
     mode = getattr(args, 'mode', 'base')
     organ_terms = None
-    if mode != 'base':
+    if (mode != 'base') and getattr(args, 'organ_terms_tsv', None):
         organ_terms = _load_organ_terms(getattr(args, 'organ_terms_tsv', None))
     metadata_specieswise_dir = _ensure_directory(
         os.path.join(args.out_dir, 'metadata_specieswise'),
         'metadata_specieswise path',
     )
-    task_items = list(enumerate(species_list, start=1))
+    task_items = [
+        (index, species_name, species_token)
+        for index, (species_name, species_token) in enumerate(species_list, start=1)
+    ]
     species_jobs = _resolve_metadata_species_jobs(args=args, task_count=len(task_items))
     if (species_jobs == 1) or (len(task_items) <= 1):
         for task in task_items:

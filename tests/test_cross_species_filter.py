@@ -1,10 +1,109 @@
 import os
 import pytest
+import numpy
 import pandas
 from types import SimpleNamespace
 
-from amalgkit.cross_species_filter import get_species_from_dir, generate_input_symlinks, get_sample_group_string, run_cross_species_filter
+from amalgkit.cross_species_filter import (
+    _calculate_correlation_within_group,
+    _resolve_matrix_for_embedding,
+    generate_input_symlinks,
+    get_sample_group_string,
+    get_species_from_dir,
+    run_cross_species_filter,
+)
 from amalgkit.util import Metadata
+
+
+def test_cross_species_correlations_use_sample_group_reference_across_species():
+    metadata = pandas.DataFrame(
+        {
+            'species_tag': ['A', 'A', 'B', 'B', 'C', 'C'],
+            'run': ['leaf', 'root', 'leaf', 'root', 'leaf', 'root'],
+            'sample_group': ['leaf', 'root', 'leaf', 'root', 'leaf', 'root'],
+            'exclusion': ['no'] * 6,
+        }
+    )
+    leaf = [1.0, 2.0, 3.0, 4.0, 5.0]
+    root = [5.0, 4.0, 3.0, 2.0, 1.0]
+    orthologs = pandas.DataFrame(
+        {
+            'A_leaf': leaf,
+            'A_root': root,
+            'B_leaf': leaf,
+            'B_root': root,
+            'C_leaf': root,
+            'C_root': root,
+        },
+        index=['G1', 'G2', 'G3', 'G4', 'G5'],
+    )
+
+    result = _calculate_correlation_within_group(
+        df_metadata=metadata,
+        ortholog_matrix=orthologs,
+        correction_label='corrected',
+    )
+
+    mislabeled = result.loc[
+        result['species_tag'].eq('C') & result['run'].eq('leaf'),
+        :,
+    ].iloc[0]
+    assert numpy.isclose(mislabeled['within_group_cor_corrected'], -1.0)
+    assert numpy.isclose(mislabeled['max_nongroup_cor_corrected'], 1.0)
+
+
+def test_embedding_missing_strategies_perform_iterative_imputation():
+    matrix = pandas.DataFrame(
+        [
+            [1.0, 2.0, 3.0, numpy.nan],
+            [2.0, 4.0, numpy.nan, 8.0],
+            [10.0, numpy.nan, 6.0, 4.0],
+            [4.0, 3.0, 2.0, 1.0],
+            [5.0, 7.0, 9.0, 11.0],
+        ],
+        columns=['A', 'B', 'C', 'D'],
+    )
+
+    row_mean = _resolve_matrix_for_embedding(matrix, 'row_mean')
+    em_pca = _resolve_matrix_for_embedding(matrix, 'em_pca')
+    nipals = _resolve_matrix_for_embedding(matrix, 'nipals')
+
+    assert not em_pca.isna().any().any()
+    assert not nipals.isna().any().any()
+    observed = matrix.notna()
+    numpy.testing.assert_allclose(em_pca.where(observed).stack(), matrix.stack())
+    numpy.testing.assert_allclose(nipals.where(observed).stack(), matrix.stack())
+    assert not numpy.allclose(em_pca.to_numpy(), row_mean.to_numpy())
+    assert not numpy.allclose(nipals.to_numpy(), row_mean.to_numpy())
+
+
+def test_embedding_imputation_preserves_observed_negative_values_and_imputes_nonfinite():
+    matrix = pandas.DataFrame(
+        [
+            [-2.0, numpy.nan, 2.0, numpy.inf],
+            [-1.0, 0.0, 1.0, -numpy.inf],
+            [numpy.nan, numpy.nan, numpy.nan, numpy.nan],
+        ],
+        index=['structured_1', 'structured_2', 'all_missing'],
+        columns=['A', 'B', 'C', 'D'],
+    )
+    observed = numpy.isfinite(matrix.to_numpy(dtype=float))
+
+    for strategy in ('row_mean', 'em_pca', 'nipals'):
+        imputed = _resolve_matrix_for_embedding(matrix, strategy)
+
+        assert imputed.shape == matrix.shape
+        assert numpy.isfinite(imputed.to_numpy(dtype=float)).all()
+        numpy.testing.assert_array_equal(
+            imputed.to_numpy(dtype=float)[observed],
+            matrix.to_numpy(dtype=float)[observed],
+        )
+
+    row_mean = _resolve_matrix_for_embedding(matrix, 'row_mean')
+    numpy.testing.assert_allclose(
+        row_mean.loc['all_missing', :].to_numpy(dtype=float),
+        numpy.zeros((matrix.shape[1],), dtype=float),
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -76,6 +76,9 @@ Shared index-build locks prevent concurrent batch jobs from building the same sp
 
 `--oarfish_seq_tech auto` infers ONT/PacBio subtype from metadata when possible.
 
+Extra backend options cannot override AMALGKIT-managed inputs, output paths,
+indices, thread counts, layouts, or sequencing-technology flags.
+
 ## Array Jobs
 
 `--batch` processes one selected metadata row by one-based index:
@@ -106,6 +109,12 @@ Typical per-run outputs include:
 - backend-specific auxiliary files
 
 `<RUN>_abundance.tsv` contains target ID, length, effective length, estimated counts, and TPM.
+
+When selection columns are populated, only rows with `exclusion == no` and
+`is_sampled == yes` are quantified. A run is complete only after its abundance
+table and run-info JSON pass schema, row, finite-number, nonnegative-value, and
+pseudoalignment-range checks. `--redo yes` builds in a staging directory and
+replaces an existing valid result only after the new result validates.
 
 ## Next Steps
 

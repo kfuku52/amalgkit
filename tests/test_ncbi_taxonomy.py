@@ -191,6 +191,38 @@ def test_reads_existing_ete4_taxonomy_database(tmp_path):
         taxonomy.close()
 
 
+def test_download_wrapper_reuses_ete4_database_and_existing_taxdump(tmp_path):
+    args = SimpleNamespace(
+        out_dir=str(tmp_path / "out"),
+        download_dir=str(tmp_path / "downloads"),
+    )
+    data_dir = tmp_path / "downloads" / "ete_taxonomy"
+    data_dir.mkdir(parents=True)
+    dbfile = write_legacy_ete_database(data_dir / "taxa.sqlite")
+    taxdump = write_tiny_taxdump(data_dir / "taxdump.tar.gz")
+    original_db_bytes = dbfile.read_bytes()
+    original_taxdump_bytes = taxdump.read_bytes()
+    cache = download_utils._get_thread_local_ncbi_taxonomy_cache()
+    cache.clear()
+
+    def fail_download(*_args, **_kwargs):
+        raise AssertionError("an existing ETE4 taxonomy cache must not be downloaded again")
+
+    taxonomy = download_utils.get_ncbi_taxonomy(
+        args=args,
+        urlretrieve_fn=fail_download,
+    )
+    try:
+        assert taxonomy.db_format == LEGACY_ETE4_DB_FORMAT
+        assert taxonomy.get_lineage(9606) == [1, 2, 9605, 9606]
+        assert taxonomy.get_taxid_translator([9606]) == {9606: "Homo sapiens"}
+        assert dbfile.read_bytes() == original_db_bytes
+        assert taxdump.read_bytes() == original_taxdump_bytes
+    finally:
+        taxonomy.close()
+        cache.clear()
+
+
 def test_failed_rebuild_keeps_existing_database(tmp_path):
     valid_taxdump = write_tiny_taxdump(tmp_path / "valid.tar.gz")
     invalid_taxdump = write_tiny_taxdump(
@@ -462,22 +494,26 @@ def test_default_download_validates_published_checksum(tmp_path, monkeypatch):
     ).hexdigest()
     requested = []
 
-    def copy_valid_dump(url, out_path):
-        requested.append(url)
-        shutil.copyfile(source, out_path)
-
-    def serve_checksum(url, timeout):
+    def serve_download_and_checksum(url, timeout):
         requested.append((url, timeout))
+        if url == download_utils.NCBI_TAXDUMP_URL:
+            return io.BytesIO(source.read_bytes())
         return io.BytesIO("{}  taxdump.tar.gz\n".format(expected_md5).encode("ascii"))
 
-    monkeypatch.setattr(download_utils.urllib.request, "urlretrieve", copy_valid_dump)
-    monkeypatch.setattr(download_utils.urllib.request, "urlopen", serve_checksum)
+    monkeypatch.setattr(
+        download_utils.urllib.request,
+        "urlopen",
+        serve_download_and_checksum,
+    )
 
-    result = download_utils.ensure_ncbi_taxdump_file(destination)
+    result = download_utils.ensure_ncbi_taxdump_file(
+        destination,
+        download_timeout_seconds=7,
+    )
 
     assert result == str(destination)
     assert requested == [
-        download_utils.NCBI_TAXDUMP_URL,
+        (download_utils.NCBI_TAXDUMP_URL, 7.0),
         (download_utils.NCBI_TAXDUMP_MD5_URL, 30),
     ]
 

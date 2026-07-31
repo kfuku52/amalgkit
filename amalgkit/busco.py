@@ -21,6 +21,13 @@ from amalgkit.metadata_utils import (
 )
 from amalgkit.orthology_utils import parse_busco_species_name
 from amalgkit.parallel_utils import resolve_thread_worker_allocation, run_tasks_with_optional_threads
+from amalgkit.runtime_utils import (
+    normalize_species_token,
+    resolve_species_token,
+    safe_join_component,
+    validate_safe_path_component,
+    validate_unique_species_tokens,
+)
 from amalgkit.subprocess_utils import run_checked_command
 
 
@@ -47,6 +54,7 @@ BUSCO_OPTION_VALUE_ARITY = {
     '--lineage_dataset': 1,
     '-c': 1,
     '--cpu': 1,
+    '-t': 1,
     '--out_path': 1,
     '--download_path': 1,
     '--download': 1,
@@ -54,6 +62,52 @@ BUSCO_OPTION_VALUE_ARITY = {
     '--datasets_version': 1,
     '--config': 1,
 }
+
+
+def species_output_token(scientific_name):
+    return normalize_species_token(
+        scientific_name,
+        label='scientific_name-derived BUSCO token',
+    )
+
+
+def validate_unique_busco_species_tokens(species_names, explicit_tokens=None):
+    if explicit_tokens is None:
+        explicit_tokens = [None] * len(species_names)
+    return validate_unique_species_tokens(
+        list(zip(species_names, explicit_tokens)),
+        context='BUSCO output',
+    )
+
+
+def build_busco_species_token_map(metadata, species_names):
+    if metadata is None:
+        return {
+            species_name: species_output_token(species_name)
+            for species_name in species_names
+        }
+    names = metadata.df['scientific_name'].fillna('').astype(str).str.strip()
+    if 'species_token' in metadata.df.columns:
+        explicit_tokens = metadata.df['species_token'].fillna('').astype(str).str.strip()
+    else:
+        explicit_tokens = pandas.Series('', index=metadata.df.index)
+    validate_unique_busco_species_tokens(names.tolist(), explicit_tokens.tolist())
+    token_by_species = {}
+    for species_name, explicit_token in zip(names.tolist(), explicit_tokens.tolist()):
+        if species_name == '':
+            continue
+        token = resolve_species_token(species_name, explicit_token, label='species_token')
+        previous_token = token_by_species.get(species_name)
+        if previous_token is not None and previous_token != token:
+            raise ValueError(
+                'Scientific name has conflicting species_token values: {} ({}, {})'.format(
+                    species_name,
+                    previous_token,
+                    token,
+                )
+            )
+        token_by_species[species_name] = token
+    return token_by_species
 BUSCO_ANALYSIS_RESERVED_OPTIONS = {
     '-i',
     '--in',
@@ -77,6 +131,9 @@ BUSCO_DOWNLOAD_FORWARD_OPTIONS = {
     '-q',
     '--quiet',
 }
+BUSCO_RESERVED_ATTACHED_SHORT_OPTIONS = ('-i', '-o', '-m', '-l', '-c')
+COMPLEASM_RESERVED_OPTIONS = {'-i', '-o', '-l', '-t', '--mode'}
+COMPLEASM_RESERVED_ATTACHED_SHORT_OPTIONS = ('-i', '-o', '-l', '-t')
 
 
 def validate_busco_metadata_columns(metadata, required_columns):
@@ -209,7 +266,12 @@ def _list_normalized_busco_tables(busco_dir):
     return sorted(tables)
 
 
-def summarize_busco_species_tables(busco_dir, species_order=None):
+def summarize_busco_species_tables(
+    busco_dir,
+    species_order=None,
+    species_name_by_token=None,
+):
+    species_name_by_token = species_name_by_token or {}
     table_names = _list_normalized_busco_tables(busco_dir)
     if len(table_names) == 0:
         return pandas.DataFrame(columns=['species', 'status', 'count']), 0
@@ -228,7 +290,11 @@ def summarize_busco_species_tables(busco_dir, species_order=None):
         tmp = tmp.loc[_normalize_busco_id_series(tmp.loc[:, 'busco_id']) != 'buscoid', ['busco_id', 'status']].copy()
         if tmp.empty:
             continue
-        tmp.loc[:, 'species'] = parse_busco_species_name(table_name).replace('_', ' ')
+        species_token = parse_busco_species_name(table_name)
+        tmp.loc[:, 'species'] = species_name_by_token.get(
+            species_token,
+            species_token.replace('_', ' '),
+        )
         tmp.loc[:, 'status'] = tmp.loc[:, 'status'].fillna('').astype(str).str.strip()
         tmp.loc[tmp.loc[:, 'status'] == 'Complete', 'status'] = 'Single'
         tmp = tmp.loc[tmp.loc[:, 'status'].isin(['Single', 'Duplicated', 'Fragmented', 'Missing']), :]
@@ -270,10 +336,20 @@ def summarize_busco_species_tables(busco_dir, species_order=None):
     return summary, total_buscos
 
 
-def generate_busco_species_plot(busco_dir, species_order=None, out_path=None, font_size=8):
+def generate_busco_species_plot(
+    busco_dir,
+    species_order=None,
+    out_path=None,
+    font_size=8,
+    species_name_by_token=None,
+):
     if out_path is None:
         out_path = os.path.join(busco_dir, 'busco_completeness.pdf')
-    summary, total_buscos = summarize_busco_species_tables(busco_dir, species_order=species_order)
+    summary, total_buscos = summarize_busco_species_tables(
+        busco_dir,
+        species_order=species_order,
+        species_name_by_token=species_name_by_token,
+    )
     if summary.empty:
         print('No normalized BUSCO tables were found for plot generation at: {}'.format(busco_dir), flush=True)
         return None
@@ -405,9 +481,7 @@ def _species_prefix_candidates(sci_name):
     raw = str(sci_name).strip()
     if raw == '':
         return []
-    normalized = re.sub(r'\s+', '_', raw)
-    normalized = re.sub(r'_+', '_', normalized)
-    return [normalized]
+    return [normalize_species_token(raw, label='scientific_name-derived FASTA token')]
 
 
 def _strip_fasta_stem(filename):
@@ -417,7 +491,7 @@ def _strip_fasta_stem(filename):
         if stem_lower.endswith(suffix):
             stem = stem[:-len(suffix)]
             break
-    return re.sub(r'_+', '_', re.sub(r'\s+', '_', stem.strip()))
+    return normalize_species_token(stem, label='FASTA filename token')
 
 
 def resolve_species_fasta(sci_name, fasta_dir, fasta_filenames=None):
@@ -502,6 +576,13 @@ def split_busco_extra_args(extra_args):
     download_args = []
     index = 0
     while index < len(extra_args):
+        raw_token = str(extra_args[index])
+        for short_option in BUSCO_RESERVED_ATTACHED_SHORT_OPTIONS:
+            if raw_token.startswith(short_option) and raw_token != short_option:
+                raise ValueError(
+                    'BUSCO tool arguments must not override managed option {} '
+                    'using attached syntax: {}'.format(short_option, raw_token)
+                )
         tokens, option_name = _consume_busco_extra_arg(extra_args, index)
         if option_name in BUSCO_DOWNLOAD_FORWARD_OPTIONS:
             download_args.extend(tokens)
@@ -513,8 +594,26 @@ def split_busco_extra_args(extra_args):
     return analysis_args, download_args
 
 
+def split_compleasm_extra_args(extra_args):
+    analysis_args = []
+    index = 0
+    while index < len(extra_args):
+        raw_token = str(extra_args[index])
+        for short_option in COMPLEASM_RESERVED_ATTACHED_SHORT_OPTIONS:
+            if raw_token.startswith(short_option) and raw_token != short_option:
+                raise ValueError(
+                    'compleasm tool arguments must not override managed option {} '
+                    'using attached syntax: {}'.format(short_option, raw_token)
+                )
+        tokens, option_name = _consume_busco_extra_arg(extra_args, index)
+        if option_name is None or option_name not in COMPLEASM_RESERVED_OPTIONS:
+            analysis_args.extend(tokens)
+        index += len(tokens)
+    return analysis_args
+
+
 def build_busco_analysis_command(fasta_path, sci_name, output_root, args, extra_args):
-    out_name = sci_name.replace(' ', '_')
+    out_name = species_output_token(sci_name)
     download_path = resolve_busco_download_path(args)
     analysis_extra_args, _ = split_busco_extra_args(extra_args)
     cmd = [
@@ -558,7 +657,7 @@ def resolve_busco_download_lock_path(args, lineage):
 
 
 def _dir_has_entries(path_dir):
-    if not os.path.isdir(path_dir):
+    if os.path.islink(path_dir) or not os.path.isdir(path_dir):
         return False
     try:
         with os.scandir(path_dir) as entries:
@@ -569,28 +668,95 @@ def _dir_has_entries(path_dir):
     return False
 
 
+def _read_busco_expected_count(dataset_cfg):
+    try:
+        with open(dataset_cfg, 'r', encoding='utf-8') as handle:
+            for line in handle:
+                match = re.match(
+                    r'\s*number_of_buscos\s*=\s*(\d+)\s*$',
+                    line,
+                    flags=re.IGNORECASE,
+                )
+                if match is not None:
+                    return int(match.group(1))
+    except OSError:
+        return None
+    return None
+
+
+def _count_valid_hmm_files(hmms_dir):
+    if os.path.islink(hmms_dir) or not os.path.isdir(hmms_dir):
+        return 0
+    count = 0
+    try:
+        with os.scandir(hmms_dir) as entries:
+            for entry in entries:
+                if (
+                    entry.is_file(follow_symlinks=False)
+                    and entry.name.lower().endswith('.hmm')
+                    and entry.stat(follow_symlinks=False).st_size > 0
+                ):
+                    try:
+                        with open(entry.path, 'rb') as handle:
+                            signature = handle.read(16)
+                    except OSError:
+                        continue
+                    if signature.startswith(b'HMMER3/'):
+                        count += 1
+    except OSError:
+        return 0
+    return count
+
+
 def has_busco_lineage_cache(download_path, lineage):
-    lineage = str(lineage).strip()
-    if lineage == '':
-        return False
+    lineage = validate_safe_path_component(lineage, label='BUSCO lineage')
     candidates = [
         os.path.join(download_path, lineage),
         os.path.join(download_path, 'lineages', lineage),
     ]
     for candidate in candidates:
-        if _dir_has_entries(candidate):
-            return True
-        if os.path.isfile(candidate):
-            return True
-        if os.path.isfile(candidate + '.tar.gz'):
-            return True
-        if os.path.isfile(candidate + '.tgz'):
+        if os.path.islink(candidate):
+            continue
+        dataset_cfg = os.path.join(candidate, 'dataset.cfg')
+        hmms_dir = os.path.join(candidate, 'hmms')
+        ancestral_path = os.path.join(candidate, 'ancestral')
+        has_manifest = (
+            not os.path.islink(dataset_cfg)
+            and os.path.isfile(dataset_cfg)
+            and os.path.getsize(dataset_cfg) > 0
+        )
+        expected_buscos = _read_busco_expected_count(dataset_cfg) if has_manifest else None
+        hmm_count = _count_valid_hmm_files(hmms_dir)
+        required_payload_paths = [
+            os.path.join(candidate, 'scores_cutoff'),
+            os.path.join(candidate, 'lengths_cutoff'),
+            ancestral_path,
+        ]
+        has_required_payload = all(
+            not os.path.islink(path)
+            and os.path.isfile(path)
+            and os.path.getsize(path) > 0
+            for path in required_payload_paths
+        )
+        has_payload = (
+            expected_buscos is not None
+            and expected_buscos > 0
+            and hmm_count >= expected_buscos
+            and has_required_payload
+        )
+        if expected_buscos == 0:
+            has_payload = (
+                not os.path.islink(ancestral_path)
+                and os.path.isfile(ancestral_path)
+                and os.path.getsize(ancestral_path) > 0
+            )
+        if has_manifest and has_payload:
             return True
     return False
 
 
 def run_busco(fasta_path, sci_name, output_root, args, extra_args):
-    out_name = sci_name.replace(' ', '_')
+    out_name = species_output_token(sci_name)
     download_root = resolve_download_dir(args)
     if os.path.exists(download_root) and (not os.path.isdir(download_root)):
         raise NotADirectoryError(
@@ -618,12 +784,20 @@ def run_busco(fasta_path, sci_name, output_root, args, extra_args):
     with acquire_exclusive_lock(lock_path=lock_path, lock_label='BUSCO lineage download'):
         if not has_busco_lineage_cache(download_path=download_path, lineage=args.lineage):
             run_command(build_busco_download_command(args=args, extra_args=extra_args))
+            if not has_busco_lineage_cache(download_path=download_path, lineage=args.lineage):
+                raise RuntimeError(
+                    'BUSCO lineage download did not produce a complete cache: {}'.format(args.lineage)
+                )
     run_command(analysis_cmd)
     return os.path.join(output_root, out_name)
 
 
 def run_compleasm(fasta_path, sci_name, output_root, args, extra_args):
-    out_dir = os.path.join(output_root, sci_name.replace(' ', '_'))
+    out_dir = safe_join_component(
+        output_root,
+        species_output_token(sci_name),
+        label='scientific_name-derived BUSCO token',
+    )
     ensure_clean_dir(out_dir, args.redo)
     cmd = [
         args.compleasm_exe,
@@ -634,7 +808,7 @@ def run_compleasm(fasta_path, sci_name, output_root, args, extra_args):
         '-t', str(args.threads),
         '--mode', 'transcriptome',
     ]
-    cmd.extend(extra_args)
+    cmd.extend(split_compleasm_extra_args(extra_args))
     run_command(cmd)
     return out_dir
 
@@ -651,6 +825,7 @@ def collect_species(args, metadata):
                 'Placeholder scientific_name from amalgkit integrate cannot be used for busco. '
                 'Edit --species before running busco.'
             )
+        species_output_token(species_name)
         fasta_path = os.path.realpath(args.fasta)
         if not os.path.exists(fasta_path):
             raise FileNotFoundError('FASTA file not found: {}'.format(fasta_path))
@@ -683,23 +858,59 @@ def collect_species(args, metadata):
     species = list(dict.fromkeys(species))
     if len(species) == 0:
         raise ValueError('No valid scientific_name entries were found in metadata.')
+    token_by_species = build_busco_species_token_map(metadata, species)
     fasta_filenames = list_fasta_filenames(fasta_dir)
     fasta_map = {}
     for sp in species:
-        fasta_map[sp] = resolve_species_fasta(sp, fasta_dir, fasta_filenames=fasta_filenames)
+        fasta_map[sp] = resolve_species_fasta(
+            token_by_species[sp],
+            fasta_dir,
+            fasta_filenames=fasta_filenames,
+        )
     return species, fasta_map
 
 
-def process_species_busco(sp, fasta_path, busco_dir, tool, args, extra_args):
+def process_species_busco(
+    sp,
+    fasta_path,
+    busco_dir,
+    tool,
+    args,
+    extra_args,
+    species_token=None,
+):
     print('Processing species: {}'.format(sp), flush=True)
+    species_token = resolve_species_token(sp, species_token, label='species_token')
+    try:
+        default_species_token = species_output_token(sp)
+    except ValueError:
+        default_species_token = None
+    tool_species_name = sp if species_token == default_species_token else species_token
     if tool == 'busco':
         output_root = busco_dir
-        ensure_clean_dir(os.path.join(output_root, sp.replace(' ', '_')), args.redo)
-        tool_out_dir = run_busco(fasta_path, sp, output_root, args, extra_args)
+        ensure_clean_dir(
+            safe_join_component(
+                output_root,
+                species_token,
+                label='scientific_name-derived BUSCO token',
+            ),
+            args.redo,
+        )
+        tool_out_dir = run_busco(fasta_path, tool_species_name, output_root, args, extra_args)
     else:
-        tool_out_dir = run_compleasm(fasta_path, sp, busco_dir, args, extra_args)
+        tool_out_dir = run_compleasm(
+            fasta_path,
+            tool_species_name,
+            busco_dir,
+            args,
+            extra_args,
+        )
     full_table = find_full_table(tool_out_dir)
-    out_table = os.path.join(busco_dir, sp.replace(' ', '_') + '_busco.tsv')
+    out_table = safe_join_component(
+        busco_dir,
+        species_token + '_busco.tsv',
+        label='BUSCO table filename',
+    )
     normalize_busco_table(full_table, out_table)
     print('BUSCO table written: {}'.format(out_table), flush=True)
     return out_table
@@ -711,7 +922,23 @@ def load_metadata_if_needed_for_busco(args):
     return load_metadata(args)
 
 
-def run_busco_species_jobs(species, fasta_map, busco_dir, tool, args, extra_args, species_jobs):
+def run_busco_species_jobs(
+    species,
+    fasta_map,
+    busco_dir,
+    tool,
+    args,
+    extra_args,
+    species_jobs,
+    species_token_by_name=None,
+):
+    species_token_by_name = species_token_by_name or {
+        sp: species_output_token(sp) for sp in species
+    }
+    validate_unique_busco_species_tokens(
+        species,
+        [species_token_by_name[sp] for sp in species],
+    )
     if (species_jobs == 1) or (len(species) <= 1):
         for sp in species:
             process_species_busco(
@@ -721,6 +948,7 @@ def run_busco_species_jobs(species, fasta_map, busco_dir, tool, args, extra_args
                 tool=tool,
                 args=args,
                 extra_args=extra_args,
+                species_token=species_token_by_name[sp],
             )
         return
 
@@ -735,6 +963,7 @@ def run_busco_species_jobs(species, fasta_map, busco_dir, tool, args, extra_args
             tool=tool,
             args=args,
             extra_args=extra_args,
+            species_token=species_token_by_name[sp],
         ),
         max_workers=max_workers,
     )
@@ -765,6 +994,7 @@ def busco_main(args):
     extra_args = shlex.split(runtime_args.tool_args) if runtime_args.tool_args else []
     metadata = load_metadata_if_needed_for_busco(runtime_args)
     species, fasta_map = collect_species(runtime_args, metadata)
+    species_token_by_name = build_busco_species_token_map(metadata, species)
     with staged_output_dir(busco_dir, redo=runtime_args.redo, prefix='amalgkit_busco_stage_') as stage_dir:
         run_busco_species_jobs(
             species=species,
@@ -774,9 +1004,14 @@ def busco_main(args):
             args=runtime_args,
             extra_args=extra_args,
             species_jobs=species_jobs,
+            species_token_by_name=species_token_by_name,
         )
         generate_busco_species_plot(
             busco_dir=stage_dir,
             species_order=species,
             out_path=os.path.join(stage_dir, 'busco_completeness.pdf'),
+            species_name_by_token={
+                token: species_name
+                for species_name, token in species_token_by_name.items()
+            },
         )

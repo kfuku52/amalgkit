@@ -105,6 +105,20 @@ class TestDatasetExtract:
         with pytest.raises(NotADirectoryError, match='not a directory'):
             extract_dataset(name='toy', out_dir=str(out_file), overwrite=False)
 
+    @pytest.mark.parametrize('dangling', [False, True])
+    def test_extract_dataset_rejects_symbolic_link_output_root(self, tmp_path, monkeypatch, dangling):
+        _prepare_fake_dataset(tmp_path, monkeypatch)
+        target = tmp_path / 'outside'
+        if not dangling:
+            target.mkdir()
+        linked_out = tmp_path / 'linked-out'
+        linked_out.symlink_to(target, target_is_directory=True)
+
+        with pytest.raises(ValueError, match='symbolic-link dataset output root'):
+            extract_dataset(name='toy', out_dir=str(linked_out), overwrite=True)
+
+        assert not (target / 'fasta' / 'toy.fa.gz').exists()
+
     def test_extract_dataset_rejects_destination_entry_that_is_directory(self, tmp_path, monkeypatch):
         _prepare_fake_dataset(tmp_path, monkeypatch)
         out_dir = tmp_path / 'out'
@@ -130,6 +144,29 @@ class TestDatasetExtract:
 
         with pytest.raises(FileNotFoundError, match='Dataset source file\\(s\\) not found'):
             extract_dataset(name='toy', out_dir=str(out_dir), overwrite=False)
+
+    def test_extract_dataset_rejects_unsafe_packaged_filename(self, tmp_path, monkeypatch):
+        _prepare_fake_dataset(tmp_path, monkeypatch)
+        dataset_module.DATASETS['toy']['files']['fasta'] = ['../escape.fa']
+
+        with pytest.raises(ValueError, match='dataset filename'):
+            extract_dataset(name='toy', out_dir=str(tmp_path / 'out'), overwrite=True)
+
+        assert not (tmp_path / 'escape.fa').exists()
+
+    def test_extract_dataset_rejects_symbolic_link_destination(self, tmp_path, monkeypatch):
+        _prepare_fake_dataset(tmp_path, monkeypatch)
+        out_dir = tmp_path / 'out'
+        fasta_dir = out_dir / 'fasta'
+        fasta_dir.mkdir(parents=True)
+        outside = tmp_path / 'outside.fa'
+        outside.write_text('keep', encoding='utf-8')
+        (fasta_dir / 'toy.fa.gz').symlink_to(outside)
+
+        with pytest.raises(ValueError, match='symbolic-link dataset'):
+            extract_dataset(name='toy', out_dir=str(out_dir), overwrite=True)
+
+        assert outside.read_text(encoding='utf-8') == 'keep'
 
 
 class TestDatasetValidation:

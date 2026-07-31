@@ -161,18 +161,18 @@ def _fit_latent_model(
 ):
     run_ids = list(counts_df.columns)
     if k <= 0:
-        coefficients, fitted = _fit_linear_effects(response_matrix, design_matrix)
-        corrected_log_counts = design_matrix.dot(coefficients).T + offsets.reshape(1, -1)
-        corrected = numpy.exp(numpy.clip(corrected_log_counts, -MAX_EXPONENT, MAX_EXPONENT))
-        corrected_df = pandas.DataFrame(corrected, index=counts_df.index, columns=run_ids)
+        _coefficients, fitted = _fit_linear_effects(response_matrix, design_matrix)
+        corrected_df = counts_df.astype(float).copy()
         latent_df = pandas.DataFrame(index=run_ids)
         objective = _objective_value(response_matrix - fitted)
         return _LatentFit(corrected_df, latent_df, objective, 0, True, 0)
 
+    _design_coefficients, design_fitted = _fit_linear_effects(response_matrix, design_matrix)
+    design_residuals = response_matrix - design_fitted
     weighted_residuals, _gene_weights = _weighted_residuals(
-        _project_orthogonal_to_design(response_matrix, design_matrix),
+        design_residuals,
         normalized_counts,
-        response_matrix,
+        design_fitted,
         family,
     )
     latent = _update_latent_factors(weighted_residuals, design_matrix, k)
@@ -196,15 +196,20 @@ def _fit_latent_model(
         design_augmented = numpy.column_stack([design_matrix, latent])
         coefficients, fitted = _fit_linear_effects(response_matrix, design_augmented)
         residuals = response_matrix - fitted
-        weighted_residuals, _gene_weights = _weighted_residuals(
-            residuals,
+        weighted_design_residuals, _gene_weights = _weighted_residuals(
+            design_residuals,
             normalized_counts=normalized_counts,
             fitted_matrix=fitted,
             family=family,
         )
-        updated_latent = _update_latent_factors(weighted_residuals, design_matrix, latent.shape[1])
+        updated_latent = _update_latent_factors(
+            weighted_design_residuals,
+            design_matrix,
+            latent.shape[1],
+        )
         iterations = iteration + 1
-        objective = _objective_value(weighted_residuals)
+        weighted_model_residuals = residuals * _gene_weights
+        objective = _objective_value(weighted_model_residuals)
         if _subspace_distance(latent, updated_latent) <= float(tol):
             latent = updated_latent
             converged = True
@@ -229,9 +234,14 @@ def _fit_latent_model(
 
     design_augmented = numpy.column_stack([design_matrix, latent])
     coefficients, fitted = _fit_linear_effects(response_matrix, design_augmented)
-    design_only = design_matrix.dot(coefficients[:design_matrix.shape[1], :]).T
-    corrected_log_counts = design_only + offsets.reshape(1, -1)
-    corrected = numpy.exp(numpy.clip(corrected_log_counts, -MAX_EXPONENT, MAX_EXPONENT))
+    latent_coefficients = coefficients[design_matrix.shape[1]:, :]
+    latent_effect = latent.dot(latent_coefficients).T
+    corrected_response = response_matrix - latent_effect
+    corrected_normalized = (
+        numpy.exp(numpy.clip(corrected_response, -MAX_EXPONENT, MAX_EXPONENT))
+        - 0.5
+    )
+    corrected = numpy.maximum(corrected_normalized, 0.0) * numpy.exp(offsets).reshape(1, -1)
     corrected_df = pandas.DataFrame(corrected, index=counts_df.index, columns=run_ids)
     latent_df = pandas.DataFrame(
         latent,
@@ -366,6 +376,24 @@ def run_latent_glm_backend(
             extra={'latent_converged': True},
         ).to_jsonable()
         return counts.copy(), pandas.DataFrame(index=run_ids), summary
+
+    if not fit.converged:
+        summary = BatchEffectResult(
+            backend='latent_glm',
+            method=method,
+            skip_reason='latent_not_converged',
+            stable=False,
+            corrected_run_ids=[],
+            uncorrected_run_ids=list(run_ids),
+            resolved_latent_k=int(resolved_k),
+            latent_family=family,
+            latent_iterations=int(fit.iterations),
+            latent_objective=float(fit.objective),
+            negative_values_before_clip=0,
+            negative_values_after_clip=0,
+            extra={'latent_converged': False},
+        ).to_jsonable()
+        return counts.copy(), fit.latent_df, summary
 
     corrected_df = fit.corrected_df.loc[:, run_ids]
     corrected_df = corrected_df.clip(lower=0.0)

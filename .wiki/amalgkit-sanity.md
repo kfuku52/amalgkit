@@ -87,6 +87,12 @@ amalgkit sanity --out_dir ./ --all --strict yes --strict_level warning
 
 `--strict_level warning` fails on warnings or errors.
 
+Content checks validate FASTQ record structure, supported nonempty index files,
+quant table schemas and finite nonnegative values, quant JSON ranges, BUSCO
+tables, and downstream metadata tables. Missing-item and rerun manifest files
+are rewritten on every check, including as empty files after a successful
+recheck, so stale targets are not retained.
+
 ## Report and Rerun
 
 Default report path:

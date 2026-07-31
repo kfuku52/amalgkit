@@ -9,6 +9,13 @@ from amalgkit.cli_utils import (
 )
 
 
+def positive_int(value):
+    int_value = int(value)
+    if int_value <= 0:
+        raise argparse.ArgumentTypeError('must be > 0')
+    return int_value
+
+
 def build_parser(command_handlers, command_names, version, prog=None):
     parser = argparse.ArgumentParser(
         description='A toolkit for cross-species transcriptome amalgamation',
@@ -122,6 +129,8 @@ def build_parser(command_handlers, command_names, version, prog=None):
                           '"inferred" = basename(out_dir).')
     pse.add_argument('--select_rules_tsv', metavar='PATH|inferred', default='inferred', type=str, required=False, action='store',
                      help='default=%(default)s: PATH to select_rules.tsv. "inferred" = out_dir/select_rules.tsv')
+    pse.add_argument('--random_seed', metavar='INT', default=0, type=int, required=False, action='store',
+                     help='default=%(default)s: Non-negative random seed used for deterministic sample selection.')
     pse.set_defaults(handler=command_handlers['select'])
 
     pge_help = 'Retrieving fastq files. See `amalgkit getfastq -h`'
@@ -183,13 +192,13 @@ def build_parser(command_handlers, command_names, version, prog=None):
                           '"auto" keeps the MMseqs2 default; lower values are faster but less sensitive.')
     pge.add_argument('--rrna_filter_chunk_spots', metavar='INT', default=5000000, type=int,
                      required=False, action='store',
-                     help='default=%(default)s: Maximum spots per MMseqs rRNA query chunk. Paired mates stay in '
-                          'the same chunk and are removed together.')
+                     help='default=%(default)s: Maximum FASTQ spots per synchronized MMseqs2 rRNA query chunk. '
+                          'Paired mates stay in the same chunk and are removed together.')
     pge.add_argument('--rrna_filter_memory_limit', metavar='SIZE|auto', default='32G', type=str,
                      required=False, action='store',
-                     help='default=%(default)s: Value forwarded to MMseqs --split-memory-limit for SILVA index '
-                          'creation and each rRNA search. This controls target-DB splitting, not total process RSS. '
-                          '"auto" keeps the MMseqs default.')
+                     help='default=%(default)s: Positive integer byte count with an optional uppercase B/K/M/G/T '
+                          'unit, forwarded to MMseqs2 --split-memory-limit for SILVA index creation and each '
+                          'rRNA search (for example, 32G). "auto" keeps the MMseqs2 default.')
     pge.add_argument('--rrna_filter_jobs', metavar='1|2|auto', default=1, type=int_or_auto,
                      required=False, action='store',
                      help='default=%(default)s: Maximum concurrently processed SRA runs while rRNA filtering is '
@@ -281,6 +290,12 @@ def build_parser(command_handlers, command_names, version, prog=None):
     pge.add_argument('--sra_download_method', metavar='auto|urllib|curl', default='auto', type=str, required=False, action='store',
                      choices=['auto', 'urllib', 'curl'],
                      help='default=%(default)s: Method for downloading SRA objects from cloud URLs.')
+    pge.add_argument('--sra_download_wait_timeout_seconds', metavar='INT', default=86400, type=positive_int,
+                     required=False, action='store',
+                     help='default=%(default)s: Maximum seconds to wait for an available provider download slot.')
+    pge.add_argument('--sra_download_transfer_timeout_seconds', metavar='INT', default=21600, type=positive_int,
+                     required=False, action='store',
+                     help='default=%(default)s: Maximum seconds allowed for one SRA or original FASTQ transfer.')
     pge.add_argument('--read_name', metavar='default|trinity', default='default', type=str, required=False, action='store',
                      choices=['default', 'trinity'],
                      help='default=%(default)s: read name formatting for downstream analysis.')

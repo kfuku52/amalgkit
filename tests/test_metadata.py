@@ -1,5 +1,6 @@
 import xml.etree.ElementTree as ET
 import json
+import pathlib
 from contextlib import contextmanager
 
 import pytest
@@ -9,7 +10,14 @@ from http.client import IncompleteRead
 
 from types import SimpleNamespace
 
-from amalgkit.metadata import _prepare_single_metadata, fetch_sra_xml, metadata_main
+from amalgkit.metadata import (
+    _load_species_list,
+    _prepare_single_metadata,
+    _query_output_token,
+    _run_single_query,
+    fetch_sra_xml,
+    metadata_main,
+)
 from amalgkit.util import Metadata
 
 
@@ -262,6 +270,19 @@ class TestMetadataMain:
 
         with pytest.raises(NotADirectoryError, match='not a directory'):
             metadata_main(args)
+
+    def test_rejects_symbolic_link_metadata_directory(self, tmp_path):
+        out_dir = tmp_path / 'out'
+        out_dir.mkdir()
+        outside = tmp_path / 'outside'
+        outside.mkdir()
+        (out_dir / 'metadata').symlink_to(outside, target_is_directory=True)
+        args = self._args(out_dir)
+
+        with pytest.raises(ValueError, match='symbolic-link Metadata path'):
+            metadata_main(args)
+
+        assert not (outside / 'metadata.tsv').exists()
 
     def test_rejects_metadata_tsv_directory_when_redo_disabled(self, tmp_path):
         out_dir = tmp_path / 'out'
@@ -634,7 +655,7 @@ class TestMetadataMain:
 
         merged_path = out_dir / 'metadata_specieswise' / 'Species_alpha' / 'Species_alpha.metadata.tsv'
         merged_df = pandas.read_csv(merged_path, sep='\t')
-        assert set(merged_df['run'].tolist()) == {'SRR_FLOWER', 'SRR_LEAF', 'SRR_ROOT'}
+        assert set(merged_df['run'].tolist()) == {'SRR_LEAF', 'SRR_ROOT'}
         assert 'sample_attribute_leaf_stage' in merged_df.columns
         assert 'sample_attribute_root_zone' in merged_df.columns
         assert merged_df.loc[merged_df['run'] == 'SRR_LEAF', 'sample_attribute_leaf_stage'].iat[0] == 'young'
@@ -785,7 +806,153 @@ class TestMetadataMain:
         assert observed['merged'] == ['Species alpha', 'Species beta']
 
 
+def test_cached_query_is_reused_only_when_its_fingerprint_matches(tmp_path, monkeypatch):
+    args = TestMetadataMain._args(tmp_path / 'query')
+    search_calls = []
+
+    def fake_search(search_term, args=None):
+        _ = args
+        search_calls.append(search_term)
+        return [search_term]
+
+    def fake_iter(record_ids, args=None):
+        _ = args
+        yield record_ids[0]
+
+    def fake_from_xml_roots(xml_roots):
+        search_term = list(xml_roots)[0]
+        return Metadata.from_DataFrame(
+            pandas.DataFrame(
+                [
+                    {
+                        'scientific_name': 'Species alpha',
+                        'experiment': 'SRX1',
+                        'run': 'RUN_' + search_term.upper(),
+                        'taxid': '1001',
+                        'tissue': 'leaf',
+                    }
+                ]
+            )
+        )
+
+    monkeypatch.setattr('amalgkit.metadata.search_sra_record_ids', fake_search)
+    monkeypatch.setattr('amalgkit.metadata.iter_sra_xml_chunks', fake_iter)
+    monkeypatch.setattr('amalgkit.metadata.Metadata.from_xml_roots', fake_from_xml_roots)
+
+    first = _run_single_query(
+        args=args,
+        search_string='first',
+        allow_cached=True,
+    )
+    second = _run_single_query(
+        args=args,
+        search_string='second',
+        allow_cached=True,
+    )
+    second_info = dict(second['query_info'])
+    second_info['created_at'] = '2020-01-02T03:04:05'
+    with open(second['paths']['query_info_path'], 'w', encoding='utf-8') as handle:
+        json.dump(second_info, handle)
+    summary_before = pathlib.Path(second['paths']['summary_path']).read_bytes()
+    cached_second = _run_single_query(
+        args=args,
+        search_string='second',
+        allow_cached=True,
+    )
+
+    assert search_calls == ['first', 'second']
+    assert first['query_info']['used_cached_metadata'] is False
+    assert second['query_info']['used_cached_metadata'] is False
+    assert cached_second['query_info']['used_cached_metadata'] is True
+    assert cached_second['query_info']['created_at'] == '2020-01-02T03:04:05'
+    assert cached_second['query_info']['last_accessed_at'] is not None
+    assert pathlib.Path(second['paths']['summary_path']).read_bytes() == summary_before
+    assert cached_second['metadata'].df['run'].tolist() == ['RUN_SECOND']
+
+
+def test_species_list_preserves_valid_explicit_tokens_and_rejects_collisions(tmp_path):
+    species_tsv = tmp_path / 'species.tsv'
+    pandas.DataFrame(
+        [
+            {'scientific_name': 'Species alpha', 'species_token': 'alpha-v2'},
+            {'scientific_name': 'Species beta', 'species_token': 'beta.v2'},
+        ]
+    ).to_csv(species_tsv, sep='\t', index=False)
+
+    assert _load_species_list(species_tsv, include_tokens=True) == [
+        ('Species alpha', 'alpha-v2'),
+        ('Species beta', 'beta.v2'),
+    ]
+
+    pandas.DataFrame(
+        [
+            {'scientific_name': 'Species alpha', 'species_token': 'shared'},
+            {'scientific_name': 'Species beta', 'species_token': 'shared'},
+        ]
+    ).to_csv(species_tsv, sep='\t', index=False)
+    with pytest.raises(ValueError, match='Duplicate species_token'):
+        _load_species_list(species_tsv, include_tokens=True)
+
+
+def test_species_list_rejects_unsafe_explicit_token(tmp_path):
+    species_tsv = tmp_path / 'species.tsv'
+    pandas.DataFrame(
+        [
+            {'scientific_name': 'Species alpha', 'species_token': '../escape'},
+        ]
+    ).to_csv(species_tsv, sep='\t', index=False)
+
+    with pytest.raises(ValueError, match='species_token'):
+        _load_species_list(species_tsv, include_tokens=True)
+
+
+def test_query_output_token_normalizes_spaces_and_rejects_path_separators():
+    assert _query_output_token('root tip') == 'root_tip'
+    with pytest.raises(ValueError, match='path separators'):
+        _query_output_token('../escape')
+
+
 class TestMetadataFromXmlRoots:
+    def test_emits_one_metadata_row_per_run_in_an_experiment_package(self):
+        xml_root = ET.fromstring(
+            '''
+            <EXPERIMENT_PACKAGE_SET>
+              <EXPERIMENT_PACKAGE>
+                <SAMPLE>
+                  <SAMPLE_NAME>
+                    <SCIENTIFIC_NAME>Species alpha</SCIENTIFIC_NAME>
+                    <TAXON_ID>1001</TAXON_ID>
+                  </SAMPLE_NAME>
+                </SAMPLE>
+                <EXPERIMENT>
+                  <IDENTIFIERS>
+                    <PRIMARY_ID>SRX000001</PRIMARY_ID>
+                  </IDENTIFIERS>
+                  <DESIGN>
+                    <LIBRARY_DESCRIPTOR>
+                      <LIBRARY_LAYOUT><SINGLE /></LIBRARY_LAYOUT>
+                    </LIBRARY_DESCRIPTOR>
+                  </DESIGN>
+                </EXPERIMENT>
+                <RUN_SET>
+                  <RUN total_spots="10" total_bases="100">
+                    <IDENTIFIERS><PRIMARY_ID>SRR000001</PRIMARY_ID></IDENTIFIERS>
+                  </RUN>
+                  <RUN total_spots="20" total_bases="250">
+                    <IDENTIFIERS><PRIMARY_ID>SRR000002</PRIMARY_ID></IDENTIFIERS>
+                  </RUN>
+                </RUN_SET>
+              </EXPERIMENT_PACKAGE>
+            </EXPERIMENT_PACKAGE_SET>
+            '''
+        )
+
+        metadata = Metadata.from_xml_roots([xml_root])
+
+        assert metadata.df['run'].tolist() == ['SRR000001', 'SRR000002']
+        assert metadata.df['total_spots'].tolist() == ['10', '20']
+        assert metadata.df['total_bases'].tolist() == ['100', '250']
+
     def test_preserves_colliding_sample_attributes(self):
         xml_root = ET.fromstring(
             '''

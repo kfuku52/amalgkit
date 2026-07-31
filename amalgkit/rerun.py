@@ -16,6 +16,7 @@ from amalgkit.filter_utils import (
     load_merged_per_species_metadata,
     merge_metadata_by_run,
     save_exclusion_plot_pdf,
+    staged_output_dir,
 )
 from amalgkit.finalize import _build_per_species_args, _copy_species_tables
 from amalgkit.getfastq import getfastq_main
@@ -27,6 +28,7 @@ from amalgkit.merge import (
     scan_quant_abundance_paths,
 )
 from amalgkit.metadata_utils import Metadata, load_metadata, write_updated_metadata
+from amalgkit.output_utils import atomic_output_path
 from amalgkit.per_species_tables import generate_per_species_tables, resolve_per_species_input
 from amalgkit.quant import (
     build_quant_tasks,
@@ -35,7 +37,14 @@ from amalgkit.quant import (
     quant_main,
     resolve_quant_backends_for_tasks,
 )
+from amalgkit.runtime_utils import (
+    resolve_species_token,
+    safe_join_component,
+    validate_safe_path_component,
+    validate_unique_species_tokens,
+)
 from amalgkit.busco import (
+    build_busco_species_token_map,
     collect_species as collect_busco_species,
     generate_busco_species_plot,
     load_metadata_if_needed_for_busco,
@@ -61,6 +70,17 @@ FINALIZE_ROOT_OUTPUT_FILES = [
     'metadata.tsv',
     'finalize_exclusion.pdf',
 ]
+MERGE_REQUIRED_SPECIES_SUFFIXES = (
+    'eff_length.tsv',
+    'est_counts.tsv',
+    'tpm.tsv',
+)
+FINALIZE_REQUIRED_SPECIES_SUFFIXES = (
+    'metadata.tsv',
+    'expression.tsv',
+    'batch_effect_summary.tsv',
+    'curation_final_summary.tsv',
+)
 
 
 def _parse_csv_option(value):
@@ -82,10 +102,13 @@ def _write_json(path, payload):
     parent_dir = os.path.dirname(path)
     if parent_dir != '':
         os.makedirs(parent_dir, exist_ok=True)
+    if os.path.lexists(path) and os.path.islink(path):
+        raise ValueError('Refusing symbolic-link JSON output path: {}'.format(path))
     if os.path.exists(path) and (not os.path.isfile(path)):
         raise IsADirectoryError('JSON output path exists but is not a file: {}'.format(path))
-    with open(path, 'w', encoding='utf-8') as handle:
-        json.dump(payload, handle, indent=2, sort_keys=True)
+    with atomic_output_path(path, suffix='.json') as temporary_path:
+        with open(temporary_path, 'w', encoding='utf-8') as handle:
+            json.dump(payload, handle, indent=2, sort_keys=True)
 
 
 def _resolve_report_path(args):
@@ -101,11 +124,23 @@ def _resolve_report_path(args):
 
 
 def _resolve_execution_out_dir(args, report_payload):
-    requested = os.path.realpath(args.out_dir)
+    requested_absolute = os.path.abspath(args.out_dir)
+    if os.path.lexists(requested_absolute) and os.path.islink(requested_absolute):
+        raise ValueError(
+            'Refusing symbolic-link rerun output root: {}'.format(requested_absolute)
+        )
+    requested = os.path.realpath(requested_absolute)
     report_out_dir = str(report_payload.get('out_dir', '')).strip()
     if report_out_dir == '':
         return requested
-    report_out_dir = os.path.realpath(report_out_dir)
+    report_out_absolute = os.path.abspath(report_out_dir)
+    if os.path.lexists(report_out_absolute) and os.path.islink(report_out_absolute):
+        raise ValueError(
+            'Refusing symbolic-link rerun report output root: {}'.format(
+                report_out_absolute
+            )
+        )
+    report_out_dir = os.path.realpath(report_out_absolute)
     if requested == os.path.realpath('./'):
         return report_out_dir
     return requested
@@ -128,8 +163,26 @@ def _resolve_manifest_path(args, out_dir):
     if requested.lower() == 'none':
         return None
     if requested == 'inferred':
-        return os.path.realpath(os.path.join(out_dir, 'sanity', RERUN_MANIFEST_FILENAME))
-    return os.path.realpath(requested)
+        manifest_path = os.path.abspath(
+            os.path.join(out_dir, 'sanity', RERUN_MANIFEST_FILENAME)
+        )
+    else:
+        manifest_path = os.path.abspath(requested)
+    manifest_parent = os.path.dirname(manifest_path)
+    if os.path.lexists(manifest_parent) and os.path.islink(manifest_parent):
+        raise ValueError(
+            'Refusing symbolic-link rerun manifest directory: {}'.format(
+                manifest_parent
+            )
+        )
+    if os.path.lexists(manifest_path) and os.path.islink(manifest_path):
+        raise ValueError(
+            'Refusing symbolic-link rerun manifest path: {}'.format(manifest_path)
+        )
+    return os.path.join(
+        os.path.realpath(manifest_parent),
+        os.path.basename(manifest_path),
+    )
 
 
 def _load_metadata_from_path(metadata_path, out_dir):
@@ -204,6 +257,8 @@ def _filter_runs_by_user_filters(metadata, run_ids, allowed_runs, allowed_specie
             run_to_species[run_id] = species
     filtered = []
     for run_id in run_ids:
+        if run_id not in run_to_species:
+            continue
         if allowed_runs and (run_id not in allowed_runs):
             continue
         if allowed_species and (run_to_species.get(run_id, '') not in allowed_species):
@@ -212,10 +267,16 @@ def _filter_runs_by_user_filters(metadata, run_ids, allowed_runs, allowed_specie
     return filtered
 
 
-def _filter_species_by_user_filters(species_names, allowed_species):
-    if not allowed_species:
-        return list(species_names)
-    return [species for species in species_names if species in allowed_species]
+def _filter_species_by_user_filters(species_names, allowed_species, available_species=None):
+    available_set = None if available_species is None else set(available_species)
+    filtered = []
+    for species in species_names:
+        if (available_set is not None) and (species not in available_set):
+            continue
+        if allowed_species and (species not in allowed_species):
+            continue
+        filtered.append(species)
+    return filtered
 
 
 def _subset_metadata(metadata, run_ids=None, species_names=None):
@@ -262,6 +323,7 @@ def _normalize_relative_paths(relative_paths):
         rel_path = str(rel_path).strip()
         if (rel_path == '') or (rel_path in seen):
             continue
+        rel_path = validate_safe_path_component(rel_path, label='rerun relative path')
         seen.add(rel_path)
         normalized.append(rel_path)
     return normalized
@@ -278,7 +340,7 @@ def _preflight_rerun_overwrite(target_root, relative_paths, redo):
         return
     existing_paths = []
     for rel_path in _normalize_relative_paths(relative_paths):
-        target_path = os.path.join(target_root, rel_path)
+        target_path = safe_join_component(target_root, rel_path, label='rerun relative path')
         if os.path.lexists(target_path):
             existing_paths.append(target_path)
     if len(existing_paths) == 0:
@@ -287,12 +349,51 @@ def _preflight_rerun_overwrite(target_root, relative_paths, redo):
     raise AmalgkitExit('--redo is set to "no". Exiting.', exit_code=0, use_stderr=False)
 
 
-def _normalize_species_dir_name(species):
-    return '_'.join(str(species).strip().split())
+def _normalize_species_dir_name(species, explicit_token=None):
+    return resolve_species_token(
+        species,
+        explicit_token,
+        label='species_token',
+    )
+
+
+def _build_rerun_species_token_map(metadata):
+    species_names = metadata.df['scientific_name'].fillna('').astype(str).str.strip()
+    if 'species_token' in metadata.df.columns:
+        explicit_tokens = metadata.df['species_token'].fillna('').astype(str).str.strip()
+    else:
+        explicit_tokens = pandas.Series('', index=metadata.df.index)
+    validate_unique_species_tokens(
+        list(zip(species_names.tolist(), explicit_tokens.tolist())),
+        context='rerun output',
+    )
+    token_by_species = {}
+    for species, explicit_token in zip(species_names.tolist(), explicit_tokens.tolist()):
+        if species == '':
+            continue
+        token = _normalize_species_dir_name(species, explicit_token)
+        previous_token = token_by_species.get(species)
+        if previous_token is not None and previous_token != token:
+            raise ValueError(
+                'Scientific name has conflicting species_token values: {} ({}, {})'.format(
+                    species,
+                    previous_token,
+                    token,
+                )
+            )
+        token_by_species[species] = token
+    return token_by_species
 
 
 def _create_staging_root(target_root, prefix):
-    parent_dir = os.path.dirname(os.path.realpath(target_root))
+    absolute_target_root = os.path.abspath(target_root)
+    if os.path.lexists(absolute_target_root) and os.path.islink(absolute_target_root):
+        raise ValueError(
+            'Refusing to stage through symbolic-link rerun output root: {}'.format(
+                absolute_target_root
+            )
+        )
+    parent_dir = os.path.dirname(os.path.realpath(absolute_target_root))
     if parent_dir != '':
         os.makedirs(parent_dir, exist_ok=True)
         return tempfile.mkdtemp(prefix=prefix, dir=parent_dir)
@@ -300,18 +401,32 @@ def _create_staging_root(target_root, prefix):
 
 
 def _commit_staged_paths(target_root, staged_root, relative_paths):
-    target_root = os.path.realpath(target_root)
-    staged_root = os.path.realpath(staged_root)
+    absolute_target_root = os.path.abspath(target_root)
+    absolute_staged_root = os.path.abspath(staged_root)
+    if os.path.lexists(absolute_target_root) and os.path.islink(absolute_target_root):
+        raise ValueError(
+            'Refusing to commit through symbolic-link rerun output root: {}'.format(
+                absolute_target_root
+            )
+        )
+    if os.path.lexists(absolute_staged_root) and os.path.islink(absolute_staged_root):
+        raise ValueError(
+            'Refusing symbolic-link rerun staging root: {}'.format(absolute_staged_root)
+        )
+    target_root = os.path.realpath(absolute_target_root)
+    staged_root = os.path.realpath(absolute_staged_root)
     parent_dir = os.path.dirname(target_root)
     if parent_dir != '':
         os.makedirs(parent_dir, exist_ok=True)
     os.makedirs(target_root, exist_ok=True)
+    requested_paths = _normalize_relative_paths(relative_paths)
     replace_paths = [
-        rel_path.strip()
-        for rel_path in relative_paths
-        if str(rel_path).strip() != ''
+        rel_path
+        for rel_path in requested_paths
+        if os.path.lexists(
+            safe_join_component(staged_root, rel_path, label='rerun relative path')
+        )
     ]
-    replace_paths = list(dict.fromkeys(replace_paths))
     backup_root = tempfile.mkdtemp(
         prefix='amalgkit_rerun_backup_',
         dir=parent_dir if parent_dir != '' else None,
@@ -320,18 +435,18 @@ def _commit_staged_paths(target_root, staged_root, relative_paths):
     backed_up_paths = []
     try:
         for rel_path in replace_paths:
-            target_path = os.path.join(target_root, rel_path)
+            target_path = safe_join_component(target_root, rel_path, label='rerun relative path')
             if not os.path.lexists(target_path):
                 continue
-            backup_path = os.path.join(backup_root, rel_path)
+            backup_path = safe_join_component(backup_root, rel_path, label='rerun relative path')
             os.makedirs(os.path.dirname(backup_path), exist_ok=True)
             os.rename(target_path, backup_path)
             backed_up_paths.append((rel_path, backup_path))
         for rel_path in replace_paths:
-            staged_path = os.path.join(staged_root, rel_path)
+            staged_path = safe_join_component(staged_root, rel_path, label='rerun relative path')
             if not os.path.lexists(staged_path):
                 continue
-            target_path = os.path.join(target_root, rel_path)
+            target_path = safe_join_component(target_root, rel_path, label='rerun relative path')
             os.makedirs(os.path.dirname(target_path), exist_ok=True)
             os.rename(staged_path, target_path)
             committed_paths.append(target_path)
@@ -339,13 +454,45 @@ def _commit_staged_paths(target_root, staged_root, relative_paths):
         for target_path in reversed(committed_paths):
             _remove_path_if_exists(target_path)
         for rel_path, backup_path in reversed(backed_up_paths):
-            target_path = os.path.join(target_root, rel_path)
+            target_path = safe_join_component(target_root, rel_path, label='rerun relative path')
             os.makedirs(os.path.dirname(target_path), exist_ok=True)
             if os.path.lexists(backup_path):
                 os.rename(backup_path, target_path)
         shutil.rmtree(backup_root, ignore_errors=True)
         raise
     shutil.rmtree(backup_root, ignore_errors=True)
+
+
+def _validate_staged_species_outputs(staged_root, species_tokens, required_suffixes, label):
+    for token in species_tokens:
+        species_dir = safe_join_component(
+            staged_root,
+            token,
+            label='{} species token'.format(label),
+        )
+        if os.path.islink(species_dir) or not os.path.isdir(species_dir):
+            raise RuntimeError(
+                '{} rerun did not generate the required species directory: {}'.format(
+                    label,
+                    species_dir,
+                )
+            )
+        for suffix in required_suffixes:
+            required_path = os.path.join(
+                species_dir,
+                '{}_{}'.format(token, suffix),
+            )
+            if (
+                os.path.islink(required_path)
+                or not os.path.isfile(required_path)
+                or os.path.getsize(required_path) <= 0
+            ):
+                raise RuntimeError(
+                    '{} rerun did not generate required output: {}'.format(
+                        label,
+                        required_path,
+                    )
+                )
 
 
 def _list_unique_species(metadata):
@@ -371,15 +518,29 @@ def _list_selected_species(metadata):
     return [value for value in dict.fromkeys(selected.tolist()) if value != '']
 
 
-def _copy_existing_merge_species_dirs(source_merge_dir, stage_payload_dir, species_names, skip_species=None):
+def _copy_existing_merge_species_dirs(
+    source_merge_dir,
+    stage_payload_dir,
+    species_names,
+    skip_species=None,
+    species_token_by_name=None,
+):
     if not os.path.isdir(source_merge_dir):
         return
+    species_token_by_name = species_token_by_name or {}
+
+    def resolve_token(species):
+        token = species_token_by_name.get(species)
+        if token is None:
+            token = _normalize_species_dir_name(species)
+        return token
+
     skip_tokens = {
-        _normalize_species_dir_name(species)
+        resolve_token(species)
         for species in list(skip_species or [])
     }
     species_tokens = _normalize_relative_paths([
-        _normalize_species_dir_name(species)
+        resolve_token(species)
         for species in list(species_names or [])
     ])
     for token in species_tokens:
@@ -452,7 +613,11 @@ def _build_rerun_plan(report_payload, metadata, requested_checks, allowed_runs, 
             target_type='species',
             include_warnings=include_warnings,
         )
-        species_targets = _filter_species_by_user_filters(species_targets, allowed_species)
+        species_targets = _filter_species_by_user_filters(
+            species_targets,
+            allowed_species,
+            available_species=_list_unique_species(metadata),
+        )
         has_global_issue = _has_global_issue(
             report_payload=report_payload,
             check_name=check_name,
@@ -596,7 +761,8 @@ def rerun_merge_check(args, metadata, target_species, force_all_species=False, d
         return
     merge_dir = os.path.join(args.out_dir, 'merge')
     quant_dir = os.path.join(args.out_dir, 'quant')
-    target_species_dirs = [_normalize_species_dir_name(species) for species in target_species]
+    species_token_by_name = _build_rerun_species_token_map(metadata)
+    target_species_dirs = [species_token_by_name[species] for species in target_species]
     redo = _resolve_rerun_redo(args)
     _preflight_rerun_overwrite(
         target_root=merge_dir,
@@ -624,6 +790,7 @@ def rerun_merge_check(args, metadata, target_species, force_all_species=False, d
             stage_payload_dir=stage_payload_dir,
             species_names=_list_unique_species(metadata),
             skip_species=target_species,
+            species_token_by_name=species_token_by_name,
         )
         refreshed_metadata = merge_fastp_stats_into_metadata(
             Metadata.from_DataFrame(metadata.df.copy(deep=True)),
@@ -640,6 +807,12 @@ def rerun_merge_check(args, metadata, target_species, force_all_species=False, d
         generate_merge_plot_pdfs(
             merge_dir=stage_payload_dir,
             path_metadata_merge=merge_metadata_path,
+        )
+        _validate_staged_species_outputs(
+            staged_root=stage_payload_dir,
+            species_tokens=target_species_dirs,
+            required_suffixes=MERGE_REQUIRED_SPECIES_SUFFIXES,
+            label='merge',
         )
         _commit_staged_paths(
             target_root=merge_dir,
@@ -659,9 +832,10 @@ def rerun_busco_check(args, metadata, target_species, rebuild_summary_only=False
         return
     busco_dir = os.path.join(args.out_dir, 'busco')
     all_species = _list_unique_species(metadata)
+    species_token_by_name = _build_rerun_species_token_map(metadata)
     target_relative_paths = []
     for species in target_species:
-        token = _normalize_species_dir_name(species)
+        token = species_token_by_name[species]
         target_relative_paths.extend([token, token + '_busco.tsv'])
     target_relative_paths.append('busco_completeness.pdf')
     redo = _resolve_rerun_redo(args)
@@ -670,30 +844,50 @@ def rerun_busco_check(args, metadata, target_species, rebuild_summary_only=False
         relative_paths=target_relative_paths,
         redo=redo,
     )
-    os.makedirs(busco_dir, exist_ok=True)
     runtime_args = clone_namespace(args, redo=redo)
-    if len(target_species) > 0:
-        tool = select_busco_tool(runtime_args)
-        full_metadata = load_metadata_if_needed_for_busco(runtime_args)
-        subset_metadata = None
-        if full_metadata is not None:
-            subset_metadata = _subset_metadata(full_metadata, species_names=target_species)
-        species, fasta_map = collect_busco_species(runtime_args, subset_metadata)
-        extra_args = shlex.split(runtime_args.tool_args) if getattr(runtime_args, 'tool_args', None) else []
-        for species_name in species:
-            process_species_busco(
-                sp=species_name,
-                fasta_path=fasta_map[species_name],
-                busco_dir=busco_dir,
-                tool=tool,
-                args=runtime_args,
-                extra_args=extra_args,
+    with staged_output_dir(busco_dir, redo=True, prefix='amalgkit_rerun_busco_') as stage_busco_dir:
+        if os.path.isdir(busco_dir):
+            shutil.copytree(busco_dir, stage_busco_dir, dirs_exist_ok=True)
+        if len(target_species) > 0:
+            tool = select_busco_tool(runtime_args)
+            full_metadata = load_metadata_if_needed_for_busco(runtime_args)
+            subset_metadata = None
+            if full_metadata is not None:
+                subset_metadata = _subset_metadata(full_metadata, species_names=target_species)
+            species, fasta_map = collect_busco_species(runtime_args, subset_metadata)
+            busco_token_by_name = build_busco_species_token_map(
+                subset_metadata,
+                species,
             )
-    generate_busco_species_plot(
-        busco_dir=busco_dir,
-        species_order=all_species,
-        out_path=os.path.join(busco_dir, 'busco_completeness.pdf'),
-    )
+            extra_args = shlex.split(runtime_args.tool_args) if getattr(runtime_args, 'tool_args', None) else []
+            stage_args = clone_namespace(runtime_args, redo=True)
+            for species_name in species:
+                process_species_busco(
+                    sp=species_name,
+                    fasta_path=fasta_map[species_name],
+                    busco_dir=stage_busco_dir,
+                    tool=tool,
+                    args=stage_args,
+                    extra_args=extra_args,
+                    species_token=busco_token_by_name[species_name],
+                )
+        summary_path = os.path.join(stage_busco_dir, 'busco_completeness.pdf')
+        generate_busco_species_plot(
+            busco_dir=stage_busco_dir,
+            species_order=all_species,
+            out_path=summary_path,
+            species_name_by_token={
+                token: species_name
+                for species_name, token in species_token_by_name.items()
+            },
+        )
+        if (
+            not os.path.isfile(summary_path)
+            or os.path.getsize(summary_path) <= 0
+        ):
+            raise RuntimeError(
+                'BUSCO rerun did not generate busco_completeness.pdf.'
+            )
 
 
 def rerun_finalize_check(args, metadata, target_species, force_all_species=False, dry_run=False):
@@ -706,7 +900,8 @@ def rerun_finalize_check(args, metadata, target_species, force_all_species=False
     if dry_run:
         return
     finalize_dir = os.path.join(args.out_dir, 'finalize')
-    target_species_dirs = [_normalize_species_dir_name(species) for species in target_species]
+    species_token_by_name = _build_rerun_species_token_map(metadata)
+    target_species_dirs = [species_token_by_name[species] for species in target_species]
     redo = _resolve_rerun_redo(args)
     _preflight_rerun_overwrite(
         target_root=finalize_dir,
@@ -750,6 +945,12 @@ def rerun_finalize_check(args, metadata, target_species, force_all_species=False
             y_label='Sample count',
             font_size=8,
         )
+        _validate_staged_species_outputs(
+            staged_root=stage_payload_dir,
+            species_tokens=target_species_dirs,
+            required_suffixes=FINALIZE_REQUIRED_SPECIES_SUFFIXES,
+            label='finalize',
+        )
         _commit_staged_paths(
             target_root=finalize_dir,
             staged_root=stage_payload_dir,
@@ -770,6 +971,7 @@ def rerun_main(args):
         metadata=metadata_path,
     )
     metadata = _load_metadata_from_path(metadata_path, out_dir)
+    _build_rerun_species_token_map(metadata)
     allowed_runs = set(_parse_csv_option(getattr(args, 'run', None)))
     allowed_species = set(_parse_csv_option(getattr(args, 'species', None)))
     include_warnings = bool(getattr(args, 'include_warnings', False))

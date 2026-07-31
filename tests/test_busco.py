@@ -12,11 +12,14 @@ from amalgkit.busco import (
     collect_species,
     summarize_busco_species_tables,
     generate_busco_species_plot,
+    has_busco_lineage_cache,
     select_tool,
     ensure_clean_dir,
     run_command,
     run_busco,
     busco_main,
+    build_busco_analysis_command,
+    run_compleasm,
 )
 from amalgkit.util import Metadata
 
@@ -585,6 +588,131 @@ def test_run_busco_places_downloads_under_out_dir(tmp_path, monkeypatch):
     assert '--offline' in analysis_cmd
     assert (out_dir / 'downloads').exists()
     assert (out_dir / 'downloads' / 'busco_downloads').exists()
+
+
+def test_busco_lineage_cache_requires_manifest_and_payload(tmp_path):
+    download_path = tmp_path / 'busco_downloads'
+    lineage_dir = download_path / 'eukaryota_odb12'
+    lineage_dir.mkdir(parents=True)
+    (lineage_dir / 'downloaded.tar.gz').write_bytes(b'partial')
+
+    assert has_busco_lineage_cache(
+        str(download_path),
+        'eukaryota_odb12',
+    ) is False
+
+    (lineage_dir / 'dataset.cfg').write_text(
+        'name=eukaryota\nnumber_of_BUSCOs=2\n',
+        encoding='utf-8',
+    )
+    (lineage_dir / 'hmms').mkdir()
+    assert has_busco_lineage_cache(
+        str(download_path),
+        'eukaryota_odb12',
+    ) is False
+
+    (lineage_dir / 'hmms' / 'BUSCO1.hmm').write_text('HMMER3/f\n', encoding='utf-8')
+    assert has_busco_lineage_cache(
+        str(download_path),
+        'eukaryota_odb12',
+    ) is False
+
+    (lineage_dir / 'hmms' / 'BUSCO2.hmm').write_text('HMMER3/f\n', encoding='utf-8')
+    (lineage_dir / 'scores_cutoff').write_text('BUSCO1 1\n', encoding='utf-8')
+    (lineage_dir / 'lengths_cutoff').write_text('BUSCO1 1 1\n', encoding='utf-8')
+    (lineage_dir / 'ancestral').write_text('>BUSCO1\nAAAA\n', encoding='utf-8')
+    assert has_busco_lineage_cache(
+        str(download_path),
+        'eukaryota_odb12',
+    ) is True
+
+
+def test_busco_lineage_cache_rejects_symlinked_payload(tmp_path):
+    download_path = tmp_path / 'busco_downloads'
+    lineage_dir = download_path / 'eukaryota_odb12'
+    lineage_dir.mkdir(parents=True)
+    (lineage_dir / 'dataset.cfg').write_text(
+        'name=eukaryota\nnumber_of_BUSCOs=1\n',
+        encoding='utf-8',
+    )
+    outside_hmms = tmp_path / 'outside_hmms'
+    outside_hmms.mkdir()
+    (outside_hmms / 'BUSCO1.hmm').write_text('HMMER3/f\n', encoding='utf-8')
+    (lineage_dir / 'hmms').symlink_to(outside_hmms, target_is_directory=True)
+
+    assert has_busco_lineage_cache(
+        str(download_path),
+        'eukaryota_odb12',
+    ) is False
+
+
+def test_busco_lineage_cache_rejects_garbage_hmms_and_missing_support_files(tmp_path):
+    lineage_dir = tmp_path / 'busco_downloads' / 'eukaryota_odb12'
+    (lineage_dir / 'hmms').mkdir(parents=True)
+    (lineage_dir / 'dataset.cfg').write_text(
+        'number_of_BUSCOs=2\n',
+        encoding='utf-8',
+    )
+    (lineage_dir / 'hmms' / 'garbage1.hmm').write_text('x', encoding='utf-8')
+    (lineage_dir / 'hmms' / 'garbage2.hmm').write_text('y', encoding='utf-8')
+
+    assert has_busco_lineage_cache(
+        str(tmp_path / 'busco_downloads'),
+        'eukaryota_odb12',
+    ) is False
+
+
+@pytest.mark.parametrize('attached_arg', ['-o../../escape', '-i/tmp/evil', '-lother', '-c8'])
+def test_busco_rejects_attached_managed_tool_args(tmp_path, attached_arg):
+    args = SimpleNamespace(
+        busco_exe='busco',
+        lineage='eukaryota_odb12',
+        threads=1,
+        redo=False,
+        out_dir=str(tmp_path),
+    )
+
+    with pytest.raises(ValueError, match='must not override'):
+        build_busco_analysis_command(
+            fasta_path='input.fa',
+            sci_name='Species A',
+            output_root=str(tmp_path),
+            args=args,
+            extra_args=[attached_arg],
+        )
+
+
+def test_compleasm_rejects_attached_managed_tool_args(tmp_path):
+    args = SimpleNamespace(
+        compleasm_exe='compleasm',
+        lineage='eukaryota_odb12',
+        threads=1,
+        redo=False,
+    )
+
+    with pytest.raises(ValueError, match='must not override'):
+        run_compleasm(
+            fasta_path='input.fa',
+            sci_name='Species A',
+            output_root=str(tmp_path),
+            args=args,
+            extra_args=['-o../../escape'],
+        )
+
+
+def test_busco_summary_maps_explicit_token_back_to_scientific_name(tmp_path):
+    write_busco_table(
+        tmp_path / 'custom-a_busco.tsv',
+        [['BUSCO1', 'Complete', 'seq1', '100', '200', 'url', 'desc']],
+    )
+
+    summary, _total = summarize_busco_species_tables(
+        str(tmp_path),
+        species_order=['Species A'],
+        species_name_by_token={'custom-a': 'Species A'},
+    )
+
+    assert summary['species'].drop_duplicates().tolist() == ['Species A']
 
 
 def test_run_busco_rejects_download_path_that_is_file(tmp_path):

@@ -22,6 +22,8 @@ Python package dependencies are installed with AMALGKIT. Important runtime libra
 
 AMALGKIT handles NCBI taxonomy lookups with its built-in SQLite backend. The NCBI taxonomy dump is downloaded automatically when a local taxonomy database is not available.
 
+Existing taxonomy caches created by ETE4 are supported without installing ETE4. AMALGKIT reads the ETE4 `taxa.sqlite` schema directly and reuses a colocated `taxdump.tar.gz` without modifying either file. For commands with `--download_dir`, the cache location remains `<download_dir>/ete_taxonomy`; for the default cache, AMALGKIT also detects ETE4's `~/.local/share/ete` directory. The optional ETE4 `taxa.sqlite.traverse.pkl` file is not needed by AMALGKIT.
+
 ## Core External Tools
 
 Some commands call external bioinformatics tools. Install only the tools needed for the workflow you run.

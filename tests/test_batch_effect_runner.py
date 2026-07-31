@@ -6,6 +6,35 @@ import pandas
 from amalgkit import batch_effect_runner
 
 
+def test_combatseq_skips_when_only_one_non_singleton_batch_remains():
+    counts = pandas.DataFrame(
+        {
+            'RUN1': [10.0, 20.0],
+            'RUN2': [11.0, 21.0],
+            'RUN3': [30.0, 40.0],
+        },
+        index=['G1', 'G2'],
+    )
+    metadata = pandas.DataFrame(
+        {
+            'run': ['RUN1', 'RUN2', 'RUN3'],
+            'sample_group': ['A', 'B', 'A'],
+            'bioproject': ['BP1', 'BP1', 'BP2'],
+        }
+    )
+
+    corrected, summary = batch_effect_runner.run_combatseq_backend(
+        counts_df=counts,
+        metadata_df=metadata,
+    )
+
+    pandas.testing.assert_frame_equal(corrected, counts)
+    assert summary['method'] == 'insufficient_batches'
+    assert summary['skip_reason'] == 'combatseq_insufficient_batches'
+    assert summary['corrected_run_ids'] == []
+    assert summary['uncorrected_run_ids'] == ['RUN1', 'RUN2', 'RUN3']
+
+
 def test_batch_effect_runner_writes_combatseq_outputs(tmp_path, capsys, monkeypatch):
     counts_path = tmp_path / 'counts.tsv'
     metadata_path = tmp_path / 'metadata.tsv'

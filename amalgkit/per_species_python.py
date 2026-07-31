@@ -85,8 +85,7 @@ def _compute_sample_group_correlation_metrics(tc, sra, selected_sample_groups, d
     required_sample_groups = [group for group in selected_sample_groups if group in set(sra.loc[:, 'sample_group'].astype(str))]
     out = sra.copy()
     for column in ['ws_within_group_cor', 'ws_max_nongroup_cor', 'ws_margin', 'ws_robust_z', 'ws_outlier_candidate']:
-        if column not in out.columns:
-            out.loc[:, column] = numpy.nan if column != 'ws_outlier_candidate' else False
+        out.loc[:, column] = numpy.nan if column != 'ws_outlier_candidate' else False
     if (len(required_sample_groups) <= 1) or (tc.shape[1] == 0) or (out.shape[0] == 0):
         return out
     tc_ave = sample_group_mean(tc, out, required_sample_groups)['tc_ave']
@@ -165,7 +164,11 @@ def _apply_within_group_filter(tc, sra, args, selected_sample_groups, min_dif=0.
         outlier_col='ws_outlier_candidate',
     )
     candidate_runs = (
-        filtered.loc[filtered['ws_outlier_candidate'].fillna(False).astype(bool), 'run']
+        filtered.loc[
+            filtered['ws_outlier_candidate'].fillna(False).astype(bool)
+            & filtered['run'].astype(str).isin(tc.columns.astype(str)),
+            'run',
+        ]
         .fillna('')
         .astype(str)
         .tolist()
@@ -189,6 +192,14 @@ def _apply_within_group_filter(tc, sra, args, selected_sample_groups, min_dif=0.
         out_sra.loc[out_sra['run'].astype(str).isin(excluded_runs), 'exclusion'] = 'low_within_sample_group_correlation'
     out_tc = tc.loc[:, [run_id for run_id in tc.columns if run_id not in set(excluded_runs)]].copy()
     return out_tc, out_sra, excluded_runs
+
+
+def _should_stop_within_group_filter(current_tc, next_tc, excluded_runs):
+    if len(excluded_runs) == 0:
+        return True
+    if next_tc.shape[1] == 0:
+        return True
+    return list(next_tc.columns) == list(current_tc.columns)
 
 
 def _save_ws_scatter_plot(metadata_df, out_pdf_path, font_size=8):
@@ -468,10 +479,15 @@ def _run_prepare_or_wsfilter_python_worker(args, metadata, species_tag, input_di
                 transform_method=str(getattr(args, 'norm', 'log2p1-fpkm')),
                 font_size=8,
             )
+        should_stop = _should_stop_within_group_filter(
+            current_tc=current_tc,
+            next_tc=next_tc,
+            excluded_runs=excluded_runs,
+        )
         current_tc = next_tc
         current_sra = next_sra
         round_index += 1
-        if len(excluded_runs) == 0:
+        if should_stop:
             break
 
     batch_info = initialize_batch_info(run_ids=current_sra.loc[:, 'run'].astype(str).tolist(), batch_effect_alg='no')

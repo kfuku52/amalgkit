@@ -3,10 +3,16 @@ from types import SimpleNamespace
 
 import numpy
 import pandas
+import pytest
 
 from amalgkit.command_context import PerSpeciesTableContext
 from amalgkit.metadata_utils import Metadata
-from amalgkit.per_species_finalize_python import _compute_distance_matrix
+from amalgkit.per_species_finalize_python import (
+    _compute_distance_matrix,
+    _run_batch_effect_step,
+    _transform_raw_to_fpkm,
+    _transform_raw_to_tpm,
+)
 from amalgkit import per_species_tables as per_species_tables_module
 
 
@@ -134,6 +140,197 @@ def test_compute_distance_matrix_clips_negative_roundoff():
     assert numpy.all(dist >= 0.0)
     assert dist[0, 1] == 0.0
     assert dist[1, 0] == 0.0
+
+
+def test_batch_step_aligns_effective_lengths_after_gene_partitioning():
+    counts = pandas.DataFrame(
+        {
+            'RUN1': [100.0, 0.0, 100.0],
+            'RUN2': [100.0, 0.0, 100.0],
+        },
+        index=['G1', 'G2', 'G3'],
+    )
+    effective_lengths = pandas.DataFrame(
+        {
+            'RUN1': [100.0, 200.0, 1000.0],
+            'RUN2': [100.0, 200.0, 1000.0],
+        },
+        index=['G1', 'G2', 'G3'],
+    )
+    metadata = pandas.DataFrame(
+        {
+            'run': ['RUN1', 'RUN2'],
+            'sample_group': ['A', 'B'],
+            'scientific_name': ['Example species', 'Example species'],
+            'bioproject': ['BP1', 'BP2'],
+            'exclusion': ['no', 'no'],
+        }
+    )
+    args = SimpleNamespace(
+        norm='none-fpkm',
+        batch_effect_alg='combatseq',
+        clip_negative=True,
+    )
+
+    result = _run_batch_effect_step(
+        counts_df=counts,
+        metadata_df=metadata,
+        eff_length_df=effective_lengths,
+        args=args,
+    )
+
+    assert list(result['tc'].index) == ['G1', 'G2', 'G3']
+    assert result['tc'].loc['G3', 'RUN1'] == 500_000.0
+    assert result['tc'].loc['G2', 'RUN1'] == 0.0
+
+
+def test_single_sample_batch_skip_still_applies_requested_normalization():
+    counts = pandas.DataFrame({'RUN1': [100.0, 100.0]}, index=['G1', 'G2'])
+    effective_lengths = pandas.DataFrame(
+        {'RUN1': [100.0, 1000.0]},
+        index=['G1', 'G2'],
+    )
+    metadata = pandas.DataFrame(
+        {
+            'run': ['RUN1'],
+            'sample_group': ['A'],
+            'scientific_name': ['Example species'],
+            'bioproject': ['BP1'],
+            'exclusion': ['no'],
+        }
+    )
+
+    for batch_effect_alg in ('combatseq', 'ruvseq', 'latent_glm'):
+        result = _run_batch_effect_step(
+            counts_df=counts,
+            metadata_df=metadata,
+            eff_length_df=effective_lengths,
+            args=SimpleNamespace(
+                norm='none-tpm',
+                batch_effect_alg=batch_effect_alg,
+                clip_negative=True,
+            ),
+        )
+        numpy.testing.assert_allclose(
+            result['tc'].loc[:, 'RUN1'].to_numpy(dtype=float),
+            [909_090.9090909091, 90_909.09090909091],
+        )
+        assert result['batch_info']['skip_reason'] == 'single_sample'
+
+
+def test_ruvseq_all_nonexpressed_genes_returns_safe_noop():
+    counts = pandas.DataFrame(
+        {
+            'RUN1': [0.0, 0.0],
+            'RUN2': [0.0, 0.0],
+        },
+        index=['G1', 'G2'],
+    )
+    effective_lengths = pandas.DataFrame(
+        {
+            'RUN1': [100.0, 100.0],
+            'RUN2': [100.0, 100.0],
+        },
+        index=['G1', 'G2'],
+    )
+    metadata = pandas.DataFrame(
+        {
+            'run': ['RUN1', 'RUN2'],
+            'sample_group': ['A', 'B'],
+            'scientific_name': ['Example species', 'Example species'],
+            'bioproject': ['BP1', 'BP2'],
+            'exclusion': ['no', 'no'],
+        }
+    )
+
+    result = _run_batch_effect_step(
+        counts_df=counts,
+        metadata_df=metadata,
+        eff_length_df=effective_lengths,
+        args=SimpleNamespace(
+            norm='none-tpm',
+            batch_effect_alg='ruvseq',
+            clip_negative=True,
+            ruvseq_control_genes='auto',
+            ruvseq_k='auto',
+            ruvseq_k_max=2,
+            ruvseq_control_top_n=1000,
+            ruvseq_min_controls=2,
+        ),
+    )
+
+    pandas.testing.assert_frame_equal(result['tc'], counts)
+    assert result['batch_info']['skip_reason'] == 'no_expressed_genes'
+    assert result['batch_info']['batch_effect_alg_applied'] == 'no'
+    assert result['batch_info']['corrected_runs'] == []
+    assert result['batch_info']['uncorrected_runs'] == ['RUN1', 'RUN2']
+
+
+def test_expression_transform_allows_missing_or_zero_length_for_zero_counts():
+    counts = pandas.DataFrame(
+        {
+            'RUN1': [0.0, 0.0, 5.0],
+            'RUN2': [0.0, 2.0, 0.0],
+        },
+        index=['G1', 'G2', 'G3'],
+    )
+    effective_lengths = pandas.DataFrame(
+        {
+            'RUN1': [0.0, numpy.nan, 10.0],
+            'RUN2': [numpy.nan, 20.0, 0.0],
+        },
+        index=['G1', 'G2', 'G3'],
+    )
+
+    transformed = _transform_raw_to_tpm(
+        counts_df=counts,
+        eff_length_df=effective_lengths,
+    )
+
+    numpy.testing.assert_allclose(
+        transformed.to_numpy(dtype=float),
+        numpy.array(
+            [
+                [0.0, 0.0],
+                [0.0, 1_000_000.0],
+                [1_000_000.0, 0.0],
+            ]
+        ),
+    )
+
+
+def test_expression_transform_rejects_nonpositive_or_nonfinite_effective_lengths():
+    counts = pandas.DataFrame({'RUN1': [1.0]}, index=['G1'])
+
+    for invalid_value in (0.0, -1.0, numpy.nan, numpy.inf):
+        effective_lengths = pandas.DataFrame(
+            {'RUN1': [invalid_value]},
+            index=['G1'],
+        )
+        with pytest.raises(ValueError, match='finite positive values'):
+            _transform_raw_to_tpm(
+                counts_df=counts,
+                eff_length_df=effective_lengths,
+            )
+
+
+@pytest.mark.parametrize('invalid_value', [0.0, -1.0, numpy.nan, numpy.inf])
+def test_fpkm_transform_rejects_invalid_tmm_library_size(invalid_value):
+    counts = pandas.DataFrame({'RUN1': [1.0]}, index=['G1'])
+    effective_lengths = pandas.DataFrame({'RUN1': [100.0]}, index=['G1'])
+    metadata = pandas.DataFrame(
+        {
+            'run': ['RUN1'],
+            'tmm_library_size': [invalid_value],
+        }
+    )
+
+    with pytest.raises(ValueError, match='tmm_library_size'):
+        _transform_raw_to_fpkm(
+            counts_df=counts,
+            eff_length_df=effective_lengths,
+            metadata_df=metadata,
+        )
 
 
 def test_generate_per_species_tables_uses_python_finalize_worker_for_skip_curation(tmp_path):

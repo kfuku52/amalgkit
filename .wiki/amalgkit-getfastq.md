@@ -58,6 +58,12 @@ Provider concurrency caps use `--download_lock_dir`, which defaults to `out_dir/
 
 Set a cap to `0` or `auto` to disable throttling.
 
+Provider-slot waits are bounded by `--sra_download_wait_timeout_seconds` (default 86,400 seconds),
+and each transfer is bounded by `--sra_download_transfer_timeout_seconds` (default 21,600 seconds).
+Downloaded files must be non-empty. Transfer, TLS, HTTP, or malformed-provider failures move on to the
+next enabled source instead of aborting the entire fallback chain. ENA locations are taken from its
+official filereport fields; AMALGKIT does not synthesize an `.sra` URL.
+
 ## FASTQ Processing
 
 Common options:
@@ -111,9 +117,10 @@ Large FASTQ inputs are searched in synchronized spot chunks (`--rrna_filter_chun
 5,000,000), so paired mates remain together and are removed together. Successful chunks are rewritten
 immediately and their MMseqs query databases are deleted. `--rrna_filter_memory_limit` (default `32G`)
 is forwarded to MMseqs `--split-memory-limit` for both index creation and search; this limits target-DB
-splitting rather than imposing a hard whole-process RSS limit. `--rrna_filter_jobs` defaults to 1 and may
-be set to 2 to cap the number of simultaneously processed runs. On the first failed run, runs that have
-not started are not submitted.
+splitting rather than imposing a hard whole-process RSS limit. Its value must be a positive integer with
+an optional uppercase `B`, `K`, `M`, `G`, or `T` suffix, or `auto` to retain the MMseqs default.
+`--rrna_filter_jobs` defaults to 1, accepts `1`, `2`, or `auto`, and caps the number of simultaneously
+processed runs. On the first failed run, runs that have not started are not submitted.
 
 `--contam_filter yes` uses MMseqs2 taxonomy against a database such as UniRef90.
 

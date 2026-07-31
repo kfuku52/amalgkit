@@ -1,8 +1,10 @@
 import errno
 import hashlib
 import json
+import math
 import os
 import re
+import secrets
 import socket
 import stat
 import tempfile
@@ -24,9 +26,11 @@ from amalgkit.ncbi_taxonomy import (
 
 
 DOWNLOAD_LOCK_POLL_SECONDS = 5
-DOWNLOAD_LOCK_TIMEOUT_SECONDS = 3600
+DOWNLOAD_LOCK_TIMEOUT_SECONDS = None
 DOWNLOAD_LOCK_HEARTBEAT_SECONDS = 60
 DOWNLOAD_LOCK_STALE_SECONDS = 900
+DOWNLOAD_TRANSFER_TIMEOUT_SECONDS = 21600
+DOWNLOAD_IO_CHUNK_SIZE = 1024 * 1024
 NCBI_TAXDUMP_URL = 'https://ftp.ncbi.nlm.nih.gov/pub/taxonomy/taxdump.tar.gz'
 NCBI_TAXDUMP_MD5_URL = NCBI_TAXDUMP_URL + '.md5'
 _BUILTIN_NCBI_TAXONOMY_CLASS = NcbiTaxonomy
@@ -99,9 +103,10 @@ def resolve_lock_path(lock_dir, lock_name, default_name='lock'):
 
 
 def resolve_download_lock_path(args, lock_name, resolve_download_dir_fn=None):
-    if resolve_download_dir_fn is None:
-        resolve_download_dir_fn = resolve_download_dir
-    lock_dir = os.path.join(resolve_download_dir_fn(args), 'locks')
+    lock_dir = resolve_download_lock_dir(
+        args,
+        resolve_download_dir_fn=resolve_download_dir_fn,
+    )
     return resolve_lock_path(lock_dir=lock_dir, lock_name=lock_name)
 
 
@@ -246,13 +251,16 @@ def _resolve_local_boot_id():
     return boot_id
 
 
-def _build_lock_metadata():
+def _build_lock_metadata(owner_token=None):
+    if owner_token is None:
+        owner_token = secrets.token_hex(16)
     return {
-        'format': 'amalgkit-lock-v2',
+        'format': 'amalgkit-lock-v3',
         'pid': os.getpid(),
         'hostname': socket.gethostname(),
         'boot_id': _resolve_local_boot_id(),
         'created_at': time.time(),
+        'owner_token': owner_token,
     }
 
 
@@ -307,13 +315,32 @@ def _describe_lock_owner(metadata):
 
 def _try_create_lock_file(lock_path):
     _assert_lock_path_is_regular_file(lock_path)
+    owner_token = secrets.token_hex(16)
     try:
-        fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_RDWR)
     except FileExistsError:
-        return False
-    with os.fdopen(fd, 'w') as lock_handle:
-        lock_handle.write(_serialize_lock_metadata(_build_lock_metadata()))
-    return True
+        return None
+    try:
+        metadata = _build_lock_metadata(owner_token=owner_token)
+        payload = _serialize_lock_metadata(metadata).encode('utf-8')
+        written = 0
+        while written < len(payload):
+            written += os.write(fd, payload[written:])
+        os.fsync(fd)
+        stat_result = os.fstat(fd)
+        return {
+            'fd': fd,
+            'owner_token': owner_token,
+            'st_dev': stat_result.st_dev,
+            'st_ino': stat_result.st_ino,
+        }
+    except Exception:
+        os.close(fd)
+        try:
+            os.remove(lock_path)
+        except FileNotFoundError:
+            pass
+        raise
 
 
 def _read_lock_owner_pid(lock_path):
@@ -367,7 +394,34 @@ def _stale_lock_heartbeat_expired(stat_result, stale_seconds):
     return heartbeat_age > stale_seconds
 
 
-def _start_lock_heartbeat(lock_path, interval_seconds):
+def _lock_path_matches_owner(lock_path, owner_state):
+    if not isinstance(owner_state, dict):
+        return False
+    fd = owner_state.get('fd')
+    if fd is None:
+        return False
+    try:
+        fd_stat = os.fstat(fd)
+        path_stat = os.stat(lock_path, follow_symlinks=False)
+    except (FileNotFoundError, OSError):
+        return False
+    if not stat.S_ISREG(path_stat.st_mode):
+        return False
+    if (
+        (fd_stat.st_dev != path_stat.st_dev)
+        or (fd_stat.st_ino != path_stat.st_ino)
+        or (path_stat.st_dev != owner_state.get('st_dev'))
+        or (path_stat.st_ino != owner_state.get('st_ino'))
+    ):
+        return False
+    metadata = _read_lock_metadata(lock_path)
+    return (
+        isinstance(metadata, dict)
+        and metadata.get('owner_token') == owner_state.get('owner_token')
+    )
+
+
+def _start_lock_heartbeat(lock_path, interval_seconds, owner_state):
     interval_seconds = float(interval_seconds)
     if interval_seconds <= 0:
         raise ValueError('interval_seconds must be > 0.')
@@ -378,9 +432,7 @@ def _start_lock_heartbeat(lock_path, interval_seconds):
             if stop_event.wait(interval_seconds):
                 return
             try:
-                os.utime(lock_path, None)
-            except FileNotFoundError:
-                return
+                os.utime(owner_state['fd'], None)
             except OSError:
                 return
 
@@ -393,12 +445,25 @@ def _start_lock_heartbeat(lock_path, interval_seconds):
     return stop_event, thread
 
 
-def _release_heartbeat_lock(lock_path, heartbeat_stop, heartbeat_thread, lock_label='Lock'):
+def _release_heartbeat_lock(
+    lock_path,
+    heartbeat_stop,
+    heartbeat_thread,
+    owner_state,
+    lock_label='Lock',
+):
     heartbeat_stop.set()
     heartbeat_thread.join(timeout=max(1.0, float(DOWNLOAD_LOCK_HEARTBEAT_SECONDS)))
-    if os.path.lexists(lock_path):
-        _assert_lock_path_is_regular_file(lock_path, lock_label=lock_label)
-        os.remove(lock_path)
+    try:
+        if _lock_path_matches_owner(lock_path=lock_path, owner_state=owner_state):
+            os.remove(lock_path)
+    finally:
+        fd = owner_state.get('fd') if isinstance(owner_state, dict) else None
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
 
 
 def _break_stale_lock_if_needed(lock_path, lock_label='Lock', stale_seconds=DOWNLOAD_LOCK_STALE_SECONDS):
@@ -406,7 +471,7 @@ def _break_stale_lock_if_needed(lock_path, lock_label='Lock', stale_seconds=DOWN
         return False
     _assert_lock_path_is_regular_file(lock_path, lock_label=lock_label)
     try:
-        stat_before = os.stat(lock_path)
+        stat_before = os.stat(lock_path, follow_symlinks=False)
     except FileNotFoundError:
         return False
     metadata = _read_lock_metadata(lock_path)
@@ -415,7 +480,7 @@ def _break_stale_lock_if_needed(lock_path, lock_label='Lock', stale_seconds=DOWN
     if _is_same_host_lock_owner(metadata) and (owner_pid is not None):
         if not _is_process_alive(owner_pid):
             stale_reason = 'same-host owner PID {} is not running'.format(owner_pid)
-    elif _stale_lock_heartbeat_expired(stat_before, stale_seconds):
+    if (stale_reason is None) and _stale_lock_heartbeat_expired(stat_before, stale_seconds):
         stale_reason = 'heartbeat expired after {:.0f} sec ({})'.format(
             time.time() - stat_before.st_mtime,
             _describe_lock_owner(metadata),
@@ -423,13 +488,16 @@ def _break_stale_lock_if_needed(lock_path, lock_label='Lock', stale_seconds=DOWN
     if stale_reason is None:
         return False
     try:
-        stat_now = os.stat(lock_path)
+        stat_now = os.stat(lock_path, follow_symlinks=False)
     except FileNotFoundError:
         return False
     if (
-        (stat_before.st_ino != stat_now.st_ino)
+        (stat_before.st_dev != stat_now.st_dev)
+        or (stat_before.st_ino != stat_now.st_ino)
         or (stat_before.st_size != stat_now.st_size)
         or (stat_before.st_mtime_ns != stat_now.st_mtime_ns)
+        or (stat_before.st_ctime_ns != stat_now.st_ctime_ns)
+        or (_read_lock_metadata(lock_path) != metadata)
     ):
         return False
     try:
@@ -503,11 +571,12 @@ def acquire_exclusive_lock(
     timeout_seconds=DOWNLOAD_LOCK_TIMEOUT_SECONDS,
 ):
     poll_seconds = int(poll_seconds)
-    timeout_seconds = int(timeout_seconds)
     if poll_seconds <= 0:
         raise ValueError('poll_seconds must be > 0.')
-    if timeout_seconds <= 0:
-        raise ValueError('timeout_seconds must be > 0.')
+    if timeout_seconds is not None:
+        timeout_seconds = float(timeout_seconds)
+        if timeout_seconds <= 0:
+            raise ValueError('timeout_seconds must be > 0 or None.')
     _assert_lock_path_is_regular_file(lock_path, lock_label=lock_label)
     lock_path = os.path.realpath(lock_path)
     lock_dir = os.path.dirname(lock_path)
@@ -518,10 +587,12 @@ def acquire_exclusive_lock(
     wait_start = time.time()
     has_reported_wait = False
     while True:
-        if _try_create_lock_file(lock_path):
+        owner_state = _try_create_lock_file(lock_path)
+        if owner_state is not None:
             heartbeat_stop, heartbeat_thread = _start_lock_heartbeat(
                 lock_path=lock_path,
                 interval_seconds=DOWNLOAD_LOCK_HEARTBEAT_SECONDS,
+                owner_state=owner_state,
             )
             try:
                 yield
@@ -530,6 +601,7 @@ def acquire_exclusive_lock(
                     lock_path=lock_path,
                     heartbeat_stop=heartbeat_stop,
                     heartbeat_thread=heartbeat_thread,
+                    owner_state=owner_state,
                     lock_label=lock_label,
                 )
             return
@@ -552,7 +624,7 @@ def acquire_exclusive_lock(
                 flush=True,
             )
             has_reported_wait = True
-        if elapsed > timeout_seconds:
+        if (timeout_seconds is not None) and (elapsed > timeout_seconds):
             raise TimeoutError(
                 'Timed out after {:,} sec waiting for {} lock: {}'.format(
                     timeout_seconds,
@@ -573,11 +645,12 @@ def acquire_counting_semaphore(
     wait=True,
 ):
     poll_seconds = int(poll_seconds)
-    timeout_seconds = int(timeout_seconds)
     if poll_seconds <= 0:
         raise ValueError('poll_seconds must be > 0.')
-    if timeout_seconds <= 0:
-        raise ValueError('timeout_seconds must be > 0.')
+    if timeout_seconds is not None:
+        timeout_seconds = float(timeout_seconds)
+        if timeout_seconds <= 0:
+            raise ValueError('timeout_seconds must be > 0 or None.')
     max_concurrency = int(max_concurrency)
     if max_concurrency <= 0:
         raise ValueError('max_concurrency must be > 0.')
@@ -590,10 +663,12 @@ def acquire_counting_semaphore(
     has_reported_wait = False
     while True:
         for slot_path in slot_paths:
-            if _try_create_lock_file(slot_path):
+            owner_state = _try_create_lock_file(slot_path)
+            if owner_state is not None:
                 heartbeat_stop, heartbeat_thread = _start_lock_heartbeat(
                     lock_path=slot_path,
                     interval_seconds=DOWNLOAD_LOCK_HEARTBEAT_SECONDS,
+                    owner_state=owner_state,
                 )
                 try:
                     yield slot_path
@@ -602,6 +677,7 @@ def acquire_counting_semaphore(
                         lock_path=slot_path,
                         heartbeat_stop=heartbeat_stop,
                         heartbeat_thread=heartbeat_thread,
+                        owner_state=owner_state,
                         lock_label=lock_label,
                     )
                 return
@@ -628,7 +704,7 @@ def acquire_counting_semaphore(
                     flush=True,
                 )
                 has_reported_wait = True
-            if elapsed > timeout_seconds:
+            if (timeout_seconds is not None) and (elapsed > timeout_seconds):
                 raise TimeoutError(
                     'Timed out after {:,} sec waiting for {} slot: {}'.format(
                         timeout_seconds,
@@ -665,6 +741,81 @@ def maybe_acquire_download_semaphore(
         wait=wait,
     ) as slot_path:
         yield slot_path
+
+
+def download_url_to_regular_file(
+    url,
+    output_path,
+    timeout_seconds=DOWNLOAD_TRANSFER_TIMEOUT_SECONDS,
+    urlopen_fn=None,
+    chunk_size=DOWNLOAD_IO_CHUNK_SIZE,
+):
+    if urlopen_fn is None:
+        urlopen_fn = urllib.request.urlopen
+    timeout_seconds = float(timeout_seconds)
+    if (not math.isfinite(timeout_seconds)) or (timeout_seconds <= 0):
+        raise ValueError('timeout_seconds must be a finite value > 0.')
+    chunk_size = int(chunk_size)
+    if chunk_size <= 0:
+        raise ValueError('chunk_size must be > 0.')
+    output_path = os.path.abspath(os.fspath(output_path))
+    parent_dir = os.path.dirname(output_path)
+    if parent_dir != '':
+        _ensure_regular_directory(parent_dir, label='Download parent path')
+    _assert_regular_file_or_absent(output_path, label='Download output path')
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    if hasattr(os, 'O_NOFOLLOW'):
+        flags |= os.O_NOFOLLOW
+    fd = os.open(output_path, flags, 0o666)
+    started_at = time.monotonic()
+    total_bytes = 0
+    stat_result = os.fstat(fd)
+    succeeded = False
+    try:
+        if not stat.S_ISREG(stat_result.st_mode):
+            raise OSError('Download output path is not a regular file: {}'.format(output_path))
+        per_operation_timeout = max(1.0, min(timeout_seconds, 60.0))
+        with urlopen_fn(  # noqa: S310 - callers provide fixed or validated URLs
+            url,
+            timeout=per_operation_timeout,
+        ) as response:
+            with os.fdopen(fd, 'wb', closefd=False) as output_handle:
+                while True:
+                    if (time.monotonic() - started_at) >= timeout_seconds:
+                        raise TimeoutError(
+                            'Download exceeded {:.0f} sec: {}'.format(
+                                timeout_seconds,
+                                url,
+                            )
+                        )
+                    chunk = response.read(chunk_size)
+                    if not chunk:
+                        break
+                    output_handle.write(chunk)
+                    total_bytes += len(chunk)
+                output_handle.flush()
+                os.fsync(output_handle.fileno())
+        if total_bytes <= 0:
+            raise ValueError('Downloaded file is empty: {}'.format(url))
+        succeeded = True
+    finally:
+        os.close(fd)
+        if not succeeded:
+            try:
+                path_stat = os.stat(output_path, follow_symlinks=False)
+            except FileNotFoundError:
+                path_stat = None
+            if (
+                path_stat is not None
+                and stat.S_ISREG(path_stat.st_mode)
+                and path_stat.st_dev == stat_result.st_dev
+                and path_stat.st_ino == stat_result.st_ino
+            ):
+                try:
+                    os.remove(output_path)
+                except FileNotFoundError:
+                    pass
+    return output_path
 
 
 def read_published_md5(checksum_url, expected_filename, urlopen_fn):
@@ -716,10 +867,14 @@ def calculate_file_md5(path):
     return digest.hexdigest()
 
 
-def ensure_ncbi_taxdump_file(taxdump_path, urlretrieve_fn=None, checksum_urlopen_fn=None):
+def ensure_ncbi_taxdump_file(
+    taxdump_path,
+    urlretrieve_fn=None,
+    checksum_urlopen_fn=None,
+    download_timeout_seconds=DOWNLOAD_TRANSFER_TIMEOUT_SECONDS,
+    download_urlopen_fn=None,
+):
     use_published_checksum = urlretrieve_fn is None
-    if urlretrieve_fn is None:
-        urlretrieve_fn = urllib.request.urlretrieve
     if checksum_urlopen_fn is None and use_published_checksum:
         checksum_urlopen_fn = urllib.request.urlopen
     taxdump_path = os.path.abspath(os.fspath(taxdump_path))
@@ -753,10 +908,20 @@ def ensure_ncbi_taxdump_file(taxdump_path, urlretrieve_fn=None, checksum_urlopen
     os.close(tmp_fd)
     print('Downloading NCBI taxonomy dump: {}'.format(NCBI_TAXDUMP_URL), flush=True)
     try:
-        urlretrieve_fn(NCBI_TAXDUMP_URL, tmp_path)
+        if urlretrieve_fn is None:
+            download_url_to_regular_file(
+                url=NCBI_TAXDUMP_URL,
+                output_path=tmp_path,
+                timeout_seconds=download_timeout_seconds,
+                urlopen_fn=download_urlopen_fn,
+            )
+        else:
+            urlretrieve_fn(NCBI_TAXDUMP_URL, tmp_path)
         _assert_regular_file_or_absent(
             tmp_path, label='Downloaded NCBI taxdump temporary path'
         )
+        if os.path.getsize(tmp_path) <= 0:
+            raise ValueError('Downloaded NCBI taxonomy dump is empty.')
         validate_taxonomy_dump(tmp_path)
         if checksum_urlopen_fn is not None:
             expected_md5 = read_published_md5(
@@ -784,11 +949,19 @@ def ensure_ncbi_taxdump_file(taxdump_path, urlretrieve_fn=None, checksum_urlopen
     return taxdump_path
 
 
-def ensure_ete_taxdump_file(taxdump_path, urlretrieve_fn=None, checksum_urlopen_fn=None):
+def ensure_ete_taxdump_file(
+    taxdump_path,
+    urlretrieve_fn=None,
+    checksum_urlopen_fn=None,
+    download_timeout_seconds=DOWNLOAD_TRANSFER_TIMEOUT_SECONDS,
+    download_urlopen_fn=None,
+):
     return ensure_ncbi_taxdump_file(
         taxdump_path=taxdump_path,
         urlretrieve_fn=urlretrieve_fn,
         checksum_urlopen_fn=checksum_urlopen_fn,
+        download_timeout_seconds=download_timeout_seconds,
+        download_urlopen_fn=download_urlopen_fn,
     )
 
 

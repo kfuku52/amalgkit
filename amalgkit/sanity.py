@@ -1,18 +1,20 @@
 import datetime
 import json
+import math
 import numpy as np
 import os
 import pandas
 import re
 
 from amalgkit.exceptions import AmalgkitExit
-from amalgkit.fastq_utils import open_fastq_binary
+from amalgkit.fastq_utils import validate_fastq_structure
 from amalgkit.merge_plots import _collect_est_count_summaries
 from amalgkit.metadata_utils import (
     get_newest_intermediate_file_extension,
     get_sra_stat,
     load_metadata,
 )
+from amalgkit.output_utils import atomic_output_path, atomic_write_dataframe
 from amalgkit.parallel_utils import (
     is_auto_parallel_option,
     resolve_detected_cpu_count,
@@ -20,6 +22,12 @@ from amalgkit.parallel_utils import (
     validate_positive_int_option,
 )
 from amalgkit.prefix_utils import find_run_prefixed_entries
+from amalgkit.runtime_utils import (
+    resolve_species_token,
+    safe_join_component,
+    validate_safe_path_component,
+    validate_unique_species_tokens,
+)
 
 MERGE_ROOT_OUTPUT_FILENAMES = [
     'merge_mapping_rate.pdf',
@@ -34,6 +42,7 @@ MERGE_ROOT_OUTPUT_FILENAMES = [
 
 QUANT_INDEX_SUFFIXES = ('.idx', '.mmi')
 QUANT_INDEX_TRAILING_STEM_SUFFIXES = ('.ont-cdna', '.ont-drna', '.pac-bio', '.pac-bio-hifi')
+QUANT_INDEX_READY_MARKER_SUFFIX = '.amalgkit.ready.json'
 
 
 def list_duplicates(seq):
@@ -70,10 +79,53 @@ def _scan_target_run_dirs(root_path, target_runs):
         pass
     return run_files_map, non_dir_runs
 
-def _normalize_species_prefix(species):
-    normalized = re.sub(r'\s+', '_', str(species).strip())
-    normalized = re.sub(r'_+', '_', normalized)
-    return normalized
+def _normalize_species_prefix(species, explicit_token=None):
+    if str(species).strip() == '':
+        return ''
+    return resolve_species_token(
+        species,
+        explicit_token,
+        label='sanity species_token',
+    )
+
+
+def _build_sanity_species_token_map(metadata, species_names=None):
+    names = metadata.df['scientific_name'].fillna('').astype(str).str.strip()
+    if 'species_token' in metadata.df.columns:
+        explicit_tokens = metadata.df['species_token'].fillna('').astype(str).str.strip()
+    else:
+        explicit_tokens = pandas.Series('', index=metadata.df.index)
+    validate_unique_species_tokens(
+        list(zip(names.tolist(), explicit_tokens.tolist())),
+        context='sanity output',
+    )
+    token_by_species = {}
+    for species, explicit_token in zip(names.tolist(), explicit_tokens.tolist()):
+        if species == '':
+            continue
+        token = _normalize_species_prefix(species, explicit_token)
+        previous_token = token_by_species.get(species)
+        if previous_token is not None and previous_token != token:
+            raise ValueError(
+                'Scientific name has conflicting species_token values: {} ({}, {})'.format(
+                    species,
+                    previous_token,
+                    token,
+                )
+            )
+        token_by_species[species] = token
+    if species_names is None:
+        return token_by_species
+    selected_tokens = {}
+    for species_name in species_names:
+        species = str(species_name).strip()
+        if species == '':
+            continue
+        token = token_by_species.get(species)
+        if token is None:
+            token = _normalize_species_prefix(species)
+        selected_tokens[species] = token
+    return selected_tokens
 
 
 def _get_species_prefix_candidates(species_or_prefix):
@@ -106,16 +158,15 @@ def _print_log_mode(args, num_items, singular_label='run', plural_label=None):
     ))
 
 def _write_unavailable_items(output_dir, filename, item_ids, label):
-    if not item_ids:
-        return ''
     if os.path.exists(output_dir) and (not os.path.isdir(output_dir)):
         raise NotADirectoryError('Sanity output path exists but is not a directory: {}'.format(output_dir))
     os.makedirs(output_dir, exist_ok=True)
     outpath = os.path.join(output_dir, filename)
     print("writing {} to: {}".format(label, outpath))
-    with open(outpath, "w") as f:
-        for item_id in item_ids:
-            f.write(item_id + "\n")
+    with atomic_output_path(outpath, suffix=os.path.splitext(outpath)[1]) as tmp_path:
+        with open(tmp_path, "w") as f:
+            for item_id in item_ids:
+                f.write(item_id + "\n")
     return outpath
 
 
@@ -195,7 +246,7 @@ def _build_getfastq_sra_stat_cache(sra_ids, metadata):
     for sra_id in sra_ids:
         try:
             cache[sra_id] = get_sra_stat(sra_id, metadata)
-        except AssertionError:
+        except (AssertionError, KeyError, TypeError, ValueError):
             cache[sra_id] = None
     return cache
 
@@ -237,7 +288,7 @@ def _check_single_getfastq_run(
     else:
         try:
             sra_stat = get_sra_stat(sra_id, metadata)
-        except AssertionError as exc:
+        except (AssertionError, KeyError, TypeError, ValueError) as exc:
             if verbose_run_logs:
                 print('Skipping {} due to metadata inconsistency: {}'.format(sra_id, exc))
             return False
@@ -290,6 +341,8 @@ def parse_metadata(args, metadata):
                 args.metadata,
             )
         )
+    sra_ids = sra_ids.map(lambda value: validate_safe_path_component(value, label='run ID'))
+    metadata.df.loc[:, 'run'] = sra_ids
     uni_sra_ids = np.unique(sra_ids.to_numpy(dtype=str))
     if len(sra_ids):
         print(len(uni_sra_ids), " SRA runs detected:")
@@ -385,14 +438,13 @@ def check_getfastq_outputs(args, sra_ids, metadata, output_dir):
     else:
         data_unavailable = list(sra_ids)
 
-    if data_unavailable:
-        _write_unavailable_items(
-            output_dir=output_dir,
-            filename="SRA_IDs_without_fastq.txt",
-            item_ids=data_unavailable,
-            label="SRA IDs without getfastq output",
-        )
-    else:
+    _write_unavailable_items(
+        output_dir=output_dir,
+        filename="SRA_IDs_without_fastq.txt",
+        item_ids=data_unavailable,
+        label="SRA IDs without getfastq output",
+    )
+    if not data_unavailable:
         txt = "The getfastq output files for all SRA IDs in --metadata ({}) were found."
         print(txt.format(args.metadata))
 
@@ -417,19 +469,61 @@ def _entry_matches_species_index(entry_name, prefix):
     return _strip_quant_index_stem(entry_name) == _normalize_species_prefix(prefix)
 
 
+def _validate_index_ready_marker(index_path):
+    marker_path = index_path + QUANT_INDEX_READY_MARKER_SUFFIX
+    if not os.path.lexists(marker_path):
+        return ''
+    if os.path.islink(marker_path) or not os.path.isfile(marker_path):
+        return 'Index ready marker is not a regular file: {}'.format(marker_path)
+    try:
+        with open(marker_path, 'r', encoding='utf-8') as handle:
+            payload = json.load(handle)
+        stat_result = os.stat(index_path, follow_symlinks=False)
+        expected_backend = 'kallisto' if index_path.lower().endswith('.idx') else 'oarfish'
+        if not isinstance(payload, dict):
+            return 'Index ready marker must contain a JSON object.'
+        if payload.get('backend') != expected_backend:
+            return 'Index ready marker backend does not match the index suffix.'
+        if int(payload.get('index_size', -1)) != int(stat_result.st_size):
+            return 'Index ready marker size does not match the index file.'
+        if int(payload.get('index_mtime_ns', -1)) != int(stat_result.st_mtime_ns):
+            return 'Index ready marker timestamp does not match the index file.'
+        if int(payload.get('schema_version', 1)) >= 2:
+            reference_fingerprint = payload.get('reference_fingerprint')
+            if (
+                not isinstance(reference_fingerprint, dict)
+                or not str(reference_fingerprint.get('sha256', '')).strip()
+            ):
+                return 'Index ready marker is missing its reference FASTA fingerprint.'
+    except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        return 'Failed to validate index ready marker: {}'.format(exc)
+    return ''
+
+
 def _find_index_files(index_entries, index_dir_path, prefix):
     matched = [
         entry for entry in index_entries
         if _entry_matches_species_index(entry, prefix)
+        and str(entry).lower().endswith(QUANT_INDEX_SUFFIXES)
     ]
     return [
         os.path.join(index_dir_path, entry)
         for entry in matched
-        if os.path.isfile(os.path.join(index_dir_path, entry))
+        if not os.path.islink(os.path.join(index_dir_path, entry))
+        and os.path.isfile(os.path.join(index_dir_path, entry))
+        and os.path.getsize(os.path.join(index_dir_path, entry)) > 0
     ]
 
-def _resolve_species_index_files(species, index_entries, index_dir_path, verbose_run_logs=True):
-    candidates = _get_species_prefix_candidates(species)
+def _resolve_species_index_files(
+    species,
+    index_entries,
+    index_dir_path,
+    verbose_run_logs=True,
+    species_token=None,
+):
+    candidates = _get_species_prefix_candidates(
+        species if species_token is None else species_token
+    )
     sci_name = candidates[0]
     index_path = os.path.join(index_dir_path, sci_name + "*")
     if verbose_run_logs:
@@ -493,7 +587,8 @@ def _check_single_quant_run(sra_id, quant_path, quant_run_files_map, non_dir_run
     return False
 
 
-def check_quant_index(args, uni_species, output_dir):
+def check_quant_index(args, uni_species, output_dir, species_token_by_name=None):
+    species_token_by_name = species_token_by_name or {}
     if args.index_dir:
         index_dir_path = args.index_dir
     else:
@@ -524,6 +619,7 @@ def check_quant_index(args, uni_species, output_dir):
                     index_entries=index_entries,
                     index_dir_path=index_dir_path,
                     verbose_run_logs=verbose_run_logs,
+                    species_token=species_token_by_name.get(species),
                 )
                 is_ambiguous = _classify_index_files(
                     species=species,
@@ -551,6 +647,7 @@ def check_quant_index(args, uni_species, output_dir):
                     index_entries=index_entries,
                     index_dir_path=index_dir_path,
                     verbose_run_logs=False,
+                    species_token=species_token_by_name.get(species),
                 ),
                 max_workers=max_workers,
             )
@@ -572,14 +669,13 @@ def check_quant_index(args, uni_species, output_dir):
                     'Please keep only one index file per species.'.format(len(ambiguous_species))
                 )
 
-        if index_unavailable:
-            _write_unavailable_items(
-                output_dir=output_dir,
-                filename="species_without_index.txt",
-                item_ids=index_unavailable,
-                label="species without index",
-            )
-        else:
+        _write_unavailable_items(
+            output_dir=output_dir,
+            filename="species_without_index.txt",
+            item_ids=index_unavailable,
+            label="species without index",
+        )
+        if not index_unavailable:
             print("index found for all species in --metadata ({})".format(args.metadata))
     else:
         print("Could not find index directory ", index_dir_path, " . Did you provide the correct Path?")
@@ -664,14 +760,13 @@ def check_quant_output(args, sra_ids, output_dir):
     else:
         data_unavailable = list(sra_ids)
 
-    if data_unavailable:
-        _write_unavailable_items(
-            output_dir=output_dir,
-            filename="SRA_IDs_without_quant.txt",
-            item_ids=data_unavailable,
-            label="SRA IDs without quant output",
-        )
-    else:
+    _write_unavailable_items(
+        output_dir=output_dir,
+        filename="SRA_IDs_without_quant.txt",
+        item_ids=data_unavailable,
+        label="SRA IDs without quant output",
+    )
+    if not data_unavailable:
         print("Quant outputs found for all SRA IDs in --metadata ({})".format(args.metadata))
 
     return data_available, data_unavailable
@@ -722,6 +817,19 @@ def _filter_metadata_for_sanity(args, metadata):
     run_filters = _parse_csv_option(getattr(args, 'run', None))
     species_filters = _parse_csv_option(getattr(args, 'species', None))
     filtered_df = metadata.df.copy()
+    eligible_mask = pandas.Series(True, index=filtered_df.index)
+    if 'exclusion' in filtered_df.columns:
+        exclusion = filtered_df['exclusion'].fillna('').astype(str).str.strip().str.lower()
+        if exclusion.ne('').any():
+            eligible_mask &= exclusion.eq('no')
+    if 'is_sampled' in filtered_df.columns:
+        sampled = filtered_df['is_sampled'].fillna('').astype(str).str.strip().str.lower()
+        if sampled.ne('').any():
+            invalid = sorted(set(sampled.loc[(sampled != '') & (~sampled.isin({'yes', 'no'}))].tolist()))
+            if invalid:
+                raise ValueError('Column "is_sampled" contains invalid flag(s): {}'.format(', '.join(invalid)))
+            eligible_mask &= sampled.eq('yes')
+    filtered_df = filtered_df.loc[eligible_mask, :].copy()
     if species_filters:
         if 'scientific_name' not in filtered_df.columns:
             raise ValueError('Column "scientific_name" is required when --species is specified.')
@@ -963,7 +1071,15 @@ def _read_tsv_head(path, nrows=5, comment=None):
     )
 
 
-def _validate_nonempty_table(path, required_columns, context, comment=None, require_data_rows=True, require_non_target_columns=False):
+def _validate_nonempty_table(
+    path,
+    required_columns,
+    context,
+    comment=None,
+    require_data_rows=True,
+    require_non_target_columns=False,
+    numeric_nonnegative_columns=(),
+):
     try:
         df = _read_tsv_head(path, comment=comment)
     except Exception as exc:
@@ -975,9 +1091,53 @@ def _validate_nonempty_table(path, required_columns, context, comment=None, requ
         return '{} did not include any data columns beyond {}.'.format(context, ', '.join(required_columns))
     if require_data_rows and (df.shape[0] == 0):
         return '{} did not contain any data rows.'.format(context)
+    numeric_columns = [
+        column for column in numeric_nonnegative_columns if column in df.columns
+    ]
+    scan_columns = list(numeric_columns)
     if 'target_id' in df.columns:
-        target_ids = df.loc[:, 'target_id'].fillna('').astype(str).str.strip()
-        if require_data_rows and target_ids.eq('').all():
+        scan_columns.append('target_id')
+    if scan_columns:
+        saw_data_row = False
+        saw_valid_target = False
+        seen_target_ids = set()
+        try:
+            chunks = pandas.read_csv(
+                path,
+                sep='\t',
+                header=0,
+                comment=comment,
+                usecols=scan_columns,
+                chunksize=10000,
+                low_memory=False,
+            )
+            for chunk in chunks:
+                saw_data_row = saw_data_row or (chunk.shape[0] > 0)
+                if 'target_id' in chunk.columns:
+                    target_ids = chunk['target_id'].fillna('').astype(str).str.strip()
+                    if target_ids.eq('').any():
+                        return '{} contains missing target_id values.'.format(context)
+                    duplicate_target_ids = set(target_ids.loc[target_ids.duplicated()].tolist())
+                    duplicate_target_ids.update(set(target_ids.tolist()).intersection(seen_target_ids))
+                    if duplicate_target_ids:
+                        return '{} contains duplicate target_id values: {}.'.format(
+                            context,
+                            ', '.join(sorted(duplicate_target_ids)[:5]),
+                        )
+                    seen_target_ids.update(target_ids.tolist())
+                    saw_valid_target = saw_valid_target or bool(target_ids.ne('').any())
+                for column in numeric_columns:
+                    numeric = pandas.to_numeric(chunk[column], errors='coerce')
+                    values = numeric.to_numpy(dtype=float)
+                    if numeric.isna().any() or (not np.isfinite(values).all()):
+                        return '{} contains non-finite values in "{}".'.format(context, column)
+                    if (numeric < 0).any():
+                        return '{} contains negative values in "{}".'.format(context, column)
+        except Exception as exc:
+            return 'Failed to scan {}: {}'.format(context, exc)
+        if require_data_rows and not saw_data_row:
+            return '{} did not contain any data rows.'.format(context)
+        if require_data_rows and ('target_id' in df.columns) and not saw_valid_target:
             return '{} did not contain valid target_id values.'.format(context)
     return ''
 
@@ -988,13 +1148,15 @@ def _validate_quant_run_info_json(path):
             payload = json.load(handle)
     except Exception as exc:
         return 'Failed to read quant run info JSON: {}'.format(exc)
+    if not isinstance(payload, dict):
+        return 'quant run info JSON must contain an object.'
     if 'p_pseudoaligned' not in payload:
         return 'quant run info JSON is missing "p_pseudoaligned".'
     try:
         value = float(payload.get('p_pseudoaligned'))
     except (TypeError, ValueError):
         return 'quant run info JSON has an invalid "p_pseudoaligned" value.'
-    if (value < 0.0) or (value > 100.0):
+    if (not math.isfinite(value)) or (value < 0.0) or (value > 100.0):
         return 'quant run info JSON has out-of-range "p_pseudoaligned": {}'.format(value)
     return ''
 
@@ -1004,24 +1166,12 @@ def _validate_fastq_file(path):
         return 'FASTQ file not found: {}'.format(path)
     if os.path.getsize(path) <= 0:
         return 'FASTQ file is empty: {}'.format(path)
-    newline_count = 0
-    total_bytes = 0
     try:
-        with open_fastq_binary(path) as handle:
-            while True:
-                chunk = handle.read(16 * 1024 * 1024)
-                if chunk == b'':
-                    break
-                total_bytes += len(chunk)
-                newline_count += chunk.count(b'\n')
+        record_count = validate_fastq_structure(path)
     except Exception as exc:
         return 'FASTQ stream validation failed for {}: {}'.format(path, exc)
-    if total_bytes == 0:
-        return 'FASTQ file is empty after decompression: {}'.format(path)
-    if newline_count < 4:
+    if record_count <= 0:
         return 'FASTQ file does not contain a complete record: {}'.format(path)
-    if (newline_count % 4) != 0:
-        return 'FASTQ line count is not divisible by 4: {}'.format(path)
     return ''
 
 
@@ -1126,7 +1276,7 @@ def _write_sanity_summary(output_dir, summary_rows):
         'rerun_manifest_path',
         'example_targets',
     ])
-    summary_df.to_csv(summary_path, sep='\t', index=False)
+    atomic_write_dataframe(summary_df, summary_path, sep='\t', index=False)
     return summary_path
 
 
@@ -1142,7 +1292,7 @@ def _write_sanity_issues(output_dir, issues):
         'message',
         'suggested_action',
     ])
-    issues_df.to_csv(issues_path, sep='\t', index=False)
+    atomic_write_dataframe(issues_df, issues_path, sep='\t', index=False)
     return issues_path
 
 
@@ -1159,8 +1309,9 @@ def _load_previous_sanity_report(output_dir):
 
 def _write_sanity_report_json(output_dir, payload):
     report_path = os.path.join(output_dir, 'sanity_report.json')
-    with open(report_path, 'w', encoding='utf-8') as handle:
-        json.dump(payload, handle, indent=2, sort_keys=True)
+    with atomic_output_path(report_path, suffix='.json') as temporary_path:
+        with open(temporary_path, 'w', encoding='utf-8') as handle:
+            json.dump(payload, handle, indent=2, sort_keys=True)
     return report_path
 
 
@@ -1202,7 +1353,12 @@ def _write_sanity_comparison(output_dir, previous_payload, summary_rows):
     if not comparison_rows:
         return ''
     comparison_path = os.path.join(output_dir, 'sanity_comparison.tsv')
-    pandas.DataFrame(comparison_rows).to_csv(comparison_path, sep='\t', index=False)
+    atomic_write_dataframe(
+        pandas.DataFrame(comparison_rows),
+        comparison_path,
+        sep='\t',
+        index=False,
+    )
     return comparison_path
 
 
@@ -1313,11 +1469,11 @@ def _validate_orphan_entries(check_name, root_path, expected_names, target_type)
 
 def _validate_getfastq_content(metadata, sra_id, root_path, metadata_path, run_files_map):
     issues = []
-    run_dir = os.path.join(root_path, sra_id)
+    run_dir = safe_join_component(root_path, sra_id, label='run ID')
     run_files = run_files_map.get(sra_id, set())
     try:
         sra_stat = get_sra_stat(sra_id, metadata)
-    except AssertionError as exc:
+    except (AssertionError, KeyError, TypeError, ValueError) as exc:
         issues.append(_build_issue(
             check_name='getfastq',
             severity='error',
@@ -1414,16 +1570,30 @@ def run_sanity_check_getfastq(args, metadata, uni_species, sra_ids, output_dir, 
     available, unavailable = check_getfastq_outputs(args, sra_ids, metadata, output_dir)
     issues = []
     for sra_id in unavailable:
-        issues.append(_build_issue(
-            check_name='getfastq',
-            severity='error',
-            issue_type='missing_output',
-            target_type='run',
-            target_id=sra_id,
-            path=os.path.join(root_path, sra_id),
-            message='getfastq output was not detected for this run.',
-            suggested_action='rerun_getfastq',
-        ))
+        try:
+            get_sra_stat(sra_id, metadata)
+        except (AssertionError, KeyError, TypeError, ValueError) as exc:
+            issues.append(_build_issue(
+                check_name='getfastq',
+                severity='error',
+                issue_type='metadata_inconsistency',
+                target_type='run',
+                target_id=sra_id,
+                path=safe_join_component(root_path, sra_id, label='run ID'),
+                message='Metadata inconsistency while resolving getfastq files: {}'.format(exc),
+                suggested_action='review_metadata',
+            ))
+        else:
+            issues.append(_build_issue(
+                check_name='getfastq',
+                severity='error',
+                issue_type='missing_output',
+                target_type='run',
+                target_id=sra_id,
+                path=safe_join_component(root_path, sra_id, label='run ID'),
+                message='getfastq output was not detected for this run.',
+                suggested_action='rerun_getfastq',
+            ))
     issues.extend(_validate_orphan_entries('getfastq', root_path, checked_runs, 'run'))
     if os.path.isdir(root_path):
         run_files_map, _non_dir_runs = _scan_target_run_dirs(root_path, set(available))
@@ -1449,6 +1619,7 @@ def _validate_quant_content(sra_id, root_path, metadata_path):
         required_columns=['target_id', 'length', 'eff_length', 'est_counts', 'tpm'],
         context='quant abundance table {}'.format(abundance_path),
         require_data_rows=True,
+        numeric_nonnegative_columns=['length', 'eff_length', 'est_counts', 'tpm'],
     )
     if abundance_error != '':
         issues.append(_build_issue(
@@ -1521,19 +1692,28 @@ def run_sanity_check_quant(args, metadata, uni_species, sra_ids, output_dir, met
 
 
 def _matches_any_species_index(entry_name, species_values):
+    candidate_name = str(entry_name)
+    if candidate_name.endswith(QUANT_INDEX_READY_MARKER_SUFFIX):
+        candidate_name = candidate_name[:-len(QUANT_INDEX_READY_MARKER_SUFFIX)]
     for species in species_values:
         candidates = _get_species_prefix_candidates(species)
         for candidate in candidates:
-            if _entry_matches_species_index(entry_name, candidate):
+            if _entry_matches_species_index(candidate_name, candidate):
                 return True
     return False
 
 
 def run_sanity_check_index(args, metadata, uni_species, sra_ids, output_dir, metadata_path):
-    _ = (metadata, sra_ids)
+    _ = sra_ids
     root_path = _resolve_sanity_check_path(args, 'index', 'index_dir')
     checked_species = [str(species).strip() for species in list(uni_species)]
-    _available, unavailable = check_quant_index(args, uni_species, output_dir)
+    species_token_by_name = _build_sanity_species_token_map(metadata, checked_species)
+    _available, unavailable = check_quant_index(
+        args,
+        uni_species,
+        output_dir,
+        species_token_by_name=species_token_by_name,
+    )
     issues = []
     if os.path.isdir(root_path):
         index_entries = sorted(os.listdir(root_path))
@@ -1543,6 +1723,7 @@ def run_sanity_check_index(args, metadata, uni_species, sra_ids, output_dir, met
                 index_entries=index_entries,
                 index_dir_path=root_path,
                 verbose_run_logs=False,
+                species_token=species_token_by_name[species],
             )
             if len(index_files) == 0:
                 issues.append(_build_issue(
@@ -1551,7 +1732,7 @@ def run_sanity_check_index(args, metadata, uni_species, sra_ids, output_dir, met
                     issue_type='missing_output',
                     target_type='species',
                     target_id=species,
-                    path=os.path.join(root_path, _normalize_species_prefix(species)),
+                    path=os.path.join(root_path, species_token_by_name[species]),
                     message='No index file matched this species.',
                     suggested_action='rerun_index',
                 ))
@@ -1580,6 +1761,18 @@ def run_sanity_check_index(args, metadata, uni_species, sra_ids, output_dir, met
                     message='Index file is empty.',
                     suggested_action='rerun_index',
                 ))
+            marker_error = _validate_index_ready_marker(index_path)
+            if marker_error != '':
+                issues.append(_build_issue(
+                    check_name='index',
+                    severity='error',
+                    issue_type='invalid_content',
+                    target_type='species',
+                    target_id=species,
+                    path=index_path + QUANT_INDEX_READY_MARKER_SUFFIX,
+                    message=marker_error,
+                    suggested_action='rerun_index',
+                ))
             if _is_stale_output(metadata_path, index_path):
                 issues.append(_build_issue(
                     check_name='index',
@@ -1595,7 +1788,10 @@ def run_sanity_check_index(args, metadata, uni_species, sra_ids, output_dir, met
             entry_path = os.path.join(root_path, entry_name)
             if os.path.isdir(entry_path):
                 continue
-            if _matches_any_species_index(entry_name, checked_species):
+            if _matches_any_species_index(
+                entry_name,
+                species_token_by_name.values(),
+            ):
                 continue
             issues.append(_build_issue(
                 check_name='index',
@@ -1630,9 +1826,14 @@ def run_sanity_check_index(args, metadata, uni_species, sra_ids, output_dir, met
     return row, issues
 
 
-def _validate_merge_species_tables(species, species_dir, metadata_path):
+def _validate_merge_species_tables(
+    species,
+    species_dir,
+    metadata_path,
+    species_token=None,
+):
     issues = []
-    species_tag = _normalize_species_prefix(species)
+    species_tag = _normalize_species_prefix(species, species_token)
     for suffix in ['eff_length.tsv', 'est_counts.tsv', 'tpm.tsv']:
         table_path = os.path.join(species_dir, '{}_{}'.format(species_tag, suffix))
         if not os.path.isfile(table_path):
@@ -1680,10 +1881,13 @@ def _validate_merge_species_tables(species, species_dir, metadata_path):
 
 
 def run_sanity_check_merge(args, metadata, uni_species, sra_ids, output_dir, metadata_path):
-    _ = (metadata, sra_ids)
+    _ = sra_ids
     root_path = _resolve_sanity_check_path(args, 'merge', 'merge_dir')
     checked_species = [str(species).strip() for species in list(uni_species)]
-    species_tokens = {_normalize_species_prefix(species): species for species in checked_species}
+    species_token_by_name = _build_sanity_species_token_map(metadata, checked_species)
+    species_tokens = {
+        token: species for species, token in species_token_by_name.items()
+    }
     issues = []
     if (not os.path.exists(root_path)) or (not os.path.isdir(root_path)):
         for species in checked_species:
@@ -1746,7 +1950,12 @@ def run_sanity_check_merge(args, metadata, uni_species, sra_ids, output_dir, met
                     suggested_action='rerun_merge',
                 ))
                 continue
-            issues.extend(_validate_merge_species_tables(species, species_dir, metadata_path))
+            issues.extend(_validate_merge_species_tables(
+                species,
+                species_dir,
+                metadata_path,
+                species_token=token,
+            ))
         expected_entries = list(species_tokens.keys()) + ['metadata.tsv'] + list(MERGE_ROOT_OUTPUT_FILENAMES)
         issues.extend(_validate_orphan_entries('merge', root_path, expected_entries, 'species'))
     rerun_manifest_path = _write_manifest(
@@ -1760,10 +1969,13 @@ def run_sanity_check_merge(args, metadata, uni_species, sra_ids, output_dir, met
 
 
 def run_sanity_check_busco(args, metadata, uni_species, sra_ids, output_dir, metadata_path):
-    _ = (metadata, sra_ids)
+    _ = sra_ids
     root_path = _resolve_sanity_check_path(args, 'busco', 'busco_dir')
     checked_species = [str(species).strip() for species in list(uni_species)]
-    species_tokens = {_normalize_species_prefix(species): species for species in checked_species}
+    species_token_by_name = _build_sanity_species_token_map(metadata, checked_species)
+    species_tokens = {
+        token: species for species, token in species_token_by_name.items()
+    }
     issues = []
     if (not os.path.exists(root_path)) or (not os.path.isdir(root_path)):
         for species in checked_species:
@@ -1851,9 +2063,14 @@ def run_sanity_check_busco(args, metadata, uni_species, sra_ids, output_dir, met
     return row, issues
 
 
-def _validate_finalize_species_outputs(species, species_dir, metadata_path):
+def _validate_finalize_species_outputs(
+    species,
+    species_dir,
+    metadata_path,
+    species_token=None,
+):
     issues = []
-    species_tag = _normalize_species_prefix(species)
+    species_tag = _normalize_species_prefix(species, species_token)
     expected_files = {
         '{}_metadata.tsv'.format(species_tag): ['run'],
         '{}_expression.tsv'.format(species_tag): ['target_id'],
@@ -1907,10 +2124,13 @@ def _validate_finalize_species_outputs(species, species_dir, metadata_path):
 
 
 def run_sanity_check_finalize(args, metadata, uni_species, sra_ids, output_dir, metadata_path):
-    _ = (metadata, sra_ids)
+    _ = sra_ids
     root_path = _resolve_sanity_check_path(args, 'finalize', 'finalize_dir')
     checked_species = [str(species).strip() for species in list(uni_species)]
-    species_tokens = {_normalize_species_prefix(species): species for species in checked_species}
+    species_token_by_name = _build_sanity_species_token_map(metadata, checked_species)
+    species_tokens = {
+        token: species for species, token in species_token_by_name.items()
+    }
     issues = []
     if (not os.path.exists(root_path)) or (not os.path.isdir(root_path)):
         for species in checked_species:
@@ -1983,7 +2203,12 @@ def run_sanity_check_finalize(args, metadata, uni_species, sra_ids, output_dir, 
                     suggested_action='rerun_finalize',
                 ))
                 continue
-            issues.extend(_validate_finalize_species_outputs(species, species_dir, metadata_path))
+            issues.extend(_validate_finalize_species_outputs(
+                species,
+                species_dir,
+                metadata_path,
+                species_token=token,
+            ))
         expected_entries = list(species_tokens.keys()) + ['metadata.tsv', 'finalize_exclusion.pdf']
         issues.extend(_validate_orphan_entries('finalize', root_path, expected_entries, 'species'))
     rerun_manifest_path = _write_manifest(
@@ -1997,19 +2222,29 @@ def run_sanity_check_finalize(args, metadata, uni_species, sra_ids, output_dir, 
 
 
 def sanity_main(args):
-    out_dir = os.path.realpath(args.out_dir)
+    absolute_out_dir = os.path.abspath(args.out_dir)
+    if os.path.lexists(absolute_out_dir) and os.path.islink(absolute_out_dir):
+        raise ValueError(
+            'Refusing symbolic-link sanity output root: {}'.format(absolute_out_dir)
+        )
+    out_dir = os.path.realpath(absolute_out_dir)
     if os.path.exists(out_dir) and (not os.path.isdir(out_dir)):
         raise NotADirectoryError('Output path exists but is not a directory: {}'.format(out_dir))
     metadata = load_metadata(args)
     output_dir = os.path.join(out_dir, 'sanity')
+    if os.path.lexists(output_dir) and os.path.islink(output_dir):
+        raise ValueError(
+            'Refusing symbolic-link sanity output directory: {}'.format(output_dir)
+        )
     if os.path.exists(output_dir) and (not os.path.isdir(output_dir)):
         raise NotADirectoryError('Sanity output path exists but is not a directory: {}'.format(output_dir))
-    previous_payload = _load_previous_sanity_report(output_dir) if os.path.isdir(output_dir) else None
-    os.makedirs(output_dir, exist_ok=True)
     metadata_path = _resolve_metadata_path(args)
     run_filters, species_filters = _filter_metadata_for_sanity(args, metadata)
     uni_species, sra_ids = parse_metadata(args, metadata)
+    _build_sanity_species_token_map(metadata, uni_species)
     requested_checks = _resolve_requested_sanity_checks(args)
+    previous_payload = _load_previous_sanity_report(output_dir) if os.path.isdir(output_dir) else None
+    os.makedirs(output_dir, exist_ok=True)
     runner_by_check = {
         'getfastq': run_sanity_check_getfastq,
         'index': run_sanity_check_index,

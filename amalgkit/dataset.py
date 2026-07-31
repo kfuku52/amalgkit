@@ -12,6 +12,8 @@ import os
 import shutil
 
 from amalgkit.exceptions import AmalgkitExit
+from amalgkit.output_utils import atomic_output_path
+from amalgkit.runtime_utils import safe_join_component, validate_safe_path_component
 
 try:
     import importlib.resources as ir
@@ -87,6 +89,22 @@ DATASETS = {
 }
 
 
+def resolve_dataset_output_root(out_dir):
+    absolute_out_dir = os.path.abspath(out_dir)
+    if os.path.lexists(absolute_out_dir) and os.path.islink(absolute_out_dir):
+        raise ValueError(
+            'Refusing to write through symbolic-link dataset output root: {}'.format(
+                absolute_out_dir
+            )
+        )
+    real_out_dir = os.path.realpath(absolute_out_dir)
+    if os.path.exists(real_out_dir) and (not os.path.isdir(real_out_dir)):
+        raise NotADirectoryError(
+            'Output path exists but is not a directory: {}'.format(real_out_dir)
+        )
+    return real_out_dir
+
+
 def get_dataset_dir():
     """Return the path to the bundled datasets directory."""
     return os.path.join(os.path.dirname(__file__), 'datasets')
@@ -145,19 +163,22 @@ def resolve_dataset_source_dir(name):
 
 
 def build_extracted_dirs(out_dir, extra_dir_names=None):
-    out_dir = os.path.realpath(out_dir)
-    if os.path.exists(out_dir) and (not os.path.isdir(out_dir)):
-        raise NotADirectoryError('Output path exists but is not a directory: {}'.format(out_dir))
+    out_dir = resolve_dataset_output_root(out_dir)
     extracted_dirs = {
         key: os.path.join(out_dir, relative_path)
         for key, relative_path in WORKSPACE_DIRS.items()
     }
     for dir_name in list(extra_dir_names or []):
+        dir_name = validate_safe_path_component(dir_name, label='dataset file type')
         if dir_name in extracted_dirs:
             continue
         if dir_name in ROOT_LEVEL_DATASET_FILE_TYPES:
             continue
-        extracted_dirs[dir_name] = os.path.join(out_dir, dir_name)
+        extracted_dirs[dir_name] = safe_join_component(
+            out_dir,
+            dir_name,
+            label='dataset file type',
+        )
     for path_dir in extracted_dirs.values():
         os.makedirs(path_dir, exist_ok=True)
     return extracted_dirs
@@ -167,7 +188,8 @@ def validate_dataset_source_files(dataset, dataset_src):
     missing_sources = []
     for file_type, files in dataset['files'].items():
         for filename in files:
-            src = os.path.join(dataset_src, filename)
+            filename = validate_safe_path_component(filename, label='dataset filename')
+            src = safe_join_component(dataset_src, filename, label='dataset filename')
             if not os.path.isfile(src):
                 missing_sources.append(src)
     if missing_sources:
@@ -177,12 +199,12 @@ def validate_dataset_source_files(dataset, dataset_src):
 
 
 def build_select_rules_output_path(out_dir):
-    out_dir = os.path.realpath(out_dir)
-    if os.path.exists(out_dir) and (not os.path.isdir(out_dir)):
-        raise NotADirectoryError('Output path exists but is not a directory: {}'.format(out_dir))
+    out_dir = resolve_dataset_output_root(out_dir)
     os.makedirs(out_dir, exist_ok=True)
     path_rules = os.path.join(out_dir, SELECT_RULES_FILENAME)
-    if os.path.exists(path_rules):
+    if os.path.lexists(path_rules):
+        if os.path.islink(path_rules):
+            raise ValueError('Refusing to use symbolic-link select rules output: {}'.format(path_rules))
         if not os.path.isfile(path_rules):
             raise IsADirectoryError(
                 'Select rules output path exists but is not a file: {}'.format(path_rules)
@@ -192,12 +214,12 @@ def build_select_rules_output_path(out_dir):
 
 def preflight_rule_set_export(rule_set_name, out_dir, overwrite=False):
     validate_rule_set_name(rule_set_name)
-    out_dir = os.path.realpath(out_dir)
-    if os.path.exists(out_dir) and (not os.path.isdir(out_dir)):
-        raise NotADirectoryError('Output path exists but is not a directory: {}'.format(out_dir))
+    out_dir = resolve_dataset_output_root(out_dir)
     path_rules = os.path.join(out_dir, SELECT_RULES_FILENAME)
     if not os.path.lexists(path_rules):
         return path_rules
+    if os.path.islink(path_rules):
+        raise ValueError('Refusing to use symbolic-link select rules output: {}'.format(path_rules))
     if not os.path.isfile(path_rules):
         raise IsADirectoryError(
             'Select rules output path exists but is not a file: {}'.format(path_rules)
@@ -209,12 +231,12 @@ def preflight_rule_set_export(rule_set_name, out_dir, overwrite=False):
 
 
 def build_workspace_file_output_path(out_dir, filename, label):
-    out_dir = os.path.realpath(out_dir)
-    if os.path.exists(out_dir) and (not os.path.isdir(out_dir)):
-        raise NotADirectoryError('Output path exists but is not a directory: {}'.format(out_dir))
+    out_dir = resolve_dataset_output_root(out_dir)
     os.makedirs(out_dir, exist_ok=True)
     outpath = os.path.join(out_dir, filename)
-    if os.path.exists(outpath) and (not os.path.isfile(outpath)):
+    if os.path.lexists(outpath) and os.path.islink(outpath):
+        raise ValueError('Refusing to use symbolic-link {} output: {}'.format(label, outpath))
+    if os.path.lexists(outpath) and (not os.path.isfile(outpath)):
         raise IsADirectoryError(
             '{} output path exists but is not a file: {}'.format(label, outpath)
         )
@@ -223,20 +245,21 @@ def build_workspace_file_output_path(out_dir, filename, label):
 
 def write_workspace_template(out_dir, filename, text, label, overwrite=False):
     outpath = build_workspace_file_output_path(out_dir, filename, label)
-    if os.path.exists(outpath) and (not overwrite):
+    if os.path.lexists(outpath) and (not overwrite):
         print('  Skipping (exists): {}'.format(outpath))
         return outpath
-    if os.path.exists(outpath) and overwrite:
+    if os.path.lexists(outpath) and overwrite:
         print('  Overwriting: {}'.format(outpath))
     else:
         print('  Writing: {}'.format(outpath))
-    with open(outpath, 'w', encoding='utf-8') as handle:
-        handle.write(text)
+    with atomic_output_path(outpath, suffix=os.path.splitext(outpath)[1]) as tmp_path:
+        with open(tmp_path, 'w', encoding='utf-8') as handle:
+            handle.write(text)
     return outpath
 
 
 def copy_dataset_files(dataset, dataset_src, extracted_dirs, out_dir, overwrite=False, skip_file_types=None):
-    out_dir = os.path.realpath(out_dir)
+    out_dir = resolve_dataset_output_root(out_dir)
     skip_file_types = set(skip_file_types or [])
     for file_type, files in dataset['files'].items():
         if file_type in skip_file_types:
@@ -246,21 +269,25 @@ def copy_dataset_files(dataset, dataset_src, extracted_dirs, out_dir, overwrite=
             if file_type not in ROOT_LEVEL_DATASET_FILE_TYPES:
                 continue
         for filename in files:
-            src = os.path.join(dataset_src, filename)
+            filename = validate_safe_path_component(filename, label='dataset filename')
+            src = safe_join_component(dataset_src, filename, label='dataset filename')
             if file_type in ROOT_LEVEL_DATASET_FILE_TYPES:
-                dst = os.path.join(out_dir, filename)
+                dst = safe_join_component(out_dir, filename, label='dataset filename')
                 dest_label = out_dir
             else:
-                dst = os.path.join(dest_dir, filename)
+                dst = safe_join_component(dest_dir, filename, label='dataset filename')
                 dest_label = dest_dir
-            if os.path.exists(dst) and (not os.path.isfile(dst)):
+            if os.path.lexists(dst) and os.path.islink(dst):
+                raise ValueError('Refusing to use symbolic-link dataset destination: {}'.format(dst))
+            if os.path.lexists(dst) and (not os.path.isfile(dst)):
                 raise NotADirectoryError(
                     'Destination path exists but is not a file: {}'.format(dst)
                 )
-            if os.path.exists(dst) and not overwrite:
+            if os.path.lexists(dst) and not overwrite:
                 print(f'  Skipping (exists): {dst}')
                 continue
-            shutil.copy2(src, dst)
+            with atomic_output_path(dst, suffix=os.path.splitext(dst)[1]) as tmp_path:
+                shutil.copy2(src, tmp_path)
             print(f'  Copied: {filename} -> {dest_label}/')
 
 
@@ -273,14 +300,15 @@ def _copy_rule_set_to_output(rule_set_name, path_rules):
             'Bundled select_rules.tsv not found for rule set "{}".'.format(rule_set_name)
         )
     print('Copying from {} to {}'.format(rules_file, path_rules))
-    with open(path_rules, mode='wb') as f:
-        f.write(rules_file.read_bytes())
+    with atomic_output_path(path_rules, suffix='.tsv') as tmp_path:
+        with open(tmp_path, mode='wb') as f:
+            f.write(rules_file.read_bytes())
     return path_rules
 
 
 def export_rule_set(rule_set_name, out_dir, overwrite=False):
     path_rules = build_select_rules_output_path(out_dir)
-    if os.path.exists(path_rules):
+    if os.path.lexists(path_rules):
         print('Output select rules already exists: {}'.format(path_rules))
         if overwrite:
             print('--overwrite is set to "yes". The select rules file will be overwritten: {}'.format(path_rules))
@@ -291,10 +319,10 @@ def export_rule_set(rule_set_name, out_dir, overwrite=False):
 
 def ensure_rule_set(rule_set_name, out_dir, overwrite=False):
     path_rules = build_select_rules_output_path(out_dir)
-    if os.path.exists(path_rules) and (not overwrite):
+    if os.path.lexists(path_rules) and (not overwrite):
         print('  Skipping (exists): {}'.format(path_rules))
         return path_rules
-    if os.path.exists(path_rules) and overwrite:
+    if os.path.lexists(path_rules) and overwrite:
         print('--overwrite is set to "yes". The select rules file will be overwritten: {}'.format(path_rules))
     return _copy_rule_set_to_output(rule_set_name, path_rules)
 

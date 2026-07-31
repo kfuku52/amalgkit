@@ -141,6 +141,69 @@ def _exclude_inappropriate_sample_from_eff_length(eff_length_df, counts_df):
     return eff_length_df.loc[:, [run_id for run_id in counts_df.columns if run_id in eff_length_df.columns]].copy()
 
 
+def _align_effective_lengths(counts_df, eff_length_df):
+    if counts_df.index.has_duplicates:
+        duplicated = counts_df.index[counts_df.index.duplicated()].astype(str).unique().tolist()
+        raise ValueError('Count table contains duplicate target_id values: {}'.format(', '.join(duplicated)))
+    if eff_length_df.index.has_duplicates:
+        duplicated = eff_length_df.index[eff_length_df.index.duplicated()].astype(str).unique().tolist()
+        raise ValueError('Effective-length table contains duplicate target_id values: {}'.format(', '.join(duplicated)))
+    missing_genes = [str(gene_id) for gene_id in counts_df.index if gene_id not in eff_length_df.index]
+    if missing_genes:
+        raise ValueError(
+            'Effective-length table is missing target_id values required by the count table: {}'.format(
+                ', '.join(missing_genes)
+            )
+        )
+    missing_runs = [str(run_id) for run_id in counts_df.columns if run_id not in eff_length_df.columns]
+    if missing_runs:
+        raise ValueError(
+            'Effective-length table is missing run columns required by the count table: {}'.format(
+                ', '.join(missing_runs)
+            )
+        )
+    aligned = eff_length_df.reindex(index=counts_df.index, columns=counts_df.columns).apply(
+        pandas.to_numeric,
+        errors='coerce',
+    )
+    counts = counts_df.apply(pandas.to_numeric, errors='coerce').to_numpy(dtype=float)
+    invalid_counts = (~numpy.isfinite(counts)) | (counts < 0)
+    if invalid_counts.any():
+        row_idx, column_idx = numpy.argwhere(invalid_counts)[0]
+        raise ValueError(
+            'Count table must contain finite non-negative values; invalid value for '
+            'target_id {} and run {}.'.format(
+                counts_df.index[int(row_idx)],
+                counts_df.columns[int(column_idx)],
+            )
+        )
+    values = aligned.to_numpy(dtype=float)
+    invalid_always = numpy.isinf(values) | (values < 0)
+    missing_or_zero = numpy.isnan(values) | (values == 0)
+    invalid_required = missing_or_zero & (counts > 0)
+    invalid = invalid_always | invalid_required
+    if invalid.any():
+        row_idx, column_idx = numpy.argwhere(invalid)[0]
+        raise ValueError(
+            'Effective-length table must contain finite positive values for positive counts; '
+            'invalid value for '
+            'target_id {} and run {}.'.format(
+                aligned.index[int(row_idx)],
+                aligned.columns[int(column_idx)],
+            )
+        )
+    safe_missing_or_zero = missing_or_zero & (counts == 0)
+    if safe_missing_or_zero.any():
+        values = values.copy()
+        values[safe_missing_or_zero] = 1.0
+        aligned = pandas.DataFrame(
+            values,
+            index=aligned.index,
+            columns=aligned.columns,
+        )
+    return aligned
+
+
 def _sort_tc_and_metadata(counts_df, metadata_df, sort_columns=('sample_group', 'scientific_name', 'bioproject')):
     sorted_metadata = metadata_df.copy()
     present_columns = [column for column in sort_columns if column in sorted_metadata.columns]
@@ -157,10 +220,23 @@ def _sort_tc_and_metadata(counts_df, metadata_df, sort_columns=('sample_group', 
 def _transform_raw_to_fpkm(counts_df, eff_length_df, metadata_df):
     if 'tmm_library_size' in metadata_df.columns:
         metadata_indexed = metadata_df.copy().set_index('run')
-        library_sizes = metadata_indexed.loc[list(counts_df.columns), 'tmm_library_size'].astype(float).to_numpy()
+        library_sizes = pandas.to_numeric(
+            metadata_indexed.loc[list(counts_df.columns), 'tmm_library_size'],
+            errors='coerce',
+        ).to_numpy(dtype=float)
+        invalid_library_sizes = (~numpy.isfinite(library_sizes)) | (library_sizes <= 0)
+        if invalid_library_sizes.any():
+            invalid_run = counts_df.columns[int(numpy.flatnonzero(invalid_library_sizes)[0])]
+            raise ValueError(
+                'tmm_library_size must contain finite positive values; invalid value for '
+                'run {}.'.format(invalid_run)
+            )
     else:
         library_sizes = counts_df.sum(axis=0).to_numpy(dtype=float)
-    effective_lengths = eff_length_df.loc[:, counts_df.columns].to_numpy(dtype=float)
+    effective_lengths = _align_effective_lengths(
+        counts_df=counts_df,
+        eff_length_df=eff_length_df,
+    ).to_numpy(dtype=float)
     counts = counts_df.to_numpy(dtype=float)
     with numpy.errstate(divide='ignore', invalid='ignore'):
         values = counts / effective_lengths / library_sizes.reshape(1, -1) * 1e9
@@ -170,7 +246,10 @@ def _transform_raw_to_fpkm(counts_df, eff_length_df, metadata_df):
 
 def _transform_raw_to_tpm(counts_df, eff_length_df):
     counts = counts_df.to_numpy(dtype=float)
-    effective_lengths = eff_length_df.loc[:, counts_df.columns].to_numpy(dtype=float)
+    effective_lengths = _align_effective_lengths(
+        counts_df=counts_df,
+        eff_length_df=eff_length_df,
+    ).to_numpy(dtype=float)
     with numpy.errstate(divide='ignore', invalid='ignore'):
         x = counts / effective_lengths
         values = x * 1e6 / numpy.nansum(x, axis=0, keepdims=True)
@@ -242,11 +321,20 @@ def _run_batch_effect_step(counts_df, metadata_df, eff_length_df, args):
         }
 
     if counts_df.shape[1] == 1:
-        batch_info = initialize_batch_info(run_ids=counts_df.columns, batch_effect_alg=batch_effect_alg)
+        out = _sort_tc_and_metadata(counts_df, metadata_df)
+        batch_info = initialize_batch_info(run_ids=out['tc'].columns, batch_effect_alg=batch_effect_alg)
         batch_info['skip_reason'] = 'single_sample'
         batch_info['batch_effect_alg_applied'] = 'no'
+        transformed = _apply_transformation_logic(
+            counts_df=out['tc'],
+            eff_length_df=eff_length_df,
+            transform_method=transform_method,
+            batch_effect_alg=batch_effect_alg,
+            step='after_batch',
+            metadata_df=out['sra'],
+        )
         return {
-            'tc': counts_df.copy(),
+            'tc': transformed,
             'sva': None,
             'batch_info': batch_info,
         }
@@ -282,7 +370,10 @@ def _run_batch_effect_step(counts_df, metadata_df, eff_length_df, args):
             batch_info['skip_reason'] = summary.get('skip_reason', '')
             batch_info['corrected_runs'] = summary.get('corrected_run_ids', [])
             sv_info = sv_df
-        corrected_full = pandas.concat([corrected.loc[:, run_all], counts_nonexpressed.loc[:, run_all]], axis=0)
+        corrected_full = pandas.concat(
+            [corrected.loc[:, run_all], counts_nonexpressed.loc[:, run_all]],
+            axis=0,
+        ).reindex(index=counts_sorted.index, columns=run_all)
     elif batch_effect_alg == 'combatseq':
         corrected, summary = run_combatseq_backend(
             counts_df=counts_expressed,
@@ -293,7 +384,10 @@ def _run_batch_effect_step(counts_df, metadata_df, eff_length_df, args):
         batch_info['skip_reason'] = summary.get('skip_reason', '')
         batch_info['corrected_runs'] = summary.get('corrected_run_ids', [])
         sv_info = None
-        corrected_full = pandas.concat([corrected.loc[:, run_all], counts_nonexpressed.loc[:, run_all]], axis=0)
+        corrected_full = pandas.concat(
+            [corrected.loc[:, run_all], counts_nonexpressed.loc[:, run_all]],
+            axis=0,
+        ).reindex(index=counts_sorted.index, columns=run_all)
     elif batch_effect_alg == 'ruvseq':
         corrected, w_df, summary = run_ruvseq_backend(
             counts_df=counts_expressed,
@@ -315,7 +409,10 @@ def _run_batch_effect_step(counts_df, metadata_df, eff_length_df, args):
         batch_info['skip_reason'] = summary.get('skip_reason', '')
         batch_info['corrected_runs'] = summary.get('corrected_run_ids', [])
         sv_info = w_df
-        corrected_full = pandas.concat([corrected.loc[:, run_all], counts_nonexpressed.loc[:, run_all]], axis=0)
+        corrected_full = pandas.concat(
+            [corrected.loc[:, run_all], counts_nonexpressed.loc[:, run_all]],
+            axis=0,
+        ).reindex(index=counts_sorted.index, columns=run_all)
     elif batch_effect_alg == 'latent_glm':
         corrected, latent_df, summary = run_latent_glm_backend(
             counts_df=counts_expressed,
@@ -335,7 +432,10 @@ def _run_batch_effect_step(counts_df, metadata_df, eff_length_df, args):
         batch_info['skip_reason'] = summary.get('skip_reason', '')
         batch_info['corrected_runs'] = summary.get('corrected_run_ids', [])
         sv_info = latent_df
-        corrected_full = pandas.concat([corrected.loc[:, run_all], counts_nonexpressed.loc[:, run_all]], axis=0)
+        corrected_full = pandas.concat(
+            [corrected.loc[:, run_all], counts_nonexpressed.loc[:, run_all]],
+            axis=0,
+        ).reindex(index=counts_sorted.index, columns=run_all)
     else:
         raise ValueError('Unsupported batch effect algorithm for Python finalize worker: {}'.format(batch_effect_alg))
 

@@ -1,10 +1,15 @@
 import json
+import hashlib
+import math
 import os
 import re
 import shlex
+import shutil
+import stat
 import subprocess
 import sys
 import tempfile
+import warnings
 
 import numpy
 import pandas
@@ -12,6 +17,7 @@ import pandas
 from amalgkit.arg_utils import clone_namespace
 from amalgkit.command_context import PrefetchedDirEntries, QuantRuntimeContext
 from amalgkit.download_utils import acquire_exclusive_lock
+from amalgkit.filter_utils import staged_output_dir
 from amalgkit.getfastq_stats import read_getfastq_stats_row
 from amalgkit.metadata_utils import (
     Metadata,
@@ -21,11 +27,19 @@ from amalgkit.metadata_utils import (
     is_private_fastq_scientific_name_placeholder,
     load_metadata,
 )
+from amalgkit.output_utils import atomic_output_path
 from amalgkit.parallel_utils import (
     is_auto_parallel_option,
     resolve_detected_cpu_count,
     resolve_thread_worker_allocation,
     run_tasks_with_optional_threads,
+)
+from amalgkit.runtime_utils import (
+    normalize_species_token,
+    resolve_species_token,
+    safe_join_component,
+    validate_safe_path_component,
+    validate_unique_species_tokens,
 )
 from amalgkit.prefix_utils import find_run_prefixed_entries, find_species_prefixed_entries
 from amalgkit.subprocess_utils import probe_dependency_command, run_logged_command
@@ -82,8 +96,9 @@ OARFISH_ONT_DIRECT_RNA_PATTERNS = (
 )
 
 
-def purge_existing_quant_outputs(sra_id, output_dir):
-    stale_names = [
+def _managed_quant_output_filenames(sra_id):
+    sra_id = validate_safe_path_component(sra_id, label='run ID')
+    return frozenset([
         sra_id + '_abundance.tsv',
         sra_id + '_run_info.json',
         sra_id + '_abundance.h5',
@@ -96,8 +111,11 @@ def purge_existing_quant_outputs(sra_id, output_dir):
         sra_id + '.infreps.pq',
         sra_id + '.prob',
         sra_id + '.prob.lz4',
-    ]
-    for stale_name in stale_names:
+    ])
+
+
+def purge_existing_quant_outputs(sra_id, output_dir):
+    for stale_name in _managed_quant_output_filenames(sra_id):
         stale_path = os.path.join(output_dir, stale_name)
         if not os.path.exists(stale_path):
             continue
@@ -106,18 +124,128 @@ def purge_existing_quant_outputs(sra_id, output_dir):
         os.remove(stale_path)
 
 
-def quant_output_exists(sra_id, output_dir):
+def _preserve_unknown_quant_sidecars(sra_id, source_dir, stage_dir):
+    managed_names = _managed_quant_output_filenames(sra_id)
+    preserved_names = []
+    with os.scandir(source_dir) as entries:
+        for entry in entries:
+            if entry.name in managed_names:
+                continue
+            if entry.is_symlink() or not entry.is_file(follow_symlinks=False):
+                continue
+            safe_name = validate_safe_path_component(
+                entry.name,
+                label='quant sidecar filename',
+            )
+            destination_path = os.path.join(stage_dir, safe_name)
+            if os.path.lexists(destination_path):
+                # A sidecar emitted by the current backend takes precedence over
+                # an unknown file retained from the previous run.
+                continue
+            source_fd = None
+            destination_fd = None
+            try:
+                source_flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0)
+                source_fd = os.open(entry.path, source_flags)
+                source_stat = os.fstat(source_fd)
+                if not stat.S_ISREG(source_stat.st_mode):
+                    os.close(source_fd)
+                    source_fd = None
+                    continue
+                destination_fd = os.open(
+                    destination_path,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    0o600,
+                )
+                with os.fdopen(source_fd, 'rb') as source_handle:
+                    source_fd = None
+                    with os.fdopen(destination_fd, 'wb') as destination_handle:
+                        destination_fd = None
+                        shutil.copyfileobj(source_handle, destination_handle)
+                        os.fchmod(
+                            destination_handle.fileno(),
+                            stat.S_IMODE(source_stat.st_mode),
+                        )
+            except Exception:
+                if source_fd is not None:
+                    os.close(source_fd)
+                if destination_fd is not None:
+                    os.close(destination_fd)
+                if os.path.lexists(destination_path):
+                    os.remove(destination_path)
+                raise
+            preserved_names.append(safe_name)
+    if preserved_names:
+        print(
+            'Preserved existing quant diagnostic sidecar(s): {}'.format(
+                ', '.join(sorted(preserved_names))
+            ),
+            flush=True,
+        )
+    return preserved_names
+
+
+def validate_quant_outputs(sra_id, output_dir):
+    sra_id = validate_safe_path_component(sra_id, label='run ID')
     abundance_path = os.path.join(output_dir, sra_id + '_abundance.tsv')
     run_info_path = os.path.join(output_dir, sra_id + '_run_info.json')
-    has_abundance = os.path.isfile(abundance_path)
-    has_run_info = os.path.isfile(run_info_path)
-    if has_abundance and has_run_info:
-        print('Output files detected: {}, {}'.format(abundance_path, run_info_path))
+    if (not os.path.isfile(abundance_path)) or os.path.getsize(abundance_path) <= 0:
+        return False, 'Missing or empty quant abundance table: {}'.format(abundance_path)
+    if (not os.path.isfile(run_info_path)) or os.path.getsize(run_info_path) <= 0:
+        return False, 'Missing or empty quant run-info JSON: {}'.format(run_info_path)
+    try:
+        abundance = pandas.read_csv(abundance_path, sep='\t')
+    except Exception as exc:
+        return False, 'Failed to read quant abundance table: {}'.format(exc)
+    required_columns = ['target_id', 'length', 'eff_length', 'est_counts', 'tpm']
+    missing = [column for column in required_columns if column not in abundance.columns]
+    if missing:
+        return False, 'Quant abundance table is missing column(s): {}'.format(', '.join(missing))
+    if abundance.shape[0] == 0:
+        return False, 'Quant abundance table contains no data rows.'
+    if abundance['target_id'].fillna('').astype(str).str.strip().eq('').any():
+        return False, 'Quant abundance table contains an empty target_id.'
+    normalized_target_ids = abundance['target_id'].fillna('').astype(str).str.strip()
+    if normalized_target_ids.duplicated().any():
+        return False, 'Quant abundance table contains duplicate target_id values.'
+    for column in ['length', 'eff_length', 'est_counts', 'tpm']:
+        numeric = pandas.to_numeric(abundance[column], errors='coerce')
+        if numeric.isna().any() or (not numpy.isfinite(numeric.to_numpy(dtype=float)).all()):
+            return False, 'Quant abundance column "{}" contains non-finite values.'.format(column)
+        if (numeric < 0).any():
+            return False, 'Quant abundance column "{}" contains negative values.'.format(column)
+    try:
+        with open(run_info_path, 'r', encoding='utf-8') as handle:
+            run_info = json.load(
+                handle,
+                parse_constant=lambda value: (_ for _ in ()).throw(
+                    ValueError('non-standard numeric constant {}'.format(value))
+                ),
+            )
+    except Exception as exc:
+        return False, 'Failed to read quant run-info JSON: {}'.format(exc)
+    if not isinstance(run_info, dict) or 'p_pseudoaligned' not in run_info:
+        return False, 'Quant run-info JSON is missing p_pseudoaligned.'
+    try:
+        pseudoaligned = float(run_info['p_pseudoaligned'])
+    except (TypeError, ValueError):
+        return False, 'Quant run-info JSON has an invalid p_pseudoaligned.'
+    if (not math.isfinite(pseudoaligned)) or pseudoaligned < 0.0 or pseudoaligned > 100.0:
+        return False, 'Quant run-info JSON has an out-of-range p_pseudoaligned.'
+    return True, ''
+
+
+def quant_output_exists(sra_id, output_dir):
+    is_valid, validation_error = validate_quant_outputs(sra_id=sra_id, output_dir=output_dir)
+    if is_valid:
+        print(
+            'Validated quant output files: {}, {}'.format(
+                os.path.join(output_dir, sra_id + '_abundance.tsv'),
+                os.path.join(output_dir, sra_id + '_run_info.json'),
+            )
+        )
         return True
-    if not has_abundance:
-        print('Output file was not detected: {}'.format(abundance_path))
-    if not has_run_info:
-        print('Output file was not detected: {}'.format(run_info_path))
+    print(validation_error)
     return False
 
 
@@ -394,9 +522,33 @@ def parse_quant_option_args(option_string, option_name):
     if not option_string:
         return []
     try:
-        return shlex.split(option_string)
+        parsed = shlex.split(option_string)
     except ValueError as e:
         raise ValueError('Invalid {} string: {}'.format(option_name, option_string)) from e
+    reserved_by_option = {
+        '--kallisto_options': {
+            '-i', '--index', '-o', '--output-dir', '--threads', '-t',
+            '--single', '-l', '--fragment-length', '-s', '--sd',
+        },
+        '--oarfish_options': {
+            '-j', '--threads', '--reads', '--index', '--seq-tech', '-o', '--output',
+        },
+    }
+    reserved = reserved_by_option.get(option_name, set())
+    reserved_short_options = {
+        token for token in reserved if token.startswith('-') and not token.startswith('--')
+    }
+    for token in parsed:
+        option_token = token.split('=', 1)[0]
+        is_attached_short_option = any(
+            token.startswith(short_option) and token != short_option
+            for short_option in reserved_short_options
+        )
+        if option_token in reserved or is_attached_short_option:
+            raise ValueError(
+                '{} must not override amalgkit-managed option "{}".'.format(option_name, option_token)
+            )
+    return parsed
 
 
 def build_kallisto_quant_command(args, in_files, lib_layout, output_dir, index, nominal_length=None, fragment_sd=None):
@@ -506,11 +658,37 @@ def adapt_oarfish_outputs(output_dir, sra_id, sra_stat, output_prefix, seq_tech)
             )
         )
 
-    target_ids = quant_df['target_id'].astype(str)
-    lengths = pandas.to_numeric(quant_df['length'], errors='coerce').fillna(0.0)
-    est_counts = pandas.to_numeric(quant_df['est_counts'], errors='coerce').fillna(0.0)
+    target_ids = quant_df['target_id'].fillna('').astype(str).str.strip()
+    if target_ids.eq('').any():
+        raise ValueError('oarfish quant output contains an empty target_id.')
+    if target_ids.duplicated().any():
+        raise ValueError('oarfish quant output contains duplicate target_id values.')
+    lengths = pandas.to_numeric(quant_df['length'], errors='coerce')
+    est_counts = pandas.to_numeric(quant_df['est_counts'], errors='coerce')
+    for column_name, values in [('length', lengths), ('est_counts', est_counts)]:
+        numeric_values = values.to_numpy(dtype=float)
+        if values.isna().any() or not numpy.isfinite(numeric_values).all():
+            raise ValueError(
+                'oarfish quant output contains non-finite values in {}.'.format(
+                    column_name
+                )
+            )
+        if (values < 0).any():
+            raise ValueError(
+                'oarfish quant output contains negative values in {}.'.format(
+                    column_name
+                )
+            )
     if 'tpm' in quant_df.columns:
-        tpm = pandas.to_numeric(quant_df['tpm'], errors='coerce').fillna(0.0)
+        tpm = pandas.to_numeric(quant_df['tpm'], errors='coerce')
+        if (
+            tpm.isna().any()
+            or not numpy.isfinite(tpm.to_numpy(dtype=float)).all()
+            or (tpm < 0).any()
+        ):
+            raise ValueError(
+                'oarfish quant output contains invalid values in tpm.'
+            )
     else:
         tpm = pandas.Series(_compute_compatibility_tpm(est_counts.to_numpy(), lengths.to_numpy()))
 
@@ -529,11 +707,20 @@ def adapt_oarfish_outputs(output_dir, sra_id, sra_stat, output_prefix, seq_tech)
     if not isinstance(meta_info, dict):
         meta_info = {'oarfish_meta_info': meta_info}
     mapped_reads = float(est_counts.sum())
-    total_reads = float(sra_stat['total_spot'])
-    p_pseudoaligned = 0.0
-    if total_reads > 0:
-        p_pseudoaligned = mapped_reads / total_reads * 100.0
-    p_pseudoaligned = min(max(float(p_pseudoaligned), 0.0), 100.0)
+    try:
+        total_reads = float(sra_stat['total_spot'])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError('Invalid total_spot for oarfish output adaptation.') from exc
+    if (not math.isfinite(total_reads)) or total_reads <= 0:
+        raise ValueError('Invalid total_spot for oarfish output adaptation.')
+    if mapped_reads > total_reads:
+        raise ValueError(
+            'oarfish mapped-read count exceeds total_spot: {} > {}.'.format(
+                mapped_reads,
+                total_reads,
+            )
+        )
+    p_pseudoaligned = mapped_reads / total_reads * 100.0
     run_info = dict(meta_info)
     run_info['quant_backend'] = 'oarfish'
     run_info['oarfish_seq_tech'] = seq_tech
@@ -708,6 +895,16 @@ def _find_species_prefixed_files(
     if entries is None:
         entries = list_dir_entries(path_dir)
     normalized_suffixes = _normalize_index_suffixes(suffixes)
+    candidate_paths = [
+        os.path.join(path_dir, entry)
+        for entry in entries
+        if (
+            (normalized_suffixes is None)
+            or str(entry).lower().endswith(normalized_suffixes)
+        )
+        and not os.path.islink(os.path.join(path_dir, entry))
+        and os.path.isfile(os.path.join(path_dir, entry))
+    ]
     matched_paths = [
         os.path.join(path_dir, entry)
         for entry in find_species_prefixed_entries(entries, species_prefix)
@@ -715,25 +912,158 @@ def _find_species_prefixed_files(
             (normalized_suffixes is None)
             or str(entry).lower().endswith(normalized_suffixes)
         )
+        and not os.path.islink(os.path.join(path_dir, entry))
         and os.path.isfile(os.path.join(path_dir, entry))
     ]
     normalized_prefix = _normalize_species_identifier(species_prefix)
-    exact_paths = [
+    exact_paths = sorted([
         path
-        for path in matched_paths
+        for path in candidate_paths
         if _normalize_species_stem_from_entry(
             path,
             suffixes=suffixes or (),
             trailing_suffixes=exact_stem_suffixes,
         ) == normalized_prefix
-    ]
+    ])
     return exact_paths, matched_paths
 
 
 def _is_nonempty_regular_file(path):
     try:
-        return os.path.isfile(path) and os.path.getsize(path) > 0
+        return (not os.path.islink(path)) and os.path.isfile(path) and os.path.getsize(path) > 0
     except OSError:
+        return False
+
+
+def _index_ready_marker_path(index_path):
+    return index_path + '.amalgkit.ready.json'
+
+
+def _file_fingerprint(path):
+    resolved_path = os.path.realpath(path)
+    stat_result = os.stat(resolved_path, follow_symlinks=False)
+    digest = hashlib.sha256()
+    with open(resolved_path, 'rb') as handle:
+        while True:
+            chunk = handle.read(1024 * 1024)
+            if chunk == b'':
+                break
+            digest.update(chunk)
+    return {
+        'path': resolved_path,
+        'size': int(stat_result.st_size),
+        'mtime_ns': int(stat_result.st_mtime_ns),
+        'sha256': digest.hexdigest(),
+    }
+
+
+def _index_tool_fingerprint(backend):
+    executable = shutil.which('kallisto' if backend == 'kallisto' else 'oarfish')
+    if executable is None:
+        return None
+    return _file_fingerprint(executable)
+
+
+def _write_index_ready_marker(index_path, backend, fasta_path=None):
+    stat_result = os.stat(index_path, follow_symlinks=False)
+    payload = {
+        'schema_version': 2 if fasta_path is not None else 1,
+        'backend': backend,
+        'index_size': int(stat_result.st_size),
+        'index_mtime_ns': int(stat_result.st_mtime_ns),
+        'reference_fingerprint': (
+            None if fasta_path is None else _file_fingerprint(fasta_path)
+        ),
+        'tool_fingerprint': _index_tool_fingerprint(backend),
+    }
+    marker_path = _index_ready_marker_path(index_path)
+    with atomic_output_path(marker_path, suffix='.json') as temporary_marker:
+        with open(temporary_marker, 'w', encoding='utf-8') as handle:
+            json.dump(payload, handle, indent=2, sort_keys=True)
+
+
+def _validate_index_commit_target(path, label):
+    if not os.path.lexists(path):
+        return
+    if os.path.islink(path):
+        raise ValueError('Refusing symbolic-link {}: {}'.format(label, path))
+    if not os.path.isfile(path):
+        raise IsADirectoryError('{} exists but is not a regular file: {}'.format(label, path))
+
+
+def _commit_index_with_ready_marker(
+    temporary_index_path,
+    index_path,
+    temporary_marker_path,
+):
+    marker_path = _index_ready_marker_path(index_path)
+    _validate_index_commit_target(index_path, 'index output')
+    _validate_index_commit_target(marker_path, 'index ready marker')
+    backup_dir = os.path.dirname(temporary_index_path)
+    index_backup = os.path.join(backup_dir, '.previous_index')
+    marker_backup = os.path.join(backup_dir, '.previous_index_ready_marker')
+    had_index = os.path.lexists(index_path)
+    had_marker = os.path.lexists(marker_path)
+    index_committed = False
+    marker_committed = False
+    try:
+        if had_index:
+            os.replace(index_path, index_backup)
+        if had_marker:
+            os.replace(marker_path, marker_backup)
+        os.replace(temporary_index_path, index_path)
+        index_committed = True
+        os.replace(temporary_marker_path, marker_path)
+        marker_committed = True
+    except Exception:
+        if marker_committed and os.path.lexists(marker_path):
+            os.remove(marker_path)
+        if index_committed and os.path.lexists(index_path):
+            os.remove(index_path)
+        if had_index and os.path.lexists(index_backup):
+            os.replace(index_backup, index_path)
+        if had_marker and os.path.lexists(marker_backup):
+            os.replace(marker_backup, marker_path)
+        raise
+
+
+def _is_ready_index_file(
+    index_path,
+    backend,
+    require_ready_marker=False,
+    fasta_path=None,
+):
+    if not _is_nonempty_regular_file(index_path):
+        return False
+    if not require_ready_marker:
+        return True
+    marker_path = _index_ready_marker_path(index_path)
+    if (not os.path.isfile(marker_path)) or os.path.islink(marker_path):
+        return False
+    try:
+        with open(marker_path, 'r', encoding='utf-8') as handle:
+            payload = json.load(handle)
+        stat_result = os.stat(index_path, follow_symlinks=False)
+        is_matching_index = (
+            isinstance(payload, dict)
+            and payload.get('backend') == backend
+            and int(payload.get('index_size', -1)) == int(stat_result.st_size)
+            and int(payload.get('index_mtime_ns', -1)) == int(stat_result.st_mtime_ns)
+        )
+        if not is_matching_index:
+            return False
+        if fasta_path is not None:
+            if payload.get('reference_fingerprint') != _file_fingerprint(fasta_path):
+                return False
+            current_tool_fingerprint = _index_tool_fingerprint(backend)
+            marker_tool_fingerprint = payload.get('tool_fingerprint')
+            if (
+                current_tool_fingerprint is not None
+                and marker_tool_fingerprint != current_tool_fingerprint
+            ):
+                return False
+        return True
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
         return False
 
 
@@ -861,13 +1191,128 @@ def resolve_input_fastq_files(sra_stat, output_dir_getfastq, ext, files=None):
     return [os.path.join(output_dir_getfastq, f) for f in matched]
 
 
-def run_quant(args, metadata, sra_id, index, runtime_context=None, backend=None, oarfish_seq_tech=None):
-    output_dir = os.path.join(args.out_dir, 'quant', sra_id)
+def _rollback_fastq_removal(records, quarantine_dir):
+    for record in records:
+        marker_path = record['marker_path']
+        if os.path.lexists(marker_path):
+            if os.path.islink(marker_path) or os.path.isfile(marker_path):
+                os.remove(marker_path)
+        marker_backup = record['marker_backup']
+        if os.path.lexists(marker_backup):
+            os.replace(marker_backup, marker_path)
+    for record in reversed(records):
+        input_path = record['input_path']
+        if os.path.lexists(input_path):
+            continue
+        source_path = None
+        if os.path.lexists(record['quarantine_path']):
+            source_path = record['quarantine_path']
+        elif os.path.lexists(record['backup_path']):
+            source_path = record['backup_path']
+        if source_path is not None:
+            os.replace(source_path, input_path)
+    shutil.rmtree(quarantine_dir, ignore_errors=True)
+
+
+def _safely_remove_quant_fastq_files(in_files):
+    normalized_inputs = [os.path.abspath(path) for path in in_files]
+    if len(normalized_inputs) == 0:
+        return
+    parent_dirs = {os.path.dirname(path) for path in normalized_inputs}
+    if len(parent_dirs) != 1:
+        raise ValueError('FASTQ cleanup requires all inputs to share one directory.')
+    parent_dir = parent_dirs.pop()
+    records = []
+    for index, input_path in enumerate(normalized_inputs):
+        if os.path.islink(input_path) or not os.path.isfile(input_path):
+            raise FileNotFoundError(
+                'FASTQ cleanup input is not a regular file: {}'.format(input_path)
+            )
+        marker_path = input_path + '.safely_removed'
+        if os.path.lexists(marker_path) and (
+            os.path.islink(marker_path) or not os.path.isfile(marker_path)
+        ):
+            raise ValueError(
+                'Refusing non-regular safe-removal marker: {}'.format(marker_path)
+            )
+        records.append({
+            'input_path': input_path,
+            'marker_path': marker_path,
+            'quarantine_path': '',
+            'backup_path': '',
+            'marker_backup': '',
+            'index': index,
+        })
+    quarantine_dir = tempfile.mkdtemp(
+        prefix='.amalgkit_quant_cleanup_',
+        dir=parent_dir,
+    )
+    for record in records:
+        suffix = str(record['index'])
+        record['quarantine_path'] = os.path.join(quarantine_dir, 'input_' + suffix)
+        record['backup_path'] = os.path.join(quarantine_dir, 'backup_' + suffix)
+        record['marker_backup'] = os.path.join(quarantine_dir, 'marker_' + suffix)
+    try:
+        for record in records:
+            os.replace(record['input_path'], record['quarantine_path'])
+        for record in records:
+            os.link(record['quarantine_path'], record['backup_path'])
+        for record in records:
+            if os.path.lexists(record['marker_path']):
+                os.replace(record['marker_path'], record['marker_backup'])
+        for record in records:
+            with atomic_output_path(
+                record['marker_path'],
+                suffix='.safely_removed',
+            ) as temporary_marker:
+                with open(temporary_marker, 'w', encoding='utf-8') as handle:
+                    handle.write(
+                        'This fastq file was safely removed after `amalgkit quant`.'
+                    )
+        for record in records:
+            os.remove(record['quarantine_path'])
+    except Exception:
+        _rollback_fastq_removal(records, quarantine_dir)
+        raise
+    cleanup_failed = False
+    for record in records:
+        try:
+            if os.path.lexists(record['backup_path']):
+                os.remove(record['backup_path'])
+            if os.path.lexists(record['marker_backup']):
+                os.remove(record['marker_backup'])
+        except OSError:
+            cleanup_failed = True
+    try:
+        os.rmdir(quarantine_dir)
+    except OSError:
+        cleanup_failed = True
+    if cleanup_failed:
+        warnings.warn(
+            'FASTQ cleanup committed, but quarantine cleanup was incomplete: {}'.format(
+                quarantine_dir
+            ),
+            RuntimeWarning,
+        )
+
+
+def _run_quant_unlocked(
+    args,
+    metadata,
+    sra_id,
+    index,
+    runtime_context=None,
+    backend=None,
+    oarfish_seq_tech=None,
+):
+    sra_id = validate_safe_path_component(sra_id, label='run ID')
+    quant_root = os.path.join(args.out_dir, 'quant')
+    if os.path.exists(quant_root) and (not os.path.isdir(quant_root)):
+        raise NotADirectoryError('Quant output path exists but is not a directory: {}'.format(quant_root))
+    os.makedirs(quant_root, exist_ok=True)
+    output_dir = safe_join_component(quant_root, sra_id, label='run ID')
     if os.path.exists(output_dir) and (not os.path.isdir(output_dir)):
         raise NotADirectoryError('Quant run output path exists but is not a directory: {}'.format(output_dir))
-    os.makedirs(output_dir, exist_ok=True)
-    if args.redo:
-        purge_existing_quant_outputs(sra_id=sra_id, output_dir=output_dir)
     is_quant_output_available = quant_output_exists(sra_id, output_dir)
     if is_quant_output_available:
         if args.redo:
@@ -875,7 +1320,11 @@ def run_quant(args, metadata, sra_id, index, runtime_context=None, backend=None,
         else:
             print('Continued. The output will not be overwritten. If you want to overwrite the results, set "--redo yes".')
             return
-    output_dir_getfastq = os.path.join(args.out_dir, 'getfastq', sra_id)
+    output_dir_getfastq = safe_join_component(
+        os.path.join(args.out_dir, 'getfastq'),
+        sra_id,
+        label='run ID',
+    )
     if os.path.exists(output_dir_getfastq) and (not os.path.isdir(output_dir_getfastq)):
         raise NotADirectoryError(
             'getfastq run path exists but is not a directory: {}'.format(output_dir_getfastq)
@@ -917,22 +1366,70 @@ def run_quant(args, metadata, sra_id, index, runtime_context=None, backend=None,
         raise FileNotFoundError('{}: Fastq file not found. Check {}'.format(sra_id, output_dir_getfastq))
     print('Input fastq detected:', ', '.join(in_files))
     print('Quant backend selected for {}: {}'.format(sra_id, backend))
-    if backend == 'kallisto':
-        call_kallisto(args, in_files, metadata, sra_stat, output_dir, index)
-    elif backend == 'oarfish':
-        print('oarfish seq-tech selected for {}: {}'.format(sra_id, oarfish_seq_tech))
-        call_oarfish(args, in_files, metadata, sra_stat, output_dir, index, oarfish_seq_tech)
-    else:
-        raise ValueError('Unsupported quant backend: {}'.format(backend))
+    with staged_output_dir(output_dir, redo=True, prefix='amalgkit_quant_stage_') as stage_output_dir:
+        if backend == 'kallisto':
+            call_kallisto(args, in_files, metadata, sra_stat, stage_output_dir, index)
+        elif backend == 'oarfish':
+            print('oarfish seq-tech selected for {}: {}'.format(sra_id, oarfish_seq_tech))
+            call_oarfish(args, in_files, metadata, sra_stat, stage_output_dir, index, oarfish_seq_tech)
+        else:
+            raise ValueError('Unsupported quant backend: {}'.format(backend))
+        is_valid, validation_error = validate_quant_outputs(sra_id=sra_id, output_dir=stage_output_dir)
+        if not is_valid:
+            raise RuntimeError(
+                'Quant backend finished without valid outputs for {}: {}'.format(sra_id, validation_error)
+            )
+        if bool(args.redo) and os.path.isdir(output_dir):
+            _preserve_unknown_quant_sidecars(
+                sra_id=sra_id,
+                source_dir=output_dir,
+                stage_dir=stage_output_dir,
+            )
     if (args.clean_fastq and quant_output_exists(sra_id, output_dir)):
         print('Safe-deleting getfastq files.', flush=True)
         for in_file in in_files:
             print('Output file detected. Safely removing fastq:', in_file)
-            os.remove(in_file)
-            with open(in_file + '.safely_removed', 'w') as handle:
-                handle.write('This fastq file was safely removed after `amalgkit quant`.')
+        _safely_remove_quant_fastq_files(in_files)
     else:
         print('Skipping the deletion of getfastq files.', flush=True)
+
+
+def run_quant(
+    args,
+    metadata,
+    sra_id,
+    index,
+    runtime_context=None,
+    backend=None,
+    oarfish_seq_tech=None,
+):
+    sra_id = validate_safe_path_component(sra_id, label='run ID')
+    quant_root = os.path.join(args.out_dir, 'quant')
+    if os.path.exists(quant_root) and not os.path.isdir(quant_root):
+        raise NotADirectoryError(
+            'Quant output path exists but is not a directory: {}'.format(quant_root)
+        )
+    os.makedirs(quant_root, exist_ok=True)
+    lock_path = os.path.join(quant_root, '.{}.lock'.format(sra_id))
+    with acquire_exclusive_lock(
+        lock_path=lock_path,
+        lock_label='Quant run lock',
+        poll_seconds=int(
+            getattr(args, 'quant_lock_poll', INDEX_BUILD_LOCK_POLL_SECONDS)
+        ),
+        timeout_seconds=int(
+            getattr(args, 'quant_lock_timeout', INDEX_BUILD_LOCK_TIMEOUT_SECONDS)
+        ),
+    ):
+        return _run_quant_unlocked(
+            args=args,
+            metadata=metadata,
+            sra_id=sra_id,
+            index=index,
+            runtime_context=runtime_context,
+            backend=backend,
+            oarfish_seq_tech=oarfish_seq_tech,
+        )
 
 
 def _resolve_index_lock_options(args):
@@ -956,16 +1453,17 @@ def _resolve_index_dir(args):
         raise FileNotFoundError('Could not find index folder at: {}'.format(index_dir))
     if not os.path.isdir(index_dir):
         raise NotADirectoryError('Index path exists but is not a directory: {}'.format(index_dir))
+    if args.build_index and os.path.islink(index_dir):
+        raise ValueError(
+            'Refusing to build an index through a symbolic-link directory: {}'.format(index_dir)
+        )
     return index_dir
 
 
 def _normalize_species_identifier(text):
-    normalized = str(text).strip()
-    if normalized == '':
+    if str(text).strip() == '':
         return ''
-    normalized = re.sub(r'\s+', '_', normalized)
-    normalized = re.sub(r'_+', '_', normalized)
-    return normalized
+    return normalize_species_token(text, label='scientific_name-derived index token')
 
 
 def _collect_species_identifier_values(sci_name, alias_names=None):
@@ -994,16 +1492,59 @@ def _build_species_identifier_candidates_from_values(sci_name, alias_names=None)
 
 
 def _resolve_task_species_identifier_values(sra_id, sci_name, runtime_context=None):
-    _ = (sra_id, runtime_context)
+    if isinstance(runtime_context, QuantRuntimeContext):
+        stored_values = runtime_context.species_identifier_values_by_run.get(sra_id)
+        if stored_values:
+            return list(stored_values)
     return _collect_species_identifier_values(sci_name)
 
 
 def _resolve_quant_species_identifier_values(metadata, tasks):
-    _ = metadata
+    token_by_run = _build_quant_species_token_by_run(metadata)
     species_identifier_values_by_run = {}
     for sra_id, sci_name in tasks:
-        species_identifier_values_by_run[sra_id] = _collect_species_identifier_values(sci_name)
+        species_token = token_by_run.get(sra_id)
+        if species_token is None:
+            species_token = normalize_species_token(sci_name)
+        species_identifier_values_by_run[sra_id] = [
+            species_token
+        ]
     return species_identifier_values_by_run
+
+
+def _build_quant_species_token_by_run(metadata):
+    species_names = metadata.df['scientific_name'].fillna('').astype(str).str.strip()
+    if 'species_token' in metadata.df.columns:
+        explicit_tokens = metadata.df['species_token'].fillna('').astype(str).str.strip()
+    else:
+        explicit_tokens = pandas.Series('', index=metadata.df.index)
+    validate_unique_species_tokens(
+        list(zip(species_names.tolist(), explicit_tokens.tolist())),
+        context='quant index',
+    )
+    token_by_species = {}
+    token_by_run = {}
+    for run_id, species_name, explicit_token in zip(
+        metadata.df['run'].fillna('').astype(str).str.strip().tolist(),
+        species_names.tolist(),
+        explicit_tokens.tolist(),
+    ):
+        if species_name == '':
+            continue
+        token = resolve_species_token(species_name, explicit_token, label='species_token')
+        previous_token = token_by_species.get(species_name)
+        if previous_token is not None and previous_token != token:
+            raise ValueError(
+                'Scientific name has conflicting species_token values: {} ({}, {})'.format(
+                    species_name,
+                    previous_token,
+                    token,
+                )
+            )
+        token_by_species[species_name] = token
+        if run_id != '':
+            token_by_run[run_id] = token
+    return token_by_run
 
 
 def _resolve_index_suffix(backend):
@@ -1031,7 +1572,16 @@ def _build_index_cache_key(backend, sci_name, oarfish_seq_tech=None, alias_names
     return (backend, normalized_sci_name, str(oarfish_seq_tech))
 
 
-def _find_single_index_file(index_dir, sci_name, entries=None, backend='kallisto', oarfish_seq_tech=None, alias_names=None):
+def _find_single_index_file(
+    index_dir,
+    sci_name,
+    entries=None,
+    backend='kallisto',
+    oarfish_seq_tech=None,
+    alias_names=None,
+    require_ready_marker=False,
+    fasta_path=None,
+):
     _ = alias_names
     backend_label = 'Kallisto' if backend == 'kallisto' else 'oarfish'
     index_suffix = _resolve_index_suffix(backend)
@@ -1044,7 +1594,16 @@ def _find_single_index_file(index_dir, sci_name, entries=None, backend='kallisto
             entries=entries,
             suffixes=(index_suffix,),
         )
-        index_files = [path for path in index_files if _is_nonempty_regular_file(path)]
+        index_files = [
+            path
+            for path in index_files
+            if _is_ready_index_file(
+                path,
+                backend=backend,
+                require_ready_marker=require_ready_marker,
+                fasta_path=fasta_path,
+            )
+        ]
         if len(index_files) > 1:
             raise ValueError(
                 'Found multiple {} index files for species. Please make sure there is only one index file for this species.'.format(
@@ -1110,14 +1669,26 @@ def _resolve_single_fasta_file(args, sci_name, runtime_context=None, alias_names
 
 
 def _build_kallisto_index(index_path, fasta_file, sci_name):
-    index_path = os.path.realpath(index_path)
+    absolute_index_path = os.path.abspath(index_path)
+    if os.path.lexists(absolute_index_path) and os.path.islink(absolute_index_path):
+        raise ValueError(
+            'Refusing to replace symbolic-link index output: {}'.format(absolute_index_path)
+        )
+    index_path = os.path.join(
+        os.path.realpath(os.path.dirname(absolute_index_path)),
+        os.path.basename(absolute_index_path),
+    )
+    _validate_index_commit_target(
+        _index_ready_marker_path(index_path),
+        'index ready marker',
+    )
     fasta_file = os.path.realpath(fasta_file)
     index_dir = os.path.dirname(index_path)
     print('Reference fasta file found: {}'.format(fasta_file), flush=True)
     print('Building index: {}'.format(index_path), flush=True)
-    kallisto_build_cmd = ['kallisto', 'index', '-i', index_path, fasta_file]
-
     with tempfile.TemporaryDirectory(prefix='amalgkit_kallisto_index_', dir=index_dir) as build_cwd:
+        temporary_index_path = os.path.join(build_cwd, os.path.basename(index_path))
+        kallisto_build_cmd = ['kallisto', 'index', '-i', temporary_index_path, fasta_file]
         print('Using isolated kallisto index work directory: {}'.format(build_cwd), flush=True)
 
         def run_in_build_cwd(command, stdout, stderr):
@@ -1136,34 +1707,70 @@ def _build_kallisto_index(index_path, fasta_file, sci_name):
             stdout_label='kallisto index stdout:',
             stderr_label='kallisto index stderr:',
         )
-    if index_out.returncode != 0:
-        raise RuntimeError('kallisto index failed for {}.'.format(sci_name))
-    if not _is_nonempty_regular_file(index_path):
-        raise RuntimeError('Index file was not generated: {}'.format(index_path))
+        if index_out.returncode != 0:
+            raise RuntimeError('kallisto index failed for {}.'.format(sci_name))
+        if not _is_nonempty_regular_file(temporary_index_path):
+            raise RuntimeError('Index file was not generated: {}'.format(temporary_index_path))
+        _write_index_ready_marker(
+            temporary_index_path,
+            backend='kallisto',
+            fasta_path=fasta_file,
+        )
+        _commit_index_with_ready_marker(
+            temporary_index_path=temporary_index_path,
+            index_path=index_path,
+            temporary_marker_path=_index_ready_marker_path(temporary_index_path),
+        )
 
 
 def _build_oarfish_index(args, index_path, fasta_file, sci_name, seq_tech):
+    absolute_index_path = os.path.abspath(index_path)
+    if os.path.lexists(absolute_index_path) and os.path.islink(absolute_index_path):
+        raise ValueError(
+            'Refusing to replace symbolic-link index output: {}'.format(absolute_index_path)
+        )
+    index_path = os.path.join(
+        os.path.realpath(os.path.dirname(absolute_index_path)),
+        os.path.basename(absolute_index_path),
+    )
+    _validate_index_commit_target(
+        _index_ready_marker_path(index_path),
+        'index ready marker',
+    )
     print('Reference fasta file found: {}'.format(fasta_file), flush=True)
     print('Building index: {}'.format(index_path), flush=True)
-    oarfish_build_cmd = [
-        'oarfish', '-j', str(args.threads),
-        '--annotated', fasta_file,
-        '--seq-tech', seq_tech,
-        '--only-index',
-        '--index-out', index_path,
-    ]
-    index_out, _stdout_txt, _stderr_txt = run_logged_command(
-        command=oarfish_build_cmd,
-        runner=subprocess.run,
-        print_command=True,
-        print_output=True,
-        stdout_label='oarfish index stdout:',
-        stderr_label='oarfish index stderr:',
-    )
-    if index_out.returncode != 0:
-        raise RuntimeError('oarfish index failed for {}.'.format(sci_name))
-    if not _is_nonempty_regular_file(index_path):
-        raise RuntimeError('Index file was not generated: {}'.format(index_path))
+    index_dir = os.path.dirname(os.path.realpath(index_path))
+    with tempfile.TemporaryDirectory(prefix='amalgkit_oarfish_index_', dir=index_dir) as build_dir:
+        temporary_index_path = os.path.join(build_dir, os.path.basename(index_path))
+        oarfish_build_cmd = [
+            'oarfish', '-j', str(args.threads),
+            '--annotated', fasta_file,
+            '--seq-tech', seq_tech,
+            '--only-index',
+            '--index-out', temporary_index_path,
+        ]
+        index_out, _stdout_txt, _stderr_txt = run_logged_command(
+            command=oarfish_build_cmd,
+            runner=subprocess.run,
+            print_command=True,
+            print_output=True,
+            stdout_label='oarfish index stdout:',
+            stderr_label='oarfish index stderr:',
+        )
+        if index_out.returncode != 0:
+            raise RuntimeError('oarfish index failed for {}.'.format(sci_name))
+        if not _is_nonempty_regular_file(temporary_index_path):
+            raise RuntimeError('Index file was not generated: {}'.format(temporary_index_path))
+        _write_index_ready_marker(
+            temporary_index_path,
+            backend='oarfish',
+            fasta_path=fasta_file,
+        )
+        _commit_index_with_ready_marker(
+            temporary_index_path=temporary_index_path,
+            index_path=index_path,
+            temporary_marker_path=_index_ready_marker_path(temporary_index_path),
+        )
 
 
 def get_index(args, sci_name, runtime_context=None, backend=None, oarfish_seq_tech=None, alias_names=None):
@@ -1180,6 +1787,20 @@ def get_index(args, sci_name, runtime_context=None, backend=None, oarfish_seq_te
     lock_path = os.path.join(index_dir, '.{}.lock'.format(os.path.basename(index_path)))
     prefetched_index_lookup_entries = _resolve_prefetched_index_entries(index_dir, runtime_context=runtime_context)
     use_prefetched_index = prefetched_index_lookup_entries is not None
+    matched_prefix = None
+    fasta_file = None
+    if args.build_index:
+        try:
+            matched_prefix, fasta_file = _find_single_fasta_match(
+                args,
+                sci_name,
+                runtime_context=runtime_context,
+            )
+        except FileNotFoundError:
+            # A concurrent builder may still publish a complete shared index.
+            # Re-raise below only if no ready index appears after locking.
+            matched_prefix = None
+            fasta_file = None
 
     if use_prefetched_index:
         index = _find_single_index_file(
@@ -1188,6 +1809,8 @@ def get_index(args, sci_name, runtime_context=None, backend=None, oarfish_seq_te
             entries=prefetched_index_lookup_entries,
             backend=backend,
             oarfish_seq_tech=oarfish_seq_tech,
+            require_ready_marker=bool(args.build_index),
+            fasta_path=fasta_file,
         )
     else:
         index = _find_single_index_file(
@@ -1195,6 +1818,8 @@ def get_index(args, sci_name, runtime_context=None, backend=None, oarfish_seq_te
             sci_name=sci_name,
             backend=backend,
             oarfish_seq_tech=oarfish_seq_tech,
+            require_ready_marker=bool(args.build_index),
+            fasta_path=fasta_file,
         )
     if index is not None:
         return index
@@ -1213,9 +1838,11 @@ def get_index(args, sci_name, runtime_context=None, backend=None, oarfish_seq_te
         index = _find_single_index_file(
             index_dir=index_dir,
             sci_name=sci_name,
-            entries=prefetched_index_lookup_entries,
+            entries=None,
             backend=backend,
             oarfish_seq_tech=oarfish_seq_tech,
+            require_ready_marker=True,
+            fasta_path=fasta_file,
         )
         if index is not None:
             print('Detected completed index after lock acquisition: {}'.format(index), flush=True)
@@ -1223,11 +1850,12 @@ def get_index(args, sci_name, runtime_context=None, backend=None, oarfish_seq_te
 
         print('--build_index set. Building index for {}'.format(sci_name))
         _remove_empty_regular_file(index_path)
-        matched_prefix, fasta_file = _find_single_fasta_match(
-            args,
-            sci_name,
-            runtime_context=runtime_context,
-        )
+        if fasta_file is None:
+            matched_prefix, fasta_file = _find_single_fasta_match(
+                args,
+                sci_name,
+                runtime_context=runtime_context,
+            )
         if backend == 'kallisto':
             _build_kallisto_index(index_path=index_path, fasta_file=fasta_file, sci_name=build_sci_name)
         elif backend == 'oarfish':
@@ -1261,7 +1889,13 @@ def run_quant_for_sra(args, metadata, sra_id, sci_name, runtime_context=None):
     print('')
     print('Species: {}'.format(sci_name))
     print('SRA Run ID: {}'.format(sra_id))
-    normalized_sci_name = _normalize_species_identifier(sci_name)
+    normalized_sci_name = _normalize_species_identifier(
+        _resolve_task_species_identifier_values(
+            sra_id,
+            sci_name,
+            runtime_context=runtime_context,
+        )[0]
+    )
     backend = None
     oarfish_seq_tech = None
     index_cache = None
@@ -1320,7 +1954,13 @@ def _resolve_task_backend_info(args, tasks, runtime_context=None):
             oarfish_seq_tech = requested_seq_tech
         task_info.append((
             sra_id,
-            _normalize_species_identifier(sci_name),
+            _normalize_species_identifier(
+                _resolve_task_species_identifier_values(
+                    sra_id,
+                    sci_name,
+                    runtime_context=runtime_context,
+                )[0]
+            ),
             backend,
             oarfish_seq_tech,
         ))
@@ -1471,10 +2111,30 @@ def build_quant_tasks(metadata):
     missing_columns = [col for col in required_columns if col not in metadata.df.columns]
     if len(missing_columns) > 0:
         raise ValueError('Missing required metadata column(s) for quant: {}'.format(', '.join(missing_columns)))
+    eligible_mask = pandas.Series(True, index=metadata.df.index)
+    if 'exclusion' in metadata.df.columns:
+        exclusion = metadata.df['exclusion'].fillna('').astype(str).str.strip().str.lower()
+        if exclusion.ne('').any():
+            eligible_mask &= exclusion.eq('no')
+    if 'is_sampled' in metadata.df.columns:
+        sampled = metadata.df['is_sampled'].fillna('').astype(str).str.strip().str.lower()
+        if sampled.ne('').any():
+            invalid_sampled = sorted(
+                set(sampled.loc[(sampled != '') & (~sampled.isin({'yes', 'no'}))].tolist())
+            )
+            if invalid_sampled:
+                raise ValueError(
+                    'Column "is_sampled" contains invalid flag(s): {}'.format(', '.join(invalid_sampled))
+                )
+            eligible_mask &= sampled.eq('yes')
+    metadata.df = metadata.df.loc[eligible_mask, :].copy().reset_index(drop=True)
+    if metadata.df.shape[0] == 0:
+        raise ValueError('No eligible quant rows remained after exclusion/is_sampled filtering.')
     runs = metadata.df['run'].fillna('').astype(str).str.strip()
     species = metadata.df['scientific_name'].fillna('').astype(str).str.strip()
     metadata.df['run'] = runs
     metadata.df['scientific_name'] = species
+    _build_quant_species_token_by_run(metadata)
     missing_species_runs = []
     placeholder_species_runs = []
     missing_run_count = 0
@@ -1485,6 +2145,7 @@ def build_quant_tasks(metadata):
         if run_id == '':
             missing_run_count += 1
             continue
+        run_id = validate_safe_path_component(run_id, label='run ID')
         if sci_name == '':
             missing_species_runs.append(run_id)
             continue

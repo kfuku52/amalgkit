@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 import numpy
 import pandas
 
+from amalgkit.imputation import impute_expression
 from amalgkit.normalization_tmm import run_tmm_rounds_for_cstmm
 
 
@@ -91,17 +92,14 @@ def _copy_eff_length_file(dir_count, dir_cstmm, species_name):
     shutil.copy2(src, dst)
 
 
-def _fill_missing_with_row_mean(df):
-    if not df.isna().any().any():
-        return df
-    row_means = df.mean(axis=1, skipna=True).fillna(0.0)
-    return df.T.fillna(row_means).T
-
-
 def _get_df_nonzero(df_counts):
     is_zero_col = (df_counts.sum(axis=0, skipna=True) == 0)
     df_nonzero = df_counts.loc[:, ~is_zero_col].copy()
-    return _fill_missing_with_row_mean(df_nonzero)
+    return impute_expression(
+        df_nonzero,
+        strategy='em_pca',
+        minimum_imputed_value=0.0,
+    )
 
 
 def _get_singlecopy_bool_index(df_gc, spp_filled, percent_singlecopy_threshold=50.0):

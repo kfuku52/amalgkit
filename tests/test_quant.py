@@ -1,5 +1,6 @@
 import os
 import json
+import pathlib
 import subprocess
 from contextlib import contextmanager
 
@@ -9,8 +10,12 @@ import pandas
 from types import SimpleNamespace
 
 from amalgkit.command_context import PrefetchedDirEntries, QuantRuntimeContext
+from amalgkit.output_utils import atomic_output_path
 from amalgkit.quant import (
     _build_kallisto_index,
+    _is_ready_index_file,
+    _safely_remove_quant_fastq_files,
+    _write_index_ready_marker,
     _metadata_with_quant_input_sra_stats,
     build_kallisto_quant_command,
     build_oarfish_quant_command,
@@ -23,8 +28,10 @@ from amalgkit.quant import (
     check_kallisto_dependency,
     check_oarfish_dependency,
     get_index,
+    parse_quant_option_args,
     call_kallisto,
     call_oarfish,
+    adapt_oarfish_outputs,
     run_quant,
     pre_resolve_species_indices,
     prefetch_getfastq_run_files,
@@ -36,6 +43,19 @@ from amalgkit.quant import (
 from amalgkit.util import Metadata
 
 
+def write_valid_quant_outputs(output_dir, sra_id='SRR001', target_id='tx1'):
+    os.makedirs(output_dir, exist_ok=True)
+    pandas.DataFrame([{
+        'target_id': target_id,
+        'length': 100,
+        'eff_length': 90,
+        'est_counts': 5,
+        'tpm': 1.0,
+    }]).to_csv(os.path.join(output_dir, sra_id + '_abundance.tsv'), sep='\t', index=False)
+    with open(os.path.join(output_dir, sra_id + '_run_info.json'), 'w', encoding='utf-8') as handle:
+        json.dump({'p_pseudoaligned': 50.0}, handle)
+
+
 # ---------------------------------------------------------------------------
 # quant_output_exists (checks for abundance.tsv in output directory)
 # ---------------------------------------------------------------------------
@@ -43,8 +63,7 @@ from amalgkit.util import Metadata
 class TestQuantOutputExists:
     def test_output_exists(self, tmp_path):
         """Returns True when both abundance.tsv and run_info.json exist."""
-        (tmp_path / 'SRR001_abundance.tsv').write_text('target_id\tdata\n')
-        (tmp_path / 'SRR001_run_info.json').write_text('{}')
+        write_valid_quant_outputs(tmp_path)
         assert quant_output_exists('SRR001', str(tmp_path)) is True
 
     def test_output_missing(self, tmp_path):
@@ -58,6 +77,63 @@ class TestQuantOutputExists:
     def test_ignores_directory_named_as_abundance_file(self, tmp_path):
         (tmp_path / 'SRR001_abundance.tsv').mkdir()
         assert quant_output_exists('SRR001', str(tmp_path)) is False
+
+    def test_rejects_header_only_abundance_table(self, tmp_path):
+        (tmp_path / 'SRR001_abundance.tsv').write_text(
+            'target_id\tlength\teff_length\test_counts\ttpm\n',
+            encoding='utf-8',
+        )
+        (tmp_path / 'SRR001_run_info.json').write_text(
+            '{"p_pseudoaligned": 50}',
+            encoding='utf-8',
+        )
+
+        assert quant_output_exists('SRR001', str(tmp_path)) is False
+
+    def test_rejects_duplicate_target_ids(self, tmp_path):
+        write_valid_quant_outputs(tmp_path)
+        abundance_path = tmp_path / 'SRR001_abundance.tsv'
+        abundance = pandas.read_csv(abundance_path, sep='\t')
+        pandas.concat([abundance, abundance], ignore_index=True).to_csv(
+            abundance_path,
+            sep='\t',
+            index=False,
+        )
+
+        assert quant_output_exists('SRR001', str(tmp_path)) is False
+
+    @pytest.mark.parametrize('pseudoaligned', [-1, 101, 'NaN'])
+    def test_rejects_invalid_pseudoalignment_percentage(self, tmp_path, pseudoaligned):
+        write_valid_quant_outputs(tmp_path)
+        (tmp_path / 'SRR001_run_info.json').write_text(
+            json.dumps({'p_pseudoaligned': pseudoaligned}),
+            encoding='utf-8',
+        )
+
+        assert quant_output_exists('SRR001', str(tmp_path)) is False
+
+
+@pytest.mark.parametrize(
+    ('option_name', 'option_string'),
+    [
+        ('--kallisto_options', '--index=other.idx'),
+        ('--kallisto_options', '-o other'),
+        ('--kallisto_options', '--threads 99'),
+        ('--kallisto_options', '-iother.idx'),
+        ('--kallisto_options', '-oelsewhere'),
+        ('--kallisto_options', '-t8'),
+        ('--kallisto_options', '-l200'),
+        ('--kallisto_options', '-s20'),
+        ('--oarfish_options', '--reads=other.fastq'),
+        ('--oarfish_options', '--seq-tech pacbio'),
+        ('--oarfish_options', '--output elsewhere'),
+        ('--oarfish_options', '-j8'),
+        ('--oarfish_options', '-oelsewhere'),
+    ],
+)
+def test_parse_quant_options_rejects_managed_options(option_name, option_string):
+    with pytest.raises(ValueError, match='must not override'):
+        parse_quant_option_args(option_string, option_name)
 
 
 class TestPurgeExistingQuantOutputs:
@@ -88,6 +164,90 @@ class TestPurgeExistingQuantOutputs:
         (tmp_path / 'SRR001_abundance.tsv').mkdir()
         with pytest.raises(IsADirectoryError, match='not a file'):
             purge_existing_quant_outputs('SRR001', str(tmp_path))
+
+
+def test_safe_fastq_cleanup_rolls_back_when_marker_write_fails(tmp_path, monkeypatch):
+    fastq_paths = [tmp_path / 'R1.fastq.gz', tmp_path / 'R2.fastq.gz']
+    for path in fastq_paths:
+        path.write_bytes(b'reads')
+    real_atomic_output_path = atomic_output_path
+    calls = {'count': 0}
+
+    @contextmanager
+    def fail_second_marker(*args, **kwargs):
+        calls['count'] += 1
+        if calls['count'] == 2:
+            raise OSError('marker failure')
+        with real_atomic_output_path(*args, **kwargs) as temporary_path:
+            yield temporary_path
+
+    monkeypatch.setattr('amalgkit.quant.atomic_output_path', fail_second_marker)
+
+    with pytest.raises(OSError, match='marker failure'):
+        _safely_remove_quant_fastq_files([str(path) for path in fastq_paths])
+
+    assert all(path.read_bytes() == b'reads' for path in fastq_paths)
+    assert all(not (tmp_path / (path.name + '.safely_removed')).exists() for path in fastq_paths)
+
+
+def test_index_ready_marker_invalidates_when_reference_changes(tmp_path):
+    index_path = tmp_path / 'Species_A.idx'
+    fasta_path = tmp_path / 'Species_A.fa'
+    index_path.write_text('index', encoding='utf-8')
+    fasta_path.write_text('>a\nAAAA\n', encoding='utf-8')
+    _write_index_ready_marker(
+        str(index_path),
+        backend='kallisto',
+        fasta_path=str(fasta_path),
+    )
+
+    assert _is_ready_index_file(
+        str(index_path),
+        backend='kallisto',
+        require_ready_marker=True,
+        fasta_path=str(fasta_path),
+    )
+
+    fasta_path.write_text('>a\nCCCC\n', encoding='utf-8')
+
+    assert not _is_ready_index_file(
+        str(index_path),
+        backend='kallisto',
+        require_ready_marker=True,
+        fasta_path=str(fasta_path),
+    )
+
+
+@pytest.mark.parametrize(
+    ('quant_rows', 'total_spot', 'error_match'),
+    [
+        ('tx1\t100\tNaN\n', 10, 'non-finite'),
+        ('tx1\t100\t-1\n', 10, 'negative'),
+        ('tx1\t100\t6\ntx1\t100\t1\n', 10, 'duplicate target_id'),
+        ('tx1\t100\t11\n', 10, 'exceeds total_spot'),
+    ],
+)
+def test_adapt_oarfish_outputs_rejects_invalid_raw_values(
+    tmp_path,
+    quant_rows,
+    total_spot,
+    error_match,
+):
+    output_prefix = tmp_path / 'SRR001'
+    output_prefix.with_suffix('.quant').write_text(
+        'tname\tlen\tnum_reads\n' + quant_rows,
+        encoding='utf-8',
+    )
+    output_prefix.with_suffix('.meta_info.json').write_text('{}', encoding='utf-8')
+
+    with pytest.raises(ValueError, match=error_match):
+        adapt_oarfish_outputs(
+            output_dir=str(tmp_path),
+            sra_id='SRR001',
+            sra_stat={'total_spot': total_spot},
+            output_prefix=str(output_prefix),
+            seq_tech='ont-cdna',
+        )
 
 
 class TestCheckKallistoDependency:
@@ -490,6 +650,7 @@ class TestGetfastqPrefetch:
             called['kallisto'] += 1
             assert len(in_files) == 1
             assert in_files[0].endswith('SRR001.fastq.gz')
+            write_valid_quant_outputs(_output_dir)
             return SimpleNamespace(returncode=0)
 
         monkeypatch.setattr('amalgkit.quant.list_getfastq_run_files', fail_if_listdir_used)
@@ -531,6 +692,7 @@ class TestGetfastqPrefetch:
         def fake_call_kallisto(_args, in_files, _metadata, sra_stat, _output_dir, _index):
             observed['in_files'] = in_files
             observed['sra_stat'] = sra_stat
+            write_valid_quant_outputs(_output_dir)
             return SimpleNamespace(returncode=0)
 
         monkeypatch.setattr('amalgkit.quant.call_kallisto', fake_call_kallisto)
@@ -606,6 +768,7 @@ class TestGetfastqPrefetch:
 
         def fake_call_kallisto(_args, _in_files, _metadata, sra_stat, _output_dir, _index):
             observed['sra_stat'] = sra_stat
+            write_valid_quant_outputs(_output_dir)
             return SimpleNamespace(returncode=0)
 
         monkeypatch.setattr('amalgkit.quant.call_kallisto', fake_call_kallisto)
@@ -648,6 +811,7 @@ class TestGetfastqPrefetch:
 
         def fake_call_kallisto(_args, _in_files, _metadata, sra_stat, _output_dir, _index):
             observed['sra_stat'] = sra_stat
+            write_valid_quant_outputs(_output_dir)
             return SimpleNamespace(returncode=0)
 
         monkeypatch.setattr('amalgkit.quant.call_kallisto', fake_call_kallisto)
@@ -694,12 +858,14 @@ class TestGetfastqPrefetch:
         with pytest.raises(ValueError, match='total_spots must be > 0'):
             run_quant(args, metadata, 'SRR001', 'dummy.idx', runtime_context=runtime_context)
 
-    def test_run_quant_redo_purges_stale_outputs_before_call(self, tmp_path, monkeypatch):
+    def test_run_quant_redo_failure_preserves_previous_valid_outputs(self, tmp_path, monkeypatch):
         out_dir = tmp_path / 'out'
         out_dir.mkdir()
         quant_run_dir = out_dir / 'quant' / 'SRR001'
         quant_run_dir.mkdir(parents=True)
-        (quant_run_dir / 'SRR001_abundance.tsv').write_text('stale')
+        write_valid_quant_outputs(quant_run_dir, target_id='old')
+        old_abundance = (quant_run_dir / 'SRR001_abundance.tsv').read_text()
+        old_run_info = (quant_run_dir / 'SRR001_run_info.json').read_text()
         args = SimpleNamespace(
             out_dir=str(out_dir),
             redo=True,
@@ -717,18 +883,77 @@ class TestGetfastqPrefetch:
             'nominal_length': [200],
             'exclusion': ['no'],
         }))
-        called = {'kallisto': 0}
-
         def fake_call_kallisto(_args, in_files, _metadata, _sra_stat, _output_dir, _index):
-            called['kallisto'] += 1
-            assert not (quant_run_dir / 'SRR001_abundance.tsv').exists()
+            assert (quant_run_dir / 'SRR001_abundance.tsv').exists()
             assert len(in_files) == 1
+            raise RuntimeError('simulated backend failure')
+
+        monkeypatch.setattr('amalgkit.quant.call_kallisto', fake_call_kallisto)
+
+        with pytest.raises(RuntimeError, match='simulated backend failure'):
+            run_quant(args, metadata, 'SRR001', 'dummy.idx', runtime_context=runtime_context)
+        assert (quant_run_dir / 'SRR001_abundance.tsv').read_text() == old_abundance
+        assert (quant_run_dir / 'SRR001_run_info.json').read_text() == old_run_info
+
+    def test_run_quant_redo_preserves_only_unknown_regular_sidecars(self, tmp_path, monkeypatch):
+        out_dir = tmp_path / 'out'
+        quant_run_dir = out_dir / 'quant' / 'SRR001'
+        quant_run_dir.mkdir(parents=True)
+        write_valid_quant_outputs(quant_run_dir, target_id='old')
+        (quant_run_dir / 'diagnostic.log').write_text('keep\n', encoding='utf-8')
+        (quant_run_dir / 'SRR001.prob').write_text('stale-managed\n', encoding='utf-8')
+        (quant_run_dir / 'debug-directory').mkdir()
+        outside_log = tmp_path / 'outside.log'
+        outside_log.write_text('outside\n', encoding='utf-8')
+        (quant_run_dir / 'linked.log').symlink_to(outside_log)
+        args = SimpleNamespace(
+            out_dir=str(out_dir),
+            redo=True,
+            clean_fastq=False,
+            threads=1,
+        )
+        runtime_context = QuantRuntimeContext(
+            run_files_by_run={'SRR001': {'SRR001.fastq.gz'}}
+        )
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001'],
+            'scientific_name': ['Species A'],
+            'lib_layout': ['single'],
+            'total_spots': [10],
+            'spot_length': [100],
+            'total_bases': [1000],
+            'nominal_length': [200],
+            'exclusion': ['no'],
+        }))
+
+        def fake_call_kallisto(_args, _in_files, _metadata, _sra_stat, stage_dir, _index):
+            assert not (pathlib.Path(stage_dir) / 'diagnostic.log').exists()
+            assert not (pathlib.Path(stage_dir) / 'SRR001.prob').exists()
+            assert not (pathlib.Path(stage_dir) / 'debug-directory').exists()
+            assert not (pathlib.Path(stage_dir) / 'linked.log').exists()
+            write_valid_quant_outputs(stage_dir, target_id='new')
             return SimpleNamespace(returncode=0)
 
         monkeypatch.setattr('amalgkit.quant.call_kallisto', fake_call_kallisto)
 
-        run_quant(args, metadata, 'SRR001', 'dummy.idx', runtime_context=runtime_context)
-        assert called['kallisto'] == 1
+        run_quant(
+            args,
+            metadata,
+            'SRR001',
+            'dummy.idx',
+            runtime_context=runtime_context,
+        )
+
+        abundance = pandas.read_csv(
+            quant_run_dir / 'SRR001_abundance.tsv',
+            sep='\t',
+        )
+        assert abundance['target_id'].tolist() == ['new']
+        assert (quant_run_dir / 'diagnostic.log').read_text(encoding='utf-8') == 'keep\n'
+        assert not (quant_run_dir / 'SRR001.prob').exists()
+        assert not (quant_run_dir / 'debug-directory').exists()
+        assert not (quant_run_dir / 'linked.log').exists()
+        assert outside_log.read_text(encoding='utf-8') == 'outside\n'
 
     def test_run_quant_raises_when_fastq_is_missing(self, tmp_path, monkeypatch):
         out_dir = tmp_path / 'out'
@@ -818,6 +1043,38 @@ class TestGetfastqPrefetch:
 
 
 class TestQuantEdgeCases:
+    def test_build_quant_tasks_uses_only_selected_nonexcluded_rows(self):
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001', 'SRR002', 'SRR003'],
+            'scientific_name': ['Species A', 'Species A', 'Species A'],
+            'exclusion': ['no', 'low_nspots', 'no'],
+            'is_sampled': ['yes', 'yes', 'no'],
+        }))
+
+        assert build_quant_tasks(metadata) == [('SRR001', 'Species A')]
+        assert metadata.df['run'].tolist() == ['SRR001']
+
+    def test_build_quant_tasks_rejects_invalid_sampling_flag(self):
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001'],
+            'scientific_name': ['Species A'],
+            'exclusion': ['no'],
+            'is_sampled': ['maybe'],
+        }))
+
+        with pytest.raises(ValueError, match='invalid flag'):
+            build_quant_tasks(metadata)
+
+    def test_build_quant_tasks_rejects_unsafe_run_identifier(self):
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['../escape'],
+            'scientific_name': ['Species A'],
+            'exclusion': ['no'],
+        }))
+
+        with pytest.raises(ValueError, match='run ID'):
+            build_quant_tasks(metadata)
+
     def test_build_quant_tasks_rejects_missing_required_columns(self):
         metadata = Metadata.from_DataFrame(pandas.DataFrame({
             'run': ['SRR001'],
@@ -1193,6 +1450,7 @@ class TestQuantEdgeCases:
             captured['poll_seconds'] = poll_seconds
             captured['timeout_seconds'] = timeout_seconds
             index_path.write_text('index_ready')
+            _write_index_ready_marker(str(index_path), backend='kallisto')
             yield
 
         def fail_if_called(*_args, **_kwargs):
@@ -1276,7 +1534,8 @@ class TestQuantEdgeCases:
 
         def fake_run(cmd, stdout, stderr):
             assert cmd[:3] == ['kallisto', 'index', '-i']
-            index_path.write_text('built')
+            with open(cmd[3], 'w', encoding='utf-8') as handle:
+                handle.write('built')
             return SimpleNamespace(returncode=0, stdout=b'', stderr=b'')
 
         monkeypatch.setattr(subprocess, 'run', fake_run)
@@ -1304,6 +1563,7 @@ class TestQuantEdgeCases:
                 path_dir=str(fasta_dir),
             ),
         )
+        (fasta_dir / 'Homo_sapiens.fa').write_text('>a\nAAAA\n', encoding='utf-8')
         seen = {'entries': None}
 
         def fake_find_species_fasta_files(path_fasta_dir, sci_name, entries=None):
@@ -1311,7 +1571,8 @@ class TestQuantEdgeCases:
             return sci_name, [os.path.join(path_fasta_dir, sci_name + '.fa')]
 
         def fake_run(cmd, stdout, stderr):
-            index_path.write_text('built')
+            with open(cmd[cmd.index('-i') + 1], 'w', encoding='utf-8') as handle:
+                handle.write('built')
             return SimpleNamespace(returncode=0, stdout=b'', stderr=b'')
 
         monkeypatch.setattr('amalgkit.quant._find_species_fasta_files', fake_find_species_fasta_files)
@@ -1509,6 +1770,40 @@ class TestQuantEdgeCases:
         assert built == [(str(stale_index), str(fasta_dir / 'Homo_sapiens.fa'), 'Homo_sapiens')]
         assert stale_index.read_text() == 'idx'
 
+    def test_get_index_rebuilds_nonempty_index_without_ready_marker(self, tmp_path, monkeypatch):
+        out_dir = tmp_path / 'out'
+        fasta_dir = tmp_path / 'fasta'
+        index_dir = tmp_path / 'index'
+        out_dir.mkdir()
+        fasta_dir.mkdir()
+        index_dir.mkdir()
+        (fasta_dir / 'Homo_sapiens.fa').write_text('>a\nAAAA\n', encoding='utf-8')
+        partial_index = index_dir / 'Homo_sapiens.idx'
+        partial_index.write_text('partial-but-nonempty', encoding='utf-8')
+        built = []
+        args = SimpleNamespace(
+            out_dir=str(out_dir),
+            index_dir=str(index_dir),
+            build_index=True,
+            fasta_dir=str(fasta_dir),
+            index_lock_poll=1,
+            index_lock_timeout=10,
+        )
+
+        def fake_build(index_path, fasta_file, sci_name):
+            built.append((index_path, fasta_file, sci_name))
+            with open(index_path, 'w', encoding='utf-8') as handle:
+                handle.write('complete-index')
+            _write_index_ready_marker(index_path, backend='kallisto')
+
+        monkeypatch.setattr('amalgkit.quant._build_kallisto_index', fake_build)
+
+        observed = get_index(args, 'Homo_sapiens')
+
+        assert observed == str(partial_index)
+        assert len(built) == 1
+        assert partial_index.read_text(encoding='utf-8') == 'complete-index'
+
     def test_build_kallisto_index_uses_isolated_workdir(self, tmp_path, monkeypatch):
         index_dir = tmp_path / 'index'
         fasta_dir = tmp_path / 'fasta'
@@ -1537,6 +1832,38 @@ class TestQuantEdgeCases:
         assert len(observed_cwds) == 1
         assert observed_cwds[0] != os.getcwd()
         assert not os.path.exists(observed_cwds[0])
+
+    def test_failed_kallisto_index_build_preserves_previous_index(self, tmp_path, monkeypatch):
+        index_path = tmp_path / 'Homo_sapiens.idx'
+        fasta_file = tmp_path / 'Homo_sapiens.fa'
+        index_path.write_text('previous-good-index', encoding='utf-8')
+        fasta_file.write_text('>a\nAAAA\n', encoding='utf-8')
+
+        def fake_run(cmd, stdout, stderr, cwd=None):
+            _ = (stdout, stderr, cwd)
+            with open(cmd[3], 'w', encoding='utf-8') as handle:
+                handle.write('partial-index')
+            return SimpleNamespace(returncode=1, stdout=b'', stderr=b'failed')
+
+        monkeypatch.setattr(subprocess, 'run', fake_run)
+
+        with pytest.raises(RuntimeError, match='kallisto index failed'):
+            _build_kallisto_index(str(index_path), str(fasta_file), 'Homo_sapiens')
+
+        assert index_path.read_text(encoding='utf-8') == 'previous-good-index'
+
+    def test_build_kallisto_index_rejects_symbolic_link_output(self, tmp_path):
+        outside = tmp_path / 'outside.idx'
+        outside.write_text('outside-index', encoding='utf-8')
+        index_path = tmp_path / 'Homo_sapiens.idx'
+        index_path.symlink_to(outside)
+        fasta_file = tmp_path / 'Homo_sapiens.fa'
+        fasta_file.write_text('>a\nAAAA\n', encoding='utf-8')
+
+        with pytest.raises(ValueError, match='symbolic-link index output'):
+            _build_kallisto_index(str(index_path), str(fasta_file), 'Homo_sapiens')
+
+        assert outside.read_text(encoding='utf-8') == 'outside-index'
 
     def test_call_kallisto_rejects_unsupported_layout(self, tmp_path):
         args = SimpleNamespace(threads=1)
@@ -1641,6 +1968,7 @@ class TestQuantEdgeCases:
             observed['oarfish'] += 1
             assert in_files == [str(out_dir / 'getfastq' / 'SRR001' / 'SRR001.fastq.gz')]
             assert seq_tech == 'pac-bio'
+            write_valid_quant_outputs(_output_dir)
             return SimpleNamespace(returncode=0)
 
         monkeypatch.setattr('amalgkit.quant.call_oarfish', fake_call_oarfish)

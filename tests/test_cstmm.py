@@ -1,9 +1,129 @@
 import pytest
+import numpy
 import pandas
 from types import SimpleNamespace
 
 from amalgkit.cstmm import filepath2spp, get_count_files, cstmm_main
-from amalgkit.normalization_tmm import run_tmm_rounds_for_cstmm
+from amalgkit.cstmm_python import _get_df_nonzero
+from amalgkit.imputation import impute_expression
+from amalgkit.normalization_tmm import (
+    apply_tmm_factors,
+    calc_factor_tmm,
+    run_tmm_rounds_for_cstmm,
+)
+
+
+def test_tmm_rounds_reject_empty_and_all_zero_reference_matrices():
+    with pytest.raises(ValueError, match='at least one sample column'):
+        run_tmm_rounds_for_cstmm(pandas.DataFrame(index=['G1', 'G2']))
+    with pytest.raises(ValueError, match='at least one positive count'):
+        run_tmm_rounds_for_cstmm(
+            pandas.DataFrame(
+                {'RUN1': [0.0, 0.0], 'RUN2': [0.0, 0.0]},
+                index=['G1', 'G2'],
+            )
+        )
+
+
+@pytest.mark.parametrize(
+    ('invalid_value', 'message'),
+    [
+        (numpy.inf, 'finite values'),
+        (-1.0, 'Negative counts'),
+    ],
+)
+def test_tmm_rounds_reject_nonfinite_or_negative_counts(invalid_value, message):
+    counts = pandas.DataFrame(
+        {
+            'RUN1': [1.0, invalid_value],
+            'RUN2': [2.0, 3.0],
+        },
+        index=['G1', 'G2'],
+    )
+
+    with pytest.raises(ValueError, match=message):
+        run_tmm_rounds_for_cstmm(counts)
+
+
+@pytest.mark.parametrize('invalid_value', [0.0, -1.0, numpy.nan, numpy.inf])
+def test_tmm_rounds_reject_nonpositive_or_nonfinite_library_sizes(invalid_value):
+    counts = pandas.DataFrame(
+        {
+            'RUN1': [1.0, 2.0],
+            'RUN2': [2.0, 3.0],
+        },
+        index=['G1', 'G2'],
+    )
+    library_sizes = pandas.Series(
+        {
+            'RUN1': invalid_value,
+            'RUN2': 5.0,
+        }
+    )
+
+    with pytest.raises(ValueError, match='lib.sizes'):
+        run_tmm_rounds_for_cstmm(counts, lib_size=library_sizes)
+
+
+def test_direct_tmm_helpers_reject_invalid_counts_library_sizes_and_factors():
+    with pytest.raises(ValueError, match='count vectors'):
+        calc_factor_tmm(
+            obs=numpy.array([1.0, numpy.inf]),
+            ref=numpy.array([1.0, 2.0]),
+        )
+    with pytest.raises(ValueError, match='libsize_obs'):
+        calc_factor_tmm(
+            obs=numpy.array([1.0, 2.0]),
+            ref=numpy.array([1.0, 2.0]),
+            libsize_obs=0.0,
+        )
+
+    counts = pandas.DataFrame(
+        {'RUN1': [1.0, 2.0], 'RUN2': [2.0, 3.0]},
+        index=['G1', 'G2'],
+    )
+    with pytest.raises(ValueError, match='norm_factors'):
+        apply_tmm_factors(
+            counts,
+            pandas.Series({'RUN1': 1.0, 'RUN2': 0.0}),
+        )
+
+
+def test_cstmm_reference_uses_iterative_pca_for_structured_missing_values():
+    counts = pandas.DataFrame(
+        [
+            [1.0, 2.0, 3.0, numpy.nan],
+            [2.0, 4.0, numpy.nan, 8.0],
+            [10.0, numpy.nan, 6.0, 4.0],
+            [4.0, 3.0, 2.0, 1.0],
+            [5.0, 7.0, 9.0, 11.0],
+        ],
+        columns=['RUN1', 'RUN2', 'RUN3', 'RUN4'],
+    )
+
+    imputed = _get_df_nonzero(counts)
+
+    assert not imputed.isna().any().any()
+    assert not numpy.isclose(imputed.loc[0, 'RUN4'], 2.0)
+
+
+def test_imputation_minimum_applies_only_to_imputed_values():
+    matrix = pandas.DataFrame(
+        {
+            'RUN1': [-2.0, 1.0],
+            'RUN2': [numpy.nan, 3.0],
+        },
+        index=['G1', 'G2'],
+    )
+
+    imputed = impute_expression(
+        matrix,
+        strategy='row_mean',
+        minimum_imputed_value=0.0,
+    )
+
+    assert imputed.loc['G1', 'RUN1'] == -2.0
+    assert imputed.loc['G1', 'RUN2'] == 0.0
 
 
 def _read_dcf(path):

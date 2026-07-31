@@ -103,3 +103,7 @@ amalgkit rerun --out_dir ./ --manifest none
 - `--download_dir` and `--download_lock_dir` are shared with download-heavy targets.
 - Use `--dry_run yes` before large cluster reruns.
 - Use `--include_warnings yes` when the goal is to regenerate warning-level missing summaries, not only failed core outputs.
+- Report targets are intersected with the current metadata before execution, so
+  runs or species removed since the report was generated are skipped.
+- BUSCO repairs are staged and replace the existing BUSCO directory only after
+  all requested species work and the summary plot complete.

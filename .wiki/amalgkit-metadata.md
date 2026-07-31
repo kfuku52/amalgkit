@@ -34,7 +34,11 @@ amalgkit metadata \
     --entrez_email example@email.com
 ```
 
-`--species_tsv` must contain a `scientific_name` column. `--organ_terms_tsv` can provide:
+`--species_tsv` must contain a `scientific_name` column. It may also contain a
+unique `species_token` column to control per-species directory names. Tokens
+may contain only ASCII letters, digits, `.`, `_`, and `-`; names that differ
+only by case are rejected to remain safe on case-insensitive filesystems.
+`--organ_terms_tsv` can provide:
 
 - `sample_group`
 - semicolon-separated `title_terms`
@@ -53,6 +57,12 @@ amalgkit metadata \
 | `--merge yes/no` | merge per-query outputs into a species-level table in batch mode |
 | `--resolve_names yes/no` | resolve scientific names through NCBI taxonomy IDs |
 | `--ncbi_metadata_max_concurrency` | throttle NCBI metadata requests across shared processes |
+
+Species-wise query results are reused only when the recorded query fingerprint
+matches the current search string, species, mode, name-resolution setting, and
+AMALGKIT version. Changing one of those inputs refreshes the cached result.
+SRA experiment packages containing multiple runs produce one metadata row per
+run.
 
 ## Columns to Review
 

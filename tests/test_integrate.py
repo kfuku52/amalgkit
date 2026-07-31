@@ -58,18 +58,19 @@ class TestIntegrateFastqHelpers:
         with pytest.raises(ValueError, match='too small for ISIZE footer'):
             get_gzip_isize(str(bad))
 
-    def test_estimate_total_spots_from_gzip_sample_rejects_large_gzip_for_quick_mode(self, tmp_path, monkeypatch):
-        gz_path = tmp_path / 'x.fastq.gz'
-        gz_path.write_bytes(b'\x1f\x8b\x08\x00')
-        monkeypatch.setattr('amalgkit.integrate.os.path.getsize', lambda _p: (1 << 32))
-        monkeypatch.setattr('amalgkit.integrate.get_gzip_isize', lambda _p: 1024)
+    def test_estimate_total_spots_counts_all_concatenated_gzip_members(self, tmp_path):
+        import gzip
 
-        with pytest.raises(ValueError, match='ISIZE footer may overflow'):
-            estimate_total_spots_from_gzip_sample(
-                path_fastq=str(gz_path),
-                sampled_reads=100,
-                sampled_record_chars=1000,
-            )
+        gz_path = tmp_path / 'x.fastq.gz'
+        member1 = gzip.compress(b'@r1\nAAAA\n+\n!!!!\n')
+        member2 = gzip.compress(b'@r2\nCCCC\n+\n####\n')
+        gz_path.write_bytes(member1 + member2)
+
+        assert estimate_total_spots_from_gzip_sample(
+            path_fastq=str(gz_path),
+            sampled_reads=1,
+            sampled_record_chars=16,
+        ) == 2
 
     def test_scan_fastq_stats_with_seqkit_batch_parses_multiple_rows(self, tmp_path, monkeypatch):
         path_a = tmp_path / 'a.fastq'
@@ -314,7 +315,7 @@ class TestIntegrateGetFastqStats:
         out_dir = tmp_path / 'out'
         fastq_dir.mkdir()
         out_dir.mkdir()
-        self._write_one_read_fastq(str(fastq_dir / 'single.fastq'))
+        _write_fastq(str(fastq_dir / 'single.fastq'), ['A', 'AA'])
 
         def fake_run(cmd, stdout=None, stderr=None):
             input_paths = cmd[cmd.index('-j') + 2:]
@@ -348,8 +349,8 @@ class TestIntegrateGetFastqStats:
         out_dir = tmp_path / 'out'
         fastq_dir.mkdir()
         out_dir.mkdir()
-        self._write_one_read_fastq(str(fastq_dir / 'paired_1.fastq'))
-        self._write_one_read_fastq(str(fastq_dir / 'paired_2.fastq'))
+        _write_fastq(str(fastq_dir / 'paired_1.fastq'), ['A', 'AA'])
+        _write_fastq(str(fastq_dir / 'paired_2.fastq'), ['AA', 'AAA'])
 
         def fake_run(cmd, stdout=None, stderr=None):
             input_paths = cmd[cmd.index('-j') + 2:]
@@ -381,6 +382,65 @@ class TestIntegrateGetFastqStats:
         assert int(df.loc[0, 'spot_length']) == 5
         assert int(df.loc[0, 'total_spots']) == 2
         assert int(df.loc[0, 'total_bases']) == 8
+
+    def test_accurate_mode_rejects_cached_seqkit_read_count_mismatch(self, tmp_path, monkeypatch):
+        fastq_dir = tmp_path / 'fq'
+        out_dir = tmp_path / 'out'
+        fastq_dir.mkdir()
+        out_dir.mkdir()
+        fastq_path = fastq_dir / 'stale.fastq'
+        self._write_one_read_fastq(str(fastq_path))
+        stale_cache = {
+            os.path.abspath(str(fastq_path)): {
+                'num_reads': 2,
+                'avg_len': 4,
+                'num_bases': 8,
+            },
+        }
+        monkeypatch.setattr(
+            'amalgkit.integrate.build_seqkit_stats_cache_for_runs',
+            lambda *args, **kwargs: stale_cache,
+        )
+        args = SimpleNamespace(
+            fastq_dir=str(fastq_dir),
+            accurate_size=True,
+            out_dir=str(out_dir),
+            seqkit_exe='seqkit',
+        )
+
+        with pytest.raises(
+            ValueError,
+            match=r'cached seqkit stats reported 2 reads, but structure validation counted 1',
+        ):
+            get_fastq_stats(args)
+
+    def test_accurate_mode_rejects_malformed_fastq_even_with_cached_stats(self, tmp_path, monkeypatch):
+        fastq_dir = tmp_path / 'fq'
+        out_dir = tmp_path / 'out'
+        fastq_dir.mkdir()
+        out_dir.mkdir()
+        fastq_path = fastq_dir / 'malformed.fastq'
+        fastq_path.write_text('@r0\nAAAA\n+\nIII\n')
+        cached_stats = {
+            os.path.abspath(str(fastq_path)): {
+                'num_reads': 1,
+                'avg_len': 4,
+                'num_bases': 4,
+            },
+        }
+        monkeypatch.setattr(
+            'amalgkit.integrate.build_seqkit_stats_cache_for_runs',
+            lambda *args, **kwargs: cached_stats,
+        )
+        args = SimpleNamespace(
+            fastq_dir=str(fastq_dir),
+            accurate_size=True,
+            out_dir=str(out_dir),
+            seqkit_exe='seqkit',
+        )
+
+        with pytest.raises(ValueError, match='sequence and quality lengths differ'):
+            get_fastq_stats(args)
 
     def test_accurate_mode_python_fallback_rounds_average_and_keeps_exact_bases(self, tmp_path, monkeypatch):
         fastq_dir = tmp_path / 'fq'
@@ -438,6 +498,38 @@ class TestIntegrateGetFastqStats:
         args = SimpleNamespace(fastq_dir=str(fastq_dir), accurate_size=True, out_dir=str(out_dir))
 
         with pytest.raises(ValueError, match='Mismatched paired-end read counts'):
+            get_fastq_stats(args)
+
+    def test_raises_on_paired_read_id_mismatch_with_equal_counts(self, tmp_path):
+        fastq_dir = tmp_path / 'fq'
+        out_dir = tmp_path / 'out'
+        fastq_dir.mkdir()
+        out_dir.mkdir()
+        with open(str(fastq_dir / 'ids_1.fastq'), 'wt') as fh:
+            fh.write('@r0/1\nAAAA\n+\nIIII\n')
+            fh.write('@r1/1\nCCCC\n+\nIIII\n')
+        with open(str(fastq_dir / 'ids_2.fastq'), 'wt') as fh:
+            fh.write('@r0/2\nAAAA\n+\nIIII\n')
+            fh.write('@different/2\nCCCC\n+\nIIII\n')
+        args = SimpleNamespace(fastq_dir=str(fastq_dir), accurate_size=True, out_dir=str(out_dir))
+
+        with pytest.raises(ValueError, match='Mismatched paired-end read IDs/order.*record 2'):
+            get_fastq_stats(args)
+
+    def test_raises_on_paired_read_order_mismatch_with_equal_counts(self, tmp_path):
+        fastq_dir = tmp_path / 'fq'
+        out_dir = tmp_path / 'out'
+        fastq_dir.mkdir()
+        out_dir.mkdir()
+        with open(str(fastq_dir / 'order_1.fastq'), 'wt') as fh:
+            fh.write('@r0 1:N:0:1\nAAAA\n+\nIIII\n')
+            fh.write('@r1 1:N:0:1\nCCCC\n+\nIIII\n')
+        with open(str(fastq_dir / 'order_2.fastq'), 'wt') as fh:
+            fh.write('@r1 2:N:0:1\nCCCC\n+\nIIII\n')
+            fh.write('@r0 2:N:0:1\nAAAA\n+\nIIII\n')
+        args = SimpleNamespace(fastq_dir=str(fastq_dir), accurate_size=True, out_dir=str(out_dir))
+
+        with pytest.raises(ValueError, match='Mismatched paired-end read IDs/order.*record 1'):
             get_fastq_stats(args)
 
     def test_raises_on_malformed_gz_fastq_line_count_in_quick_mode(self, tmp_path):

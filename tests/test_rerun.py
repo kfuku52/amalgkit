@@ -1,12 +1,23 @@
 import json
 import os
+import pathlib
 from types import SimpleNamespace
 
 import pandas
 import pytest
 
 from amalgkit.exceptions import AmalgkitExit
-from amalgkit.rerun import rerun_main
+from amalgkit.rerun import _commit_staged_paths, rerun_main
+
+
+def _write_required_species_outputs(root, token, suffixes):
+    species_dir = pathlib.Path(root) / token
+    species_dir.mkdir(parents=True, exist_ok=True)
+    for suffix in suffixes:
+        (species_dir / '{}_{}'.format(token, suffix)).write_text(
+            'data\n',
+            encoding='utf-8',
+        )
 
 
 def _write_metadata(path_metadata):
@@ -55,6 +66,41 @@ def _build_args(tmp_path, **overrides):
     return SimpleNamespace(**data)
 
 
+def test_commit_staged_paths_preserves_old_target_when_stage_is_missing(tmp_path):
+    target_root = tmp_path / 'target'
+    staged_root = tmp_path / 'stage'
+    target_root.mkdir()
+    staged_root.mkdir()
+    (target_root / 'summary.pdf').write_text('old-valid', encoding='utf-8')
+
+    _commit_staged_paths(
+        str(target_root),
+        str(staged_root),
+        ['summary.pdf'],
+    )
+
+    assert (target_root / 'summary.pdf').read_text(encoding='utf-8') == 'old-valid'
+
+
+def test_commit_staged_paths_rejects_symbolic_link_target_root(tmp_path):
+    outside = tmp_path / 'outside'
+    outside.mkdir()
+    linked_target = tmp_path / 'linked'
+    linked_target.symlink_to(outside, target_is_directory=True)
+    staged_root = tmp_path / 'stage'
+    staged_root.mkdir()
+    (staged_root / 'summary.pdf').write_text('new', encoding='utf-8')
+
+    with pytest.raises(ValueError, match='symbolic-link rerun output root'):
+        _commit_staged_paths(
+            str(linked_target),
+            str(staged_root),
+            ['summary.pdf'],
+        )
+
+    assert not (outside / 'summary.pdf').exists()
+
+
 def test_rerun_run_checks_use_report_targets(tmp_path, monkeypatch):
     metadata_dir = tmp_path / 'metadata'
     metadata_dir.mkdir()
@@ -74,6 +120,7 @@ def test_rerun_run_checks_use_report_targets(tmp_path, monkeypatch):
         ],
         issues=[
             {'check': 'getfastq', 'severity': 'error', 'target_type': 'run', 'target_id': 'SRR002'},
+            {'check': 'getfastq', 'severity': 'error', 'target_type': 'run', 'target_id': 'SRR_STALE'},
             {'check': 'quant', 'severity': 'error', 'target_type': 'run', 'target_id': 'SRR003'},
         ],
     )
@@ -168,6 +215,7 @@ def test_rerun_busco_warning_repairs_summary_only(tmp_path, monkeypatch):
     def fake_generate_busco_species_plot(*args, **kwargs):
         observed['plot_calls'] += 1
         observed['plot_out_path'] = kwargs['out_path']
+        pathlib.Path(kwargs['out_path']).write_text('pdf')
 
     monkeypatch.setattr('amalgkit.rerun.process_species_busco', fake_process_species_busco)
     monkeypatch.setattr('amalgkit.rerun.generate_busco_species_plot', fake_generate_busco_species_plot)
@@ -176,7 +224,7 @@ def test_rerun_busco_warning_repairs_summary_only(tmp_path, monkeypatch):
 
     assert observed['process_calls'] == 0
     assert observed['plot_calls'] == 1
-    assert observed['plot_out_path'].endswith('busco/busco_completeness.pdf')
+    assert (tmp_path / 'busco' / 'busco_completeness.pdf').read_text() == 'pdf'
 
 
 def test_rerun_merge_global_issue_respects_species_filter_and_rebuilds_summary(tmp_path, monkeypatch):
@@ -209,6 +257,11 @@ def test_rerun_merge_global_issue_respects_species_filter_and_rebuilds_summary(t
         observed.setdefault('species_calls', []).append(sp)
         observed['merge_dir'] = merge_dir
         observed['run_abundance_paths'] = dict(run_abundance_paths)
+        _write_required_species_outputs(
+            merge_dir,
+            sp.replace(' ', '_'),
+            ('eff_length.tsv', 'est_counts.tsv', 'tpm.tsv'),
+        )
 
     def fake_merge_fastp_stats_into_metadata(metadata, out_dir, max_workers=None):
         observed['fastp_out_dir'] = out_dir
@@ -266,10 +319,11 @@ def test_rerun_merge_subset_keeps_global_plot_context(tmp_path, monkeypatch):
 
     def fake_merge_species_quant_tables(sp, metadata, quant_dir, merge_dir, run_abundance_paths):
         token = sp.replace(' ', '_')
-        species_dir = os.path.join(merge_dir, token)
-        os.makedirs(species_dir, exist_ok=True)
-        with open(os.path.join(species_dir, '{}_est_counts.tsv'.format(token)), 'w', encoding='utf-8') as handle:
-            handle.write('target_id\tRUN1\ng1\t2\n')
+        _write_required_species_outputs(
+            merge_dir,
+            token,
+            ('eff_length.tsv', 'est_counts.tsv', 'tpm.tsv'),
+        )
 
     monkeypatch.setattr('amalgkit.rerun.merge_species_quant_tables', fake_merge_species_quant_tables)
     monkeypatch.setattr('amalgkit.rerun.merge_fastp_stats_into_metadata', lambda metadata, out_dir, max_workers=None: metadata)
@@ -329,6 +383,16 @@ def test_rerun_finalize_global_issue_respects_species_filter(tmp_path, monkeypat
         observed['copied_per_species_dir'] = per_species_dir
         observed['finalize_dir'] = finalize_dir
         observed['batch_effect_alg'] = batch_effect_alg
+        _write_required_species_outputs(
+            finalize_dir,
+            'Mus_musculus',
+            (
+                'metadata.tsv',
+                'expression.tsv',
+                'batch_effect_summary.tsv',
+                'curation_final_summary.tsv',
+            ),
+        )
 
     def fake_copy_per_species_pdfs(per_species_dir, dst_dir, species_subset=None):
         observed['pdf_src_dir'] = per_species_dir
@@ -399,6 +463,17 @@ def test_rerun_finalize_global_issue_overrides_species_subset_selection(tmp_path
 
     def fake_copy_species_tables(per_species_dir, finalize_dir, batch_effect_alg):
         observed['finalize_dir'] = finalize_dir
+        for token in ('Homo_sapiens', 'Mus_musculus'):
+            _write_required_species_outputs(
+                finalize_dir,
+                token,
+                (
+                    'metadata.tsv',
+                    'expression.tsv',
+                    'batch_effect_summary.tsv',
+                    'curation_final_summary.tsv',
+                ),
+            )
 
     def fake_copy_per_species_pdfs(per_species_dir, dst_dir, species_subset=None):
         observed['pdf_dst_dir'] = dst_dir

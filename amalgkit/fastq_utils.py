@@ -29,12 +29,16 @@ def open_fastq_binary(path_fastq):
 
 def count_fastq_lines(path_fastq, chunk_size=DEFAULT_FASTQ_CHUNK_SIZE):
     num_lines = 0
+    last_byte = b''
     with open_fastq_binary(path_fastq) as handle:
         while True:
             chunk = handle.read(chunk_size)
             if not chunk:
                 break
             num_lines += chunk.count(b'\n')
+            last_byte = chunk[-1:]
+    if (last_byte != b'') and (last_byte != b'\n'):
+        num_lines += 1
     return num_lines
 
 

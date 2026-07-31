@@ -26,8 +26,10 @@ def _as_matrix_with_columns(counts):
         columns = ['sample{}'.format(i + 1) for i in range(matrix.shape[1])]
     if matrix.ndim != 2:
         raise ValueError('counts must be two-dimensional.')
-    if numpy.isnan(matrix).any():
-        raise ValueError('NA counts are not permitted.')
+    if not numpy.isfinite(matrix).all():
+        raise ValueError('Counts must contain only finite values.')
+    if (matrix < 0).any():
+        raise ValueError('Negative counts are not permitted.')
     return matrix, columns
 
 
@@ -40,9 +42,11 @@ def _coerce_library_sizes(lib_size, matrix, columns):
     else:
         values = numpy.asarray(lib_size, dtype=float).reshape(-1)
         if values.size != nsamples:
-            values = numpy.resize(values, nsamples)
-    if numpy.isnan(values).any():
-        raise ValueError('NA lib.sizes are not permitted.')
+            raise ValueError('lib.size must match the number of sample columns.')
+    if not numpy.isfinite(values).all():
+        raise ValueError('lib.sizes must contain only finite values.')
+    if (values <= 0).any():
+        raise ValueError('lib.sizes must contain only positive values.')
     return pandas.Series(values, index=columns, dtype=float)
 
 
@@ -85,6 +89,10 @@ def calc_factor_tmm(
     ref_array = numpy.asarray(ref, dtype=float)
     if obs_array.ndim > 2 or ref_array.ndim > 2:
         raise ValueError('obs and ref must be one- or two-dimensional.')
+    if (not numpy.isfinite(obs_array).all()) or (not numpy.isfinite(ref_array).all()):
+        raise ValueError('TMM count vectors must contain only finite values.')
+    if (obs_array < 0).any() or (ref_array < 0).any():
+        raise ValueError('TMM count vectors must not contain negative values.')
     obs_vector = obs_array.reshape(-1, order='F')
     ref_vector = ref_array.reshape(-1, order='F')
     n_obs = float(obs_vector.sum()) if libsize_obs is None else float(numpy.asarray(libsize_obs, dtype=float).reshape(-1)[0])
@@ -94,6 +102,10 @@ def calc_factor_tmm(
         n_ref_values = numpy.asarray(libsize_ref, dtype=float).reshape(-1)
         if n_ref_values.size == 0:
             n_ref_values = numpy.array([float(ref_vector.sum())], dtype=float)
+    if (not numpy.isfinite(n_obs)) or n_obs <= 0:
+        raise ValueError('libsize_obs must be finite and positive.')
+    if (not numpy.isfinite(n_ref_values).all()) or (n_ref_values <= 0).any():
+        raise ValueError('libsize_ref must contain only finite positive values.')
     target_size = max(obs_vector.size, ref_vector.size)
     obs_scaled = _recycle(obs_vector / n_obs, target_size)
     ref_scaled = _recycle(ref_vector, target_size) / _recycle(n_ref_values, target_size)
@@ -196,6 +208,10 @@ def calc_norm_factors_tmm(
 
 def run_tmm_rounds_for_cstmm(counts, lib_size=None):
     matrix, columns = _as_matrix_with_columns(counts)
+    if matrix.shape[1] == 0:
+        raise ValueError('TMM normalization requires at least one sample column.')
+    if _remove_all_zero_rows(matrix).shape[0] == 0:
+        raise ValueError('TMM normalization requires at least one positive count.')
     libs = _coerce_library_sizes(lib_size, matrix, columns)
     round1_counts = counts if isinstance(counts, pandas.DataFrame) else pandas.DataFrame(matrix, columns=columns)
     round1 = calc_norm_factors_tmm(round1_counts, lib_size=libs, ref_column=None)
@@ -218,12 +234,15 @@ def run_tmm_rounds_for_cstmm(counts, lib_size=None):
 def apply_tmm_factors(counts, norm_factors):
     if not isinstance(counts, pandas.DataFrame):
         raise ValueError('counts must be a pandas.DataFrame.')
+    _matrix, _columns = _as_matrix_with_columns(counts)
     if isinstance(norm_factors, pandas.Series):
         factors = norm_factors.reindex(counts.columns).to_numpy(dtype=float)
     else:
         factors = numpy.asarray(norm_factors, dtype=float).reshape(-1)
         if factors.size != counts.shape[1]:
             raise ValueError('norm_factors must match the number of sample columns.')
+    if (not numpy.isfinite(factors).all()) or (factors <= 0).any():
+        raise ValueError('norm_factors must contain only finite positive values.')
     corrected = counts.copy()
     corrected.loc[:, :] = counts.to_numpy(dtype=float, copy=False) / factors.reshape(1, -1)
     return corrected

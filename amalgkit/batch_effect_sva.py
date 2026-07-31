@@ -51,6 +51,31 @@ def build_intercept_only_design_matrix(num_rows):
     return numpy.ones((num_rows, 1), dtype=float), ['(Intercept)']
 
 
+def _align_metadata_to_counts(counts_df, metadata_df):
+    if 'run' not in metadata_df.columns:
+        raise ValueError('Missing required metadata column: run')
+    count_run_ids = [str(run_id).strip() for run_id in counts_df.columns]
+    if any(run_id == '' for run_id in count_run_ids):
+        raise ValueError('Count table contains an empty run ID.')
+    if len(set(count_run_ids)) != len(count_run_ids):
+        raise ValueError('Count table contains duplicate run IDs.')
+    metadata = metadata_df.copy()
+    metadata.loc[:, 'run'] = metadata.loc[:, 'run'].fillna('').astype(str).str.strip()
+    duplicate_runs = (
+        metadata.loc[metadata['run'] != '', 'run']
+        .loc[lambda values: values.duplicated(keep=False)]
+        .drop_duplicates()
+        .tolist()
+    )
+    if duplicate_runs:
+        raise ValueError('Metadata contains duplicate run IDs: {}'.format(', '.join(duplicate_runs)))
+    metadata_by_run = metadata.loc[metadata['run'] != '', :].set_index('run', drop=False)
+    missing_runs = [run_id for run_id in count_run_ids if run_id not in metadata_by_run.index]
+    if missing_runs:
+        raise ValueError('Metadata is missing rows for runs: {}'.format(', '.join(missing_runs)))
+    return metadata_by_run.loc[count_run_ids, :].reset_index(drop=True)
+
+
 def clean_y_matrix(y_matrix, mod_matrix, sv_matrix):
     y = numpy.asarray(y_matrix, dtype=float)
     mod = numpy.asarray(mod_matrix, dtype=float)
@@ -412,7 +437,7 @@ def f_pvalue(data_matrix, mod_matrix, mod0_matrix):
 
     with numpy.errstate(divide='ignore', invalid='ignore'):
         fstats = ((rss0 - rss1) / float(numerator_df)) / (rss1 / float(denominator_df))
-    fstats = numpy.nan_to_num(fstats, nan=0.0, posinf=0.0, neginf=0.0)
+    fstats = numpy.nan_to_num(fstats, nan=0.0, posinf=numpy.inf, neginf=0.0)
     fstats = numpy.maximum(fstats, 0.0)
     return 1.0 - stats.f.cdf(fstats, dfn=numerator_df, dfd=denominator_df)
 
@@ -688,11 +713,15 @@ def run_sva_backend(
     sample_group_column='sample_group',
     random_seed=None,
 ):
+    aligned_metadata = _align_metadata_to_counts(
+        counts_df=counts_df,
+        metadata_df=metadata_df,
+    )
     if sample_group_column not in metadata_df.columns:
         raise ValueError('Missing required metadata column: {}'.format(sample_group_column))
-    sample_groups = metadata_df.loc[:, sample_group_column]
+    sample_groups = aligned_metadata.loc[:, sample_group_column]
     mod_matrix, _mod_names = build_sample_group_design_matrix(sample_groups)
-    _mod0_matrix, _mod0_names = build_intercept_only_design_matrix(metadata_df.shape[0])
+    _mod0_matrix, _mod0_names = build_intercept_only_design_matrix(aligned_metadata.shape[0])
     counts_matrix = counts_df.to_numpy(dtype=float, copy=False)
     resolved = resolve_sva_parameters(
         num_samples=counts_df.shape[1],

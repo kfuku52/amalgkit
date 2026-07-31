@@ -12,6 +12,13 @@ from amalgkit.parallel_utils import (
     run_tasks_with_optional_threads,
     validate_positive_int_option,
 )
+from amalgkit.runtime_utils import (
+    normalize_species_token,
+    resolve_species_token,
+    safe_join_component,
+    validate_safe_path_component,
+    validate_unique_species_tokens,
+)
 
 FASTP_STATS_COLUMNS = ['fastp_duplication_rate', 'fastp_insert_size_peak']
 GETFASTQ_PERCENT_COLUMNS = [
@@ -48,6 +55,50 @@ GETFASTQ_MERGE_COLUMNS = FASTP_STATS_COLUMNS + GETFASTQ_PERCENT_COLUMNS + GETFAS
 MERGE_QUANT_READ_MAX_WORKERS = 4
 
 
+def merge_species_output_token(scientific_name):
+    return normalize_species_token(
+        scientific_name,
+        label='scientific_name-derived merge token',
+    )
+
+
+def validate_unique_merge_species_tokens(species_names, explicit_tokens=None):
+    if explicit_tokens is None:
+        explicit_tokens = [None] * len(species_names)
+    try:
+        return validate_unique_species_tokens(
+            list(zip(species_names, explicit_tokens)),
+            context='merge output',
+        )
+    except ValueError as exc:
+        raise ValueError('Invalid merge token: {}'.format(exc)) from exc
+
+
+def build_merge_species_token_map(metadata):
+    species_names = metadata.df.loc[:, 'scientific_name'].fillna('').astype(str).str.strip()
+    if 'species_token' in metadata.df.columns:
+        explicit_tokens = metadata.df.loc[:, 'species_token'].fillna('').astype(str).str.strip()
+    else:
+        explicit_tokens = pandas.Series('', index=metadata.df.index)
+    validate_unique_merge_species_tokens(species_names.tolist(), explicit_tokens.tolist())
+    token_by_species = {}
+    for species_name, explicit_token in zip(species_names.tolist(), explicit_tokens.tolist()):
+        if species_name == '':
+            continue
+        token = resolve_species_token(species_name, explicit_token, label='species_token')
+        previous_token = token_by_species.get(species_name)
+        if previous_token is not None and previous_token != token:
+            raise ValueError(
+                'Scientific name has conflicting species_token values: {} ({}, {})'.format(
+                    species_name,
+                    previous_token,
+                    token,
+                )
+            )
+        token_by_species[species_name] = token
+    return token_by_species
+
+
 def validate_metadata_columns(metadata, required_columns, context):
     missing = [col for col in required_columns if col not in metadata.df.columns]
     if len(missing) > 0:
@@ -68,6 +119,7 @@ def collect_valid_run_ids(run_values):
         run_id = str(run_id).strip()
         if run_id == '':
             continue
+        run_id = validate_safe_path_component(run_id, label='run ID')
         if run_id in seen:
             continue
         seen.add(run_id)
@@ -98,11 +150,13 @@ def scan_quant_abundance_paths(quant_dir, target_runs=None):
 def _find_fastp_stats_candidates(getfastq_dir, run_ids):
     candidates = []
     for run_id in run_ids:
-        getfastq_stats_path = os.path.join(getfastq_dir, run_id, 'getfastq_stats.tsv')
+        run_id = validate_safe_path_component(run_id, label='run ID')
+        run_dir = safe_join_component(getfastq_dir, run_id, label='run ID')
+        getfastq_stats_path = os.path.join(run_dir, 'getfastq_stats.tsv')
         if os.path.isfile(getfastq_stats_path):
             candidates.append((run_id, getfastq_stats_path))
             continue
-        fastp_stats_path = os.path.join(getfastq_dir, run_id, 'fastp_stats.tsv')
+        fastp_stats_path = os.path.join(run_dir, 'fastp_stats.tsv')
         if os.path.isfile(fastp_stats_path):
             candidates.append((run_id, fastp_stats_path))
     return candidates
@@ -288,8 +342,15 @@ def write_species_merged_quant_tables(merge_species_dir, sp_filled, detected_sra
 
 def merge_species_quant_tables(sp, metadata, quant_dir, merge_dir, run_abundance_paths=None):
     print('processing: {}'.format(sp), flush=True)
-    sp_filled = sp.replace(' ', '_')
-    merge_species_dir = os.path.join(merge_dir, sp_filled)
+    sp_filled = build_merge_species_token_map(metadata).get(
+        str(sp).strip(),
+        merge_species_output_token(sp),
+    )
+    merge_species_dir = safe_join_component(
+        merge_dir,
+        sp_filled,
+        label='scientific_name-derived merge token',
+    )
     sra_ids, sampled_sra_ids = collect_species_runs(metadata, sp)
     sra_id_set = set(sra_ids)
     if len(sra_ids) == 0:
@@ -338,6 +399,7 @@ def run_merge_species_jobs(metadata, quant_dir, merge_dir, run_abundance_paths, 
     spp = spp.loc[spp != ''].drop_duplicates().to_numpy()
     if len(spp) == 0:
         raise ValueError('No valid scientific_name entries were found in metadata for merge.')
+    build_merge_species_token_map(metadata)
     if (species_jobs == 1) or (len(spp) <= 1):
         total_detected = 0
         for sp in spp:
@@ -415,6 +477,7 @@ def merge_main(args):
         required_columns=['run', 'scientific_name', 'exclusion'],
         context='merge',
     )
+    build_merge_species_token_map(metadata)
     run_abundance_paths = scan_quant_abundance_paths(
         quant_dir=quant_dir,
         target_runs=set(collect_valid_run_ids(metadata.df.loc[:, 'run'].values)),

@@ -352,6 +352,7 @@ def resolve_ruvseq_k_and_matrix(
         if selected_k < 0:
             selected_k = 1
         corrected_df, w_df = ruvr_correct_counts(seq_uq_df, controls, selected_k, residuals_df)
+        resolved_k = int(w_df.shape[1])
         comp = score_ruvseq_components(
             mat_df=corrected_df,
             metadata_df=metadata_df,
@@ -359,7 +360,7 @@ def resolve_ruvseq_k_and_matrix(
             sample_group_column=sample_group_column,
         )
         return {
-            'k': selected_k,
+            'k': resolved_k,
             'matrix': corrected_df,
             'w': w_df,
             'score': comp['score'],
@@ -391,6 +392,9 @@ def resolve_ruvseq_k_and_matrix(
     best_w = pandas.DataFrame(index=seq_uq_df.columns)
     for k in range(1, max_k + 1):
         corrected_df, w_df = ruvr_correct_counts(seq_uq_df, controls, k, residuals_df)
+        resolved_k = int(w_df.shape[1])
+        if resolved_k <= 0:
+            continue
         comp = score_ruvseq_components(
             mat_df=corrected_df,
             metadata_df=metadata_df,
@@ -407,7 +411,7 @@ def resolve_ruvseq_k_and_matrix(
             penalty = 0.0
         penalized_score = score - penalty if numpy.isfinite(score) else math.nan
         if not numpy.isfinite(best_penalized_score):
-            best_k = k
+            best_k = resolved_k
             best_score = score
             best_group_score = group_score
             best_batch_score = comp['batch_score']
@@ -419,7 +423,7 @@ def resolve_ruvseq_k_and_matrix(
         if not numpy.isfinite(penalized_score):
             continue
         if penalized_score > (best_penalized_score + RUVSEQ_SCORE_TOLERANCE):
-            best_k = k
+            best_k = resolved_k
             best_score = score
             best_group_score = group_score
             best_batch_score = comp['batch_score']
@@ -430,13 +434,17 @@ def resolve_ruvseq_k_and_matrix(
             continue
         if abs(float(penalized_score - best_penalized_score)) <= RUVSEQ_SCORE_TOLERANCE:
             should_replace = False
-            if (int(best_k) <= 0) and (int(k) > 0):
+            if (int(best_k) <= 0) and (int(resolved_k) > 0):
                 should_replace = True
-            elif (int(best_k) > 0) and (int(k) > 0) and (int(k) < int(best_k)):
+            elif (
+                (int(best_k) > 0)
+                and (int(resolved_k) > 0)
+                and (int(resolved_k) < int(best_k))
+            ):
                 should_replace = True
             if not should_replace:
                 continue
-            best_k = k
+            best_k = resolved_k
             best_score = score
             best_group_score = group_score
             best_batch_score = comp['batch_score']
@@ -469,8 +477,14 @@ def run_ruvseq_backend(
     batch_column='bioproject',
     sample_group_column='sample_group',
 ):
-    aligned_metadata = _align_metadata_to_counts(counts_df=counts_df, metadata_df=metadata_df)
     method = 'manual' if str(k_setting) != 'auto' else 'auto'
+    if counts_df.shape[0] == 0:
+        return _build_ruvseq_skip_output(
+            counts_df=counts_df,
+            method=method,
+            skip_reason='no_expressed_genes',
+        )
+    aligned_metadata = _align_metadata_to_counts(counts_df=counts_df, metadata_df=metadata_df)
     try:
         design_df, sample_groups = _build_sample_group_design(
             aligned_metadata=aligned_metadata,

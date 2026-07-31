@@ -15,8 +15,8 @@ from amalgkit.fastq_utils import (
     parse_seqkit_stats_row_num_reads_avg_len as parse_seqkit_stats_row,
     parse_seqkit_stats_rows,
     round_half_up,
-    sequence_line_length as _sequence_line_length,
     sample_fastq_reads,
+    validate_fastq_structure,
 )
 from amalgkit.metadata_utils import Metadata, load_metadata
 from amalgkit.output_utils import atomic_write_dataframe
@@ -343,25 +343,120 @@ def estimate_total_spots_from_gzip_sample(path_fastq, sampled_reads, sampled_rec
         raise ValueError('No sampled reads available to estimate total spots: {}'.format(path_fastq))
     if sampled_record_chars <= 0:
         raise ValueError('No sampled record size available to estimate total spots: {}'.format(path_fastq))
-    compressed_size = os.path.getsize(path_fastq)
-    if compressed_size >= (1 << 32):
-        raise ValueError(
-            'gzip file is >= 4 GiB and ISIZE footer may overflow. Re-run with --accurate_size yes: {}'.format(
-                path_fastq
-            )
-        )
-    avg_record_chars = sampled_record_chars / sampled_reads
-    uncompressed_size = get_gzip_isize(path_fastq)
-    if uncompressed_size <= 0:
-        raise ValueError('gzip ISIZE footer is not positive. Re-run with --accurate_size yes: {}'.format(path_fastq))
-    estimated_reads = int(round(uncompressed_size / avg_record_chars))
-    return max(1, estimated_reads)
+    # Gzip ISIZE is modulo 2**32 and only describes the final member of a
+    # concatenated gzip stream. Stream validation is therefore the only safe
+    # source of a record count.
+    return validate_fastq_structure(path_fastq)
 
 def is_approximately_equal_count(count_a, count_b, tolerance_fraction, tolerance_min):
     diff = abs(int(count_a) - int(count_b))
     max_count = max(int(count_a), int(count_b))
     tolerance = max(int(tolerance_min), int(round(max_count * float(tolerance_fraction))))
     return diff <= tolerance
+
+
+def _read_validated_fastq_record(handle, path_fastq):
+    header = handle.readline()
+    if header == b'':
+        return None
+    sequence = handle.readline()
+    separator = handle.readline()
+    quality = handle.readline()
+    if (sequence == b'') or (separator == b'') or (quality == b''):
+        raise ValueError('Malformed FASTQ (record truncated): {}'.format(path_fastq))
+    if not header.startswith(b'@'):
+        raise ValueError('Malformed FASTQ header: {}'.format(path_fastq))
+    if not separator.startswith(b'+'):
+        raise ValueError('Malformed FASTQ separator: {}'.format(path_fastq))
+    sequence = sequence.rstrip(b'\r\n')
+    quality = quality.rstrip(b'\r\n')
+    if len(sequence) != len(quality):
+        raise ValueError(
+            'Malformed FASTQ (sequence and quality lengths differ): {}'.format(path_fastq)
+        )
+    return header, sequence
+
+
+def _parse_paired_fastq_header(header):
+    fields = header.rstrip(b'\r\n')[1:].split()
+    if len(fields) == 0 or fields[0] == b'':
+        raise ValueError('Malformed FASTQ header (read ID is empty).')
+    read_id = fields[0]
+    mate_index = None
+    if read_id.endswith(b'/1'):
+        read_id = read_id[:-2]
+        mate_index = 1
+    elif read_id.endswith(b'/2'):
+        read_id = read_id[:-2]
+        mate_index = 2
+    elif len(fields) > 1:
+        mate_match = re.match(rb'^([12])(?::|$)', fields[1])
+        if mate_match is not None:
+            mate_index = int(mate_match.group(1))
+    if read_id == b'':
+        raise ValueError('Malformed FASTQ header (read ID is empty).')
+    return read_id, mate_index
+
+
+def validate_paired_fastq_structure(read1_path, read2_path, run_id):
+    num_records = 0
+    with open_fastq_binary(read1_path) as read1_handle, open_fastq_binary(read2_path) as read2_handle:
+        while True:
+            read1_record = _read_validated_fastq_record(read1_handle, read1_path)
+            read2_record = _read_validated_fastq_record(read2_handle, read2_path)
+            if read1_record is None and read2_record is None:
+                return num_records
+            record_number = num_records + 1
+            if read1_record is None or read2_record is None:
+                raise ValueError(
+                    'Mismatched paired-end read counts for {}: mates end at different records '
+                    '(first mismatch at record {}).'.format(run_id, record_number)
+                )
+            read1_id, read1_mate = _parse_paired_fastq_header(read1_record[0])
+            read2_id, read2_mate = _parse_paired_fastq_header(read2_record[0])
+            if read1_mate not in (None, 1):
+                raise ValueError(
+                    'Invalid paired-end mate annotation for {} at record {}: '
+                    'read1 header identifies mate {}.'.format(run_id, record_number, read1_mate)
+                )
+            if read2_mate not in (None, 2):
+                raise ValueError(
+                    'Invalid paired-end mate annotation for {} at record {}: '
+                    'read2 header identifies mate {}.'.format(run_id, record_number, read2_mate)
+                )
+            if read1_id != read2_id:
+                raise ValueError(
+                    'Mismatched paired-end read IDs/order for {} at record {}.'.format(
+                        run_id,
+                        record_number,
+                    )
+                )
+            num_records += 1
+
+
+def require_matching_validated_read_count(path_fastq, reported_count, validated_count, source):
+    try:
+        reported_count = int(reported_count)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            '{} returned an invalid read count for {}: {!r}.'.format(
+                source,
+                path_fastq,
+                reported_count,
+            )
+        ) from exc
+    if reported_count != int(validated_count):
+        raise ValueError(
+            'FASTQ read count mismatch for {}: {} reported {} reads, but structure '
+            'validation counted {}.'.format(
+                path_fastq,
+                source,
+                reported_count,
+                validated_count,
+            )
+        )
+    return reported_count
+
 
 def _scan_fastq_stats_internal(path_fastq, max_reads_for_average=None):
     total_reads = 0
@@ -370,16 +465,11 @@ def _scan_fastq_stats_internal(path_fastq, max_reads_for_average=None):
     total_bases = 0
     with open_fastq_binary(path_fastq) as f:
         while True:
-            line1 = f.readline()
-            if line1 == b'':
+            record = _read_validated_fastq_record(f, path_fastq)
+            if record is None:
                 break
-            line2 = f.readline()
-            line3 = f.readline()
-            line4 = f.readline()
-            if (line2 == b'') or (line3 == b'') or (line4 == b''):
-                raise ValueError('Malformed FASTQ (record truncated): {}'.format(path_fastq))
             total_reads += 1
-            seq_len = _sequence_line_length(line2)
+            seq_len = len(record[1])
             total_bases += seq_len
             if (max_reads_for_average is None) or (sampled_reads < max_reads_for_average):
                 sampled_reads += 1
@@ -451,13 +541,25 @@ def scan_run_fastq_stats(run_spec, accurate_size, seqkit_exe='seqkit', seqkit_th
         return None
 
     quick_gzip_mode = (not accurate_size) and (not is_decompressed)
+    if lib_layout == 'paired':
+        validated_read1_count = validate_paired_fastq_structure(
+            read1_path=read1_path,
+            read2_path=read2_path,
+            run_id=run_id,
+        )
+        validated_read2_count = validated_read1_count
+    else:
+        validated_read1_count = validate_fastq_structure(read1_path)
+        validated_read2_count = None
     read1_num_bases = None
     if accurate_size or is_decompressed:
         print('--accurate_size set to yes. Running accurate sequence scan with seqkit stats.')
         read1_stats = None
+        read1_stats_source = 'seqkit stats'
         if isinstance(seqkit_stats_cache, dict):
             read1_stats = seqkit_stats_cache.get(os.path.abspath(read1_path), None)
         if read1_stats is not None:
+            read1_stats_source = 'cached seqkit stats'
             total_spots = read1_stats['num_reads']
             avg_len_read1 = read1_stats['avg_len']
             read1_num_bases = read1_stats['num_bases']
@@ -471,25 +573,25 @@ def scan_run_fastq_stats(run_spec, accurate_size, seqkit_exe='seqkit', seqkit_th
             except Exception as exc:
                 warnings.warn('seqkit stats failed for {}. Falling back to Python FASTQ parser. {}'.format(read1_path, exc))
                 read1_stats = scan_fastq_stats_detailed(path_fastq=read1_path, max_reads_for_average=None)
+                read1_stats_source = 'Python FASTQ scan'
             total_spots = read1_stats['num_reads']
             avg_len_read1 = read1_stats['avg_len']
             read1_num_bases = read1_stats['num_bases']
+        total_spots = require_matching_validated_read_count(
+            path_fastq=read1_path,
+            reported_count=total_spots,
+            validated_count=validated_read1_count,
+            source=read1_stats_source,
+        )
     else:
         print('--accurate_size set to no. Running quick sequence scan (first 1,000 reads + gzip size estimate).')
-        sampled_reads, avg_len_read1, sampled_record_chars, reached_eof_read1 = sample_fastq_reads(
+        sampled_reads, avg_len_read1, _sampled_record_chars, _reached_eof_read1 = sample_fastq_reads(
             path_fastq=read1_path,
             max_reads=QUICK_MODE_SAMPLE_READS,
         )
         if sampled_reads == 0:
             raise ValueError('No reads detected in FASTQ file: {}'.format(read1_path))
-        if reached_eof_read1:
-            total_spots = sampled_reads
-        else:
-            total_spots = estimate_total_spots_from_gzip_sample(
-                path_fastq=read1_path,
-                sampled_reads=sampled_reads,
-                sampled_record_chars=sampled_record_chars,
-            )
+        total_spots = validated_read1_count
     if total_spots <= 0:
         raise ValueError('No reads detected in FASTQ file: {}'.format(read1_path))
 
@@ -497,40 +599,29 @@ def scan_run_fastq_stats(run_spec, accurate_size, seqkit_exe='seqkit', seqkit_th
     read2_num_bases = None
     if lib_layout == 'paired':
         if quick_gzip_mode:
-            sampled_reads_read2, avg_len_read2, sampled_record_chars_read2, reached_eof_read2 = sample_fastq_reads(
+            sampled_reads_read2, avg_len_read2, _sampled_record_chars_read2, _reached_eof_read2 = sample_fastq_reads(
                 path_fastq=read2_path,
                 max_reads=QUICK_MODE_SAMPLE_READS,
             )
             if sampled_reads_read2 == 0:
                 raise ValueError('No reads detected in FASTQ file: {}'.format(read2_path))
-            if reached_eof_read2:
-                read2_spots = sampled_reads_read2
-            else:
-                read2_spots = estimate_total_spots_from_gzip_sample(
-                    path_fastq=read2_path,
-                    sampled_reads=sampled_reads_read2,
-                    sampled_record_chars=sampled_record_chars_read2,
-                )
+            read2_spots = validated_read2_count
             if read2_spots <= 0:
                 raise ValueError('No reads detected in FASTQ file: {}'.format(read2_path))
-            if not is_approximately_equal_count(
-                total_spots,
-                read2_spots,
-                tolerance_fraction=QUICK_MODE_PAIRED_COUNT_TOLERANCE_FRACTION,
-                tolerance_min=QUICK_MODE_PAIRED_COUNT_TOLERANCE_MIN_READS,
-            ):
+            if total_spots != read2_spots:
                 raise ValueError(
-                    'Estimated paired-end read counts for {} differ (read1={}, read2={}). '
-                    'Re-run with --accurate_size yes for exact validation.'.format(
+                    'Paired-end read counts for {} differ (read1={}, read2={}).'.format(
                         run_id, total_spots, read2_spots
                     )
                 )
             total_spots = min(total_spots, read2_spots)
         else:
             read2_stats = None
+            read2_stats_source = 'seqkit stats'
             if isinstance(seqkit_stats_cache, dict):
                 read2_stats = seqkit_stats_cache.get(os.path.abspath(read2_path), None)
             if read2_stats is not None:
+                read2_stats_source = 'cached seqkit stats'
                 read2_spots = read2_stats['num_reads']
                 avg_len_read2 = read2_stats['avg_len']
                 read2_num_bases = read2_stats['num_bases']
@@ -544,9 +635,16 @@ def scan_run_fastq_stats(run_spec, accurate_size, seqkit_exe='seqkit', seqkit_th
                 except Exception as exc:
                     warnings.warn('seqkit stats failed for {}. Falling back to Python FASTQ parser. {}'.format(read2_path, exc))
                     read2_stats = scan_fastq_stats_detailed(path_fastq=read2_path, max_reads_for_average=None)
+                    read2_stats_source = 'Python FASTQ scan'
                 read2_spots = read2_stats['num_reads']
                 avg_len_read2 = read2_stats['avg_len']
                 read2_num_bases = read2_stats['num_bases']
+            read2_spots = require_matching_validated_read_count(
+                path_fastq=read2_path,
+                reported_count=read2_spots,
+                validated_count=validated_read2_count,
+                source=read2_stats_source,
+            )
             if read2_spots <= 0:
                 raise ValueError('No reads detected in FASTQ file: {}'.format(read2_path))
             if read2_spots != total_spots:

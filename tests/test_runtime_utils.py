@@ -1,0 +1,67 @@
+import pytest
+
+from amalgkit.runtime_utils import (
+    resolve_species_token,
+    safe_join_component,
+    validate_safe_path_component,
+    validate_unique_species_tokens,
+)
+
+
+@pytest.mark.parametrize(
+    'value',
+    [
+        '',
+        '.',
+        '..',
+        '../escape',
+        'nested/name',
+        r'nested\name',
+        '/absolute',
+        'line\nbreak',
+    ],
+)
+def test_validate_safe_path_component_rejects_unsafe_values(value):
+    with pytest.raises(ValueError):
+        validate_safe_path_component(value, label='test component')
+
+
+def test_safe_join_component_stays_within_root(tmp_path):
+    assert safe_join_component(str(tmp_path), 'SRR001') == str(tmp_path / 'SRR001')
+
+
+def test_safe_join_component_rejects_symbolic_link_leaf(tmp_path):
+    outside = tmp_path / 'outside'
+    outside.mkdir()
+    (tmp_path / 'SRR001').symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ValueError, match='symbolic-link'):
+        safe_join_component(str(tmp_path), 'SRR001', label='run ID')
+
+
+def test_safe_join_component_rejects_symbolic_link_root(tmp_path):
+    real_root = tmp_path / 'real'
+    real_root.mkdir()
+    linked_root = tmp_path / 'linked'
+    linked_root.symlink_to(real_root, target_is_directory=True)
+
+    with pytest.raises(ValueError, match='symbolic-link output root'):
+        safe_join_component(str(linked_root), 'SRR001', label='run ID')
+
+
+def test_explicit_species_token_must_be_canonical():
+    with pytest.raises(ValueError, match='ASCII letters'):
+        resolve_species_token('Species A', 'token (x)')
+
+
+@pytest.mark.parametrize(
+    'pairs',
+    [
+        [('Alpha', None), ('alpha', None)],
+        [('Species A', 'Token'), ('Species B', 'token')],
+        [('Species A', '\u00e9'), ('Species B', 'e\u0301')],
+    ],
+)
+def test_species_token_collision_detection_is_filesystem_conservative(pairs):
+    with pytest.raises(ValueError):
+        validate_unique_species_tokens(pairs)

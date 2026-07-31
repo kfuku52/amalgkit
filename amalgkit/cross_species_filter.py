@@ -10,6 +10,7 @@ import pandas
 
 from amalgkit.command_context import CrossSpeciesFilterContext
 from amalgkit.filter_utils import save_exclusion_plot_pdf, staged_output_dir
+from amalgkit.imputation import impute_expression
 from amalgkit.metadata_utils import load_metadata
 from amalgkit.orthology_utils import (
     check_ortholog_parameter_compatibility,
@@ -264,49 +265,59 @@ def _calculate_correlation_within_group(df_metadata, ortholog_matrix, correction
     kept = kept.loc[kept['sample_id'].isin(ortholog_matrix.columns), :].copy()
     if kept.shape[0] == 0:
         return out
-    group_keys = (kept['species_tag'].astype(str) + '_' + kept['sample_group'].astype(str)).tolist()
-    kept.loc[:, 'species_sample_group'] = group_keys
-    group_order = list(dict.fromkeys(group_keys))
+    group_order = list(dict.fromkeys(kept['sample_group'].astype(str).tolist()))
     ortholog_med = pandas.DataFrame(index=ortholog_matrix.index, columns=group_order, dtype=float)
-    for group_key in group_order:
-        sample_ids = kept.loc[kept['species_sample_group'].eq(group_key), 'sample_id'].astype(str).tolist()
-        tc_group = ortholog_matrix.loc[:, [sample_id for sample_id in sample_ids if sample_id in ortholog_matrix.columns]].copy()
-        if tc_group.shape[1] == 0:
+    species_order = list(dict.fromkeys(kept['species_tag'].astype(str).tolist()))
+    for sample_group in group_order:
+        species_profiles = pandas.DataFrame(index=ortholog_matrix.index, dtype=float)
+        for species_tag in species_order:
+            sample_ids = kept.loc[
+                kept['species_tag'].astype(str).eq(species_tag)
+                & kept['sample_group'].astype(str).eq(sample_group),
+                'sample_id',
+            ].astype(str).tolist()
+            sample_ids = [
+                sample_id
+                for sample_id in sample_ids
+                if sample_id in ortholog_matrix.columns
+            ]
+            if len(sample_ids) == 0:
+                continue
+            tc_species_group = ortholog_matrix.loc[:, sample_ids].apply(
+                pandas.to_numeric,
+                errors='coerce',
+            )
+            species_profiles.loc[:, species_tag] = tc_species_group.mean(axis=1, skipna=True)
+        if species_profiles.shape[1] == 0:
             continue
-        ortholog_med.loc[:, group_key] = tc_group.median(axis=1, skipna=True).to_numpy(dtype=float)
-    for _, row in kept.iterrows():
+        ortholog_med.loc[:, sample_group] = species_profiles.median(axis=1, skipna=True)
+    for row_idx, row in kept.iterrows():
         sample_id = str(row['sample_id'])
-        group_key = str(row['species_sample_group'])
-        if (sample_id not in ortholog_matrix.columns) or (group_key not in ortholog_med.columns):
+        sample_group = str(row['sample_group'])
+        if (sample_id not in ortholog_matrix.columns) or (sample_group not in ortholog_med.columns):
             continue
         sample_values = ortholog_matrix.loc[:, sample_id]
-        within_cor = _safe_corr(sample_values, ortholog_med.loc[:, group_key], method='pearson')
-        other_keys = [key for key in group_order if key != group_key]
+        within_cor = _safe_corr(sample_values, ortholog_med.loc[:, sample_group], method='pearson')
+        other_groups = [group for group in group_order if group != sample_group]
         nongroup_values = [
-            _safe_corr(sample_values, ortholog_med.loc[:, other_key], method='pearson')
-            for other_key in other_keys
+            _safe_corr(sample_values, ortholog_med.loc[:, other_group], method='pearson')
+            for other_group in other_groups
         ]
         nongroup_values = [value for value in nongroup_values if numpy.isfinite(value)]
         max_nongroup = max(nongroup_values) if len(nongroup_values) > 0 else numpy.nan
-        row_idx = out.index[out['species_tag'].eq(row['species_tag']) & out['run'].astype(str).eq(str(row['run']))]
         out.loc[row_idx, target_col] = within_cor
         out.loc[row_idx, nongroup_col] = max_nongroup
     return out
-
-
-def _fill_missing_by_row_mean(df):
-    if df.shape[0] == 0 or df.shape[1] == 0:
-        return df.copy()
-    filled = df.copy()
-    row_means = filled.mean(axis=1, skipna=True).fillna(0.0)
-    return filled.T.fillna(row_means).T
 
 
 def _resolve_matrix_for_embedding(matrix_df, missing_strategy):
     if str(missing_strategy).lower() == 'strict':
         out = matrix_df.dropna(axis=0, how='any').copy()
     else:
-        out = _fill_missing_by_row_mean(matrix_df)
+        out = impute_expression(
+            matrix_df=matrix_df,
+            strategy=missing_strategy,
+        )
     return out
 
 

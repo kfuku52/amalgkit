@@ -1,3 +1,4 @@
+import copy
 import datetime
 import json
 import os
@@ -33,6 +34,25 @@ SELECT_SAMPLING_STRATEGIES = (
     'smallest_bioprojects_first',
     'random',
 )
+
+
+def iter_experiment_packages_per_run(root):
+    """Yield one EXPERIMENT_PACKAGE view per RUN without dropping sibling runs."""
+    for package in root.iter(tag='EXPERIMENT_PACKAGE'):
+        runs = package.findall('./RUN_SET/RUN')
+        if len(runs) <= 1:
+            yield package
+            continue
+        for run_index in range(len(runs)):
+            package_copy = copy.deepcopy(package)
+            run_set_copy = package_copy.find('./RUN_SET')
+            copied_runs = list(run_set_copy.findall('./RUN')) if run_set_copy is not None else []
+            for copied_index, copied_run in enumerate(copied_runs):
+                if copied_index != run_index:
+                    run_set_copy.remove(copied_run)
+            yield package_copy
+
+
 _TAXONOMY_LOOKUP_CACHE_LOCK = threading.Lock()
 _LINEAGE_BY_TAXID_CACHE = {}
 _RANK_BY_TAXID_CACHE = {}
@@ -264,7 +284,7 @@ class Metadata:
         counter = 0
         for xml_root in xml_roots:
             root = Metadata._normalize_xml_root(xml_root)
-            for entry in root.iter(tag="EXPERIMENT_PACKAGE"):
+            for entry in iter_experiment_packages_per_run(root):
                 if counter % 1000 == 0:
                     now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                     print('{}: Converting {:,}th sample from XML to DataFrame'.format(now, counter), flush=True)
@@ -579,7 +599,9 @@ class Metadata:
         if str(self.df['taxid'].dtype) != 'Int64':
             raise TypeError('taxid column must be Int64 dtype')
 
-    def _maximize_bioproject_sampling(self, df, target_n=10):
+    def _maximize_bioproject_sampling(self, df, target_n=10, rng=None):
+        if rng is None:
+            rng = numpy.random.default_rng(0)
         if 'exclusion' not in df.columns:
             raise ValueError('Column "exclusion" is required for sample selection.')
         exclusion_series = (
@@ -606,14 +628,14 @@ class Metadata:
         grouped = df.loc[is_unselected_eligible, :].groupby('bioproject', sort=False).groups
         index_pools = {}
         for bioproject, indices in grouped.items():
-            shuffled = list(numpy.random.permutation(indices.to_numpy()))
+            shuffled = list(rng.permutation(indices.to_numpy()))
             if len(shuffled) > 0:
                 index_pools[bioproject] = shuffled
 
         active_bioprojects = list(index_pools.keys())
         while (selected_n < target_n) and (len(active_bioprojects) > 0):
             exhausted = set()
-            bioproject_order = numpy.random.permutation(active_bioprojects)
+            bioproject_order = rng.permutation(active_bioprojects)
             for bioproject in bioproject_order:
                 if selected_n >= target_n:
                     break
@@ -630,7 +652,9 @@ class Metadata:
                 active_bioprojects = [bp for bp in active_bioprojects if bp not in exhausted]
         return df
 
-    def _sample_bioprojects_by_size(self, df, target_n=10, largest_first=True):
+    def _sample_bioprojects_by_size(self, df, target_n=10, largest_first=True, rng=None):
+        if rng is None:
+            rng = numpy.random.default_rng(0)
         if 'exclusion' not in df.columns:
             raise ValueError('Column "exclusion" is required for sample selection.')
         exclusion_series = (
@@ -657,11 +681,11 @@ class Metadata:
         grouped = df.loc[is_unselected_eligible, :].groupby('bioproject', sort=False).groups
         index_pools = {}
         for bioproject, indices in grouped.items():
-            shuffled = list(numpy.random.permutation(indices.to_numpy()))
+            shuffled = list(rng.permutation(indices.to_numpy()))
             if len(shuffled) > 0:
                 index_pools[bioproject] = shuffled
 
-        randomized_bioprojects = list(numpy.random.permutation(list(index_pools.keys())))
+        randomized_bioprojects = list(rng.permutation(list(index_pools.keys())))
         ordered_bioprojects = sorted(
             randomized_bioprojects,
             key=lambda bioproject: len(index_pools[bioproject]),
@@ -677,7 +701,9 @@ class Metadata:
                 break
         return df
 
-    def _sample_random(self, df, target_n=10):
+    def _sample_random(self, df, target_n=10, rng=None):
+        if rng is None:
+            rng = numpy.random.default_rng(0)
         if 'exclusion' not in df.columns:
             raise ValueError('Column "exclusion" is required for sample selection.')
         exclusion_series = (
@@ -703,12 +729,17 @@ class Metadata:
 
         remaining_n = target_n - selected_n
         eligible_indices = df.index[is_unselected_eligible].to_numpy()
-        selected_indices = numpy.random.permutation(eligible_indices)[:remaining_n]
+        selected_indices = rng.permutation(eligible_indices)[:remaining_n]
         if len(selected_indices) > 0:
             df.loc[selected_indices, 'is_sampled'] = 'yes'
         return df
 
-    def label_sampled_data(self, max_sample=10, sampling_strategy='maximize_bioproject_diversity'):
+    def label_sampled_data(
+        self,
+        max_sample=10,
+        sampling_strategy='maximize_bioproject_diversity',
+        random_seed=0,
+    ):
         previous_mode = pandas.get_option('mode.chained_assignment')
         pandas.set_option('mode.chained_assignment', None)
         try:
@@ -722,6 +753,13 @@ class Metadata:
                         ', '.join(SELECT_SAMPLING_STRATEGIES),
                     )
                 )
+            try:
+                normalized_seed = int(random_seed)
+            except (TypeError, ValueError) as exc:
+                raise ValueError('random_seed must be a non-negative integer.') from exc
+            if normalized_seed < 0:
+                raise ValueError('random_seed must be a non-negative integer.')
+            rng = numpy.random.default_rng(normalized_seed)
             txt = '{}: Selecting subsets of SRA IDs for >{:,} samples per sample_group per species (sampling_strategy={})'
             print(txt.format(datetime.datetime.now(), max_sample, normalized_strategy), flush=True)
             self.df['sample_group'] = self.df['sample_group'].fillna('').astype(str)
@@ -729,6 +767,8 @@ class Metadata:
             self.df['bioproject'] = self.df['bioproject'].fillna('unknown').astype(str).values
             self.df['is_sampled'] = 'no'
             self.df['is_qualified'] = 'no'
+            self.df['sampling_strategy'] = normalized_strategy
+            self.df['sampling_seed'] = normalized_seed
             is_empty = (self.df['sample_group'] == '')
             self.df.loc[(self.df.loc[:, 'exclusion'] == 'no') & (~is_empty), 'is_qualified'] = 'yes'
             grouped = self.df.groupby(['scientific_name', 'sample_group'], sort=False, dropna=False)
@@ -738,23 +778,27 @@ class Metadata:
                     sampled_group = self._maximize_bioproject_sampling(
                         df=sampled_group,
                         target_n=max_sample,
+                        rng=rng,
                     )
                 elif normalized_strategy == 'largest_bioprojects_first':
                     sampled_group = self._sample_bioprojects_by_size(
                         df=sampled_group,
                         target_n=max_sample,
                         largest_first=True,
+                        rng=rng,
                     )
                 elif normalized_strategy == 'smallest_bioprojects_first':
                     sampled_group = self._sample_bioprojects_by_size(
                         df=sampled_group,
                         target_n=max_sample,
                         largest_first=False,
+                        rng=rng,
                     )
                 else:
                     sampled_group = self._sample_random(
                         df=sampled_group,
                         target_n=max_sample,
+                        rng=rng,
                     )
                 self.df.loc[sampled_group.index, 'is_sampled'] = sampled_group['is_sampled'].to_numpy()
             self.reorder(omit_misc=False)

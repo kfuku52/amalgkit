@@ -9,8 +9,10 @@ from types import SimpleNamespace
 from pathlib import Path
 
 from amalgkit.select import (
+    apply_select_aggregate_rules,
     apply_select_config_parameters,
     apply_select_control_rules,
+    apply_select_filter_rules,
     apply_select_filters,
     classify_select_text,
     prepare_select_metadata,
@@ -274,6 +276,27 @@ class TestWriteSelectOutputs:
         with pytest.raises(NotADirectoryError, match='not a directory'):
             write_select_outputs(path_original, path_table, str(metadata_dir), sample_metadata)
 
+    def test_rejects_symbolic_link_original_even_when_preserving_it(self, tmp_path, sample_metadata):
+        metadata_dir = tmp_path / 'metadata'
+        metadata_dir.mkdir()
+        outside = tmp_path / 'outside.tsv'
+        outside.write_text('do not replace\n', encoding='utf-8')
+        path_original = metadata_dir / 'metadata_original.tsv'
+        path_original.symlink_to(outside)
+        path_table = metadata_dir / 'metadata.tsv'
+        sample_metadata.label_sampled_data(max_sample=10)
+
+        with pytest.raises(ValueError, match='symbolic-link output file'):
+            write_select_outputs(
+                str(path_original),
+                str(path_table),
+                str(metadata_dir),
+                sample_metadata,
+                preserve_existing_original=True,
+            )
+
+        assert outside.read_text(encoding='utf-8') == 'do not replace\n'
+
 
 class TestSelectHelpers:
     def test_resolve_select_rules_tsv_inferred(self):
@@ -491,6 +514,133 @@ class TestSelectHelpers:
         assert out.sampling_strategy == 'random'
 
 
+def test_aggregate_rules_are_idempotent_and_deduplicate_existing_tokens(tmp_path):
+    rules_path = tmp_path / 'select_rules.tsv'
+    write_select_rules(
+        rules_path,
+        [
+            {
+                'rule_id': 'aggregate_tissue',
+                'stage': 'aggregate',
+                'priority': '10',
+                'columns': 'sample_attribute_tissue',
+                'action': 'append',
+                'target_column': 'source_name',
+            },
+        ],
+    )
+    rules = read_select_rules(str(rules_path))
+    frame = pandas.DataFrame(
+        {
+            'source_name': ['leaf; root'],
+            'sample_attribute_tissue': ['root; flower'],
+        }
+    )
+
+    once = apply_select_aggregate_rules(frame, rules)
+    twice = apply_select_aggregate_rules(once, rules)
+
+    assert once.loc[0, 'source_name'] == 'leaf; root; flower'
+    pandas.testing.assert_frame_equal(once, twice)
+
+
+@pytest.mark.parametrize(
+    ('first_stop_on_match', 'expected'),
+    [
+        ('yes', 'low_nspots'),
+        ('no', 'no_sample_group'),
+    ],
+)
+def test_filter_rules_honor_stop_on_match(tmp_path, first_stop_on_match, expected):
+    rules_path = tmp_path / 'select_rules.tsv'
+    write_select_rules(
+        rules_path,
+        [
+            {
+                'rule_id': 'low_depth',
+                'stage': 'filter',
+                'priority': '10',
+                'columns': 'total_spots',
+                'action': 'exclude_if_lt_parameter',
+                'target_column': 'exclusion',
+                'outcome': 'low_nspots',
+                'parameter_name': 'min_nspots',
+                'stop_on_match': first_stop_on_match,
+            },
+            {
+                'rule_id': 'empty_group',
+                'stage': 'filter',
+                'priority': '20',
+                'columns': 'sample_group',
+                'action': 'exclude_if_empty',
+                'target_column': 'exclusion',
+                'outcome': 'no_sample_group',
+                'stop_on_match': 'yes',
+            },
+        ],
+    )
+    rules = read_select_rules(str(rules_path))
+    metadata = Metadata.from_DataFrame(
+        pandas.DataFrame(
+            {
+                'run': ['SRR001'],
+                'sample_group': [''],
+                'total_spots': [10],
+                'exclusion': ['no'],
+            }
+        )
+    )
+
+    out = apply_select_filter_rules(
+        metadata,
+        SimpleNamespace(min_nspots=100),
+        rules,
+    )
+
+    assert out.df.loc[0, 'exclusion'] == expected
+
+
+def test_low_spot_filter_excludes_invalid_nonfinite_and_nonpositive_values(tmp_path):
+    rules_path = tmp_path / 'select_rules.tsv'
+    write_select_rules(
+        rules_path,
+        [
+            {
+                'rule_id': 'low_depth',
+                'stage': 'filter',
+                'priority': '10',
+                'columns': 'total_spots',
+                'action': 'exclude_if_lt_parameter',
+                'target_column': 'exclusion',
+                'outcome': 'low_nspots',
+                'parameter_name': 'min_nspots',
+                'stop_on_match': 'yes',
+            },
+        ],
+    )
+    metadata = Metadata.from_DataFrame(pandas.DataFrame({
+        'run': ['missing', 'text', 'zero', 'negative', 'infinite', 'low', 'valid'],
+        'total_spots': [None, 'unknown', 0, -1, float('inf'), 99, 100],
+        'exclusion': ['no'] * 7,
+    }))
+
+    out = apply_select_filter_rules(
+        metadata,
+        SimpleNamespace(min_nspots=100),
+        read_select_rules(str(rules_path)),
+    )
+
+    assert out.df['exclusion'].tolist() == [
+        'low_nspots',
+        'low_nspots',
+        'low_nspots',
+        'low_nspots',
+        'low_nspots',
+        'low_nspots',
+        'no',
+    ]
+
+
 class TestSamplingStrategies:
     @staticmethod
     def _build_sampling_metadata():
@@ -538,7 +688,34 @@ class TestSamplingStrategies:
         metadata.label_sampled_data(max_sample=3, sampling_strategy='random')
 
         selected_runs = metadata.df.loc[metadata.df['is_sampled'] == 'yes', 'run'].tolist()
-        assert selected_runs == ['SRR001', 'SRR002', 'SRR003']
+        assert selected_runs == ['SRR003', 'SRR004', 'SRR005']
+
+    def test_random_sampling_is_reproducible_and_records_seed(self):
+        first = self._build_sampling_metadata()
+        second = self._build_sampling_metadata()
+        different = self._build_sampling_metadata()
+
+        first.label_sampled_data(max_sample=3, sampling_strategy='random', random_seed=17)
+        second.label_sampled_data(max_sample=3, sampling_strategy='random', random_seed=17)
+        different.label_sampled_data(max_sample=3, sampling_strategy='random', random_seed=18)
+
+        first_runs = first.df.loc[first.df['is_sampled'] == 'yes', 'run'].tolist()
+        second_runs = second.df.loc[second.df['is_sampled'] == 'yes', 'run'].tolist()
+        different_runs = different.df.loc[different.df['is_sampled'] == 'yes', 'run'].tolist()
+        assert first_runs == second_runs
+        assert first_runs != different_runs
+        assert first.df['sampling_seed'].unique().tolist() == [17]
+        assert first.df['sampling_strategy'].unique().tolist() == ['random']
+
+    def test_random_sampling_rejects_negative_seed(self):
+        metadata = self._build_sampling_metadata()
+
+        with pytest.raises(ValueError, match='non-negative integer'):
+            metadata.label_sampled_data(
+                max_sample=3,
+                sampling_strategy='random',
+                random_seed=-1,
+            )
 
     def test_invalid_sampling_strategy_raises(self):
         metadata = self._build_sampling_metadata()
@@ -1974,6 +2151,7 @@ class TestSelectMain:
 
         def fake_write_select_outputs(**kwargs):
             observed['write_table'] = kwargs['path_metadata_table']
+            observed['preserve_existing_original'] = kwargs['preserve_existing_original']
 
         monkeypatch.setattr('amalgkit.select.read_select_config', fake_read_select_config)
         monkeypatch.setattr('amalgkit.select.load_metadata', fake_load_metadata)
@@ -1989,7 +2167,102 @@ class TestSelectMain:
         assert observed['filter_out_dir'] == normalized_out_dir
         assert observed['prepare_rules'] == observed['filter_rules']
         assert observed['write_table'] == os.path.join(normalized_out_dir, 'metadata', 'metadata.tsv')
+        assert observed['preserve_existing_original'] is False
         assert args.out_dir == raw_out_dir
+
+    def test_explicit_metadata_refreshes_existing_original(self, tmp_path, monkeypatch):
+        out_dir = tmp_path / 'out'
+        metadata_dir = out_dir / 'metadata'
+        metadata_dir.mkdir(parents=True)
+        (metadata_dir / 'metadata_original.tsv').write_text('old\n', encoding='utf-8')
+        explicit_metadata = tmp_path / 'new.tsv'
+        explicit_metadata.write_text('run\nSRR_NEW\n', encoding='utf-8')
+        args = SimpleNamespace(
+            out_dir=str(out_dir),
+            select_rules_tsv='inferred',
+            metadata=str(explicit_metadata),
+            sample_group=None,
+            min_nspots=0,
+            mark_missing_rank='none',
+            mark_redundant_biosamples=False,
+            max_sample=1,
+        )
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR_NEW'],
+            'scientific_name': ['Species A'],
+            'sample_group': ['leaf'],
+            'bioproject': ['PRJ1'],
+            'biosample': ['SAM1'],
+            'total_spots': [100],
+            'exclusion': ['no'],
+        }))
+        observed = {}
+
+        monkeypatch.setattr(
+            'amalgkit.select.read_select_config',
+            lambda _path: {'rules': [], 'parameters': {}},
+        )
+        monkeypatch.setattr('amalgkit.select.load_metadata', lambda _args: metadata)
+        monkeypatch.setattr('amalgkit.select.prepare_select_metadata', lambda value, _rules: value)
+        monkeypatch.setattr('amalgkit.select.apply_select_filters', lambda value, _args, _rules: value)
+        monkeypatch.setattr(
+            'amalgkit.select.write_select_outputs',
+            lambda **kwargs: observed.update(kwargs),
+        )
+
+        select_main(args)
+
+        assert observed['preserve_existing_original'] is False
+        assert observed['metadata_original_df']['run'].tolist() == ['SRR_NEW']
+
+    def test_explicit_current_select_output_reuses_existing_original(self, tmp_path, monkeypatch):
+        out_dir = tmp_path / 'out'
+        metadata_dir = out_dir / 'metadata'
+        metadata_dir.mkdir(parents=True)
+        current_metadata = metadata_dir / 'metadata.tsv'
+        original_metadata = metadata_dir / 'metadata_original.tsv'
+        current_metadata.write_text('run\nSRR_FILTERED\n', encoding='utf-8')
+        original_metadata.write_text('run\nSRR_ORIGINAL\n', encoding='utf-8')
+        args = SimpleNamespace(
+            out_dir=str(out_dir),
+            select_rules_tsv='inferred',
+            metadata=str(current_metadata),
+            sample_group=None,
+            min_nspots=0,
+            mark_missing_rank='none',
+            mark_redundant_biosamples=False,
+            max_sample=1,
+        )
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR_ORIGINAL'],
+            'scientific_name': ['Species A'],
+            'sample_group': ['leaf'],
+            'total_spots': [100],
+            'exclusion': ['no'],
+        }))
+        observed = {}
+
+        monkeypatch.setattr(
+            'amalgkit.select.read_select_config',
+            lambda _path: {'rules': [], 'parameters': {}},
+        )
+
+        def fake_load_metadata(runtime_args):
+            observed['loaded_metadata'] = runtime_args.metadata
+            return metadata
+
+        monkeypatch.setattr('amalgkit.select.load_metadata', fake_load_metadata)
+        monkeypatch.setattr('amalgkit.select.prepare_select_metadata', lambda value, _rules: value)
+        monkeypatch.setattr('amalgkit.select.apply_select_filters', lambda value, _args, _rules: value)
+        monkeypatch.setattr(
+            'amalgkit.select.write_select_outputs',
+            lambda **kwargs: observed.update(kwargs),
+        )
+
+        select_main(args)
+
+        assert observed['loaded_metadata'] == str(original_metadata)
+        assert observed['preserve_existing_original'] is True
 
 
 class TestSelectBatchMain:

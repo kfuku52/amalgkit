@@ -106,11 +106,17 @@ def test_help_topic_getfastq_mentions_filter_runtime_safeguards():
     merged = ' '.join((out.stdout + '\n' + out.stderr).lower().split())
     assert '--rrna_filter_sensitivity' in merged
     assert '--rrna_filter_max_seqs' in merged
+    assert '--rrna_filter_jobs' in merged
     assert '--rrna_filter_chunk_spots' in merged
     assert '--rrna_filter_memory_limit' in merged
-    assert '--rrna_filter_jobs' in merged
+    assert '--sra_download_wait_timeout_seconds' in merged
+    assert '--sra_download_transfer_timeout_seconds' in merged
     assert 'default=1.0' in merged
     assert 'default=20' in merged
+    assert 'default=5000000' in merged
+    assert 'default=32g' in merged
+    assert 'default=86400' in merged
+    assert 'default=21600' in merged
     assert '--contam_filter_sensitivity' in merged
     assert '--contam_filter_max_seqs' in merged
     assert 'default=5000000' in merged
@@ -122,6 +128,16 @@ def test_help_topic_getfastq_mentions_filter_runtime_safeguards():
     assert 'first run also downloads/builds the db' in merged
     assert 'higher-priority sources are busy' in merged
     assert 'tries the next enabled source before waiting' in merged
+
+
+def test_getfastq_rejects_non_positive_download_timeouts():
+    for option in [
+        '--sra_download_wait_timeout_seconds',
+        '--sra_download_transfer_timeout_seconds',
+    ]:
+        out = run_cli('getfastq', option, '0')
+        assert out.returncode != 0
+        assert 'must be > 0' in out.stderr
 
 
 def test_help_topic_integrate_mentions_download_dir():
