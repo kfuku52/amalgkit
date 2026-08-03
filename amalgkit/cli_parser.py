@@ -307,6 +307,14 @@ def build_parser(command_handlers, command_names, version, prog=None):
                      help='default=%(default)s: Acceptable percentage loss of reads relative to --max_bp. If the 1st-round sequence '
                           'generation could not produce enough reads, the 2nd-round sequence generation is activated to '
                           'compensate the loss.')
+    pge.add_argument('--tool_timeout_seconds', metavar='INT', default=172800, type=int,
+                     required=False, action='store',
+                     help='default=%(default)s (48 h): Wall-clock timeout applied to each external\n'
+                          ' tool invocation. 0 disables the timeout.')
+    pge.add_argument('--dependency_probe_timeout_seconds', metavar='INT', default=300, type=int,
+                     required=False, action='store',
+                     help='default=%(default)s (5 min): Wall-clock timeout applied to each dependency\n'
+                          ' version/help probe run at startup. 0 disables the timeout.')
     pge.set_defaults(handler=command_handlers['getfastq'])
 
     pqu_help = 'Estimating transcript abundance with auto-selected kallisto/oarfish backend. See `amalgkit quant -h`'
@@ -344,6 +352,14 @@ def build_parser(command_handlers, command_names, version, prog=None):
                      help='default=%(default)s: Poll interval in seconds while waiting for another batch process to finish building a species index.')
     pqu.add_argument('--index_lock_timeout', metavar='INT', default=3600, type=int, required=False, action='store',
                      help='default=%(default)s: Maximum wait time in seconds for index build lock release before aborting.')
+    pqu.add_argument('--tool_timeout_seconds', metavar='INT', default=43200, type=int,
+                     required=False, action='store',
+                     help='default=%(default)s (12 h): Wall-clock timeout applied to each external\n'
+                          ' tool invocation. 0 disables the timeout.')
+    pqu.add_argument('--dependency_probe_timeout_seconds', metavar='INT', default=300, type=int,
+                     required=False, action='store',
+                     help='default=%(default)s (5 min): Wall-clock timeout applied to each dependency\n'
+                          ' version/help probe run at startup. 0 disables the timeout.')
     pqu.set_defaults(handler=command_handlers['quant'])
 
     pmg_help = 'Generating transcript abundance tables. See `amalgkit merge -h`'
@@ -369,6 +385,10 @@ def build_parser(command_handlers, command_names, version, prog=None):
                      help='default=%(default)s: PATH to compleasm executable.')
     pbu.add_argument('--tool_args', metavar='STR', default=None, type=str, required=False, action='store',
                      help='Additional arguments passed to the selected tool.')
+    pbu.add_argument('--tool_timeout_seconds', metavar='INT', default=172800, type=int,
+                     required=False, action='store',
+                     help='default=%(default)s (48 h): Wall-clock timeout applied to each external\n'
+                          ' tool invocation. 0 disables the timeout.')
     pbu.set_defaults(handler=command_handlers['busco'])
 
     pcs_help = 'Applying cross-species TMM normalization using single-copy genes. See `amalgkit cstmm -h`'
@@ -603,6 +623,10 @@ def build_parser(command_handlers, command_names, version, prog=None):
     pin.add_argument('--accurate_size', metavar='yes|no', default='yes', type=strtobool, required=False, action='store',
                      help='default=%(default)s: ONLY APPLIES TO .gz COMPRESSED FASTQ FILES. If no, scans the first 1,000 reads '
                           'to estimate average read length. If yes, scans the whole file for exact statistics.')
+    pin.add_argument('--tool_timeout_seconds', metavar='INT', default=7200, type=int,
+                     required=False, action='store',
+                     help='default=%(default)s (2 h): Wall-clock timeout applied to each external\n'
+                          ' tool invocation. 0 disables the timeout.')
     pin.set_defaults(handler=command_handlers['integrate'])
 
     pda_help = 'Extracting bundled datasets, initializing workspaces, and exporting select rule sets. See `amalgkit dataset -h`'
