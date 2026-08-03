@@ -162,6 +162,7 @@ def _apply_within_group_filter(tc, sra, args, selected_sample_groups, min_dif=0.
         robust_z_threshold=float(getattr(args, 'robust_z_threshold', -2.5)),
         robust_z_col='ws_robust_z',
         outlier_col='ws_outlier_candidate',
+        small_group_policy=str(getattr(args, 'small_group_policy', 'margin_fallback')),
     )
     candidate_runs = (
         filtered.loc[

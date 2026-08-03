@@ -377,7 +377,8 @@ def _assign_pca_to_metadata(df_metadata, pca_df, suffix):
     return out
 
 
-def _apply_csfilter_outlier_flags(df_metadata, outlier_method='none', margin_threshold=0.0, robust_z_threshold=-2.5):
+def _apply_csfilter_outlier_flags(df_metadata, outlier_method='none', margin_threshold=0.0, robust_z_threshold=-2.5,
+                                  small_group_policy='margin_fallback'):
     out = df_metadata.copy()
     out.loc[:, 'cs_margin_uncorrected'] = pandas.to_numeric(out.get('within_group_cor_uncorrected'), errors='coerce') - pandas.to_numeric(out.get('max_nongroup_cor_uncorrected'), errors='coerce')
     out.loc[:, 'cs_margin_corrected'] = pandas.to_numeric(out.get('within_group_cor_corrected'), errors='coerce') - pandas.to_numeric(out.get('max_nongroup_cor_corrected'), errors='coerce')
@@ -397,6 +398,7 @@ def _apply_csfilter_outlier_flags(df_metadata, outlier_method='none', margin_thr
         robust_z_threshold=float(robust_z_threshold),
         robust_z_col='cs_robust_z',
         outlier_col='cs_outlier_candidate',
+        small_group_policy=str(small_group_policy),
     )
     out.loc[idx, 'cs_robust_z'] = flagged['cs_robust_z'].to_numpy()
     out.loc[idx, 'cs_outlier_candidate'] = flagged['cs_outlier_candidate'].fillna(False).astype(bool).to_numpy()
@@ -1260,6 +1262,7 @@ def run_cross_species_filter(args, context=None):
             outlier_method=str(getattr(args, 'outlier_method', 'none')),
             margin_threshold=float(getattr(args, 'margin_threshold', 0.0)),
             robust_z_threshold=float(getattr(args, 'robust_z_threshold', -2.5)),
+            small_group_policy=str(getattr(args, 'small_group_policy', 'margin_fallback')),
         )
         averaged_inputs = _build_averaged_cross_species_inputs(df_metadata, orthologs)
         df_metadata.to_csv(os.path.join(stage_dir, 'metadata.tsv'), sep='\t', index=False)

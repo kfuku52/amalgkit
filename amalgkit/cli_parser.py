@@ -408,6 +408,12 @@ def build_parser(command_handlers, command_names, version, prog=None):
                      help='default=%(default)s: Margin threshold for robust-margin outlier detection.')
     pws.add_argument('--robust_z_threshold', metavar='FLOAT', default=-2.5, type=float, required=False, action='store',
                      help='default=%(default)s: Robust z-score threshold for robust-margin outlier detection.')
+    pws.add_argument('--small_group_policy', metavar='margin_fallback|retain',
+                     choices=['margin_fallback', 'retain'],
+                     default='margin_fallback', type=str, required=False, action='store',
+                     help='default=%(default)s: How to screen sample_groups too small for a robust z-score. '
+                          '"margin_fallback" applies --margin_threshold alone; '
+                          '"retain" keeps them without margin-based screening.')
     pws.set_defaults(handler=command_handlers['wsfilter'])
 
     pcsf_help = 'Cross-species outlier filtering. Outputs metadata.tsv + excluded.tsv + PDFs (no plots/). See `amalgkit csfilter -h`'
@@ -430,6 +436,12 @@ def build_parser(command_handlers, command_names, version, prog=None):
                       help='default=%(default)s: Margin threshold for robust-margin outlier detection.')
     pcsf.add_argument('--robust_z_threshold', metavar='FLOAT', default=-2.5, type=float, required=False, action='store',
                       help='default=%(default)s: Robust z-score threshold for robust-margin outlier detection.')
+    pcsf.add_argument('--small_group_policy', metavar='margin_fallback|retain',
+                      choices=['margin_fallback', 'retain'],
+                      default='margin_fallback', type=str, required=False, action='store',
+                      help='default=%(default)s: How to screen sample_groups too small for a robust z-score. '
+                           '"margin_fallback" applies --margin_threshold alone; '
+                           '"retain" keeps them without margin-based screening.')
     pcsf.set_defaults(handler=command_handlers['csfilter'])
 
     pfi_help = 'Final table export from filtered metadata. See `amalgkit finalize -h`'
