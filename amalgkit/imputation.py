@@ -1,8 +1,17 @@
+import warnings
+
 import numpy
 import pandas
 
 
 IMPUTATION_STRATEGIES = ('em_pca', 'nipals', 'row_mean')
+
+
+def _warn_row_mean_fallback(strategy, reason):
+    warnings.warn(
+        '{} imputation fell back to row-mean imputation ({}). '
+        'Imputation quality may be degraded.'.format(strategy, reason)
+    )
 
 
 def _row_mean_impute(values):
@@ -135,6 +144,12 @@ def impute_expression(
     else:
         max_pc = min(values.shape[0] - 1, values.shape[1] - 1)
         if max_pc < 1:
+            _warn_row_mean_fallback(
+                strategy,
+                'a {}x{} matrix is too small to resolve a principal component'.format(
+                    values.shape[0], values.shape[1]
+                ),
+            )
             imputed = _row_mean_impute(values_for_imputation)
         else:
             resolved_pc = min(max(1, int(num_pc)), max_pc)
@@ -147,7 +162,8 @@ def impute_expression(
                     tol=tol,
                     strategy=strategy,
                 )
-            except (ValueError, numpy.linalg.LinAlgError):
+            except (ValueError, numpy.linalg.LinAlgError) as exc:
+                _warn_row_mean_fallback(strategy, 'failed to converge/resolve: {}'.format(exc))
                 imputed = _row_mean_impute(values_for_imputation)
     if minimum_imputed_value is not None:
         imputed[missing_mask] = numpy.maximum(

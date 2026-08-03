@@ -346,3 +346,44 @@ def test_batch_effect_runner_writes_latent_glm_outputs(tmp_path, capsys, monkeyp
     assert corrected.loc['G1', 'RUN1'] == 11.0
     latent_df = pandas.read_csv(latent_path, sep='\t', index_col=0)
     assert list(latent_df.columns) == ['latent_1']
+
+
+def test_batch_effect_runner_sva_value_error_writes_failure_summary(tmp_path):
+    # Regression: the sva branch previously caught only NotImplementedError,
+    # so a real backend failure (e.g. design/alignment ValueError) crashed
+    # with an uncaught traceback and wrote no out_summary artifact, unlike the
+    # combatseq/ruvseq/latent_glm branches. The orchestrator is left without a
+    # parseable failure record. Now a ValueError is caught and a structured
+    # failure summary is written.
+    counts_path = tmp_path / 'counts.tsv'
+    metadata_path = tmp_path / 'metadata.tsv'
+    summary_path = tmp_path / 'summary.json'
+
+    # Metadata whose sample_group values cannot form a valid SVA design
+    # (single group) triggers a ValueError inside run_sva_backend.
+    pandas.DataFrame({
+        'target_id': ['G1', 'G2', 'G3', 'G4'],
+        'RUN1': [1.0, 2.0, 3.0, 4.0],
+        'RUN2': [5.0, 6.0, 7.0, 8.0],
+        'RUN3': [9.0, 10.0, 11.0, 12.0],
+        'RUN4': [13.0, 14.0, 15.0, 16.0],
+    }).to_csv(counts_path, sep='\t', index=False)
+    pandas.DataFrame({
+        'run': ['RUN1', 'RUN2', 'RUN3', 'RUN4'],
+        'sample_group': ['A', 'A', 'A', 'A'],
+        'bioproject': ['BP1', 'BP2', 'BP1', 'BP2'],
+    }).to_csv(metadata_path, sep='\t', index=False)
+
+    code = batch_effect_runner.main([
+        '--backend', 'sva',
+        '--counts_tsv', str(counts_path),
+        '--metadata_tsv', str(metadata_path),
+        '--out_summary_json', str(summary_path),
+        '--sva_nsv', 'auto',
+    ])
+
+    assert code == 1
+    assert summary_path.exists()
+    payload = batch_effect_runner.read_backend_summary_json(summary_path)
+    assert payload['backend'] == 'sva'
+    assert payload['skip_reason'] == 'sva_fit_failed'

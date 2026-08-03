@@ -89,13 +89,13 @@ def main(argv=None):
                 sample_group_column=args.sample_group_column,
                 random_seed=args.random_seed,
             )
-        except NotImplementedError as exc:
+        except (ValueError, RuntimeError, numpy.linalg.LinAlgError) as exc:
             return _write_failure_summary(
                 args=args,
                 counts=counts,
                 metadata=metadata,
                 exc=exc,
-                skip_reason='backend_not_implemented',
+                skip_reason='sva_fit_failed',
             )
         if args.out_counts_tsv is not None:
             write_expression_matrix_tsv(corrected_df, args.out_counts_tsv)

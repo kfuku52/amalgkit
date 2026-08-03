@@ -142,3 +142,71 @@ def test_latent_glm_nonconvergence_returns_original_counts():
     assert summary['skip_reason'] == 'latent_not_converged'
     assert summary['latent_converged'] is False
     assert summary['corrected_run_ids'] == []
+
+
+def _low_count_batch_fixture():
+    # Low counts with a strong multiplicative batch effect. Removing the latent
+    # effect drives exp(corrected_response) below the 0.5 pseudo-count for some
+    # low-expression cells, which is what produces pre-clip negatives.
+    rng = numpy.random.default_rng(0)
+    values = rng.poisson(lam=1.0, size=(20, 6)).astype(float)
+    batch_multiplier = numpy.where(numpy.array([0, 0, 0, 1, 1, 1]) == 1, 3.0, 1.0)
+    values *= batch_multiplier.reshape(1, -1)
+    counts_df = pandas.DataFrame(
+        values,
+        index=['G{:02d}'.format(i + 1) for i in range(20)],
+        columns=['RUN{}'.format(i + 1) for i in range(6)],
+    )
+    metadata_df = pandas.DataFrame(
+        {
+            'run': list(counts_df.columns),
+            'sample_group': ['A', 'B'] * 3,
+        }
+    )
+    return counts_df, metadata_df
+
+
+def test_run_latent_glm_backend_reports_real_pre_clip_negative_counts():
+    # Regression pin for the negative-value status counters.
+    #
+    # The back-transform in _fit_latent_model is exp(corrected_response) - 0.5,
+    # which goes negative for low-count genes, and is floored at zero *there*.
+    # Measuring negatives on the returned corrected matrix therefore always
+    # yields 0 regardless of how much clipping actually happened, so the counter
+    # has to be carried out of the fit. This test fails (0 != > 0) if the count
+    # is ever re-derived from the post-floor matrix again.
+    counts_df, metadata_df = _low_count_batch_fixture()
+
+    corrected_df, _latent_df, summary = run_latent_glm_backend(
+        counts_df=counts_df,
+        metadata_df=metadata_df,
+        k_setting=1,
+        family='nb',
+    )
+
+    # The correction must actually have been applied, not skipped.
+    assert summary['skip_reason'] == ''
+    assert summary['resolved_latent_k'] == 1
+
+    assert summary['negative_values_before_clip'] > 0
+    assert summary['negative_values_after_clip'] == 0
+    assert (corrected_df.to_numpy(dtype=float) >= 0).all()
+
+
+def test_run_latent_glm_backend_reports_zero_negatives_when_no_clipping_occurs():
+    # Negative control: a counter that is nonzero for every input would carry no
+    # information. High, well-separated counts never cross the pseudo-count
+    # boundary, so both counters must read zero here.
+    counts_df, metadata_df = _latent_fixture()
+
+    corrected_df, _latent_df, summary = run_latent_glm_backend(
+        counts_df=counts_df,
+        metadata_df=metadata_df,
+        k_setting=1,
+        family='nb',
+    )
+
+    assert summary['skip_reason'] == ''
+    assert summary['negative_values_before_clip'] == 0
+    assert summary['negative_values_after_clip'] == 0
+    assert (corrected_df.to_numpy(dtype=float) >= 0).all()

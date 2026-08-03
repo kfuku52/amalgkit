@@ -18,6 +18,10 @@ class _LatentFit:
     iterations: int
     converged: bool
     actual_k: int
+    # Counted on the back-transformed matrix before it is floored at zero in
+    # _fit_latent_model. corrected_df is already nonnegative, so this is the
+    # only place the pre-clip negatives are observable.
+    negative_values_before_clip: int = 0
 
 
 def _build_design_matrix(metadata_df, sample_group_column='sample_group'):
@@ -241,6 +245,7 @@ def _fit_latent_model(
         numpy.exp(numpy.clip(corrected_response, -MAX_EXPONENT, MAX_EXPONENT))
         - 0.5
     )
+    negative_values_before_clip = int((corrected_normalized < 0).sum())
     corrected = numpy.maximum(corrected_normalized, 0.0) * numpy.exp(offsets).reshape(1, -1)
     corrected_df = pandas.DataFrame(corrected, index=counts_df.index, columns=run_ids)
     latent_df = pandas.DataFrame(
@@ -256,7 +261,15 @@ def _fit_latent_model(
             family=family,
         )
         objective = _objective_value(weighted_residuals)
-    return _LatentFit(corrected_df, latent_df, objective, iterations, converged, actual_k)
+    return _LatentFit(
+        corrected_df,
+        latent_df,
+        objective,
+        iterations,
+        converged,
+        actual_k,
+        negative_values_before_clip,
+    )
 
 
 def _resolve_manual_k(k_setting, max_k):
@@ -395,8 +408,12 @@ def run_latent_glm_backend(
         ).to_jsonable()
         return counts.copy(), fit.latent_df, summary
 
-    corrected_df = fit.corrected_df.loc[:, run_ids]
-    corrected_df = corrected_df.clip(lower=0.0)
+    # The back-transform in _fit_latent_model (exp(corrected_response) - 0.5) can
+    # go negative for low-count genes; it is floored there, so the count has to be
+    # carried out of the fit rather than re-measured on the already-floored matrix.
+    negative_before = int(fit.negative_values_before_clip)
+    corrected_df = fit.corrected_df.loc[:, run_ids].clip(lower=0.0)
+    negative_after = int((corrected_df.to_numpy(dtype=float) < 0).sum())
     summary = BatchEffectResult(
         backend='latent_glm',
         method=method,
@@ -408,8 +425,8 @@ def run_latent_glm_backend(
         latent_family=family,
         latent_iterations=int(fit.iterations),
         latent_objective=float(fit.objective),
-        negative_values_before_clip=0,
-        negative_values_after_clip=0,
+        negative_values_before_clip=negative_before,
+        negative_values_after_clip=negative_after,
         extra={'latent_converged': bool(fit.converged)},
     ).to_jsonable()
     return corrected_df, fit.latent_df, summary
