@@ -15,6 +15,7 @@ from amalgkit.batch_effect_latent_glm import run_latent_glm_backend
 from amalgkit.batch_effect_ruvseq import run_ruvseq_backend
 from amalgkit.batch_effect_sva import run_sva_backend
 from amalgkit.filter_utils import _format_genus_species_label
+from amalgkit.runtime_utils import resolve_species_token
 from amalgkit.per_species_common import (
     append_round_summary,
     initialize_round_summary,
@@ -74,6 +75,27 @@ def _normalize_metadata_df(metadata_df):
 
 def _resolve_scientific_name(metadata_df, species_tag):
     scientific_name_series = metadata_df.get('scientific_name', pandas.Series(dtype=object)).fillna('').astype(str)
+    if 'species_token' in metadata_df.columns:
+        explicit_token_series = metadata_df.loc[:, 'species_token'].fillna('').astype(str).str.strip()
+    else:
+        explicit_token_series = pandas.Series('', index=metadata_df.index)
+    token_to_name = {}
+    for scientific_name, explicit_token in zip(
+        scientific_name_series.tolist(),
+        explicit_token_series.tolist(),
+    ):
+        normalized_name = str(scientific_name).strip()
+        if normalized_name == '':
+            continue
+        token = resolve_species_token(
+            normalized_name,
+            explicit_token=explicit_token,
+            label='species_token',
+        )
+        token_to_name.setdefault(token, normalized_name)
+    if species_tag in token_to_name:
+        return token_to_name[species_tag]
+    # Fallback for callers that pass a naive space->underscore tag.
     normalized = scientific_name_series.str.replace(' ', '_', regex=False)
     matched = scientific_name_series.loc[normalized == species_tag]
     if matched.shape[0] > 0:
