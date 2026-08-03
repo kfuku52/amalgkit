@@ -5,6 +5,7 @@ import os
 from types import SimpleNamespace
 
 from amalgkit.merge import (
+    collect_species_runs,
     collect_valid_run_ids,
     generate_merge_plot_pdfs,
     merge_fastp_stats_into_metadata,
@@ -13,6 +14,31 @@ from amalgkit.merge import (
     scan_quant_abundance_paths,
 )
 from amalgkit.util import Metadata
+
+
+class TestCollectSpeciesRuns:
+    def test_blank_exclusion_is_treated_as_not_excluded(self):
+        # Regression for #173: a blank/NA exclusion means "not excluded" and
+        # must be retained, consistent with label_sampled_data and
+        # build_quant_tasks. Previously a blank exclusion silently dropped the
+        # run from merge.
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001', 'SRR002', 'SRR003'],
+            'scientific_name': ['sp1', 'sp1', 'sp1'],
+            'exclusion': ['no', '', 'low_mapping_rate'],
+        }))
+        sra_ids, sampled_sra_ids = collect_species_runs(metadata, 'sp1')
+        assert sra_ids == ['SRR001', 'SRR002']
+        assert sampled_sra_ids == {'SRR001', 'SRR002'}
+
+    def test_exclusion_reason_excludes_run(self):
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001', 'SRR002'],
+            'scientific_name': ['sp1', 'sp1'],
+            'exclusion': ['no', 'no_cstmm_output'],
+        }))
+        sra_ids, _sampled_sra_ids = collect_species_runs(metadata, 'sp1')
+        assert sra_ids == ['SRR001']
 
 
 class TestMergeFastpStatsIntoMetadata:

@@ -1054,6 +1054,21 @@ class TestQuantEdgeCases:
         assert build_quant_tasks(metadata) == [('SRR001', 'Species A')]
         assert metadata.df['run'].tolist() == ['SRR001']
 
+    def test_build_quant_tasks_keeps_blank_exclusion_when_column_mixed(self):
+        # Regression for #173: a blank/NA exclusion means "not excluded" and
+        # must be retained even when other rows carry an exclusion reason.
+        # Previously a blank exclusion was silently dropped whenever the
+        # column had any non-empty value.
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001', 'SRR002', 'SRR003'],
+            'scientific_name': ['Species A', 'Species A', 'Species A'],
+            'exclusion': ['no', '', 'low_nspots'],
+            'is_sampled': ['yes', 'yes', 'yes'],
+        }))
+
+        assert build_quant_tasks(metadata) == [('SRR001', 'Species A'), ('SRR002', 'Species A')]
+        assert metadata.df['run'].tolist() == ['SRR001', 'SRR002']
+
     def test_build_quant_tasks_rejects_invalid_sampling_flag(self):
         metadata = Metadata.from_DataFrame(pandas.DataFrame({
             'run': ['SRR001'],

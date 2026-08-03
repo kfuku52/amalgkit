@@ -5749,8 +5749,11 @@ def filter_getfastq_eligible_metadata(metadata):
             .str.strip()
             .str.lower()
         )
-        if exclusion.ne('').any():
-            eligible_mask &= exclusion.eq('no')
+        # "no" means retained; blank/NA is treated as "no" (consistent with
+        # label_sampled_data in metadata_utils, build_quant_tasks in quant and
+        # collect_species_runs in merge). Any other value is an exclusion
+        # reason (e.g. low_nspots, no_cstmm_output) and excludes the run.
+        eligible_mask &= exclusion.isin({'', 'no'})
     if 'is_sampled' in metadata.df.columns:
         sampled = (
             metadata.df.loc[:, 'is_sampled']

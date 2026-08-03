@@ -236,7 +236,10 @@ def collect_species_runs(metadata, sp):
     species_series = metadata.df.loc[:, 'scientific_name'].fillna('').astype(str).str.strip()
     is_sp = (species_series == sp)
     exclusion_series = metadata.df.loc[:, 'exclusion'].fillna('').astype(str).str.strip().str.lower()
-    is_sampled = (exclusion_series == 'no')
+    # Blank/NA exclusion is treated as "no" (retained), consistent with
+    # label_sampled_data (metadata_utils) and build_quant_tasks (quant).
+    # Previously a blank exclusion silently dropped the run from merge.
+    is_sampled = (exclusion_series.isin({'', 'no'}))
     is_target = (is_sp & is_sampled)
     sra_ids = collect_valid_run_ids(metadata.df.loc[is_target, 'run'].values)
     sampled_sra_ids = set(sra_ids)

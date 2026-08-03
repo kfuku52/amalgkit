@@ -2114,8 +2114,13 @@ def build_quant_tasks(metadata):
     eligible_mask = pandas.Series(True, index=metadata.df.index)
     if 'exclusion' in metadata.df.columns:
         exclusion = metadata.df['exclusion'].fillna('').astype(str).str.strip().str.lower()
-        if exclusion.ne('').any():
-            eligible_mask &= exclusion.eq('no')
+        # "no" means retained; blank/NA is treated as "no" (consistent with
+        # label_sampled_data in metadata_utils and collect_species_runs in
+        # merge). Any other value is an exclusion reason (e.g. low_nspots,
+        # no_cstmm_output) and excludes the run. Previously a blank exclusion
+        # was silently dropped from quant whenever the column had any
+        # non-empty value, losing runs without a warning.
+        eligible_mask &= exclusion.isin({'', 'no'})
     if 'is_sampled' in metadata.df.columns:
         sampled = metadata.df['is_sampled'].fillna('').astype(str).str.strip().str.lower()
         if sampled.ne('').any():
