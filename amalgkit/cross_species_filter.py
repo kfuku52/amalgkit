@@ -136,8 +136,26 @@ def _species_tag(scientific_name):
 
 
 def _normalize_exclusion(series):
+    # The exclusion column is not boolean. 'no' means retained; every other
+    # non-empty value is an exclusion *reason* recorded by an upstream step
+    # (e.g. 'low_mapping_rate', 'low_within_sample_group_correlation',
+    # 'manual_removal', and the 'low_cross_species_group_correlation' this
+    # module itself writes below). Those values are preserved as-is apart from
+    # case/whitespace normalization, so downstream .eq('no') checks keep working.
+    #
+    # A blank/NA exclusion is the one value that is rejected: it used to be
+    # silently rewritten to 'no' (retained), which injected samples with missing
+    # metadata into the group references, correlations and PCA.
     normalized = pandas.Series(series).fillna('').astype(str).str.strip().str.lower()
-    normalized = normalized.replace('', 'no')
+    blank_count = int((normalized == '').sum())
+    if blank_count > 0:
+        raise ValueError(
+            'Cross-species filtering requires an explicit exclusion value for every run, but '
+            '{} row(s) have a blank/NA exclusion. A blank exclusion was previously silently '
+            'treated as "no" (retained), which injected samples with missing metadata into the '
+            'group references, correlations and PCA. Set "no" to retain a run, or an exclusion '
+            'reason (e.g. "yes", "manual_removal") to drop it, and re-run.'.format(blank_count)
+        )
     return normalized
 
 
