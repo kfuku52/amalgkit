@@ -200,3 +200,76 @@ def test_run_ruvseq_backend_empty_gene_table_returns_no_expressed_genes_skip():
     assert summary['skip_reason'] == 'no_expressed_genes'
     assert summary['corrected_run_ids'] == []
     assert summary['uncorrected_run_ids'] == ['RUN1', 'RUN2']
+
+
+def test_run_ruvseq_backend_no_op_correction_does_not_inflate_counts():
+    # Regression test: the +1 pseudo-count used for the GLM fit must not leak
+    # into the corrected matrix. When the correction is a no-op (W@alpha ~ 0),
+    # the corrected counts must equal the raw counts, not raw + 1.
+    counts_df = pandas.DataFrame(
+        {
+            'RUN1': [10.0, 20.0, 30.0],
+            'RUN2': [10.0, 20.0, 30.0],
+            'RUN3': [10.0, 20.0, 30.0],
+            'RUN4': [10.0, 20.0, 30.0],
+        },
+        index=['G1', 'G2', 'G3'],
+    )
+    metadata_df = pandas.DataFrame(
+        {
+            'run': list(counts_df.columns),
+            'sample_group': ['A', 'A', 'B', 'B'],
+            'bioproject': ['BP1', 'BP1', 'BP2', 'BP2'],
+        }
+    )
+
+    # A forced k>0 with numerically-zero residuals must still return the raw
+    # counts (the noise-floor guard resolves k to 0 instead of fitting on float
+    # noise from the GLM fit).
+    corrected_df, w_df, summary = run_ruvseq_backend(
+        counts_df=counts_df,
+        metadata_df=metadata_df,
+        k_setting='1',
+        k_max=2,
+        min_controls=2,
+    )
+
+    pandas.testing.assert_frame_equal(corrected_df, counts_df)
+    assert w_df.shape == (counts_df.shape[1], 0)
+    assert summary['resolved_ruv_k'] == 0
+    assert summary['skip_reason'] == 'ruvseq_k_zero'
+
+
+def test_ruvr_correct_counts_returns_raw_counts_on_noise_floor_residuals():
+    # Direct unit test for the noise-floor guard: residuals at float-noise
+    # magnitude must be treated as "no batch effect" (k resolves to 0) rather
+    # than producing a spurious correction.
+    counts_df = pandas.DataFrame(
+        {
+            'RUN1': [10.0, 20.0, 30.0],
+            'RUN2': [10.0, 20.0, 30.0],
+            'RUN3': [10.0, 20.0, 30.0],
+            'RUN4': [10.0, 20.0, 30.0],
+        },
+        index=['G1', 'G2', 'G3'],
+    )
+    residuals_df = pandas.DataFrame(
+        {
+            'RUN1': [1e-8, -1e-8, 1e-8],
+            'RUN2': [-1e-8, 1e-8, -1e-8],
+            'RUN3': [1e-8, 1e-8, -1e-8],
+            'RUN4': [-1e-8, -1e-8, 1e-8],
+        },
+        index=counts_df.index,
+    )
+    controls = numpy.array([True, True, True], dtype=bool)
+
+    corrected_df, w_df = ruvr_correct_counts(
+        seq_uq_df=counts_df,
+        controls=controls,
+        k=1,
+        residuals_df=residuals_df,
+    )
+
+    pandas.testing.assert_frame_equal(corrected_df, counts_df)
+    assert w_df.shape == (counts_df.shape[1], 0)

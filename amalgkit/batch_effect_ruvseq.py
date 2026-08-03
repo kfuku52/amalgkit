@@ -9,6 +9,7 @@ from amalgkit.normalization_tmm import calc_factor_quantile
 
 RUVSEQ_SCORE_TOLERANCE = 1e-12
 RUVSEQ_POISSON_ALPHA_THRESHOLD = 1e-6
+RUVSEQ_RESIDUAL_NOISE_FLOOR = 1e-6
 
 
 def _align_metadata_to_counts(counts_df, metadata_df):
@@ -311,6 +312,10 @@ def ruvr_correct_counts(seq_uq_df, controls, k, residuals_df, center=True, round
     if int(k) <= 0:
         return seq_uq_df.copy(), pandas.DataFrame(index=seq_uq_df.columns)
     e_controls = e[:, controls]
+    residual_scale = float(numpy.max(numpy.abs(e_controls))) if e_controls.size > 0 else 0.0
+    data_scale = float(numpy.max(numpy.abs(x))) if x.size > 0 else 0.0
+    if residual_scale <= (RUVSEQ_RESIDUAL_NOISE_FLOOR * max(1.0, data_scale)):
+        return seq_uq_df.copy(), pandas.DataFrame(index=seq_uq_df.columns)
     u, s, _vh = numpy.linalg.svd(e_controls, full_matrices=False)
     positive = numpy.where(s > float(tolerance))[0]
     if positive.size == 0:
@@ -504,7 +509,11 @@ def run_ruvseq_backend(
         )
     counts_plus_one = counts_df.astype(float) + 1.0
     _edge_uq_df, _uq_factors, effective_lib_sizes = _upperquartile_normalize(counts_plus_one, round_counts=True)
-    seq_uq_df, _seq_uq_scales = _between_lane_normalize_upper(counts_plus_one, round_counts=True)
+    # The correction operates on the raw-count scale so that the log(x+1) -> exp(...) - 1
+    # round-trip in ruvr_correct_counts returns raw counts when the correction is a no-op.
+    # The +1 pseudo-count is used only for the GLM fit (counts_plus_one), not for the
+    # matrix that is corrected, which avoids inflating every corrected count by +1.
+    seq_uq_df, _seq_uq_scales = _between_lane_normalize_upper(counts_df, round_counts=True)
     pvalues, residuals_df = _compute_glm_pvalues_and_residuals(
         counts_df=counts_plus_one,
         design_df=design_df,
