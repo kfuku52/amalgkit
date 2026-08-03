@@ -9,6 +9,22 @@ from amalgkit.normalization_tmm import calc_factor_quantile
 
 RUVSEQ_SCORE_TOLERANCE = 1e-12
 RUVSEQ_POISSON_ALPHA_THRESHOLD = 1e-6
+# Absolute cutoff in residual space, used to recognise "no batch effect at all".
+#
+# The control residuals are log-scale quantities (design residuals of
+# log(counts)), so the cutoff has to be a log-scale constant. It must NOT be
+# scaled by the raw count magnitude: that mixes units and lets the threshold
+# grow without bound with library depth, so a genuine log-scale residual is
+# classified as numerical noise once counts are large enough.
+#
+# The floor is set from the two measured regimes it has to separate:
+#   - Identical runs (no batch effect) leave residuals at ~1.5e-8, which is
+#     sqrt(machine epsilon) - the convergence tolerance of the statsmodels IRLS
+#     fit, not double-precision noise.
+#   - The smallest biologically meaningful effect is far larger: even a 0.1%
+#     expression difference is log(1.001) ~ 1e-3.
+# 1e-6 sits ~2 orders of magnitude above the solver artifact and ~3 orders
+# below the smallest real effect.
 RUVSEQ_RESIDUAL_NOISE_FLOOR = 1e-6
 
 
@@ -143,6 +159,15 @@ def _between_lane_normalize_upper(counts_df, round_counts=True):
         scales = pandas.Series(numpy.ones((counts_df.shape[1],), dtype=float), index=counts_df.columns, dtype=float)
     else:
         scales = quantiles / mean_quantile
+    # A sparse lane can have a 75th percentile of zero while the mean quantile
+    # is positive, which would divide that column by zero and produce inf/NaN.
+    # Such a lane carries no usable scale information, so it is left unscaled -
+    # the same policy _upperquartile_normalize already applies to its own
+    # zero/non-finite factors.
+    scales = scales.astype(float)
+    unusable = ~numpy.isfinite(scales.to_numpy(dtype=float)) | (scales.to_numpy(dtype=float) <= 0)
+    if unusable.any():
+        scales.loc[unusable] = 1.0
     normalized = counts_df.astype(float).copy()
     normalized.loc[:, :] = normalized.to_numpy(dtype=float) / scales.reindex(normalized.columns).to_numpy(dtype=float)
     if round_counts:
@@ -313,8 +338,7 @@ def ruvr_correct_counts(seq_uq_df, controls, k, residuals_df, center=True, round
         return seq_uq_df.copy(), pandas.DataFrame(index=seq_uq_df.columns)
     e_controls = e[:, controls]
     residual_scale = float(numpy.max(numpy.abs(e_controls))) if e_controls.size > 0 else 0.0
-    data_scale = float(numpy.max(numpy.abs(x))) if x.size > 0 else 0.0
-    if residual_scale <= (RUVSEQ_RESIDUAL_NOISE_FLOOR * max(1.0, data_scale)):
+    if residual_scale <= RUVSEQ_RESIDUAL_NOISE_FLOOR:
         return seq_uq_df.copy(), pandas.DataFrame(index=seq_uq_df.columns)
     u, s, _vh = numpy.linalg.svd(e_controls, full_matrices=False)
     positive = numpy.where(s > float(tolerance))[0]
@@ -509,11 +533,14 @@ def run_ruvseq_backend(
         )
     counts_plus_one = counts_df.astype(float) + 1.0
     _edge_uq_df, _uq_factors, effective_lib_sizes = _upperquartile_normalize(counts_plus_one, round_counts=True)
-    # The correction operates on the raw-count scale so that the log(x+1) -> exp(...) - 1
-    # round-trip in ruvr_correct_counts returns raw counts when the correction is a no-op.
-    # The +1 pseudo-count is used only for the GLM fit (counts_plus_one), not for the
-    # matrix that is corrected, which avoids inflating every corrected count by +1.
-    seq_uq_df, _seq_uq_scales = _between_lane_normalize_upper(counts_df, round_counts=True)
+    # The RUVr correction itself runs on the between-lane upper-quartile
+    # normalized matrix (library-size effects must be removed before the
+    # residual SVD). The +1 pseudo-count is used only for the GLM fit
+    # (counts_plus_one), not for the corrected matrix, which avoids inflating
+    # every corrected count by +1. The returned matrix is multiplied back by
+    # the between-lane scale factors in run_ruvseq_backend so "corrected
+    # counts" are on the original count scale.
+    seq_uq_df, seq_uq_scales = _between_lane_normalize_upper(counts_df, round_counts=True)
     pvalues, residuals_df = _compute_glm_pvalues_and_residuals(
         counts_df=counts_plus_one,
         design_df=design_df,
@@ -549,7 +576,23 @@ def run_ruvseq_backend(
     uncorrected_run_ids = [str(run_id) for run_id in counts_df.columns]
     skip_reason = 'ruvseq_k_zero'
     if int(resolved['k']) > 0:
-        corrected_df = resolved['matrix'].reindex(index=counts_df.index, columns=counts_df.columns)
+        # The correction ran on the between-lane upper-quartile normalized
+        # matrix; multiply back by the per-lane scale factors so the returned
+        # matrix is on the original count scale (consistent with the k=0 path
+        # and with the raw-count nonexpressed genes concatenated downstream in
+        # per_species_finalize_python). Previously the corrected matrix was
+        # returned on the normalized scale, silently rescaling every corrected
+        # count and mixing two scales in the final table.
+        normalized_corrected = resolved['matrix'].reindex(index=counts_df.index, columns=counts_df.columns)
+        scale_values = seq_uq_scales.reindex(counts_df.columns).to_numpy(dtype=float)
+        corrected_values = normalized_corrected.to_numpy(dtype=float) * scale_values[numpy.newaxis, :]
+        corrected_values = numpy.round(corrected_values)
+        corrected_values[corrected_values < 0] = 0
+        corrected_df = pandas.DataFrame(
+            corrected_values,
+            index=counts_df.index,
+            columns=counts_df.columns,
+        )
         corrected_run_ids = [str(run_id) for run_id in counts_df.columns]
         uncorrected_run_ids = []
         skip_reason = ''
