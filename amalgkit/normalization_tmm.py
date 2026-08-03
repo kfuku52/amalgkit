@@ -153,7 +153,22 @@ def _resolve_tmm_reference_column(matrix, lib_sizes):
         lib_size_values = lib_sizes.to_numpy(dtype=float)
     else:
         lib_size_values = numpy.asarray(lib_sizes, dtype=float).reshape(-1)
-    f75 = calc_factor_quantile(matrix, lib_size_values).to_numpy(dtype=float)
+    # edgeR's calcNormFactors selects the reference column from the RAW
+    # per-column 75th percentile (not divided by library size):
+    #   f75 <- apply(counts, 2, function(x) quantile(x, probs = 0.75))
+    #   refColumn <- which.min(abs(f75 - mean(f75)))
+    # Dividing by library size first changes which column is chosen whenever
+    # library sizes are heterogeneous, which silently changes every TMM factor
+    # (all factors are ratios to the reference).
+    if lib_size_values.size not in (1, matrix.shape[1]):
+        raise ValueError('lib_sizes must match the number of sample columns.')
+    f75 = numpy.asarray(
+        [
+            float(numpy.quantile(matrix[:, idx], q=0.75, method='linear'))
+            for idx in range(matrix.shape[1])
+        ],
+        dtype=float,
+    )
     if float(numpy.median(f75)) < 1e-20:
         ref_column = int(numpy.argmax(numpy.sum(numpy.sqrt(matrix), axis=0)))
     else:
