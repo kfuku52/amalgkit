@@ -436,6 +436,20 @@ class TestPerSpeciesTableGeneration:
         }))
         assert list_selected_species(metadata) == ['Species_A']
 
+    def test_list_selected_species_honors_explicit_species_token(self):
+        # Regression for #174: per-species tags must match the merge/cstmm
+        # output directories, which are keyed by the resolved species_token.
+        # A naive name.replace(' ', '_') diverged whenever an explicit token
+        # differs, making per-species workers unable to find their inputs.
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'scientific_name': ['Homo sapiens', 'Mus musculus'],
+            'run': ['R1', 'R2'],
+            'sample_group': ['g1', 'g2'],
+            'exclusion': ['no', 'no'],
+            'species_token': ['human', ''],
+        }))
+        assert list_selected_species(metadata) == ['human', 'Mus_musculus']
+
     def test_list_selected_species_ignores_blank_scientific_name(self):
         metadata = Metadata.from_DataFrame(pandas.DataFrame({
             'scientific_name': ['Species A', '', '   '],
