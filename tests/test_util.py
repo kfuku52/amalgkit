@@ -2047,7 +2047,7 @@ class TestMetadataTaxidValidation:
             'taxid': [9606],
         }))
         metadata.df['taxid'] = metadata.df['taxid'].astype('Int64')
-        captured = {'lock_path': None, 'urlretrieve': None}
+        captured = {'lock_path': None, 'downloaded': None}
 
         class DummyLock:
             def __init__(self, lock_path, lock_label='Lock', poll_seconds=5, timeout_seconds=3600):
@@ -2070,15 +2070,18 @@ class TestMetadataTaxidValidation:
             def get_rank(self, _lineage):
                 return {1: 'domain', 9606: 'species'}
 
-        def fake_urlretrieve(url, out_path):
-            captured['urlretrieve'] = (url, out_path)
-            with open(out_path, 'wb') as fout:
+        def fake_download(url, output_path, timeout_seconds, urlopen_fn=None):
+            _ = (timeout_seconds, urlopen_fn)
+            captured['downloaded'] = (url, output_path)
+            with open(output_path, 'wb') as fout:
                 fout.write(b'taxdump')
 
         monkeypatch.setattr('amalgkit.download_utils.acquire_exclusive_lock', DummyLock)
         monkeypatch.setattr('amalgkit.download_utils.NcbiTaxonomy', RecordingNcbi)
-        monkeypatch.setattr('amalgkit.download_utils.urllib.request.urlretrieve', fake_urlretrieve)
+        monkeypatch.setattr('amalgkit.download_utils.download_url_to_regular_file', fake_download)
         monkeypatch.setattr('amalgkit.download_utils.validate_taxonomy_dump', lambda path: path)
+        monkeypatch.setattr('amalgkit.download_utils.read_published_md5', lambda *args, **kwargs: 'd41d8cd98f00b204e9800998ecf8427e')
+        monkeypatch.setattr('amalgkit.download_utils.calculate_file_md5', lambda path: 'd41d8cd98f00b204e9800998ecf8427e')
         args = SimpleNamespace(
             out_dir=str(tmp_path / 'out'),
             download_dir=str(tmp_path / 'shared_downloads'),
@@ -2093,10 +2096,12 @@ class TestMetadataTaxidValidation:
         assert os.path.isdir(expected_ete_dir)
         assert os.path.isfile(os.path.join(expected_ete_dir, 'taxdump.tar.gz'))
         assert captured['lock_path'] == expected_lock_path
-        assert captured['urlretrieve'][0].endswith('/taxdump.tar.gz')
-        assert os.path.dirname(captured['urlretrieve'][1]) == expected_ete_dir
-        assert os.path.basename(captured['urlretrieve'][1]).startswith('taxdump.tar.gz.')
-        assert captured['urlretrieve'][1].endswith('.tmp')
+        # The hardened download path (timeout-aware, checksum-verified) is
+        # used in production, not the untimed urllib.request.urlretrieve.
+        assert captured['downloaded'][0].endswith('/taxdump.tar.gz')
+        assert os.path.dirname(captured['downloaded'][1]) == expected_ete_dir
+        assert os.path.basename(captured['downloaded'][1]).startswith('taxdump.tar.gz.')
+        assert captured['downloaded'][1].endswith('.tmp')
 
     def test_add_standard_rank_taxids_replaces_existing_lineage_columns(self, monkeypatch):
         metadata = Metadata.from_DataFrame(pandas.DataFrame({
@@ -2174,7 +2179,7 @@ class TestMetadataTaxidValidation:
         assert metadata2.df.loc[0, 'scientific_name'] == 'Homo sapiens'
 
     def test_get_ete_ncbitaxa_bootstraps_fresh_custom_download_dir(self, tmp_path, monkeypatch):
-        captured = {'lock_path': None, 'urlretrieve': None}
+        captured = {'lock_path': None, 'downloaded': None}
 
         class DummyLock:
             def __init__(self, lock_path, lock_label='Lock', poll_seconds=5, timeout_seconds=3600):
@@ -2191,9 +2196,10 @@ class TestMetadataTaxidValidation:
             def __init__(self, **kwargs):
                 captured['kwargs'] = kwargs
 
-        def fake_urlretrieve(url, out_path):
-            captured['urlretrieve'] = (url, out_path)
-            with open(out_path, 'wb') as fout:
+        def fake_download(url, output_path, timeout_seconds, urlopen_fn=None):
+            _ = (timeout_seconds, urlopen_fn)
+            captured['downloaded'] = (url, output_path)
+            with open(output_path, 'wb') as fout:
                 fout.write(b'taxdump')
 
         args = SimpleNamespace(
@@ -2207,8 +2213,10 @@ class TestMetadataTaxidValidation:
         assert not os.path.exists(args.download_dir)
         monkeypatch.setattr('amalgkit.util.acquire_exclusive_lock', DummyLock)
         monkeypatch.setattr('amalgkit.download_utils.NcbiTaxonomy', RecordingNcbi)
-        monkeypatch.setattr('amalgkit.download_utils.urllib.request.urlretrieve', fake_urlretrieve)
+        monkeypatch.setattr('amalgkit.download_utils.download_url_to_regular_file', fake_download)
         monkeypatch.setattr('amalgkit.download_utils.validate_taxonomy_dump', lambda path: path)
+        monkeypatch.setattr('amalgkit.download_utils.read_published_md5', lambda *args, **kwargs: 'd41d8cd98f00b204e9800998ecf8427e')
+        monkeypatch.setattr('amalgkit.download_utils.calculate_file_md5', lambda path: 'd41d8cd98f00b204e9800998ecf8427e')
 
         result = get_ete_ncbitaxa(args=args)
 
@@ -2218,10 +2226,12 @@ class TestMetadataTaxidValidation:
         assert captured['kwargs']['taxdump_file'] == os.path.join(expected_ete_dir, 'taxdump.tar.gz')
         assert os.path.isfile(os.path.join(expected_ete_dir, 'taxdump.tar.gz'))
         assert captured['lock_path'] == expected_lock_path
-        assert captured['urlretrieve'][0].endswith('/taxdump.tar.gz')
-        assert os.path.dirname(captured['urlretrieve'][1]) == expected_ete_dir
-        assert os.path.basename(captured['urlretrieve'][1]).startswith('taxdump.tar.gz.')
-        assert captured['urlretrieve'][1].endswith('.tmp')
+        # The hardened download path (timeout-aware, checksum-verified) is
+        # used in production, not the untimed urllib.request.urlretrieve.
+        assert captured['downloaded'][0].endswith('/taxdump.tar.gz')
+        assert os.path.dirname(captured['downloaded'][1]) == expected_ete_dir
+        assert os.path.basename(captured['downloaded'][1]).startswith('taxdump.tar.gz.')
+        assert captured['downloaded'][1].endswith('.tmp')
 
     def test_get_ete_ncbitaxa_reuses_existing_custom_db_without_taxdump_refresh(self, tmp_path, monkeypatch):
         captured = {'lock_path': None}
