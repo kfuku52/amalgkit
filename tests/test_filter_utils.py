@@ -3,8 +3,67 @@ import os
 import pandas
 import pytest
 
-from amalgkit.filter_utils import save_exclusion_plot_pdf, staged_output_dir
+from amalgkit.filter_utils import merge_metadata_by_run, save_exclusion_plot_pdf, staged_output_dir
 from amalgkit.output_utils import atomic_output_path
+
+
+def test_merge_metadata_by_run_rejects_update_runs_absent_from_source():
+    source_df = pandas.DataFrame(
+        {
+            'run': ['R1', 'R2'],
+            'mapping_rate': [0.1, 0.2],
+        }
+    )
+    update_df = pandas.DataFrame(
+        {
+            'run': ['R1', 'R3'],
+            'mapping_rate': [0.5, 0.7],
+        }
+    )
+
+    with pytest.raises(ValueError, match='absent from source metadata: R3'):
+        merge_metadata_by_run(source_df, update_df)
+
+
+def test_merge_metadata_by_run_preserves_numeric_dtype_for_numeric_strings():
+    source_df = pandas.DataFrame(
+        {
+            'run': ['R1', 'R2'],
+            'mapping_rate': [0.1, 0.2],
+        }
+    )
+    update_df = pandas.DataFrame(
+        {
+            'run': ['R1'],
+            'mapping_rate': pandas.Series(['0.5'], dtype='object'),
+        }
+    )
+
+    observed = merge_metadata_by_run(source_df, update_df)
+
+    assert pandas.api.types.is_float_dtype(observed['mapping_rate'].dtype)
+    assert observed['mapping_rate'].tolist() == [0.5, 0.2]
+
+
+def test_merge_metadata_by_run_warns_before_promoting_incompatible_numeric_column():
+    source_df = pandas.DataFrame(
+        {
+            'run': ['R1', 'R2'],
+            'mapping_rate': [0.1, 0.2],
+        }
+    )
+    update_df = pandas.DataFrame(
+        {
+            'run': ['R1'],
+            'mapping_rate': ['not_available'],
+        }
+    )
+
+    with pytest.warns(UserWarning, match='mapping_rate.*float64.*object.*R1'):
+        observed = merge_metadata_by_run(source_df, update_df)
+
+    assert pandas.api.types.is_object_dtype(observed['mapping_rate'].dtype)
+    assert observed['mapping_rate'].tolist() == ['not_available', 0.2]
 
 
 def test_save_exclusion_plot_pdf_writes_pdf(tmp_path):

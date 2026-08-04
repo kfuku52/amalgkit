@@ -22,21 +22,75 @@ def merge_metadata_by_run(source_df, update_df):
     update = update.loc[update['run'] != '', :].drop_duplicates(subset=['run'], keep='last')
     source = source.set_index('run', drop=False)
     update = update.set_index('run', drop=False)
+    source_run_ids = set(source.index.tolist())
+    missing_run_ids = [run_id for run_id in update.index.tolist() if run_id not in source_run_ids]
+    if missing_run_ids:
+        raise ValueError(
+            'Updated metadata contains run IDs absent from source metadata: {}.'.format(
+                ', '.join(missing_run_ids)
+            )
+        )
     for col in update.columns:
         if col not in source.columns:
             source[col] = pandas.NA
-        update_col = update[col]
-        if update_col.isna().all():
+        update_values = update[col].dropna()
+        if update_values.shape[0] == 0:
             continue
-        for run_id, value in update_col.dropna().items():
-            if run_id not in source.index:
+
+        source_dtype = source[col].dtype
+        if pandas.api.types.is_numeric_dtype(source_dtype):
+            numeric_values = pandas.to_numeric(update_values, errors='coerce')
+            incompatible = numeric_values.isna() & update_values.notna()
+            if not bool(incompatible.any()):
+                combined_values = pandas.concat(
+                    [
+                        source[col].reset_index(drop=True),
+                        numeric_values.reset_index(drop=True),
+                    ],
+                    ignore_index=True,
+                )
+                target_dtype = combined_values.dtype
+                source[col] = source[col].astype(target_dtype)
+                for run_id, value in numeric_values.items():
+                    source.loc[run_id, col] = value
                 continue
-            try:
+
+            warnings.warn(
+                'Metadata column "{}" contains values incompatible with dtype {}; '
+                'promoting the column to object while merging run(s): {}.'.format(
+                    col,
+                    source_dtype,
+                    ', '.join(update_values.index[incompatible].astype(str).tolist()),
+                ),
+                UserWarning,
+                stacklevel=2,
+            )
+            source[col] = source[col].astype('object')
+            for run_id, value in update_values.items():
                 source.loc[run_id, col] = value
-            except (TypeError, ValueError):
-                # Some metadata columns can change type across steps (e.g., numeric -> string labels).
-                source[col] = source[col].astype('object')
-                source.loc[run_id, col] = value
+            continue
+
+        candidate = source[col].copy()
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter('error', FutureWarning)
+                for run_id, value in update_values.items():
+                    candidate.loc[run_id] = value
+        except (FutureWarning, TypeError, ValueError):
+            warnings.warn(
+                'Metadata column "{}" contains values incompatible with dtype {}; '
+                'promoting the column to object while merging run(s): {}.'.format(
+                    col,
+                    source_dtype,
+                    ', '.join(update_values.index.astype(str).tolist()),
+                ),
+                UserWarning,
+                stacklevel=2,
+            )
+            candidate = source[col].astype('object')
+            for run_id, value in update_values.items():
+                candidate.loc[run_id] = value
+        source[col] = candidate
     return source.reset_index(drop=True)
 
 
