@@ -1017,8 +1017,13 @@ def get_ncbi_taxonomy(
         resolve_taxonomy_data_dir_fn = resolve_ncbi_taxonomy_data_dir
     if resolve_taxonomy_lock_path_fn is None:
         resolve_taxonomy_lock_path_fn = resolve_ncbi_taxonomy_lock_path
-    if urlretrieve_fn is None:
-        urlretrieve_fn = urllib.request.urlretrieve
+    # Production uses the hardened download path (download_url_to_regular_file:
+    # per-operation + total timeouts, fsync, O_NOFOLLOW, empty-file rejection)
+    # with the published-MD5 verification. urllib.request.urlretrieve is never
+    # used in production: it has no timeout parameter and its use here disabled
+    # the checksum verification (ensure_ncbi_taxdump_file only verifies the
+    # checksum when urlretrieve_fn is None). Callers/tests may inject a
+    # urlretrieve_fn explicitly to simulate the legacy behavior.
     if is_database_compatible_fn is None:
         is_database_compatible_fn = is_taxonomy_database_compatible
 
