@@ -33,6 +33,7 @@ from amalgkit.quant import (
     call_oarfish,
     adapt_oarfish_outputs,
     run_quant,
+    run_quant_for_sra,
     pre_resolve_species_indices,
     prefetch_getfastq_run_files,
     build_quant_tasks,
@@ -711,6 +712,94 @@ class TestGetfastqPrefetch:
         stderr = capsys.readouterr().err
         assert 'Using extracted-read statistics as a quant-only fallback' in stderr
         assert 'The source metadata is unchanged.' in stderr
+
+    def test_run_quant_auto_infers_backend_from_getfastq_stats(self, tmp_path, monkeypatch):
+        out_dir = tmp_path / 'out'
+        run_dir = out_dir / 'getfastq' / 'SRR001'
+        run_dir.mkdir(parents=True)
+        pandas.DataFrame([{
+            'run': 'SRR001',
+            'num_written': 10,
+            'bp_fastp_in': 1000,
+        }]).to_csv(run_dir / 'getfastq_stats.tsv', sep='\t', index=False)
+        args = SimpleNamespace(
+            out_dir=str(out_dir),
+            redo=False,
+            clean_fastq=False,
+            threads=1,
+            quant_backend='auto',
+            oarfish_seq_tech='auto',
+        )
+        runtime_context = QuantRuntimeContext(
+            run_files_by_run={'SRR001': {'SRR001.fastq.gz'}},
+        )
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001'],
+            'scientific_name': ['Species A'],
+            'lib_layout': ['single'],
+            'total_spots': [numpy.nan],
+            'spot_length': [numpy.nan],
+            'total_bases': [numpy.nan],
+            'nominal_length': [200],
+            'exclusion': ['no'],
+        }))
+        observed = {}
+
+        def fake_call_kallisto(_args, _in_files, quant_metadata, sra_stat, output_dir, _index):
+            observed['spot_length'] = quant_metadata.df.loc[0, 'spot_length']
+            observed['total_spot'] = sra_stat['total_spot']
+            write_valid_quant_outputs(output_dir)
+            return SimpleNamespace(returncode=0)
+
+        monkeypatch.setattr('amalgkit.quant.call_kallisto', fake_call_kallisto)
+
+        run_quant(args, metadata, 'SRR001', 'dummy.idx', runtime_context=runtime_context)
+
+        assert observed == {'spot_length': 100.0, 'total_spot': 10}
+        assert pandas.isna(metadata.df.loc[0, 'total_spots'])
+        assert pandas.isna(metadata.df.loc[0, 'total_bases'])
+        assert pandas.isna(metadata.df.loc[0, 'spot_length'])
+
+    def test_run_quant_for_sra_auto_recovers_stats_before_backend_inference(self, tmp_path, monkeypatch):
+        out_dir = tmp_path / 'out'
+        run_dir = out_dir / 'getfastq' / 'SRR001'
+        run_dir.mkdir(parents=True)
+        pandas.DataFrame([{
+            'run': 'SRR001',
+            'num_written': 10,
+            'bp_fastp_in': 1000,
+        }]).to_csv(run_dir / 'getfastq_stats.tsv', sep='\t', index=False)
+        args = SimpleNamespace(
+            out_dir=str(out_dir),
+            quant_backend='auto',
+            oarfish_seq_tech='auto',
+        )
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001'],
+            'scientific_name': ['Species A'],
+            'lib_layout': ['single'],
+            'total_spots': [numpy.nan],
+            'spot_length': [numpy.nan],
+            'total_bases': [numpy.nan],
+            'exclusion': ['no'],
+        }))
+        observed = {}
+
+        monkeypatch.setattr(
+            'amalgkit.quant.get_index',
+            lambda *_args, **_kwargs: 'dummy.idx',
+        )
+
+        def fake_run_quant(_args, quant_metadata, _sra_id, _index, **kwargs):
+            observed['backend'] = kwargs['backend']
+            observed['spot_length'] = quant_metadata.df.loc[0, 'spot_length']
+
+        monkeypatch.setattr('amalgkit.quant.run_quant', fake_run_quant)
+
+        run_quant_for_sra(args, metadata, 'SRR001', 'Species A')
+
+        assert observed == {'backend': 'kallisto', 'spot_length': 100.0}
+        assert pandas.isna(metadata.df.loc[0, 'spot_length'])
 
     def test_quant_stats_fallback_supports_single_end_runs(self, tmp_path):
         pandas.DataFrame([{
@@ -2032,6 +2121,60 @@ class TestQuantEdgeCases:
 
         with pytest.raises(NotADirectoryError, match='Quant path exists but is not a directory'):
             quant_main(args)
+
+    def test_quant_main_recovers_stats_before_auto_backend_inference(self, tmp_path, monkeypatch):
+        out_dir = tmp_path / 'out'
+        run_dir = out_dir / 'getfastq' / 'SRR001'
+        run_dir.mkdir(parents=True)
+        pandas.DataFrame([{
+            'run': 'SRR001',
+            'num_written': 10,
+            'bp_fastp_in': 1000,
+        }]).to_csv(run_dir / 'getfastq_stats.tsv', sep='\t', index=False)
+        args = SimpleNamespace(
+            out_dir=str(out_dir),
+            internal_jobs=1,
+            threads=1,
+            redo=False,
+            metadata='inferred',
+            quant_backend='auto',
+            oarfish_seq_tech='auto',
+        )
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001'],
+            'scientific_name': ['Species A'],
+            'lib_layout': ['single'],
+            'total_spots': [numpy.nan],
+            'spot_length': [numpy.nan],
+            'total_bases': [numpy.nan],
+            'exclusion': ['no'],
+        }))
+        observed = {}
+
+        monkeypatch.setattr('amalgkit.quant.load_metadata', lambda _args: metadata)
+        monkeypatch.setattr('amalgkit.quant.check_quant_dependencies', lambda _backends: None)
+        monkeypatch.setattr(
+            'amalgkit.quant.pre_resolve_species_indices',
+            lambda _args, _tasks, runtime_context=None: {},
+        )
+
+        def fake_run_quant_for_sra(_args, quant_metadata, sra_id, _sci_name, runtime_context=None):
+            observed['run'] = sra_id
+            observed['backend'] = runtime_context.quant_backend_by_run[sra_id]
+            observed['spot_length'] = quant_metadata.df.loc[0, 'spot_length']
+
+        monkeypatch.setattr('amalgkit.quant.run_quant_for_sra', fake_run_quant_for_sra)
+
+        quant_main(args)
+
+        assert observed == {
+            'run': 'SRR001',
+            'backend': 'kallisto',
+            'spot_length': 100.0,
+        }
+        assert pandas.isna(metadata.df.loc[0, 'total_spots'])
+        assert pandas.isna(metadata.df.loc[0, 'total_bases'])
+        assert pandas.isna(metadata.df.loc[0, 'spot_length'])
 
     def test_quant_main_parallel_dispatch(self, tmp_path, monkeypatch):
         args = SimpleNamespace(

@@ -369,6 +369,23 @@ def _metadata_with_quant_input_sra_stats(metadata, sra_id, output_dir_getfastq):
     return quant_metadata
 
 
+def _metadata_with_quant_input_sra_stats_for_tasks(args, metadata, tasks):
+    quant_metadata = metadata
+    getfastq_root = os.path.join(args.out_dir, 'getfastq')
+    for sra_id, _sci_name in tasks:
+        output_dir_getfastq = safe_join_component(
+            getfastq_root,
+            sra_id,
+            label='run ID',
+        )
+        quant_metadata = _metadata_with_quant_input_sra_stats(
+            quant_metadata,
+            sra_id,
+            output_dir_getfastq,
+        )
+    return quant_metadata
+
+
 def _collect_metadata_text_fragments(metadata, sra_id):
     fragments = []
     for column_name in [
@@ -1335,12 +1352,12 @@ def _run_quant_unlocked(
         if isinstance(runtime_context, QuantRuntimeContext) and (sra_id in runtime_context.quant_backend_by_run):
             backend = runtime_context.quant_backend_by_run[sra_id]
         else:
-            backend = resolve_quant_backend(args, metadata, sra_id)
+            backend = resolve_quant_backend(args, quant_metadata, sra_id)
     if (backend == 'oarfish') and (oarfish_seq_tech is None):
         if isinstance(runtime_context, QuantRuntimeContext) and (sra_id in runtime_context.oarfish_seq_tech_by_run):
             oarfish_seq_tech = runtime_context.oarfish_seq_tech_by_run[sra_id]
         else:
-            oarfish_seq_tech = resolve_oarfish_seq_tech(args, metadata, sra_id)
+            oarfish_seq_tech = resolve_oarfish_seq_tech(args, quant_metadata, sra_id)
     run_files = None
     if isinstance(runtime_context, QuantRuntimeContext):
         run_files = runtime_context.run_files_by_run.get(sra_id, None)
@@ -1368,10 +1385,10 @@ def _run_quant_unlocked(
     print('Quant backend selected for {}: {}'.format(sra_id, backend))
     with staged_output_dir(output_dir, redo=True, prefix='amalgkit_quant_stage_') as stage_output_dir:
         if backend == 'kallisto':
-            call_kallisto(args, in_files, metadata, sra_stat, stage_output_dir, index)
+            call_kallisto(args, in_files, quant_metadata, sra_stat, stage_output_dir, index)
         elif backend == 'oarfish':
             print('oarfish seq-tech selected for {}: {}'.format(sra_id, oarfish_seq_tech))
-            call_oarfish(args, in_files, metadata, sra_stat, stage_output_dir, index, oarfish_seq_tech)
+            call_oarfish(args, in_files, quant_metadata, sra_stat, stage_output_dir, index, oarfish_seq_tech)
         else:
             raise ValueError('Unsupported quant backend: {}'.format(backend))
         is_valid, validation_error = validate_quant_outputs(sra_id=sra_id, output_dir=stage_output_dir)
@@ -1889,6 +1906,11 @@ def run_quant_for_sra(args, metadata, sra_id, sci_name, runtime_context=None):
     print('')
     print('Species: {}'.format(sci_name))
     print('SRA Run ID: {}'.format(sra_id))
+    quant_metadata = _metadata_with_quant_input_sra_stats_for_tasks(
+        args,
+        metadata,
+        [(sra_id, sci_name)],
+    )
     normalized_sci_name = _normalize_species_identifier(
         _resolve_task_species_identifier_values(
             sra_id,
@@ -1904,9 +1926,9 @@ def run_quant_for_sra(args, metadata, sra_id, sci_name, runtime_context=None):
         oarfish_seq_tech = runtime_context.oarfish_seq_tech_by_run.get(sra_id, None)
         index_cache = runtime_context.resolved_index_cache
     if backend is None:
-        backend = resolve_quant_backend(args, metadata, sra_id)
+        backend = resolve_quant_backend(args, quant_metadata, sra_id)
     if (backend == 'oarfish') and (oarfish_seq_tech is None):
-        oarfish_seq_tech = resolve_oarfish_seq_tech(args, metadata, sra_id)
+        oarfish_seq_tech = resolve_oarfish_seq_tech(args, quant_metadata, sra_id)
     index_cache_key = _build_index_cache_key(
         backend,
         normalized_sci_name,
@@ -1926,7 +1948,7 @@ def run_quant_for_sra(args, metadata, sra_id, sci_name, runtime_context=None):
         )
     run_quant(
         args,
-        metadata,
+        quant_metadata,
         sra_id,
         index,
         runtime_context=runtime_context,
@@ -2089,15 +2111,29 @@ def prefetch_getfastq_run_files(args, tasks):
 def prepare_quant_runtime_context(args, tasks, metadata=None, backend_by_run=None, oarfish_seq_tech_by_run=None):
     runtime_context = QuantRuntimeContext()
     runtime_context.run_files_by_run = prefetch_getfastq_run_files(args, tasks)
+    quant_metadata = metadata
+    if metadata is not None:
+        quant_metadata = _metadata_with_quant_input_sra_stats_for_tasks(
+            args,
+            metadata,
+            tasks,
+        )
     if backend_by_run is None or oarfish_seq_tech_by_run is None:
-        if metadata is None:
+        if quant_metadata is None:
             backend_by_run = {sra_id: 'kallisto' for sra_id, _sci_name in tasks}
             oarfish_seq_tech_by_run = {}
         else:
-            backend_by_run, oarfish_seq_tech_by_run = resolve_quant_backends_for_tasks(args, metadata, tasks)
+            backend_by_run, oarfish_seq_tech_by_run = resolve_quant_backends_for_tasks(
+                args,
+                quant_metadata,
+                tasks,
+            )
     runtime_context.quant_backend_by_run = dict(backend_by_run)
     runtime_context.oarfish_seq_tech_by_run = dict(oarfish_seq_tech_by_run)
-    runtime_context.species_identifier_values_by_run = _resolve_quant_species_identifier_values(metadata, tasks)
+    runtime_context.species_identifier_values_by_run = _resolve_quant_species_identifier_values(
+        quant_metadata,
+        tasks,
+    )
     runtime_context.resolved_index_cache = pre_resolve_species_indices(
         args,
         tasks,
@@ -2194,18 +2230,27 @@ def quant_main(args):
     runtime_args = clone_namespace(args, threads=threads, internal_jobs=jobs, out_dir=out_dir)
     metadata = load_metadata(runtime_args)
     tasks = build_quant_tasks(metadata)
-    backend_by_run, oarfish_seq_tech_by_run = resolve_quant_backends_for_tasks(runtime_args, metadata, tasks)
+    quant_metadata = _metadata_with_quant_input_sra_stats_for_tasks(
+        runtime_args,
+        metadata,
+        tasks,
+    )
+    backend_by_run, oarfish_seq_tech_by_run = resolve_quant_backends_for_tasks(
+        runtime_args,
+        quant_metadata,
+        tasks,
+    )
     check_quant_dependencies(backend_by_run)
     runtime_context = prepare_quant_runtime_context(
         runtime_args,
         tasks,
-        metadata=metadata,
+        metadata=quant_metadata,
         backend_by_run=backend_by_run,
         oarfish_seq_tech_by_run=oarfish_seq_tech_by_run,
     )
     if (jobs == 1) or (len(tasks) <= 1):
         for sra_id, sci_name in tasks:
-            run_quant_for_sra(runtime_args, metadata, sra_id, sci_name, runtime_context=runtime_context)
+            run_quant_for_sra(runtime_args, quant_metadata, sra_id, sci_name, runtime_context=runtime_context)
         return
 
     max_workers = min(jobs, len(tasks))
@@ -2214,7 +2259,7 @@ def quant_main(args):
         task_items=tasks,
         task_fn=lambda task: run_quant_for_sra(
             runtime_args,
-            metadata,
+            quant_metadata,
             task[0],
             task[1],
             runtime_context=runtime_context,
