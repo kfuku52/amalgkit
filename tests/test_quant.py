@@ -57,6 +57,30 @@ def write_valid_quant_outputs(output_dir, sra_id='SRR001', target_id='tx1'):
         json.dump({'p_pseudoaligned': 50.0}, handle)
 
 
+def write_safely_removed_fastq_marker(out_dir, sra_id='SRR001'):
+    run_dir = pathlib.Path(out_dir) / 'getfastq' / sra_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    marker = run_dir / (sra_id + '.fastq.gz.safely_removed')
+    marker.write_text(
+        'This fastq file was safely removed after `amalgkit quant`.',
+        encoding='utf-8',
+    )
+    return marker
+
+
+def make_single_run_quant_metadata():
+    return Metadata.from_DataFrame(pandas.DataFrame({
+        'run': ['SRR001'],
+        'scientific_name': ['Species A'],
+        'lib_layout': ['single'],
+        'total_spots': [10],
+        'spot_length': [100],
+        'total_bases': [1000],
+        'nominal_length': [200],
+        'exclusion': ['no'],
+    }))
+
+
 # ---------------------------------------------------------------------------
 # quant_output_exists (checks for abundance.tsv in output directory)
 # ---------------------------------------------------------------------------
@@ -983,6 +1007,117 @@ class TestGetfastqPrefetch:
             run_quant(args, metadata, 'SRR001', 'dummy.idx', runtime_context=runtime_context)
         assert (quant_run_dir / 'SRR001_abundance.tsv').read_text() == old_abundance
         assert (quant_run_dir / 'SRR001_run_info.json').read_text() == old_run_info
+
+    def test_run_quant_rejects_safely_removed_fastq_when_outputs_are_missing(self, tmp_path):
+        out_dir = tmp_path / 'out'
+        marker = write_safely_removed_fastq_marker(out_dir)
+        args = SimpleNamespace(
+            out_dir=str(out_dir),
+            redo=False,
+            clean_fastq=False,
+            threads=1,
+        )
+        runtime_context = QuantRuntimeContext(
+            run_files_by_run={'SRR001': {marker.name}},
+        )
+
+        with pytest.raises(
+            FileNotFoundError,
+            match='valid quant outputs are missing or invalid.*amalgkit getfastq',
+        ):
+            run_quant(
+                args,
+                make_single_run_quant_metadata(),
+                'SRR001',
+                'dummy.idx',
+                runtime_context=runtime_context,
+            )
+
+    def test_run_quant_rejects_safely_removed_fastq_when_outputs_are_invalid(self, tmp_path):
+        out_dir = tmp_path / 'out'
+        marker = write_safely_removed_fastq_marker(out_dir)
+        quant_run_dir = out_dir / 'quant' / 'SRR001'
+        quant_run_dir.mkdir(parents=True)
+        (quant_run_dir / 'SRR001_abundance.tsv').write_text('invalid\n', encoding='utf-8')
+        (quant_run_dir / 'SRR001_run_info.json').write_text('invalid\n', encoding='utf-8')
+        args = SimpleNamespace(
+            out_dir=str(out_dir),
+            redo=False,
+            clean_fastq=False,
+            threads=1,
+        )
+        runtime_context = QuantRuntimeContext(
+            run_files_by_run={'SRR001': {marker.name}},
+        )
+
+        with pytest.raises(
+            FileNotFoundError,
+            match='valid quant outputs are missing or invalid',
+        ):
+            run_quant(
+                args,
+                make_single_run_quant_metadata(),
+                'SRR001',
+                'dummy.idx',
+                runtime_context=runtime_context,
+            )
+
+    def test_run_quant_rejects_redo_with_safely_removed_fastq_and_preserves_outputs(self, tmp_path):
+        out_dir = tmp_path / 'out'
+        marker = write_safely_removed_fastq_marker(out_dir)
+        quant_run_dir = out_dir / 'quant' / 'SRR001'
+        write_valid_quant_outputs(quant_run_dir, target_id='old')
+        old_abundance = (quant_run_dir / 'SRR001_abundance.tsv').read_text(encoding='utf-8')
+        old_run_info = (quant_run_dir / 'SRR001_run_info.json').read_text(encoding='utf-8')
+        args = SimpleNamespace(
+            out_dir=str(out_dir),
+            redo=True,
+            clean_fastq=False,
+            threads=1,
+        )
+        runtime_context = QuantRuntimeContext(
+            run_files_by_run={'SRR001': {marker.name}},
+        )
+
+        with pytest.raises(FileNotFoundError, match='--redo requires re-quantification'):
+            run_quant(
+                args,
+                make_single_run_quant_metadata(),
+                'SRR001',
+                'dummy.idx',
+                runtime_context=runtime_context,
+            )
+
+        assert (quant_run_dir / 'SRR001_abundance.tsv').read_text(encoding='utf-8') == old_abundance
+        assert (quant_run_dir / 'SRR001_run_info.json').read_text(encoding='utf-8') == old_run_info
+
+    def test_run_quant_reuses_valid_outputs_with_safely_removed_fastq(self, tmp_path, monkeypatch):
+        out_dir = tmp_path / 'out'
+        marker = write_safely_removed_fastq_marker(out_dir)
+        write_valid_quant_outputs(out_dir / 'quant' / 'SRR001')
+        args = SimpleNamespace(
+            out_dir=str(out_dir),
+            redo=False,
+            clean_fastq=False,
+            threads=1,
+        )
+        runtime_context = QuantRuntimeContext(
+            run_files_by_run={'SRR001': {marker.name}},
+        )
+        monkeypatch.setattr(
+            'amalgkit.quant.get_newest_intermediate_file_extension',
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError('FASTQ marker should not be inspected when valid output is reused')
+            ),
+        )
+
+        run_quant(
+            args,
+            make_single_run_quant_metadata(),
+            'SRR001',
+            'dummy.idx',
+            runtime_context=runtime_context,
+        )
 
     def test_run_quant_redo_preserves_only_unknown_regular_sidecars(self, tmp_path, monkeypatch):
         out_dir = tmp_path / 'out'

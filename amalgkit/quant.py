@@ -1367,9 +1367,19 @@ def _run_quant_unlocked(
     sra_stat['getfastq_sra_dir'] = output_dir_getfastq
     ext = get_newest_intermediate_file_extension(sra_stat, work_dir=output_dir_getfastq, files=run_files)
     if ext == '.safely_removed':
-        print('These files have been safe-deleted. If you wish to re-obtain the .fastq file(s), run: getfastq --id ', sra_id, ' -w ', args.out_dir)
-        print('Skipping.')
-        return
+        if is_quant_output_available:
+            reason = '--redo requires re-quantification'
+        else:
+            reason = 'valid quant outputs are missing or invalid'
+        raise FileNotFoundError(
+            'Cannot run quant for {} because its FASTQ inputs were safely removed and {}. '
+            'Re-run `amalgkit getfastq --id {} -w {}` before quant.'.format(
+                sra_id,
+                reason,
+                sra_id,
+                args.out_dir,
+            )
+        )
     if ext == 'no_extension_found':
         sys.stderr.write('getfastq output not found in: {}, layout = {}\n'.format(sra_stat['getfastq_sra_dir'], sra_stat['layout']))
         txt = 'Exiting. If you wish to obtain the .fastq file(s), run: getfastq --id {}\n'

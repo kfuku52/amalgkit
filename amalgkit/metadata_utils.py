@@ -1027,7 +1027,7 @@ def get_newest_intermediate_file_extension(sra_stat, work_dir, files=None):
             for f in set(safe_delete_names)
         ])
         if len(safe_delete_files):
-            txt = 'getfastq safely_removed flag was detected. `amalgkit quant` has been completed in this sample: {}\n'
+            txt = 'getfastq safely_removed flag was detected. FASTQ input was removed after a previous quant run: {}\n'
             sys.stdout.write(txt.format(work_dir))
             for safe_delete_file in safe_delete_files:
                 sys.stdout.write('{}\n'.format(safe_delete_file))
