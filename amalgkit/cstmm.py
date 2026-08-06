@@ -4,6 +4,7 @@ import sys
 from amalgkit.cstmm_python import run_cstmm_python_multi_species, run_cstmm_python_single_species
 from amalgkit.filter_utils import staged_output_dir
 from amalgkit.orthology_utils import (
+    DEFAULT_SINGLE_COPY_THRESHOLD,
     check_ortholog_parameter_compatibility,
     generate_multisp_busco_table,
     orthogroup2genecount,
@@ -117,5 +118,6 @@ def cstmm_main(args):
                 dir_cstmm=stage_dir,
                 file_genecount=file_genecount,
                 file_orthogroup_table=file_orthogroup_table,
+                single_copy_threshold=getattr(args, 'single_copy_threshold', DEFAULT_SINGLE_COPY_THRESHOLD),
             )
     cleanup_tmp_amalgkit_files(work_dir='.')

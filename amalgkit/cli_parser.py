@@ -1,4 +1,5 @@
 import argparse
+import math
 
 from amalgkit.cli_utils import (
     build_help_command_handler,
@@ -14,6 +15,16 @@ def positive_int(value):
     if int_value <= 0:
         raise argparse.ArgumentTypeError('must be > 0')
     return int_value
+
+
+def single_copy_threshold(value):
+    try:
+        threshold = float(value)
+    except (TypeError, ValueError) as exc:
+        raise argparse.ArgumentTypeError('must be > 0 and <= 100') from exc
+    if (not math.isfinite(threshold)) or (threshold <= 0.0) or (threshold > 100.0):
+        raise argparse.ArgumentTypeError('must be > 0 and <= 100')
+    return threshold
 
 
 def build_parser(command_handlers, command_names, version, prog=None):
@@ -384,6 +395,9 @@ def build_parser(command_handlers, command_names, version, prog=None):
                           '"inferred" = out_dir/merge')
     pcs.add_argument('--tmm_backend', metavar='python', default='python', choices=['python'], type=str, required=False, action='store',
                      help='default=%(default)s: Backend used for cstmm.')
+    pcs.add_argument('--single_copy_threshold', metavar='PERCENT', default=50.0, type=single_copy_threshold,
+                     required=False, action='store',
+                     help='default=%(default)s: Minimum percentage of species in which an orthogroup must be single-copy.')
     pcs.set_defaults(handler=command_handlers['cstmm'])
 
     pws_help = 'Within-species outlier filtering. Outputs metadata.tsv + excluded.tsv + species PDFs (no plots/). See `amalgkit wsfilter -h`'
@@ -430,6 +444,10 @@ def build_parser(command_handlers, command_names, version, prog=None):
                       help='default=%(default)s: Margin threshold for robust-margin outlier detection.')
     pcsf.add_argument('--robust_z_threshold', metavar='FLOAT', default=-2.5, type=float, required=False, action='store',
                       help='default=%(default)s: Robust z-score threshold for robust-margin outlier detection.')
+    pcsf.add_argument('--single_copy_threshold', metavar='PERCENT', default=None, type=single_copy_threshold,
+                      required=False, action='store',
+                      help='default=inferred: Minimum percentage of species in which an orthogroup must be single-copy. '
+                           'Inherits the value recorded by cstmm, or uses 50 when no cstmm value is available.')
     pcsf.set_defaults(handler=command_handlers['csfilter'])
 
     pfi_help = 'Final table export from filtered metadata. See `amalgkit finalize -h`'

@@ -2,6 +2,7 @@ import os
 from types import SimpleNamespace
 
 import pandas
+import pytest
 
 from amalgkit.command_context import CrossSpeciesFilterContext, PerSpeciesTableContext
 from amalgkit.util import Metadata
@@ -47,6 +48,7 @@ def _base_args(tmp_path):
         missing_strategy='em_pca',
         margin_threshold=0.0,
         robust_z_threshold=-2.5,
+        single_copy_threshold=None,
     )
 
 
@@ -157,6 +159,7 @@ def test_csfilter_outputs_metadata_excluded_and_root_pdfs(tmp_path, monkeypatch)
         captured['outlier_method'] = cross_species_args.outlier_method
         captured['batch_effect_alg'] = cross_species_args.batch_effect_alg
         captured['plot_mode'] = cross_species_args.plot_mode
+        captured['single_copy_threshold'] = cross_species_args.single_copy_threshold
         captured['cross_species_context'] = context
         cross_species_dir = os.path.join(cross_species_args.out_dir, 'cross_species')
         os.makedirs(cross_species_dir, exist_ok=True)
@@ -214,11 +217,55 @@ def test_csfilter_outputs_metadata_excluded_and_root_pdfs(tmp_path, monkeypatch)
     assert captured['outlier_method'] == 'robust_margin'
     assert captured['batch_effect_alg'] == 'no'
     assert captured['plot_mode'] == 'single'
+    assert captured['single_copy_threshold'] == 50.0
     assert isinstance(captured['per_species_context'], PerSpeciesTableContext)
     assert captured['per_species_context'].metadata is metadata
     assert captured['per_species_context'].input_dir == str(tmp_path / 'input')
     assert isinstance(captured['cross_species_context'], CrossSpeciesFilterContext)
     assert captured['cross_species_context'].metadata is metadata
+
+
+def test_csfilter_inherits_single_copy_threshold_from_metadata():
+    args = SimpleNamespace(single_copy_threshold=None)
+    metadata_df = pandas.DataFrame({'single_copy_threshold': [75.0, 75.0]})
+
+    assert csfilter_module._resolve_single_copy_threshold(args, metadata_df) == 75.0
+
+
+def test_csfilter_falls_back_to_default_single_copy_threshold():
+    args = SimpleNamespace(single_copy_threshold=None)
+
+    assert csfilter_module._resolve_single_copy_threshold(args, pandas.DataFrame()) == 50.0
+
+
+def test_csfilter_accepts_matching_explicit_single_copy_threshold():
+    args = SimpleNamespace(single_copy_threshold=75.0)
+    metadata_df = pandas.DataFrame({'single_copy_threshold': [75.0, 75.0]})
+
+    assert csfilter_module._resolve_single_copy_threshold(args, metadata_df) == 75.0
+
+
+def test_csfilter_rejects_single_copy_threshold_mismatch():
+    args = SimpleNamespace(single_copy_threshold=100.0)
+    metadata_df = pandas.DataFrame({'single_copy_threshold': [50.0, 50.0]})
+
+    with pytest.raises(ValueError, match='does not match the value recorded by cstmm'):
+        csfilter_module._resolve_single_copy_threshold(args, metadata_df)
+
+
+@pytest.mark.parametrize(
+    'values',
+    [
+        [50.0, ''],
+        [50.0, 75.0],
+    ],
+)
+def test_csfilter_rejects_invalid_recorded_single_copy_threshold(values):
+    args = SimpleNamespace(single_copy_threshold=None)
+    metadata_df = pandas.DataFrame({'single_copy_threshold': values})
+
+    with pytest.raises(ValueError, match='Metadata contains'):
+        csfilter_module._resolve_single_copy_threshold(args, metadata_df)
 
 
 def test_finalize_outputs_tables_and_merged_metadata(tmp_path, monkeypatch):

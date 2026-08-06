@@ -8,12 +8,61 @@ from amalgkit.cross_species_filter import (
     _calculate_correlation_within_group,
     _load_expression_tables,
     _resolve_matrix_for_embedding,
+    _select_single_copy_orthogroups,
     generate_input_symlinks,
     get_sample_group_string,
     get_species_from_dir,
     run_cross_species_filter,
 )
 from amalgkit.util import Metadata
+
+
+def test_single_copy_selection_uses_shared_percentage_and_retains_missing_orthologs(tmp_path):
+    genecount_path = tmp_path / 'genecount.tsv'
+    orthogroup_path = tmp_path / 'orthogroup.tsv'
+    species = ['Species_A', 'Species_B', 'Species_C', 'Species_D']
+    pandas.DataFrame(
+        {
+            'orthogroup_id': ['OG50', 'OG75', 'OG100'],
+            'Species_A': [1, 1, 1],
+            'Species_B': [1, 1, 1],
+            'Species_C': [2, 1, 1],
+            'Species_D': [0, 2, 1],
+        }
+    ).to_csv(genecount_path, sep='\t', index=False)
+    pandas.DataFrame(
+        {
+            'busco_id': ['OG50', 'OG75', 'OG100'],
+            'Species_A': ['A50', 'A75', 'A100'],
+            'Species_B': ['B50', 'B75', 'B100'],
+            'Species_C': ['C50a,C50b', 'C75', 'C100'],
+            'Species_D': ['', 'D75a,D75b', 'D100'],
+        }
+    ).to_csv(orthogroup_path, sep='\t', index=False)
+
+    at_50 = _select_single_copy_orthogroups(
+        file_orthogroup_table=orthogroup_path,
+        file_genecount=genecount_path,
+        spp_filled=species,
+        single_copy_threshold=50.0,
+    )
+    at_75 = _select_single_copy_orthogroups(
+        file_orthogroup_table=orthogroup_path,
+        file_genecount=genecount_path,
+        spp_filled=species,
+        single_copy_threshold=75.0,
+    )
+    at_100 = _select_single_copy_orthogroups(
+        file_orthogroup_table=orthogroup_path,
+        file_genecount=genecount_path,
+        spp_filled=species,
+        single_copy_threshold=100.0,
+    )
+
+    assert at_50.index.tolist() == ['OG50', 'OG75', 'OG100']
+    assert pandas.isna(at_50.loc['OG50', 'Species_D'])
+    assert at_75.index.tolist() == ['OG75', 'OG100']
+    assert at_100.index.tolist() == ['OG100']
 
 
 def test_load_expression_tables_reports_all_missing_species_tables(tmp_path):
@@ -605,6 +654,8 @@ class TestCrossSpeciesFilterMain:
 
         cross_species_dir = out_dir / 'cross_species'
         assert (cross_species_dir / 'metadata.tsv').is_file()
+        metadata_df = pandas.read_csv(cross_species_dir / 'metadata.tsv', sep='\t')
+        assert set(metadata_df['single_copy_threshold']) == {50.0}
         assert (cross_species_dir / 'cross_species_sample_number_heatmap.pdf').is_file()
         assert (cross_species_dir / 'cross_species_group_cor_scatter.pdf').is_file()
         assert (cross_species_dir / 'cross_species_run_pca_pc12_pre_correction.pdf').is_file()

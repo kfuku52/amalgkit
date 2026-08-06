@@ -555,6 +555,7 @@ class TestCstmmMain:
             orthogroup_table=str(orthogroup),
             redo=False,
             tmm_backend='python',
+            single_copy_threshold=75.0,
         )
         cleaned = {}
         monkeypatch.setattr('amalgkit.cstmm.cleanup_tmp_amalgkit_files', lambda work_dir: cleaned.setdefault('work_dir', work_dir))
@@ -625,6 +626,7 @@ class TestCstmmMain:
         metadata_df = pandas.read_csv(metadata_path, sep='\t')
         assert 'tmm_library_size' in metadata_df.columns
         assert 'tmm_normalization_factor' in metadata_df.columns
+        assert set(metadata_df['single_copy_threshold']) == {75.0}
         retained = metadata_df.loc[metadata_df['scientific_name'] != 'Species B', 'exclusion']
         assert set(retained) == {'no'}
         excluded = metadata_df.loc[

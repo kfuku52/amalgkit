@@ -121,6 +121,10 @@ amalgkit csfilter --out_dir ./ --metadata ./wsfilter/metadata.tsv --dir_busco ./
 amalgkit finalize --out_dir ./ --metadata ./csfilter/metadata.tsv --batch_effect_alg no
 ```
 
+`cstmm` and `csfilter` select single-copy orthogroups with `--single_copy_threshold PERCENT` (default: 50).
+`cstmm` records the selected percentage in `metadata.tsv`; when the option is omitted, `csfilter` inherits that value
+and rejects a conflicting explicit value. Metadata created by older versions has no recorded value and falls back to 50.
+
 ## Split Filtering Workflow
 `wsfilter` and `csfilter` are decoupled filters that output `metadata.tsv`, `excluded.tsv`, exclusion summary PDF, and species PDFs (without a `plots/` directory).  
 Run one or both in any order, then export tables once with `finalize`.

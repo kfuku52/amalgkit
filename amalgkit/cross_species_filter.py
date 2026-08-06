@@ -13,9 +13,12 @@ from amalgkit.filter_utils import save_exclusion_plot_pdf, staged_output_dir
 from amalgkit.imputation import impute_expression
 from amalgkit.metadata_utils import load_metadata
 from amalgkit.orthology_utils import (
+    DEFAULT_SINGLE_COPY_THRESHOLD,
     check_ortholog_parameter_compatibility,
     generate_multisp_busco_table,
+    get_single_copy_orthogroup_mask,
     orthogroup2genecount,
+    validate_single_copy_threshold,
 )
 from amalgkit.outlier_utils import flag_margin_outliers
 from amalgkit.runtime_utils import cleanup_tmp_amalgkit_files
@@ -220,16 +223,23 @@ def _load_expression_tables(dir_cross_species_input_table, spp_filled, batch_eff
     return out
 
 
-def _select_single_copy_orthogroups(file_orthogroup_table, file_genecount, spp_filled):
+def _select_single_copy_orthogroups(
+    file_orthogroup_table,
+    file_genecount,
+    spp_filled,
+    single_copy_threshold=DEFAULT_SINGLE_COPY_THRESHOLD,
+):
     df_gc = pandas.read_csv(file_genecount, sep='\t', low_memory=False).set_index('orthogroup_id')
     df_og = pandas.read_csv(file_orthogroup_table, sep='\t', low_memory=False).set_index('busco_id')
     present_species = [sp for sp in spp_filled if (sp in df_gc.columns) and (sp in df_og.columns)]
     if len(present_species) == 0:
         raise ValueError('No species columns overlapped between orthogroup inputs and per-species tables.')
-    is_singlecopy = df_gc.loc[:, present_species].eq(1).all(axis=1)
+    is_singlecopy = get_single_copy_orthogroup_mask(
+        df_genecount=df_gc,
+        species=present_species,
+        single_copy_threshold=single_copy_threshold,
+    )
     df_singleog = df_og.loc[is_singlecopy, present_species].copy()
-    for sp in present_species:
-        df_singleog = df_singleog.loc[df_singleog.loc[:, sp].fillna('').astype(str).str.strip() != '', :]
     return df_singleog
 
 
@@ -1207,6 +1217,10 @@ def _save_overview_pdf(matrix_df, df_metadata, out_pdf_path):
 
 
 def run_cross_species_filter(args, context=None):
+    single_copy_threshold = getattr(args, 'single_copy_threshold', None)
+    if single_copy_threshold is None:
+        single_copy_threshold = DEFAULT_SINGLE_COPY_THRESHOLD
+    single_copy_threshold = validate_single_copy_threshold(single_copy_threshold)
     orthology_params = check_ortholog_parameter_compatibility(args)
     if orthology_params is None:
         orthogroup_table = getattr(args, 'orthogroup_table', None)
@@ -1255,7 +1269,12 @@ def run_cross_species_filter(args, context=None):
         spp_filled = sorted(set(unaveraged_tcs['uncorrected']).intersection(unaveraged_tcs['corrected']))
         if len(spp_filled) == 0:
             raise FileNotFoundError('No matching cross-species tc tables were found for batch_effect_alg={}'.format(batch_effect_alg))
-        df_singleog = _select_single_copy_orthogroups(file_orthogroup_table, file_genecount, spp_filled)
+        df_singleog = _select_single_copy_orthogroups(
+            file_orthogroup_table,
+            file_genecount,
+            spp_filled,
+            single_copy_threshold=single_copy_threshold,
+        )
         orthologs = _extract_ortholog_unaveraged_expression_table(df_singleog, unaveraged_tcs)
         df_metadata = _calculate_correlation_within_group(df_metadata, orthologs['uncorrected'], 'uncorrected')
         df_metadata = _calculate_correlation_within_group(df_metadata, orthologs['corrected'], 'corrected')
@@ -1275,6 +1294,7 @@ def run_cross_species_filter(args, context=None):
             margin_threshold=float(getattr(args, 'margin_threshold', 0.0)),
             robust_z_threshold=float(getattr(args, 'robust_z_threshold', -2.5)),
         )
+        df_metadata['single_copy_threshold'] = single_copy_threshold
         averaged_inputs = _build_averaged_cross_species_inputs(df_metadata, orthologs)
         df_metadata.to_csv(os.path.join(stage_dir, 'metadata.tsv'), sep='\t', index=False)
         _save_sample_number_heatmap_pdf(df_metadata, os.path.join(stage_dir, 'cross_species_sample_number_heatmap.pdf'))

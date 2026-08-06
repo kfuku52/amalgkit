@@ -8,6 +8,38 @@ import pandas
 from amalgkit.parallel_utils import run_tasks_with_optional_threads as default_run_tasks_with_optional_threads
 
 
+DEFAULT_SINGLE_COPY_THRESHOLD = 50.0
+
+
+def validate_single_copy_threshold(single_copy_threshold):
+    try:
+        threshold = float(single_copy_threshold)
+    except (TypeError, ValueError) as exc:
+        raise ValueError('single_copy_threshold must be a number greater than 0 and at most 100.') from exc
+    if (not numpy.isfinite(threshold)) or (threshold <= 0.0) or (threshold > 100.0):
+        raise ValueError('single_copy_threshold must be a number greater than 0 and at most 100.')
+    return threshold
+
+
+def get_single_copy_orthogroup_mask(
+    df_genecount,
+    species,
+    single_copy_threshold=DEFAULT_SINGLE_COPY_THRESHOLD,
+):
+    species = list(species)
+    if len(species) == 0:
+        raise ValueError('At least one species is required to select single-copy orthogroups.')
+    missing_species = [sp for sp in species if sp not in df_genecount.columns]
+    if len(missing_species) > 0:
+        raise ValueError(
+            'Species column(s) not found in gene-count table: {}'.format(', '.join(missing_species))
+        )
+    threshold = validate_single_copy_threshold(single_copy_threshold)
+    species_counts = df_genecount.loc[:, species].apply(pandas.to_numeric, errors='coerce')
+    percent_single_copy = species_counts.eq(1).sum(axis=1).div(float(len(species))).mul(100.0)
+    return percent_single_copy.ge(threshold)
+
+
 def orthogroup2genecount(file_orthogroup, file_genecount, spp):
     df = pandas.read_csv(file_orthogroup, sep='\t', header=0, low_memory=False)
     if 'busco_id' not in df.columns:

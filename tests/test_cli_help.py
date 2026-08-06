@@ -43,6 +43,7 @@ def test_help_topic_csfilter_exits_zero():
     merged = (out.stdout + '\n' + out.stderr).lower()
     assert '--orthogroup_table' in merged
     assert '--robust_z_threshold' in merged
+    assert '--single_copy_threshold' in merged
 
 
 def test_help_topic_finalize_exits_zero():
@@ -66,6 +67,15 @@ def test_help_topic_cstmm_includes_redo():
     merged = (out.stdout + '\n' + out.stderr).lower()
     assert '--redo' in merged
     assert '--tmm_backend' in merged
+    assert '--single_copy_threshold' in merged
+
+
+def test_single_copy_threshold_rejects_values_outside_percentage_range():
+    for command in ['cstmm', 'csfilter']:
+        for value in ['0', '101', 'nan']:
+            out = run_cli(command, '--single_copy_threshold', value)
+            assert out.returncode != 0
+            assert 'must be > 0 and <= 100' in out.stderr
 
 
 def test_help_topic_quant_mentions_backend_specific_index_building():
