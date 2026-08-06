@@ -10,6 +10,7 @@ from amalgkit.cross_species_filter import (
     _resolve_matrix_for_embedding,
     _select_single_copy_orthogroups,
     generate_input_symlinks,
+    get_sample_groups,
     get_sample_group_string,
     get_species_from_dir,
     run_cross_species_filter,
@@ -116,6 +117,35 @@ def test_cross_species_correlations_use_sample_group_reference_across_species():
     ].iloc[0]
     assert numpy.isclose(mislabeled['within_group_cor_corrected'], -1.0)
     assert numpy.isclose(mislabeled['max_nongroup_cor_corrected'], 1.0)
+
+
+def test_cross_species_within_group_reference_leaves_evaluated_sample_out():
+    metadata = pandas.DataFrame(
+        {
+            'species_tag': ['A', 'B', 'C'],
+            'run': ['leaf', 'leaf', 'leaf'],
+            'sample_group': ['leaf', 'leaf', 'leaf'],
+            'exclusion': ['no', 'no', 'no'],
+        }
+    )
+    target = numpy.array([1.0, 2.0, 3.0, 4.0, 5.0])
+    species_b = numpy.array([1.0, 2.0, 3.0, 4.0, 5.0])
+    species_c = numpy.array([5.0, 3.0, 4.0, 2.0, 1.0])
+    orthologs = pandas.DataFrame(
+        {'A_leaf': target, 'B_leaf': species_b, 'C_leaf': species_c},
+        index=['G1', 'G2', 'G3', 'G4', 'G5'],
+    )
+
+    result = _calculate_correlation_within_group(
+        df_metadata=metadata,
+        ortholog_matrix=orthologs,
+        correction_label='corrected',
+    )
+
+    observed = result.loc[result['species_tag'].eq('A'), 'within_group_cor_corrected'].iloc[0]
+    expected = pandas.Series(target).corr(pandas.Series((species_b + species_c) / 2.0))
+    assert numpy.isclose(observed, expected)
+    assert not numpy.isclose(observed, 1.0)
 
 
 def test_embedding_missing_strategies_perform_iterative_imputation():
@@ -374,6 +404,11 @@ class TestGetSampleGroupString:
     def test_cli_sample_group_supports_pipe_and_hyphen(self):
         args = SimpleNamespace(sample_group='non-treated | treated')
         assert get_sample_group_string(args) == 'non-treated|treated'
+
+    def test_cli_sample_group_supports_escaped_comma_and_pipe(self):
+        args = SimpleNamespace(sample_group=r'leaf\, young,root\|tip')
+        assert get_sample_groups(args) == ['leaf, young', 'root|tip']
+        assert get_sample_group_string(args) == r'leaf\, young|root\|tip'
 
     def test_reads_sample_group_from_metadata(self, monkeypatch):
         args = SimpleNamespace(sample_group=None)
@@ -642,15 +677,20 @@ class TestCrossSpeciesFilterMain:
 
         assert (existing_dir / 'old.txt').read_text() == 'old'
 
-    def test_run_cross_species_filter_writes_restored_plot_outputs(self, tmp_path):
+    def test_run_cross_species_filter_writes_restored_plot_outputs(self, tmp_path, monkeypatch):
         out_dir = tmp_path / 'out'
         orthogroup_path = self._write_cross_species_fixture(out_dir)
         args = self._base_args(out_dir)
         args.sample_group = 'leaf,root'
         args.orthogroup_table = str(orthogroup_path)
         args.missing_strategy = 'row_mean'
+        cwd_sentinel = tmp_path / 'tmp.amalgkit.keep'
+        cwd_sentinel.write_text('keep')
+        monkeypatch.chdir(tmp_path)
 
         run_cross_species_filter(args)
+
+        assert cwd_sentinel.read_text() == 'keep'
 
         cross_species_dir = out_dir / 'cross_species'
         assert (cross_species_dir / 'metadata.tsv').is_file()

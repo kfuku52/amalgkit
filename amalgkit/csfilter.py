@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pandas
 
 from amalgkit.command_context import CrossSpeciesFilterContext, PerSpeciesTableContext
-from amalgkit.cross_species_filter import run_cross_species_filter
+from amalgkit.cross_species_filter import run_cross_species_filter, serialize_sample_groups
 from amalgkit.filter_utils import (
     infer_latest_filter_metadata,
     merge_metadata_by_run,
@@ -55,7 +55,7 @@ def _resolve_sample_group_arg(args, metadata_df):
     values = values.loc[values != ''].drop_duplicates().tolist()
     if len(values) == 0:
         raise ValueError('No sample_group values were found in metadata.')
-    return '|'.join(values)
+    return serialize_sample_groups(values)
 
 
 def _build_prepare_per_species_args(args, input_dir, tmp_out_dir):
@@ -130,9 +130,8 @@ def _resolve_single_copy_threshold(args, metadata_df):
 
 
 def _write_excluded_table(df_metadata, out_path):
-    reason = 'low_cross_species_group_correlation'
-    exclusion_values = df_metadata['exclusion'].fillna('').astype(str).str.strip()
-    excluded = df_metadata.loc[exclusion_values == reason, :].copy()
+    exclusion_values = df_metadata['exclusion'].fillna('').astype(str).str.strip().str.lower()
+    excluded = df_metadata.loc[~exclusion_values.eq('no'), :].copy()
     preferred_cols = [
         'run',
         'scientific_name',

@@ -1,5 +1,4 @@
 import os
-import re
 
 import matplotlib
 matplotlib.use('Agg')
@@ -21,7 +20,6 @@ from amalgkit.orthology_utils import (
     validate_single_copy_threshold,
 )
 from amalgkit.outlier_utils import flag_margin_outliers
-from amalgkit.runtime_utils import cleanup_tmp_amalgkit_files
 
 
 def _normalize_sample_groups(values):
@@ -39,8 +37,33 @@ def _normalize_sample_groups(values):
 
 
 def _parse_sample_group_argument(sample_group_arg):
-    tokens = re.split(r'[,\|]+', str(sample_group_arg))
+    tokens = []
+    token = []
+    value = str(sample_group_arg)
+    index = 0
+    while index < len(value):
+        char = value[index]
+        if char == '\\' and index + 1 < len(value) and value[index + 1] in {'\\', ',', '|'}:
+            token.append(value[index + 1])
+            index += 2
+            continue
+        if char in {',', '|'}:
+            tokens.append(''.join(token))
+            token = []
+        else:
+            token.append(char)
+        index += 1
+    tokens.append(''.join(token))
     return _normalize_sample_groups(tokens)
+
+
+def serialize_sample_groups(values):
+    groups = _normalize_sample_groups(values)
+    escaped = [
+        value.replace('\\', '\\\\').replace(',', '\\,').replace('|', '\\|')
+        for value in groups
+    ]
+    return '|'.join(escaped)
 
 
 def _iter_visible_subdirs(path_dir):
@@ -63,7 +86,7 @@ def _collect_tsv_files(path_tables_dir):
     return sorted(files)
 
 
-def get_sample_group_string(args, context=None):
+def get_sample_groups(args, context=None):
     metadata = None
     if isinstance(context, CrossSpeciesFilterContext):
         metadata = context.metadata
@@ -81,7 +104,11 @@ def get_sample_group_string(args, context=None):
     if len(sample_group) == 0:
         raise ValueError('No sample_group was selected. Provide --sample_group or fill metadata sample_group column.')
     print('sample_groups to be included: {}'.format(', '.join(sample_group)))
-    return '|'.join(sample_group)
+    return sample_group
+
+
+def get_sample_group_string(args, context=None):
+    return serialize_sample_groups(get_sample_groups(args=args, context=context))
 
 
 def get_species_from_dir(per_species_dir):
@@ -270,6 +297,8 @@ def _safe_corr(left_values, right_values, method):
     valid = left.notna() & right.notna()
     if int(valid.sum()) <= 1:
         return numpy.nan
+    if left.loc[valid].nunique() <= 1 or right.loc[valid].nunique() <= 1:
+        return numpy.nan
     try:
         return float(left.loc[valid].corr(right.loc[valid], method=method))
     except ValueError:
@@ -291,6 +320,7 @@ def _calculate_correlation_within_group(df_metadata, ortholog_matrix, correction
         return out
     group_order = list(dict.fromkeys(kept['sample_group'].astype(str).tolist()))
     ortholog_med = pandas.DataFrame(index=ortholog_matrix.index, columns=group_order, dtype=float)
+    species_profiles_by_group = {}
     species_order = list(dict.fromkeys(kept['species_tag'].astype(str).tolist()))
     for sample_group in group_order:
         species_profiles = pandas.DataFrame(index=ortholog_matrix.index, dtype=float)
@@ -314,6 +344,7 @@ def _calculate_correlation_within_group(df_metadata, ortholog_matrix, correction
             species_profiles.loc[:, species_tag] = tc_species_group.mean(axis=1, skipna=True)
         if species_profiles.shape[1] == 0:
             continue
+        species_profiles_by_group[sample_group] = species_profiles
         ortholog_med.loc[:, sample_group] = species_profiles.median(axis=1, skipna=True)
     for row_idx, row in kept.iterrows():
         sample_id = str(row['sample_id'])
@@ -321,7 +352,35 @@ def _calculate_correlation_within_group(df_metadata, ortholog_matrix, correction
         if (sample_id not in ortholog_matrix.columns) or (sample_group not in ortholog_med.columns):
             continue
         sample_values = ortholog_matrix.loc[:, sample_id]
-        within_cor = _safe_corr(sample_values, ortholog_med.loc[:, sample_group], method='pearson')
+        within_profiles = species_profiles_by_group.get(sample_group)
+        if within_profiles is None:
+            within_cor = numpy.nan
+        else:
+            within_profiles = within_profiles.copy()
+            species_tag = str(row['species_tag'])
+            other_sample_ids = kept.loc[
+                kept['species_tag'].astype(str).eq(species_tag)
+                & kept['sample_group'].astype(str).eq(sample_group)
+                & ~kept['sample_id'].astype(str).eq(sample_id),
+                'sample_id',
+            ].astype(str).tolist()
+            other_sample_ids = [
+                other_sample_id
+                for other_sample_id in other_sample_ids
+                if other_sample_id in ortholog_matrix.columns
+            ]
+            if len(other_sample_ids) == 0:
+                within_profiles = within_profiles.drop(columns=[species_tag], errors='ignore')
+            else:
+                within_profiles.loc[:, species_tag] = ortholog_matrix.loc[:, other_sample_ids].apply(
+                    pandas.to_numeric,
+                    errors='coerce',
+                ).mean(axis=1, skipna=True)
+            if within_profiles.shape[1] == 0:
+                within_cor = numpy.nan
+            else:
+                within_reference = within_profiles.median(axis=1, skipna=True)
+                within_cor = _safe_corr(sample_values, within_reference, method='pearson')
         other_groups = [group for group in group_order if group != sample_group]
         nongroup_values = [
             _safe_corr(sample_values, ortholog_med.loc[:, other_group], method='pearson')
@@ -1244,7 +1303,7 @@ def run_cross_species_filter(args, context=None):
     spp = get_species_from_dir(per_species_dir)
     if len(spp) == 0:
         raise ValueError('No per-species directories were found in: {}'.format(per_species_dir))
-    selected_sample_groups = get_sample_group_string(args, context=context).split('|')
+    selected_sample_groups = get_sample_groups(args, context=context)
     with staged_output_dir(
         cross_species_dir,
         redo=bool(getattr(args, 'redo', False)),
@@ -1344,4 +1403,3 @@ def run_cross_species_filter(args, context=None):
             y_label='Sample count',
             font_size=8,
         )
-    cleanup_tmp_amalgkit_files(work_dir='.')

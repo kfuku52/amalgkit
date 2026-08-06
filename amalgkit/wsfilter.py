@@ -40,9 +40,8 @@ def _build_per_species_args(args, input_dir, tmp_out_dir):
 
 
 def _write_excluded_table(df_metadata, out_path):
-    reason = 'low_within_sample_group_correlation'
-    exclusion_values = df_metadata['exclusion'].fillna('').astype(str).str.strip()
-    excluded = df_metadata.loc[exclusion_values == reason, :].copy()
+    exclusion_values = df_metadata['exclusion'].fillna('').astype(str).str.strip().str.lower()
+    excluded = df_metadata.loc[~exclusion_values.eq('no'), :].copy()
     preferred_cols = [
         'run',
         'scientific_name',

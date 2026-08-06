@@ -9,7 +9,6 @@ from amalgkit.orthology_utils import (
     generate_multisp_busco_table,
     orthogroup2genecount,
 )
-from amalgkit.runtime_utils import cleanup_tmp_amalgkit_files
 
 def resolve_species_count_file(sciname_path):
     sciname_count_files = []
@@ -120,4 +119,3 @@ def cstmm_main(args):
                 file_orthogroup_table=file_orthogroup_table,
                 single_copy_threshold=getattr(args, 'single_copy_threshold', DEFAULT_SINGLE_COPY_THRESHOLD),
             )
-    cleanup_tmp_amalgkit_files(work_dir='.')

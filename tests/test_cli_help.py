@@ -44,6 +44,7 @@ def test_help_topic_csfilter_exits_zero():
     assert '--orthogroup_table' in merged
     assert '--robust_z_threshold' in merged
     assert '--single_copy_threshold' in merged
+    assert 'escape a literal comma or pipe' in merged
 
 
 def test_help_topic_finalize_exits_zero():

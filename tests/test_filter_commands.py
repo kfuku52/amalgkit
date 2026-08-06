@@ -152,12 +152,17 @@ def test_wsfilter_rerun_uses_recorded_metadata_and_preserves_cross_species_exclu
     wsfilter_module.wsfilter_main(args)
 
     output_metadata = pandas.read_csv(tmp_path / 'out' / 'wsfilter' / 'metadata.tsv', sep='\t')
+    output_excluded = pandas.read_csv(tmp_path / 'out' / 'wsfilter' / 'excluded.tsv', sep='\t')
     assert captured['metadata'] == os.path.realpath(str(recorded_metadata))
     assert isinstance(captured['context'], PerSpeciesTableContext)
     assert captured['context'].metadata is captured['resolved_metadata']
     assert captured['context'].input_dir == str(tmp_path / 'input')
     assert output_metadata.set_index('run').loc['R1', 'exclusion'] == 'low_within_sample_group_correlation'
     assert output_metadata.set_index('run').loc['R2', 'exclusion'] == 'low_cross_species_group_correlation'
+    assert output_excluded.set_index('run')['exclusion'].to_dict() == {
+        'R1': 'low_within_sample_group_correlation',
+        'R2': 'low_cross_species_group_correlation',
+    }
     state = json.loads((tmp_path / 'out' / 'filter_metadata_state.json').read_text(encoding='utf-8'))
     assert state['command'] == 'wsfilter'
 
@@ -246,6 +251,26 @@ def test_csfilter_outputs_metadata_excluded_and_root_pdfs(tmp_path, monkeypatch)
     state = json.loads((tmp_path / 'out' / 'filter_metadata_state.json').read_text(encoding='utf-8'))
     assert state['command'] == 'csfilter'
     assert state['metadata_path'] == 'csfilter/metadata.tsv'
+
+
+def test_filter_excluded_tables_include_prior_stage_reasons(tmp_path):
+    metadata = pandas.DataFrame(
+        {
+            'run': ['R1', 'R2', 'R3'],
+            'scientific_name': ['Species A'] * 3,
+            'sample_group': ['leaf', 'leaf', 'root'],
+            'exclusion': [
+                'low_within_sample_group_correlation',
+                'low_cross_species_group_correlation',
+                'no',
+            ],
+        }
+    )
+    for command_module in [wsfilter_module, csfilter_module]:
+        out_path = tmp_path / '{}_excluded.tsv'.format(command_module.__name__.rsplit('.', 1)[-1])
+        command_module._write_excluded_table(metadata, out_path)
+        observed = pandas.read_csv(out_path, sep='\t')
+        assert observed['run'].tolist() == ['R1', 'R2']
 
 
 def test_wsfilter_failure_does_not_update_filter_metadata_state(tmp_path, monkeypatch):

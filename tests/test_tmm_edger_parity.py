@@ -2,6 +2,7 @@ import numpy
 import pandas
 
 from amalgkit.normalization_tmm import (
+    _resolve_median_reference_column,
     apply_tmm_factors,
     run_tmm_rounds_for_cstmm,
 )
@@ -30,7 +31,7 @@ def test_run_tmm_rounds_for_cstmm_returns_positive_factors_and_reference_columns
     assert numpy.all(observed.round1_factors.to_numpy(dtype=float) > 0)
     assert numpy.all(observed.round2_factors.to_numpy(dtype=float) > 0)
     assert 0 <= observed.round1_reference_column < counts.shape[1]
-    assert len(observed.median_reference_columns) >= 1
+    assert len(observed.median_reference_columns) == 1
     assert all(0 <= idx < counts.shape[1] for idx in observed.median_reference_columns)
 
 
@@ -50,6 +51,11 @@ def test_run_tmm_rounds_for_cstmm_keeps_identical_columns_balanced():
 
     numpy.testing.assert_allclose(observed.round1_factors.to_numpy(dtype=float), numpy.ones(4), rtol=0.0, atol=1e-12)
     numpy.testing.assert_allclose(observed.round2_factors.to_numpy(dtype=float), numpy.ones(4), rtol=0.0, atol=1e-12)
+    assert observed.median_reference_columns == [0]
+
+
+def test_median_tmm_reference_uses_true_even_median_and_one_column():
+    assert _resolve_median_reference_column([101.0, 1.0, 99.0, 2.0]) == 2
 
 
 def test_apply_tmm_factors_divides_each_sample_column():

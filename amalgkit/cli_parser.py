@@ -77,6 +77,7 @@ def build_parser(command_handlers, command_names, version, prog=None):
     pp_sg = argparse.ArgumentParser(add_help=False)
     pp_sg.add_argument('--sample_group', metavar='tissueA,tissueB,tissueC,...', default=None, type=str, required=False, action='store',
                      help='default=%(default)s: "Comma separated list of sample groups. '
+                          'Use a backslash to escape a literal comma or pipe in a group name. '
                           'By default, all sample_group values in metadata.tsv are passed.')
     pp_sgc = argparse.ArgumentParser(add_help=False)
     pp_sgc.add_argument('--sample_group_color', metavar='#d95f02ff,#1b9e77ff,#7570b3ff,...', default='DEFAULT', type=str, required=False, action='store',
