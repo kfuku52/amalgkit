@@ -9,22 +9,19 @@ from amalgkit.normalization_tmm import calc_factor_quantile
 
 RUVSEQ_SCORE_TOLERANCE = 1e-12
 RUVSEQ_POISSON_ALPHA_THRESHOLD = 1e-6
-# Absolute cutoff in residual space, used to recognise "no batch effect at all".
+# Absolute cutoff in GLM deviance-residual space, used to recognise numerical
+# no-effect fits.
 #
-# The control residuals are log-scale quantities (design residuals of
-# log(counts)), so the cutoff has to be a log-scale constant. It must NOT be
-# scaled by the raw count magnitude: that mixes units and lets the threshold
-# grow without bound with library depth, so a genuine log-scale residual is
-# classified as numerical noise once counts are large enough.
+# The control residuals come from statsmodels' fit.resid_deviance. They are not
+# raw-count quantities, so the cutoff must NOT be scaled by the raw count
+# magnitude: that mixes units and lets the threshold grow without bound with
+# library depth, eventually classifying nontrivial residual structure as
+# numerical noise.
 #
-# The floor is set from the two measured regimes it has to separate:
-#   - Identical runs (no batch effect) leave residuals at ~1.5e-8, which is
-#     sqrt(machine epsilon) - the convergence tolerance of the statsmodels IRLS
-#     fit, not double-precision noise.
-#   - The smallest biologically meaningful effect is far larger: even a 0.1%
-#     expression difference is log(1.001) ~ 1e-3.
-# 1e-6 sits ~2 orders of magnitude above the solver artifact and ~3 orders
-# below the smallest real effect.
+# Identical runs leave residuals at ~1.5e-8, the convergence-scale artifact of
+# the statsmodels IRLS fit. The 1e-6 floor sits safely above that measured
+# artifact. A regression test separately pins that a residual magnitude of 0.5
+# remains actionable even when normalized counts are in the millions.
 RUVSEQ_RESIDUAL_NOISE_FLOOR = 1e-6
 
 

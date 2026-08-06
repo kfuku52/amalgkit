@@ -9,11 +9,29 @@ from amalgkit.command_context import PerSpeciesTableContext
 from amalgkit.metadata_utils import Metadata
 from amalgkit.per_species_finalize_python import (
     _compute_distance_matrix,
+    _resolve_scientific_name,
     _run_batch_effect_step,
     _transform_raw_to_fpkm,
     _transform_raw_to_tpm,
 )
 from amalgkit import per_species_tables as per_species_tables_module
+
+
+def test_resolve_scientific_name_honors_explicit_species_token():
+    # Regression for #174: the tag->name reverse map must use the same token
+    # resolution as merge/cstmm (explicit species_token honored), so a worker
+    # dispatched with token "human" resolves back to "Homo sapiens".
+    metadata = pandas.DataFrame({
+        'run': ['R1', 'R2'],
+        'scientific_name': ['Homo sapiens', 'Mus musculus'],
+        'sample_group': ['g1', 'g2'],
+        'exclusion': ['no', 'no'],
+        'species_token': ['human', ''],
+    })
+    assert _resolve_scientific_name(metadata, 'human') == 'Homo sapiens'
+    assert _resolve_scientific_name(metadata, 'Mus_musculus') == 'Mus musculus'
+    # Fallback for a naive space->underscore tag remains available.
+    assert _resolve_scientific_name(metadata, 'Homo_sapiens') == 'Homo sapiens'
 
 
 def _write_species_input_fixture(tmp_path, species='Finalizus example', sample_groups=None, bioprojects=None):

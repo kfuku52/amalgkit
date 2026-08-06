@@ -1,5 +1,4 @@
 import os
-import re
 
 import matplotlib
 matplotlib.use('Agg')
@@ -13,12 +12,14 @@ from amalgkit.filter_utils import save_exclusion_plot_pdf, staged_output_dir
 from amalgkit.imputation import impute_expression
 from amalgkit.metadata_utils import load_metadata
 from amalgkit.orthology_utils import (
+    DEFAULT_SINGLE_COPY_THRESHOLD,
     check_ortholog_parameter_compatibility,
     generate_multisp_busco_table,
+    get_single_copy_orthogroup_mask,
     orthogroup2genecount,
+    validate_single_copy_threshold,
 )
 from amalgkit.outlier_utils import flag_margin_outliers
-from amalgkit.runtime_utils import cleanup_tmp_amalgkit_files
 
 
 def _normalize_sample_groups(values):
@@ -36,8 +37,33 @@ def _normalize_sample_groups(values):
 
 
 def _parse_sample_group_argument(sample_group_arg):
-    tokens = re.split(r'[,\|]+', str(sample_group_arg))
+    tokens = []
+    token = []
+    value = str(sample_group_arg)
+    index = 0
+    while index < len(value):
+        char = value[index]
+        if char == '\\' and index + 1 < len(value) and value[index + 1] in {'\\', ',', '|'}:
+            token.append(value[index + 1])
+            index += 2
+            continue
+        if char in {',', '|'}:
+            tokens.append(''.join(token))
+            token = []
+        else:
+            token.append(char)
+        index += 1
+    tokens.append(''.join(token))
     return _normalize_sample_groups(tokens)
+
+
+def serialize_sample_groups(values):
+    groups = _normalize_sample_groups(values)
+    escaped = [
+        value.replace('\\', '\\\\').replace(',', '\\,').replace('|', '\\|')
+        for value in groups
+    ]
+    return '|'.join(escaped)
 
 
 def _iter_visible_subdirs(path_dir):
@@ -60,7 +86,7 @@ def _collect_tsv_files(path_tables_dir):
     return sorted(files)
 
 
-def get_sample_group_string(args, context=None):
+def get_sample_groups(args, context=None):
     metadata = None
     if isinstance(context, CrossSpeciesFilterContext):
         metadata = context.metadata
@@ -78,7 +104,11 @@ def get_sample_group_string(args, context=None):
     if len(sample_group) == 0:
         raise ValueError('No sample_group was selected. Provide --sample_group or fill metadata sample_group column.')
     print('sample_groups to be included: {}'.format(', '.join(sample_group)))
-    return '|'.join(sample_group)
+    return sample_group
+
+
+def get_sample_group_string(args, context=None):
+    return serialize_sample_groups(get_sample_groups(args=args, context=context))
 
 
 def get_species_from_dir(per_species_dir):
@@ -187,6 +217,8 @@ def _load_expression_tables(dir_cross_species_input_table, spp_filled, batch_eff
     uncorrected_suffix = '.uncorrected.tc.tsv'
     corrected_suffix = '.{}.tc.tsv'.format(batch_effect_alg)
     out = {'uncorrected': {}, 'corrected': {}}
+    matched_tables = {}
+    missing_tables = []
     for sp in spp_filled:
         species_prefix = '{}.'.format(sp)
         uncorrected_matches = [name for name in all_files if name.startswith(species_prefix) and name.endswith(uncorrected_suffix)]
@@ -195,10 +227,22 @@ def _load_expression_tables(dir_cross_species_input_table, spp_filled, batch_eff
             raise ValueError('Multiple uncorrected tc tables matched species {}: {}'.format(sp, ', '.join(uncorrected_matches)))
         if len(corrected_matches) > 1:
             raise ValueError('Multiple corrected tc tables matched species {}: {}'.format(sp, ', '.join(corrected_matches)))
-        if (len(uncorrected_matches) == 0) or (len(corrected_matches) == 0):
+        missing_for_species = []
+        if len(uncorrected_matches) == 0:
+            missing_for_species.append('{}{}'.format(sp, uncorrected_suffix))
+        if len(corrected_matches) == 0:
+            missing_for_species.append('{}{}'.format(sp, corrected_suffix))
+        if missing_for_species:
+            missing_tables.append('{}: {}'.format(sp, ', '.join(missing_for_species)))
             continue
-        uncorrected_path = os.path.join(dir_cross_species_input_table, uncorrected_matches[0])
-        corrected_path = os.path.join(dir_cross_species_input_table, corrected_matches[0])
+        matched_tables[sp] = (uncorrected_matches[0], corrected_matches[0])
+    if missing_tables:
+        raise FileNotFoundError(
+            'Required cross-species expression table(s) are missing: {}.'.format('; '.join(missing_tables))
+        )
+    for sp, (uncorrected_name, corrected_name) in matched_tables.items():
+        uncorrected_path = os.path.join(dir_cross_species_input_table, uncorrected_name)
+        corrected_path = os.path.join(dir_cross_species_input_table, corrected_name)
         out['uncorrected'][sp] = pandas.read_csv(uncorrected_path, sep='\t', index_col=0, low_memory=False)
         out['corrected'][sp] = pandas.read_csv(corrected_path, sep='\t', index_col=0, low_memory=False)
         out['uncorrected'][sp].columns = out['uncorrected'][sp].columns.map(str)
@@ -206,16 +250,23 @@ def _load_expression_tables(dir_cross_species_input_table, spp_filled, batch_eff
     return out
 
 
-def _select_single_copy_orthogroups(file_orthogroup_table, file_genecount, spp_filled):
+def _select_single_copy_orthogroups(
+    file_orthogroup_table,
+    file_genecount,
+    spp_filled,
+    single_copy_threshold=DEFAULT_SINGLE_COPY_THRESHOLD,
+):
     df_gc = pandas.read_csv(file_genecount, sep='\t', low_memory=False).set_index('orthogroup_id')
     df_og = pandas.read_csv(file_orthogroup_table, sep='\t', low_memory=False).set_index('busco_id')
     present_species = [sp for sp in spp_filled if (sp in df_gc.columns) and (sp in df_og.columns)]
     if len(present_species) == 0:
         raise ValueError('No species columns overlapped between orthogroup inputs and per-species tables.')
-    is_singlecopy = df_gc.loc[:, present_species].eq(1).all(axis=1)
+    is_singlecopy = get_single_copy_orthogroup_mask(
+        df_genecount=df_gc,
+        species=present_species,
+        single_copy_threshold=single_copy_threshold,
+    )
     df_singleog = df_og.loc[is_singlecopy, present_species].copy()
-    for sp in present_species:
-        df_singleog = df_singleog.loc[df_singleog.loc[:, sp].fillna('').astype(str).str.strip() != '', :]
     return df_singleog
 
 
@@ -246,6 +297,8 @@ def _safe_corr(left_values, right_values, method):
     valid = left.notna() & right.notna()
     if int(valid.sum()) <= 1:
         return numpy.nan
+    if left.loc[valid].nunique() <= 1 or right.loc[valid].nunique() <= 1:
+        return numpy.nan
     try:
         return float(left.loc[valid].corr(right.loc[valid], method=method))
     except ValueError:
@@ -267,6 +320,7 @@ def _calculate_correlation_within_group(df_metadata, ortholog_matrix, correction
         return out
     group_order = list(dict.fromkeys(kept['sample_group'].astype(str).tolist()))
     ortholog_med = pandas.DataFrame(index=ortholog_matrix.index, columns=group_order, dtype=float)
+    species_profiles_by_group = {}
     species_order = list(dict.fromkeys(kept['species_tag'].astype(str).tolist()))
     for sample_group in group_order:
         species_profiles = pandas.DataFrame(index=ortholog_matrix.index, dtype=float)
@@ -290,6 +344,7 @@ def _calculate_correlation_within_group(df_metadata, ortholog_matrix, correction
             species_profiles.loc[:, species_tag] = tc_species_group.mean(axis=1, skipna=True)
         if species_profiles.shape[1] == 0:
             continue
+        species_profiles_by_group[sample_group] = species_profiles
         ortholog_med.loc[:, sample_group] = species_profiles.median(axis=1, skipna=True)
     for row_idx, row in kept.iterrows():
         sample_id = str(row['sample_id'])
@@ -297,7 +352,35 @@ def _calculate_correlation_within_group(df_metadata, ortholog_matrix, correction
         if (sample_id not in ortholog_matrix.columns) or (sample_group not in ortholog_med.columns):
             continue
         sample_values = ortholog_matrix.loc[:, sample_id]
-        within_cor = _safe_corr(sample_values, ortholog_med.loc[:, sample_group], method='pearson')
+        within_profiles = species_profiles_by_group.get(sample_group)
+        if within_profiles is None:
+            within_cor = numpy.nan
+        else:
+            within_profiles = within_profiles.copy()
+            species_tag = str(row['species_tag'])
+            other_sample_ids = kept.loc[
+                kept['species_tag'].astype(str).eq(species_tag)
+                & kept['sample_group'].astype(str).eq(sample_group)
+                & ~kept['sample_id'].astype(str).eq(sample_id),
+                'sample_id',
+            ].astype(str).tolist()
+            other_sample_ids = [
+                other_sample_id
+                for other_sample_id in other_sample_ids
+                if other_sample_id in ortholog_matrix.columns
+            ]
+            if len(other_sample_ids) == 0:
+                within_profiles = within_profiles.drop(columns=[species_tag], errors='ignore')
+            else:
+                within_profiles.loc[:, species_tag] = ortholog_matrix.loc[:, other_sample_ids].apply(
+                    pandas.to_numeric,
+                    errors='coerce',
+                ).mean(axis=1, skipna=True)
+            if within_profiles.shape[1] == 0:
+                within_cor = numpy.nan
+            else:
+                within_reference = within_profiles.median(axis=1, skipna=True)
+                within_cor = _safe_corr(sample_values, within_reference, method='pearson')
         other_groups = [group for group in group_order if group != sample_group]
         nongroup_values = [
             _safe_corr(sample_values, ortholog_med.loc[:, other_group], method='pearson')
@@ -1193,6 +1276,10 @@ def _save_overview_pdf(matrix_df, df_metadata, out_pdf_path):
 
 
 def run_cross_species_filter(args, context=None):
+    single_copy_threshold = getattr(args, 'single_copy_threshold', None)
+    if single_copy_threshold is None:
+        single_copy_threshold = DEFAULT_SINGLE_COPY_THRESHOLD
+    single_copy_threshold = validate_single_copy_threshold(single_copy_threshold)
     orthology_params = check_ortholog_parameter_compatibility(args)
     if orthology_params is None:
         orthogroup_table = getattr(args, 'orthogroup_table', None)
@@ -1216,7 +1303,7 @@ def run_cross_species_filter(args, context=None):
     spp = get_species_from_dir(per_species_dir)
     if len(spp) == 0:
         raise ValueError('No per-species directories were found in: {}'.format(per_species_dir))
-    selected_sample_groups = get_sample_group_string(args, context=context).split('|')
+    selected_sample_groups = get_sample_groups(args, context=context)
     with staged_output_dir(
         cross_species_dir,
         redo=bool(getattr(args, 'redo', False)),
@@ -1241,7 +1328,12 @@ def run_cross_species_filter(args, context=None):
         spp_filled = sorted(set(unaveraged_tcs['uncorrected']).intersection(unaveraged_tcs['corrected']))
         if len(spp_filled) == 0:
             raise FileNotFoundError('No matching cross-species tc tables were found for batch_effect_alg={}'.format(batch_effect_alg))
-        df_singleog = _select_single_copy_orthogroups(file_orthogroup_table, file_genecount, spp_filled)
+        df_singleog = _select_single_copy_orthogroups(
+            file_orthogroup_table,
+            file_genecount,
+            spp_filled,
+            single_copy_threshold=single_copy_threshold,
+        )
         orthologs = _extract_ortholog_unaveraged_expression_table(df_singleog, unaveraged_tcs)
         df_metadata = _calculate_correlation_within_group(df_metadata, orthologs['uncorrected'], 'uncorrected')
         df_metadata = _calculate_correlation_within_group(df_metadata, orthologs['corrected'], 'corrected')
@@ -1261,6 +1353,7 @@ def run_cross_species_filter(args, context=None):
             margin_threshold=float(getattr(args, 'margin_threshold', 0.0)),
             robust_z_threshold=float(getattr(args, 'robust_z_threshold', -2.5)),
         )
+        df_metadata['single_copy_threshold'] = single_copy_threshold
         averaged_inputs = _build_averaged_cross_species_inputs(df_metadata, orthologs)
         df_metadata.to_csv(os.path.join(stage_dir, 'metadata.tsv'), sep='\t', index=False)
         _save_sample_number_heatmap_pdf(df_metadata, os.path.join(stage_dir, 'cross_species_sample_number_heatmap.pdf'))
@@ -1310,4 +1403,3 @@ def run_cross_species_filter(args, context=None):
             y_label='Sample count',
             font_size=8,
         )
-    cleanup_tmp_amalgkit_files(work_dir='.')

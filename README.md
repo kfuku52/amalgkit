@@ -28,9 +28,10 @@ amalgkit -h
 amalgkit help metadata
 ```
 
-AMALGKIT supports Linux and macOS with Python 3.11 or later. The Bioconda
-package can lag behind the latest GitHub release; run `amalgkit --version` when
-reproducing an analysis.
+AMALGKIT supports Linux and macOS with Python 3.11 or later. Git tags, GitHub
+Releases, and the Bioconda recipe are updated for major and minor versions, not
+for patch-only changes. The latest patch code remains available from the default
+branch, so run `amalgkit --version` when reproducing an analysis.
 
 `amalgkit getfastq` requires `fasterq-dump` from `sra-tools >= 3` on `PATH`.
 If you manage external tools separately, install it explicitly, for example:
@@ -120,10 +121,17 @@ amalgkit csfilter --out_dir ./ --metadata ./wsfilter/metadata.tsv --dir_busco ./
 amalgkit finalize --out_dir ./ --metadata ./csfilter/metadata.tsv --batch_effect_alg no
 ```
 
+`cstmm` and `csfilter` select single-copy orthogroups with `--single_copy_threshold PERCENT` (default: 50).
+`cstmm` records the selected percentage in `metadata.tsv`; when the option is omitted, `csfilter` inherits that value
+and rejects a conflicting explicit value. Metadata created by older versions has no recorded value and falls back to 50.
+
 ## Split Filtering Workflow
 `wsfilter` and `csfilter` are decoupled filters that output `metadata.tsv`, `excluded.tsv`, exclusion summary PDF, and species PDFs (without a `plots/` directory).  
 Run one or both in any order, then export tables once with `finalize`.
-When `--metadata inferred` is used in these commands, the latest filter metadata (`wsfilter/metadata.tsv` or `csfilter/metadata.tsv`) is auto-detected.
+When `--metadata inferred` is used, `filter_metadata_state.json` identifies the metadata from the last successfully
+completed filter, so rerunning `wsfilter` or `csfilter` in either order does not depend on file modification times.
+For workspaces created by older versions without this state file, `csfilter/metadata.tsv` is preferred over
+`wsfilter/metadata.tsv` with an explicit compatibility warning.
 
 ```bash
 # Example: wsfilter -> csfilter -> finalize

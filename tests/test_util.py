@@ -1,3 +1,4 @@
+import builtins
 import json
 import os
 import socket
@@ -1133,6 +1134,26 @@ class TestLoadMetadata:
         assert isinstance(m, Metadata)
         assert m.df.shape[0] == 5
 
+    def test_load_metadata_requests_utf8_encoding(self, tmp_path, sample_metadata, monkeypatch):
+        path = tmp_path / 'metadata.tsv'
+        sample_metadata.df.to_csv(str(path), sep='\t', index=False, encoding='utf-8')
+        observed = {}
+        original_read_csv = pandas.read_csv
+
+        def capture_read_csv(*args, **kwargs):
+            observed['encoding'] = kwargs.get('encoding')
+            return original_read_csv(*args, **kwargs)
+
+        monkeypatch.setattr(pandas, 'read_csv', capture_read_csv)
+
+        class Args:
+            metadata = str(path)
+            out_dir = str(tmp_path)
+
+        load_metadata(Args())
+
+        assert observed['encoding'] == 'utf-8'
+
     def test_load_from_inferred_path(self, tmp_path, sample_metadata):
         """When metadata='inferred', loads from out_dir/metadata/metadata.tsv."""
         meta_dir = tmp_path / 'metadata'
@@ -1535,6 +1556,32 @@ class TestGetMappingRate:
         (sra_dir / 'SRR001_run_info.json').write_text(json.dumps(run_info))
         m = get_mapping_rate(sample_metadata, str(quant_dir))
         assert m.df.loc[m.df['run'] == 'SRR001', 'mapping_rate'].values[0] == 85.5
+
+    def test_reads_run_info_as_utf8_under_non_utf8_locale(self, tmp_path, sample_metadata, monkeypatch):
+        quant_dir = tmp_path / 'quant'
+        sra_dir = quant_dir / 'SRR001'
+        sra_dir.mkdir(parents=True)
+        run_info_path = sra_dir / 'SRR001_run_info.json'
+        run_info_path.write_text(
+            json.dumps({'p_pseudoaligned': 85.5, 'note': '葉'}, ensure_ascii=False),
+            encoding='utf-8',
+        )
+        original_open = builtins.open
+        observed_encodings = []
+
+        def non_utf8_locale_open(file, *args, **kwargs):
+            if os.path.realpath(os.fspath(file)) == os.path.realpath(run_info_path):
+                observed_encodings.append(kwargs.get('encoding'))
+                if 'encoding' not in kwargs:
+                    kwargs['encoding'] = 'ascii'
+            return original_open(file, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, 'open', non_utf8_locale_open)
+
+        metadata = get_mapping_rate(sample_metadata, str(quant_dir), max_workers=1)
+
+        assert metadata.df.loc[metadata.df['run'] == 'SRR001', 'mapping_rate'].values[0] == 85.5
+        assert observed_encodings == ['utf-8']
 
     def test_avoids_quant_root_listdir_scan(self, tmp_path, sample_metadata, monkeypatch):
         quant_dir = tmp_path / 'quant'
@@ -2047,7 +2094,7 @@ class TestMetadataTaxidValidation:
             'taxid': [9606],
         }))
         metadata.df['taxid'] = metadata.df['taxid'].astype('Int64')
-        captured = {'lock_path': None, 'urlretrieve': None}
+        captured = {'lock_path': None, 'downloaded': None}
 
         class DummyLock:
             def __init__(self, lock_path, lock_label='Lock', poll_seconds=5, timeout_seconds=3600):
@@ -2070,15 +2117,18 @@ class TestMetadataTaxidValidation:
             def get_rank(self, _lineage):
                 return {1: 'domain', 9606: 'species'}
 
-        def fake_urlretrieve(url, out_path):
-            captured['urlretrieve'] = (url, out_path)
-            with open(out_path, 'wb') as fout:
+        def fake_download(url, output_path, timeout_seconds, urlopen_fn=None):
+            _ = (timeout_seconds, urlopen_fn)
+            captured['downloaded'] = (url, output_path)
+            with open(output_path, 'wb') as fout:
                 fout.write(b'taxdump')
 
         monkeypatch.setattr('amalgkit.download_utils.acquire_exclusive_lock', DummyLock)
         monkeypatch.setattr('amalgkit.download_utils.NcbiTaxonomy', RecordingNcbi)
-        monkeypatch.setattr('amalgkit.download_utils.urllib.request.urlretrieve', fake_urlretrieve)
+        monkeypatch.setattr('amalgkit.download_utils.download_url_to_regular_file', fake_download)
         monkeypatch.setattr('amalgkit.download_utils.validate_taxonomy_dump', lambda path: path)
+        monkeypatch.setattr('amalgkit.download_utils.read_published_md5', lambda *args, **kwargs: 'd41d8cd98f00b204e9800998ecf8427e')
+        monkeypatch.setattr('amalgkit.download_utils.calculate_file_md5', lambda path: 'd41d8cd98f00b204e9800998ecf8427e')
         args = SimpleNamespace(
             out_dir=str(tmp_path / 'out'),
             download_dir=str(tmp_path / 'shared_downloads'),
@@ -2093,10 +2143,12 @@ class TestMetadataTaxidValidation:
         assert os.path.isdir(expected_ete_dir)
         assert os.path.isfile(os.path.join(expected_ete_dir, 'taxdump.tar.gz'))
         assert captured['lock_path'] == expected_lock_path
-        assert captured['urlretrieve'][0].endswith('/taxdump.tar.gz')
-        assert os.path.dirname(captured['urlretrieve'][1]) == expected_ete_dir
-        assert os.path.basename(captured['urlretrieve'][1]).startswith('taxdump.tar.gz.')
-        assert captured['urlretrieve'][1].endswith('.tmp')
+        # The hardened download path (timeout-aware, checksum-verified) is
+        # used in production, not the untimed urllib.request.urlretrieve.
+        assert captured['downloaded'][0].endswith('/taxdump.tar.gz')
+        assert os.path.dirname(captured['downloaded'][1]) == expected_ete_dir
+        assert os.path.basename(captured['downloaded'][1]).startswith('taxdump.tar.gz.')
+        assert captured['downloaded'][1].endswith('.tmp')
 
     def test_add_standard_rank_taxids_replaces_existing_lineage_columns(self, monkeypatch):
         metadata = Metadata.from_DataFrame(pandas.DataFrame({
@@ -2174,7 +2226,7 @@ class TestMetadataTaxidValidation:
         assert metadata2.df.loc[0, 'scientific_name'] == 'Homo sapiens'
 
     def test_get_ete_ncbitaxa_bootstraps_fresh_custom_download_dir(self, tmp_path, monkeypatch):
-        captured = {'lock_path': None, 'urlretrieve': None}
+        captured = {'lock_path': None, 'downloaded': None}
 
         class DummyLock:
             def __init__(self, lock_path, lock_label='Lock', poll_seconds=5, timeout_seconds=3600):
@@ -2191,9 +2243,10 @@ class TestMetadataTaxidValidation:
             def __init__(self, **kwargs):
                 captured['kwargs'] = kwargs
 
-        def fake_urlretrieve(url, out_path):
-            captured['urlretrieve'] = (url, out_path)
-            with open(out_path, 'wb') as fout:
+        def fake_download(url, output_path, timeout_seconds, urlopen_fn=None):
+            _ = (timeout_seconds, urlopen_fn)
+            captured['downloaded'] = (url, output_path)
+            with open(output_path, 'wb') as fout:
                 fout.write(b'taxdump')
 
         args = SimpleNamespace(
@@ -2207,8 +2260,10 @@ class TestMetadataTaxidValidation:
         assert not os.path.exists(args.download_dir)
         monkeypatch.setattr('amalgkit.util.acquire_exclusive_lock', DummyLock)
         monkeypatch.setattr('amalgkit.download_utils.NcbiTaxonomy', RecordingNcbi)
-        monkeypatch.setattr('amalgkit.download_utils.urllib.request.urlretrieve', fake_urlretrieve)
+        monkeypatch.setattr('amalgkit.download_utils.download_url_to_regular_file', fake_download)
         monkeypatch.setattr('amalgkit.download_utils.validate_taxonomy_dump', lambda path: path)
+        monkeypatch.setattr('amalgkit.download_utils.read_published_md5', lambda *args, **kwargs: 'd41d8cd98f00b204e9800998ecf8427e')
+        monkeypatch.setattr('amalgkit.download_utils.calculate_file_md5', lambda path: 'd41d8cd98f00b204e9800998ecf8427e')
 
         result = get_ete_ncbitaxa(args=args)
 
@@ -2218,10 +2273,12 @@ class TestMetadataTaxidValidation:
         assert captured['kwargs']['taxdump_file'] == os.path.join(expected_ete_dir, 'taxdump.tar.gz')
         assert os.path.isfile(os.path.join(expected_ete_dir, 'taxdump.tar.gz'))
         assert captured['lock_path'] == expected_lock_path
-        assert captured['urlretrieve'][0].endswith('/taxdump.tar.gz')
-        assert os.path.dirname(captured['urlretrieve'][1]) == expected_ete_dir
-        assert os.path.basename(captured['urlretrieve'][1]).startswith('taxdump.tar.gz.')
-        assert captured['urlretrieve'][1].endswith('.tmp')
+        # The hardened download path (timeout-aware, checksum-verified) is
+        # used in production, not the untimed urllib.request.urlretrieve.
+        assert captured['downloaded'][0].endswith('/taxdump.tar.gz')
+        assert os.path.dirname(captured['downloaded'][1]) == expected_ete_dir
+        assert os.path.basename(captured['downloaded'][1]).startswith('taxdump.tar.gz.')
+        assert captured['downloaded'][1].endswith('.tmp')
 
     def test_get_ete_ncbitaxa_reuses_existing_custom_db_without_taxdump_refresh(self, tmp_path, monkeypatch):
         captured = {'lock_path': None}

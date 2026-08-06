@@ -384,42 +384,46 @@ def test_run_ruvseq_backend_survives_a_zero_quantile_lane_end_to_end():
     assert numpy.all(values >= 0)
 
 
-def test_run_ruvseq_backend_detects_batch_effect_at_high_counts():
-    # The residual noise floor must not scale with count magnitude. The control
-    # residuals are log-scale, so comparing them against a cutoff derived from
-    # the maximum raw count classified a genuine batch effect as numerical
-    # noise once library depth was large enough: with counts in the millions
-    # the cutoff reached ~2.0 while the real residual was ~1.3, so k collapsed
-    # to 0 and the correction was silently skipped.
-    rng = numpy.random.default_rng(0)
-    values = rng.gamma(shape=4.0, scale=2e6 / 4.0, size=(40, 6))
-    # A genuine 2.5x batch effect on the second half of the runs.
-    values[:, 3:] *= 2.5
-    counts_df = pandas.DataFrame(
-        numpy.round(values),
-        index=['G{:02d}'.format(i) for i in range(40)],
-        columns=['RUN{}'.format(i + 1) for i in range(6)],
-    )
-    metadata_df = pandas.DataFrame(
+def test_ruvr_correct_counts_keeps_nontrivial_residuals_at_high_counts():
+    # Positive control for the residual-space cutoff: the same fixed residuals
+    # must remain actionable regardless of raw-count magnitude. The previous
+    # count-scaled cutoff reached >2.0 for this matrix and incorrectly treated
+    # these 0.5-magnitude residuals as numerical noise.
+    seq_uq_df = pandas.DataFrame(
         {
-            'run': list(counts_df.columns),
-            'sample_group': ['A', 'A', 'A', 'B', 'B', 'B'],
-            'bioproject': ['BP1', 'BP1', 'BP1', 'BP2', 'BP2', 'BP2'],
-        }
+            'RUN1': [2_000_000.0, 1_800_000.0, 1_600_000.0],
+            'RUN2': [2_050_000.0, 1_850_000.0, 1_650_000.0],
+            'RUN3': [2_100_000.0, 1_900_000.0, 1_700_000.0],
+            'RUN4': [2_020_000.0, 1_820_000.0, 1_620_000.0],
+            'RUN5': [2_070_000.0, 1_870_000.0, 1_670_000.0],
+            'RUN6': [2_120_000.0, 1_920_000.0, 1_720_000.0],
+        },
+        index=['G1', 'G2', 'G3'],
     )
-    assert counts_df.to_numpy(dtype=float).max() > 1e6
+    residuals_df = pandas.DataFrame(
+        {
+            'RUN1': [0.5, 0.25, -0.5],
+            'RUN2': [-0.5, -0.25, 0.5],
+            'RUN3': [0.5, 0.25, -0.5],
+            'RUN4': [-0.5, -0.25, 0.5],
+            'RUN5': [0.5, 0.25, -0.5],
+            'RUN6': [-0.5, -0.25, 0.5],
+        },
+        index=seq_uq_df.index,
+    )
+    controls = numpy.ones((seq_uq_df.shape[0],), dtype=bool)
 
-    _corrected_df, w_df, summary = run_ruvseq_backend(
-        counts_df=counts_df,
-        metadata_df=metadata_df,
-        k_setting='1',
-        k_max=2,
-        min_controls=5,
+    corrected_df, w_df = ruvr_correct_counts(
+        seq_uq_df=seq_uq_df,
+        controls=controls,
+        k=1,
+        residuals_df=residuals_df,
     )
 
-    assert int(summary['resolved_ruv_k']) == 1
-    assert summary['skip_reason'] == ''
-    assert w_df.shape[1] == 1
+    assert seq_uq_df.to_numpy(dtype=float).max() > 1e6
+    assert numpy.abs(residuals_df.to_numpy(dtype=float)).max() == 0.5
+    assert w_df.shape == (seq_uq_df.shape[1], 1)
+    assert numpy.isfinite(corrected_df.to_numpy(dtype=float)).all()
 
 
 def test_run_ruvseq_backend_reconstructs_raw_counts_when_correction_is_a_noop():

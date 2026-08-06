@@ -81,6 +81,49 @@ def test_estimate_num_sv_be_returns_unresolved_for_constant_residual_matrix():
     assert estimate.nsv is None
 
 
+def test_estimate_num_sv_be_default_seed_is_reproducible_and_auto_is_opt_in(monkeypatch):
+    data = numpy.array([
+        [10.0, 12.0, 40.0, 42.0],
+        [11.0, 13.0, 41.0, 43.0],
+        [12.0, 15.0, 39.0, 44.0],
+        [50.0, 48.0, 20.0, 18.0],
+        [51.0, 47.0, 19.0, 17.0],
+        [25.0, 29.0, 30.0, 28.0],
+    ])
+    mod, _ = build_sample_group_design_matrix(['A', 'A', 'B', 'B'])
+    original_default_rng = numpy.random.default_rng
+    observed_seeds = []
+
+    def capture_default_rng(seed=None):
+        observed_seeds.append(seed)
+        return original_default_rng(seed)
+
+    monkeypatch.setattr(batch_effect_sva_module.numpy.random, 'default_rng', capture_default_rng)
+
+    first = estimate_num_sv_be(
+        data_matrix=data,
+        mod_matrix=mod,
+        B_value=5,
+        max_nsv=1,
+    )
+    second = estimate_num_sv_be(
+        data_matrix=data,
+        mod_matrix=mod,
+        B_value=5,
+        max_nsv=1,
+    )
+    estimate_num_sv_be(
+        data_matrix=data,
+        mod_matrix=mod,
+        B_value=5,
+        max_nsv=1,
+        random_seed='auto',
+    )
+
+    assert first == second
+    assert observed_seeds == [0, 0, None]
+
+
 def test_run_sva_backend_supports_auto_nsv_when_estimate_is_zero():
     counts = pandas.DataFrame(
         {

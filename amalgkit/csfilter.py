@@ -1,3 +1,4 @@
+import math
 import os
 import shutil
 import tempfile
@@ -6,13 +7,15 @@ from types import SimpleNamespace
 import pandas
 
 from amalgkit.command_context import CrossSpeciesFilterContext, PerSpeciesTableContext
-from amalgkit.cross_species_filter import run_cross_species_filter
+from amalgkit.cross_species_filter import run_cross_species_filter, serialize_sample_groups
 from amalgkit.filter_utils import (
     infer_latest_filter_metadata,
     merge_metadata_by_run,
     save_exclusion_plot_pdf,
     staged_output_dir,
+    write_filter_metadata_state,
 )
+from amalgkit.orthology_utils import DEFAULT_SINGLE_COPY_THRESHOLD, validate_single_copy_threshold
 from amalgkit.per_species_tables import generate_per_species_tables, resolve_per_species_input
 
 
@@ -52,7 +55,7 @@ def _resolve_sample_group_arg(args, metadata_df):
     values = values.loc[values != ''].drop_duplicates().tolist()
     if len(values) == 0:
         raise ValueError('No sample_group values were found in metadata.')
-    return '|'.join(values)
+    return serialize_sample_groups(values)
 
 
 def _build_prepare_per_species_args(args, input_dir, tmp_out_dir):
@@ -80,12 +83,13 @@ def _build_prepare_per_species_args(args, input_dir, tmp_out_dir):
     return SimpleNamespace(**data)
 
 
-def _build_cross_species_args(args, tmp_out_dir, sample_group_arg):
+def _build_cross_species_args(args, tmp_out_dir, sample_group_arg, single_copy_threshold):
     data = vars(args).copy()
     data['out_dir'] = tmp_out_dir
     data['sample_group'] = sample_group_arg
     data['batch_effect_alg'] = 'no'
     data['plot_mode'] = 'single'
+    data['single_copy_threshold'] = single_copy_threshold
     data.setdefault('sample_group_color', 'DEFAULT')
     data.setdefault('missing_strategy', 'em_pca')
     data['outlier_method'] = 'robust_margin'
@@ -95,10 +99,39 @@ def _build_cross_species_args(args, tmp_out_dir, sample_group_arg):
     return cross_species_args
 
 
+def _resolve_single_copy_threshold(args, metadata_df):
+    recorded_threshold = None
+    if 'single_copy_threshold' in metadata_df.columns:
+        raw_values = metadata_df['single_copy_threshold']
+        blank = raw_values.isna() | raw_values.astype(str).str.strip().eq('')
+        if blank.any() and (not blank.all()):
+            raise ValueError('Metadata contains a partially missing single_copy_threshold column.')
+        if not blank.all():
+            normalized = [validate_single_copy_threshold(value) for value in raw_values.tolist()]
+            recorded_threshold = normalized[0]
+            if any(not math.isclose(value, recorded_threshold) for value in normalized[1:]):
+                raise ValueError('Metadata contains inconsistent single_copy_threshold values.')
+
+    requested_threshold = getattr(args, 'single_copy_threshold', None)
+    if requested_threshold is None:
+        if recorded_threshold is not None:
+            return recorded_threshold
+        return DEFAULT_SINGLE_COPY_THRESHOLD
+
+    requested_threshold = validate_single_copy_threshold(requested_threshold)
+    if (recorded_threshold is not None) and (not math.isclose(requested_threshold, recorded_threshold)):
+        raise ValueError(
+            '--single_copy_threshold ({}) does not match the value recorded by cstmm ({}).'.format(
+                requested_threshold,
+                recorded_threshold,
+            )
+        )
+    return requested_threshold
+
+
 def _write_excluded_table(df_metadata, out_path):
-    reason = 'low_cross_species_group_correlation'
-    exclusion_values = df_metadata['exclusion'].fillna('').astype(str).str.strip()
-    excluded = df_metadata.loc[exclusion_values == reason, :].copy()
+    exclusion_values = df_metadata['exclusion'].fillna('').astype(str).str.strip().str.lower()
+    excluded = df_metadata.loc[~exclusion_values.eq('no'), :].copy()
     preferred_cols = [
         'run',
         'scientific_name',
@@ -185,8 +218,9 @@ def csfilter_main(args):
             data = vars(args).copy()
             data['metadata'] = latest_metadata
             resolve_args = SimpleNamespace(**data)
-            print('Using latest filter metadata: {}'.format(latest_metadata))
+            print('Using inferred filter metadata: {}'.format(latest_metadata))
     metadata, input_dir = resolve_per_species_input(resolve_args)
+    single_copy_threshold = _resolve_single_copy_threshold(resolve_args, metadata.df)
     out_root = os.path.realpath(args.out_dir)
     dir_cs = os.path.join(out_root, 'csfilter')
     tmp_out_dir = tempfile.mkdtemp(prefix='amalgkit_csfilter_')
@@ -197,7 +231,12 @@ def csfilter_main(args):
             context=PerSpeciesTableContext(metadata=metadata, input_dir=input_dir),
         )
         sample_group_arg = _resolve_sample_group_arg(args=resolve_args, metadata_df=metadata.df)
-        cross_species_args = _build_cross_species_args(args=resolve_args, tmp_out_dir=tmp_out_dir, sample_group_arg=sample_group_arg)
+        cross_species_args = _build_cross_species_args(
+            args=resolve_args,
+            tmp_out_dir=tmp_out_dir,
+            sample_group_arg=sample_group_arg,
+            single_copy_threshold=single_copy_threshold,
+        )
         run_cross_species_filter(cross_species_args, context=CrossSpeciesFilterContext(metadata=metadata))
         cross_species_metadata_path = os.path.join(tmp_out_dir, 'cross_species', 'metadata.tsv')
         if not os.path.isfile(cross_species_metadata_path):
@@ -221,6 +260,7 @@ def csfilter_main(args):
                 src_dir=os.path.join(tmp_out_dir, 'cross_species'),
                 dst_dir=stage_dir,
             )
+        write_filter_metadata_state(out_dir=out_root, command='csfilter')
     finally:
         if os.path.isdir(tmp_out_dir):
             shutil.rmtree(tmp_out_dir, ignore_errors=True)

@@ -6,13 +6,80 @@ from types import SimpleNamespace
 
 from amalgkit.cross_species_filter import (
     _calculate_correlation_within_group,
+    _load_expression_tables,
     _resolve_matrix_for_embedding,
+    _select_single_copy_orthogroups,
     generate_input_symlinks,
+    get_sample_groups,
     get_sample_group_string,
     get_species_from_dir,
     run_cross_species_filter,
 )
 from amalgkit.util import Metadata
+
+
+def test_single_copy_selection_uses_shared_percentage_and_retains_missing_orthologs(tmp_path):
+    genecount_path = tmp_path / 'genecount.tsv'
+    orthogroup_path = tmp_path / 'orthogroup.tsv'
+    species = ['Species_A', 'Species_B', 'Species_C', 'Species_D']
+    pandas.DataFrame(
+        {
+            'orthogroup_id': ['OG50', 'OG75', 'OG100'],
+            'Species_A': [1, 1, 1],
+            'Species_B': [1, 1, 1],
+            'Species_C': [2, 1, 1],
+            'Species_D': [0, 2, 1],
+        }
+    ).to_csv(genecount_path, sep='\t', index=False)
+    pandas.DataFrame(
+        {
+            'busco_id': ['OG50', 'OG75', 'OG100'],
+            'Species_A': ['A50', 'A75', 'A100'],
+            'Species_B': ['B50', 'B75', 'B100'],
+            'Species_C': ['C50a,C50b', 'C75', 'C100'],
+            'Species_D': ['', 'D75a,D75b', 'D100'],
+        }
+    ).to_csv(orthogroup_path, sep='\t', index=False)
+
+    at_50 = _select_single_copy_orthogroups(
+        file_orthogroup_table=orthogroup_path,
+        file_genecount=genecount_path,
+        spp_filled=species,
+        single_copy_threshold=50.0,
+    )
+    at_75 = _select_single_copy_orthogroups(
+        file_orthogroup_table=orthogroup_path,
+        file_genecount=genecount_path,
+        spp_filled=species,
+        single_copy_threshold=75.0,
+    )
+    at_100 = _select_single_copy_orthogroups(
+        file_orthogroup_table=orthogroup_path,
+        file_genecount=genecount_path,
+        spp_filled=species,
+        single_copy_threshold=100.0,
+    )
+
+    assert at_50.index.tolist() == ['OG50', 'OG75', 'OG100']
+    assert pandas.isna(at_50.loc['OG50', 'Species_D'])
+    assert at_75.index.tolist() == ['OG75', 'OG100']
+    assert at_100.index.tolist() == ['OG100']
+
+
+def test_load_expression_tables_reports_all_missing_species_tables(tmp_path):
+    (tmp_path / 'Species_A.no.tc.tsv').touch()
+    (tmp_path / 'Species_B.uncorrected.tc.tsv').touch()
+
+    with pytest.raises(FileNotFoundError) as exc_info:
+        _load_expression_tables(
+            str(tmp_path),
+            ['Species_A', 'Species_B'],
+            'no',
+        )
+
+    message = str(exc_info.value)
+    assert 'Species_A: Species_A.uncorrected.tc.tsv' in message
+    assert 'Species_B: Species_B.no.tc.tsv' in message
 
 
 def test_cross_species_correlations_use_sample_group_reference_across_species():
@@ -50,6 +117,35 @@ def test_cross_species_correlations_use_sample_group_reference_across_species():
     ].iloc[0]
     assert numpy.isclose(mislabeled['within_group_cor_corrected'], -1.0)
     assert numpy.isclose(mislabeled['max_nongroup_cor_corrected'], 1.0)
+
+
+def test_cross_species_within_group_reference_leaves_evaluated_sample_out():
+    metadata = pandas.DataFrame(
+        {
+            'species_tag': ['A', 'B', 'C'],
+            'run': ['leaf', 'leaf', 'leaf'],
+            'sample_group': ['leaf', 'leaf', 'leaf'],
+            'exclusion': ['no', 'no', 'no'],
+        }
+    )
+    target = numpy.array([1.0, 2.0, 3.0, 4.0, 5.0])
+    species_b = numpy.array([1.0, 2.0, 3.0, 4.0, 5.0])
+    species_c = numpy.array([5.0, 3.0, 4.0, 2.0, 1.0])
+    orthologs = pandas.DataFrame(
+        {'A_leaf': target, 'B_leaf': species_b, 'C_leaf': species_c},
+        index=['G1', 'G2', 'G3', 'G4', 'G5'],
+    )
+
+    result = _calculate_correlation_within_group(
+        df_metadata=metadata,
+        ortholog_matrix=orthologs,
+        correction_label='corrected',
+    )
+
+    observed = result.loc[result['species_tag'].eq('A'), 'within_group_cor_corrected'].iloc[0]
+    expected = pandas.Series(target).corr(pandas.Series((species_b + species_c) / 2.0))
+    assert numpy.isclose(observed, expected)
+    assert not numpy.isclose(observed, 1.0)
 
 
 def test_embedding_missing_strategies_perform_iterative_imputation():
@@ -308,6 +404,11 @@ class TestGetSampleGroupString:
     def test_cli_sample_group_supports_pipe_and_hyphen(self):
         args = SimpleNamespace(sample_group='non-treated | treated')
         assert get_sample_group_string(args) == 'non-treated|treated'
+
+    def test_cli_sample_group_supports_escaped_comma_and_pipe(self):
+        args = SimpleNamespace(sample_group=r'leaf\, young,root\|tip')
+        assert get_sample_groups(args) == ['leaf, young', 'root|tip']
+        assert get_sample_group_string(args) == r'leaf\, young|root\|tip'
 
     def test_reads_sample_group_from_metadata(self, monkeypatch):
         args = SimpleNamespace(sample_group=None)
@@ -576,18 +677,25 @@ class TestCrossSpeciesFilterMain:
 
         assert (existing_dir / 'old.txt').read_text() == 'old'
 
-    def test_run_cross_species_filter_writes_restored_plot_outputs(self, tmp_path):
+    def test_run_cross_species_filter_writes_restored_plot_outputs(self, tmp_path, monkeypatch):
         out_dir = tmp_path / 'out'
         orthogroup_path = self._write_cross_species_fixture(out_dir)
         args = self._base_args(out_dir)
         args.sample_group = 'leaf,root'
         args.orthogroup_table = str(orthogroup_path)
         args.missing_strategy = 'row_mean'
+        cwd_sentinel = tmp_path / 'tmp.amalgkit.keep'
+        cwd_sentinel.write_text('keep')
+        monkeypatch.chdir(tmp_path)
 
         run_cross_species_filter(args)
 
+        assert cwd_sentinel.read_text() == 'keep'
+
         cross_species_dir = out_dir / 'cross_species'
         assert (cross_species_dir / 'metadata.tsv').is_file()
+        metadata_df = pandas.read_csv(cross_species_dir / 'metadata.tsv', sep='\t')
+        assert set(metadata_df['single_copy_threshold']) == {50.0}
         assert (cross_species_dir / 'cross_species_sample_number_heatmap.pdf').is_file()
         assert (cross_species_dir / 'cross_species_group_cor_scatter.pdf').is_file()
         assert (cross_species_dir / 'cross_species_run_pca_pc12_pre_correction.pdf').is_file()
