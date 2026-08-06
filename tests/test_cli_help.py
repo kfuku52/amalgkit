@@ -51,6 +51,7 @@ def test_help_topic_finalize_exits_zero():
     out = run_cli('help', 'finalize')
     assert out.returncode == 0
     merged = (out.stdout + '\n' + out.stderr).lower()
+    compact = ' '.join(merged.split())
     assert '--batch_effect_alg' in merged
     assert '--seed' in merged
     assert '--sva_nsv' in merged
@@ -60,6 +61,8 @@ def test_help_topic_finalize_exits_zero():
     assert '--ruvseq_backend' in merged
     assert '--latent_family' in merged
     assert 'latent_glm' in merged
+    assert 'default=0: random seed for stochastic steps' in compact
+    assert '"auto" uses os entropy and may produce non-reproducible results' in compact
 
 
 def test_help_topic_cstmm_includes_redo():

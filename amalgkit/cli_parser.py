@@ -478,8 +478,9 @@ def build_parser(command_handlers, command_names, version, prog=None):
                      help='default=%(default)s: Top non-DE genes considered as control candidates when --ruvseq_control_genes auto.')
     pfi.add_argument('--ruvseq_min_controls', metavar='INT', default=100, type=int, required=False, action='store',
                      help='default=%(default)s: Minimum number of control genes required for RUVSeq auto selection.')
-    pfi.add_argument('--seed', metavar='INT|auto', default='auto', type=nonnegative_int_or_auto, required=False, action='store',
-                     help='default=%(default)s: Random seed for stochastic steps (SVA/RUVSeq/t-SNE). "auto" keeps default RNG behavior.')
+    pfi.add_argument('--seed', metavar='INT|auto', default=0, type=nonnegative_int_or_auto, required=False, action='store',
+                     help='default=%(default)s: Random seed for stochastic steps (SVA/RUVSeq/t-SNE). '
+                          '"auto" uses OS entropy and may produce non-reproducible results.')
     pfi.add_argument('--sva_nsv', metavar='INT|auto', default='auto', type=nonnegative_int_or_auto, required=False, action='store',
                      help='default=%(default)s: Number of surrogate variables for SVA. "auto" lets sva estimate n.sv.')
     pfi.add_argument('--sva_B', metavar='INT|auto', default='auto', type=int_or_auto, required=False, action='store',

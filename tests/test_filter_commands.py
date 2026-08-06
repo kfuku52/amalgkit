@@ -420,7 +420,7 @@ def test_finalize_outputs_tables_and_merged_metadata(tmp_path, monkeypatch):
     assert out_metadata.loc[out_metadata['run'] == 'R1', 'exclusion'].iloc[0] == 'low_cross_species_group_correlation'
     assert out_metadata.loc[out_metadata['run'] == 'R1', 'batch_corrected'].iloc[0] == 'yes'
     assert out_metadata.loc[out_metadata['run'] == 'R1', 'batch_alg_used'].iloc[0] == 'sva'
-    assert captured['seed'] == 'auto'
+    assert captured['seed'] == 0
     assert captured['sva_backend'] == 'python'
     assert captured['combatseq_backend'] == 'python'
     assert captured['ruvseq_backend'] == 'python'

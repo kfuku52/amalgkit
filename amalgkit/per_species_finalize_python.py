@@ -383,7 +383,7 @@ def _run_batch_effect_step(counts_df, metadata_df, eff_length_df, args):
                 B_setting=str(getattr(args, 'sva_B', 'auto')),
                 B_auto_max=int(getattr(args, 'sva_B_auto_max', 100)),
                 sample_group_column='sample_group',
-                random_seed=getattr(args, 'seed', 'auto'),
+                random_seed=getattr(args, 'seed', 0),
             )
             batch_info['resolved_sva_nsv'] = summary.get('resolved_sva_nsv')
             batch_info['resolved_sva_B'] = summary.get('resolved_sva_B')
@@ -931,7 +931,7 @@ def run_finalize_python_worker(args, metadata, species_tag, input_dir):
             scientific_name=scientific_name,
             species_tag=species_tag,
             dir_tsv=dir_tsv,
-            random_seed_value=getattr(args, 'seed', None),
+            random_seed_value=getattr(args, 'seed', 0),
         )
         return 0
 
@@ -1018,7 +1018,7 @@ def run_finalize_python_worker(args, metadata, species_tag, input_dir):
         scientific_name=scientific_name,
         species_tag=species_tag,
         dir_tsv=dir_tsv,
-        random_seed_value=getattr(args, 'seed', None),
+        random_seed_value=getattr(args, 'seed', 0),
     )
     return 0
 

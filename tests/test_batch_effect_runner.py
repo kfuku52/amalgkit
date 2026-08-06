@@ -6,6 +6,18 @@ import pandas
 from amalgkit import batch_effect_runner
 
 
+def test_batch_effect_runner_defaults_to_reproducible_seed():
+    parser = batch_effect_runner.build_parser()
+
+    args = parser.parse_args([
+        '--backend', 'sva',
+        '--counts_tsv', 'counts.tsv',
+        '--metadata_tsv', 'metadata.tsv',
+    ])
+
+    assert args.random_seed == '0'
+
+
 def test_combatseq_skips_when_only_one_non_singleton_batch_remains():
     counts = pandas.DataFrame(
         {
