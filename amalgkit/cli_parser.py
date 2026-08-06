@@ -379,7 +379,7 @@ def build_parser(command_handlers, command_names, version, prog=None):
     pbu.add_argument('--compleasm_exe', metavar='PATH', default='compleasm', type=str, required=False, action='store',
                      help='default=%(default)s: PATH to compleasm executable.')
     pbu.add_argument('--tool_args', metavar='STR', default=None, type=str, required=False, action='store',
-                     help='Additional arguments passed to the selected tool.')
+                     help='Additional arguments passed to the selected tool. For BUSCO, --download is managed from --lineage and cannot be supplied here.')
     pbu.set_defaults(handler=command_handlers['busco'])
 
     pcs_help = 'Applying cross-species TMM normalization using single-copy genes. See `amalgkit cstmm -h`'
