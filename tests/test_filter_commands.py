@@ -1,3 +1,4 @@
+import json
 import os
 from types import SimpleNamespace
 
@@ -5,6 +6,7 @@ import pandas
 import pytest
 
 from amalgkit.command_context import CrossSpeciesFilterContext, PerSpeciesTableContext
+from amalgkit.filter_utils import write_filter_metadata_state
 from amalgkit.util import Metadata
 from amalgkit import wsfilter as wsfilter_module
 from amalgkit import csfilter as csfilter_module
@@ -102,19 +104,32 @@ def test_wsfilter_outputs_metadata_excluded_and_species_pdfs(tmp_path, monkeypat
     assert isinstance(captured['context'], PerSpeciesTableContext)
     assert captured['context'].metadata is metadata
     assert captured['context'].input_dir == str(tmp_path / 'input')
+    state = json.loads((tmp_path / 'out' / 'filter_metadata_state.json').read_text(encoding='utf-8'))
+    assert state['command'] == 'wsfilter'
+    assert state['metadata_path'] == 'wsfilter/metadata.tsv'
 
 
-def test_wsfilter_uses_latest_filter_metadata_when_inferred(tmp_path, monkeypatch):
+def test_wsfilter_rerun_uses_recorded_metadata_and_preserves_cross_species_exclusion(tmp_path, monkeypatch):
     args = _base_args(tmp_path)
-    metadata = _base_metadata()
-    latest_meta = tmp_path / 'out' / 'csfilter' / 'metadata.tsv'
-    latest_meta.parent.mkdir(parents=True, exist_ok=True)
-    latest_meta.write_text('run\texclusion\nR1\tno\n')
+    args.redo = True
+    source_metadata = _base_metadata()
+    source_metadata.df.loc[source_metadata.df['run'].eq('R2'), 'exclusion'] = 'low_cross_species_group_correlation'
+    recorded_metadata = tmp_path / 'out' / 'csfilter' / 'metadata.tsv'
+    recorded_metadata.parent.mkdir(parents=True, exist_ok=True)
+    source_metadata.df.to_csv(recorded_metadata, sep='\t', index=False)
+    write_filter_metadata_state(tmp_path / 'out', 'csfilter')
+    stale_ws_metadata = tmp_path / 'out' / 'wsfilter' / 'metadata.tsv'
+    stale_ws_metadata.parent.mkdir(parents=True, exist_ok=True)
+    _base_metadata().df.to_csv(stale_ws_metadata, sep='\t', index=False)
+    os.utime(recorded_metadata, (1_000_000_000, 1_000_000_000))
+    os.utime(stale_ws_metadata, (2_000_000_000, 2_000_000_000))
     captured = {}
 
     def fake_resolve_per_species_input(passed_args):
         captured['metadata'] = passed_args.metadata
-        return metadata, str(tmp_path / 'input')
+        resolved_metadata = Metadata.from_DataFrame(pandas.read_csv(passed_args.metadata, sep='\t'))
+        captured['resolved_metadata'] = resolved_metadata
+        return resolved_metadata, str(tmp_path / 'input')
 
     def fake_generate_per_species_tables(per_species_args, context=None):
         captured['context'] = context
@@ -122,7 +137,7 @@ def test_wsfilter_uses_latest_filter_metadata_when_inferred(tmp_path, monkeypatc
         os.makedirs(tables_dir, exist_ok=True)
         pandas.DataFrame({
             'run': ['R1'],
-            'exclusion': ['no'],
+            'exclusion': ['low_within_sample_group_correlation'],
         }).to_csv(os.path.join(tables_dir, 'Species_A.metadata.tsv'), sep='\t', index=False)
 
     monkeypatch.setattr(wsfilter_module, 'resolve_per_species_input', fake_resolve_per_species_input)
@@ -136,10 +151,15 @@ def test_wsfilter_uses_latest_filter_metadata_when_inferred(tmp_path, monkeypatc
 
     wsfilter_module.wsfilter_main(args)
 
-    assert captured['metadata'] == os.path.realpath(str(latest_meta))
+    output_metadata = pandas.read_csv(tmp_path / 'out' / 'wsfilter' / 'metadata.tsv', sep='\t')
+    assert captured['metadata'] == os.path.realpath(str(recorded_metadata))
     assert isinstance(captured['context'], PerSpeciesTableContext)
-    assert captured['context'].metadata is metadata
+    assert captured['context'].metadata is captured['resolved_metadata']
     assert captured['context'].input_dir == str(tmp_path / 'input')
+    assert output_metadata.set_index('run').loc['R1', 'exclusion'] == 'low_within_sample_group_correlation'
+    assert output_metadata.set_index('run').loc['R2', 'exclusion'] == 'low_cross_species_group_correlation'
+    state = json.loads((tmp_path / 'out' / 'filter_metadata_state.json').read_text(encoding='utf-8'))
+    assert state['command'] == 'wsfilter'
 
 
 def test_csfilter_outputs_metadata_excluded_and_root_pdfs(tmp_path, monkeypatch):
@@ -223,6 +243,36 @@ def test_csfilter_outputs_metadata_excluded_and_root_pdfs(tmp_path, monkeypatch)
     assert captured['per_species_context'].input_dir == str(tmp_path / 'input')
     assert isinstance(captured['cross_species_context'], CrossSpeciesFilterContext)
     assert captured['cross_species_context'].metadata is metadata
+    state = json.loads((tmp_path / 'out' / 'filter_metadata_state.json').read_text(encoding='utf-8'))
+    assert state['command'] == 'csfilter'
+    assert state['metadata_path'] == 'csfilter/metadata.tsv'
+
+
+def test_wsfilter_failure_does_not_update_filter_metadata_state(tmp_path, monkeypatch):
+    args = _base_args(tmp_path)
+    metadata = _base_metadata()
+    state_updates = []
+
+    monkeypatch.setattr(
+        wsfilter_module,
+        'resolve_per_species_input',
+        lambda _args: (metadata, str(tmp_path / 'input')),
+    )
+    monkeypatch.setattr(
+        wsfilter_module,
+        'generate_per_species_tables',
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError('worker failed')),
+    )
+    monkeypatch.setattr(
+        wsfilter_module,
+        'write_filter_metadata_state',
+        lambda **kwargs: state_updates.append(kwargs),
+    )
+
+    with pytest.raises(RuntimeError, match='worker failed'):
+        wsfilter_module.wsfilter_main(args)
+
+    assert state_updates == []
 
 
 def test_csfilter_inherits_single_copy_threshold_from_metadata():

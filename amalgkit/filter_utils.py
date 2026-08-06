@@ -1,3 +1,4 @@
+import json
 import os
 import re
 import shutil
@@ -7,7 +8,12 @@ from contextlib import contextmanager
 
 import pandas
 
-from amalgkit.output_utils import get_default_creation_mode
+from amalgkit.output_utils import atomic_output_path, get_default_creation_mode
+
+
+FILTER_METADATA_STATE_FILENAME = 'filter_metadata_state.json'
+FILTER_METADATA_STATE_SCHEMA_VERSION = 1
+FILTER_COMMANDS = ('wsfilter', 'csfilter')
 
 
 def merge_metadata_by_run(source_df, update_df):
@@ -369,13 +375,99 @@ def save_exclusion_plot_pdf(df_metadata, out_pdf_path, y_label='Sample count', f
     pyplot.close(figure)
 
 
-def infer_latest_filter_metadata(out_dir):
+def get_filter_metadata_state_path(out_dir):
+    return os.path.join(os.path.realpath(out_dir), FILTER_METADATA_STATE_FILENAME)
+
+
+def _get_filter_metadata_paths(out_dir):
     out_root = os.path.realpath(out_dir)
-    candidates = [
-        os.path.join(out_root, 'wsfilter', 'metadata.tsv'),
-        os.path.join(out_root, 'csfilter', 'metadata.tsv'),
+    return {
+        command: os.path.join(out_root, command, 'metadata.tsv')
+        for command in FILTER_COMMANDS
+    }
+
+
+def write_filter_metadata_state(out_dir, command):
+    command = str(command).strip()
+    if command not in FILTER_COMMANDS:
+        raise ValueError('Unknown filter command for metadata state: {}'.format(command))
+    metadata_paths = _get_filter_metadata_paths(out_dir)
+    metadata_path = metadata_paths[command]
+    if not os.path.isfile(metadata_path):
+        raise FileNotFoundError('Filter metadata was not generated: {}'.format(metadata_path))
+    state_path = get_filter_metadata_state_path(out_dir)
+    payload = {
+        'schema_version': FILTER_METADATA_STATE_SCHEMA_VERSION,
+        'command': command,
+        'metadata_path': '{}/metadata.tsv'.format(command),
+    }
+    with atomic_output_path(state_path, suffix='.json') as temporary_path:
+        with open(temporary_path, 'w', encoding='utf-8') as handle:
+            json.dump(payload, handle, indent=2, sort_keys=True)
+            handle.write('\n')
+    return state_path
+
+
+def _read_filter_metadata_state(out_dir):
+    state_path = get_filter_metadata_state_path(out_dir)
+    if not os.path.lexists(state_path):
+        return None, 'state file is missing'
+    if os.path.islink(state_path):
+        return None, 'state file is a symbolic link'
+    if not os.path.isfile(state_path):
+        return None, 'state path is not a file'
+    try:
+        with open(state_path, 'r', encoding='utf-8') as handle:
+            payload = json.load(handle)
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        return None, 'state file could not be read: {}'.format(exc)
+    if not isinstance(payload, dict):
+        return None, 'state payload is not an object'
+    if payload.get('schema_version') != FILTER_METADATA_STATE_SCHEMA_VERSION:
+        return None, 'unsupported state schema_version: {}'.format(payload.get('schema_version'))
+    command = str(payload.get('command', '')).strip()
+    if command not in FILTER_COMMANDS:
+        return None, 'unknown filter command: {}'.format(command)
+    expected_relative_path = '{}/metadata.tsv'.format(command)
+    recorded_relative_path = str(payload.get('metadata_path', '')).strip()
+    if os.path.normpath(recorded_relative_path) != os.path.normpath(expected_relative_path):
+        return None, 'metadata_path does not match command {}'.format(command)
+    metadata_path = _get_filter_metadata_paths(out_dir)[command]
+    if not os.path.isfile(metadata_path):
+        return None, 'recorded metadata file is missing: {}'.format(metadata_path)
+    return metadata_path, None
+
+
+def infer_latest_filter_metadata(out_dir):
+    state_metadata_path, state_error = _read_filter_metadata_state(out_dir)
+    if state_metadata_path is not None:
+        return state_metadata_path
+
+    metadata_paths = _get_filter_metadata_paths(out_dir)
+    existing = [
+        metadata_paths[command]
+        for command in ('csfilter', 'wsfilter')
+        if os.path.isfile(metadata_paths[command])
     ]
-    existing = [path for path in candidates if os.path.isfile(path)]
     if len(existing) == 0:
+        if state_error != 'state file is missing':
+            warnings.warn(
+                'Ignoring invalid filter metadata state ({}); no completed filter metadata was found.'.format(
+                    state_error
+                ),
+                UserWarning,
+                stacklevel=2,
+            )
         return None
-    return max(existing, key=lambda path: os.path.getmtime(path))
+    selected = existing[0]
+    warnings.warn(
+        'Filter metadata state is unavailable ({}). Using legacy deterministic fallback: {}. '
+        'Run wsfilter or csfilter to refresh {}.'.format(
+            state_error,
+            selected,
+            FILTER_METADATA_STATE_FILENAME,
+        ),
+        UserWarning,
+        stacklevel=2,
+    )
+    return selected

@@ -151,6 +151,28 @@ class TestResolvePerSpeciesInput:
         with pytest.raises(NotADirectoryError, match='cstmm input path exists but is not a directory'):
             resolve_per_species_input(args)
 
+    def test_inferred_input_prefers_cstmm_metadata_over_merge(self, tmp_path):
+        out_dir = tmp_path / 'out'
+        cstmm_dir = out_dir / 'cstmm'
+        merge_dir = out_dir / 'merge'
+        cstmm_dir.mkdir(parents=True)
+        merge_dir.mkdir(parents=True)
+        (cstmm_dir / 'metadata.tsv').write_text(
+            'run\tscientific_name\texclusion\nR_CSTMM\tSpecies A\tno_cstmm_output\n',
+            encoding='utf-8',
+        )
+        (merge_dir / 'metadata.tsv').write_text(
+            'run\tscientific_name\texclusion\nR_MERGE\tSpecies A\tno\n',
+            encoding='utf-8',
+        )
+        args = self._args(out_dir=out_dir, input_dir='inferred')
+
+        metadata, resolved_input_dir = resolve_per_species_input(args)
+
+        assert resolved_input_dir == str(cstmm_dir)
+        assert metadata.df['run'].tolist() == ['R_CSTMM']
+        assert metadata.df['exclusion'].tolist() == ['no_cstmm_output']
+
 
 class TestCollectPendingSpeciesForTables:
     def test_redo_replaces_species_symlink(self, tmp_path):

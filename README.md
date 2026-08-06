@@ -128,7 +128,10 @@ and rejects a conflicting explicit value. Metadata created by older versions has
 ## Split Filtering Workflow
 `wsfilter` and `csfilter` are decoupled filters that output `metadata.tsv`, `excluded.tsv`, exclusion summary PDF, and species PDFs (without a `plots/` directory).  
 Run one or both in any order, then export tables once with `finalize`.
-When `--metadata inferred` is used in these commands, the latest filter metadata (`wsfilter/metadata.tsv` or `csfilter/metadata.tsv`) is auto-detected.
+When `--metadata inferred` is used, `filter_metadata_state.json` identifies the metadata from the last successfully
+completed filter, so rerunning `wsfilter` or `csfilter` in either order does not depend on file modification times.
+For workspaces created by older versions without this state file, `csfilter/metadata.tsv` is preferred over
+`wsfilter/metadata.tsv` with an explicit compatibility warning.
 
 ```bash
 # Example: wsfilter -> csfilter -> finalize

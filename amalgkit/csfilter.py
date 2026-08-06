@@ -13,6 +13,7 @@ from amalgkit.filter_utils import (
     merge_metadata_by_run,
     save_exclusion_plot_pdf,
     staged_output_dir,
+    write_filter_metadata_state,
 )
 from amalgkit.orthology_utils import DEFAULT_SINGLE_COPY_THRESHOLD, validate_single_copy_threshold
 from amalgkit.per_species_tables import generate_per_species_tables, resolve_per_species_input
@@ -218,7 +219,7 @@ def csfilter_main(args):
             data = vars(args).copy()
             data['metadata'] = latest_metadata
             resolve_args = SimpleNamespace(**data)
-            print('Using latest filter metadata: {}'.format(latest_metadata))
+            print('Using inferred filter metadata: {}'.format(latest_metadata))
     metadata, input_dir = resolve_per_species_input(resolve_args)
     single_copy_threshold = _resolve_single_copy_threshold(resolve_args, metadata.df)
     out_root = os.path.realpath(args.out_dir)
@@ -260,6 +261,7 @@ def csfilter_main(args):
                 src_dir=os.path.join(tmp_out_dir, 'cross_species'),
                 dst_dir=stage_dir,
             )
+        write_filter_metadata_state(out_dir=out_root, command='csfilter')
     finally:
         if os.path.isdir(tmp_out_dir):
             shutil.rmtree(tmp_out_dir, ignore_errors=True)
