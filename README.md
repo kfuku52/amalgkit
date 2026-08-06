@@ -28,9 +28,10 @@ amalgkit -h
 amalgkit help metadata
 ```
 
-AMALGKIT supports Linux and macOS with Python 3.11 or later. The Bioconda
-package can lag behind the latest GitHub release; run `amalgkit --version` when
-reproducing an analysis.
+AMALGKIT supports Linux and macOS with Python 3.11 or later. The Bioconda recipe
+is updated for major and minor releases, not for every patch release, so the
+packaged version can lag behind the latest GitHub release. Run
+`amalgkit --version` when reproducing an analysis.
 
 `amalgkit getfastq` requires `fasterq-dump` from `sra-tools >= 3` on `PATH`.
 If you manage external tools separately, install it explicitly, for example:

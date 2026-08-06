@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 from amalgkit.cross_species_filter import (
     _calculate_correlation_within_group,
+    _load_expression_tables,
     _resolve_matrix_for_embedding,
     generate_input_symlinks,
     get_sample_group_string,
@@ -13,6 +14,22 @@ from amalgkit.cross_species_filter import (
     run_cross_species_filter,
 )
 from amalgkit.util import Metadata
+
+
+def test_load_expression_tables_reports_all_missing_species_tables(tmp_path):
+    (tmp_path / 'Species_A.no.tc.tsv').touch()
+    (tmp_path / 'Species_B.uncorrected.tc.tsv').touch()
+
+    with pytest.raises(FileNotFoundError) as exc_info:
+        _load_expression_tables(
+            str(tmp_path),
+            ['Species_A', 'Species_B'],
+            'no',
+        )
+
+    message = str(exc_info.value)
+    assert 'Species_A: Species_A.uncorrected.tc.tsv' in message
+    assert 'Species_B: Species_B.no.tc.tsv' in message
 
 
 def test_cross_species_correlations_use_sample_group_reference_across_species():

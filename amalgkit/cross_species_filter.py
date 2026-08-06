@@ -187,6 +187,8 @@ def _load_expression_tables(dir_cross_species_input_table, spp_filled, batch_eff
     uncorrected_suffix = '.uncorrected.tc.tsv'
     corrected_suffix = '.{}.tc.tsv'.format(batch_effect_alg)
     out = {'uncorrected': {}, 'corrected': {}}
+    matched_tables = {}
+    missing_tables = []
     for sp in spp_filled:
         species_prefix = '{}.'.format(sp)
         uncorrected_matches = [name for name in all_files if name.startswith(species_prefix) and name.endswith(uncorrected_suffix)]
@@ -195,10 +197,22 @@ def _load_expression_tables(dir_cross_species_input_table, spp_filled, batch_eff
             raise ValueError('Multiple uncorrected tc tables matched species {}: {}'.format(sp, ', '.join(uncorrected_matches)))
         if len(corrected_matches) > 1:
             raise ValueError('Multiple corrected tc tables matched species {}: {}'.format(sp, ', '.join(corrected_matches)))
-        if (len(uncorrected_matches) == 0) or (len(corrected_matches) == 0):
+        missing_for_species = []
+        if len(uncorrected_matches) == 0:
+            missing_for_species.append('{}{}'.format(sp, uncorrected_suffix))
+        if len(corrected_matches) == 0:
+            missing_for_species.append('{}{}'.format(sp, corrected_suffix))
+        if missing_for_species:
+            missing_tables.append('{}: {}'.format(sp, ', '.join(missing_for_species)))
             continue
-        uncorrected_path = os.path.join(dir_cross_species_input_table, uncorrected_matches[0])
-        corrected_path = os.path.join(dir_cross_species_input_table, corrected_matches[0])
+        matched_tables[sp] = (uncorrected_matches[0], corrected_matches[0])
+    if missing_tables:
+        raise FileNotFoundError(
+            'Required cross-species expression table(s) are missing: {}.'.format('; '.join(missing_tables))
+        )
+    for sp, (uncorrected_name, corrected_name) in matched_tables.items():
+        uncorrected_path = os.path.join(dir_cross_species_input_table, uncorrected_name)
+        corrected_path = os.path.join(dir_cross_species_input_table, corrected_name)
         out['uncorrected'][sp] = pandas.read_csv(uncorrected_path, sep='\t', index_col=0, low_memory=False)
         out['corrected'][sp] = pandas.read_csv(corrected_path, sep='\t', index_col=0, low_memory=False)
         out['uncorrected'][sp].columns = out['uncorrected'][sp].columns.map(str)
