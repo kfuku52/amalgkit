@@ -840,7 +840,7 @@ def load_metadata(args, dir_subcommand='metadata', batch_scope='run'):
     if not os.path.isfile(real_path):
         raise IsADirectoryError('Metadata path exists but is not a file: {}'.format(real_path))
     print('{}: Loading metadata from: {}'.format(datetime.datetime.now(), real_path), flush=True)
-    df = pandas.read_csv(real_path, sep='\t', header=0, low_memory=False)
+    df = pandas.read_csv(real_path, sep='\t', header=0, low_memory=False, encoding='utf-8')
     metadata = Metadata.from_DataFrame(df)
     if 'batch' not in dir(args):
         return metadata
@@ -1134,7 +1134,7 @@ def get_mapping_rate(
             if not os.path.exists(run_info_path):
                 return sra_id, None, 'missing'
             try:
-                with open(run_info_path) as f:
+                with open(run_info_path, encoding='utf-8') as f:
                     run_info = json.load(f)
             except Exception as e:
                 return sra_id, None, 'Failed to read run_info.json for {}: {}'.format(sra_id, e)

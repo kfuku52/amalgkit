@@ -1,3 +1,4 @@
+import builtins
 import json
 import os
 import socket
@@ -1133,6 +1134,26 @@ class TestLoadMetadata:
         assert isinstance(m, Metadata)
         assert m.df.shape[0] == 5
 
+    def test_load_metadata_requests_utf8_encoding(self, tmp_path, sample_metadata, monkeypatch):
+        path = tmp_path / 'metadata.tsv'
+        sample_metadata.df.to_csv(str(path), sep='\t', index=False, encoding='utf-8')
+        observed = {}
+        original_read_csv = pandas.read_csv
+
+        def capture_read_csv(*args, **kwargs):
+            observed['encoding'] = kwargs.get('encoding')
+            return original_read_csv(*args, **kwargs)
+
+        monkeypatch.setattr(pandas, 'read_csv', capture_read_csv)
+
+        class Args:
+            metadata = str(path)
+            out_dir = str(tmp_path)
+
+        load_metadata(Args())
+
+        assert observed['encoding'] == 'utf-8'
+
     def test_load_from_inferred_path(self, tmp_path, sample_metadata):
         """When metadata='inferred', loads from out_dir/metadata/metadata.tsv."""
         meta_dir = tmp_path / 'metadata'
@@ -1535,6 +1556,32 @@ class TestGetMappingRate:
         (sra_dir / 'SRR001_run_info.json').write_text(json.dumps(run_info))
         m = get_mapping_rate(sample_metadata, str(quant_dir))
         assert m.df.loc[m.df['run'] == 'SRR001', 'mapping_rate'].values[0] == 85.5
+
+    def test_reads_run_info_as_utf8_under_non_utf8_locale(self, tmp_path, sample_metadata, monkeypatch):
+        quant_dir = tmp_path / 'quant'
+        sra_dir = quant_dir / 'SRR001'
+        sra_dir.mkdir(parents=True)
+        run_info_path = sra_dir / 'SRR001_run_info.json'
+        run_info_path.write_text(
+            json.dumps({'p_pseudoaligned': 85.5, 'note': '葉'}, ensure_ascii=False),
+            encoding='utf-8',
+        )
+        original_open = builtins.open
+        observed_encodings = []
+
+        def non_utf8_locale_open(file, *args, **kwargs):
+            if os.path.realpath(os.fspath(file)) == os.path.realpath(run_info_path):
+                observed_encodings.append(kwargs.get('encoding'))
+                if 'encoding' not in kwargs:
+                    kwargs['encoding'] = 'ascii'
+            return original_open(file, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, 'open', non_utf8_locale_open)
+
+        metadata = get_mapping_rate(sample_metadata, str(quant_dir), max_workers=1)
+
+        assert metadata.df.loc[metadata.df['run'] == 'SRR001', 'mapping_rate'].values[0] == 85.5
+        assert observed_encodings == ['utf-8']
 
     def test_avoids_quant_root_listdir_scan(self, tmp_path, sample_metadata, monkeypatch):
         quant_dir = tmp_path / 'quant'
