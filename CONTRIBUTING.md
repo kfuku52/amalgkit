@@ -29,10 +29,11 @@ same pull request.
 
 The package version is defined once in `amalgkit/__init__.py`. After the full
 test workflow succeeds for a push to `master`, the release workflow creates the
-matching annotated Git tag and GitHub Release if that version has not already
-been released. Do not reuse or move an existing version tag.
+matching annotated Git tag and GitHub Release only when the patch component is
+zero (for example, `0.17.0` or `1.0.0`). Patch-only versions such as `0.16.39`
+remain available from the default branch without a tag or GitHub Release. Do
+not manually tag patch-only versions, or reuse or move an existing version tag.
 
-Bioconda recipe updates are intentionally limited to releases that change the
-major or minor version. Do not update the Bioconda recipe for patch-only
-releases; patch fixes remain available from GitHub until the next major or minor
-Bioconda update.
+The Bioconda recipe follows these major and minor release tags. Do not update
+the Bioconda recipe for patch-only versions; patch fixes remain available from
+the default branch until the next major or minor release.
