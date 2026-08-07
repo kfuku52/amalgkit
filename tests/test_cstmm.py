@@ -77,6 +77,12 @@ def test_direct_tmm_helpers_reject_invalid_counts_library_sizes_and_factors():
             ref=numpy.array([1.0, 2.0]),
             libsize_obs=0.0,
         )
+    with pytest.raises(ValueError, match='libsize_obs'):
+        calc_factor_tmm(
+            obs=numpy.array([1.0, 2.0]),
+            ref=numpy.array([1.0, 2.0]),
+            libsize_obs=numpy.array([]),
+        )
 
     counts = pandas.DataFrame(
         {'RUN1': [1.0, 2.0], 'RUN2': [2.0, 3.0]},
@@ -508,8 +514,9 @@ class TestCstmmMain:
             redo=False,
             tmm_backend='python',
         )
-        cleaned = {}
-        monkeypatch.setattr('amalgkit.cstmm.cleanup_tmp_amalgkit_files', lambda work_dir: cleaned.setdefault('work_dir', work_dir))
+        cwd_sentinel = tmp_path / 'tmp.amalgkit.keep'
+        cwd_sentinel.write_text('keep')
+        monkeypatch.chdir(tmp_path)
 
         cstmm_main(args)
 
@@ -524,7 +531,7 @@ class TestCstmmMain:
         assert (out_dir / 'cstmm' / 'cstmm_normalization_factor_scatter.pdf').is_file()
         assert (out_dir / 'cstmm' / 'cstmm_mean_expression_boxplot.pdf').is_file()
         assert (out_dir / 'cstmm' / 'cstmm_exclusion.pdf').is_file()
-        assert cleaned['work_dir'] == '.'
+        assert cwd_sentinel.read_text() == 'keep'
 
         corrected = pandas.read_csv(counts_path, sep='\t')
         corrected_matrix = corrected.set_index('target_id')
@@ -555,10 +562,8 @@ class TestCstmmMain:
             orthogroup_table=str(orthogroup),
             redo=False,
             tmm_backend='python',
+            single_copy_threshold=75.0,
         )
-        cleaned = {}
-        monkeypatch.setattr('amalgkit.cstmm.cleanup_tmp_amalgkit_files', lambda work_dir: cleaned.setdefault('work_dir', work_dir))
-
         cstmm_main(args)
 
         metadata_path = out_dir / 'cstmm' / 'metadata.tsv'
@@ -574,8 +579,6 @@ class TestCstmmMain:
         assert (out_dir / 'cstmm' / 'cstmm_normalization_factor_scatter.pdf').is_file()
         assert (out_dir / 'cstmm' / 'cstmm_mean_expression_boxplot.pdf').is_file()
         assert (out_dir / 'cstmm' / 'cstmm_exclusion.pdf').is_file()
-        assert cleaned['work_dir'] == '.'
-
         df_sog = pandas.DataFrame(
             {
                 'Species_A_R1': [100.0, 50.0, 30.0],
@@ -625,6 +628,7 @@ class TestCstmmMain:
         metadata_df = pandas.read_csv(metadata_path, sep='\t')
         assert 'tmm_library_size' in metadata_df.columns
         assert 'tmm_normalization_factor' in metadata_df.columns
+        assert set(metadata_df['single_copy_threshold']) == {75.0}
         retained = metadata_df.loc[metadata_df['scientific_name'] != 'Species B', 'exclusion']
         assert set(retained) == {'no'}
         excluded = metadata_df.loc[

@@ -62,13 +62,11 @@ def print_command_output(stdout_txt, stderr_txt, stdout_label=None, stderr_label
 
 def _timeout_error_message(timeout_seconds, command_txt, exc):
     timeout_txt = '' if timeout_seconds is None else ' after {:,} sec'.format(int(float(timeout_seconds)))
-    stderr_txt = getattr(exc, 'stderr', None)
-    if stderr_txt is None:
-        stderr_txt = b''
+    stderr_txt = decode_command_output(getattr(exc, 'stderr', None))
     return 'Command timed out{}: {}\n{}'.format(
         timeout_txt,
         command_txt,
-        stderr_txt.decode('utf8', errors='replace').rstrip(),
+        stderr_txt.rstrip(),
     )
 
 
@@ -86,7 +84,7 @@ def _run_command_with_timeout(runner, command, timeout_seconds):
         # Injected test runners (and some thin wrappers) accept only
         # (command, stdout, stderr); fall back without the timeout so the
         # timeout capability remains opt-in for real subprocess calls.
-        if 'timeout' not in str(exc):
+        if "unexpected keyword argument 'timeout'" not in str(exc):
             raise
         return runner(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
@@ -185,7 +183,7 @@ def run_logged_check_call(
         try:
             return runner(command, timeout=float(timeout_seconds))
         except TypeError as exc:
-            if 'timeout' not in str(exc):
+            if "unexpected keyword argument 'timeout'" not in str(exc):
                 raise
             return runner(command)
     except subprocess.TimeoutExpired as exc:

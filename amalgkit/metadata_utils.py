@@ -840,7 +840,7 @@ def load_metadata(args, dir_subcommand='metadata', batch_scope='run'):
     if not os.path.isfile(real_path):
         raise IsADirectoryError('Metadata path exists but is not a file: {}'.format(real_path))
     print('{}: Loading metadata from: {}'.format(datetime.datetime.now(), real_path), flush=True)
-    df = pandas.read_csv(real_path, sep='\t', header=0, low_memory=False)
+    df = pandas.read_csv(real_path, sep='\t', header=0, low_memory=False, encoding='utf-8')
     metadata = Metadata.from_DataFrame(df)
     if 'batch' not in dir(args):
         return metadata
@@ -1027,7 +1027,7 @@ def get_newest_intermediate_file_extension(sra_stat, work_dir, files=None):
             for f in set(safe_delete_names)
         ])
         if len(safe_delete_files):
-            txt = 'getfastq safely_removed flag was detected. `amalgkit quant` has been completed in this sample: {}\n'
+            txt = 'getfastq safely_removed flag was detected. FASTQ input was removed after a previous quant run: {}\n'
             sys.stdout.write(txt.format(work_dir))
             for safe_delete_file in safe_delete_files:
                 sys.stdout.write('{}\n'.format(safe_delete_file))
@@ -1134,7 +1134,7 @@ def get_mapping_rate(
             if not os.path.exists(run_info_path):
                 return sra_id, None, 'missing'
             try:
-                with open(run_info_path) as f:
+                with open(run_info_path, encoding='utf-8') as f:
                     run_info = json.load(f)
             except Exception as e:
                 return sra_id, None, 'Failed to read run_info.json for {}: {}'.format(sra_id, e)

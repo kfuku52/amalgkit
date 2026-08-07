@@ -11,6 +11,7 @@ from amalgkit.filter_utils import (
     merge_metadata_by_run,
     save_exclusion_plot_pdf,
     staged_output_dir,
+    write_filter_metadata_state,
 )
 from amalgkit.per_species_tables import generate_per_species_tables, resolve_per_species_input
 
@@ -39,9 +40,8 @@ def _build_per_species_args(args, input_dir, tmp_out_dir):
 
 
 def _write_excluded_table(df_metadata, out_path):
-    reason = 'low_within_sample_group_correlation'
-    exclusion_values = df_metadata['exclusion'].fillna('').astype(str).str.strip()
-    excluded = df_metadata.loc[exclusion_values == reason, :].copy()
+    exclusion_values = df_metadata['exclusion'].fillna('').astype(str).str.strip().str.lower()
+    excluded = df_metadata.loc[~exclusion_values.eq('no'), :].copy()
     preferred_cols = [
         'run',
         'scientific_name',
@@ -52,6 +52,7 @@ def _write_excluded_table(df_metadata, out_path):
         'ws_max_nongroup_cor',
         'ws_margin',
         'ws_robust_z',
+        'ws_small_group',
     ]
     cols = [col for col in preferred_cols if col in excluded.columns]
     if len(cols) == 0:
@@ -69,7 +70,7 @@ def wsfilter_main(args):
             data = vars(args).copy()
             data['metadata'] = latest_metadata
             resolve_args = SimpleNamespace(**data)
-            print('Using latest filter metadata: {}'.format(latest_metadata))
+            print('Using inferred filter metadata: {}'.format(latest_metadata))
     metadata, input_dir = resolve_per_species_input(resolve_args)
     out_root = os.path.realpath(args.out_dir)
     dir_ws = os.path.join(out_root, 'wsfilter')
@@ -101,6 +102,7 @@ def wsfilter_main(args):
                 per_species_dir=os.path.join(tmp_out_dir, 'per_species'),
                 dst_dir=stage_dir,
             )
+        write_filter_metadata_state(out_dir=out_root, command='wsfilter')
     finally:
         if os.path.isdir(tmp_out_dir):
             shutil.rmtree(tmp_out_dir, ignore_errors=True)

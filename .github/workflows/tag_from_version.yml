@@ -38,8 +38,9 @@ jobs:
         id: package
         shell: bash
         run: |
-          VERSION=$(python - <<'PY'
+          python - <<'PY'
           import ast
+          import os
           import pathlib
           import re
 
@@ -52,15 +53,24 @@ jobs:
               if any(isinstance(target, ast.Name) and target.id == '__version__' for target in node.targets):
                   version = ast.literal_eval(node.value)
                   break
-          if not isinstance(version, str) or not re.fullmatch(r'\d+\.\d+\.\d+(?:[a-z]+\d+)?', version):
+          match = re.fullmatch(r'(\d+)\.(\d+)\.(\d+)(?:[a-z]+\d+)?', version) if isinstance(version, str) else None
+          if match is None:
               raise SystemExit('Invalid or missing __version__ in {}'.format(init_path))
-          print(version)
+          should_release = int(match.group(3)) == 0
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
+              output.write('version={}\n'.format(version))
+              output.write('tag=v{}\n'.format(version))
+              output.write('should_release={}\n'.format(str(should_release).lower()))
           PY
-          )
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Skip patch-only release
+        if: steps.package.outputs.should_release != 'true'
+        env:
+          VERSION: ${{ steps.package.outputs.version }}
+        run: echo "Skipping Git tag and GitHub Release for patch-only version $VERSION."
 
       - name: Create version tag
+        if: steps.package.outputs.should_release == 'true'
         id: tag
         env:
           EVENT_NAME: ${{ github.event_name }}
@@ -86,7 +96,7 @@ jobs:
           fi
 
       - name: Create GitHub Release if missing
-        if: steps.tag.outputs.skip != 'true'
+        if: steps.package.outputs.should_release == 'true' && steps.tag.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.package.outputs.tag }}

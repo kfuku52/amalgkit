@@ -43,12 +43,15 @@ def test_help_topic_csfilter_exits_zero():
     merged = (out.stdout + '\n' + out.stderr).lower()
     assert '--orthogroup_table' in merged
     assert '--robust_z_threshold' in merged
+    assert '--single_copy_threshold' in merged
+    assert 'escape a literal comma or pipe' in merged
 
 
 def test_help_topic_finalize_exits_zero():
     out = run_cli('help', 'finalize')
     assert out.returncode == 0
     merged = (out.stdout + '\n' + out.stderr).lower()
+    compact = ' '.join(merged.split())
     assert '--batch_effect_alg' in merged
     assert '--seed' in merged
     assert '--sva_nsv' in merged
@@ -58,6 +61,8 @@ def test_help_topic_finalize_exits_zero():
     assert '--ruvseq_backend' in merged
     assert '--latent_family' in merged
     assert 'latent_glm' in merged
+    assert 'default=0: random seed for stochastic steps' in compact
+    assert '"auto" uses os entropy and may produce non-reproducible results' in compact
 
 
 def test_help_topic_cstmm_includes_redo():
@@ -66,6 +71,15 @@ def test_help_topic_cstmm_includes_redo():
     merged = (out.stdout + '\n' + out.stderr).lower()
     assert '--redo' in merged
     assert '--tmm_backend' in merged
+    assert '--single_copy_threshold' in merged
+
+
+def test_single_copy_threshold_rejects_values_outside_percentage_range():
+    for command in ['cstmm', 'csfilter']:
+        for value in ['0', '101', 'nan']:
+            out = run_cli(command, '--single_copy_threshold', value)
+            assert out.returncode != 0
+            assert 'must be > 0 and <= 100' in out.stderr
 
 
 def test_help_topic_quant_mentions_backend_specific_index_building():
@@ -184,3 +198,21 @@ def test_help_topic_dataset_mentions_init_workspace_scaffold():
     assert '--name' in merged
     assert 'init' in merged
     assert 'workspace scaffold' in merged
+
+
+def test_small_group_policy_option_is_exposed_for_filter_commands():
+    # The small-group policy must be reachable from the CLI, not only from the
+    # Python API, and it must offer both documented values.
+    for command in ('wsfilter', 'csfilter'):
+        out = run_cli(command, '--help')
+        assert out.returncode == 0, out.stderr
+        merged = out.stdout + '\n' + out.stderr
+        assert '--small_group_policy' in merged, command
+        assert 'margin_fallback' in merged, command
+        assert 'retain' in merged, command
+
+
+def test_small_group_policy_rejects_unknown_value():
+    out = run_cli('wsfilter', '--small_group_policy', 'keep_everything')
+    assert out.returncode != 0
+    assert 'invalid choice' in (out.stdout + out.stderr).lower()

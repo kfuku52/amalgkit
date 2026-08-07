@@ -80,9 +80,10 @@ def test_run_logged_command_applies_timeout_to_real_subprocess():
         )
 
 
-def test_run_logged_command_timeout_preserves_stderr():
+@pytest.mark.parametrize('timeout_stderr', [b'hung stderr', 'hung stderr'])
+def test_run_logged_command_timeout_preserves_stderr(timeout_stderr):
     def fake_run(_cmd, stdout=None, stderr=None, timeout=5):
-        raise subprocess.TimeoutExpired(cmd=['dummy'], timeout=float(timeout), stderr=b'hung stderr')
+        raise subprocess.TimeoutExpired(cmd=['dummy'], timeout=float(timeout), stderr=timeout_stderr)
 
     with pytest.raises(TimeoutError, match='hung stderr'):
         run_logged_command(
@@ -131,6 +132,43 @@ def test_run_logged_check_call_falls_back_for_runner_without_timeout_param():
     )
 
     assert result == 0
+
+
+def test_run_logged_command_does_not_retry_runner_internal_type_error():
+    calls = []
+
+    def fake_run(cmd, stdout=None, stderr=None, timeout=None):
+        calls.append(timeout)
+        raise TypeError('timeout calculation failed inside runner')
+
+    with pytest.raises(TypeError, match='timeout calculation failed'):
+        run_logged_command(
+            command=['dummy'],
+            runner=fake_run,
+            print_command=False,
+            print_output=False,
+            timeout_seconds=30,
+        )
+
+    assert calls == [30.0]
+
+
+def test_run_logged_check_call_does_not_retry_runner_internal_type_error():
+    calls = []
+
+    def fake_check_call(cmd, timeout=None):
+        calls.append(timeout)
+        raise TypeError('timeout calculation failed inside runner')
+
+    with pytest.raises(TypeError, match='timeout calculation failed'):
+        run_logged_check_call(
+            command=['dummy'],
+            runner=fake_check_call,
+            print_command=False,
+            timeout_seconds=30,
+        )
+
+    assert calls == [30.0]
 
 
 # --- Timeout policy resolution -------------------------------------------------

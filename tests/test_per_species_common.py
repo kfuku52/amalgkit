@@ -61,6 +61,34 @@ def test_sample_group_mean_and_tau_for_two_groups():
     assert tau_df['order'].tolist() == ['leaf|root', 'root|leaf', 'leaf|root', 'leaf|root']
 
 
+def test_sample_group_mean_excludes_flagged_runs_from_group_average():
+    counts_df = pandas.DataFrame(
+        {
+            'RUN1': [10.0, 20.0],
+            'RUN2': [100.0, 200.0],
+        },
+        index=['G1', 'G2'],
+    )
+    metadata_df = pandas.DataFrame(
+        {
+            'run': ['RUN1', 'RUN2'],
+            'sample_group': ['root', 'root'],
+            'bioproject': ['BP1', 'BP1'],
+            'exclusion': ['no', 'manual_removal'],
+        }
+    )
+
+    expected_mean = pandas.DataFrame({'root': [10.0, 20.0]}, index=['G1', 'G2'])
+    for balance_bp in (False, True):
+        observed = sample_group_mean(
+            counts_df=counts_df,
+            metadata_df=metadata_df,
+            balance_bp=balance_bp,
+        )
+        pandas.testing.assert_frame_equal(observed['tc_ave'], expected_mean)
+        assert observed['selected_sample_groups'] == ['root']
+
+
 def test_sample_group_mean_balance_bp_drops_fully_excluded_group():
     counts_df = pandas.DataFrame(
         {

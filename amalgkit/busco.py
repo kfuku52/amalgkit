@@ -598,6 +598,11 @@ def split_busco_extra_args(extra_args):
                     'using attached syntax: {}'.format(short_option, raw_token)
                 )
         tokens, option_name = _consume_busco_extra_arg(extra_args, index)
+        if option_name == '--download':
+            raise ValueError(
+                'BUSCO --tool_args must not include --download because amalgkit manages '
+                'lineage downloads. Use --lineage to select the BUSCO dataset.'
+            )
         if option_name in BUSCO_DOWNLOAD_FORWARD_OPTIONS:
             download_args.extend(tokens)
         if option_name is None:
