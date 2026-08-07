@@ -1,4 +1,6 @@
 import os
+import sys
+import types
 from types import SimpleNamespace
 
 import numpy
@@ -8,6 +10,7 @@ import pytest
 from amalgkit.command_context import PerSpeciesTableContext
 from amalgkit.metadata_utils import Metadata
 from amalgkit.per_species_finalize_python import (
+    _compute_tsne_coordinates,
     _compute_distance_matrix,
     _resolve_scientific_name,
     _run_batch_effect_step,
@@ -15,6 +18,29 @@ from amalgkit.per_species_finalize_python import (
     _transform_raw_to_tpm,
 )
 from amalgkit import per_species_tables as per_species_tables_module
+
+
+@pytest.mark.parametrize(('seed', 'expected'), [(37, 37), ('auto', None)])
+def test_compute_tsne_coordinates_honors_finalize_seed(monkeypatch, seed, expected):
+    observed = {}
+
+    class FakeTSNE:
+        def __init__(self, **kwargs):
+            observed.update(kwargs)
+
+        def fit_transform(self, values):
+            return numpy.zeros((values.shape[0], 2), dtype=float)
+
+    monkeypatch.setitem(sys.modules, 'sklearn.manifold', types.SimpleNamespace(TSNE=FakeTSNE))
+    counts_df = pandas.DataFrame(
+        numpy.arange(20, dtype=float).reshape(5, 4),
+        columns=['RUN1', 'RUN2', 'RUN3', 'RUN4'],
+    )
+
+    coords = _compute_tsne_coordinates(counts_df, random_seed=seed)
+
+    assert coords.shape == (4, 2)
+    assert observed['random_state'] == expected
 
 
 def test_resolve_scientific_name_honors_explicit_species_token():

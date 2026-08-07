@@ -428,6 +428,12 @@ def _run_batch_effect_step(counts_df, metadata_df, eff_length_df, args):
         batch_info['ruv_selected_score'] = summary.get('ruv_selected_score')
         batch_info['ruv_selected_penalized_score'] = summary.get('ruv_selected_penalized_score')
         batch_info['ruv_penalty'] = summary.get('ruv_penalty')
+        batch_info['ruv_residual_method'] = summary.get('ruv_residual_method')
+        batch_info['ruv_pvalue_method'] = summary.get('ruv_pvalue_method')
+        batch_info['ruv_fallback_used'] = summary.get('ruv_fallback_used')
+        batch_info['ruv_fallback_reason'] = summary.get('ruv_fallback_reason')
+        batch_info['ruv_nb_fallback_genes'] = summary.get('ruv_nb_fallback_genes')
+        batch_info['ruv_anova_failure_genes'] = summary.get('ruv_anova_failure_genes')
         batch_info['skip_reason'] = summary.get('skip_reason', '')
         batch_info['corrected_runs'] = summary.get('corrected_run_ids', [])
         sv_info = w_df
@@ -537,7 +543,7 @@ def _compute_mds_coordinates(corr_df):
     return coords
 
 
-def _compute_tsne_coordinates(counts_df):
+def _compute_tsne_coordinates(counts_df, random_seed=0):
     num_samples = counts_df.shape[1]
     coords = numpy.full((num_samples, 2), numpy.nan, dtype=float)
     if num_samples < 4:
@@ -550,10 +556,11 @@ def _compute_tsne_coordinates(counts_df):
     except ImportError:
         return coords
     try:
+        random_state = None if (random_seed is None) or (str(random_seed).lower() == 'auto') else int(random_seed)
         coords = TSNE(
             n_components=2,
             perplexity=float(min(30, max_perplexity)),
-            random_state=1,
+            random_state=random_state,
             init='pca',
             learning_rate='auto',
             method='exact',
@@ -707,6 +714,7 @@ def save_quick_state_comparison_plot(
     batch_effect_alg,
     sv_info=None,
     font_size=8,
+    random_seed=0,
 ):
     if (tc_before.shape[1] <= 1) or (tc_after.shape[1] <= 1):
         return None
@@ -736,8 +744,8 @@ def save_quick_state_comparison_plot(
     pca_after = _compute_pca_coordinates(corr_after)
     coords_before = _compute_mds_coordinates(corr_before)
     coords_after = _compute_mds_coordinates(corr_after)
-    tsne_before = _compute_tsne_coordinates(before)
-    tsne_after = _compute_tsne_coordinates(after)
+    tsne_before = _compute_tsne_coordinates(before, random_seed=random_seed)
+    tsne_after = _compute_tsne_coordinates(after, random_seed=random_seed)
     tau_before = sample_group_to_tau(
         tc_sample_group_df=sample_group_mean(before, metadata, selected_sample_groups)['tc_ave'],
         rich_annotation=False,
@@ -925,6 +933,7 @@ def run_finalize_python_worker(args, metadata, species_tag, input_dir):
             num_total_runs_species=num_total_runs_species,
             num_runs_after_sample_group_filter=num_runs_after_sample_group_filter,
             total_runtime_sec=0.0,
+            species_tag=species_tag,
         )
         write_batch_effect_summary_tsv(
             batch_info=batch_info_current,
@@ -953,6 +962,7 @@ def run_finalize_python_worker(args, metadata, species_tag, input_dir):
             batch_effect_alg=str(getattr(args, 'batch_effect_alg', 'no')),
             sv_info=out.get('sva'),
             font_size=8,
+            random_seed=getattr(args, 'seed', 0),
         )
     if bool(getattr(args, 'maintain_zero', True)):
         tc_batch_corrected = tc_batch_corrected.copy()
@@ -1012,6 +1022,7 @@ def run_finalize_python_worker(args, metadata, species_tag, input_dir):
         num_total_runs_species=num_total_runs_species,
         num_runs_after_sample_group_filter=num_runs_after_sample_group_filter,
         total_runtime_sec=0.0,
+        species_tag=species_tag,
     )
     write_batch_effect_summary_tsv(
         batch_info=batch_info_current,

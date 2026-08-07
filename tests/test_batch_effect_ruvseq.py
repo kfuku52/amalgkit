@@ -1,11 +1,59 @@
 import numpy
 import pandas
+import pytest
 
+import amalgkit.batch_effect_ruvseq as batch_effect_ruvseq
 from amalgkit.batch_effect_ruvseq import (
     _between_lane_normalize_upper,
     run_ruvseq_backend,
     ruvr_correct_counts,
 )
+
+
+def test_run_ruvseq_backend_reports_wholesale_glm_fallback(monkeypatch):
+    counts_df = pandas.DataFrame(
+        {
+            'RUN1': [100.0, 20.0, 80.0],
+            'RUN2': [95.0, 22.0, 75.0],
+            'RUN3': [18.0, 105.0, 30.0],
+            'RUN4': [20.0, 100.0, 28.0],
+        },
+        index=['G1', 'G2', 'G3'],
+    )
+    metadata_df = pandas.DataFrame(
+        {
+            'run': list(counts_df.columns),
+            'sample_group': ['A', 'A', 'B', 'B'],
+            'bioproject': ['BP1', 'BP2', 'BP1', 'BP2'],
+        }
+    )
+
+    def force_glm_failure(counts_df, design_df, effective_lib_sizes, diagnostics=None):
+        batch_effect_ruvseq._record_ruv_fallback(diagnostics, 'forced_glm_failure')
+        return None, None
+
+    monkeypatch.setattr(
+        batch_effect_ruvseq,
+        '_compute_glm_pvalues_and_residuals',
+        force_glm_failure,
+    )
+
+    with pytest.warns(UserWarning, match='fallback estimation path'):
+        _corrected_df, _w_df, summary = run_ruvseq_backend(
+            counts_df=counts_df,
+            metadata_df=metadata_df,
+            control_mode='all',
+            k_setting='0',
+            k_max=2,
+            min_controls=2,
+        )
+
+    assert summary['ruv_residual_method'] == 'least_squares'
+    assert summary['ruv_pvalue_method'] == 'one_way_anova'
+    assert summary['ruv_fallback_used'] is True
+    assert summary['ruv_fallback_reason'] == 'forced_glm_failure'
+    assert summary['ruv_nb_fallback_genes'] == 0
+    assert summary['ruv_anova_failure_genes'] == 0
 
 
 def test_ruvr_correct_counts_preserves_shape_and_nonnegative_values():

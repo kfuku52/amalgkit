@@ -1,6 +1,7 @@
 import pytest
 
 from amalgkit.runtime_utils import (
+    build_species_token_map,
     resolve_species_token,
     safe_join_component,
     validate_safe_path_component,
@@ -52,6 +53,14 @@ def test_safe_join_component_rejects_symbolic_link_root(tmp_path):
 def test_explicit_species_token_must_be_canonical():
     with pytest.raises(ValueError, match='ASCII letters'):
         resolve_species_token('Species A', 'token (x)')
+
+
+def test_build_species_token_map_rejects_conflicting_tokens_for_one_species():
+    with pytest.raises(ValueError, match='conflicting species_token'):
+        build_species_token_map(
+            ['Homo sapiens', 'Homo sapiens'],
+            ['human', 'Homo_sapiens'],
+        )
 
 
 @pytest.mark.parametrize(

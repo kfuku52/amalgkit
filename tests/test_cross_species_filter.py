@@ -9,6 +9,7 @@ from amalgkit.cross_species_filter import (
     _calculate_correlation_within_group,
     _load_expression_tables,
     _normalize_cross_species_metadata_table,
+    _prepare_metadata_table,
     _resolve_matrix_for_embedding,
     _select_single_copy_orthogroups,
     generate_input_symlinks,
@@ -77,6 +78,39 @@ def test_normalize_cross_species_metadata_table_normalizes_case_and_whitespace()
     )
     normalized = _normalize_cross_species_metadata_table(df)
     assert normalized.loc[:, 'exclusion'].tolist() == ['no', 'no', 'manual_removal']
+
+
+def test_normalize_cross_species_metadata_table_honors_explicit_species_token():
+    df = pandas.DataFrame(
+        {
+            'run': ['RUN1', 'RUN2'],
+            'scientific_name': ['Homo sapiens', 'Mus musculus'],
+            'species_token': ['human', 'mouse'],
+            'sample_group': ['leaf', 'leaf'],
+            'exclusion': ['no', 'no'],
+        }
+    )
+
+    normalized = _normalize_cross_species_metadata_table(df)
+
+    assert normalized.loc[:, 'species_tag'].tolist() == ['human', 'mouse']
+
+
+def test_prepare_cross_species_metadata_matches_explicit_token_directories(tmp_path):
+    pandas.DataFrame(
+        {
+            'run': ['RUN1'],
+            'scientific_name': ['Homo sapiens'],
+            'species_token': ['human'],
+            'sample_group': ['leaf'],
+            'exclusion': ['no'],
+        }
+    ).to_csv(tmp_path / 'human.metadata.tsv', sep='\t', index=False)
+
+    observed = _prepare_metadata_table(str(tmp_path), ['leaf'], ['human'])
+
+    assert observed.loc[:, 'run'].tolist() == ['RUN1']
+    assert observed.loc[:, 'species_tag'].tolist() == ['human']
 
 
 def test_cross_species_retains_only_exclusion_no_across_reason_values():

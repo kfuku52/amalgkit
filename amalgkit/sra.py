@@ -1,4 +1,6 @@
 from Bio import Entrez
+from contextlib import contextmanager
+from contextvars import ContextVar
 import datetime
 from defusedxml.ElementTree import parse as parse_untrusted_xml
 from http.client import IncompleteRead
@@ -9,8 +11,50 @@ import xml.etree.ElementTree as ET
 from urllib.error import HTTPError, URLError
 
 from amalgkit.download_utils import maybe_acquire_download_semaphore
+from amalgkit.subprocess_utils import resolve_timeout_seconds
 
 SRA_ACCESSION_PATTERN = re.compile(r'\b(?:[SED](?:RR|RP|RS|RX)\d+)\b', re.IGNORECASE)
+NCBI_METADATA_TIMEOUT_SECONDS = 300
+_ENTREZ_TIMEOUT_CONTEXT = ContextVar('amalgkit_entrez_timeout_seconds', default=None)
+_ENTREZ_ORIGINAL_URLOPEN = getattr(
+    Entrez.urlopen,
+    '_amalgkit_original_urlopen',
+    Entrez.urlopen,
+)
+
+
+def _entrez_urlopen_with_timeout(*args, **kwargs):
+    timeout_seconds = _ENTREZ_TIMEOUT_CONTEXT.get()
+    if timeout_seconds is not None:
+        kwargs.setdefault('timeout', float(timeout_seconds))
+    return _ENTREZ_ORIGINAL_URLOPEN(*args, **kwargs)
+
+
+_entrez_urlopen_with_timeout._amalgkit_original_urlopen = _ENTREZ_ORIGINAL_URLOPEN
+if not hasattr(Entrez.urlopen, '_amalgkit_original_urlopen'):
+    # Bio.Entrez does not expose a request-timeout argument. Its private request
+    # helper resolves this module-level urlopen symbol, so a context-local
+    # wrapper lets concurrent amalgkit workers use their own timeout without
+    # changing the process-wide socket default.
+    Entrez.urlopen = _entrez_urlopen_with_timeout
+
+
+def resolve_ncbi_metadata_timeout_seconds(args, default_seconds=NCBI_METADATA_TIMEOUT_SECONDS):
+    return resolve_timeout_seconds(
+        args=args,
+        attribute_name='ncbi_metadata_timeout_seconds',
+        default_seconds=default_seconds,
+    )
+
+
+@contextmanager
+def entrez_request_timeout(args=None):
+    timeout_seconds = resolve_ncbi_metadata_timeout_seconds(args)
+    token = _ENTREZ_TIMEOUT_CONTEXT.set(timeout_seconds)
+    try:
+        yield timeout_seconds
+    finally:
+        _ENTREZ_TIMEOUT_CONTEXT.reset(token)
 
 
 def _close_entrez_handle(handle):
@@ -45,20 +89,20 @@ def esearch_sra_with_retry(search_term, args=None):
             limit_attr='ncbi_metadata_max_concurrency',
             semaphore_name='ncbi_metadata',
             lock_label='NCBI metadata download',
-        ):
+        ), entrez_request_timeout(args):
             sra_handle = Entrez.esearch(db='sra', term=search_term, retmax=10000000)
             try:
                 return Entrez.read(sra_handle)
             finally:
                 _close_entrez_handle(sra_handle)
-    except (HTTPError, URLError) as exc:
+    except (HTTPError, URLError, TimeoutError) as exc:
         print(exc, '- Trying Entrez.esearch() again...')
         with maybe_acquire_download_semaphore(
             args=args,
             limit_attr='ncbi_metadata_max_concurrency',
             semaphore_name='ncbi_metadata',
             lock_label='NCBI metadata download',
-        ):
+        ), entrez_request_timeout(args):
             sra_handle = Entrez.esearch(db='sra', term=search_term, retmax=10000000)
             try:
                 return Entrez.read(sra_handle)
@@ -74,13 +118,13 @@ def fetch_sra_xml_chunk(record_ids, start, end, retmax, max_retry=10, verbose=Tr
                 limit_attr='ncbi_metadata_max_concurrency',
                 semaphore_name='ncbi_metadata',
                 lock_label='NCBI metadata download',
-            ):
+            ), entrez_request_timeout(args):
                 handle = Entrez.efetch(db='sra', id=record_ids[start:end], rettype='full', retmode='xml', retmax=retmax)
                 try:
                     return parse_untrusted_xml(handle).getroot()
                 finally:
                     _close_entrez_handle(handle)
-        except (HTTPError, URLError) as exc:
+        except (HTTPError, URLError, TimeoutError) as exc:
             if verbose:
                 print(
                     '{} - Trying Entrez.efetch() again after {:,} seconds...'.format(exc, int(retry_sleep_second)),

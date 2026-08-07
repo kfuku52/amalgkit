@@ -201,7 +201,7 @@ def normalize_busco_table(src_path, dest_path):
     src_path_lower = src_path.lower()
     open_func = gzip.open if src_path_lower.endswith('.gz') else open
     compression = 'gzip' if src_path_lower.endswith('.gz') else None
-    with open_func(src_path, 'rt') as f:
+    with open_func(src_path, 'rt', encoding='utf-8') as f:
         for line in f:
             if not line.startswith('#'):
                 continue
@@ -242,7 +242,7 @@ def normalize_busco_table(src_path, dest_path):
         df.columns = REQUIRED_COLUMNS
     df = normalize_busco_columns(df)
     df = df.loc[:, REQUIRED_COLUMNS]
-    with open(dest_path, 'w') as f:
+    with open(dest_path, 'w', encoding='utf-8') as f:
         f.write('# Busco id\tStatus\tSequence\tScore\tLength\tOrthoDB url\tDescription\n')
         df.to_csv(f, sep='\t', index=False, header=False)
 

@@ -8,6 +8,7 @@ import pytest
 from amalgkit.busco import BUSCO_TOOL_TIMEOUT_SECONDS, resolve_busco_tool_timeout_seconds
 from amalgkit.getfastq import (
     GETFASTQ_TOOL_TIMEOUT_SECONDS,
+    concatenate_files_with_system_cat,
     resolve_getfastq_dependency_probe_timeout_seconds,
     resolve_getfastq_tool_timeout_seconds,
 )
@@ -53,6 +54,13 @@ def test_dependency_probe_timeout_option_is_exposed(command):
     out = run_cli(command, '--help')
     assert out.returncode == 0, out.stderr
     assert '--dependency_probe_timeout_seconds' in (out.stdout + out.stderr), command
+
+
+@pytest.mark.parametrize('command', ('metadata', 'getfastq'))
+def test_ncbi_metadata_timeout_option_is_exposed(command):
+    out = run_cli(command, '--help')
+    assert out.returncode == 0, out.stderr
+    assert '--ncbi_metadata_timeout_seconds' in (out.stdout + out.stderr), command
 
 
 @pytest.mark.parametrize('command', TIMEOUT_COMMANDS)
@@ -132,6 +140,32 @@ def test_tool_timeout_override_reaches_the_subprocess_runner(monkeypatch, tmp_pa
     observed.clear()
     integrate.scan_fastq_stats_with_seqkit_batch(path_fastq_paths=[str(fastq_path)])
     assert observed['timeout'] == float(INTEGRATE_SEQKIT_TIMEOUT_SECONDS)
+
+
+def test_getfastq_cat_receives_timeout_and_removes_partial_output_on_timeout(monkeypatch, tmp_path):
+    infile_path = tmp_path / 'input.fastq.gz'
+    outfile_path = tmp_path / 'output.fastq.gz'
+    infile_path.write_bytes(b'content')
+    observed = {}
+
+    monkeypatch.setattr('amalgkit.getfastq.shutil.which', lambda _name: '/bin/cat')
+
+    def fake_run(command, stdout=None, stderr=None, timeout=None):
+        observed['timeout'] = timeout
+        stdout.write(b'partial')
+        raise subprocess.TimeoutExpired(command, timeout)
+
+    monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
+
+    with pytest.raises(TimeoutError, match='Command timed out after 17 sec'):
+        concatenate_files_with_system_cat(
+            [str(infile_path)],
+            str(outfile_path),
+            timeout_seconds=17,
+        )
+
+    assert observed['timeout'] == 17.0
+    assert not outfile_path.exists()
 
 
 def test_tool_timeout_zero_disables_the_limit_end_to_end(monkeypatch, tmp_path):

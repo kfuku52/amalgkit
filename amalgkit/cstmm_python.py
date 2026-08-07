@@ -15,13 +15,7 @@ from amalgkit.orthology_utils import (
     get_single_copy_orthogroup_mask,
     validate_single_copy_threshold,
 )
-
-
-def _normalize_species_prefix(scientific_name):
-    prefix = str(scientific_name).strip()
-    prefix = re.sub(r'\s+', '_', prefix)
-    prefix = re.sub(r'_+', '_', prefix)
-    return prefix
+from amalgkit.runtime_utils import build_species_token_map
 
 
 def _list_matching_files(path_dir, pattern):
@@ -178,8 +172,18 @@ def append_tmm_stats_to_metadata_python(metadata_df, roundtrip):
     df_metadata = metadata_df.copy()
     df_metadata['scientific_name'] = df_metadata['scientific_name'].astype(str).str.strip()
     df_metadata['run'] = df_metadata['run'].astype(str).str.strip()
+    explicit_tokens = (
+        df_metadata['species_token'].fillna('').astype(str).str.strip().tolist()
+        if 'species_token' in df_metadata.columns
+        else None
+    )
+    token_by_species = build_species_token_map(
+        scientific_names=df_metadata['scientific_name'].tolist(),
+        explicit_tokens=explicit_tokens,
+        context='cstmm output',
+    )
     df_metadata['sample_id'] = [
-        '{}_{}'.format(_normalize_species_prefix(scientific_name), run_id)
+        '{}_{}'.format(token_by_species[scientific_name], run_id)
         for scientific_name, run_id in zip(df_metadata['scientific_name'], df_metadata['run'])
     ]
     df_nf = _build_norm_factor_frame(metadata_df=df_metadata, roundtrip=roundtrip)

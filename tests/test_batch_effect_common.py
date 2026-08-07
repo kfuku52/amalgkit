@@ -41,6 +41,10 @@ def test_initialize_batch_info_matches_finalize_defaults():
     assert observed['resolved_sva_nsv'] is None
     assert observed['resolved_ruv_k'] is None
     assert observed['resolved_latent_k'] is None
+    assert observed['ruv_residual_method'] is None
+    assert observed['ruv_pvalue_method'] is None
+    assert observed['ruv_fallback_used'] is None
+    assert observed['ruv_fallback_reason'] is None
 
 
 def test_annotate_metadata_with_batch_info_marks_corrected_runs():
@@ -87,6 +91,12 @@ def test_build_batch_effect_summary_dataframe_matches_expected_columns():
             'ruv_selected_score': 0.5,
             'ruv_selected_penalized_score': 0.6,
             'ruv_penalty': 0.1,
+            'ruv_residual_method': 'glm_deviance',
+            'ruv_pvalue_method': 'glm_lrt',
+            'ruv_fallback_used': False,
+            'ruv_fallback_reason': '',
+            'ruv_nb_fallback_genes': 0,
+            'ruv_anova_failure_genes': 0,
             'skip_reason': '',
         }
     )
@@ -106,6 +116,9 @@ def test_build_batch_effect_summary_dataframe_matches_expected_columns():
     assert observed.loc[0, 'uncorrected_runs'] == 'RUN3'
     assert int(observed.loc[0, 'resolved_ruv_k']) == 2
     assert int(observed.loc[0, 'resolved_ruv_controls']) == 150
+    assert observed.loc[0, 'ruv_residual_method'] == 'glm_deviance'
+    assert observed.loc[0, 'ruv_pvalue_method'] == 'glm_lrt'
+    assert bool(observed.loc[0, 'ruv_fallback_used']) is False
 
 
 def test_build_batch_effect_summary_dataframe_accepts_batch_effect_result():

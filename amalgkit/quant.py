@@ -727,9 +727,9 @@ def adapt_oarfish_outputs(output_dir, sra_id, sra_stat, output_prefix, seq_tech)
         'tpm': tpm,
     })
     abundance_path = os.path.join(output_dir, sra_id + '_abundance.tsv')
-    abundance_df.to_csv(abundance_path, sep='\t', index=False)
+    abundance_df.to_csv(abundance_path, sep='\t', index=False, encoding='utf-8')
 
-    with open(meta_info_path) as meta_handle:
+    with open(meta_info_path, encoding='utf-8') as meta_handle:
         meta_info = json.load(meta_handle)
     if not isinstance(meta_info, dict):
         meta_info = {'oarfish_meta_info': meta_info}
@@ -755,7 +755,7 @@ def adapt_oarfish_outputs(output_dir, sra_id, sra_stat, output_prefix, seq_tech)
     run_info['num_pseudoaligned'] = mapped_reads
     run_info['p_pseudoaligned'] = p_pseudoaligned
     run_info_path = os.path.join(output_dir, sra_id + '_run_info.json')
-    with open(run_info_path, 'w') as run_info_handle:
+    with open(run_info_path, 'w', encoding='utf-8') as run_info_handle:
         json.dump(run_info, run_info_handle, indent=2, sort_keys=True)
 
 

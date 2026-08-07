@@ -1,4 +1,5 @@
 import gzip
+import builtins
 import os
 import pytest
 import pandas
@@ -243,6 +244,33 @@ def test_normalize_busco_table_from_gzip(tmp_path):
     content = dest.read_text()
     assert content.startswith("# Busco id\tStatus\tSequence\tScore\tLength\tOrthoDB url\tDescription")
     assert "BUSCO1" in content
+
+
+def test_normalize_busco_table_uses_utf8_for_text_io(tmp_path, monkeypatch):
+    src = tmp_path / 'full_table.tsv'
+    dest = tmp_path / 'normalized.tsv'
+    src.write_text(
+        '# Busco id\tStatus\tSequence\tScore\tLength\tOrthoDB url\tDescription\n'
+        'BUSCO1\tComplete\tseq1\t100\t200\turl1\t葉の遺伝子\n',
+        encoding='utf-8',
+    )
+    original_open = builtins.open
+    observed = []
+
+    def non_utf8_locale_open(file, *args, **kwargs):
+        resolved = os.path.realpath(os.fspath(file))
+        if resolved in {os.path.realpath(src), os.path.realpath(dest)}:
+            observed.append((resolved, kwargs.get('encoding')))
+            if 'encoding' not in kwargs:
+                kwargs['encoding'] = 'ascii'
+        return original_open(file, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, 'open', non_utf8_locale_open)
+
+    normalize_busco_table(str(src), str(dest))
+
+    assert '葉の遺伝子' in dest.read_text(encoding='utf-8')
+    assert all(encoding == 'utf-8' for _path, encoding in observed)
 
 
 def test_normalize_busco_table_from_uppercase_gzip_extension(tmp_path):

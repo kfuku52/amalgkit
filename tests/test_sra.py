@@ -1,15 +1,19 @@
 import xml.etree.ElementTree as ET
 from io import BytesIO
+from types import SimpleNamespace
 
 import pytest
 from defusedxml.common import EntitiesForbidden
 
 from amalgkit.sra import (
+    _entrez_urlopen_with_timeout,
+    entrez_request_timeout,
     esearch_sra_with_retry,
     extract_sra_accessions,
     fetch_sra_xml_chunk,
     inspect_accession_search_mismatches,
 )
+import amalgkit.sra as sra
 
 
 class RecordingBytesIO(BytesIO):
@@ -59,6 +63,36 @@ def test_esearch_closes_entrez_handle(monkeypatch):
 
     assert esearch_sra_with_retry('SRR000001') == {'IdList': ['ID1']}
     assert handle.was_closed
+
+
+def test_entrez_timeout_context_passes_cli_value_to_urlopen(monkeypatch):
+    observed = {}
+
+    def fake_urlopen(*args, **kwargs):
+        observed['args'] = args
+        observed['kwargs'] = kwargs
+        return object()
+
+    monkeypatch.setattr(sra, '_ENTREZ_ORIGINAL_URLOPEN', fake_urlopen)
+    with entrez_request_timeout(SimpleNamespace(ncbi_metadata_timeout_seconds=17)):
+        _entrez_urlopen_with_timeout('request')
+
+    assert observed['args'] == ('request',)
+    assert observed['kwargs']['timeout'] == 17.0
+
+
+def test_entrez_timeout_can_be_disabled(monkeypatch):
+    observed = {}
+
+    def fake_urlopen(*_args, **kwargs):
+        observed['kwargs'] = kwargs
+        return object()
+
+    monkeypatch.setattr(sra, '_ENTREZ_ORIGINAL_URLOPEN', fake_urlopen)
+    with entrez_request_timeout(SimpleNamespace(ncbi_metadata_timeout_seconds=0)):
+        _entrez_urlopen_with_timeout('request')
+
+    assert 'timeout' not in observed['kwargs']
 
 
 class TestInspectAccessionSearchMismatches:

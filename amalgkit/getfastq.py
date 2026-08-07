@@ -603,26 +603,41 @@ def build_concat_output_path(args, output_dir, subext, outext):
     return os.path.join(output_dir, os.path.basename(args.id_list) + subext + outext)
 
 
-def concatenate_files_with_system_cat(infile_paths, outfile_path):
+def concatenate_files_with_system_cat(
+    infile_paths,
+    outfile_path,
+    timeout_seconds=GETFASTQ_TOOL_TIMEOUT_SECONDS,
+):
     cat_exe = shutil.which('cat')
     if cat_exe is None:
         return False
-    with open(outfile_path, 'wb') as out_handle:
-        def cat_runner(command, stdout=None, stderr=None):
-            _ = stdout
-            return subprocess.run(  # noqa: S603 - command is an argv list headed by resolved system cat
-                command,
-                stdout=out_handle,
-                stderr=stderr,
-            )
+    try:
+        with open(outfile_path, 'wb') as out_handle:
+            def cat_runner(command, stdout=None, stderr=None, timeout=None):
+                _ = stdout
+                run_kwargs = {
+                    'stdout': out_handle,
+                    'stderr': stderr,
+                }
+                if timeout is not None:
+                    run_kwargs['timeout'] = timeout
+                return subprocess.run(  # noqa: S603 - command is an argv list headed by resolved system cat
+                    command,
+                    **run_kwargs,
+                )
 
-        cat_out, _stdout_txt, _stderr_txt = run_logged_command(
-            command=[cat_exe] + infile_paths,
-            runner=cat_runner,
-            print_command=False,
-            print_output=False,
-            not_found_label='cat',
-        )
+            cat_out, _stdout_txt, _stderr_txt = run_logged_command(
+                command=[cat_exe] + infile_paths,
+                runner=cat_runner,
+                print_command=False,
+                print_output=False,
+                not_found_label='cat',
+                timeout_seconds=timeout_seconds,
+            )
+    except Exception:
+        if os.path.isfile(outfile_path):
+            os.remove(outfile_path)
+        raise
     if cat_out.returncode == 0:
         return True
     if os.path.exists(outfile_path):
@@ -631,7 +646,14 @@ def concatenate_files_with_system_cat(infile_paths, outfile_path):
     return False
 
 
-def concat_fastq_files_for_subext(run_ids, subext, inext, output_dir, outfile_path):
+def concat_fastq_files_for_subext(
+    run_ids,
+    subext,
+    inext,
+    output_dir,
+    outfile_path,
+    timeout_seconds=GETFASTQ_TOOL_TIMEOUT_SECONDS,
+):
     infiles = [run_id + subext + inext for run_id in run_ids]
     infile_paths = []
     if os.path.exists(outfile_path):
@@ -646,7 +668,11 @@ def concat_fastq_files_for_subext(run_ids, subext, inext, output_dir, outfile_pa
             raise FileNotFoundError('Dumped fastq not found: ' + infile_path)
         print('Concatenated file:', infile_path, flush=True)
         infile_paths.append(infile_path)
-    if not concatenate_files_with_system_cat(infile_paths, outfile_path):
+    if not concatenate_files_with_system_cat(
+        infile_paths,
+        outfile_path,
+        timeout_seconds=timeout_seconds,
+    ):
         for infile_path in infile_paths:
             append_file_binary(infile_path, outfile_path)
     print('')
@@ -687,6 +713,7 @@ def concat_fastq(args, metadata, output_dir, g):
         requested_workers = 1
     requested_workers = max(1, requested_workers)
     worker_count = min(len(subexts), requested_workers)
+    timeout_seconds = resolve_getfastq_tool_timeout_seconds(args)
     if worker_count <= 1:
         for subext in subexts:
             outfile_path = build_concat_output_path(args=args, output_dir=output_dir, subext=subext, outext=outext)
@@ -696,6 +723,7 @@ def concat_fastq(args, metadata, output_dir, g):
                 inext=inext,
                 output_dir=output_dir,
                 outfile_path=outfile_path,
+                timeout_seconds=timeout_seconds,
             )
     else:
         print(
@@ -713,6 +741,7 @@ def concat_fastq(args, metadata, output_dir, g):
                 inext=inext,
                 output_dir=output_dir,
                 outfile_path=outfile_path,
+                timeout_seconds=timeout_seconds,
             )
             return subext
         _, failures = run_tasks_with_optional_threads(

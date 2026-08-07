@@ -279,8 +279,12 @@ def write_curation_summaries(
     num_total_runs_species,
     num_runs_after_sample_group_filter,
     total_runtime_sec,
+    species_tag=None,
 ):
-    species_tag = str(scientific_name).replace(' ', '_')
+    if species_tag is None:
+        species_tag = str(scientific_name).replace(' ', '_')
+    else:
+        species_tag = str(species_tag)
     os.makedirs(dir_tsv, exist_ok=True)
     round_path = os.path.join(
         dir_tsv,

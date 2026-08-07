@@ -324,6 +324,7 @@ def _write_prepare_outputs(
         num_total_runs_species=num_total_runs_species,
         num_runs_after_sample_group_filter=num_runs_after_sample_group_filter,
         total_runtime_sec=0.0,
+        species_tag=species_tag,
     )
     save_tau_histogram_pdf(
         counts_df=tc_final,

@@ -4,7 +4,7 @@ import pandas
 from types import SimpleNamespace
 
 from amalgkit.cstmm import filepath2spp, get_count_files, cstmm_main
-from amalgkit.cstmm_python import _get_df_nonzero
+from amalgkit.cstmm_python import _get_df_nonzero, append_tmm_stats_to_metadata_python
 from amalgkit.imputation import impute_expression
 from amalgkit.normalization_tmm import (
     apply_tmm_factors,
@@ -130,6 +130,27 @@ def test_imputation_minimum_applies_only_to_imputed_values():
 
     assert imputed.loc['G1', 'RUN1'] == -2.0
     assert imputed.loc['G1', 'RUN2'] == 0.0
+
+
+def test_cstmm_metadata_join_honors_explicit_species_token():
+    metadata = pandas.DataFrame(
+        {
+            'run': ['R1'],
+            'scientific_name': ['Homo sapiens'],
+            'species_token': ['human'],
+            'exclusion': ['no'],
+        }
+    )
+    roundtrip = SimpleNamespace(
+        round2_factors=pandas.Series({'human_R1': 1.25}),
+        library_sizes=pandas.Series({'human_R1': 1000.0}),
+    )
+
+    observed = append_tmm_stats_to_metadata_python(metadata, roundtrip)
+
+    assert observed.loc[0, 'exclusion'] == 'no'
+    assert observed.loc[0, 'tmm_library_size'] == 1000.0
+    assert observed.loc[0, 'tmm_normalization_factor'] == 1.25
 
 
 def _read_dcf(path):

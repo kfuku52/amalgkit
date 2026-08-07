@@ -111,6 +111,7 @@ from amalgkit.getfastq import (
     maybe_run_getfastq_second_round,
     remove_stale_getfastq_completion_manifest,
     GETFASTQ_RESUME_SCHEMA_VERSION,
+    GETFASTQ_TOOL_TIMEOUT_SECONDS,
     GETFASTQ_PHASE_COMPLETE,
     GETFASTQ_PHASE_FIRST_ROUND,
     GETFASTQ_PHASE_SECOND_ROUND_IN_PROGRESS,
@@ -2440,9 +2441,17 @@ class TestConcatFastq:
         g = {'num_bp_per_sra': 4}
         observed = {'max_workers': None, 'subexts': []}
 
-        def fake_concat_fastq_files_for_subext(run_ids, subext, inext, output_dir, outfile_path):
+        def fake_concat_fastq_files_for_subext(
+            run_ids,
+            subext,
+            inext,
+            output_dir,
+            outfile_path,
+            timeout_seconds,
+        ):
             assert run_ids == ['SRR001', 'SRR002']
             assert inext == '.amalgkit.fastq.gz'
+            assert timeout_seconds == float(GETFASTQ_TOOL_TIMEOUT_SECONDS)
             observed['subexts'].append(subext)
             with open(outfile_path, 'wt') as out:
                 out.write('dummy-{}\n'.format(subext))

@@ -1,4 +1,5 @@
 import math
+import warnings
 
 import numpy
 import pandas
@@ -67,6 +68,12 @@ def _build_ruvseq_skip_output(counts_df, method, skip_reason):
             'ruv_selected_score': math.nan,
             'ruv_selected_penalized_score': math.nan,
             'ruv_penalty': math.nan,
+            'ruv_residual_method': 'not_run',
+            'ruv_pvalue_method': 'not_run',
+            'ruv_fallback_used': False,
+            'ruv_fallback_reason': '',
+            'ruv_nb_fallback_genes': 0,
+            'ruv_anova_failure_genes': 0,
         },
     )
 
@@ -200,9 +207,20 @@ def _estimate_nb_alpha_from_poisson_fit(y, mu):
     return alpha
 
 
-def _compute_glm_pvalues_and_residuals(counts_df, design_df, effective_lib_sizes):
+def _record_ruv_fallback(diagnostics, reason):
+    diagnostics['ruv_fallback_used'] = True
+    reasons = diagnostics.setdefault('_ruv_fallback_reasons', [])
+    reason = str(reason).strip()
+    if reason != '' and reason not in reasons:
+        reasons.append(reason)
+
+
+def _compute_glm_pvalues_and_residuals(counts_df, design_df, effective_lib_sizes, diagnostics=None):
+    if diagnostics is None:
+        diagnostics = {}
     sm = _load_statsmodels()
     if sm is None:
+        _record_ruv_fallback(diagnostics, 'statsmodels_unavailable')
         return None, None
     x_full = design_df.to_numpy(dtype=float)
     x_null = numpy.ones((design_df.shape[0], 1), dtype=float)
@@ -217,7 +235,11 @@ def _compute_glm_pvalues_and_residuals(counts_df, design_df, effective_lib_sizes
         try:
             poisson_full = sm.GLM(y, x_full, family=sm.families.Poisson(), offset=offset).fit(maxiter=100, disp=0)
             poisson_null = sm.GLM(y, x_null, family=sm.families.Poisson(), offset=offset).fit(maxiter=100, disp=0)
-        except Exception:
+        except Exception as exc:
+            _record_ruv_fallback(
+                diagnostics,
+                'poisson_glm_failed:{}'.format(exc.__class__.__name__),
+            )
             return None, None
         alpha = _estimate_nb_alpha_from_poisson_fit(y=y, mu=poisson_full.fittedvalues)
         fit_full = poisson_full
@@ -228,6 +250,10 @@ def _compute_glm_pvalues_and_residuals(counts_df, design_df, effective_lib_sizes
                 fit_full = sm.GLM(y, x_full, family=nb_family, offset=offset).fit(maxiter=100, disp=0)
                 fit_null = sm.GLM(y, x_null, family=nb_family, offset=offset).fit(maxiter=100, disp=0)
             except Exception:
+                diagnostics['ruv_nb_fallback_genes'] = int(
+                    diagnostics.get('ruv_nb_fallback_genes', 0)
+                ) + 1
+                _record_ruv_fallback(diagnostics, 'negative_binomial_glm_failed')
                 fit_full = poisson_full
                 fit_null = poisson_null
         residuals[row_idx, :] = numpy.asarray(fit_full.resid_deviance, dtype=float).reshape(-1)
@@ -238,7 +264,9 @@ def _compute_glm_pvalues_and_residuals(counts_df, design_df, effective_lib_sizes
     return pvalues_series, residuals_df
 
 
-def _compute_group_pvalues(seq_uq_df, sample_groups):
+def _compute_group_pvalues(seq_uq_df, sample_groups, diagnostics=None):
+    if diagnostics is None:
+        diagnostics = {}
     groups = pandas.Series(sample_groups, index=seq_uq_df.columns).astype(str)
     levels = [level for level in sorted(groups.unique().tolist()) if level != '']
     if len(levels) <= 1:
@@ -259,6 +287,10 @@ def _compute_group_pvalues(seq_uq_df, sample_groups):
         try:
             pvalues[idx] = float(f_oneway(*arrays).pvalue)
         except Exception:
+            diagnostics['ruv_anova_failure_genes'] = int(
+                diagnostics.get('ruv_anova_failure_genes', 0)
+            ) + 1
+            _record_ruv_fallback(diagnostics, 'one_way_anova_failed')
             pvalues[idx] = 1.0
     return pandas.Series(pvalues, index=seq_uq_df.index, dtype=float)
 
@@ -538,14 +570,28 @@ def run_ruvseq_backend(
     # the between-lane scale factors in run_ruvseq_backend so "corrected
     # counts" are on the original count scale.
     seq_uq_df, seq_uq_scales = _between_lane_normalize_upper(counts_df, round_counts=True)
+    diagnostics = {
+        'ruv_residual_method': 'glm_deviance',
+        'ruv_pvalue_method': 'glm_lrt',
+        'ruv_fallback_used': False,
+        'ruv_nb_fallback_genes': 0,
+        'ruv_anova_failure_genes': 0,
+    }
     pvalues, residuals_df = _compute_glm_pvalues_and_residuals(
         counts_df=counts_plus_one,
         design_df=design_df,
         effective_lib_sizes=effective_lib_sizes,
+        diagnostics=diagnostics,
     )
     if (pvalues is None) or (residuals_df is None):
+        diagnostics['ruv_residual_method'] = 'least_squares'
+        diagnostics['ruv_pvalue_method'] = 'one_way_anova'
         residuals_df = compute_design_residuals(seq_uq_df=seq_uq_df, design_df=design_df)
-        pvalues = _compute_group_pvalues(seq_uq_df=seq_uq_df, sample_groups=sample_groups)
+        pvalues = _compute_group_pvalues(
+            seq_uq_df=seq_uq_df,
+            sample_groups=sample_groups,
+            diagnostics=diagnostics,
+        )
     controls = select_ruvseq_controls(
         counts_df=counts_plus_one,
         seq_uq_df=seq_uq_df,
@@ -606,7 +652,23 @@ def run_ruvseq_backend(
         'ruv_selected_score': resolved['score'],
         'ruv_selected_penalized_score': resolved['penalized_score'],
         'ruv_penalty': resolved['penalty'],
+        'ruv_residual_method': diagnostics['ruv_residual_method'],
+        'ruv_pvalue_method': diagnostics['ruv_pvalue_method'],
+        'ruv_fallback_used': bool(diagnostics['ruv_fallback_used']),
+        'ruv_fallback_reason': '|'.join(diagnostics.get('_ruv_fallback_reasons', [])),
+        'ruv_nb_fallback_genes': int(diagnostics['ruv_nb_fallback_genes']),
+        'ruv_anova_failure_genes': int(diagnostics['ruv_anova_failure_genes']),
     }
+    if summary['ruv_fallback_used']:
+        warnings.warn(
+            'RUVSeq used a fallback estimation path ({}). Residual method: {}; p-value method: {}.'.format(
+                summary['ruv_fallback_reason'],
+                summary['ruv_residual_method'],
+                summary['ruv_pvalue_method'],
+            ),
+            UserWarning,
+            stacklevel=2,
+        )
     return corrected_df, resolved['w'], summary
 
 

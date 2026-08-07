@@ -10,6 +10,7 @@ _DCF_FIELD_TYPES = {
     'sva_stable': 'bool',
     'group_model_used': 'bool',
     'group_fallback_used': 'bool',
+    'ruv_fallback_used': 'bool',
     'latent_converged': 'bool',
     'corrected_run_ids': 'str_list',
     'uncorrected_run_ids': 'str_list',
@@ -25,6 +26,8 @@ _DCF_FIELD_TYPES = {
     'latent_iterations': 'int',
     'negative_values_before_clip': 'int',
     'negative_values_after_clip': 'int',
+    'ruv_nb_fallback_genes': 'int',
+    'ruv_anova_failure_genes': 'int',
     'metadata_rows': 'int',
     'latent_objective': 'float',
     'ruv_baseline_score': 'float',
@@ -32,6 +35,9 @@ _DCF_FIELD_TYPES = {
     'ruv_selected_penalized_score': 'float',
     'ruv_penalty': 'float',
     'latent_family': 'nullable_str',
+    'ruv_residual_method': 'nullable_str',
+    'ruv_pvalue_method': 'nullable_str',
+    'ruv_fallback_reason': 'nullable_str',
 }
 
 

@@ -2,6 +2,7 @@ import os
 import json
 import pathlib
 import subprocess
+import builtins
 from contextlib import contextmanager
 
 import pytest
@@ -273,6 +274,43 @@ def test_adapt_oarfish_outputs_rejects_invalid_raw_values(
             output_prefix=str(output_prefix),
             seq_tech='ont-cdna',
         )
+
+
+def test_adapt_oarfish_outputs_uses_utf8_for_json_io(tmp_path, monkeypatch):
+    output_prefix = tmp_path / 'SRR001'
+    output_prefix.with_suffix('.quant').write_text(
+        'tname\tlen\tnum_reads\ntranscript葉\t100\t1\n',
+        encoding='utf-8',
+    )
+    meta_info_path = output_prefix.with_suffix('.meta_info.json')
+    meta_info_path.write_text(
+        json.dumps({'note': '葉'}, ensure_ascii=False),
+        encoding='utf-8',
+    )
+    run_info_path = tmp_path / 'SRR001_run_info.json'
+    original_open = builtins.open
+    observed = []
+
+    def non_utf8_locale_open(file, *args, **kwargs):
+        resolved = os.path.realpath(os.fspath(file))
+        if resolved in {os.path.realpath(meta_info_path), os.path.realpath(run_info_path)}:
+            observed.append((resolved, kwargs.get('encoding')))
+            if 'encoding' not in kwargs:
+                kwargs['encoding'] = 'ascii'
+        return original_open(file, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, 'open', non_utf8_locale_open)
+
+    adapt_oarfish_outputs(
+        output_dir=str(tmp_path),
+        sra_id='SRR001',
+        sra_stat={'total_spot': 2},
+        output_prefix=str(output_prefix),
+        seq_tech='ont-cdna',
+    )
+
+    assert json.loads(run_info_path.read_text(encoding='utf-8'))['note'] == '葉'
+    assert [encoding for _path, encoding in observed] == ['utf-8', 'utf-8']
 
 
 class TestCheckKallistoDependency:

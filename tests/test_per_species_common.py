@@ -223,3 +223,25 @@ def test_build_and_write_curation_summaries(tmp_path):
     loaded_final = pandas.read_csv(final_path, sep='\t')
     pandas.testing.assert_frame_equal(loaded_round, round_summary, check_dtype=False)
     pandas.testing.assert_frame_equal(loaded_final, out['final_summary'], check_dtype=False)
+
+
+def test_write_curation_summaries_honors_resolved_species_tag(tmp_path):
+    metadata_df = pandas.DataFrame({'run': ['RUN1'], 'exclusion': ['no']})
+
+    out = write_curation_summaries(
+        round_summary=initialize_round_summary(),
+        metadata_df=metadata_df,
+        scientific_name='Homo sapiens',
+        batch_effect_alg='no',
+        dir_tsv=str(tmp_path),
+        mapping_rate_cutoff=0.0,
+        correlation_threshold=0.3,
+        one_outlier_per_iteration=False,
+        num_total_runs_species=1,
+        num_runs_after_sample_group_filter=1,
+        total_runtime_sec=0.0,
+        species_tag='human',
+    )
+
+    assert out['round_path'] == str(tmp_path / 'human.no.curation_round_summary.tsv')
+    assert out['final_path'] == str(tmp_path / 'human.no.curation_final_summary.tsv')

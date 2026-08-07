@@ -20,6 +20,7 @@ from amalgkit.orthology_utils import (
     validate_single_copy_threshold,
 )
 from amalgkit.outlier_utils import flag_margin_outliers
+from amalgkit.runtime_utils import build_species_token_map
 
 
 def _normalize_sample_groups(values):
@@ -161,10 +162,6 @@ def generate_input_symlinks(input_table_dir, per_species_dir, spp):
             os.symlink(path_src, path_dst)
 
 
-def _species_tag(scientific_name):
-    return str(scientific_name).strip().replace(' ', '_')
-
-
 def _normalize_exclusion(series):
     # The exclusion column is not boolean. 'no' means retained; every other
     # non-empty value is an exclusion *reason* recorded by an upstream step
@@ -202,7 +199,17 @@ def _normalize_cross_species_metadata_table(df_metadata):
     out.loc[:, 'scientific_name'] = out.loc[:, 'scientific_name'].astype(str).str.strip()
     out.loc[:, 'sample_group'] = out.loc[:, 'sample_group'].astype(str).str.strip()
     out.loc[:, 'exclusion'] = _normalize_exclusion(out.loc[:, 'exclusion'])
-    out.loc[:, 'species_tag'] = out.loc[:, 'scientific_name'].map(_species_tag)
+    explicit_tokens = (
+        out.loc[:, 'species_token'].fillna('').astype(str).str.strip().tolist()
+        if 'species_token' in out.columns
+        else None
+    )
+    token_by_species = build_species_token_map(
+        scientific_names=out.loc[:, 'scientific_name'].tolist(),
+        explicit_tokens=explicit_tokens,
+        context='cross-species output',
+    )
+    out.loc[:, 'species_tag'] = out.loc[:, 'scientific_name'].map(token_by_species)
     return out
 
 

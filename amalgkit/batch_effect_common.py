@@ -34,6 +34,12 @@ class BatchEffectResult:
     resolved_sva_B: Optional[int] = None
     resolved_ruv_k: Optional[int] = None
     resolved_ruv_controls: Optional[int] = None
+    ruv_residual_method: Optional[str] = None
+    ruv_pvalue_method: Optional[str] = None
+    ruv_fallback_used: Optional[bool] = None
+    ruv_fallback_reason: Optional[str] = None
+    ruv_nb_fallback_genes: Optional[int] = None
+    ruv_anova_failure_genes: Optional[int] = None
     resolved_latent_k: Optional[int] = None
     latent_family: Optional[str] = None
     latent_iterations: Optional[int] = None
@@ -54,6 +60,12 @@ class BatchEffectResult:
             'resolved_sva_B': self.resolved_sva_B,
             'resolved_ruv_k': self.resolved_ruv_k,
             'resolved_ruv_controls': self.resolved_ruv_controls,
+            'ruv_residual_method': self.ruv_residual_method,
+            'ruv_pvalue_method': self.ruv_pvalue_method,
+            'ruv_fallback_used': self.ruv_fallback_used,
+            'ruv_fallback_reason': self.ruv_fallback_reason,
+            'ruv_nb_fallback_genes': self.ruv_nb_fallback_genes,
+            'ruv_anova_failure_genes': self.ruv_anova_failure_genes,
             'resolved_latent_k': self.resolved_latent_k,
             'latent_family': self.latent_family,
             'latent_iterations': self.latent_iterations,
@@ -78,6 +90,12 @@ def initialize_batch_info(run_ids=(), batch_effect_alg='no'):
         'sva_stable': None,
         'resolved_ruv_k': None,
         'resolved_ruv_controls': None,
+        'ruv_residual_method': None,
+        'ruv_pvalue_method': None,
+        'ruv_fallback_used': None,
+        'ruv_fallback_reason': None,
+        'ruv_nb_fallback_genes': None,
+        'ruv_anova_failure_genes': None,
         'ruv_baseline_score': None,
         'ruv_selected_score': None,
         'ruv_selected_penalized_score': None,
@@ -187,6 +205,12 @@ def build_batch_effect_summary_dataframe(
                 'sva_stable': _summary_scalar(_batch_info_value(batch_info, 'sva_stable', 'stable')),
                 'resolved_ruv_k': _summary_scalar(_batch_info_value(batch_info, 'resolved_ruv_k')),
                 'resolved_ruv_controls': _summary_scalar(_batch_info_value(batch_info, 'resolved_ruv_controls')),
+                'ruv_residual_method': _summary_scalar(_batch_info_value(batch_info, 'ruv_residual_method')),
+                'ruv_pvalue_method': _summary_scalar(_batch_info_value(batch_info, 'ruv_pvalue_method')),
+                'ruv_fallback_used': _summary_scalar(_batch_info_value(batch_info, 'ruv_fallback_used')),
+                'ruv_fallback_reason': _summary_scalar(_batch_info_value(batch_info, 'ruv_fallback_reason')),
+                'ruv_nb_fallback_genes': _summary_scalar(_batch_info_value(batch_info, 'ruv_nb_fallback_genes')),
+                'ruv_anova_failure_genes': _summary_scalar(_batch_info_value(batch_info, 'ruv_anova_failure_genes')),
                 'ruv_baseline_score': _summary_scalar(_batch_info_value(batch_info, 'ruv_baseline_score')),
                 'ruv_selected_score': _summary_scalar(_batch_info_value(batch_info, 'ruv_selected_score')),
                 'ruv_selected_penalized_score': _summary_scalar(_batch_info_value(batch_info, 'ruv_selected_penalized_score')),

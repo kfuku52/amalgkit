@@ -98,6 +98,40 @@ def validate_unique_species_tokens(species_and_tokens, context='species outputs'
     }
 
 
+def build_species_token_map(scientific_names, explicit_tokens=None, context='species outputs'):
+    names = [str(value).strip() for value in scientific_names]
+    if explicit_tokens is None:
+        tokens = [''] * len(names)
+    else:
+        tokens = ['' if value is None else str(value).strip() for value in explicit_tokens]
+    if len(tokens) != len(names):
+        raise ValueError('scientific_names and explicit_tokens must have the same length.')
+    validate_unique_species_tokens(
+        list(zip(names, tokens)),
+        context=context,
+    )
+    token_by_species = {}
+    for scientific_name, explicit_token in zip(names, tokens):
+        if scientific_name == '':
+            continue
+        token = resolve_species_token(
+            scientific_name,
+            explicit_token=explicit_token,
+            label='species_token',
+        )
+        previous = token_by_species.get(scientific_name)
+        if previous is not None and previous != token:
+            raise ValueError(
+                'Scientific name has conflicting species_token values: {} ({}, {})'.format(
+                    scientific_name,
+                    previous,
+                    token,
+                )
+            )
+        token_by_species[scientific_name] = token
+    return token_by_species
+
+
 def _assert_path_is_within_root(path, root, label='Path'):
     path_real = os.path.realpath(path)
     root_real = os.path.realpath(root)

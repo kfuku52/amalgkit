@@ -116,6 +116,10 @@ def build_parser(command_handlers, command_names, version, prog=None):
                      required=False, action='store',
                      help='default=%(default)s: Maximum concurrent NCBI Entrez metadata requests across processes when '
                           'download_lock_dir is shared. Set to 0 or "auto" to disable throttling.')
+    pme.add_argument('--ncbi_metadata_timeout_seconds', metavar='INT', default=300, type=int,
+                     required=False, action='store',
+                     help='default=%(default)s (5 min): Socket timeout for each NCBI Entrez metadata request. '
+                          '0 disables the timeout.')
     pme.set_defaults(handler=command_handlers['metadata'])
 
     pse_help = 'Selecting SRA entries for analysis. See `amalgkit select -h`'
@@ -299,6 +303,10 @@ def build_parser(command_handlers, command_names, version, prog=None):
                      required=False, action='store',
                      help='default=%(default)s: Maximum concurrent NCBI Entrez metadata requests for --id/--id_list across '
                           'processes when download_lock_dir is shared. Set to 0 or "auto" to disable throttling.')
+    pge.add_argument('--ncbi_metadata_timeout_seconds', metavar='INT', default=300, type=int,
+                     required=False, action='store',
+                     help='default=%(default)s (5 min): Socket timeout for each NCBI Entrez metadata request. '
+                          '0 disables the timeout.')
     pge.add_argument('--sra_download_method', metavar='auto|urllib|curl', default='auto', type=str, required=False, action='store',
                      choices=['auto', 'urllib', 'curl'],
                      help='default=%(default)s: Method for downloading SRA objects from cloud URLs.')
