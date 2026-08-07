@@ -19,6 +19,7 @@ from amalgkit.busco import (
     run_busco,
     busco_main,
     build_busco_analysis_command,
+    split_busco_extra_args,
     run_compleasm,
 )
 from amalgkit.util import Metadata
@@ -680,6 +681,43 @@ def test_busco_rejects_attached_managed_tool_args(tmp_path, attached_arg):
             args=args,
             extra_args=[attached_arg],
         )
+
+
+@pytest.mark.parametrize(
+    'download_args',
+    [
+        ['--download', 'all'],
+        ['--download=eukaryota'],
+    ],
+)
+def test_busco_rejects_managed_download_tool_args(tmp_path, download_args):
+    args = SimpleNamespace(
+        busco_exe='busco',
+        lineage='eukaryota_odb12',
+        threads=1,
+        redo=False,
+        out_dir=str(tmp_path),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match='must not include --download.*Use --lineage',
+    ):
+        build_busco_analysis_command(
+            fasta_path='input.fa',
+            sci_name='Species A',
+            output_root=str(tmp_path),
+            args=args,
+            extra_args=download_args,
+        )
+
+
+@pytest.mark.parametrize('quiet_arg', ['-q', '--quiet'])
+def test_busco_forwards_quiet_tool_args_to_download_and_analysis(quiet_arg):
+    analysis_args, download_args = split_busco_extra_args([quiet_arg])
+
+    assert analysis_args == [quiet_arg]
+    assert download_args == [quiet_arg]
 
 
 def test_compleasm_rejects_attached_managed_tool_args(tmp_path):

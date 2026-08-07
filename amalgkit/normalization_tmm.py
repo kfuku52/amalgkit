@@ -95,7 +95,13 @@ def calc_factor_tmm(
         raise ValueError('TMM count vectors must not contain negative values.')
     obs_vector = obs_array.reshape(-1, order='F')
     ref_vector = ref_array.reshape(-1, order='F')
-    n_obs = float(obs_vector.sum()) if libsize_obs is None else float(numpy.asarray(libsize_obs, dtype=float).reshape(-1)[0])
+    if libsize_obs is None:
+        n_obs = float(obs_vector.sum())
+    else:
+        n_obs_values = numpy.asarray(libsize_obs, dtype=float).reshape(-1)
+        if n_obs_values.size == 0:
+            raise ValueError('libsize_obs must contain one finite positive value.')
+        n_obs = float(n_obs_values[0])
     if libsize_ref is None:
         n_ref_values = numpy.array([float(ref_vector.sum())], dtype=float)
     else:
@@ -161,6 +167,14 @@ def _resolve_tmm_reference_column(matrix, lib_sizes):
     return ref_column
 
 
+def _resolve_median_reference_column(factors):
+    values = numpy.asarray(factors, dtype=float).reshape(-1)
+    if values.size == 0:
+        raise ValueError('At least one TMM normalization factor is required.')
+    median_value = float(numpy.median(values))
+    return int(numpy.argmin(numpy.abs(values - median_value)))
+
+
 def calc_norm_factors_tmm(
     counts,
     lib_size=None,
@@ -217,10 +231,7 @@ def run_tmm_rounds_for_cstmm(counts, lib_size=None):
     round1 = calc_norm_factors_tmm(round1_counts, lib_size=libs, ref_column=None)
     round1_values = round1.to_numpy(dtype=float)
     round1_reference_column = _resolve_tmm_reference_column(_remove_all_zero_rows(matrix), libs)
-    median_value = float(numpy.sort(round1_values)[int(math.ceil(round1_values.size / 2.0) - 1)])
-    median_reference_columns = [
-        int(idx) for idx, value in enumerate(round1_values) if value == median_value
-    ]
+    median_reference_columns = [_resolve_median_reference_column(round1_values)]
     round2 = calc_norm_factors_tmm(round1_counts, lib_size=libs, ref_column=median_reference_columns)
     return TMMRoundTripResult(
         round1_factors=round1,

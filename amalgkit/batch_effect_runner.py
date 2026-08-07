@@ -49,7 +49,7 @@ def build_parser():
     parser.add_argument('--latent_k_max', required=False, default='5')
     parser.add_argument('--latent_max_iter', required=False, default='200')
     parser.add_argument('--latent_tol', required=False, default='1e-5')
-    parser.add_argument('--random_seed', required=False, default='auto')
+    parser.add_argument('--random_seed', required=False, default='0')
     return parser
 
 

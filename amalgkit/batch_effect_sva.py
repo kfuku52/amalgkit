@@ -253,7 +253,7 @@ def estimate_num_sv_be(
     mod_matrix,
     B_value,
     max_nsv,
-    random_seed=None,
+    random_seed=0,
 ):
     data = numpy.asarray(data_matrix, dtype=float)
     mod = numpy.asarray(mod_matrix, dtype=float)
@@ -380,7 +380,7 @@ def estimate_num_sv_at_B(
     mod_matrix,
     B_value,
     max_nsv,
-    random_seed=None,
+    random_seed=0,
 ):
     try:
         be_estimate = estimate_num_sv_be(
@@ -711,7 +711,7 @@ def run_sva_backend(
     B_setting='auto',
     B_auto_max=100,
     sample_group_column='sample_group',
-    random_seed=None,
+    random_seed=0,
 ):
     aligned_metadata = _align_metadata_to_counts(
         counts_df=counts_df,
