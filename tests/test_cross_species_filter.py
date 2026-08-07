@@ -8,6 +8,7 @@ from amalgkit.cross_species_filter import (
     _apply_csfilter_outlier_flags,
     _calculate_correlation_within_group,
     _load_expression_tables,
+    _normalize_cross_species_metadata_table,
     _resolve_matrix_for_embedding,
     _select_single_copy_orthogroups,
     generate_input_symlinks,
@@ -17,6 +18,89 @@ from amalgkit.cross_species_filter import (
     run_cross_species_filter,
 )
 from amalgkit.util import Metadata
+
+
+def test_normalize_cross_species_metadata_table_rejects_blank_exclusion():
+    # Regression for #172: a blank/NA exclusion must not be silently converted
+    # to "no" (retained). Samples with missing exclusion metadata previously
+    # leaked into group references, correlations and PCA.
+    df = pandas.DataFrame(
+        {
+            'run': ['RUN1', 'RUN2', 'RUN3'],
+            'scientific_name': ['Spec example', 'Spec example', 'Spec example'],
+            'sample_group': ['A', 'A', 'B'],
+            'exclusion': ['no', '', None],
+        }
+    )
+    with pytest.raises(ValueError, match=r'2 row\(s\) have a blank/NA exclusion'):
+        _normalize_cross_species_metadata_table(df)
+
+
+def test_normalize_cross_species_metadata_table_preserves_exclusion_reasons():
+    # `exclusion` is not a boolean field. Non-`no` values carry the reason a run
+    # was excluded, written by the per-species pipeline into its .metadata.tsv
+    # and consumed here. Rejecting them would break cross-species filtering for
+    # any input that already contains a previously excluded sample.
+    df = pandas.DataFrame(
+        {
+            'run': ['RUN1', 'RUN2', 'RUN3', 'RUN4', 'RUN5'],
+            'scientific_name': ['Spec example'] * 5,
+            'sample_group': ['A', 'A', 'B', 'B', 'A'],
+            'exclusion': [
+                'no',
+                'manual_removal',
+                'low_mapping_rate',
+                'low_within_sample_group_correlation',
+                'yes',
+            ],
+        }
+    )
+    normalized = _normalize_cross_species_metadata_table(df)
+
+    assert normalized.loc[:, 'exclusion'].tolist() == [
+        'no',
+        'manual_removal',
+        'low_mapping_rate',
+        'low_within_sample_group_correlation',
+        'yes',
+    ]
+
+
+def test_normalize_cross_species_metadata_table_normalizes_case_and_whitespace():
+    df = pandas.DataFrame(
+        {
+            'run': ['RUN1', 'RUN2', 'RUN3'],
+            'scientific_name': ['Spec example'] * 3,
+            'sample_group': ['A', 'A', 'B'],
+            'exclusion': ['no', ' NO ', 'Manual_Removal'],
+        }
+    )
+    normalized = _normalize_cross_species_metadata_table(df)
+    assert normalized.loc[:, 'exclusion'].tolist() == ['no', 'no', 'manual_removal']
+
+
+def test_cross_species_retains_only_exclusion_no_across_reason_values():
+    # Downstream selection is `.eq('no')`: every non-`no` reason must drop the
+    # run, and none of them may raise. This is the behaviour the reason strings
+    # exist to drive.
+    df = pandas.DataFrame(
+        {
+            'run': ['RUN1', 'RUN2', 'RUN3', 'RUN4', 'RUN5'],
+            'scientific_name': ['Spec example'] * 5,
+            'sample_group': ['A', 'A', 'B', 'B', 'A'],
+            'exclusion': [
+                'no',
+                'manual_removal',
+                'low_mapping_rate',
+                'low_within_sample_group_correlation',
+                'yes',
+            ],
+        }
+    )
+    normalized = _normalize_cross_species_metadata_table(df)
+
+    kept = normalized.loc[normalized['exclusion'].eq('no'), 'run'].tolist()
+    assert kept == ['RUN1']
 
 
 def test_cross_species_outlier_flags_surface_small_group_status():
