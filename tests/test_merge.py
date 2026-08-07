@@ -783,7 +783,7 @@ def test_merge_main_prunes_stale_species_outputs(tmp_path, monkeypatch):
 def test_generate_merge_plot_pdfs_writes_python_pdf_outputs(tmp_path):
     merge_dir = tmp_path / 'merge'
     merge_dir.mkdir()
-    species_dir = merge_dir / 'Species_A'
+    species_dir = merge_dir / 'human'
     species_dir.mkdir()
     pandas.DataFrame(
         {
@@ -791,7 +791,7 @@ def test_generate_merge_plot_pdfs_writes_python_pdf_outputs(tmp_path):
             'RUN1': [10.0, 20.0],
             'RUN2': [30.0, 40.0],
         }
-    ).to_csv(species_dir / 'Species_A_est_counts.tsv', sep='\t', index=False)
+    ).to_csv(species_dir / 'human_est_counts.tsv', sep='\t', index=False)
     metadata_path = merge_dir / 'metadata.tsv'
     pandas.DataFrame(
         {

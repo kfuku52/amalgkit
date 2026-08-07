@@ -601,3 +601,46 @@ def test_invalid_api_inputs_are_ignored_or_reported_consistently(tmp_path):
             taxonomy.get_lineage(2**70)
     finally:
         taxonomy.close()
+
+
+def test_get_ncbi_taxonomy_default_uses_hardened_downloader_not_urlretrieve(tmp_path, monkeypatch):
+    # Regression for #169: production must use download_url_to_regular_file
+    # (timeout-aware, fsync, O_NOFOLLOW) with published-MD5 verification, not
+    # the untimed urllib.request.urlretrieve (which also disabled the checksum
+    # because ensure_ncbi_taxdump_file only verifies when urlretrieve_fn is
+    # None).
+    source_taxdump = write_tiny_taxdump(tmp_path / "source-taxdump.tar.gz")
+    args = SimpleNamespace(
+        out_dir=str(tmp_path / "out"),
+        download_dir=str(tmp_path / "downloads"),
+    )
+    cache = download_utils._get_thread_local_ncbi_taxonomy_cache()
+    cache.clear()
+
+    urlretrieve_called = []
+
+    def fail_urlretrieve(*_args, **_kwargs):
+        urlretrieve_called.append(True)
+        raise AssertionError("production must not call urllib.request.urlretrieve")
+
+    def hardened_download(url, output_path, timeout_seconds, urlopen_fn=None):
+        _ = (timeout_seconds, urlopen_fn)
+        shutil.copyfile(source_taxdump, output_path)
+
+    expected_md5 = hashlib.md5(  # noqa: S324 - mirrors the upstream integrity checksum
+        source_taxdump.read_bytes(),
+        usedforsecurity=False,
+    ).hexdigest()
+
+    monkeypatch.setattr(download_utils.urllib.request, "urlretrieve", fail_urlretrieve)
+    monkeypatch.setattr(download_utils, "download_url_to_regular_file", hardened_download)
+    monkeypatch.setattr(download_utils, "read_published_md5", lambda **kwargs: expected_md5)
+    monkeypatch.setattr(download_utils, "calculate_file_md5", lambda path: expected_md5)
+
+    taxonomy = download_utils.get_ncbi_taxonomy(args=args)
+    try:
+        assert taxonomy.get_taxid_translator([9606]) == {9606: "Homo sapiens"}
+        assert urlretrieve_called == []
+    finally:
+        taxonomy.close()
+        cache.clear()

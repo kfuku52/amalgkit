@@ -358,18 +358,19 @@ def _save_mean_expression_boxplot(metadata_df, merge_dir, out_path, font_size=8)
             flush=True,
         )
         return
-    if {'scientific_name', 'run'}.issubset(metadata_df.columns):
-        metadata_cols = [column for column in ['scientific_name', 'run', 'exclusion'] if column in metadata_df.columns]
-        metadata_subset = metadata_df.loc[:, metadata_cols].drop_duplicates()
-        summary_df = summary_df.merge(
-            metadata_subset,
-            on=['scientific_name', 'run'],
-            how='left',
-            sort=False,
-        )
-    elif 'run' in metadata_df.columns:
+    if 'run' in metadata_df.columns:
         metadata_cols = [column for column in ['run', 'exclusion'] if column in metadata_df.columns]
         metadata_subset = metadata_df.loc[:, metadata_cols].drop_duplicates()
+        duplicated_runs = metadata_subset.loc[:, 'run'].astype(str).duplicated(keep='first')
+        if duplicated_runs.any():
+            duplicated_run_ids = sorted(
+                metadata_subset.loc[duplicated_runs, 'run'].astype(str).unique().tolist()
+            )
+            warnings.warn(
+                'Detected duplicated run IDs in metadata while preparing the mean-expression plot; '
+                'keeping the first row for: {}'.format(', '.join(duplicated_run_ids))
+            )
+            metadata_subset = metadata_subset.loc[~duplicated_runs, :].copy()
         summary_df = summary_df.merge(metadata_subset, on='run', how='left', sort=False)
     else:
         summary_df.loc[:, 'exclusion'] = pandas.NA

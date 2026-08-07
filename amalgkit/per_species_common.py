@@ -70,7 +70,10 @@ def sample_group_mean(
     for sample_group in list(resolved_groups):
         is_sample_group = sra.loc[:, sample_group_column].eq(sample_group).to_numpy(dtype=bool)
         exclusion_sample_group = sra_is_non_excluded[is_sample_group]
-        run_sample_group = sra.loc[is_sample_group & is_run_in_tc, run_column].tolist()
+        run_sample_group = sra.loc[
+            is_sample_group & is_run_in_tc & sra_is_non_excluded,
+            run_column,
+        ].tolist()
         if (len(exclusion_sample_group) > 0) and bool(numpy.all(~exclusion_sample_group)):
             kept_groups = [group for group in kept_groups if group != sample_group]
             if sample_group in tc_ave.columns:

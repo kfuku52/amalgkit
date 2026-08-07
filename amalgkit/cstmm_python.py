@@ -10,6 +10,11 @@ import pandas
 
 from amalgkit.imputation import impute_expression
 from amalgkit.normalization_tmm import run_tmm_rounds_for_cstmm
+from amalgkit.orthology_utils import (
+    DEFAULT_SINGLE_COPY_THRESHOLD,
+    get_single_copy_orthogroup_mask,
+    validate_single_copy_threshold,
+)
 
 
 def _normalize_species_prefix(scientific_name):
@@ -103,18 +108,28 @@ def _get_df_nonzero(df_counts):
 
 
 def _get_singlecopy_bool_index(df_gc, spp_filled, percent_singlecopy_threshold=50.0):
-    num_species = float(len(spp_filled))
-    df_species = df_gc.loc[:, spp_filled]
-    num_singlecopy_species = df_species.eq(1).sum(axis=1)
-    percent_singlecopy_species = (num_singlecopy_species / num_species) * 100.0
-    return percent_singlecopy_species.ge(float(percent_singlecopy_threshold))
+    return get_single_copy_orthogroup_mask(
+        df_genecount=df_gc,
+        species=spp_filled,
+        single_copy_threshold=percent_singlecopy_threshold,
+    )
 
 
-def _get_df_exp_single_copy_ortholog(file_genecount, file_orthogroup_table, dir_count, uncorrected_by_species):
+def _get_df_exp_single_copy_ortholog(
+    file_genecount,
+    file_orthogroup_table,
+    dir_count,
+    uncorrected_by_species,
+    single_copy_threshold=DEFAULT_SINGLE_COPY_THRESHOLD,
+):
     df_gc = _read_genecount_table(file_genecount=file_genecount)
     df_og = _read_orthogroup_table(file_orthogroup_table=file_orthogroup_table)
     spp_filled = _get_spp_filled(dir_count=dir_count, df_gc=df_gc)
-    is_singlecopy = _get_singlecopy_bool_index(df_gc=df_gc, spp_filled=spp_filled)
+    is_singlecopy = _get_singlecopy_bool_index(
+        df_gc=df_gc,
+        spp_filled=spp_filled,
+        percent_singlecopy_threshold=single_copy_threshold,
+    )
     df_singleog = df_og.loc[is_singlecopy, spp_filled].copy()
     df_sog = df_singleog.copy()
     for species_name in spp_filled:
@@ -340,13 +355,21 @@ def save_exclusion_plot_python(df_metadata, out_path, y_label='Sample count'):
     plt.close(fig)
 
 
-def _run_cstmm_python(uncorrected_by_species, df_sog, dir_count, dir_cstmm):
+def _run_cstmm_python(
+    uncorrected_by_species,
+    df_sog,
+    dir_count,
+    dir_cstmm,
+    single_copy_threshold=None,
+):
     df_nonzero = _get_df_nonzero(df_sog)
     library_sizes = _get_library_sizes(df_nonzero=df_nonzero, uncorrected_by_species=uncorrected_by_species)
     roundtrip = run_tmm_rounds_for_cstmm(counts=df_nonzero, lib_size=library_sizes.reindex(df_nonzero.columns))
     metadata_path = os.path.join(dir_count, 'metadata.tsv')
     df_metadata = pandas.read_csv(metadata_path, sep='\t')
     df_metadata = append_tmm_stats_to_metadata_python(metadata_df=df_metadata, roundtrip=roundtrip)
+    if single_copy_threshold is not None:
+        df_metadata['single_copy_threshold'] = validate_single_copy_threshold(single_copy_threshold)
     df_metadata = df_metadata.loc[:, ~pandas.Index(df_metadata.columns).astype(str).str.startswith('Unnamed')]
     os.makedirs(dir_cstmm, exist_ok=True)
     df_metadata.to_csv(os.path.join(dir_cstmm, 'metadata.tsv'), sep='\t', index=False)
@@ -379,7 +402,14 @@ def run_cstmm_python_single_species(dir_count, dir_cstmm, species_name):
     )
 
 
-def run_cstmm_python_multi_species(dir_count, dir_cstmm, file_genecount, file_orthogroup_table):
+def run_cstmm_python_multi_species(
+    dir_count,
+    dir_cstmm,
+    file_genecount,
+    file_orthogroup_table,
+    single_copy_threshold=DEFAULT_SINGLE_COPY_THRESHOLD,
+):
+    single_copy_threshold = validate_single_copy_threshold(single_copy_threshold)
     df_gc = _read_genecount_table(file_genecount=file_genecount)
     species_names = _get_spp_filled(dir_count=dir_count, df_gc=df_gc)
     uncorrected = _load_uncorrected(dir_count=dir_count, species_names=species_names)
@@ -388,10 +418,12 @@ def run_cstmm_python_multi_species(dir_count, dir_cstmm, file_genecount, file_or
         file_orthogroup_table=file_orthogroup_table,
         dir_count=dir_count,
         uncorrected_by_species=uncorrected,
+        single_copy_threshold=single_copy_threshold,
     )
     return _run_cstmm_python(
         uncorrected_by_species=uncorrected,
         df_sog=df_sog,
         dir_count=dir_count,
         dir_cstmm=dir_cstmm,
+        single_copy_threshold=single_copy_threshold,
     )

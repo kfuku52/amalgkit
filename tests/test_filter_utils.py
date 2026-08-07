@@ -1,10 +1,145 @@
+import json
 import os
 
 import pandas
 import pytest
 
-from amalgkit.filter_utils import save_exclusion_plot_pdf, staged_output_dir
+from amalgkit.filter_utils import (
+    FILTER_METADATA_STATE_FILENAME,
+    get_filter_metadata_state_path,
+    infer_latest_filter_metadata,
+    merge_metadata_by_run,
+    save_exclusion_plot_pdf,
+    staged_output_dir,
+    write_filter_metadata_state,
+)
 from amalgkit.output_utils import atomic_output_path
+
+
+def _write_filter_metadata(out_dir, command):
+    metadata_path = out_dir / command / 'metadata.tsv'
+    metadata_path.parent.mkdir(parents=True, exist_ok=True)
+    metadata_path.write_text('run\texclusion\nR1\tno\n', encoding='utf-8')
+    return metadata_path
+
+
+def test_filter_metadata_state_tracks_last_completed_filter_independent_of_mtime(tmp_path):
+    ws_metadata = _write_filter_metadata(tmp_path, 'wsfilter')
+    cs_metadata = _write_filter_metadata(tmp_path, 'csfilter')
+    write_filter_metadata_state(tmp_path, 'csfilter')
+    os.utime(ws_metadata, (2_000_000_000, 2_000_000_000))
+    os.utime(cs_metadata, (1_000_000_000, 1_000_000_000))
+
+    assert infer_latest_filter_metadata(tmp_path) == str(cs_metadata)
+
+    write_filter_metadata_state(tmp_path, 'wsfilter')
+    os.utime(cs_metadata, (2_000_000_000, 2_000_000_000))
+    os.utime(ws_metadata, (1_000_000_000, 1_000_000_000))
+
+    assert infer_latest_filter_metadata(tmp_path) == str(ws_metadata)
+    state = json.loads((tmp_path / FILTER_METADATA_STATE_FILENAME).read_text(encoding='utf-8'))
+    assert state == {
+        'command': 'wsfilter',
+        'metadata_path': 'wsfilter/metadata.tsv',
+        'schema_version': 1,
+    }
+
+
+def test_filter_metadata_legacy_fallback_is_deterministic_and_warns(tmp_path):
+    ws_metadata = _write_filter_metadata(tmp_path, 'wsfilter')
+    cs_metadata = _write_filter_metadata(tmp_path, 'csfilter')
+    os.utime(ws_metadata, (2_000_000_000, 2_000_000_000))
+    os.utime(cs_metadata, (1_000_000_000, 1_000_000_000))
+
+    with pytest.warns(UserWarning, match='legacy deterministic fallback.*csfilter/metadata.tsv'):
+        selected = infer_latest_filter_metadata(tmp_path)
+
+    assert selected == str(cs_metadata)
+
+
+def test_filter_metadata_invalid_state_cannot_escape_expected_stage_path(tmp_path):
+    ws_metadata = _write_filter_metadata(tmp_path, 'wsfilter')
+    state_path = get_filter_metadata_state_path(tmp_path)
+    with open(state_path, 'w', encoding='utf-8') as handle:
+        json.dump(
+            {
+                'schema_version': 1,
+                'command': 'wsfilter',
+                'metadata_path': '../outside.tsv',
+            },
+            handle,
+        )
+
+    with pytest.warns(UserWarning, match='metadata_path does not match.*legacy deterministic fallback'):
+        selected = infer_latest_filter_metadata(tmp_path)
+
+    assert selected == str(ws_metadata)
+
+
+def test_write_filter_metadata_state_rejects_unknown_command_and_missing_output(tmp_path):
+    with pytest.raises(ValueError, match='Unknown filter command'):
+        write_filter_metadata_state(tmp_path, 'unknown')
+    with pytest.raises(FileNotFoundError, match='Filter metadata was not generated'):
+        write_filter_metadata_state(tmp_path, 'wsfilter')
+
+
+def test_merge_metadata_by_run_rejects_update_runs_absent_from_source():
+    source_df = pandas.DataFrame(
+        {
+            'run': ['R1', 'R2'],
+            'mapping_rate': [0.1, 0.2],
+        }
+    )
+    update_df = pandas.DataFrame(
+        {
+            'run': ['R1', 'R3'],
+            'mapping_rate': [0.5, 0.7],
+        }
+    )
+
+    with pytest.raises(ValueError, match='absent from source metadata: R3'):
+        merge_metadata_by_run(source_df, update_df)
+
+
+def test_merge_metadata_by_run_preserves_numeric_dtype_for_numeric_strings():
+    source_df = pandas.DataFrame(
+        {
+            'run': ['R1', 'R2'],
+            'mapping_rate': [0.1, 0.2],
+        }
+    )
+    update_df = pandas.DataFrame(
+        {
+            'run': ['R1'],
+            'mapping_rate': pandas.Series(['0.5'], dtype='object'),
+        }
+    )
+
+    observed = merge_metadata_by_run(source_df, update_df)
+
+    assert pandas.api.types.is_float_dtype(observed['mapping_rate'].dtype)
+    assert observed['mapping_rate'].tolist() == [0.5, 0.2]
+
+
+def test_merge_metadata_by_run_warns_before_promoting_incompatible_numeric_column():
+    source_df = pandas.DataFrame(
+        {
+            'run': ['R1', 'R2'],
+            'mapping_rate': [0.1, 0.2],
+        }
+    )
+    update_df = pandas.DataFrame(
+        {
+            'run': ['R1'],
+            'mapping_rate': ['not_available'],
+        }
+    )
+
+    with pytest.warns(UserWarning, match='mapping_rate.*float64.*object.*R1'):
+        observed = merge_metadata_by_run(source_df, update_df)
+
+    assert pandas.api.types.is_object_dtype(observed['mapping_rate'].dtype)
+    assert observed['mapping_rate'].tolist() == ['not_available', 0.2]
 
 
 def test_save_exclusion_plot_pdf_writes_pdf(tmp_path):

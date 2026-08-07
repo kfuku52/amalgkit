@@ -1,9 +1,12 @@
+import json
 import os
 from types import SimpleNamespace
 
 import pandas
+import pytest
 
 from amalgkit.command_context import CrossSpeciesFilterContext, PerSpeciesTableContext
+from amalgkit.filter_utils import write_filter_metadata_state
 from amalgkit.util import Metadata
 from amalgkit import wsfilter as wsfilter_module
 from amalgkit import csfilter as csfilter_module
@@ -47,6 +50,7 @@ def _base_args(tmp_path):
         missing_strategy='em_pca',
         margin_threshold=0.0,
         robust_z_threshold=-2.5,
+        single_copy_threshold=None,
     )
 
 
@@ -100,19 +104,32 @@ def test_wsfilter_outputs_metadata_excluded_and_species_pdfs(tmp_path, monkeypat
     assert isinstance(captured['context'], PerSpeciesTableContext)
     assert captured['context'].metadata is metadata
     assert captured['context'].input_dir == str(tmp_path / 'input')
+    state = json.loads((tmp_path / 'out' / 'filter_metadata_state.json').read_text(encoding='utf-8'))
+    assert state['command'] == 'wsfilter'
+    assert state['metadata_path'] == 'wsfilter/metadata.tsv'
 
 
-def test_wsfilter_uses_latest_filter_metadata_when_inferred(tmp_path, monkeypatch):
+def test_wsfilter_rerun_uses_recorded_metadata_and_preserves_cross_species_exclusion(tmp_path, monkeypatch):
     args = _base_args(tmp_path)
-    metadata = _base_metadata()
-    latest_meta = tmp_path / 'out' / 'csfilter' / 'metadata.tsv'
-    latest_meta.parent.mkdir(parents=True, exist_ok=True)
-    latest_meta.write_text('run\texclusion\nR1\tno\n')
+    args.redo = True
+    source_metadata = _base_metadata()
+    source_metadata.df.loc[source_metadata.df['run'].eq('R2'), 'exclusion'] = 'low_cross_species_group_correlation'
+    recorded_metadata = tmp_path / 'out' / 'csfilter' / 'metadata.tsv'
+    recorded_metadata.parent.mkdir(parents=True, exist_ok=True)
+    source_metadata.df.to_csv(recorded_metadata, sep='\t', index=False)
+    write_filter_metadata_state(tmp_path / 'out', 'csfilter')
+    stale_ws_metadata = tmp_path / 'out' / 'wsfilter' / 'metadata.tsv'
+    stale_ws_metadata.parent.mkdir(parents=True, exist_ok=True)
+    _base_metadata().df.to_csv(stale_ws_metadata, sep='\t', index=False)
+    os.utime(recorded_metadata, (1_000_000_000, 1_000_000_000))
+    os.utime(stale_ws_metadata, (2_000_000_000, 2_000_000_000))
     captured = {}
 
     def fake_resolve_per_species_input(passed_args):
         captured['metadata'] = passed_args.metadata
-        return metadata, str(tmp_path / 'input')
+        resolved_metadata = Metadata.from_DataFrame(pandas.read_csv(passed_args.metadata, sep='\t'))
+        captured['resolved_metadata'] = resolved_metadata
+        return resolved_metadata, str(tmp_path / 'input')
 
     def fake_generate_per_species_tables(per_species_args, context=None):
         captured['context'] = context
@@ -120,7 +137,7 @@ def test_wsfilter_uses_latest_filter_metadata_when_inferred(tmp_path, monkeypatc
         os.makedirs(tables_dir, exist_ok=True)
         pandas.DataFrame({
             'run': ['R1'],
-            'exclusion': ['no'],
+            'exclusion': ['low_within_sample_group_correlation'],
         }).to_csv(os.path.join(tables_dir, 'Species_A.metadata.tsv'), sep='\t', index=False)
 
     monkeypatch.setattr(wsfilter_module, 'resolve_per_species_input', fake_resolve_per_species_input)
@@ -134,10 +151,20 @@ def test_wsfilter_uses_latest_filter_metadata_when_inferred(tmp_path, monkeypatc
 
     wsfilter_module.wsfilter_main(args)
 
-    assert captured['metadata'] == os.path.realpath(str(latest_meta))
+    output_metadata = pandas.read_csv(tmp_path / 'out' / 'wsfilter' / 'metadata.tsv', sep='\t')
+    output_excluded = pandas.read_csv(tmp_path / 'out' / 'wsfilter' / 'excluded.tsv', sep='\t')
+    assert captured['metadata'] == os.path.realpath(str(recorded_metadata))
     assert isinstance(captured['context'], PerSpeciesTableContext)
-    assert captured['context'].metadata is metadata
+    assert captured['context'].metadata is captured['resolved_metadata']
     assert captured['context'].input_dir == str(tmp_path / 'input')
+    assert output_metadata.set_index('run').loc['R1', 'exclusion'] == 'low_within_sample_group_correlation'
+    assert output_metadata.set_index('run').loc['R2', 'exclusion'] == 'low_cross_species_group_correlation'
+    assert output_excluded.set_index('run')['exclusion'].to_dict() == {
+        'R1': 'low_within_sample_group_correlation',
+        'R2': 'low_cross_species_group_correlation',
+    }
+    state = json.loads((tmp_path / 'out' / 'filter_metadata_state.json').read_text(encoding='utf-8'))
+    assert state['command'] == 'wsfilter'
 
 
 def test_csfilter_outputs_metadata_excluded_and_root_pdfs(tmp_path, monkeypatch):
@@ -157,6 +184,7 @@ def test_csfilter_outputs_metadata_excluded_and_root_pdfs(tmp_path, monkeypatch)
         captured['outlier_method'] = cross_species_args.outlier_method
         captured['batch_effect_alg'] = cross_species_args.batch_effect_alg
         captured['plot_mode'] = cross_species_args.plot_mode
+        captured['single_copy_threshold'] = cross_species_args.single_copy_threshold
         captured['cross_species_context'] = context
         cross_species_dir = os.path.join(cross_species_args.out_dir, 'cross_species')
         os.makedirs(cross_species_dir, exist_ok=True)
@@ -214,11 +242,111 @@ def test_csfilter_outputs_metadata_excluded_and_root_pdfs(tmp_path, monkeypatch)
     assert captured['outlier_method'] == 'robust_margin'
     assert captured['batch_effect_alg'] == 'no'
     assert captured['plot_mode'] == 'single'
+    assert captured['single_copy_threshold'] == 50.0
     assert isinstance(captured['per_species_context'], PerSpeciesTableContext)
     assert captured['per_species_context'].metadata is metadata
     assert captured['per_species_context'].input_dir == str(tmp_path / 'input')
     assert isinstance(captured['cross_species_context'], CrossSpeciesFilterContext)
     assert captured['cross_species_context'].metadata is metadata
+    state = json.loads((tmp_path / 'out' / 'filter_metadata_state.json').read_text(encoding='utf-8'))
+    assert state['command'] == 'csfilter'
+    assert state['metadata_path'] == 'csfilter/metadata.tsv'
+
+
+def test_filter_excluded_tables_include_prior_stage_reasons(tmp_path):
+    metadata = pandas.DataFrame(
+        {
+            'run': ['R1', 'R2', 'R3'],
+            'scientific_name': ['Species A'] * 3,
+            'sample_group': ['leaf', 'leaf', 'root'],
+            'exclusion': [
+                'low_within_sample_group_correlation',
+                'low_cross_species_group_correlation',
+                'no',
+            ],
+            'ws_small_group': [True, False, False],
+            'cs_small_group': [False, True, False],
+        }
+    )
+    for command_module, expected_small_group_col in [
+        (wsfilter_module, 'ws_small_group'),
+        (csfilter_module, 'cs_small_group'),
+    ]:
+        out_path = tmp_path / '{}_excluded.tsv'.format(command_module.__name__.rsplit('.', 1)[-1])
+        command_module._write_excluded_table(metadata, out_path)
+        observed = pandas.read_csv(out_path, sep='\t')
+        assert observed['run'].tolist() == ['R1', 'R2']
+        assert expected_small_group_col in observed.columns
+
+
+def test_wsfilter_failure_does_not_update_filter_metadata_state(tmp_path, monkeypatch):
+    args = _base_args(tmp_path)
+    metadata = _base_metadata()
+    state_updates = []
+
+    monkeypatch.setattr(
+        wsfilter_module,
+        'resolve_per_species_input',
+        lambda _args: (metadata, str(tmp_path / 'input')),
+    )
+    monkeypatch.setattr(
+        wsfilter_module,
+        'generate_per_species_tables',
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError('worker failed')),
+    )
+    monkeypatch.setattr(
+        wsfilter_module,
+        'write_filter_metadata_state',
+        lambda **kwargs: state_updates.append(kwargs),
+    )
+
+    with pytest.raises(RuntimeError, match='worker failed'):
+        wsfilter_module.wsfilter_main(args)
+
+    assert state_updates == []
+
+
+def test_csfilter_inherits_single_copy_threshold_from_metadata():
+    args = SimpleNamespace(single_copy_threshold=None)
+    metadata_df = pandas.DataFrame({'single_copy_threshold': [75.0, 75.0]})
+
+    assert csfilter_module._resolve_single_copy_threshold(args, metadata_df) == 75.0
+
+
+def test_csfilter_falls_back_to_default_single_copy_threshold():
+    args = SimpleNamespace(single_copy_threshold=None)
+
+    assert csfilter_module._resolve_single_copy_threshold(args, pandas.DataFrame()) == 50.0
+
+
+def test_csfilter_accepts_matching_explicit_single_copy_threshold():
+    args = SimpleNamespace(single_copy_threshold=75.0)
+    metadata_df = pandas.DataFrame({'single_copy_threshold': [75.0, 75.0]})
+
+    assert csfilter_module._resolve_single_copy_threshold(args, metadata_df) == 75.0
+
+
+def test_csfilter_rejects_single_copy_threshold_mismatch():
+    args = SimpleNamespace(single_copy_threshold=100.0)
+    metadata_df = pandas.DataFrame({'single_copy_threshold': [50.0, 50.0]})
+
+    with pytest.raises(ValueError, match='does not match the value recorded by cstmm'):
+        csfilter_module._resolve_single_copy_threshold(args, metadata_df)
+
+
+@pytest.mark.parametrize(
+    'values',
+    [
+        [50.0, ''],
+        [50.0, 75.0],
+    ],
+)
+def test_csfilter_rejects_invalid_recorded_single_copy_threshold(values):
+    args = SimpleNamespace(single_copy_threshold=None)
+    metadata_df = pandas.DataFrame({'single_copy_threshold': values})
+
+    with pytest.raises(ValueError, match='Metadata contains'):
+        csfilter_module._resolve_single_copy_threshold(args, metadata_df)
 
 
 def test_finalize_outputs_tables_and_merged_metadata(tmp_path, monkeypatch):
@@ -298,7 +426,7 @@ def test_finalize_outputs_tables_and_merged_metadata(tmp_path, monkeypatch):
     assert out_metadata.loc[out_metadata['run'] == 'R1', 'exclusion'].iloc[0] == 'low_cross_species_group_correlation'
     assert out_metadata.loc[out_metadata['run'] == 'R1', 'batch_corrected'].iloc[0] == 'yes'
     assert out_metadata.loc[out_metadata['run'] == 'R1', 'batch_alg_used'].iloc[0] == 'sva'
-    assert captured['seed'] == 'auto'
+    assert captured['seed'] == 0
     assert captured['sva_backend'] == 'python'
     assert captured['combatseq_backend'] == 'python'
     assert captured['ruvseq_backend'] == 'python'

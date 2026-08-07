@@ -84,8 +84,15 @@ def _filter_low_mapping_rate(tc, sra, mapping_rate_cutoff):
 def _compute_sample_group_correlation_metrics(tc, sra, selected_sample_groups, dist_method):
     required_sample_groups = [group for group in selected_sample_groups if group in set(sra.loc[:, 'sample_group'].astype(str))]
     out = sra.copy()
-    for column in ['ws_within_group_cor', 'ws_max_nongroup_cor', 'ws_margin', 'ws_robust_z', 'ws_outlier_candidate']:
-        out.loc[:, column] = numpy.nan if column != 'ws_outlier_candidate' else False
+    for column in [
+        'ws_within_group_cor',
+        'ws_max_nongroup_cor',
+        'ws_margin',
+        'ws_robust_z',
+        'ws_outlier_candidate',
+        'ws_small_group',
+    ]:
+        out.loc[:, column] = False if column in {'ws_outlier_candidate', 'ws_small_group'} else numpy.nan
     if (len(required_sample_groups) <= 1) or (tc.shape[1] == 0) or (out.shape[0] == 0):
         return out
     tc_ave = sample_group_mean(tc, out, required_sample_groups)['tc_ave']
@@ -162,6 +169,8 @@ def _apply_within_group_filter(tc, sra, args, selected_sample_groups, min_dif=0.
         robust_z_threshold=float(getattr(args, 'robust_z_threshold', -2.5)),
         robust_z_col='ws_robust_z',
         outlier_col='ws_outlier_candidate',
+        small_group_policy=str(getattr(args, 'small_group_policy', 'margin_fallback')),
+        small_group_col='ws_small_group',
     )
     candidate_runs = (
         filtered.loc[
@@ -182,12 +191,22 @@ def _apply_within_group_filter(tc, sra, args, selected_sample_groups, min_dif=0.
         ].copy()
         excluded_runs = _reduce_outlier_candidates(candidate_df)
     out_sra = sra.copy()
-    metric_cols = ['ws_within_group_cor', 'ws_max_nongroup_cor', 'ws_margin', 'ws_robust_z', 'ws_outlier_candidate']
+    boolean_metric_cols = {'ws_outlier_candidate', 'ws_small_group'}
+    metric_cols = [
+        'ws_within_group_cor',
+        'ws_max_nongroup_cor',
+        'ws_margin',
+        'ws_robust_z',
+        'ws_outlier_candidate',
+        'ws_small_group',
+    ]
     for metric_col in metric_cols:
         if metric_col not in out_sra.columns:
-            out_sra.loc[:, metric_col] = numpy.nan if metric_col != 'ws_outlier_candidate' else False
+            out_sra.loc[:, metric_col] = False if metric_col in boolean_metric_cols else numpy.nan
         run_map = filtered.set_index(filtered['run'].astype(str))[metric_col]
         out_sra.loc[:, metric_col] = out_sra.loc[:, 'run'].astype(str).map(run_map)
+        if metric_col in boolean_metric_cols:
+            out_sra.loc[:, metric_col] = out_sra.loc[:, metric_col].fillna(False).astype(bool)
     if len(excluded_runs) > 0:
         out_sra.loc[out_sra['run'].astype(str).isin(excluded_runs), 'exclusion'] = 'low_within_sample_group_correlation'
     out_tc = tc.loc[:, [run_id for run_id in tc.columns if run_id not in set(excluded_runs)]].copy()

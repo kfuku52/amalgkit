@@ -247,6 +247,11 @@ def test_finalize_python_ruvseq_runs_end_to_end(tmp_path):
         bioprojects=['BP1', 'BP2', 'BP1', 'BP2'],
         species='Pythonruvseq example',
     )
+    # Inject a genuine latent batch signal so a real unwanted-variation
+    # component exists for RUVseq to estimate. Without this, the design fit
+    # leaves only float-noise residuals and the correct resolution is k=0
+    # (the regression test in test_batch_effect_ruvseq.py pins that case).
+    _inject_latent_batch_signal(tmp_path / 'input', fixture['species_tag'])
     out_dir = _run_finalize_python(
         tmp_path=tmp_path,
         fixture=fixture,

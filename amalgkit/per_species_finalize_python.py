@@ -15,6 +15,7 @@ from amalgkit.batch_effect_latent_glm import run_latent_glm_backend
 from amalgkit.batch_effect_ruvseq import run_ruvseq_backend
 from amalgkit.batch_effect_sva import run_sva_backend
 from amalgkit.filter_utils import _format_genus_species_label
+from amalgkit.runtime_utils import resolve_species_token
 from amalgkit.per_species_common import (
     append_round_summary,
     initialize_round_summary,
@@ -74,6 +75,27 @@ def _normalize_metadata_df(metadata_df):
 
 def _resolve_scientific_name(metadata_df, species_tag):
     scientific_name_series = metadata_df.get('scientific_name', pandas.Series(dtype=object)).fillna('').astype(str)
+    if 'species_token' in metadata_df.columns:
+        explicit_token_series = metadata_df.loc[:, 'species_token'].fillna('').astype(str).str.strip()
+    else:
+        explicit_token_series = pandas.Series('', index=metadata_df.index)
+    token_to_name = {}
+    for scientific_name, explicit_token in zip(
+        scientific_name_series.tolist(),
+        explicit_token_series.tolist(),
+    ):
+        normalized_name = str(scientific_name).strip()
+        if normalized_name == '':
+            continue
+        token = resolve_species_token(
+            normalized_name,
+            explicit_token=explicit_token,
+            label='species_token',
+        )
+        token_to_name.setdefault(token, normalized_name)
+    if species_tag in token_to_name:
+        return token_to_name[species_tag]
+    # Fallback for callers that pass a naive space->underscore tag.
     normalized = scientific_name_series.str.replace(' ', '_', regex=False)
     matched = scientific_name_series.loc[normalized == species_tag]
     if matched.shape[0] > 0:
@@ -361,7 +383,7 @@ def _run_batch_effect_step(counts_df, metadata_df, eff_length_df, args):
                 B_setting=str(getattr(args, 'sva_B', 'auto')),
                 B_auto_max=int(getattr(args, 'sva_B_auto_max', 100)),
                 sample_group_column='sample_group',
-                random_seed=getattr(args, 'seed', 'auto'),
+                random_seed=getattr(args, 'seed', 0),
             )
             batch_info['resolved_sva_nsv'] = summary.get('resolved_sva_nsv')
             batch_info['resolved_sva_B'] = summary.get('resolved_sva_B')
@@ -909,7 +931,7 @@ def run_finalize_python_worker(args, metadata, species_tag, input_dir):
             scientific_name=scientific_name,
             species_tag=species_tag,
             dir_tsv=dir_tsv,
-            random_seed_value=getattr(args, 'seed', None),
+            random_seed_value=getattr(args, 'seed', 0),
         )
         return 0
 
@@ -996,7 +1018,7 @@ def run_finalize_python_worker(args, metadata, species_tag, input_dir):
         scientific_name=scientific_name,
         species_tag=species_tag,
         dir_tsv=dir_tsv,
-        random_seed_value=getattr(args, 'seed', None),
+        random_seed_value=getattr(args, 'seed', 0),
     )
     return 0
 
