@@ -64,7 +64,14 @@ from amalgkit.sra_sources import (
     normalize_sra_download_url,
 )
 from amalgkit.sra import fetch_sra_xml as shared_fetch_sra_xml
-from amalgkit.subprocess_utils import format_command, probe_dependency_command, run_checked_command, run_logged_command
+from amalgkit.subprocess_utils import (
+    DEPENDENCY_PROBE_TIMEOUT_SECONDS,
+    format_command,
+    probe_dependency_command,
+    resolve_timeout_seconds,
+    run_checked_command,
+    run_logged_command,
+)
 
 import os
 import re
@@ -180,6 +187,27 @@ SRA_DOWNLOAD_SOURCE_PRIORITY = (
 )
 SRA_DOWNLOAD_WAIT_TIMEOUT_SECONDS = 86400
 SRA_DOWNLOAD_TRANSFER_TIMEOUT_SECONDS = 21600
+# Default wall-clock timeout for external sequence tools invoked by getfastq
+# (fasterq-dump, seqkit, fastp, mmseqs). Extraction/filtering can run for
+# hours on large SRA runs, so this is generous; a genuinely hung process
+# (NFS stall, dead lock) must still be surfaced instead of blocking forever.
+GETFASTQ_TOOL_TIMEOUT_SECONDS = 48 * 3600
+
+
+def resolve_getfastq_tool_timeout_seconds(args, default_seconds=GETFASTQ_TOOL_TIMEOUT_SECONDS):
+    return resolve_timeout_seconds(
+        args=args,
+        attribute_name='tool_timeout_seconds',
+        default_seconds=default_seconds,
+    )
+
+
+def resolve_getfastq_dependency_probe_timeout_seconds(args, default_seconds=DEPENDENCY_PROBE_TIMEOUT_SECONDS):
+    return resolve_timeout_seconds(
+        args=args,
+        attribute_name='dependency_probe_timeout_seconds',
+        default_seconds=default_seconds,
+    )
 SRA_DOWNLOAD_IO_CHUNK_SIZE = 1024 * 1024
 RECOVERABLE_DOWNLOAD_EXCEPTIONS = (
     urllib.error.URLError,
@@ -1241,6 +1269,7 @@ def download_with_curl(source_url, output_path, args, sra_source_name, artifact_
     out, _stdout_txt, _stderr_txt = run_logged_command(
         command=command,
         runner=subprocess.run,
+        timeout_seconds=resolve_getfastq_tool_timeout_seconds(args),
         print_command=True,
         print_output=should_print_getfastq_command_output(args),
         stdout_label='curl stdout:',
@@ -1700,11 +1729,14 @@ def check_getfastq_dependency(args):
     if obsolete_fastq_dump_exe:
         sys.stderr.write('--fastq_dump_exe is obsolete and ignored.\n')
 
+    probe_timeout_seconds = resolve_getfastq_dependency_probe_timeout_seconds(args)
+
     def probe_command(command, label):
         out, _stdout_txt, _stderr_txt = probe_dependency_command(
             command=command,
             label=label,
             runner=subprocess.run,
+            timeout_seconds=probe_timeout_seconds,
         )
         return out
 
@@ -1795,6 +1827,7 @@ def run_seqkit_seq_command(input_paths, output_path, args, command_label, seqkit
     out, _stdout_txt, _stderr_txt = run_checked_command(
         command=command,
         runner=subprocess.run,
+        timeout_seconds=resolve_getfastq_tool_timeout_seconds(args),
         print_command=True,
         print_output=should_print_getfastq_command_output(args),
         stdout_label='{} stdout:'.format(command_label),
@@ -1827,6 +1860,7 @@ def run_seqkit_range_command(input_path, output_path, start, end, args, command_
     out, _stdout_txt, _stderr_txt = run_checked_command(
         command=command,
         runner=subprocess.run,
+        timeout_seconds=resolve_getfastq_tool_timeout_seconds(args),
         print_command=True,
         print_output=should_print_getfastq_command_output(args),
         stdout_label='{} stdout:'.format(command_label),
@@ -1860,6 +1894,7 @@ def run_seqkit_replace_command(input_path, output_path, suffix, args, command_la
     out, _stdout_txt, _stderr_txt = run_checked_command(
         command=command,
         runner=subprocess.run,
+        timeout_seconds=resolve_getfastq_tool_timeout_seconds(args),
         print_command=True,
         print_output=should_print_getfastq_command_output(args),
         stdout_label='{} stdout:'.format(command_label),
@@ -1936,6 +1971,7 @@ def scan_fastq_records_and_bases_with_seqkit_batch(path_fastq_paths, args, seqki
     out, stdout_txt, stderr_txt = run_checked_command(
         command=command,
         runner=subprocess.run,
+        timeout_seconds=resolve_getfastq_tool_timeout_seconds(args),
         print_command=True,
         print_output=should_print_getfastq_command_output(args),
         stdout_label='FASTQ stats scan with seqkit stdout:',
@@ -2210,6 +2246,7 @@ def resolve_mmseqs_dbtype(args, target_db, runtime_context=None):
     out, stdout_txt, stderr_txt = run_checked_command(
         command=[mmseqs_exe, 'dbtype', target_db],
         runner=subprocess.run,
+        timeout_seconds=resolve_getfastq_tool_timeout_seconds(args),
         print_command=False,
         print_output=False,
         failure_message=lambda result, _stdout, stderr, _command_txt: (
@@ -2313,6 +2350,7 @@ def ensure_mmseqs_contam_taxonomy_db_exists(args):
         run_checked_command(
             command=db_cmd,
             runner=subprocess.run,
+        timeout_seconds=resolve_getfastq_tool_timeout_seconds(args),
             print_command=True,
             command_prefix='Downloading MMseqs taxonomy DB with command',
             print_output=should_print_getfastq_command_output(args),
@@ -2604,6 +2642,7 @@ def ensure_mmseqs_rrna_search_index_exists(args, db_path):
             run_checked_command(
                 command=command,
                 runner=subprocess.run,
+        timeout_seconds=resolve_getfastq_tool_timeout_seconds(args),
                 print_command=True,
                 command_prefix='Building MMseqs rRNA search index with command',
                 print_output=should_print_getfastq_command_output(args),
@@ -2698,6 +2737,7 @@ def ensure_mmseqs_rrna_reference_db_exists(args):
         run_checked_command(
             command=command,
             runner=subprocess.run,
+        timeout_seconds=resolve_getfastq_tool_timeout_seconds(args),
             print_command=True,
             command_prefix='Building MMseqs rRNA DB with command',
             print_output=should_print_getfastq_command_output(args),
@@ -3019,6 +3059,7 @@ def execute_fasterq_dump_command(fasterq_dump_command, args, prefix='Command'):
     fqd_out, stdout_txt, stderr_txt = run_logged_command(
         command=fasterq_dump_command,
         runner=subprocess.run,
+        timeout_seconds=resolve_getfastq_tool_timeout_seconds(args),
         print_command=True,
         command_prefix=prefix,
         print_output=should_print_getfastq_command_output(args),
@@ -3728,10 +3769,11 @@ def finalize_run_fastp_return(metadata, run_file_state, return_files=False, retu
     return metadata
 
 
-def execute_fastp_command(fp_command, fastp_print=False):
+def execute_fastp_command(fp_command, fastp_print=False, timeout_seconds=GETFASTQ_TOOL_TIMEOUT_SECONDS):
     fp_out, _stdout_txt, _stderr_txt = run_checked_command(
         command=fp_command,
         runner=subprocess.run,
+        timeout_seconds=timeout_seconds,
         print_command=True,
         print_output=fastp_print,
         stdout_label='fastp stdout:',
@@ -3797,7 +3839,11 @@ def run_fastp(
     )
     fp_command = fp_command + io_args
     fp_command = [fc for fc in fp_command if fc != '']
-    fp_out = execute_fastp_command(fp_command, fastp_print=args.fastp_print)
+    fp_out = execute_fastp_command(
+        fp_command,
+        fastp_print=args.fastp_print,
+        timeout_seconds=resolve_getfastq_tool_timeout_seconds(args),
+    )
     ensure_fastp_output_files(output_dir=output_dir, output_names=output_names)
     if run_file_state is not None:
         for output_name in output_names:
@@ -4122,6 +4168,7 @@ def run_mmseqs_easy_taxonomy_single_fastq(args, input_path, target_db, result_pr
     run_checked_command(
         command=command,
         runner=subprocess.run,
+        timeout_seconds=resolve_getfastq_tool_timeout_seconds(args),
         print_command=True,
         print_output=should_print_getfastq_command_output(args),
         stdout_label='mmseqs easy-taxonomy stdout:',
@@ -4169,6 +4216,7 @@ def run_mmseqs_easy_search_single_fastq(args, input_path, target_db, result_tsv,
     _result, stdout_txt, stderr_txt = run_checked_command(
         command=command,
         runner=subprocess.run,
+        timeout_seconds=resolve_getfastq_tool_timeout_seconds(args),
         print_command=True,
         print_output=should_print_getfastq_command_output(args),
         stdout_label='mmseqs easy-search stdout:',

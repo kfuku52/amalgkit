@@ -567,7 +567,7 @@ def test_run_busco_places_downloads_under_out_dir(tmp_path, monkeypatch):
     )
     captured = {'cmds': []}
 
-    def fake_run_command(cmd):
+    def fake_run_command(cmd, timeout_seconds=None):
         captured['cmds'].append(cmd)
 
     monkeypatch.setattr('amalgkit.busco.has_busco_lineage_cache', lambda **_kwargs: True)
@@ -792,7 +792,7 @@ def test_run_busco_uses_custom_download_dir(tmp_path, monkeypatch):
     )
     captured = {'cmds': []}
 
-    def fake_run_command(cmd):
+    def fake_run_command(cmd, timeout_seconds=None):
         captured['cmds'].append(cmd)
 
     monkeypatch.setattr('amalgkit.busco.has_busco_lineage_cache', lambda **_kwargs: True)
@@ -843,7 +843,7 @@ def test_run_busco_uses_download_lock_when_lineage_cache_missing(tmp_path, monke
     def fake_has_busco_lineage_cache(**_kwargs):
         return state['cache_ready']
 
-    def fake_run_command(cmd):
+    def fake_run_command(cmd, timeout_seconds=None):
         captured['cmds'].append(cmd)
         if '--download' in cmd:
             state['cache_ready'] = True
@@ -900,7 +900,7 @@ def test_run_busco_skips_download_lock_when_lineage_cache_exists(tmp_path, monke
     monkeypatch.setattr('amalgkit.busco.has_busco_lineage_cache', lambda **_kwargs: True)
     monkeypatch.setattr('amalgkit.busco.acquire_exclusive_lock', FailingLock)
     captured_cmds = []
-    monkeypatch.setattr('amalgkit.busco.run_command', lambda cmd: captured_cmds.append(cmd))
+    monkeypatch.setattr('amalgkit.busco.run_command', lambda cmd, timeout_seconds=None: captured_cmds.append(cmd))
     run_busco(
         fasta_path='/tmp/input.fa',
         sci_name='Species A',
@@ -941,7 +941,7 @@ def test_run_busco_filters_extra_args_between_download_and_analysis(tmp_path, mo
     def fake_has_busco_lineage_cache(**_kwargs):
         return state['cache_ready']
 
-    def fake_run_command(cmd):
+    def fake_run_command(cmd, timeout_seconds=None):
         captured['cmds'].append(cmd)
         if '--download' in cmd:
             state['cache_ready'] = True

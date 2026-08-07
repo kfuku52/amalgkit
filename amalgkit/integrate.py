@@ -27,10 +27,21 @@ from amalgkit.parallel_utils import (
     validate_positive_int_option,
 )
 from amalgkit.sanity import check_getfastq_outputs
-from amalgkit.subprocess_utils import run_logged_command
+from amalgkit.subprocess_utils import resolve_timeout_seconds, run_logged_command
 
 FASTQ_EXTENSIONS = ('.fastq.gz', '.fq.gz', '.fastq', '.fq')
 FASTQ_MATE_SUFFIX_PATTERN = re.compile(r'^(.*)_([12])$')
+# Default wall-clock timeout for seqkit stats scans in integrate. A hung
+# seqkit process (stale NFS handle, dead lock) must not block integration.
+INTEGRATE_SEQKIT_TIMEOUT_SECONDS = 2 * 3600
+
+
+def resolve_integrate_tool_timeout_seconds(args, default_seconds=INTEGRATE_SEQKIT_TIMEOUT_SECONDS):
+    return resolve_timeout_seconds(
+        args=args,
+        attribute_name='tool_timeout_seconds',
+        default_seconds=default_seconds,
+    )
 QUICK_MODE_SAMPLE_READS = 1000
 QUICK_MODE_PAIRED_COUNT_TOLERANCE_FRACTION = 0.05
 QUICK_MODE_PAIRED_COUNT_TOLERANCE_MIN_READS = 10
@@ -195,7 +206,8 @@ def parse_seqkit_stats_tsv_output(stdout_txt, path_fastq):
         )
     return parse_seqkit_stats_row(row=rows[0], path_fastq=path_fastq)
 
-def scan_fastq_stats_with_seqkit_batch(path_fastq_paths, seqkit_exe='seqkit', seqkit_threads=1):
+def scan_fastq_stats_with_seqkit_batch(path_fastq_paths, seqkit_exe='seqkit', seqkit_threads=1,
+                                       timeout_seconds=INTEGRATE_SEQKIT_TIMEOUT_SECONDS):
     if path_fastq_paths is None:
         return {}
     deduplicated_paths = []
@@ -222,6 +234,7 @@ def scan_fastq_stats_with_seqkit_batch(path_fastq_paths, seqkit_exe='seqkit', se
         print_command=False,
         print_output=False,
         not_found_label='seqkit',
+        timeout_seconds=timeout_seconds,
     )
     if out.returncode != 0:
         raise RuntimeError(
@@ -238,11 +251,13 @@ def scan_fastq_stats_with_seqkit_batch(path_fastq_paths, seqkit_exe='seqkit', se
         missing_message='seqkit stats output did not include all requested FASTQ paths: {}',
     )
 
-def scan_fastq_stats_with_seqkit(path_fastq, seqkit_exe='seqkit', seqkit_threads=1):
+def scan_fastq_stats_with_seqkit(path_fastq, seqkit_exe='seqkit', seqkit_threads=1,
+                                 timeout_seconds=INTEGRATE_SEQKIT_TIMEOUT_SECONDS):
     stats_by_path = scan_fastq_stats_with_seqkit_batch(
         path_fastq_paths=[path_fastq],
         seqkit_exe=seqkit_exe,
         seqkit_threads=seqkit_threads,
+        timeout_seconds=timeout_seconds,
     )
     return stats_by_path[os.path.abspath(path_fastq)]
 
@@ -265,7 +280,8 @@ def parse_seqkit_stats_row_detailed(row, path_fastq):
     }
 
 
-def scan_fastq_stats_with_seqkit_batch_detailed(path_fastq_paths, seqkit_exe='seqkit', seqkit_threads=1):
+def scan_fastq_stats_with_seqkit_batch_detailed(path_fastq_paths, seqkit_exe='seqkit', seqkit_threads=1,
+                                                timeout_seconds=INTEGRATE_SEQKIT_TIMEOUT_SECONDS):
     if path_fastq_paths is None:
         return {}
     deduplicated_paths = []
@@ -292,6 +308,7 @@ def scan_fastq_stats_with_seqkit_batch_detailed(path_fastq_paths, seqkit_exe='se
         print_command=False,
         print_output=False,
         not_found_label='seqkit',
+        timeout_seconds=timeout_seconds,
     )
     if out.returncode != 0:
         raise RuntimeError(
@@ -309,11 +326,13 @@ def scan_fastq_stats_with_seqkit_batch_detailed(path_fastq_paths, seqkit_exe='se
     )
 
 
-def scan_fastq_stats_with_seqkit_detailed(path_fastq, seqkit_exe='seqkit', seqkit_threads=1):
+def scan_fastq_stats_with_seqkit_detailed(path_fastq, seqkit_exe='seqkit', seqkit_threads=1,
+                                          timeout_seconds=INTEGRATE_SEQKIT_TIMEOUT_SECONDS):
     stats_by_path = scan_fastq_stats_with_seqkit_batch_detailed(
         path_fastq_paths=[path_fastq],
         seqkit_exe=seqkit_exe,
         seqkit_threads=seqkit_threads,
+        timeout_seconds=timeout_seconds,
     )
     return stats_by_path[os.path.abspath(path_fastq)]
 
@@ -528,7 +547,8 @@ def resolve_run_fastq_layout(run_id, fastq_records):
     ))
 
 
-def scan_run_fastq_stats(run_spec, accurate_size, seqkit_exe='seqkit', seqkit_threads=1, seqkit_stats_cache=None):
+def scan_run_fastq_stats(run_spec, accurate_size, seqkit_exe='seqkit', seqkit_threads=1, seqkit_stats_cache=None,
+                         timeout_seconds=INTEGRATE_SEQKIT_TIMEOUT_SECONDS):
     run_id = run_spec['run']
     lib_layout = run_spec['lib_layout']
     read1_path = run_spec['read1_path']
@@ -569,6 +589,7 @@ def scan_run_fastq_stats(run_spec, accurate_size, seqkit_exe='seqkit', seqkit_th
                     path_fastq=read1_path,
                     seqkit_exe=seqkit_exe,
                     seqkit_threads=seqkit_threads,
+                    timeout_seconds=timeout_seconds,
                 )
             except Exception as exc:
                 warnings.warn('seqkit stats failed for {}. Falling back to Python FASTQ parser. {}'.format(read1_path, exc))
@@ -631,6 +652,7 @@ def scan_run_fastq_stats(run_spec, accurate_size, seqkit_exe='seqkit', seqkit_th
                         path_fastq=read2_path,
                         seqkit_exe=seqkit_exe,
                         seqkit_threads=seqkit_threads,
+                        timeout_seconds=timeout_seconds,
                     )
                 except Exception as exc:
                     warnings.warn('seqkit stats failed for {}. Falling back to Python FASTQ parser. {}'.format(read2_path, exc))
@@ -936,7 +958,8 @@ def collect_seqkit_target_paths(run_specs, accurate_size):
             target_paths.append(path_fastq)
     return target_paths
 
-def build_seqkit_stats_cache_for_runs(run_specs, accurate_size, seqkit_exe='seqkit', seqkit_threads=1):
+def build_seqkit_stats_cache_for_runs(run_specs, accurate_size, seqkit_exe='seqkit', seqkit_threads=1,
+                                      timeout_seconds=INTEGRATE_SEQKIT_TIMEOUT_SECONDS):
     target_paths = collect_seqkit_target_paths(run_specs=run_specs, accurate_size=accurate_size)
     if len(target_paths) == 0:
         return {}
@@ -944,10 +967,12 @@ def build_seqkit_stats_cache_for_runs(run_specs, accurate_size, seqkit_exe='seqk
         path_fastq_paths=target_paths,
         seqkit_exe=seqkit_exe,
         seqkit_threads=seqkit_threads,
+        timeout_seconds=timeout_seconds,
     )
 
 
-def scan_all_run_fastq_stats(run_specs, accurate_size, threads=1, seqkit_exe='seqkit'):
+def scan_all_run_fastq_stats(run_specs, accurate_size, threads=1, seqkit_exe='seqkit',
+                             timeout_seconds=INTEGRATE_SEQKIT_TIMEOUT_SECONDS):
     if is_auto_parallel_option(threads):
         jobs = resolve_detected_cpu_count()
     else:
@@ -959,6 +984,7 @@ def scan_all_run_fastq_stats(run_specs, accurate_size, threads=1, seqkit_exe='se
             accurate_size=accurate_size,
             seqkit_exe=seqkit_exe,
             seqkit_threads=max(1, jobs),
+            timeout_seconds=timeout_seconds,
         )
         if len(seqkit_stats_cache) > 0:
             print(
@@ -982,6 +1008,7 @@ def scan_all_run_fastq_stats(run_specs, accurate_size, threads=1, seqkit_exe='se
                 seqkit_exe=seqkit_exe,
                 seqkit_threads=seqkit_threads,
                 seqkit_stats_cache=seqkit_stats_cache,
+                timeout_seconds=timeout_seconds,
             )
             if stats is not None:
                 stats_by_run[run_spec['run']] = stats
@@ -999,6 +1026,7 @@ def scan_all_run_fastq_stats(run_specs, accurate_size, threads=1, seqkit_exe='se
             seqkit_exe=seqkit_exe,
             seqkit_threads=seqkit_threads,
             seqkit_stats_cache=seqkit_stats_cache,
+            timeout_seconds=timeout_seconds,
         ),
         max_workers=max_workers,
     )
@@ -1065,6 +1093,7 @@ def get_fastq_stats(args, existing_df=None, output_path=None):
         accurate_size=args.accurate_size,
         threads=getattr(args, 'threads', 1),
         seqkit_exe=getattr(args, 'seqkit_exe', 'seqkit'),
+        timeout_seconds=resolve_integrate_tool_timeout_seconds(args),
     )
     rows = build_private_fastq_metadata_rows(run_specs, stats_by_run)
     tmp_metadata = pd.DataFrame.from_records(rows)

@@ -42,10 +42,20 @@ from amalgkit.runtime_utils import (
     validate_unique_species_tokens,
 )
 from amalgkit.prefix_utils import find_run_prefixed_entries, find_species_prefixed_entries
-from amalgkit.subprocess_utils import probe_dependency_command, run_logged_command
+from amalgkit.subprocess_utils import (
+    DEPENDENCY_PROBE_TIMEOUT_SECONDS,
+    probe_dependency_command,
+    resolve_timeout_seconds,
+    run_logged_command,
+)
 
 INDEX_BUILD_LOCK_POLL_SECONDS = 5
 INDEX_BUILD_LOCK_TIMEOUT_SECONDS = 3600
+# Default wall-clock timeouts for external quantification tools. A hung
+# kallisto/oarfish process (NFS stall, dead lock on a busy cluster) must not
+# block the whole run forever; each run also accepts an explicit
+# --tool_timeout_seconds override from the CLI.
+QUANT_TOOL_TIMEOUT_SECONDS = 12 * 3600
 
 INDEX_FASTA_SUFFIXES = ('.fa', '.fasta', '.fa.gz', '.fasta.gz')
 KALLISTO_INDEX_SUFFIX = '.idx'
@@ -782,6 +792,7 @@ def call_kallisto(args, in_files, metadata, sra_stat, output_dir, index):
         print_output=True,
         stdout_label='kallisto quant stdout:',
         stderr_label='kallisto quant stderr:',
+        timeout_seconds=resolve_quant_tool_timeout_seconds(args),
     )
     if kallisto_out.returncode != 0:
         sys.stderr.write('kallisto did not finish safely.\n')
@@ -820,6 +831,7 @@ def call_oarfish(args, in_files, metadata, sra_stat, output_dir, index, seq_tech
         print_output=True,
         stdout_label='oarfish quant stdout:',
         stderr_label='oarfish quant stderr:',
+        timeout_seconds=resolve_quant_tool_timeout_seconds(args),
     )
     if oarfish_out.returncode != 0:
         raise RuntimeError(
@@ -835,28 +847,46 @@ def call_oarfish(args, in_files, metadata, sra_stat, output_dir, index, seq_tech
     return oarfish_out
 
 
-def check_kallisto_dependency():
+def check_kallisto_dependency(args=None):
     probe_dependency_command(
         command=['kallisto', 'version'],
         label='kallisto',
         runner=subprocess.run,
+        timeout_seconds=resolve_dependency_probe_timeout_seconds(args),
     )
 
 
-def check_oarfish_dependency():
+def check_oarfish_dependency(args=None):
     probe_dependency_command(
         command=['oarfish', '--version'],
         label='oarfish',
         runner=subprocess.run,
+        timeout_seconds=resolve_dependency_probe_timeout_seconds(args),
     )
 
 
-def check_quant_dependencies(backend_by_run):
+def check_quant_dependencies(backend_by_run, args=None):
     backends = set([backend for backend in backend_by_run.values() if backend != ''])
     if 'kallisto' in backends:
-        check_kallisto_dependency()
+        check_kallisto_dependency(args)
     if 'oarfish' in backends:
-        check_oarfish_dependency()
+        check_oarfish_dependency(args)
+
+
+def resolve_quant_tool_timeout_seconds(args, default_seconds=QUANT_TOOL_TIMEOUT_SECONDS):
+    return resolve_timeout_seconds(
+        args=args,
+        attribute_name='tool_timeout_seconds',
+        default_seconds=default_seconds,
+    )
+
+
+def resolve_dependency_probe_timeout_seconds(args, default_seconds=DEPENDENCY_PROBE_TIMEOUT_SECONDS):
+    return resolve_timeout_seconds(
+        args=args,
+        attribute_name='dependency_probe_timeout_seconds',
+        default_seconds=default_seconds,
+    )
 
 
 def list_getfastq_run_files(output_dir):
@@ -1695,7 +1725,7 @@ def _resolve_single_fasta_file(args, sci_name, runtime_context=None, alias_names
     return fasta_file
 
 
-def _build_kallisto_index(index_path, fasta_file, sci_name):
+def _build_kallisto_index(index_path, fasta_file, sci_name, args=None):
     absolute_index_path = os.path.abspath(index_path)
     if os.path.lexists(absolute_index_path) and os.path.islink(absolute_index_path):
         raise ValueError(
@@ -1718,13 +1748,25 @@ def _build_kallisto_index(index_path, fasta_file, sci_name):
         kallisto_build_cmd = ['kallisto', 'index', '-i', temporary_index_path, fasta_file]
         print('Using isolated kallisto index work directory: {}'.format(build_cwd), flush=True)
 
-        def run_in_build_cwd(command, stdout, stderr):
+        def run_in_build_cwd(command, stdout, stderr, timeout=None):
             try:
-                return subprocess.run(command, stdout=stdout, stderr=stderr, cwd=build_cwd)
+                return subprocess.run(command, stdout=stdout, stderr=stderr, cwd=build_cwd, timeout=timeout)
             except TypeError as exc:
-                if 'cwd' not in str(exc):
+                message = str(exc)
+                is_unsupported_keyword = (
+                    ('unexpected keyword argument' in message)
+                    and (("'cwd'" in message) or ("'timeout'" in message))
+                )
+                if not is_unsupported_keyword:
                     raise
-                return subprocess.run(command, stdout=stdout, stderr=stderr)
+                try:
+                    return subprocess.run(command, stdout=stdout, stderr=stderr, cwd=build_cwd)
+                except TypeError as exc2:
+                    message = str(exc2)
+                    if ('unexpected keyword argument' not in message) or ("'cwd'" not in message):
+                        raise
+                    # Injected test runners may accept neither cwd nor timeout.
+                    return subprocess.run(command, stdout=stdout, stderr=stderr)
 
         index_out, _stdout_txt, _stderr_txt = run_logged_command(
             command=kallisto_build_cmd,
@@ -1733,6 +1775,7 @@ def _build_kallisto_index(index_path, fasta_file, sci_name):
             print_output=True,
             stdout_label='kallisto index stdout:',
             stderr_label='kallisto index stderr:',
+            timeout_seconds=resolve_quant_tool_timeout_seconds(args),
         )
         if index_out.returncode != 0:
             raise RuntimeError('kallisto index failed for {}.'.format(sci_name))
@@ -1783,6 +1826,7 @@ def _build_oarfish_index(args, index_path, fasta_file, sci_name, seq_tech):
             print_output=True,
             stdout_label='oarfish index stdout:',
             stderr_label='oarfish index stderr:',
+            timeout_seconds=resolve_quant_tool_timeout_seconds(args),
         )
         if index_out.returncode != 0:
             raise RuntimeError('oarfish index failed for {}.'.format(sci_name))
@@ -1884,7 +1928,18 @@ def get_index(args, sci_name, runtime_context=None, backend=None, oarfish_seq_te
                 runtime_context=runtime_context,
             )
         if backend == 'kallisto':
-            _build_kallisto_index(index_path=index_path, fasta_file=fasta_file, sci_name=build_sci_name)
+            try:
+                _build_kallisto_index(
+                    index_path=index_path,
+                    fasta_file=fasta_file,
+                    sci_name=build_sci_name,
+                    args=args,
+                )
+            except TypeError as exc:
+                message = str(exc)
+                if ('unexpected keyword argument' not in message) or ("'args'" not in message):
+                    raise
+                _build_kallisto_index(index_path=index_path, fasta_file=fasta_file, sci_name=build_sci_name)
         elif backend == 'oarfish':
             _build_oarfish_index(
                 args=args,
@@ -2250,7 +2305,7 @@ def quant_main(args):
         quant_metadata,
         tasks,
     )
-    check_quant_dependencies(backend_by_run)
+    check_quant_dependencies(backend_by_run, runtime_args)
     runtime_context = prepare_quant_runtime_context(
         runtime_args,
         tasks,

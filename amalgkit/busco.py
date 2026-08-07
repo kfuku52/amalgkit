@@ -28,7 +28,7 @@ from amalgkit.runtime_utils import (
     validate_safe_path_component,
     validate_unique_species_tokens,
 )
-from amalgkit.subprocess_utils import run_checked_command
+from amalgkit.subprocess_utils import resolve_timeout_seconds, run_checked_command
 
 
 REQUIRED_COLUMNS = [
@@ -43,6 +43,19 @@ REQUIRED_COLUMNS = [
 
 
 FASTA_SUFFIXES = ('.fa', '.fasta', '.fa.gz', '.fasta.gz')
+# Default wall-clock timeout for a BUSCO/compleasm analysis or lineage
+# download. BUSCO runs can legitimately take many hours on large genomes, so
+# this is deliberately generous; a genuinely hung process (NFS stall, dead
+# lock) must still be surfaced instead of blocking the run forever.
+BUSCO_TOOL_TIMEOUT_SECONDS = 48 * 3600
+
+
+def resolve_busco_tool_timeout_seconds(args, default_seconds=BUSCO_TOOL_TIMEOUT_SECONDS):
+    return resolve_timeout_seconds(
+        args=args,
+        attribute_name='tool_timeout_seconds',
+        default_seconds=default_seconds,
+    )
 BUSCO_OPTION_VALUE_ARITY = {
     '-i': 1,
     '--in': 1,
@@ -550,12 +563,13 @@ def ensure_clean_dir(path, redo):
     os.makedirs(path, exist_ok=True)
 
 
-def run_command(cmd):
+def run_command(cmd, timeout_seconds=BUSCO_TOOL_TIMEOUT_SECONDS):
     run_checked_command(
         command=cmd,
         runner=subprocess.run,
         print_command=True,
         print_output=True,
+        timeout_seconds=timeout_seconds,
     )
 
 
@@ -782,18 +796,21 @@ def run_busco(fasta_path, sci_name, output_root, args, extra_args):
         extra_args=extra_args,
     )
     if has_busco_lineage_cache(download_path=download_path, lineage=args.lineage):
-        run_command(analysis_cmd)
+        run_command(analysis_cmd, timeout_seconds=resolve_busco_tool_timeout_seconds(args))
         return os.path.join(output_root, out_name)
 
     lock_path = resolve_busco_download_lock_path(args, args.lineage)
     with acquire_exclusive_lock(lock_path=lock_path, lock_label='BUSCO lineage download'):
         if not has_busco_lineage_cache(download_path=download_path, lineage=args.lineage):
-            run_command(build_busco_download_command(args=args, extra_args=extra_args))
+            run_command(
+                build_busco_download_command(args=args, extra_args=extra_args),
+                timeout_seconds=resolve_busco_tool_timeout_seconds(args),
+            )
             if not has_busco_lineage_cache(download_path=download_path, lineage=args.lineage):
                 raise RuntimeError(
                     'BUSCO lineage download did not produce a complete cache: {}'.format(args.lineage)
                 )
-    run_command(analysis_cmd)
+    run_command(analysis_cmd, timeout_seconds=resolve_busco_tool_timeout_seconds(args))
     return os.path.join(output_root, out_name)
 
 
@@ -814,7 +831,7 @@ def run_compleasm(fasta_path, sci_name, output_root, args, extra_args):
         '--mode', 'transcriptome',
     ]
     cmd.extend(split_compleasm_extra_args(extra_args))
-    run_command(cmd)
+    run_command(cmd, timeout_seconds=resolve_busco_tool_timeout_seconds(args))
     return out_dir
 
 

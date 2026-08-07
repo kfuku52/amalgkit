@@ -2057,6 +2057,28 @@ class TestQuantEdgeCases:
         assert observed_cwds[0] != os.getcwd()
         assert not os.path.exists(observed_cwds[0])
 
+    def test_build_kallisto_index_does_not_retry_internal_type_error(self, tmp_path, monkeypatch):
+        index_path = tmp_path / 'Homo_sapiens.idx'
+        fasta_file = tmp_path / 'Homo_sapiens.fa'
+        fasta_file.write_text('>a\nAAAA\n', encoding='utf-8')
+        calls = []
+
+        def fake_run(cmd, stdout, stderr, cwd=None, timeout=None):
+            calls.append((cwd, timeout))
+            raise TypeError('timeout calculation failed inside runner')
+
+        monkeypatch.setattr(subprocess, 'run', fake_run)
+
+        with pytest.raises(TypeError, match='timeout calculation failed'):
+            _build_kallisto_index(
+                str(index_path),
+                str(fasta_file),
+                'Homo_sapiens',
+                args=SimpleNamespace(tool_timeout_seconds=30),
+            )
+
+        assert len(calls) == 1
+
     def test_failed_kallisto_index_build_preserves_previous_index(self, tmp_path, monkeypatch):
         index_path = tmp_path / 'Homo_sapiens.idx'
         fasta_file = tmp_path / 'Homo_sapiens.fa'
@@ -2222,7 +2244,7 @@ class TestQuantEdgeCases:
             index_lock_poll=1,
             index_lock_timeout=10,
         )
-        monkeypatch.setattr('amalgkit.quant.check_kallisto_dependency', lambda: None)
+        monkeypatch.setattr('amalgkit.quant.check_kallisto_dependency', lambda args=None: None)
         monkeypatch.setattr(
             'amalgkit.quant.load_metadata',
             lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError('load_metadata should not be called')),
@@ -2248,7 +2270,7 @@ class TestQuantEdgeCases:
             index_lock_poll=1,
             index_lock_timeout=10,
         )
-        monkeypatch.setattr('amalgkit.quant.check_kallisto_dependency', lambda: None)
+        monkeypatch.setattr('amalgkit.quant.check_kallisto_dependency', lambda args=None: None)
         monkeypatch.setattr(
             'amalgkit.quant.load_metadata',
             lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError('load_metadata should not be called')),
@@ -2287,7 +2309,7 @@ class TestQuantEdgeCases:
         observed = {}
 
         monkeypatch.setattr('amalgkit.quant.load_metadata', lambda _args: metadata)
-        monkeypatch.setattr('amalgkit.quant.check_quant_dependencies', lambda _backends: None)
+        monkeypatch.setattr('amalgkit.quant.check_quant_dependencies', lambda _backends, _args=None: None)
         monkeypatch.setattr(
             'amalgkit.quant.pre_resolve_species_indices',
             lambda _args, _tasks, runtime_context=None: {},
@@ -2334,7 +2356,7 @@ class TestQuantEdgeCases:
         dispatched = []
         observed = {}
 
-        monkeypatch.setattr('amalgkit.quant.check_kallisto_dependency', lambda: None)
+        monkeypatch.setattr('amalgkit.quant.check_kallisto_dependency', lambda args=None: None)
         def fake_load_metadata(runtime_args):
             observed['load_threads'] = runtime_args.threads
             return metadata
@@ -2375,7 +2397,7 @@ class TestQuantEdgeCases:
             'nominal_length': [200, 200],
         }))
 
-        monkeypatch.setattr('amalgkit.quant.check_kallisto_dependency', lambda: None)
+        monkeypatch.setattr('amalgkit.quant.check_kallisto_dependency', lambda args=None: None)
         monkeypatch.setattr('amalgkit.quant.load_metadata', lambda _args: metadata)
         monkeypatch.setattr('amalgkit.quant.pre_resolve_species_indices', lambda _args, _tasks, runtime_context=None: {})
 
@@ -2413,7 +2435,7 @@ class TestQuantEdgeCases:
         dispatched = []
         observed = {}
 
-        monkeypatch.setattr('amalgkit.quant.check_kallisto_dependency', lambda: None)
+        monkeypatch.setattr('amalgkit.quant.check_kallisto_dependency', lambda args=None: None)
         def fake_load_metadata(runtime_args):
             observed['load_threads'] = runtime_args.threads
             return metadata
@@ -2466,7 +2488,7 @@ class TestQuantEdgeCases:
         }))
         observed = {}
 
-        monkeypatch.setattr('amalgkit.quant.check_kallisto_dependency', lambda: None)
+        monkeypatch.setattr('amalgkit.quant.check_kallisto_dependency', lambda args=None: None)
 
         def fake_load_metadata(runtime_args):
             observed['load_out_dir'] = runtime_args.out_dir
@@ -2528,7 +2550,7 @@ class TestQuantEdgeCases:
         dispatched = []
         resolved_species = []
 
-        monkeypatch.setattr('amalgkit.quant.check_kallisto_dependency', lambda: None)
+        monkeypatch.setattr('amalgkit.quant.check_kallisto_dependency', lambda args=None: None)
         monkeypatch.setattr('amalgkit.quant.load_metadata', lambda _args: metadata)
         monkeypatch.setattr(
             'amalgkit.quant.get_index',
