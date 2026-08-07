@@ -460,12 +460,14 @@ def _assign_pca_to_metadata(df_metadata, pca_df, suffix):
     return out
 
 
-def _apply_csfilter_outlier_flags(df_metadata, outlier_method='none', margin_threshold=0.0, robust_z_threshold=-2.5):
+def _apply_csfilter_outlier_flags(df_metadata, outlier_method='none', margin_threshold=0.0, robust_z_threshold=-2.5,
+                                  small_group_policy='margin_fallback'):
     out = df_metadata.copy()
     out.loc[:, 'cs_margin_uncorrected'] = pandas.to_numeric(out.get('within_group_cor_uncorrected'), errors='coerce') - pandas.to_numeric(out.get('max_nongroup_cor_uncorrected'), errors='coerce')
     out.loc[:, 'cs_margin_corrected'] = pandas.to_numeric(out.get('within_group_cor_corrected'), errors='coerce') - pandas.to_numeric(out.get('max_nongroup_cor_corrected'), errors='coerce')
     out.loc[:, 'cs_robust_z'] = numpy.nan
     out.loc[:, 'cs_outlier_candidate'] = False
+    out.loc[:, 'cs_small_group'] = False
     out.loc[:, 'cs_outlier_reason'] = ''
     if str(outlier_method) != 'robust_margin':
         return out
@@ -480,9 +482,12 @@ def _apply_csfilter_outlier_flags(df_metadata, outlier_method='none', margin_thr
         robust_z_threshold=float(robust_z_threshold),
         robust_z_col='cs_robust_z',
         outlier_col='cs_outlier_candidate',
+        small_group_policy=str(small_group_policy),
+        small_group_col='cs_small_group',
     )
     out.loc[idx, 'cs_robust_z'] = flagged['cs_robust_z'].to_numpy()
     out.loc[idx, 'cs_outlier_candidate'] = flagged['cs_outlier_candidate'].fillna(False).astype(bool).to_numpy()
+    out.loc[idx, 'cs_small_group'] = flagged['cs_small_group'].fillna(False).astype(bool).to_numpy()
     outlier_idx = idx[out.loc[idx, 'cs_outlier_candidate'].fillna(False).astype(bool).to_numpy()]
     if len(outlier_idx) > 0:
         out.loc[outlier_idx, 'cs_outlier_reason'] = 'low_cross_species_group_correlation'
@@ -1352,6 +1357,7 @@ def run_cross_species_filter(args, context=None):
             outlier_method=str(getattr(args, 'outlier_method', 'none')),
             margin_threshold=float(getattr(args, 'margin_threshold', 0.0)),
             robust_z_threshold=float(getattr(args, 'robust_z_threshold', -2.5)),
+            small_group_policy=str(getattr(args, 'small_group_policy', 'margin_fallback')),
         )
         df_metadata['single_copy_threshold'] = single_copy_threshold
         averaged_inputs = _build_averaged_cross_species_inputs(df_metadata, orthologs)

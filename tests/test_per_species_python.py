@@ -52,6 +52,7 @@ def test_within_group_filter_clears_stale_candidates_after_all_runs_removed():
     )
     assert empty_counts.shape[1] == 0
     assert excluded_runs == ['A1', 'A2', 'B1', 'B2']
+    assert excluded_metadata['ws_small_group'].tolist() == [True, True, True, True]
 
     next_counts, next_metadata, next_excluded_runs = _apply_within_group_filter(
         tc=empty_counts,
@@ -63,3 +64,4 @@ def test_within_group_filter_clears_stale_candidates_after_all_runs_removed():
     assert next_counts.shape[1] == 0
     assert next_excluded_runs == []
     assert not next_metadata['ws_outlier_candidate'].fillna(False).any()
+    assert not next_metadata['ws_small_group'].fillna(False).any()

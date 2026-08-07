@@ -264,13 +264,19 @@ def test_filter_excluded_tables_include_prior_stage_reasons(tmp_path):
                 'low_cross_species_group_correlation',
                 'no',
             ],
+            'ws_small_group': [True, False, False],
+            'cs_small_group': [False, True, False],
         }
     )
-    for command_module in [wsfilter_module, csfilter_module]:
+    for command_module, expected_small_group_col in [
+        (wsfilter_module, 'ws_small_group'),
+        (csfilter_module, 'cs_small_group'),
+    ]:
         out_path = tmp_path / '{}_excluded.tsv'.format(command_module.__name__.rsplit('.', 1)[-1])
         command_module._write_excluded_table(metadata, out_path)
         observed = pandas.read_csv(out_path, sep='\t')
         assert observed['run'].tolist() == ['R1', 'R2']
+        assert expected_small_group_col in observed.columns
 
 
 def test_wsfilter_failure_does_not_update_filter_metadata_state(tmp_path, monkeypatch):

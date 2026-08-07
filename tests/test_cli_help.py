@@ -198,3 +198,21 @@ def test_help_topic_dataset_mentions_init_workspace_scaffold():
     assert '--name' in merged
     assert 'init' in merged
     assert 'workspace scaffold' in merged
+
+
+def test_small_group_policy_option_is_exposed_for_filter_commands():
+    # The small-group policy must be reachable from the CLI, not only from the
+    # Python API, and it must offer both documented values.
+    for command in ('wsfilter', 'csfilter'):
+        out = run_cli(command, '--help')
+        assert out.returncode == 0, out.stderr
+        merged = out.stdout + '\n' + out.stderr
+        assert '--small_group_policy' in merged, command
+        assert 'margin_fallback' in merged, command
+        assert 'retain' in merged, command
+
+
+def test_small_group_policy_rejects_unknown_value():
+    out = run_cli('wsfilter', '--small_group_policy', 'keep_everything')
+    assert out.returncode != 0
+    assert 'invalid choice' in (out.stdout + out.stderr).lower()

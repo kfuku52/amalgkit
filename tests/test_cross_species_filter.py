@@ -5,6 +5,7 @@ import pandas
 from types import SimpleNamespace
 
 from amalgkit.cross_species_filter import (
+    _apply_csfilter_outlier_flags,
     _calculate_correlation_within_group,
     _load_expression_tables,
     _resolve_matrix_for_embedding,
@@ -16,6 +17,27 @@ from amalgkit.cross_species_filter import (
     run_cross_species_filter,
 )
 from amalgkit.util import Metadata
+
+
+def test_cross_species_outlier_flags_surface_small_group_status():
+    metadata = pandas.DataFrame(
+        {
+            'exclusion': ['no', 'no'],
+            'sample_group': ['leaf', 'leaf'],
+            'within_group_cor_uncorrected': [0.0, 0.0],
+            'max_nongroup_cor_uncorrected': [0.0, 0.0],
+            'within_group_cor_corrected': [-0.1, -0.2],
+            'max_nongroup_cor_corrected': [0.0, 0.0],
+        }
+    )
+
+    with pytest.warns(UserWarning, match='could not be robustly scored'):
+        observed = _apply_csfilter_outlier_flags(
+            metadata,
+            outlier_method='robust_margin',
+        )
+
+    assert observed['cs_small_group'].tolist() == [True, True]
 
 
 def test_single_copy_selection_uses_shared_percentage_and_retains_missing_orthologs(tmp_path):

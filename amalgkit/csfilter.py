@@ -142,6 +142,7 @@ def _write_excluded_table(df_metadata, out_path):
         'max_nongroup_cor',
         'cs_margin',
         'cs_robust_z',
+        'cs_small_group',
     ]
     cols = [col for col in preferred_cols if col in excluded.columns]
     if len(cols) == 0:
