@@ -40,7 +40,7 @@ def _build_per_species_args(args, input_dir, tmp_out_dir):
     data.setdefault('ruvseq_k_max', 5)
     data.setdefault('ruvseq_control_top_n', 1000)
     data.setdefault('ruvseq_min_controls', 100)
-    data.setdefault('seed', 'auto')
+    data.setdefault('seed', 0)
     data.setdefault('sva_nsv', 'auto')
     data.setdefault('sva_B', 'auto')
     data.setdefault('sva_B_auto_max', 100)
@@ -113,7 +113,7 @@ def finalize_main(args):
             data = vars(args).copy()
             data['metadata'] = latest_metadata
             resolve_args = SimpleNamespace(**data)
-            print('Using latest filter metadata: {}'.format(latest_metadata))
+            print('Using inferred filter metadata: {}'.format(latest_metadata))
     metadata, input_dir = resolve_per_species_input(resolve_args)
     out_root = os.path.realpath(args.out_dir)
     dir_finalize = os.path.join(out_root, 'finalize')

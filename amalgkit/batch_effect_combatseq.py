@@ -7,7 +7,8 @@ def _load_pycombat_seq():
         from inmoose.pycombat import pycombat_seq
     except ImportError as exc:
         raise ImportError(
-            'Python Combat-seq backend requires the "inmoose" package.'
+            'Python Combat-seq backend requires the "inmoose" package. '
+            'Install it with: pip install "amalgkit[combatseq]"'
         ) from exc
     return pycombat_seq
 

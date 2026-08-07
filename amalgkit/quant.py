@@ -42,10 +42,20 @@ from amalgkit.runtime_utils import (
     validate_unique_species_tokens,
 )
 from amalgkit.prefix_utils import find_run_prefixed_entries, find_species_prefixed_entries
-from amalgkit.subprocess_utils import probe_dependency_command, run_logged_command
+from amalgkit.subprocess_utils import (
+    DEPENDENCY_PROBE_TIMEOUT_SECONDS,
+    probe_dependency_command,
+    resolve_timeout_seconds,
+    run_logged_command,
+)
 
 INDEX_BUILD_LOCK_POLL_SECONDS = 5
 INDEX_BUILD_LOCK_TIMEOUT_SECONDS = 3600
+# Default wall-clock timeouts for external quantification tools. A hung
+# kallisto/oarfish process (NFS stall, dead lock on a busy cluster) must not
+# block the whole run forever; each run also accepts an explicit
+# --tool_timeout_seconds override from the CLI.
+QUANT_TOOL_TIMEOUT_SECONDS = 12 * 3600
 
 INDEX_FASTA_SUFFIXES = ('.fa', '.fasta', '.fa.gz', '.fasta.gz')
 KALLISTO_INDEX_SUFFIX = '.idx'
@@ -366,6 +376,23 @@ def _metadata_with_quant_input_sra_stats(metadata, sra_id, output_dir_getfastq):
             ', '.join(recovered),
         )
     )
+    return quant_metadata
+
+
+def _metadata_with_quant_input_sra_stats_for_tasks(args, metadata, tasks):
+    quant_metadata = metadata
+    getfastq_root = os.path.join(args.out_dir, 'getfastq')
+    for sra_id, _sci_name in tasks:
+        output_dir_getfastq = safe_join_component(
+            getfastq_root,
+            sra_id,
+            label='run ID',
+        )
+        quant_metadata = _metadata_with_quant_input_sra_stats(
+            quant_metadata,
+            sra_id,
+            output_dir_getfastq,
+        )
     return quant_metadata
 
 
@@ -765,6 +792,7 @@ def call_kallisto(args, in_files, metadata, sra_stat, output_dir, index):
         print_output=True,
         stdout_label='kallisto quant stdout:',
         stderr_label='kallisto quant stderr:',
+        timeout_seconds=resolve_quant_tool_timeout_seconds(args),
     )
     if kallisto_out.returncode != 0:
         sys.stderr.write('kallisto did not finish safely.\n')
@@ -803,6 +831,7 @@ def call_oarfish(args, in_files, metadata, sra_stat, output_dir, index, seq_tech
         print_output=True,
         stdout_label='oarfish quant stdout:',
         stderr_label='oarfish quant stderr:',
+        timeout_seconds=resolve_quant_tool_timeout_seconds(args),
     )
     if oarfish_out.returncode != 0:
         raise RuntimeError(
@@ -818,28 +847,46 @@ def call_oarfish(args, in_files, metadata, sra_stat, output_dir, index, seq_tech
     return oarfish_out
 
 
-def check_kallisto_dependency():
+def check_kallisto_dependency(args=None):
     probe_dependency_command(
         command=['kallisto', 'version'],
         label='kallisto',
         runner=subprocess.run,
+        timeout_seconds=resolve_dependency_probe_timeout_seconds(args),
     )
 
 
-def check_oarfish_dependency():
+def check_oarfish_dependency(args=None):
     probe_dependency_command(
         command=['oarfish', '--version'],
         label='oarfish',
         runner=subprocess.run,
+        timeout_seconds=resolve_dependency_probe_timeout_seconds(args),
     )
 
 
-def check_quant_dependencies(backend_by_run):
+def check_quant_dependencies(backend_by_run, args=None):
     backends = set([backend for backend in backend_by_run.values() if backend != ''])
     if 'kallisto' in backends:
-        check_kallisto_dependency()
+        check_kallisto_dependency(args)
     if 'oarfish' in backends:
-        check_oarfish_dependency()
+        check_oarfish_dependency(args)
+
+
+def resolve_quant_tool_timeout_seconds(args, default_seconds=QUANT_TOOL_TIMEOUT_SECONDS):
+    return resolve_timeout_seconds(
+        args=args,
+        attribute_name='tool_timeout_seconds',
+        default_seconds=default_seconds,
+    )
+
+
+def resolve_dependency_probe_timeout_seconds(args, default_seconds=DEPENDENCY_PROBE_TIMEOUT_SECONDS):
+    return resolve_timeout_seconds(
+        args=args,
+        attribute_name='dependency_probe_timeout_seconds',
+        default_seconds=default_seconds,
+    )
 
 
 def list_getfastq_run_files(output_dir):
@@ -1335,12 +1382,12 @@ def _run_quant_unlocked(
         if isinstance(runtime_context, QuantRuntimeContext) and (sra_id in runtime_context.quant_backend_by_run):
             backend = runtime_context.quant_backend_by_run[sra_id]
         else:
-            backend = resolve_quant_backend(args, metadata, sra_id)
+            backend = resolve_quant_backend(args, quant_metadata, sra_id)
     if (backend == 'oarfish') and (oarfish_seq_tech is None):
         if isinstance(runtime_context, QuantRuntimeContext) and (sra_id in runtime_context.oarfish_seq_tech_by_run):
             oarfish_seq_tech = runtime_context.oarfish_seq_tech_by_run[sra_id]
         else:
-            oarfish_seq_tech = resolve_oarfish_seq_tech(args, metadata, sra_id)
+            oarfish_seq_tech = resolve_oarfish_seq_tech(args, quant_metadata, sra_id)
     run_files = None
     if isinstance(runtime_context, QuantRuntimeContext):
         run_files = runtime_context.run_files_by_run.get(sra_id, None)
@@ -1350,9 +1397,19 @@ def _run_quant_unlocked(
     sra_stat['getfastq_sra_dir'] = output_dir_getfastq
     ext = get_newest_intermediate_file_extension(sra_stat, work_dir=output_dir_getfastq, files=run_files)
     if ext == '.safely_removed':
-        print('These files have been safe-deleted. If you wish to re-obtain the .fastq file(s), run: getfastq --id ', sra_id, ' -w ', args.out_dir)
-        print('Skipping.')
-        return
+        if is_quant_output_available:
+            reason = '--redo requires re-quantification'
+        else:
+            reason = 'valid quant outputs are missing or invalid'
+        raise FileNotFoundError(
+            'Cannot run quant for {} because its FASTQ inputs were safely removed and {}. '
+            'Re-run `amalgkit getfastq --id {} -w {}` before quant.'.format(
+                sra_id,
+                reason,
+                sra_id,
+                args.out_dir,
+            )
+        )
     if ext == 'no_extension_found':
         sys.stderr.write('getfastq output not found in: {}, layout = {}\n'.format(sra_stat['getfastq_sra_dir'], sra_stat['layout']))
         txt = 'Exiting. If you wish to obtain the .fastq file(s), run: getfastq --id {}\n'
@@ -1368,10 +1425,10 @@ def _run_quant_unlocked(
     print('Quant backend selected for {}: {}'.format(sra_id, backend))
     with staged_output_dir(output_dir, redo=True, prefix='amalgkit_quant_stage_') as stage_output_dir:
         if backend == 'kallisto':
-            call_kallisto(args, in_files, metadata, sra_stat, stage_output_dir, index)
+            call_kallisto(args, in_files, quant_metadata, sra_stat, stage_output_dir, index)
         elif backend == 'oarfish':
             print('oarfish seq-tech selected for {}: {}'.format(sra_id, oarfish_seq_tech))
-            call_oarfish(args, in_files, metadata, sra_stat, stage_output_dir, index, oarfish_seq_tech)
+            call_oarfish(args, in_files, quant_metadata, sra_stat, stage_output_dir, index, oarfish_seq_tech)
         else:
             raise ValueError('Unsupported quant backend: {}'.format(backend))
         is_valid, validation_error = validate_quant_outputs(sra_id=sra_id, output_dir=stage_output_dir)
@@ -1668,7 +1725,7 @@ def _resolve_single_fasta_file(args, sci_name, runtime_context=None, alias_names
     return fasta_file
 
 
-def _build_kallisto_index(index_path, fasta_file, sci_name):
+def _build_kallisto_index(index_path, fasta_file, sci_name, args=None):
     absolute_index_path = os.path.abspath(index_path)
     if os.path.lexists(absolute_index_path) and os.path.islink(absolute_index_path):
         raise ValueError(
@@ -1691,13 +1748,25 @@ def _build_kallisto_index(index_path, fasta_file, sci_name):
         kallisto_build_cmd = ['kallisto', 'index', '-i', temporary_index_path, fasta_file]
         print('Using isolated kallisto index work directory: {}'.format(build_cwd), flush=True)
 
-        def run_in_build_cwd(command, stdout, stderr):
+        def run_in_build_cwd(command, stdout, stderr, timeout=None):
             try:
-                return subprocess.run(command, stdout=stdout, stderr=stderr, cwd=build_cwd)
+                return subprocess.run(command, stdout=stdout, stderr=stderr, cwd=build_cwd, timeout=timeout)
             except TypeError as exc:
-                if 'cwd' not in str(exc):
+                message = str(exc)
+                is_unsupported_keyword = (
+                    ('unexpected keyword argument' in message)
+                    and (("'cwd'" in message) or ("'timeout'" in message))
+                )
+                if not is_unsupported_keyword:
                     raise
-                return subprocess.run(command, stdout=stdout, stderr=stderr)
+                try:
+                    return subprocess.run(command, stdout=stdout, stderr=stderr, cwd=build_cwd)
+                except TypeError as exc2:
+                    message = str(exc2)
+                    if ('unexpected keyword argument' not in message) or ("'cwd'" not in message):
+                        raise
+                    # Injected test runners may accept neither cwd nor timeout.
+                    return subprocess.run(command, stdout=stdout, stderr=stderr)
 
         index_out, _stdout_txt, _stderr_txt = run_logged_command(
             command=kallisto_build_cmd,
@@ -1706,6 +1775,7 @@ def _build_kallisto_index(index_path, fasta_file, sci_name):
             print_output=True,
             stdout_label='kallisto index stdout:',
             stderr_label='kallisto index stderr:',
+            timeout_seconds=resolve_quant_tool_timeout_seconds(args),
         )
         if index_out.returncode != 0:
             raise RuntimeError('kallisto index failed for {}.'.format(sci_name))
@@ -1756,6 +1826,7 @@ def _build_oarfish_index(args, index_path, fasta_file, sci_name, seq_tech):
             print_output=True,
             stdout_label='oarfish index stdout:',
             stderr_label='oarfish index stderr:',
+            timeout_seconds=resolve_quant_tool_timeout_seconds(args),
         )
         if index_out.returncode != 0:
             raise RuntimeError('oarfish index failed for {}.'.format(sci_name))
@@ -1857,7 +1928,18 @@ def get_index(args, sci_name, runtime_context=None, backend=None, oarfish_seq_te
                 runtime_context=runtime_context,
             )
         if backend == 'kallisto':
-            _build_kallisto_index(index_path=index_path, fasta_file=fasta_file, sci_name=build_sci_name)
+            try:
+                _build_kallisto_index(
+                    index_path=index_path,
+                    fasta_file=fasta_file,
+                    sci_name=build_sci_name,
+                    args=args,
+                )
+            except TypeError as exc:
+                message = str(exc)
+                if ('unexpected keyword argument' not in message) or ("'args'" not in message):
+                    raise
+                _build_kallisto_index(index_path=index_path, fasta_file=fasta_file, sci_name=build_sci_name)
         elif backend == 'oarfish':
             _build_oarfish_index(
                 args=args,
@@ -1889,6 +1971,11 @@ def run_quant_for_sra(args, metadata, sra_id, sci_name, runtime_context=None):
     print('')
     print('Species: {}'.format(sci_name))
     print('SRA Run ID: {}'.format(sra_id))
+    quant_metadata = _metadata_with_quant_input_sra_stats_for_tasks(
+        args,
+        metadata,
+        [(sra_id, sci_name)],
+    )
     normalized_sci_name = _normalize_species_identifier(
         _resolve_task_species_identifier_values(
             sra_id,
@@ -1904,9 +1991,9 @@ def run_quant_for_sra(args, metadata, sra_id, sci_name, runtime_context=None):
         oarfish_seq_tech = runtime_context.oarfish_seq_tech_by_run.get(sra_id, None)
         index_cache = runtime_context.resolved_index_cache
     if backend is None:
-        backend = resolve_quant_backend(args, metadata, sra_id)
+        backend = resolve_quant_backend(args, quant_metadata, sra_id)
     if (backend == 'oarfish') and (oarfish_seq_tech is None):
-        oarfish_seq_tech = resolve_oarfish_seq_tech(args, metadata, sra_id)
+        oarfish_seq_tech = resolve_oarfish_seq_tech(args, quant_metadata, sra_id)
     index_cache_key = _build_index_cache_key(
         backend,
         normalized_sci_name,
@@ -1926,7 +2013,7 @@ def run_quant_for_sra(args, metadata, sra_id, sci_name, runtime_context=None):
         )
     run_quant(
         args,
-        metadata,
+        quant_metadata,
         sra_id,
         index,
         runtime_context=runtime_context,
@@ -2089,15 +2176,29 @@ def prefetch_getfastq_run_files(args, tasks):
 def prepare_quant_runtime_context(args, tasks, metadata=None, backend_by_run=None, oarfish_seq_tech_by_run=None):
     runtime_context = QuantRuntimeContext()
     runtime_context.run_files_by_run = prefetch_getfastq_run_files(args, tasks)
+    quant_metadata = metadata
+    if metadata is not None:
+        quant_metadata = _metadata_with_quant_input_sra_stats_for_tasks(
+            args,
+            metadata,
+            tasks,
+        )
     if backend_by_run is None or oarfish_seq_tech_by_run is None:
-        if metadata is None:
+        if quant_metadata is None:
             backend_by_run = {sra_id: 'kallisto' for sra_id, _sci_name in tasks}
             oarfish_seq_tech_by_run = {}
         else:
-            backend_by_run, oarfish_seq_tech_by_run = resolve_quant_backends_for_tasks(args, metadata, tasks)
+            backend_by_run, oarfish_seq_tech_by_run = resolve_quant_backends_for_tasks(
+                args,
+                quant_metadata,
+                tasks,
+            )
     runtime_context.quant_backend_by_run = dict(backend_by_run)
     runtime_context.oarfish_seq_tech_by_run = dict(oarfish_seq_tech_by_run)
-    runtime_context.species_identifier_values_by_run = _resolve_quant_species_identifier_values(metadata, tasks)
+    runtime_context.species_identifier_values_by_run = _resolve_quant_species_identifier_values(
+        quant_metadata,
+        tasks,
+    )
     runtime_context.resolved_index_cache = pre_resolve_species_indices(
         args,
         tasks,
@@ -2194,18 +2295,27 @@ def quant_main(args):
     runtime_args = clone_namespace(args, threads=threads, internal_jobs=jobs, out_dir=out_dir)
     metadata = load_metadata(runtime_args)
     tasks = build_quant_tasks(metadata)
-    backend_by_run, oarfish_seq_tech_by_run = resolve_quant_backends_for_tasks(runtime_args, metadata, tasks)
-    check_quant_dependencies(backend_by_run)
+    quant_metadata = _metadata_with_quant_input_sra_stats_for_tasks(
+        runtime_args,
+        metadata,
+        tasks,
+    )
+    backend_by_run, oarfish_seq_tech_by_run = resolve_quant_backends_for_tasks(
+        runtime_args,
+        quant_metadata,
+        tasks,
+    )
+    check_quant_dependencies(backend_by_run, runtime_args)
     runtime_context = prepare_quant_runtime_context(
         runtime_args,
         tasks,
-        metadata=metadata,
+        metadata=quant_metadata,
         backend_by_run=backend_by_run,
         oarfish_seq_tech_by_run=oarfish_seq_tech_by_run,
     )
     if (jobs == 1) or (len(tasks) <= 1):
         for sra_id, sci_name in tasks:
-            run_quant_for_sra(runtime_args, metadata, sra_id, sci_name, runtime_context=runtime_context)
+            run_quant_for_sra(runtime_args, quant_metadata, sra_id, sci_name, runtime_context=runtime_context)
         return
 
     max_workers = min(jobs, len(tasks))
@@ -2214,7 +2324,7 @@ def quant_main(args):
         task_items=tasks,
         task_fn=lambda task: run_quant_for_sra(
             runtime_args,
-            metadata,
+            quant_metadata,
             task[0],
             task[1],
             runtime_context=runtime_context,

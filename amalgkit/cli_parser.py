@@ -1,4 +1,5 @@
 import argparse
+import math
 
 from amalgkit.cli_utils import (
     build_help_command_handler,
@@ -14,6 +15,16 @@ def positive_int(value):
     if int_value <= 0:
         raise argparse.ArgumentTypeError('must be > 0')
     return int_value
+
+
+def single_copy_threshold(value):
+    try:
+        threshold = float(value)
+    except (TypeError, ValueError) as exc:
+        raise argparse.ArgumentTypeError('must be > 0 and <= 100') from exc
+    if (not math.isfinite(threshold)) or (threshold <= 0.0) or (threshold > 100.0):
+        raise argparse.ArgumentTypeError('must be > 0 and <= 100')
+    return threshold
 
 
 def build_parser(command_handlers, command_names, version, prog=None):
@@ -66,6 +77,7 @@ def build_parser(command_handlers, command_names, version, prog=None):
     pp_sg = argparse.ArgumentParser(add_help=False)
     pp_sg.add_argument('--sample_group', metavar='tissueA,tissueB,tissueC,...', default=None, type=str, required=False, action='store',
                      help='default=%(default)s: "Comma separated list of sample groups. '
+                          'Use a backslash to escape a literal comma or pipe in a group name. '
                           'By default, all sample_group values in metadata.tsv are passed.')
     pp_sgc = argparse.ArgumentParser(add_help=False)
     pp_sgc.add_argument('--sample_group_color', metavar='#d95f02ff,#1b9e77ff,#7570b3ff,...', default='DEFAULT', type=str, required=False, action='store',
@@ -307,6 +319,14 @@ def build_parser(command_handlers, command_names, version, prog=None):
                      help='default=%(default)s: Acceptable percentage loss of reads relative to --max_bp. If the 1st-round sequence '
                           'generation could not produce enough reads, the 2nd-round sequence generation is activated to '
                           'compensate the loss.')
+    pge.add_argument('--tool_timeout_seconds', metavar='INT', default=172800, type=int,
+                     required=False, action='store',
+                     help='default=%(default)s (48 h): Wall-clock timeout applied to each external\n'
+                          ' tool invocation. 0 disables the timeout.')
+    pge.add_argument('--dependency_probe_timeout_seconds', metavar='INT', default=300, type=int,
+                     required=False, action='store',
+                     help='default=%(default)s (5 min): Wall-clock timeout applied to each dependency\n'
+                          ' version/help probe run at startup. 0 disables the timeout.')
     pge.set_defaults(handler=command_handlers['getfastq'])
 
     pqu_help = 'Estimating transcript abundance with auto-selected kallisto/oarfish backend. See `amalgkit quant -h`'
@@ -344,6 +364,14 @@ def build_parser(command_handlers, command_names, version, prog=None):
                      help='default=%(default)s: Poll interval in seconds while waiting for another batch process to finish building a species index.')
     pqu.add_argument('--index_lock_timeout', metavar='INT', default=3600, type=int, required=False, action='store',
                      help='default=%(default)s: Maximum wait time in seconds for index build lock release before aborting.')
+    pqu.add_argument('--tool_timeout_seconds', metavar='INT', default=43200, type=int,
+                     required=False, action='store',
+                     help='default=%(default)s (12 h): Wall-clock timeout applied to each external\n'
+                          ' tool invocation. 0 disables the timeout.')
+    pqu.add_argument('--dependency_probe_timeout_seconds', metavar='INT', default=300, type=int,
+                     required=False, action='store',
+                     help='default=%(default)s (5 min): Wall-clock timeout applied to each dependency\n'
+                          ' version/help probe run at startup. 0 disables the timeout.')
     pqu.set_defaults(handler=command_handlers['quant'])
 
     pmg_help = 'Generating transcript abundance tables. See `amalgkit merge -h`'
@@ -368,7 +396,11 @@ def build_parser(command_handlers, command_names, version, prog=None):
     pbu.add_argument('--compleasm_exe', metavar='PATH', default='compleasm', type=str, required=False, action='store',
                      help='default=%(default)s: PATH to compleasm executable.')
     pbu.add_argument('--tool_args', metavar='STR', default=None, type=str, required=False, action='store',
-                     help='Additional arguments passed to the selected tool.')
+                     help='Additional arguments passed to the selected tool. For BUSCO, --download is managed from --lineage and cannot be supplied here.')
+    pbu.add_argument('--tool_timeout_seconds', metavar='INT', default=172800, type=int,
+                     required=False, action='store',
+                     help='default=%(default)s (48 h): Wall-clock timeout applied to each external\n'
+                          ' tool invocation. 0 disables the timeout.')
     pbu.set_defaults(handler=command_handlers['busco'])
 
     pcs_help = 'Applying cross-species TMM normalization using single-copy genes. See `amalgkit cstmm -h`'
@@ -384,6 +416,9 @@ def build_parser(command_handlers, command_names, version, prog=None):
                           '"inferred" = out_dir/merge')
     pcs.add_argument('--tmm_backend', metavar='python', default='python', choices=['python'], type=str, required=False, action='store',
                      help='default=%(default)s: Backend used for cstmm.')
+    pcs.add_argument('--single_copy_threshold', metavar='PERCENT', default=50.0, type=single_copy_threshold,
+                     required=False, action='store',
+                     help='default=%(default)s: Minimum percentage of species in which an orthogroup must be single-copy.')
     pcs.set_defaults(handler=command_handlers['cstmm'])
 
     pws_help = 'Within-species outlier filtering. Outputs metadata.tsv + excluded.tsv + species PDFs (no plots/). See `amalgkit wsfilter -h`'
@@ -408,6 +443,12 @@ def build_parser(command_handlers, command_names, version, prog=None):
                      help='default=%(default)s: Margin threshold for robust-margin outlier detection.')
     pws.add_argument('--robust_z_threshold', metavar='FLOAT', default=-2.5, type=float, required=False, action='store',
                      help='default=%(default)s: Robust z-score threshold for robust-margin outlier detection.')
+    pws.add_argument('--small_group_policy', metavar='margin_fallback|retain',
+                     choices=['margin_fallback', 'retain'],
+                     default='margin_fallback', type=str, required=False, action='store',
+                     help='default=%(default)s: How to screen sample_groups too small for a robust z-score. '
+                          '"margin_fallback" applies --margin_threshold alone; '
+                          '"retain" keeps them without margin-based screening.')
     pws.set_defaults(handler=command_handlers['wsfilter'])
 
     pcsf_help = 'Cross-species outlier filtering. Outputs metadata.tsv + excluded.tsv + PDFs (no plots/). See `amalgkit csfilter -h`'
@@ -430,6 +471,16 @@ def build_parser(command_handlers, command_names, version, prog=None):
                       help='default=%(default)s: Margin threshold for robust-margin outlier detection.')
     pcsf.add_argument('--robust_z_threshold', metavar='FLOAT', default=-2.5, type=float, required=False, action='store',
                       help='default=%(default)s: Robust z-score threshold for robust-margin outlier detection.')
+    pcsf.add_argument('--small_group_policy', metavar='margin_fallback|retain',
+                      choices=['margin_fallback', 'retain'],
+                      default='margin_fallback', type=str, required=False, action='store',
+                      help='default=%(default)s: How to screen sample_groups too small for a robust z-score. '
+                           '"margin_fallback" applies --margin_threshold alone; '
+                           '"retain" keeps them without margin-based screening.')
+    pcsf.add_argument('--single_copy_threshold', metavar='PERCENT', default=None, type=single_copy_threshold,
+                      required=False, action='store',
+                      help='default=inferred: Minimum percentage of species in which an orthogroup must be single-copy. '
+                           'Inherits the value recorded by cstmm, or uses 50 when no cstmm value is available.')
     pcsf.set_defaults(handler=command_handlers['csfilter'])
 
     pfi_help = 'Final table export from filtered metadata. See `amalgkit finalize -h`'
@@ -459,8 +510,9 @@ def build_parser(command_handlers, command_names, version, prog=None):
                      help='default=%(default)s: Top non-DE genes considered as control candidates when --ruvseq_control_genes auto.')
     pfi.add_argument('--ruvseq_min_controls', metavar='INT', default=100, type=int, required=False, action='store',
                      help='default=%(default)s: Minimum number of control genes required for RUVSeq auto selection.')
-    pfi.add_argument('--seed', metavar='INT|auto', default='auto', type=nonnegative_int_or_auto, required=False, action='store',
-                     help='default=%(default)s: Random seed for stochastic steps (SVA/RUVSeq/t-SNE). "auto" keeps default RNG behavior.')
+    pfi.add_argument('--seed', metavar='INT|auto', default=0, type=nonnegative_int_or_auto, required=False, action='store',
+                     help='default=%(default)s: Random seed for stochastic steps (SVA/RUVSeq/t-SNE). '
+                          '"auto" uses OS entropy and may produce non-reproducible results.')
     pfi.add_argument('--sva_nsv', metavar='INT|auto', default='auto', type=nonnegative_int_or_auto, required=False, action='store',
                      help='default=%(default)s: Number of surrogate variables for SVA. "auto" lets sva estimate n.sv.')
     pfi.add_argument('--sva_B', metavar='INT|auto', default='auto', type=int_or_auto, required=False, action='store',
@@ -603,6 +655,10 @@ def build_parser(command_handlers, command_names, version, prog=None):
     pin.add_argument('--accurate_size', metavar='yes|no', default='yes', type=strtobool, required=False, action='store',
                      help='default=%(default)s: ONLY APPLIES TO .gz COMPRESSED FASTQ FILES. If no, scans the first 1,000 reads '
                           'to estimate average read length. If yes, scans the whole file for exact statistics.')
+    pin.add_argument('--tool_timeout_seconds', metavar='INT', default=7200, type=int,
+                     required=False, action='store',
+                     help='default=%(default)s (2 h): Wall-clock timeout applied to each external\n'
+                          ' tool invocation. 0 disables the timeout.')
     pin.set_defaults(handler=command_handlers['integrate'])
 
     pda_help = 'Extracting bundled datasets, initializing workspaces, and exporting select rule sets. See `amalgkit dataset -h`'

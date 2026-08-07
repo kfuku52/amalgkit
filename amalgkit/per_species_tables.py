@@ -9,6 +9,7 @@ import pandas
 
 from amalgkit.arg_utils import clone_namespace
 from amalgkit.command_context import PerSpeciesTableContext
+from amalgkit.merge import build_merge_species_token_map
 from amalgkit.metadata_utils import load_metadata
 from amalgkit.parallel_utils import resolve_worker_allocation, run_tasks_with_optional_threads
 from amalgkit.per_species_python import (
@@ -160,7 +161,13 @@ def list_selected_species(metadata):
         .str.strip()
     )
     selected_species = selected_species.loc[selected_species != ''].drop_duplicates().values
-    return [species.replace(' ', '_') for species in selected_species]
+    # Species tags must match the merge/cstmm output directories, which are
+    # keyed by the resolved species_token (an explicit species_token column is
+    # honored). A naive name.replace(' ', '_') diverges from the token map
+    # whenever an explicit token differs (e.g. "Homo sapiens" -> "human") and
+    # made per-species workers unable to find their input directories.
+    token_by_species = build_merge_species_token_map(metadata)
+    return [token_by_species[species] for species in selected_species]
 
 
 def has_cstmm_counts_input(input_dir, selected_species):
