@@ -4,9 +4,11 @@ from defusedxml.ElementTree import fromstring as parse_untrusted_xml_string
 import hashlib
 import itertools
 import json
+import mmap
 import numpy
 import gzip
 import pandas
+import random
 import shlex
 
 from amalgkit.arg_utils import clone_namespace
@@ -88,6 +90,7 @@ import urllib.request
 
 IDENTICAL_PAIRED_RATIO_THRESHOLD = 0.99
 IDENTICAL_PAIRED_CHECKED_READS = 2000
+IDENTICAL_PAIRED_SAMPLE_WINDOWS = 16
 ID_LIST_METADATA_MAX_WORKERS = 4
 ID_LIST_VERBOSE_LIMIT = 20
 RRNA_REFERENCE_SPECS = [
@@ -109,6 +112,7 @@ RRNA_FILTER_DEFAULT_MEMORY_LIMIT = '32G'
 CONTAM_FILTER_SUPPORTED_RANKS = ['superkingdom', 'kingdom', 'phylum', 'class', 'order', 'family', 'genus', 'species']
 CONTAM_FILTER_RANK_ALIASES = {'domain': 'superkingdom'}
 CONTAM_FILTER_DEFAULT_DB_NAME = 'UniRef90'
+CONTAM_FILTER_DEFAULT_CHUNK_SPOTS = 5_000_000
 FILTER_ORDER_SUPPORTED_FILTERS = ['fastp', 'rrna', 'contam']
 TRACE_RUN_XML_URL_TEMPLATE = 'https://trace.ncbi.nlm.nih.gov/Traces/sra-db-be/run_new?acc={}'
 GETFASTQ_DURATION_COLUMNS = [
@@ -2554,6 +2558,17 @@ def resolve_rrna_filter_chunk_spots(args):
         raise ValueError('--rrna_filter_chunk_spots must be an integer > 0.')
     return chunk_spots
 
+
+def resolve_contam_filter_chunk_spots(args):
+    raw_value = getattr(args, 'contam_filter_chunk_spots', CONTAM_FILTER_DEFAULT_CHUNK_SPOTS)
+    try:
+        chunk_spots = int(raw_value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError('--contam_filter_chunk_spots must be an integer > 0.') from exc
+    if chunk_spots <= 0:
+        raise ValueError('--contam_filter_chunk_spots must be an integer > 0.')
+    return chunk_spots
+
 def resolve_rrna_filter_index_signature(args):
     sensitivity = getattr(args, 'rrna_filter_sensitivity', 'auto')
     max_seqs = getattr(args, 'rrna_filter_max_seqs', 'auto')
@@ -3306,6 +3321,11 @@ def guard_fasterq_full_dump_disk_space(sra_stat, size_check='on'):
 
 
 def should_compress_fasterq_output_before_filters(args):
+    # Keep fasterq-dump output seekable until distributed paired-read sampling
+    # has completed. sequence_extraction compresses it immediately afterwards
+    # when no ordinary filters are enabled.
+    if bool(getattr(args, 'treat_identical_paired_as_single', False)):
+        return False
     filter_order = get_filter_execution_order(args)
     return len(filter_order) == 0
 
@@ -3505,25 +3525,195 @@ def remove_unpaired_files(sra_stat, files=None, file_state=None, return_file_sta
         return run_file_state
     return run_file_state.to_set()
 
-def get_identical_paired_ratio(read1_path, read2_path, num_checked_reads=IDENTICAL_PAIRED_CHECKED_READS):
-    num_identical = 0
-    num_checked = 0
-    read_length = 0
+def _mmap_fastq_line(mapped_file, start):
+    if start >= len(mapped_file):
+        return None, len(mapped_file)
+    end = mapped_file.find(b'\n', start)
+    if end < 0:
+        return bytes(mapped_file[start:]), len(mapped_file)
+    return bytes(mapped_file[start:end + 1]), end + 1
+
+
+def _sample_mmap_fastq_window(mapped_file, start_offset, max_records):
+    if len(mapped_file) == 0:
+        return []
+    position = max(0, min(int(start_offset), len(mapped_file) - 1))
+    if position > 0:
+        newline = mapped_file.find(b'\n', position)
+        if newline < 0:
+            return []
+        position = newline + 1
+    records = []
+    candidate_limit = max(100, int(max_records) * 20)
+    candidates_checked = 0
+    while (position < len(mapped_file)) and (len(records) < max_records):
+        candidates_checked += 1
+        if candidates_checked > candidate_limit:
+            break
+        line1, next_position = _mmap_fastq_line(mapped_file, position)
+        line2, after_line2 = _mmap_fastq_line(mapped_file, next_position)
+        line3, after_line3 = _mmap_fastq_line(mapped_file, after_line2)
+        line4, after_line4 = _mmap_fastq_line(mapped_file, after_line3)
+        if any(line is None for line in (line1, line2, line3, line4)):
+            break
+        if line1.startswith(b'@') and line3.startswith(b'+'):
+            read_id = parse_fastq_header_read_id(line1)
+            read_core = normalize_paired_read_core(read_id)
+            if read_core != '':
+                records.append((read_core, line2.rstrip(b'\r\n')))
+            position = after_line4
+            continue
+        position = next_position
+    return records
+
+
+def _distributed_mmap_paired_sample(read1_path, read2_path, sample_size):
+    sampled_pairs = []
+    sampled_cores = set()
+    windows_used = 0
+    with open(read1_path, 'rb') as read1, open(read2_path, 'rb') as read2:
+        if (os.path.getsize(read1_path) == 0) or (os.path.getsize(read2_path) == 0):
+            return sampled_pairs, windows_used
+        with mmap.mmap(read1.fileno(), 0, access=mmap.ACCESS_READ) as mapped1, mmap.mmap(
+            read2.fileno(), 0, access=mmap.ACCESS_READ
+        ) as mapped2:
+            window_count = min(IDENTICAL_PAIRED_SAMPLE_WINDOWS, max(1, int(sample_size)))
+            per_window = max(1, int(numpy.ceil(float(sample_size) / float(window_count))))
+            candidate_records = max(per_window + 32, per_window * 8)
+            for window_index in range(window_count):
+                if window_count == 1:
+                    fraction = 0.0
+                else:
+                    fraction = 0.98 * window_index / (window_count - 1)
+                records1 = _sample_mmap_fastq_window(
+                    mapped_file=mapped1,
+                    start_offset=int(len(mapped1) * fraction),
+                    max_records=candidate_records,
+                )
+                records2 = _sample_mmap_fastq_window(
+                    mapped_file=mapped2,
+                    start_offset=int(len(mapped2) * fraction),
+                    max_records=candidate_records,
+                )
+                sequences2 = dict(records2)
+                added_in_window = 0
+                for read_core, seq1 in records1:
+                    if read_core in sampled_cores or read_core not in sequences2:
+                        continue
+                    sampled_pairs.append((seq1, sequences2[read_core]))
+                    sampled_cores.add(read_core)
+                    added_in_window += 1
+                    if (len(sampled_pairs) >= sample_size) or (added_in_window >= per_window):
+                        break
+                if added_in_window > 0:
+                    windows_used += 1
+                if len(sampled_pairs) >= sample_size:
+                    break
+
+            # Small inputs cause windows to overlap. Fill any remaining sample
+            # slots from the beginning while retaining the distributed records
+            # already selected above.
+            if len(sampled_pairs) < sample_size:
+                fill_limit = max(sample_size * 4, sample_size + 128)
+                records1 = _sample_mmap_fastq_window(mapped1, 0, fill_limit)
+                records2 = dict(_sample_mmap_fastq_window(mapped2, 0, fill_limit))
+                for read_core, seq1 in records1:
+                    if read_core in sampled_cores or read_core not in records2:
+                        continue
+                    sampled_pairs.append((seq1, records2[read_core]))
+                    sampled_cores.add(read_core)
+                    if len(sampled_pairs) >= sample_size:
+                        break
+    return sampled_pairs, windows_used
+
+
+def _read_fastq_text_block(handle, input_path):
+    block = [handle.readline() for _ in range(4)]
+    if block[0] == '':
+        return None
+    if any(line == '' for line in block[1:]):
+        raise ValueError('Malformed paired FASTQ (truncated record): {}'.format(input_path))
+    if not block[0].startswith('@'):
+        raise ValueError('Malformed paired FASTQ (header does not start with @): {}'.format(input_path))
+    if not block[2].startswith('+'):
+        raise ValueError('Malformed paired FASTQ (separator does not start with +): {}'.format(input_path))
+    return block
+
+
+def _distributed_streaming_paired_sample(read1_path, read2_path, sample_size):
+    # Ordinary gzip streams have no general-purpose random-access index.
+    # Reservoir sampling still gives a deterministic, file-wide sample with
+    # bounded memory; fasterq-dump output is deliberately kept uncompressed so
+    # the mmap path above handles the common case without a full scan.
+    reservoir = []
+    random_generator = random.Random(0)  # noqa: S311 - deterministic sampling, not cryptography
     open_read1 = gzip.open if str(read1_path).endswith('.gz') else open
     open_read2 = gzip.open if str(read2_path).endswith('.gz') else open
+    num_records = 0
     with open_read1(read1_path, 'rt') as read1, open_read2(read2_path, 'rt') as read2:
-        while num_checked < num_checked_reads:
-            block1 = [read1.readline() for _ in range(4)]
-            block2 = [read2.readline() for _ in range(4)]
-            if any([line == '' for line in block1 + block2]):
+        while True:
+            block1 = _read_fastq_text_block(read1, read1_path)
+            block2 = _read_fastq_text_block(read2, read2_path)
+            if (block1 is None) and (block2 is None):
                 break
-            seq1 = block1[1].strip()
-            seq2 = block2[1].strip()
-            if num_checked == 0:
-                read_length = len(seq1)
-            if seq1 == seq2:
-                num_identical += 1
-            num_checked += 1
+            if (block1 is None) or (block2 is None):
+                raise ValueError('Paired FASTQ files contain different numbers of records.')
+            core1 = normalize_paired_read_core(parse_fastq_header_read_id(block1[0]))
+            core2 = normalize_paired_read_core(parse_fastq_header_read_id(block2[0]))
+            if (core1 == '') or (core1 != core2):
+                raise ValueError(
+                    'Paired FASTQ mate IDs are out of sync during identity sampling: {} != {}'.format(
+                        parse_fastq_header_read_id(block1[0]),
+                        parse_fastq_header_read_id(block2[0]),
+                    )
+                )
+            pair = (block1[1].strip().encode('utf-8'), block2[1].strip().encode('utf-8'))
+            if num_records < sample_size:
+                reservoir.append(pair)
+            else:
+                replacement_index = random_generator.randrange(num_records + 1)
+                if replacement_index < sample_size:
+                    reservoir[replacement_index] = pair
+            num_records += 1
+    return reservoir
+
+
+def get_identical_paired_ratio(read1_path, read2_path, num_checked_reads=IDENTICAL_PAIRED_CHECKED_READS):
+    sample_size = int(num_checked_reads)
+    if sample_size <= 0:
+        raise ValueError('num_checked_reads must be > 0.')
+    is_seekable_plain_fastq = (
+        not str(read1_path).endswith('.gz')
+        and not str(read2_path).endswith('.gz')
+    )
+    if is_seekable_plain_fastq:
+        sampled_pairs, windows_used = _distributed_mmap_paired_sample(
+            read1_path=read1_path,
+            read2_path=read2_path,
+            sample_size=sample_size,
+        )
+        print(
+            'Distributed paired-read identity sample: {:,} pair(s) from {:,} window(s).'.format(
+                len(sampled_pairs),
+                windows_used,
+            ),
+            flush=True,
+        )
+    else:
+        sampled_pairs = _distributed_streaming_paired_sample(
+            read1_path=read1_path,
+            read2_path=read2_path,
+            sample_size=sample_size,
+        )
+        print(
+            'Distributed paired-read identity sample: {:,} pair(s) via deterministic reservoir sampling.'.format(
+                len(sampled_pairs)
+            ),
+            flush=True,
+        )
+    num_checked = len(sampled_pairs)
+    num_identical = sum(seq1 == seq2 for seq1, seq2 in sampled_pairs)
+    read_length = len(sampled_pairs[0][0]) if sampled_pairs else 0
     identical_ratio = num_identical / num_checked if num_checked else 0
     return identical_ratio, num_checked, read_length
 
@@ -3556,7 +3746,7 @@ def resolve_paired_read_paths_for_identical_check(sra_stat, work_dir, run_file_s
 
 
 def convert_paired_files_to_single(sra_stat, metadata, run_file_state, read_info, identical_ratio, num_checked, read_length):
-    txt = 'Read1 and Read2 are nearly identical ({:.2%} of {:,} pairs): {}. '
+    txt = 'Read1 and Read2 are nearly identical ({:.2%} of {:,} sampled pairs): {}. '
     txt += 'Treating as single-end reads and removing redundant read2 file.\n'
     sys.stderr.write(txt.format(identical_ratio, num_checked, sra_stat['sra_id']))
     inext = read_info['inext']
@@ -3592,12 +3782,21 @@ def maybe_treat_paired_as_single(
     work_dir,
     threshold=IDENTICAL_PAIRED_RATIO_THRESHOLD,
     num_checked_reads=IDENTICAL_PAIRED_CHECKED_READS,
+    allow_conversion=False,
     files=None,
     file_state=None,
     return_files=False,
     return_file_state=False,
 ):
     run_file_state = _resolve_run_file_state(work_dir=work_dir, files=files, file_state=file_state)
+    if not allow_conversion:
+        return finalize_maybe_treat_paired_result(
+            metadata=metadata,
+            sra_stat=sra_stat,
+            run_file_state=run_file_state,
+            return_files=return_files,
+            return_file_state=return_file_state,
+        )
     read_info = resolve_paired_read_paths_for_identical_check(
         sra_stat=sra_stat,
         work_dir=work_dir,
@@ -3762,9 +3961,31 @@ def parse_fastp_option_args(fastp_option):
     if not fastp_option:
         return []
     try:
-        return shlex.split(fastp_option)
+        parsed = shlex.split(fastp_option)
     except ValueError as e:
         raise ValueError('Invalid --fastp_option string: {}'.format(fastp_option)) from e
+    reserved = {
+        '--thread', '-w',
+        '--length_required', '-l',
+        '--in1', '-i', '--in2', '-I',
+        '--out1', '-o', '--out2', '-O',
+    }
+    reserved_short = {
+        token for token in reserved if token.startswith('-') and not token.startswith('--')
+    }
+    for token in parsed:
+        option_token = token.split('=', 1)[0]
+        is_attached_short_option = any(
+            token.startswith(short_option) and token != short_option
+            for short_option in reserved_short
+        )
+        if option_token in reserved or is_attached_short_option:
+            raise ValueError(
+                '--fastp_option must not override amalgkit-managed option "{}".'.format(
+                    option_token
+                )
+            )
+    return parsed
 
 
 def build_fastp_io_arguments(sra_stat, output_dir, inext, outext):
@@ -4851,8 +5072,8 @@ def run_mmseqs_contam_filter(
                 raise FileNotFoundError('Contaminant-filter input file not found: {}'.format(run_file_state.path(input_name)))
             input_path_by_suffix[suffix] = run_file_state.path(input_name)
 
-    mmseqs_root = os.path.join(output_dir, 'mmseqs_contam_work')
-    ensure_empty_workdir(mmseqs_root)
+    mmseqs_root = tempfile.mkdtemp(prefix='mmseqs_contam_work.', dir=output_dir)
+    chunk_spots = resolve_contam_filter_chunk_spots(args)
     taxonomy_started_at = time.perf_counter()
     ncbi = get_ncbi_taxonomy(args=args)
     metadata = accumulate_and_print_stage_duration(
@@ -4863,47 +5084,108 @@ def run_mmseqs_contam_filter(
         stage_label='NCBI taxonomy initialization',
     )
     rank_cache = {}
-    remove_cores = set()
-    query_root = os.path.join(mmseqs_root, sra_id)
-    result_prefix = os.path.join(query_root, 'result')
-    tmp_dir = os.path.join(query_root, 'tmp')
-    os.makedirs(query_root, exist_ok=True)
-    os.makedirs(tmp_dir, exist_ok=True)
-    query_input_path = build_mmseqs_query_input(
-        query_root=query_root,
-        query_tag=sra_id,
-        input_path_by_suffix=input_path_by_suffix,
-    )
-    lca_tsv = run_mmseqs_easy_taxonomy_single_fastq(
-        args=args,
-        input_path=query_input_path,
-        target_db=target_db,
-        result_prefix=result_prefix,
-        tmp_dir=tmp_dir,
-        runtime_context=runtime_context,
-    )
-    remove_cores.update(
-        parse_mmseqs_lca_mismatched_cores(
-            lca_tsv_path=lca_tsv,
-            target_rank=rank_name,
-            target_rank_taxid=target_rank_taxid,
-            ncbi=ncbi,
-            rank_cache=rank_cache,
-        )
-    )
-    output_path_by_suffix = {}
-    counts_by_suffix = {}
-    for suffix, input_path in input_path_by_suffix.items():
-        output_name = output_name_by_suffix[suffix]
-        output_path = os.path.join(output_dir, output_name)
-        num_in, num_out, bp_in, bp_out = filter_fastq_by_core_set(
-            input_path=input_path,
-            output_path=output_path,
-            remove_cores=remove_cores,
-        )
-        output_path_by_suffix[suffix] = output_path
-        counts_by_suffix[suffix] = (num_in, num_out, bp_in, bp_out)
-        run_file_state.add(output_name)
+    output_path_by_suffix = {
+        suffix: os.path.join(output_dir, output_name_by_suffix[suffix])
+        for suffix in input_path_by_suffix
+    }
+    output_tmp_path_by_suffix = {
+        suffix: path + '.tmp.{}'.format(time.time_ns())
+        for suffix, path in output_path_by_suffix.items()
+    }
+    counts_by_suffix = {
+        suffix: [0, 0, 0, 0]
+        for suffix in input_path_by_suffix
+    }
+    chunk_index = 0
+    try:
+        for output_path in output_path_by_suffix.values():
+            if os.path.exists(output_path) and (not os.path.isfile(output_path)):
+                raise IsADirectoryError(
+                    'Contaminant-filter output path exists but is not a file: {}'.format(output_path)
+                )
+        with ExitStack() as stack:
+            input_handles = {
+                suffix: stack.enter_context(
+                    (gzip.open if str(path).endswith('.gz') else open)(path, 'rb')
+                )
+                for suffix, path in input_path_by_suffix.items()
+            }
+            output_handles = {
+                suffix: stack.enter_context(gzip.open(path, 'wb'))
+                for suffix, path in output_tmp_path_by_suffix.items()
+            }
+            while True:
+                chunk_index += 1
+                chunk_root = os.path.join(
+                    mmseqs_root,
+                    sra_id,
+                    'chunk_{:06d}'.format(chunk_index),
+                )
+                ensure_empty_workdir(chunk_root)
+                try:
+                    (
+                        num_chunk_spots,
+                        query_input_path,
+                        chunk_input_path_by_suffix,
+                    ) = write_mmseqs_rrna_query_chunk(
+                        input_handles=input_handles,
+                        input_path_by_suffix=input_path_by_suffix,
+                        chunk_root=chunk_root,
+                        chunk_index=chunk_index,
+                        chunk_spots=chunk_spots,
+                    )
+                    if num_chunk_spots == 0:
+                        break
+                    print(
+                        'Running MMseqs contaminant taxonomy for {} chunk {:,} ({:,} spots).'.format(
+                            sra_id,
+                            chunk_index,
+                            num_chunk_spots,
+                        ),
+                        flush=True,
+                    )
+                    result_prefix = os.path.join(chunk_root, 'result')
+                    tmp_dir = os.path.join(chunk_root, 'tmp')
+                    os.makedirs(tmp_dir, exist_ok=True)
+                    lca_tsv = run_mmseqs_easy_taxonomy_single_fastq(
+                        args=args,
+                        input_path=query_input_path,
+                        target_db=target_db,
+                        result_prefix=result_prefix,
+                        tmp_dir=tmp_dir,
+                        runtime_context=runtime_context,
+                    )
+                    remove_cores = parse_mmseqs_lca_mismatched_cores(
+                        lca_tsv_path=lca_tsv,
+                        target_rank=rank_name,
+                        target_rank_taxid=target_rank_taxid,
+                        ncbi=ncbi,
+                        rank_cache=rank_cache,
+                    )
+                    for suffix, chunk_input_path in chunk_input_path_by_suffix.items():
+                        with gzip.open(chunk_input_path, 'rb') as fin:
+                            chunk_counts = filter_fastq_stream_by_core_set(
+                                fin=fin,
+                                fout=output_handles[suffix],
+                                input_path=chunk_input_path,
+                                remove_cores=remove_cores,
+                            )
+                        for idx, count in enumerate(chunk_counts):
+                            counts_by_suffix[suffix][idx] += count
+                finally:
+                    if os.path.isdir(chunk_root):
+                        shutil.rmtree(chunk_root)
+        for suffix, tmp_path in output_tmp_path_by_suffix.items():
+            os.replace(tmp_path, output_path_by_suffix[suffix])
+            run_file_state.add(output_name_by_suffix[suffix])
+    except BaseException:
+        for tmp_path in output_tmp_path_by_suffix.values():
+            if os.path.lexists(tmp_path):
+                os.remove(tmp_path)
+        raise
+    finally:
+        if os.path.isdir(mmseqs_root):
+            shutil.rmtree(mmseqs_root)
 
     if layout == 'single':
         num_in, num_out, bp_in, bp_out = counts_by_suffix['']
@@ -5956,13 +6238,29 @@ def sequence_extraction(args, sra_stat, metadata, g, start, end, runtime_context
         end,
         return_file_state=True,
     )
-    metadata, sra_stat, run_file_state = maybe_treat_paired_as_single(
-        sra_stat=sra_stat,
-        metadata=metadata,
-        work_dir=sra_stat['getfastq_sra_dir'],
-        file_state=run_file_state,
-        return_file_state=True,
-    )
+    filter_order = get_filter_execution_order(args)
+    if bool(getattr(args, 'treat_identical_paired_as_single', False)):
+        metadata, sra_stat, run_file_state = maybe_treat_paired_as_single(
+            sra_stat=sra_stat,
+            metadata=metadata,
+            work_dir=sra_stat['getfastq_sra_dir'],
+            file_state=run_file_state,
+            allow_conversion=True,
+            return_file_state=True,
+        )
+        current_ext = get_or_detect_intermediate_extension(
+            sra_stat,
+            work_dir=sra_stat['getfastq_sra_dir'],
+            file_state=run_file_state,
+        )
+        if (len(filter_order) == 0) and (current_ext == '.fastq'):
+            run_file_state = compress_fasterq_output_files(
+                sra_stat=sra_stat,
+                args=args,
+                file_state=run_file_state,
+                return_file_state=True,
+            )
+            set_current_intermediate_extension(sra_stat, '.fastq.gz')
     delta_num_written = metadata.df.at[ind_sra, 'num_written'] - prev_num_written
     delta_bp_dumped = metadata.df.at[ind_sra, 'bp_dumped'] - prev_bp_dumped
     delta_bp_written = metadata.df.at[ind_sra, 'bp_written'] - prev_bp_written
@@ -5977,7 +6275,6 @@ def sequence_extraction(args, sra_stat, metadata, g, start, end, runtime_context
     if no_read_written:
         write_getfastq_stats(sra_stat=sra_stat, metadata=metadata, output_dir=sra_stat['getfastq_sra_dir'])
         return metadata
-    filter_order = get_filter_execution_order(args)
     for filter_name in filter_order:
         if filter_name == 'fastp':
             prev_num_fastp_out = metadata.df.at[ind_sra, 'num_fastp_out']
@@ -6532,7 +6829,7 @@ def run_first_round_getfastq(args, metadata, run_rows, g, jobs, runtime_context=
             runtime_context_by_run[run_row[1]],
         ),
         max_workers=max_workers,
-        fail_fast=True,
+        stop_scheduling_on_failure=True,
     )
     for run_row, run_result in results_by_row.items():
         run_results_by_id[run_row[1]] = run_result
@@ -6849,7 +7146,7 @@ def maybe_run_getfastq_second_round(
                         runtime_context=runtime_context_by_run[run_row[1]],
                     ),
                     max_workers=worker_count,
-                    fail_fast=True,
+                    stop_scheduling_on_failure=True,
                 )
                 if failures:
                     details = '; '.join([

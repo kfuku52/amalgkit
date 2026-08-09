@@ -1,13 +1,29 @@
 import pandas
+import pytest
 
 from amalgkit.batch_effect_common import (
     BatchEffectResult,
+    align_metadata_to_counts,
     annotate_metadata_with_batch_info,
     build_batch_effect_summary_dataframe,
     initialize_batch_info,
     normalize_run_ids,
     write_batch_effect_summary_tsv,
 )
+
+
+def test_align_metadata_to_counts_rejects_duplicate_metadata_runs():
+    counts = pandas.DataFrame({'RUN1': [1.0, 2.0]}, index=['G1', 'G2'])
+    metadata = pandas.DataFrame(
+        {
+            'run': ['RUN1', 'RUN1'],
+            'sample_group': ['leaf', 'root'],
+            'bioproject': ['P1', 'P2'],
+        }
+    )
+
+    with pytest.raises(ValueError, match='duplicate run IDs: RUN1'):
+        align_metadata_to_counts(counts_df=counts, metadata_df=metadata)
 
 
 def test_normalize_run_ids_trims_deduplicates_and_skips_empty():
@@ -45,6 +61,9 @@ def test_initialize_batch_info_matches_finalize_defaults():
     assert observed['ruv_pvalue_method'] is None
     assert observed['ruv_fallback_used'] is None
     assert observed['ruv_fallback_reason'] is None
+    assert observed['group_model_used'] is None
+    assert observed['group_fallback_used'] is None
+    assert observed['group_error_message'] is None
 
 
 def test_annotate_metadata_with_batch_info_marks_corrected_runs():
@@ -198,3 +217,27 @@ def test_build_batch_effect_summary_dataframe_supports_latent_glm_fields():
     assert int(observed.loc[0, 'latent_iterations']) == 7
     assert float(observed.loc[0, 'latent_objective']) == 0.125
     assert bool(observed.loc[0, 'latent_converged']) is True
+
+
+def test_build_batch_effect_summary_dataframe_preserves_combatseq_fallback_details():
+    batch_info = initialize_batch_info(run_ids=['RUN1', 'RUN2'], batch_effect_alg='combatseq')
+    batch_info.update(
+        {
+            'batch_effect_alg_applied': 'combatseq',
+            'corrected_runs': ['RUN1', 'RUN2'],
+            'uncorrected_runs': [],
+            'group_model_used': False,
+            'group_fallback_used': True,
+            'group_error_message': 'covariates are confounded',
+            'skip_reason': '',
+        }
+    )
+
+    observed = build_batch_effect_summary_dataframe(
+        batch_info=batch_info,
+        scientific_name='Arabidopsis thaliana',
+    )
+
+    assert bool(observed.loc[0, 'group_model_used']) is False
+    assert bool(observed.loc[0, 'group_fallback_used']) is True
+    assert observed.loc[0, 'group_error_message'] == 'covariates are confounded'

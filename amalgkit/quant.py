@@ -1750,7 +1750,9 @@ def _build_kallisto_index(index_path, fasta_file, sci_name, args=None):
 
         def run_in_build_cwd(command, stdout, stderr, timeout=None):
             try:
-                return subprocess.run(command, stdout=stdout, stderr=stderr, cwd=build_cwd, timeout=timeout)
+                return subprocess.run(  # noqa: S603 - command is an argv list for validated index tooling
+                    command, stdout=stdout, stderr=stderr, cwd=build_cwd, timeout=timeout
+                )
             except TypeError as exc:
                 message = str(exc)
                 is_unsupported_keyword = (
@@ -1760,13 +1762,17 @@ def _build_kallisto_index(index_path, fasta_file, sci_name, args=None):
                 if not is_unsupported_keyword:
                     raise
                 try:
-                    return subprocess.run(command, stdout=stdout, stderr=stderr, cwd=build_cwd)
+                    return subprocess.run(  # noqa: S603 - compatibility path preserves the validated argv list
+                        command, stdout=stdout, stderr=stderr, cwd=build_cwd
+                    )
                 except TypeError as exc2:
                     message = str(exc2)
                     if ('unexpected keyword argument' not in message) or ("'cwd'" not in message):
                         raise
                     # Injected test runners may accept neither cwd nor timeout.
-                    return subprocess.run(command, stdout=stdout, stderr=stderr)
+                    return subprocess.run(  # noqa: S603 - injected test runners receive the validated argv list
+                        command, stdout=stdout, stderr=stderr
+                    )
 
         index_out, _stdout_txt, _stderr_txt = run_logged_command(
             command=kallisto_build_cmd,

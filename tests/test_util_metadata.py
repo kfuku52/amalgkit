@@ -36,6 +36,15 @@ class TestMetadataInit:
                      'lib_layout', 'total_spots', 'exclusion', 'ENA_SRA_Link', 'DDBJ_SRA_Link']:
             assert col in m.df.columns
 
+    def test_schema_definitions_are_immutable_and_custom_columns_are_copied(self):
+        assert isinstance(Metadata.column_names, tuple)
+        assert isinstance(Metadata.removed_metadata_columns, tuple)
+        assert isinstance(Metadata.id_cols, tuple)
+        custom_columns = ['run']
+        metadata = Metadata(column_names=custom_columns)
+        custom_columns.append('later_mutation')
+        assert metadata.df.columns.tolist() == ['run']
+
 
 class TestMetadataReorder:
     def test_reorder_empty(self):
@@ -905,6 +914,35 @@ class TestLoadMetadata:
         load_metadata(Args())
 
         assert observed['encoding'] == 'utf-8'
+
+    def test_load_metadata_preserves_literal_na_annotation(self, tmp_path):
+        path = tmp_path / 'metadata.tsv'
+        path.write_text(
+            'run\tscientific_name\tsample_group\nR1\tSpecies one\tNA\n',
+            encoding='utf-8',
+        )
+
+        class Args:
+            metadata = str(path)
+            out_dir = str(tmp_path)
+
+        metadata = load_metadata(Args())
+
+        assert metadata.df.loc[0, 'sample_group'] == 'NA'
+
+    def test_load_metadata_rejects_duplicate_run_ids(self, tmp_path):
+        path = tmp_path / 'metadata.tsv'
+        path.write_text(
+            'run\tscientific_name\nR1\tSpecies one\nR1\tSpecies two\n',
+            encoding='utf-8',
+        )
+
+        class Args:
+            metadata = str(path)
+            out_dir = str(tmp_path)
+
+        with pytest.raises(ValueError, match='duplicate run IDs: R1'):
+            load_metadata(Args())
 
     def test_load_from_inferred_path(self, tmp_path, sample_metadata):
         """When metadata='inferred', loads from out_dir/metadata/metadata.tsv."""

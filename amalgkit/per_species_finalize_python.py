@@ -15,6 +15,7 @@ from amalgkit.batch_effect_latent_glm import run_latent_glm_backend
 from amalgkit.batch_effect_ruvseq import run_ruvseq_backend
 from amalgkit.batch_effect_sva import run_sva_backend
 from amalgkit.filter_utils import _format_genus_species_label
+from amalgkit.cli_utils import EXPRESSION_NORMALIZATION_METHODS
 from amalgkit.runtime_utils import resolve_species_token
 from amalgkit.per_species_common import (
     append_round_summary,
@@ -280,7 +281,12 @@ def _transform_raw_to_tpm(counts_df, eff_length_df):
 
 
 def _apply_transformation_logic(counts_df, eff_length_df, transform_method, batch_effect_alg, step, metadata_df):
-    transform_method = str(transform_method)
+    transform_method = str(transform_method).strip().lower()
+    if transform_method not in EXPRESSION_NORMALIZATION_METHODS:
+        raise ValueError(
+            'Unsupported expression normalization method: {}'.format(transform_method)
+        )
+    log_method, abundance_method = transform_method.split('-', 1)
     batch_effect_alg = str(batch_effect_alg)
     if batch_effect_alg in {'no', 'sva'}:
         bool_fpkm_tpm = step == 'before_batch'
@@ -293,20 +299,20 @@ def _apply_transformation_logic(counts_df, eff_length_df, transform_method, batc
 
     transformed = counts_df.copy()
     if bool_fpkm_tpm:
-        if 'fpkm' in transform_method:
+        if abundance_method == 'fpkm':
             transformed = _transform_raw_to_fpkm(transformed, eff_length_df, metadata_df)
-        elif 'tpm' in transform_method:
+        elif abundance_method == 'tpm':
             transformed = _transform_raw_to_tpm(transformed, eff_length_df)
     if bool_log:
         values = transformed.to_numpy(dtype=float)
         with numpy.errstate(divide='ignore', invalid='ignore'):
-            if 'logn-' in transform_method:
+            if log_method == 'logn':
                 values = numpy.log(values)
-            elif 'log2-' in transform_method:
+            elif log_method == 'log2':
                 values = numpy.log2(values)
-            elif 'lognp1-' in transform_method:
+            elif log_method == 'lognp1':
                 values = numpy.log(values + 1.0)
-            elif 'log2p1-' in transform_method:
+            elif log_method == 'log2p1':
                 values = numpy.log2(values + 1.0)
         transformed = pandas.DataFrame(values, index=transformed.index, columns=transformed.columns)
     return transformed
@@ -405,6 +411,9 @@ def _run_batch_effect_step(counts_df, metadata_df, eff_length_df, args):
         )
         batch_info['skip_reason'] = summary.get('skip_reason', '')
         batch_info['corrected_runs'] = summary.get('corrected_run_ids', [])
+        batch_info['group_model_used'] = summary.get('group_model_used')
+        batch_info['group_fallback_used'] = summary.get('group_fallback_used')
+        batch_info['group_error_message'] = summary.get('group_error_message')
         sv_info = None
         corrected_full = pandas.concat(
             [corrected.loc[:, run_all], counts_nonexpressed.loc[:, run_all]],

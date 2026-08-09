@@ -584,7 +584,7 @@ def acquire_exclusive_lock(
         if os.path.exists(lock_dir) and (not os.path.isdir(lock_dir)):
             raise NotADirectoryError('Lock parent path exists but is not a directory: {}'.format(lock_dir))
         os.makedirs(lock_dir, exist_ok=True)
-    wait_start = time.time()
+    wait_start = time.monotonic()
     has_reported_wait = False
     while True:
         owner_state = _try_create_lock_file(lock_path)
@@ -612,7 +612,7 @@ def acquire_exclusive_lock(
             stale_seconds=DOWNLOAD_LOCK_STALE_SECONDS,
         ):
             continue
-        elapsed = time.time() - wait_start
+        elapsed = time.monotonic() - wait_start
         if not has_reported_wait:
             owner_metadata = _read_lock_metadata(lock_path)
             print(
@@ -624,7 +624,7 @@ def acquire_exclusive_lock(
                 flush=True,
             )
             has_reported_wait = True
-        if (timeout_seconds is not None) and (elapsed > timeout_seconds):
+        if (timeout_seconds is not None) and (elapsed >= timeout_seconds):
             raise TimeoutError(
                 'Timed out after {:,} sec waiting for {} lock: {}'.format(
                     timeout_seconds,
@@ -659,7 +659,7 @@ def acquire_counting_semaphore(
         raise NotADirectoryError('Semaphore path exists but is not a directory: {}'.format(semaphore_dir))
     os.makedirs(semaphore_dir, exist_ok=True)
     slot_paths = _build_semaphore_slot_paths(semaphore_dir=semaphore_dir, max_concurrency=max_concurrency)
-    wait_start = time.time()
+    wait_start = time.monotonic()
     has_reported_wait = False
     while True:
         for slot_path in slot_paths:
@@ -692,7 +692,7 @@ def acquire_counting_semaphore(
             if not wait:
                 yield None
                 return
-            elapsed = time.time() - wait_start
+            elapsed = time.monotonic() - wait_start
             if not has_reported_wait:
                 print(
                     'All {:,} slot(s) are occupied for {}. Waiting for a slot in {} ({})'.format(
@@ -704,7 +704,7 @@ def acquire_counting_semaphore(
                     flush=True,
                 )
                 has_reported_wait = True
-            if (timeout_seconds is not None) and (elapsed > timeout_seconds):
+            if (timeout_seconds is not None) and (elapsed >= timeout_seconds):
                 raise TimeoutError(
                     'Timed out after {:,} sec waiting for {} slot: {}'.format(
                         timeout_seconds,

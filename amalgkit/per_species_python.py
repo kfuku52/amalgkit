@@ -82,6 +82,13 @@ def _filter_low_mapping_rate(tc, sra, mapping_rate_cutoff):
 
 
 def _compute_sample_group_correlation_metrics(tc, sra, selected_sample_groups, dist_method):
+    dist_method = str(dist_method).strip().lower()
+    if dist_method not in {'pearson', 'spearman', 'kendall'}:
+        raise ValueError(
+            'Unsupported correlation method: {}. Choose pearson, spearman, or kendall.'.format(
+                dist_method
+            )
+        )
     required_sample_groups = [group for group in selected_sample_groups if group in set(sra.loc[:, 'sample_group'].astype(str))]
     out = sra.copy()
     for column in [
@@ -129,14 +136,51 @@ def _compute_sample_group_correlation_metrics(tc, sra, selected_sample_groups, d
         for run_id in corr_by_group.index:
             sample_values = pandas.to_numeric(tc.loc[:, run_id], errors='coerce')
             for sample_group in corr_by_group.columns:
-                try:
-                    corr_value = sample_values.corr(
-                        pandas.to_numeric(tc_ave.loc[:, sample_group], errors='coerce'),
-                        method=str(dist_method),
-                    )
-                except ValueError:
-                    corr_value = numpy.nan
+                corr_value = sample_values.corr(
+                    pandas.to_numeric(tc_ave.loc[:, sample_group], errors='coerce'),
+                    method=dist_method,
+                )
                 corr_by_group.loc[run_id, sample_group] = corr_value
+
+    # A sample must not contribute to the reference profile used to judge that
+    # same sample. Besides biasing correlations upward, self-inclusion can make
+    # a two-sample group mean constant when the profiles oppose one another,
+    # turning an actionable negative margin into NaN. Non-group references do
+    # not contain the evaluated sample and can retain the precomputed means.
+    group_members = {
+        sample_group: [
+            run_id
+            for run_id in out.loc[
+                out['sample_group'].astype(str).eq(sample_group),
+                'run',
+            ].astype(str).tolist()
+            if run_id in tc.columns
+        ]
+        for sample_group in required_sample_groups
+    }
+    sample_group_by_run = dict(
+        zip(out.loc[:, 'run'].astype(str), out.loc[:, 'sample_group'].astype(str))
+    )
+    for run_id in corr_by_group.index:
+        sample_group = sample_group_by_run.get(str(run_id))
+        if sample_group not in corr_by_group.columns:
+            continue
+        other_runs = [
+            other_run
+            for other_run in group_members.get(sample_group, [])
+            if other_run != str(run_id)
+        ]
+        if len(other_runs) == 0:
+            corr_by_group.loc[run_id, sample_group] = numpy.nan
+            continue
+        within_reference = tc.loc[:, other_runs].apply(
+            pandas.to_numeric,
+            errors='coerce',
+        ).mean(axis=1, skipna=True)
+        corr_by_group.loc[run_id, sample_group] = pandas.to_numeric(
+            tc.loc[:, run_id],
+            errors='coerce',
+        ).corr(within_reference, method=dist_method)
     run_values = out.loc[:, 'run'].astype(str).tolist()
     sample_group_values = out.loc[:, 'sample_group'].astype(str).tolist()
     within_values = []

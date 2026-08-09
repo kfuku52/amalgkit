@@ -58,6 +58,7 @@ class TestFetchSraXml:
         monkeypatch.setattr('amalgkit.metadata.Entrez.esearch', flaky_esearch)
         monkeypatch.setattr('amalgkit.metadata.Entrez.read', lambda handle: {'IdList': []})
         monkeypatch.setattr('amalgkit.metadata.Entrez.efetch', lambda **kwargs: object())
+        monkeypatch.setattr('amalgkit.sra.time.sleep', lambda *_args, **_kwargs: None)
 
         root = fetch_sra_xml(search_term='SRR000000', retmax=1000)
 
@@ -172,6 +173,7 @@ class TestFetchSraXml:
         monkeypatch.setattr('amalgkit.metadata.Entrez.read', lambda handle: {'IdList': ['ID1']})
         monkeypatch.setattr('amalgkit.metadata.Entrez.efetch', lambda **kwargs: object())
         monkeypatch.setattr('amalgkit.sra.parse_untrusted_xml', lambda handle: (_ for _ in ()).throw(ET.ParseError('broken xml')))
+        monkeypatch.setattr('amalgkit.sra.time.sleep', lambda *_args, **_kwargs: None)
 
         with pytest.raises(RuntimeError, match='Failed to parse Entrez XML chunk'):
             fetch_sra_xml(search_term='SRR000000', retmax=1000)
@@ -952,6 +954,28 @@ class TestMetadataFromXmlRoots:
         assert metadata.df['run'].tolist() == ['SRR000001', 'SRR000002']
         assert metadata.df['total_spots'].tolist() == ['10', '20']
         assert metadata.df['total_bases'].tolist() == ['100', '250']
+
+    def test_batches_xml_rows_without_changing_output(self, monkeypatch):
+        monkeypatch.setattr('amalgkit.metadata_utils.METADATA_XML_ROW_BATCH_SIZE', 1)
+        xml_root = ET.fromstring(
+            '''
+            <EXPERIMENT_PACKAGE_SET>
+              <EXPERIMENT_PACKAGE>
+                <SAMPLE><SAMPLE_NAME><SCIENTIFIC_NAME>Species alpha</SCIENTIFIC_NAME></SAMPLE_NAME></SAMPLE>
+                <EXPERIMENT><IDENTIFIERS><PRIMARY_ID>SRX1</PRIMARY_ID></IDENTIFIERS></EXPERIMENT>
+                <RUN_SET>
+                  <RUN><IDENTIFIERS><PRIMARY_ID>SRR1</PRIMARY_ID></IDENTIFIERS></RUN>
+                  <RUN><IDENTIFIERS><PRIMARY_ID>SRR2</PRIMARY_ID></IDENTIFIERS></RUN>
+                </RUN_SET>
+              </EXPERIMENT_PACKAGE>
+            </EXPERIMENT_PACKAGE_SET>
+            '''
+        )
+
+        metadata = Metadata.from_xml_roots([xml_root])
+
+        assert metadata.df['run'].tolist() == ['SRR1', 'SRR2']
+        assert metadata.df['scientific_name'].tolist() == ['Species alpha', 'Species alpha']
 
     def test_preserves_colliding_sample_attributes(self):
         xml_root = ET.fromstring(

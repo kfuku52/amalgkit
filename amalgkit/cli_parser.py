@@ -2,6 +2,7 @@ import argparse
 import math
 
 from amalgkit.cli_utils import (
+    EXPRESSION_NORMALIZATION_METHODS,
     build_help_command_handler,
     int_or_auto,
     nonnegative_int_or_auto,
@@ -27,12 +28,48 @@ def single_copy_threshold(value):
     return threshold
 
 
+def finite_float(value):
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as exc:
+        raise argparse.ArgumentTypeError('must be a finite number') from exc
+    if not math.isfinite(parsed):
+        raise argparse.ArgumentTypeError('must be a finite number')
+    return parsed
+
+
+def mapping_rate_threshold(value):
+    parsed = finite_float(value)
+    if parsed < 0.0 or parsed > 100.0:
+        raise argparse.ArgumentTypeError('must be between 0 and 100')
+    return parsed
+
+
+def correlation_threshold(value):
+    parsed = finite_float(value)
+    if parsed < -1.0 or parsed > 1.0:
+        raise argparse.ArgumentTypeError('must be between -1 and 1')
+    return parsed
+
+
+def correlation_margin(value):
+    parsed = finite_float(value)
+    if parsed < -2.0 or parsed > 2.0:
+        raise argparse.ArgumentTypeError('must be between -2 and 2')
+    return parsed
+
+
 def build_parser(command_handlers, command_names, version, prog=None):
     parser = argparse.ArgumentParser(
         description='A toolkit for cross-species transcriptome amalgamation',
         prog=prog,
     )
     parser.add_argument('--version', action='version', version='amalgkit version ' + version)
+    parser.add_argument(
+        '--debug',
+        action='store_true',
+        help='Show a full traceback for unexpected errors. This global option must precede the command name.',
+    )
     subparsers = parser.add_subparsers()
 
     pp_meta = argparse.ArgumentParser(add_help=False)
@@ -162,6 +199,11 @@ def build_parser(command_handlers, command_names, version, prog=None):
                      choices=['single', 'paired', 'auto'],
                      help='default=%(default)s: Library layout of RNA-seq data to be dumped. '
                           '"auto" prioritizes paird-end libraries if both types are available.')
+    pge.add_argument('--treat_identical_paired_as_single', metavar='yes|no', default='no', type=strtobool,
+                     required=False, action='store',
+                     help='default=%(default)s: Explicitly allow distributed sampling of up to 2,000 read pairs and '
+                          'conversion to single-end when at least 99%% of sampled pairs are identical. Enabling this '
+                          'removes read2 after sampling; the default preserves both mates.')
     pge.add_argument('--max_bp', metavar='INT', default='999,999,999,999,999', type=str, required=False, action='store',
                      help='default=%(default)s: Target sequence size (bp) to be dumped.')
     pge.add_argument('--min_read_length', metavar='INT', default=25, type=int, required=False, action='store',
@@ -193,8 +235,9 @@ def build_parser(command_handlers, command_names, version, prog=None):
                      help='default=%(default)s: PATH to fastp executable.')
     pge.add_argument('--fastp_option', metavar='STR', default='-j /dev/null -h /dev/null', type=str, required=False,
                      action='store',
-                     help='default=%(default)s: Options to be passed to fastp. Do not include --length_required option here. '
-                          'It can be specified throught --min_read_length in amalgkit. ')
+                     help='default=%(default)s: Additional options passed to fastp. Input/output, thread, and '
+                          'length_required options are managed by amalgkit and are rejected here. Use '
+                          '--min_read_length to set the minimum retained read length.')
     pge.add_argument('--rrna_filter', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
                      help='default=%(default)s: Remove rRNA reads using MMseqs2 before final FASTQ output. '
                           'The first run builds both the SILVA sequence DB and its reusable MMseqs search index.')
@@ -246,6 +289,10 @@ def build_parser(command_handlers, command_names, version, prog=None):
                      required=False, action='store',
                      help='default=%(default)s: MMseqs2 --max-seqs for contaminant filtering. '
                           '"auto" keeps the MMseqs2 default; lower values are faster but less sensitive.')
+    pge.add_argument('--contam_filter_chunk_spots', metavar='INT', default=5000000, type=positive_int,
+                     required=False, action='store',
+                     help='default=%(default)s: Maximum read pairs (or single-end reads) processed per MMseqs2 '
+                          'taxonomy chunk. Smaller chunks reduce peak Python memory and temporary disk usage.')
     pge.add_argument('--mmseqs_exe', metavar='PATH', default='mmseqs', type=str, required=False, action='store',
                      help='default=%(default)s: PATH to mmseqs executable used for contaminant filtering.')
     pge.add_argument('--remove_sra', metavar='yes|no', default='yes', type=strtobool, required=False, action='store',
@@ -434,22 +481,24 @@ def build_parser(command_handlers, command_names, version, prog=None):
     pws.add_argument('--input_dir', metavar='PATH', default='inferred', type=str, required=False, action='store',
                      help='default=%(default)s: PATH to `amalgkit merge` or `amalgkit cstmm` output folder. '
                           '"inferred" = out_dir/cstmm if exist, else out_dir/merge.')
-    pws.add_argument('--dist_method', metavar='STR', default='pearson', type=str, required=False, action='store',
+    pws.add_argument('--dist_method', metavar='pearson|spearman|kendall', default='pearson', type=str,
+                     choices=['pearson', 'spearman', 'kendall'], required=False, action='store',
                      help='default=%(default)s: Method for calculating distance.')
-    pws.add_argument('--mapping_rate', metavar='FLOAT', default=0.20, type=float, required=False, action='store',
+    pws.add_argument('--mapping_rate', metavar='FLOAT', default=0.20, type=mapping_rate_threshold, required=False, action='store',
                      help='default=%(default)s: Cutoff for mapping rate.')
-    pws.add_argument('--correlation_threshold', metavar='FLOAT', default=0.30, type=float, required=False, action='store',
+    pws.add_argument('--correlation_threshold', metavar='FLOAT', default=0.30, type=correlation_threshold, required=False, action='store',
                      help='default=%(default)s: Lower cutoff for pearson r during outlier removal (legacy fallback).')
     pws.add_argument('--plot_intermediate', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
                      help='default=%(default)s: If yes, writes intermediate plots during filtering.')
     pws.add_argument('--one_outlier_per_iter', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
                      help='default=%(default)s: If yes, removes at most one outlier per sample_group/BioProject per iteration.')
     pws.add_argument('--norm', metavar='(logn|log2|lognp1|log2p1|none)-(fpkm|tpm|none)',
-                     default='log2p1-fpkm', type=str, required=False, action='store',
+                     default='log2p1-fpkm', choices=EXPRESSION_NORMALIZATION_METHODS,
+                     type=str, required=False, action='store',
                      help='default=%(default)s: Expression transformation before filtering.')
-    pws.add_argument('--margin_threshold', metavar='FLOAT', default=0.0, type=float, required=False, action='store',
+    pws.add_argument('--margin_threshold', metavar='FLOAT', default=0.0, type=correlation_margin, required=False, action='store',
                      help='default=%(default)s: Margin threshold for robust-margin outlier detection.')
-    pws.add_argument('--robust_z_threshold', metavar='FLOAT', default=-2.5, type=float, required=False, action='store',
+    pws.add_argument('--robust_z_threshold', metavar='FLOAT', default=-2.5, type=finite_float, required=False, action='store',
                      help='default=%(default)s: Robust z-score threshold for robust-margin outlier detection.')
     pws.add_argument('--small_group_policy', metavar='margin_fallback|retain',
                      choices=['margin_fallback', 'retain'],
@@ -465,7 +514,8 @@ def build_parser(command_handlers, command_names, version, prog=None):
                       help='default=%(default)s: PATH to `amalgkit merge` or `amalgkit cstmm` output folder. '
                            '"inferred" = out_dir/cstmm if exist, else out_dir/merge.')
     pcsf.add_argument('--norm', metavar='(logn|log2|lognp1|log2p1|none)-(fpkm|tpm|none)',
-                      default='log2p1-fpkm', type=str, required=False, action='store',
+                      default='log2p1-fpkm', choices=EXPRESSION_NORMALIZATION_METHODS,
+                      type=str, required=False, action='store',
                       help='default=%(default)s: Expression transformation used during temporary table generation.')
     pcsf.add_argument('--orthogroup_table', metavar='PATH', default=None, type=str, required=False, action='store',
                       help='default=%(default)s: PATH to orthogroup table, for example Orthogroups.tsv or N0.tsv in OrthoFinder.')
@@ -475,9 +525,9 @@ def build_parser(command_handlers, command_names, version, prog=None):
                       choices=['em_pca', 'nipals', 'row_mean'],
                       default='em_pca', type=str, required=False, action='store',
                       help='default=%(default)s: Missing-value handling strategy before dimensionality reduction.')
-    pcsf.add_argument('--margin_threshold', metavar='FLOAT', default=0.0, type=float, required=False, action='store',
+    pcsf.add_argument('--margin_threshold', metavar='FLOAT', default=0.0, type=correlation_margin, required=False, action='store',
                       help='default=%(default)s: Margin threshold for robust-margin outlier detection.')
-    pcsf.add_argument('--robust_z_threshold', metavar='FLOAT', default=-2.5, type=float, required=False, action='store',
+    pcsf.add_argument('--robust_z_threshold', metavar='FLOAT', default=-2.5, type=finite_float, required=False, action='store',
                       help='default=%(default)s: Robust z-score threshold for robust-margin outlier detection.')
     pcsf.add_argument('--small_group_policy', metavar='margin_fallback|retain',
                       choices=['margin_fallback', 'retain'],
@@ -497,7 +547,8 @@ def build_parser(command_handlers, command_names, version, prog=None):
                      help='default=%(default)s: PATH to `amalgkit merge` or `amalgkit cstmm` output folder. '
                           '"inferred" = out_dir/cstmm if exist, else out_dir/merge.')
     pfi.add_argument('--norm', metavar='(logn|log2|lognp1|log2p1|none)-(fpkm|tpm|none)',
-                     default='log2p1-fpkm', type=str, required=False, action='store',
+                     default='log2p1-fpkm', choices=EXPRESSION_NORMALIZATION_METHODS,
+                     type=str, required=False, action='store',
                      help='default=%(default)s: Expression transformation before optional batch correction.')
     pfi.add_argument('--batch_effect_alg', metavar='(no|sva|ruvseq|combatseq|latent_glm)',
                      choices=['no', 'sva', 'ruvseq', 'combatseq', 'latent_glm'],

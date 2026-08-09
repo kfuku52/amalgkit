@@ -1954,8 +1954,14 @@ class TestMaybeRunGetfastqSecondRound:
             )
             return metadata
 
-        def fake_run_tasks(task_items, task_fn, max_workers, fail_fast=False):
-            _ = fail_fast
+        def fake_run_tasks(
+            task_items,
+            task_fn,
+            max_workers,
+            fail_fast=False,
+            stop_scheduling_on_failure=None,
+        ):
+            _ = (fail_fast, stop_scheduling_on_failure)
             observed_workers.append(max_workers)
             return {item: task_fn(item) for item in task_items}, []
 

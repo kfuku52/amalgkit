@@ -1,5 +1,6 @@
 import importlib
 import importlib.metadata
+import math
 import os
 import re
 import shutil
@@ -9,10 +10,22 @@ import time
 
 from amalgkit.__init__ import __version__
 
+EXPRESSION_NORMALIZATION_METHODS = tuple(
+    '{}-{}'.format(log_method, abundance_method)
+    for log_method in ('logn', 'log2', 'lognp1', 'log2p1', 'none')
+    for abundance_method in ('fpkm', 'tpm', 'none')
+)
+
 DEPENDENCY_SPECS = [
     ('numpy', 'numpy'),
     ('pandas', 'pandas'),
+    ('scipy', 'scipy'),
+    ('matplotlib', 'matplotlib'),
+    ('statsmodels', 'statsmodels'),
+    ('scikit-learn', 'sklearn'),
     ('biopython', 'Bio'),
+    ('defusedxml', 'defusedxml'),
+    ('inmoose', 'inmoose'),
 ]
 
 EXTERNAL_TOOL_SPECS = [
@@ -24,7 +37,19 @@ EXTERNAL_TOOL_SPECS = [
     ('fastp', 'fastp', [['--version'], ['-h']]),
     ('busco', 'busco', [['--version'], ['-h']]),
     ('compleasm', 'compleasm', [['--version'], ['-h']]),
+    ('mmseqs', 'mmseqs', [['version'], ['--help']]),
 ]
+COMMAND_EXTERNAL_TOOL_LABELS = {
+    'getfastq': {'cat', 'seqkit', 'fasterq-dump', 'fastp', 'mmseqs'},
+    'quant': {'kallisto', 'oarfish'},
+    'busco': {'busco', 'compleasm'},
+    'integrate': {'seqkit'},
+    # rerun can dispatch any of these workflows depending on its manifest.
+    'rerun': {
+        'cat', 'seqkit', 'fasterq-dump', 'fastp', 'mmseqs',
+        'kallisto', 'oarfish', 'busco', 'compleasm',
+    },
+}
 SEMVER_PATTERN = re.compile(r'\b\d+\.\d+(?:\.\d+)*(?:[-+][0-9A-Za-z_.-]+)?\b')
 RUNTIME_BANNER_COMMANDS = {
     'metadata',
@@ -72,7 +97,7 @@ def iter_nonempty_lines(text):
 
 def run_command_capture(command, timeout=5):
     try:
-        out = subprocess.run(
+        out = subprocess.run(  # noqa: S603 - argv comes from fixed internal tool/version probes
             command,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -163,7 +188,11 @@ def print_runtime_banner(argv):
                 resolve_dependency_version(package_name, module_name),
             )
         )
+    active_command = resolve_active_command(argv)
+    relevant_labels = COMMAND_EXTERNAL_TOOL_LABELS.get(active_command, set())
     for label, executable_name, version_commands in EXTERNAL_TOOL_SPECS:
+        if label not in relevant_labels:
+            continue
         print(
             'AMALGKIT tool {}: {}'.format(
                 label,
@@ -216,7 +245,7 @@ def positive_float_or_auto(val):
     if isinstance(val, str) and (val.strip().lower() == 'auto'):
         return 'auto'
     float_val = float(val)
-    if float_val <= 0:
+    if (not math.isfinite(float_val)) or float_val <= 0:
         raise ValueError('must be > 0 or "auto"')
     return float_val
 

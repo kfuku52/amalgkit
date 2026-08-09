@@ -1,11 +1,59 @@
 from types import SimpleNamespace
 
 import pandas
+import pytest
 
 from amalgkit.per_species_python import (
     _apply_within_group_filter,
+    _compute_sample_group_correlation_metrics,
     _should_stop_within_group_filter,
 )
+
+
+def test_within_group_reference_leaves_evaluated_sample_out():
+    counts = pandas.DataFrame(
+        {
+            'A_good': [5.0, 4.0, 3.0, 2.0, 1.0],
+            'A_bad': [1.0, 2.0, 3.0, 4.0, 5.0],
+            'B1': [1.0, 2.0, 3.0, 4.0, 5.0],
+            'B2': [1.0, 2.0, 3.0, 4.0, 5.0],
+        },
+        index=['G1', 'G2', 'G3', 'G4', 'G5'],
+    )
+    metadata = pandas.DataFrame(
+        {
+            'run': ['A_good', 'A_bad', 'B1', 'B2'],
+            'sample_group': ['A', 'A', 'B', 'B'],
+            'bioproject': ['P1', 'P1', 'P2', 'P2'],
+            'exclusion': ['no', 'no', 'no', 'no'],
+        }
+    )
+
+    observed = _compute_sample_group_correlation_metrics(
+        tc=counts,
+        sra=metadata,
+        selected_sample_groups=['A', 'B'],
+        dist_method='pearson',
+    ).set_index('run')
+
+    assert observed.loc['A_bad', 'ws_within_group_cor'] == pytest.approx(-1.0)
+    assert observed.loc['A_bad', 'ws_max_nongroup_cor'] == pytest.approx(1.0)
+    assert observed.loc['A_bad', 'ws_margin'] == pytest.approx(-2.0)
+
+
+def test_within_group_correlation_rejects_unknown_method():
+    counts = pandas.DataFrame({'A1': [1.0, 2.0], 'B1': [2.0, 1.0]})
+    metadata = pandas.DataFrame(
+        {'run': ['A1', 'B1'], 'sample_group': ['A', 'B']}
+    )
+
+    with pytest.raises(ValueError, match='Unsupported correlation method'):
+        _compute_sample_group_correlation_metrics(
+            tc=counts,
+            sra=metadata,
+            selected_sample_groups=['A', 'B'],
+            dist_method='typo',
+        )
 
 
 def test_within_group_filter_stops_when_an_iteration_makes_no_progress():

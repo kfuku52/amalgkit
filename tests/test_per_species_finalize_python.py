@@ -10,6 +10,7 @@ import pytest
 from amalgkit.command_context import PerSpeciesTableContext
 from amalgkit.metadata_utils import Metadata
 from amalgkit.per_species_finalize_python import (
+    _apply_transformation_logic,
     _compute_tsne_coordinates,
     _compute_distance_matrix,
     _resolve_scientific_name,
@@ -194,6 +195,41 @@ def test_batch_step_aligns_effective_lengths_after_gene_partitioning():
     assert result['tc'].loc['G2', 'RUN1'] == 0.0
 
 
+@pytest.mark.optional_dependency
+def test_combatseq_batch_step_preserves_group_fallback_diagnostics():
+    pytest.importorskip('inmoose.pycombat')
+    counts = pandas.DataFrame(
+        {
+            'RUN1': [100, 101, 10, 11],
+            'RUN2': [100, 101, 10, 11],
+            'RUN3': [5, 6, 100, 101],
+            'RUN4': [5, 6, 100, 101],
+        },
+        index=['G1', 'G2', 'G3', 'G4'],
+    )
+    metadata = pandas.DataFrame(
+        {
+            'run': ['RUN1', 'RUN2', 'RUN3', 'RUN4'],
+            'sample_group': ['A', 'A', 'B', 'B'],
+            'bioproject': ['BP1', 'BP1', 'BP2', 'BP2'],
+        }
+    )
+    effective_lengths = pandas.DataFrame(100.0, index=counts.index, columns=counts.columns)
+
+    with pytest.warns(UserWarning, match='fell back to batch-only correction'):
+        result = _run_batch_effect_step(
+            counts_df=counts,
+            metadata_df=metadata,
+            eff_length_df=effective_lengths,
+            args=SimpleNamespace(norm='none-none', batch_effect_alg='combatseq', clip_negative=True),
+        )
+
+    batch_info = result['batch_info']
+    assert batch_info['group_model_used'] is False
+    assert batch_info['group_fallback_used'] is True
+    assert 'confounded with the batches' in batch_info['group_error_message']
+
+
 def test_single_sample_batch_skip_still_applies_requested_normalization():
     counts = pandas.DataFrame({'RUN1': [100.0, 100.0]}, index=['G1', 'G2'])
     effective_lengths = pandas.DataFrame(
@@ -226,6 +262,22 @@ def test_single_sample_batch_skip_still_applies_requested_normalization():
             [909_090.9090909091, 90_909.09090909091],
         )
         assert result['batch_info']['skip_reason'] == 'single_sample'
+
+
+def test_expression_transform_rejects_unknown_normalization_method():
+    counts = pandas.DataFrame({'RUN1': [1.0]}, index=['G1'])
+    effective_lengths = pandas.DataFrame({'RUN1': [100.0]}, index=['G1'])
+    metadata = pandas.DataFrame({'run': ['RUN1']})
+
+    with pytest.raises(ValueError, match='Unsupported expression normalization method'):
+        _apply_transformation_logic(
+            counts_df=counts,
+            eff_length_df=effective_lengths,
+            transform_method='banana',
+            batch_effect_alg='no',
+            step='before_batch',
+            metadata_df=metadata,
+        )
 
 
 def test_ruvseq_all_nonexpressed_genes_returns_safe_noop():

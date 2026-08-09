@@ -243,8 +243,8 @@ class TestDownloadLockRecovery:
 
         monkeypatch.setattr('amalgkit.download_utils._resolve_local_boot_id', lambda: 'boot-2')
         monkeypatch.setattr('amalgkit.util.os.kill', lambda _pid, _sig: None)
-        fake_now = [time.time()]
-        monkeypatch.setattr('amalgkit.download_utils.time.time', lambda: fake_now[0])
+        fake_now = [0.0]
+        monkeypatch.setattr('amalgkit.download_utils.time.monotonic', lambda: fake_now[0])
         monkeypatch.setattr(
             'amalgkit.download_utils.time.sleep',
             lambda seconds: fake_now.__setitem__(0, fake_now[0] + seconds),
@@ -287,8 +287,8 @@ class TestDownloadLockRecovery:
         }) + '\n')
 
         monkeypatch.setattr('amalgkit.download_utils.DOWNLOAD_LOCK_STALE_SECONDS', 60)
-        fake_now = [time.time()]
-        monkeypatch.setattr('amalgkit.download_utils.time.time', lambda: fake_now[0])
+        fake_now = [0.0]
+        monkeypatch.setattr('amalgkit.download_utils.time.monotonic', lambda: fake_now[0])
         monkeypatch.setattr(
             'amalgkit.download_utils.time.sleep',
             lambda seconds: fake_now.__setitem__(0, fake_now[0] + seconds),
@@ -339,6 +339,39 @@ class TestDownloadSemaphoreRecovery:
             wait=False,
         ) as acquired_slot_path:
             assert acquired_slot_path is None
+
+        assert slot_path.exists()
+
+    def test_acquire_counting_semaphore_timeout_uses_monotonic_clock(self, tmp_path, monkeypatch):
+        from amalgkit.download_utils import acquire_counting_semaphore
+
+        semaphore_dir = tmp_path / 'semaphore'
+        semaphore_dir.mkdir()
+        slot_path = semaphore_dir / 'slot-0001.lock'
+        slot_path.write_text(json.dumps({
+            'format': 'amalgkit-lock-v3',
+            'hostname': socket.gethostname(),
+            'boot_id': 'boot-semaphore-timeout',
+            'pid': os.getpid(),
+            'created_at': time.time(),
+            'owner_token': 'occupied',
+        }) + '\n')
+        fake_monotonic = [0.0]
+        monkeypatch.setattr('amalgkit.download_utils.time.monotonic', lambda: fake_monotonic[0])
+        monkeypatch.setattr(
+            'amalgkit.download_utils.time.sleep',
+            lambda seconds: fake_monotonic.__setitem__(0, fake_monotonic[0] + seconds),
+        )
+
+        with pytest.raises(TimeoutError, match='Timed out after 1.0 sec'):
+            with acquire_counting_semaphore(
+                semaphore_dir=str(semaphore_dir),
+                max_concurrency=1,
+                lock_label='test semaphore',
+                poll_seconds=1,
+                timeout_seconds=1,
+            ):
+                pass
 
         assert slot_path.exists()
 

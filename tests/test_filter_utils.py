@@ -210,6 +210,20 @@ def test_staged_output_directory_uses_shareable_default_permissions(tmp_path):
     assert os.stat(output_dir).st_mode & 0o777 == 0o755
 
 
+def test_staged_output_directory_rechecks_no_redo_at_commit(tmp_path):
+    output_dir = tmp_path / 'result'
+
+    with pytest.raises(FileExistsError, match='Use --redo yes'):
+        with staged_output_dir(str(output_dir), redo=False) as first_stage:
+            with open(os.path.join(first_stage, 'writer.txt'), 'w', encoding='utf-8') as handle:
+                handle.write('first\n')
+            with staged_output_dir(str(output_dir), redo=False) as second_stage:
+                with open(os.path.join(second_stage, 'writer.txt'), 'w', encoding='utf-8') as handle:
+                    handle.write('second\n')
+
+    assert (output_dir / 'writer.txt').read_text(encoding='utf-8') == 'second\n'
+
+
 def test_atomic_and_staged_outputs_respect_restrictive_umask(tmp_path):
     previous_umask = os.umask(0o077)
     try:

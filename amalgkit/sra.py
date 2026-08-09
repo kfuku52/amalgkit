@@ -2,8 +2,11 @@ from Bio import Entrez
 from contextlib import contextmanager
 from contextvars import ContextVar
 import datetime
+import email.utils
 from defusedxml.ElementTree import parse as parse_untrusted_xml
 from http.client import IncompleteRead
+import math
+import random
 import re
 import time
 import xml.etree.ElementTree as ET
@@ -15,6 +18,8 @@ from amalgkit.subprocess_utils import resolve_timeout_seconds
 
 SRA_ACCESSION_PATTERN = re.compile(r'\b(?:[SED](?:RR|RP|RS|RX)\d+)\b', re.IGNORECASE)
 NCBI_METADATA_TIMEOUT_SECONDS = 300
+NCBI_RETRY_DELAY_CAP_SECONDS = 900
+SRA_ESEARCH_PAGE_SIZE = 100_000
 _ENTREZ_TIMEOUT_CONTEXT = ContextVar('amalgkit_entrez_timeout_seconds', default=None)
 _ENTREZ_ORIGINAL_URLOPEN = getattr(
     Entrez.urlopen,
@@ -82,36 +87,104 @@ def merge_xml_chunk(root, chunk):
     return wrapped
 
 
-def esearch_sra_with_retry(search_term, args=None):
+def _parse_retry_after_seconds(exc):
+    headers = getattr(exc, 'headers', None)
+    if headers is None:
+        return None
+    retry_after = headers.get('Retry-After')
+    if retry_after is None:
+        return None
+    retry_after = str(retry_after).strip()
     try:
-        with maybe_acquire_download_semaphore(
-            args=args,
-            limit_attr='ncbi_metadata_max_concurrency',
-            semaphore_name='ncbi_metadata',
-            lock_label='NCBI metadata download',
-        ), entrez_request_timeout(args):
-            sra_handle = Entrez.esearch(db='sra', term=search_term, retmax=10000000)
-            try:
-                return Entrez.read(sra_handle)
-            finally:
-                _close_entrez_handle(sra_handle)
-    except (HTTPError, URLError, TimeoutError) as exc:
-        print(exc, '- Trying Entrez.esearch() again...')
-        with maybe_acquire_download_semaphore(
-            args=args,
-            limit_attr='ncbi_metadata_max_concurrency',
-            semaphore_name='ncbi_metadata',
-            lock_label='NCBI metadata download',
-        ), entrez_request_timeout(args):
-            sra_handle = Entrez.esearch(db='sra', term=search_term, retmax=10000000)
-            try:
-                return Entrez.read(sra_handle)
-            finally:
-                _close_entrez_handle(sra_handle)
+        seconds = float(retry_after)
+    except ValueError:
+        try:
+            retry_at = email.utils.parsedate_to_datetime(retry_after)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        if retry_at.tzinfo is None:
+            retry_at = retry_at.replace(tzinfo=datetime.timezone.utc)
+        seconds = (
+            retry_at - datetime.datetime.now(datetime.timezone.utc)
+        ).total_seconds()
+    if (not math.isfinite(seconds)) or seconds < 0:
+        return None
+    return min(float(seconds), float(NCBI_RETRY_DELAY_CAP_SECONDS))
+
+
+def _calculate_entrez_retry_delay(exc, retry_sleep_second, failure_index):
+    retry_after = _parse_retry_after_seconds(exc)
+    if retry_after is not None:
+        return retry_after
+    base_delay = float(retry_sleep_second)
+    if (not math.isfinite(base_delay)) or base_delay < 0:
+        raise ValueError('retry_sleep_second must be a finite value >= 0.')
+    exponential_delay = min(
+        base_delay * (2 ** min(30, max(0, int(failure_index)))),
+        float(NCBI_RETRY_DELAY_CAP_SECONDS),
+    )
+    if exponential_delay <= 0:
+        return 0.0
+    jitter_cap = min(1.0, exponential_delay * 0.1)
+    return min(
+        exponential_delay + random.uniform(0.0, jitter_cap),  # noqa: S311 - retry jitter is not security-sensitive
+        float(NCBI_RETRY_DELAY_CAP_SECONDS),
+    )
+
+
+def esearch_sra_with_retry(
+    search_term,
+    args=None,
+    max_retry=2,
+    retry_sleep_second=1,
+    retstart=0,
+    retmax=SRA_ESEARCH_PAGE_SIZE,
+):
+    max_retry = int(max_retry)
+    if max_retry <= 0:
+        raise ValueError('max_retry must be > 0.')
+    for failure_index in range(max_retry):
+        try:
+            with maybe_acquire_download_semaphore(
+                args=args,
+                limit_attr='ncbi_metadata_max_concurrency',
+                semaphore_name='ncbi_metadata',
+                lock_label='NCBI metadata download',
+            ), entrez_request_timeout(args):
+                sra_handle = Entrez.esearch(
+                    db='sra',
+                    term=search_term,
+                    retstart=int(retstart),
+                    retmax=int(retmax),
+                )
+                try:
+                    return Entrez.read(sra_handle)
+                finally:
+                    _close_entrez_handle(sra_handle)
+        except (HTTPError, URLError, TimeoutError) as exc:
+            if failure_index + 1 >= max_retry:
+                raise
+            delay_seconds = _calculate_entrez_retry_delay(
+                exc=exc,
+                retry_sleep_second=retry_sleep_second,
+                failure_index=failure_index,
+            )
+            print(
+                '{} - Trying Entrez.esearch() again after {:.1f} seconds...'.format(
+                    exc,
+                    delay_seconds,
+                ),
+                flush=True,
+            )
+            time.sleep(delay_seconds)
 
 
 def fetch_sra_xml_chunk(record_ids, start, end, retmax, max_retry=10, verbose=True, retry_sleep_second=60, args=None):
-    for _ in range(max_retry):
+    max_retry = int(max_retry)
+    if max_retry <= 0:
+        raise ValueError('max_retry must be > 0.')
+    last_exception = None
+    for failure_index in range(max_retry):
         try:
             with maybe_acquire_download_semaphore(
                 args=args,
@@ -125,24 +198,50 @@ def fetch_sra_xml_chunk(record_ids, start, end, retmax, max_retry=10, verbose=Tr
                 finally:
                     _close_entrez_handle(handle)
         except (HTTPError, URLError, TimeoutError) as exc:
+            last_exception = exc
+            if failure_index + 1 >= max_retry:
+                break
+            delay_seconds = _calculate_entrez_retry_delay(
+                exc=exc,
+                retry_sleep_second=retry_sleep_second,
+                failure_index=failure_index,
+            )
             if verbose:
                 print(
-                    '{} - Trying Entrez.efetch() again after {:,} seconds...'.format(exc, int(retry_sleep_second)),
+                    '{} - Trying Entrez.efetch() again after {:.1f} seconds...'.format(
+                        exc,
+                        delay_seconds,
+                    ),
                     flush=True,
                 )
-            time.sleep(retry_sleep_second)
+            time.sleep(delay_seconds)
             continue
-        except (ET.ParseError, IncompleteRead):
+        except (ET.ParseError, IncompleteRead) as exc:
+            last_exception = exc
+            if failure_index + 1 >= max_retry:
+                break
+            delay_seconds = _calculate_entrez_retry_delay(
+                exc=exc,
+                retry_sleep_second=retry_sleep_second,
+                failure_index=failure_index,
+            )
             if verbose:
-                print('XML may be truncated. Retrying...', flush=True)
+                print(
+                    'XML may be truncated. Retrying after {:.1f} seconds...'.format(
+                        delay_seconds,
+                    ),
+                    flush=True,
+                )
+            time.sleep(delay_seconds)
             continue
-    raise RuntimeError(
+    error = RuntimeError(
         'Failed to parse Entrez XML chunk after {} retries (records {}-{}).'.format(
             max_retry,
             start,
             end - 1,
         )
     )
+    raise error from last_exception
 
 
 def raise_if_xml_has_error(root, search_term=None):
@@ -159,8 +258,47 @@ def raise_if_xml_has_error(root, search_term=None):
 
 
 def search_sra_record_ids(search_term, verbose=True, args=None):
-    sra_record = esearch_sra_with_retry(search_term, args=args)
-    record_ids = sra_record['IdList']
+    sra_record = esearch_sra_with_retry(
+        search_term,
+        args=args,
+        retstart=0,
+        retmax=SRA_ESEARCH_PAGE_SIZE,
+    )
+    record_ids = [str(record_id) for record_id in sra_record.get('IdList', [])]
+    raw_count = sra_record.get('Count', len(record_ids))
+    try:
+        total_count = int(raw_count)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError('Entrez.esearch returned an invalid Count: {}'.format(raw_count)) from exc
+    if total_count < 0:
+        raise RuntimeError('Entrez.esearch returned a negative Count: {}'.format(total_count))
+    retstart = len(record_ids)
+    while retstart < total_count:
+        page = esearch_sra_with_retry(
+            search_term,
+            args=args,
+            retstart=retstart,
+            retmax=min(SRA_ESEARCH_PAGE_SIZE, total_count - retstart),
+        )
+        page_ids = [str(record_id) for record_id in page.get('IdList', [])]
+        if len(page_ids) == 0:
+            raise RuntimeError(
+                'Entrez.esearch returned no IDs at offset {:,} of {:,}; refusing a truncated result.'.format(
+                    retstart,
+                    total_count,
+                )
+            )
+        record_ids.extend(page_ids)
+        retstart += len(page_ids)
+    if len(record_ids) != total_count:
+        raise RuntimeError(
+            'Entrez.esearch Count/IdList mismatch: expected {:,}, received {:,}.'.format(
+                total_count,
+                len(record_ids),
+            )
+        )
+    if len(set(record_ids)) != len(record_ids):
+        raise RuntimeError('Entrez.esearch returned duplicate IDs across result pages.')
     if verbose:
         print('Number of SRA records: {:,}'.format(len(record_ids)))
     return record_ids
@@ -259,7 +397,7 @@ def inspect_accession_search_mismatches(search_term, max_accessions=3):
     for accession in extract_sra_accessions(search_term, max_count=max_accessions):
         try:
             record_ids = search_sra_record_ids(accession, verbose=False)
-        except Exception:
+        except Exception:  # noqa: S112 - optional mismatch diagnostics are best-effort
             continue
         if len(record_ids) == 0:
             continue

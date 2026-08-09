@@ -1,5 +1,6 @@
 import os
 import sys
+import traceback
 
 from amalgkit.__init__ import __version__
 from amalgkit.cli_parser import build_parser
@@ -85,5 +86,8 @@ def main(argv=None):
         sys.stderr.write('Interrupted.\n')
         return 130
     except Exception as exc:
+        if getattr(args, 'debug', False):
+            traceback.print_exc()
+            return 1
         sys.stderr.write('ERROR: {}\n'.format(exc))
         return 1

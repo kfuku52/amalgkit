@@ -27,6 +27,13 @@ def test_help_command_exits_zero():
     assert 'usage:' in out.stdout.lower()
 
 
+def test_root_help_documents_debug_tracebacks():
+    out = run_cli('--help')
+    assert out.returncode == 0
+    assert '--debug' in out.stdout
+    assert 'full traceback' in out.stdout.lower()
+
+
 def test_help_topic_metadata_exits_zero():
     out = run_cli('help', 'metadata')
     assert out.returncode == 0
@@ -138,6 +145,7 @@ def test_help_topic_getfastq_mentions_filter_runtime_safeguards():
     assert 'default=21600' in merged
     assert '--contam_filter_sensitivity' in merged
     assert '--contam_filter_max_seqs' in merged
+    assert '--contam_filter_chunk_spots' in merged
     assert 'default=5000000' in merged
     assert 'default=32g' in merged
     assert '32-128 gb ram' in merged
@@ -147,6 +155,8 @@ def test_help_topic_getfastq_mentions_filter_runtime_safeguards():
     assert 'first run also downloads/builds the db' in merged
     assert 'higher-priority sources are busy' in merged
     assert 'tries the next enabled source before waiting' in merged
+    assert '--treat_identical_paired_as_single' in merged
+    assert 'default preserves both mates' in merged
 
 
 def test_getfastq_rejects_non_positive_download_timeouts():
@@ -221,3 +231,22 @@ def test_small_group_policy_rejects_unknown_value():
     out = run_cli('wsfilter', '--small_group_policy', 'keep_everything')
     assert out.returncode != 0
     assert 'invalid choice' in (out.stdout + out.stderr).lower()
+
+
+@pytest.mark.parametrize(
+    'command, options, expected',
+    [
+        ('wsfilter', ['--norm', 'banana'], 'invalid choice'),
+        ('finalize', ['--norm', 'banana'], 'invalid choice'),
+        ('wsfilter', ['--dist_method', 'typo'], 'invalid choice'),
+        ('wsfilter', ['--mapping_rate', 'nan'], 'finite number'),
+        ('wsfilter', ['--mapping_rate', '101'], 'between 0 and 100'),
+        ('wsfilter', ['--correlation_threshold', '2'], 'between -1 and 1'),
+        ('wsfilter', ['--margin_threshold', '-3'], 'between -2 and 2'),
+        ('wsfilter', ['--robust_z_threshold', 'nan'], 'finite number'),
+    ],
+)
+def test_filter_cli_rejects_invalid_scientific_options(command, options, expected):
+    out = run_cli(command, *options)
+    assert out.returncode != 0
+    assert expected in (out.stdout + out.stderr).lower()

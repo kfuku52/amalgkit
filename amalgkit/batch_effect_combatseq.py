@@ -1,5 +1,8 @@
 import numpy
 import pandas
+import warnings
+
+from amalgkit.batch_effect_common import align_metadata_to_counts
 
 
 def _load_pycombat_seq():
@@ -14,15 +17,7 @@ def _load_pycombat_seq():
 
 
 def _align_metadata_to_counts(counts_df, metadata_df):
-    if 'run' not in metadata_df.columns:
-        raise ValueError('Missing required metadata column: run')
-    run_indexed = metadata_df.copy()
-    run_indexed['run'] = run_indexed['run'].astype(str)
-    missing_runs = [run_id for run_id in counts_df.columns if run_id not in set(run_indexed['run'])]
-    if missing_runs:
-        raise ValueError('Metadata is missing rows for runs: {}'.format(', '.join(missing_runs)))
-    aligned = run_indexed.drop_duplicates(subset=['run'], keep='first').set_index('run')
-    return aligned.loc[list(counts_df.columns), :].reset_index()
+    return align_metadata_to_counts(counts_df=counts_df, metadata_df=metadata_df)
 
 
 def _coerce_corrected_matrix(corrected, index, columns):
@@ -138,9 +133,14 @@ def run_combatseq_backend(
                     index=combat_counts.index,
                     columns=combat_counts.columns,
                 )
-            except Exception as exc:  # pragma: no cover - exercised via integration tests
+            except (FloatingPointError, ValueError, numpy.linalg.LinAlgError) as exc:
                 group_fallback_used = True
                 group_error_message = str(exc)
+                warnings.warn(
+                    'Combat-seq could not fit the sample-group covariate model and '
+                    'fell back to batch-only correction: {}'.format(exc),
+                    stacklevel=2,
+                )
                 corrected_df = run_without_group()
         else:
             corrected_df = run_without_group()

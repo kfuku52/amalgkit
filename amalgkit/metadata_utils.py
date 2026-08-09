@@ -28,6 +28,7 @@ from amalgkit.sra_sources import (
 )
 
 PRIVATE_FASTQ_SCIENTIFIC_NAME_PLACEHOLDER = 'Please add in format: Genus species'
+METADATA_XML_ROW_BATCH_SIZE = 2000
 SELECT_SAMPLING_STRATEGIES = (
     'maximize_bioproject_diversity',
     'largest_bioprojects_first',
@@ -134,7 +135,7 @@ def _update_cached_taxonomy_entries(cache_store, namespace, mapping):
 
 
 class Metadata:
-    column_names = ['scientific_name', 'tissue', 'sample_group', 'genotype', 'sex', 'age',
+    column_names = ('scientific_name', 'tissue', 'sample_group', 'genotype', 'sex', 'age',
                     'treatment', 'source_name',
                     'is_sampled', 'is_qualified', 'exclusion', 'protocol', 'bioproject', 'biosample',
                     'experiment', 'run', 'sra_primary', 'sra_sample', 'sra_study', 'study_title', 'exp_title', 'design',
@@ -144,16 +145,18 @@ class Metadata:
                     'spot_length', 'read_index', 'read_class', 'read_type', 'base_coord', 'center',
                     'submitter_id',
                     'pubmed_id', 'taxid', 'published_date', 'NCBI_Link', 'AWS_Link', 'GCP_Link',
-                    ENA_SRA_LINK_COLUMN, DDBJ_SRA_LINK_COLUMN, ]
-    removed_metadata_columns = ['lab', 'biomaterial_provider', 'cell', 'location', 'antibody', 'batch', 'misc']
-    id_cols = ['bioproject', 'biosample', 'experiment', 'run', 'sra_primary', 'sra_sample', 'sra_study']
+                    ENA_SRA_LINK_COLUMN, DDBJ_SRA_LINK_COLUMN)
+    removed_metadata_columns = ('lab', 'biomaterial_provider', 'cell', 'location', 'antibody', 'batch', 'misc')
+    id_cols = ('bioproject', 'biosample', 'experiment', 'run', 'sra_primary', 'sra_sample', 'sra_study')
 
-    def __init__(self, column_names=column_names):
-        self.df = pandas.DataFrame(index=[], columns=column_names)
+    def __init__(self, column_names=None):
+        resolved_columns = self.column_names if column_names is None else column_names
+        self.df = pandas.DataFrame(index=[], columns=list(resolved_columns))
         self.sample_attribute_collision_count = 0
         self.sample_attribute_collision_examples = []
 
-    def reorder(self, omit_misc=False, column_names=column_names):
+    def reorder(self, omit_misc=False, column_names=None):
+        column_names = list(self.column_names if column_names is None else column_names)
         is_empty = (self.df.shape[0] == 0)
         legacy_columns = [col for col in self.removed_metadata_columns if col in self.df.columns]
         if len(legacy_columns) > 0:
@@ -278,9 +281,39 @@ class Metadata:
                 }
             )
 
+        def store_sample_attribute(row, value, normalized_tag, target_column):
+            existing_value = str(row.get(target_column, ''))
+            if existing_value != "":
+                updated_value = append_unique_text(existing_value, value)
+                if updated_value != existing_value:
+                    record_sample_attribute_collision(
+                        normalized_tag=normalized_tag,
+                        target_tag=target_column,
+                        existing_value=existing_value,
+                        new_value=value,
+                    )
+                row[target_column] = updated_value
+                return
+            if target_column != normalized_tag:
+                record_sample_attribute_collision(
+                    normalized_tag=normalized_tag,
+                    target_tag=target_column,
+                    existing_value=str(row.get(normalized_tag, '')),
+                    new_value=value,
+                )
+            row[target_column] = value
+
         blocked_tags = set(metadata.removed_metadata_columns)
         core_column_tags = set(metadata.column_names)
-        row_list = list()
+        row_batch = []
+        row_frames = []
+
+        def flush_row_batch():
+            if len(row_batch) == 0:
+                return
+            row_frames.append(pandas.DataFrame.from_records(row_batch))
+            row_batch.clear()
+
         counter = 0
         for xml_root in xml_roots:
             root = Metadata._normalize_xml_root(xml_root)
@@ -400,38 +433,32 @@ class Metadata:
                     else:
                         target_tag = normalized_tag
 
-                    def store_sample_attribute(target_column):
-                        existing_value = str(row.get(target_column, ''))
-                        if existing_value != "":
-                            updated_value = append_unique_text(existing_value, value)
-                            if updated_value != existing_value:
-                                record_sample_attribute_collision(
-                                    normalized_tag=normalized_tag,
-                                    target_tag=target_column,
-                                    existing_value=existing_value,
-                                    new_value=value,
-                                )
-                            row[target_column] = updated_value
-                            return
-                        if target_column != normalized_tag:
-                            record_sample_attribute_collision(
-                                normalized_tag=normalized_tag,
-                                target_tag=target_column,
-                                existing_value=str(row.get(normalized_tag, '')),
-                                new_value=value,
-                            )
-                        row[target_column] = value
-
-                    store_sample_attribute(target_tag)
+                    store_sample_attribute(
+                        row=row,
+                        value=value,
+                        normalized_tag=normalized_tag,
+                        target_column=target_tag,
+                    )
                     if normalized_tag in core_column_tags:
                         preserved_tag = 'sample_attribute_' + normalized_tag
                         if preserved_tag != target_tag:
-                            store_sample_attribute(preserved_tag)
-                row_list.append(row)
+                            store_sample_attribute(
+                                row=row,
+                                value=value,
+                                normalized_tag=normalized_tag,
+                                target_column=preserved_tag,
+                            )
+                row_batch.append(row)
                 counter += 1
-        if len(row_list) == 0:
+                if len(row_batch) >= METADATA_XML_ROW_BATCH_SIZE:
+                    flush_row_batch()
+        flush_row_batch()
+        if len(row_frames) == 0:
             return metadata
-        df = pandas.DataFrame.from_records(row_list)
+        if len(row_frames) == 1:
+            df = row_frames[0]
+        else:
+            df = pandas.concat(row_frames, ignore_index=True, sort=False)
         now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         print('{}: Finished converting {:,} samples'.format(now, counter), flush=True)
         metadata.df = df
@@ -840,7 +867,30 @@ def load_metadata(args, dir_subcommand='metadata', batch_scope='run'):
     if not os.path.isfile(real_path):
         raise IsADirectoryError('Metadata path exists but is not a file: {}'.format(real_path))
     print('{}: Loading metadata from: {}'.format(datetime.datetime.now(), real_path), flush=True)
-    df = pandas.read_csv(real_path, sep='\t', header=0, low_memory=False, encoding='utf-8')
+    # Metadata is an annotation table first and a numeric table second. Keep
+    # literal tokens such as "NA", "N/A", and "null" intact; individual
+    # consumers explicitly coerce the numeric columns they use.
+    df = pandas.read_csv(
+        real_path,
+        sep='\t',
+        header=0,
+        low_memory=False,
+        encoding='utf-8',
+        dtype=str,
+        keep_default_na=False,
+    )
+    if 'run' in df.columns:
+        normalized_runs = df.loc[:, 'run'].fillna('').astype(str).str.strip()
+        duplicate_runs = (
+            normalized_runs.loc[(normalized_runs != '') & normalized_runs.duplicated(keep=False)]
+            .drop_duplicates()
+            .tolist()
+        )
+        if duplicate_runs:
+            raise ValueError(
+                'Metadata contains duplicate run IDs: {}'.format(', '.join(duplicate_runs))
+            )
+        df.loc[:, 'run'] = normalized_runs
     metadata = Metadata.from_DataFrame(df)
     if 'batch' not in dir(args):
         return metadata

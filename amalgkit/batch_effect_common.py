@@ -22,6 +22,32 @@ def normalize_run_ids(values):
     return normalized
 
 
+def align_metadata_to_counts(counts_df, metadata_df):
+    """Validate and align one unambiguous metadata row per count column."""
+    if 'run' not in metadata_df.columns:
+        raise ValueError('Missing required metadata column: run')
+    count_run_ids = [str(run_id).strip() for run_id in counts_df.columns]
+    if any(run_id == '' for run_id in count_run_ids):
+        raise ValueError('Count table contains an empty run ID.')
+    if len(set(count_run_ids)) != len(count_run_ids):
+        raise ValueError('Count table contains duplicate run IDs.')
+    metadata = metadata_df.copy()
+    metadata.loc[:, 'run'] = metadata.loc[:, 'run'].fillna('').astype(str).str.strip()
+    duplicate_runs = (
+        metadata.loc[metadata['run'] != '', 'run']
+        .loc[lambda values: values.duplicated(keep=False)]
+        .drop_duplicates()
+        .tolist()
+    )
+    if duplicate_runs:
+        raise ValueError('Metadata contains duplicate run IDs: {}'.format(', '.join(duplicate_runs)))
+    metadata_by_run = metadata.loc[metadata['run'] != '', :].set_index('run', drop=False)
+    missing_runs = [run_id for run_id in count_run_ids if run_id not in metadata_by_run.index]
+    if missing_runs:
+        raise ValueError('Metadata is missing rows for runs: {}'.format(', '.join(missing_runs)))
+    return metadata_by_run.loc[count_run_ids, :].reset_index(drop=True)
+
+
 @dataclass
 class BatchEffectResult:
     backend: str
@@ -40,6 +66,9 @@ class BatchEffectResult:
     ruv_fallback_reason: Optional[str] = None
     ruv_nb_fallback_genes: Optional[int] = None
     ruv_anova_failure_genes: Optional[int] = None
+    group_model_used: Optional[bool] = None
+    group_fallback_used: Optional[bool] = None
+    group_error_message: Optional[str] = None
     resolved_latent_k: Optional[int] = None
     latent_family: Optional[str] = None
     latent_iterations: Optional[int] = None
@@ -66,6 +95,9 @@ class BatchEffectResult:
             'ruv_fallback_reason': self.ruv_fallback_reason,
             'ruv_nb_fallback_genes': self.ruv_nb_fallback_genes,
             'ruv_anova_failure_genes': self.ruv_anova_failure_genes,
+            'group_model_used': self.group_model_used,
+            'group_fallback_used': self.group_fallback_used,
+            'group_error_message': self.group_error_message,
             'resolved_latent_k': self.resolved_latent_k,
             'latent_family': self.latent_family,
             'latent_iterations': self.latent_iterations,
@@ -96,6 +128,9 @@ def initialize_batch_info(run_ids=(), batch_effect_alg='no'):
         'ruv_fallback_reason': None,
         'ruv_nb_fallback_genes': None,
         'ruv_anova_failure_genes': None,
+        'group_model_used': None,
+        'group_fallback_used': None,
+        'group_error_message': None,
         'ruv_baseline_score': None,
         'ruv_selected_score': None,
         'ruv_selected_penalized_score': None,
@@ -211,6 +246,9 @@ def build_batch_effect_summary_dataframe(
                 'ruv_fallback_reason': _summary_scalar(_batch_info_value(batch_info, 'ruv_fallback_reason')),
                 'ruv_nb_fallback_genes': _summary_scalar(_batch_info_value(batch_info, 'ruv_nb_fallback_genes')),
                 'ruv_anova_failure_genes': _summary_scalar(_batch_info_value(batch_info, 'ruv_anova_failure_genes')),
+                'group_model_used': _summary_scalar(_batch_info_value(batch_info, 'group_model_used')),
+                'group_fallback_used': _summary_scalar(_batch_info_value(batch_info, 'group_fallback_used')),
+                'group_error_message': _summary_scalar(_batch_info_value(batch_info, 'group_error_message')),
                 'ruv_baseline_score': _summary_scalar(_batch_info_value(batch_info, 'ruv_baseline_score')),
                 'ruv_selected_score': _summary_scalar(_batch_info_value(batch_info, 'ruv_selected_score')),
                 'ruv_selected_penalized_score': _summary_scalar(_batch_info_value(batch_info, 'ruv_selected_penalized_score')),

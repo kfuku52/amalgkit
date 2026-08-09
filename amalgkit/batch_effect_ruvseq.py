@@ -6,6 +6,7 @@ import pandas
 from scipy.special import gammaln
 from scipy.stats import chi2, f
 
+from amalgkit.batch_effect_common import align_metadata_to_counts
 from amalgkit.normalization_tmm import calc_factor_quantile
 
 
@@ -28,15 +29,7 @@ RUVSEQ_RESIDUAL_NOISE_FLOOR = 1e-6
 
 
 def _align_metadata_to_counts(counts_df, metadata_df):
-    if 'run' not in metadata_df.columns:
-        raise ValueError('Missing required metadata column: run')
-    run_indexed = metadata_df.copy()
-    run_indexed['run'] = run_indexed['run'].astype(str)
-    missing_runs = [run_id for run_id in counts_df.columns if run_id not in set(run_indexed['run'])]
-    if missing_runs:
-        raise ValueError('Metadata is missing rows for runs: {}'.format(', '.join(missing_runs)))
-    aligned = run_indexed.drop_duplicates(subset=['run'], keep='first').set_index('run')
-    return aligned.loc[list(counts_df.columns), :].reset_index()
+    return align_metadata_to_counts(counts_df=counts_df, metadata_df=metadata_df)
 
 
 def _build_sample_group_design(aligned_metadata, sample_group_column='sample_group'):

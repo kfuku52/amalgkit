@@ -6,6 +6,8 @@ import numpy
 import pandas
 from scipy import interpolate, stats
 
+from amalgkit.batch_effect_common import align_metadata_to_counts
+
 
 SVA_LFDR_MIN_GRID_POINTS = 512
 SVA_LFDR_MAX_GRID_POINTS = 4096
@@ -56,28 +58,7 @@ def build_intercept_only_design_matrix(num_rows):
 
 
 def _align_metadata_to_counts(counts_df, metadata_df):
-    if 'run' not in metadata_df.columns:
-        raise ValueError('Missing required metadata column: run')
-    count_run_ids = [str(run_id).strip() for run_id in counts_df.columns]
-    if any(run_id == '' for run_id in count_run_ids):
-        raise ValueError('Count table contains an empty run ID.')
-    if len(set(count_run_ids)) != len(count_run_ids):
-        raise ValueError('Count table contains duplicate run IDs.')
-    metadata = metadata_df.copy()
-    metadata.loc[:, 'run'] = metadata.loc[:, 'run'].fillna('').astype(str).str.strip()
-    duplicate_runs = (
-        metadata.loc[metadata['run'] != '', 'run']
-        .loc[lambda values: values.duplicated(keep=False)]
-        .drop_duplicates()
-        .tolist()
-    )
-    if duplicate_runs:
-        raise ValueError('Metadata contains duplicate run IDs: {}'.format(', '.join(duplicate_runs)))
-    metadata_by_run = metadata.loc[metadata['run'] != '', :].set_index('run', drop=False)
-    missing_runs = [run_id for run_id in count_run_ids if run_id not in metadata_by_run.index]
-    if missing_runs:
-        raise ValueError('Metadata is missing rows for runs: {}'.format(', '.join(missing_runs)))
-    return metadata_by_run.loc[count_run_ids, :].reset_index(drop=True)
+    return align_metadata_to_counts(counts_df=counts_df, metadata_df=metadata_df)
 
 
 def clean_y_matrix(y_matrix, mod_matrix, sv_matrix):

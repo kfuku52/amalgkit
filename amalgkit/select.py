@@ -941,10 +941,11 @@ def normalize_select_metadata_frame(df, select_rules):
                 continue
             if rule['outcome'] in SELECT_NORMALIZE_ORGANS:
                 if not rule.get('skip_validation', False):
+                    rule_outcome = rule['outcome']
                     validation_series = text_series.loc[candidate_mask].apply(
-                        lambda text: validate_select_organ_text(
+                        lambda text, organ=rule_outcome: validate_select_organ_text(
                             text=text,
-                            organ=rule['outcome'],
+                            organ=organ,
                             normalize_rules=normalize_rules,
                             validate_rules=validate_rules,
                         )

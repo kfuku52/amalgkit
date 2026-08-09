@@ -71,11 +71,17 @@ Common options:
 | Option | Default | Use |
 | --- | --- | --- |
 | `--layout single/paired/auto` | `auto` | choose library layout |
+| `--treat_identical_paired_as_single yes/no` | `no` | sample up to 2,000 pairs across the FASTQ and remove read2 when at least 99% of the sample is identical |
 | `--max_bp` | very large | target number of bases to extract |
 | `--min_read_length` | `25` | minimum read length forwarded through processing |
 | `--fastp yes/no` | `yes` | run `fastp` |
 | `--remove_sra yes/no` | `yes` | remove downloaded SRA files after extraction |
 | `--remove_tmp yes/no` | `yes` | remove temporary files |
+
+Identical-pair conversion is opt-in because it removes read2. For seekable FASTQ files, AMALGKIT
+samples 16 distributed windows without scanning every record. Gzip inputs use deterministic reservoir
+sampling across the compressed stream. A sampled identity rate of at least 99% triggers conversion;
+there is no subsequent full-file identity check.
 
 When `--max_bp` is set, AMALGKIT can run a compensatory two-step extraction for public SRA-derived data:
 
@@ -122,7 +128,9 @@ an optional uppercase `B`, `K`, `M`, `G`, or `T` suffix, or `auto` to retain the
 `--rrna_filter_jobs` defaults to 1, accepts `1`, `2`, or `auto`, and caps the number of simultaneously
 processed runs. On the first failed run, runs that have not started are not submitted.
 
-`--contam_filter yes` uses MMseqs2 taxonomy against a database such as UniRef90.
+`--contam_filter yes` uses MMseqs2 taxonomy against a database such as UniRef90. It also processes
+synchronized chunks (`--contam_filter_chunk_spots`, default 5,000,000), bounding the in-memory set of
+contaminant read IDs and avoiding a full-size combined paired FASTQ.
 
 `--filter_order` accepts comma or `>` separators, such as `fastp,rrna,contam` or `rrna>contam>fastp`.
 

@@ -67,7 +67,8 @@ def test_run_combatseq_backend_falls_back_without_group_when_confounded():
             'bioproject': ['BP1', 'BP1', 'BP2', 'BP2'],
         }
     )
-    corrected, summary = run_combatseq_backend(counts_df=counts, metadata_df=metadata)
+    with pytest.warns(UserWarning, match='fell back to batch-only correction'):
+        corrected, summary = run_combatseq_backend(counts_df=counts, metadata_df=metadata)
     expected = pandas.DataFrame(
         {
             'RUN1': [24, 26, 28, 30, 33, 35, 37, 38, 47, 48],
@@ -81,6 +82,7 @@ def test_run_combatseq_backend_falls_back_without_group_when_confounded():
     assert summary['method'] == 'no_group'
     assert summary['group_model_used'] is False
     assert summary['group_fallback_used'] is True
+    assert 'confounded with the batches' in summary['group_error_message']
     assert summary['skip_reason'] == ''
 
 

@@ -88,6 +88,15 @@ class TestShouldCompressFasterqOutputBeforeFilters:
         args = SimpleNamespace(fastp=False, rrna_filter=False)
         assert should_compress_fasterq_output_before_filters(args)
 
+    def test_defers_compression_for_distributed_paired_sampling(self):
+        args = SimpleNamespace(
+            fastp=False,
+            rrna_filter=False,
+            contam_filter=False,
+            treat_identical_paired_as_single=True,
+        )
+        assert not should_compress_fasterq_output_before_filters(args)
+
     def test_skips_compression_when_fastp_is_first_filter(self):
         args = SimpleNamespace(fastp=True, rrna_filter=False)
         assert not should_compress_fasterq_output_before_filters(args)
@@ -673,6 +682,7 @@ class TestRunMmseqsContamFilter:
             contam_filter_rank = 'phylum'
             contam_filter_db = 'inferred'
             contam_filter_db_name = 'UniRef90'
+            contam_filter_chunk_spots = 2
             mmseqs_exe = 'mmseqs'
             remove_tmp = False
             dump_print = False
@@ -743,8 +753,10 @@ class TestRunMmseqsContamFilter:
         assert metadata.df.loc[0, 'bp_contam_out'] == 16
         assert metadata.df.loc[0, 'sec_ete_taxonomy'] == pytest.approx(2.5)
         assert metadata.df.loc[0, 'sec_contam_filter'] == pytest.approx(4.5)
-        assert len(observed['input_paths']) == 1
-        assert observed['input_paths'][0].endswith('_combined.fastq.gz')
+        assert len(observed['input_paths']) == 2
+        assert all(path.endswith('.fastq.gz') for path in observed['input_paths'])
+        assert observed['input_paths'][0].endswith('query_000001.fastq.gz')
+        assert observed['input_paths'][1].endswith('query_000002.fastq.gz')
         assert run_file_state.has('{}_1.contam-filtered.fastq.gz'.format(sra_id))
         assert run_file_state.has('{}_2.contam-filtered.fastq.gz'.format(sra_id))
         out = capsys.readouterr().out
@@ -1346,6 +1358,7 @@ class TestGetfastqXmlRetrieval:
         monkeypatch.setattr('amalgkit.getfastq.Entrez.esearch', flaky_esearch)
         monkeypatch.setattr('amalgkit.getfastq.Entrez.read', lambda handle: {'IdList': []})
         monkeypatch.setattr('amalgkit.getfastq.Entrez.efetch', lambda **kwargs: object())
+        monkeypatch.setattr('amalgkit.sra.time.sleep', lambda *_args, **_kwargs: None)
 
         root = getfastq_getxml(search_term='SRR000000', retmax=1000)
 
@@ -1411,6 +1424,7 @@ class TestGetfastqXmlRetrieval:
             return self._DummyTree(ET.Element('EXPERIMENT_PACKAGE'))
 
         monkeypatch.setattr('amalgkit.sra.parse_untrusted_xml', flaky_parse)
+        monkeypatch.setattr('amalgkit.sra.time.sleep', lambda *_args, **_kwargs: None)
 
         root = getfastq_getxml(search_term='SRR000000', retmax=1000)
 
@@ -1425,6 +1439,7 @@ class TestGetfastqXmlRetrieval:
             'amalgkit.sra.parse_untrusted_xml',
             lambda _handle: (_ for _ in ()).throw(ET.ParseError('broken xml')),
         )
+        monkeypatch.setattr('amalgkit.sra.time.sleep', lambda *_args, **_kwargs: None)
 
         with pytest.raises(RuntimeError, match='Failed to parse Entrez XML chunk'):
             getfastq_getxml(search_term='SRR000000', retmax=1000)

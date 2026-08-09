@@ -8,6 +8,7 @@ from contextlib import contextmanager
 
 import pandas
 
+from amalgkit.download_utils import acquire_exclusive_lock
 from amalgkit.output_utils import atomic_output_path, get_default_creation_mode
 
 
@@ -154,28 +155,49 @@ def staged_output_dir(target_dir, redo=False, prefix='amalgkit_stage_'):
     if os.path.lexists(target_dir) and (not redo):
         raise FileExistsError('Output already exists. Use --redo yes to overwrite: {}'.format(target_dir))
     stage_dir = tempfile.mkdtemp(prefix=prefix, dir=parent_dir if parent_dir != '' else None)
+    lock_path = os.path.join(
+        parent_dir if parent_dir != '' else '.',
+        '.{}.amalgkit-output.lock'.format(os.path.basename(target_dir)),
+    )
     backup_path = None
     committed = False
     try:
         yield stage_dir
-        target_mode = get_default_creation_mode(parent_dir, is_directory=True)
-        if os.path.isdir(target_dir):
-            target_mode = os.stat(target_dir, follow_symlinks=False).st_mode & 0o777
-        os.chmod(stage_dir, target_mode)
-        if os.path.lexists(target_dir):
-            backup_path = tempfile.mkdtemp(prefix=prefix + 'backup_', dir=parent_dir if parent_dir != '' else None)
-            os.rmdir(backup_path)
-            os.rename(target_dir, backup_path)
-        os.rename(stage_dir, target_dir)
-        committed = True
-        if backup_path is not None:
-            if os.path.islink(backup_path) or os.path.isfile(backup_path):
-                os.remove(backup_path)
-            elif os.path.isdir(backup_path):
-                shutil.rmtree(backup_path)
+        with acquire_exclusive_lock(
+            lock_path=lock_path,
+            lock_label='output directory commit',
+            poll_seconds=1,
+        ):
+            # The target may have appeared while work was being written to the
+            # stage directory. Re-check under the commit lock so redo=False is
+            # a durable no-overwrite guarantee rather than a start-time hint.
+            if os.path.lexists(target_dir) and os.path.islink(target_dir):
+                raise ValueError('Refusing to replace symbolic-link output directory: {}'.format(target_dir))
+            if os.path.lexists(target_dir) and (not redo):
+                raise FileExistsError('Output already exists. Use --redo yes to overwrite: {}'.format(target_dir))
+            target_mode = get_default_creation_mode(parent_dir, is_directory=True)
+            if os.path.isdir(target_dir):
+                target_mode = os.stat(target_dir, follow_symlinks=False).st_mode & 0o777
+            os.chmod(stage_dir, target_mode)
+            if os.path.lexists(target_dir):
+                backup_path = tempfile.mkdtemp(prefix=prefix + 'backup_', dir=parent_dir if parent_dir != '' else None)
+                os.rmdir(backup_path)
+                os.rename(target_dir, backup_path)
+            try:
+                os.rename(stage_dir, target_dir)
+            except BaseException:
+                if (backup_path is not None) and (not os.path.lexists(target_dir)) and os.path.lexists(backup_path):
+                    os.rename(backup_path, target_dir)
+                    backup_path = None
+                raise
+            committed = True
+            if backup_path is not None:
+                if os.path.islink(backup_path) or os.path.isfile(backup_path):
+                    os.remove(backup_path)
+                elif os.path.isdir(backup_path):
+                    shutil.rmtree(backup_path)
+                backup_path = None
     except Exception:
-        if (backup_path is not None) and (not os.path.lexists(target_dir)) and os.path.lexists(backup_path):
-            os.rename(backup_path, target_dir)
         raise
     finally:
         if (not committed) and os.path.isdir(stage_dir):

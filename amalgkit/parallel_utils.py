@@ -3,10 +3,31 @@ import os
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, as_completed, wait
 
 
-def run_tasks_with_optional_threads(task_items, task_fn, max_workers=1, fail_fast=False):
+def run_tasks_with_optional_threads(
+    task_items,
+    task_fn,
+    max_workers=1,
+    fail_fast=False,
+    stop_scheduling_on_failure=None,
+):
+    """Run tasks and return completed results plus failures.
+
+    ``stop_scheduling_on_failure`` stops submitting new work after the first
+    observed failure. Already-running threads cannot be terminated safely, so
+    they are allowed to finish and their results or failures are retained.
+    ``fail_fast`` is kept as a backwards-compatible alias for this behavior.
+    """
     tasks = list(task_items)
     results = dict()
     failures = list()
+    if stop_scheduling_on_failure is None:
+        stop_after_failure = bool(fail_fast)
+    else:
+        stop_after_failure = bool(stop_scheduling_on_failure)
+        if bool(fail_fast) and not stop_after_failure:
+            raise ValueError(
+                'fail_fast=True conflicts with stop_scheduling_on_failure=False.'
+            )
     if len(tasks) == 0:
         return results, failures
     if max_workers is None:
@@ -28,17 +49,18 @@ def run_tasks_with_optional_threads(task_items, task_fn, max_workers=1, fail_fas
                 failures.append((task, RuntimeError('Task requested exit with code {}.'.format(exc.code))))
             except Exception as exc:
                 failures.append((task, exc))
-            if fail_fast and failures:
+            if stop_after_failure and failures:
                 break
         return results, failures
     worker_count = min(worker_limit, len(tasks))
-    if fail_fast:
+    if stop_after_failure:
         task_iter = iter(tasks)
         with ThreadPoolExecutor(max_workers=worker_count) as executor:
             futures = {
                 executor.submit(task_fn, task): task
                 for task in itertools.islice(task_iter, worker_count)
             }
+            stop_submitting = False
             while futures:
                 completed, _pending = wait(futures, return_when=FIRST_COMPLETED)
                 completed_without_failure = 0
@@ -51,12 +73,14 @@ def run_tasks_with_optional_threads(task_items, task_fn, max_workers=1, fail_fas
                         failures.append((task, RuntimeError('Task requested exit with code {}.'.format(exc.code))))
                     except Exception as exc:
                         failures.append((task, exc))
-                if failures:
-                    for future in futures:
-                        future.cancel()
-                    break
-                for task in itertools.islice(task_iter, completed_without_failure):
-                    futures[executor.submit(task_fn, task)] = task
+                if failures and not stop_submitting:
+                    stop_submitting = True
+                    for future, task in list(futures.items()):
+                        if future.cancel():
+                            futures.pop(future)
+                if not stop_submitting:
+                    for task in itertools.islice(task_iter, completed_without_failure):
+                        futures[executor.submit(task_fn, task)] = task
         return results, failures
     with ThreadPoolExecutor(max_workers=worker_count) as executor:
         futures = {

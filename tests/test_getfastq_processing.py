@@ -13,6 +13,7 @@ from amalgkit.getfastq import (
     initialize_columns,
     get_identical_paired_ratio,
     maybe_treat_paired_as_single,
+    parse_fastp_option_args,
     parse_fastp_metrics,
     parse_fastp_summary_counts,
     update_fastp_metrics,
@@ -37,6 +38,30 @@ from amalgkit.util import Metadata
 
 
 class TestFastpMetrics:
+    @pytest.mark.parametrize(
+        'option_string',
+        [
+            '--thread 999',
+            '--thread=999',
+            '-w999',
+            '--length_required 0',
+            '-l0',
+            '--in1 other.fastq',
+            '-oother.fastq',
+        ],
+    )
+    def test_fastp_options_reject_managed_arguments(self, option_string):
+        with pytest.raises(ValueError, match='must not override amalgkit-managed option'):
+            parse_fastp_option_args(option_string)
+
+    def test_fastp_options_accept_unmanaged_arguments(self):
+        assert parse_fastp_option_args('--trim_front1 3 -j /dev/null') == [
+            '--trim_front1',
+            '3',
+            '-j',
+            '/dev/null',
+        ]
+
     def test_parse_fastp_metrics_extracts_duplication_and_insert_size(self):
         stderr_txt = '\n'.join([
             'Filtering result:',
@@ -799,6 +824,27 @@ class TestIdenticalPairedReads:
         assert num_checked == 3
         assert read_length == 4
 
+    def test_paired_to_single_conversion_requires_explicit_opt_in(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            'amalgkit.getfastq.get_identical_paired_ratio',
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError('comparison must not run without explicit opt-in')
+            ),
+        )
+        sra_stat = {'sra_id': 'SRR001', 'layout': 'paired'}
+
+        metadata, observed_stat, files = maybe_treat_paired_as_single(
+            sra_stat=sra_stat,
+            metadata='metadata',
+            work_dir=str(tmp_path),
+            files={'SRR001_1.fastq.gz', 'SRR001_2.fastq.gz'},
+            return_files=True,
+        )
+
+        assert metadata == 'metadata'
+        assert observed_stat['layout'] == 'paired'
+        assert files == {'SRR001_1.fastq.gz', 'SRR001_2.fastq.gz'}
+
     def test_get_identical_paired_ratio_plain_fastq(self, tmp_path):
         read1 = tmp_path / 'read1.fastq'
         read2 = tmp_path / 'read2.fastq'
@@ -808,6 +854,27 @@ class TestIdenticalPairedReads:
         assert ratio == pytest.approx(2 / 3)
         assert num_checked == 3
         assert read_length == 4
+
+    def test_identical_paired_ratio_samples_across_the_file(self, tmp_path):
+        read1 = tmp_path / 'read1.fastq'
+        read2 = tmp_path / 'read2.fastq'
+        self._write_fastq_plain(read1, ['AAAA'] * 2000 + ['CCCC'] * 2000)
+        self._write_fastq_plain(read2, ['AAAA'] * 2000 + ['TTTT'] * 2000)
+
+        ratio, num_checked, read_length = get_identical_paired_ratio(str(read1), str(read2))
+
+        assert 0.4 < ratio < 0.6
+        assert num_checked == 2000
+        assert read_length == 4
+
+    def test_identical_paired_ratio_rejects_different_record_counts(self, tmp_path):
+        read1 = tmp_path / 'read1.fastq.gz'
+        read2 = tmp_path / 'read2.fastq.gz'
+        self._write_fastq_gz(read1, ['AAAA', 'CCCC'])
+        self._write_fastq_gz(read2, ['AAAA'])
+
+        with pytest.raises(ValueError, match='different numbers of records'):
+            get_identical_paired_ratio(str(read1), str(read2))
 
     def test_maybe_treat_paired_as_single_converts_files(self, tmp_path):
         sra_id = 'SRR001'
@@ -837,6 +904,7 @@ class TestIdenticalPairedReads:
             work_dir=str(tmp_path),
             threshold=0.99,
             num_checked_reads=3,
+            allow_conversion=True,
         )
         assert sra_stat['layout'] == 'single'
         assert os.path.exists(str(tmp_path / '{}.fastq.gz'.format(sra_id)))
@@ -873,6 +941,7 @@ class TestIdenticalPairedReads:
             work_dir=str(tmp_path),
             threshold=0.99,
             num_checked_reads=3,
+            allow_conversion=True,
         )
         assert sra_stat['layout'] == 'paired'
         assert os.path.exists(str(read1))
@@ -912,6 +981,7 @@ class TestIdenticalPairedReads:
             work_dir=str(tmp_path),
             threshold=0.99,
             num_checked_reads=2,
+            allow_conversion=True,
             files={'{}_1.fastq.gz'.format(sra_id), '{}_2.fastq.gz'.format(sra_id)},
         )
         assert sra_stat['layout'] == 'single'

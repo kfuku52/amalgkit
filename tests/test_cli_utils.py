@@ -41,3 +41,59 @@ def test_resolve_external_tool_status_accepts_plain_semver_output(monkeypatch):
     status = cli_utils.resolve_external_tool_status('fasterq-dump', [['--version']])
 
     assert status == '2.9.6 (/opt/conda/bin/fasterq-dump)'
+
+
+def test_runtime_banner_reports_all_scientific_python_dependencies(monkeypatch, capsys):
+    monkeypatch.setattr(
+        cli_utils,
+        'resolve_dependency_version',
+        lambda package_name, _module_name: 'version-for-{}'.format(package_name),
+    )
+    monkeypatch.setattr(cli_utils, 'resolve_external_tool_status', lambda *_args: 'MISSING')
+
+    cli_utils.print_runtime_banner(['amalgkit', 'finalize'])
+
+    output = capsys.readouterr().out
+    for package_name in (
+        'numpy',
+        'pandas',
+        'scipy',
+        'matplotlib',
+        'statsmodels',
+        'scikit-learn',
+        'biopython',
+        'defusedxml',
+        'inmoose',
+    ):
+        assert 'AMALGKIT dependency {}: version-for-{}'.format(package_name, package_name) in output
+
+
+def test_runtime_banner_skips_external_probes_for_metadata_only_command(monkeypatch, capsys):
+    monkeypatch.setattr(cli_utils, 'resolve_dependency_version', lambda *_args: '1.0')
+
+    def fail_external_probe(*_args):
+        raise AssertionError('metadata must not execute unrelated external tools')
+
+    monkeypatch.setattr(cli_utils, 'resolve_external_tool_status', fail_external_probe)
+
+    cli_utils.print_runtime_banner(['amalgkit', 'metadata'])
+
+    assert 'AMALGKIT tool' not in capsys.readouterr().out
+
+
+def test_runtime_banner_probes_only_tools_relevant_to_active_command(monkeypatch, capsys):
+    monkeypatch.setattr(cli_utils, 'resolve_dependency_version', lambda *_args: '1.0')
+    observed = []
+
+    def record_probe(executable_name, _version_commands):
+        observed.append(executable_name)
+        return 'MISSING'
+
+    monkeypatch.setattr(cli_utils, 'resolve_external_tool_status', record_probe)
+
+    cli_utils.print_runtime_banner(['amalgkit', 'quant'])
+
+    assert observed == ['kallisto', 'oarfish']
+    output = capsys.readouterr().out
+    assert 'AMALGKIT tool kallisto:' in output
+    assert 'AMALGKIT tool fastp:' not in output

@@ -110,28 +110,42 @@ class TestRunTasksWithOptionalThreads:
         with pytest.raises(ValueError, match='max_workers must be an integer'):
             run_tasks_with_optional_threads([1], lambda x: x, max_workers='two')
 
-    def test_fail_fast_does_not_start_tasks_beyond_initial_workers(self):
+    def test_stop_on_failure_does_not_start_more_tasks_and_keeps_inflight_results(self):
         started = []
         started_lock = threading.Lock()
+        both_started = threading.Barrier(2)
 
         def worker(x):
             with started_lock:
                 started.append(x)
+            both_started.wait(timeout=1)
             if x == 1:
                 raise RuntimeError('stop')
             time.sleep(0.02)
             return x
 
-        _results, failures = run_tasks_with_optional_threads(
+        results, failures = run_tasks_with_optional_threads(
             [1, 2, 3, 4],
             worker,
             max_workers=2,
-            fail_fast=True,
+            stop_scheduling_on_failure=True,
         )
 
         assert len(failures) == 1
         assert failures[0][0] == 1
         assert set(started).issubset({1, 2})
+        assert results == {2: 2}
+
+    def test_fail_fast_remains_a_backwards_compatible_alias(self):
+        results, failures = run_tasks_with_optional_threads(
+            [1, 2, 3],
+            lambda value: (_ for _ in ()).throw(RuntimeError('stop')) if value == 1 else value,
+            max_workers=1,
+            fail_fast=True,
+        )
+
+        assert results == {}
+        assert [task for task, _exc in failures] == [1]
 
 class TestValidatePositiveIntOption:
     def test_accepts_positive(self):

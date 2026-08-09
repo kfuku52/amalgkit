@@ -616,7 +616,7 @@ class NcbiTaxonomy:
     def __del__(self):
         try:
             self.close()
-        except Exception:
+        except Exception:  # noqa: S110 - destructors must not raise during interpreter shutdown
             pass
 
     def _get_merged_mapping(self, taxids):
@@ -633,7 +633,7 @@ class NcbiTaxonomy:
             old_column = "taxid_old"
             new_column = "taxid_new"
         for chunk in _iter_chunks(pending):
-            query = "SELECT {old}, {new} FROM {table} WHERE {old} IN ({values})".format(
+            query = "SELECT {old}, {new} FROM {table} WHERE {old} IN ({values})".format(  # noqa: S608 - identifiers are fixed internally and values use parameters
                 old=old_column,
                 new=new_column,
                 table=table,
@@ -669,7 +669,7 @@ class NcbiTaxonomy:
             return ranks
         table = "nodes" if self.db_format == NATIVE_DB_FORMAT else "species"
         for chunk in _iter_chunks(taxids):
-            query = "SELECT taxid, rank FROM {} WHERE taxid IN ({})".format(
+            query = "SELECT taxid, rank FROM {} WHERE taxid IN ({})".format(  # noqa: S608 - table is fixed internally and values use parameters
                 table,
                 _sql_placeholders(chunk),
             )
@@ -684,7 +684,7 @@ class NcbiTaxonomy:
             return lineages
         if self.db_format == LEGACY_ETE4_DB_FORMAT:
             for chunk in _iter_chunks(taxids):
-                query = "SELECT taxid, track FROM species WHERE taxid IN ({})".format(
+                query = "SELECT taxid, track FROM species WHERE taxid IN ({})".format(  # noqa: S608 - values use parameter placeholders
                     _sql_placeholders(chunk)
                 )
                 for taxid, track in self.db.execute(query, chunk).fetchall():
@@ -709,7 +709,7 @@ class NcbiTaxonomy:
                 SELECT query_taxid, taxid, depth
                 FROM lineage
                 ORDER BY query_taxid, depth DESC
-            """.format(
+            """.format(  # noqa: S608 - recursive query is static and values use parameters
                 values=_sql_placeholders(chunk),
                 max_depth=MAX_LINEAGE_DEPTH,
             )
@@ -752,9 +752,9 @@ class NcbiTaxonomy:
                 query = """
                     SELECT taxid, name FROM names
                     WHERE is_scientific=1 AND taxid IN ({})
-                """.format(_sql_placeholders(chunk))
+                """.format(_sql_placeholders(chunk))  # noqa: S608 - query is static and values use parameters
             else:
-                query = "SELECT taxid, spname FROM species WHERE taxid IN ({})".format(
+                query = "SELECT taxid, spname FROM species WHERE taxid IN ({})".format(  # noqa: S608 - values use parameter placeholders
                     _sql_placeholders(chunk)
                 )
             for taxid, name in self.db.execute(query, chunk).fetchall():
@@ -787,11 +787,11 @@ class NcbiTaxonomy:
                     SELECT name, taxid FROM names
                     WHERE is_scientific=? AND name IN ({})
                     ORDER BY taxid
-                """.format(_sql_placeholders(chunk))
+                """.format(_sql_placeholders(chunk))  # noqa: S608 - query is static and values use parameters
                 params = [int(scientific)] + chunk
             else:
                 table = "species" if scientific else "synonym"
-                query = "SELECT spname, taxid FROM {} WHERE spname IN ({}) ORDER BY taxid".format(
+                query = "SELECT spname, taxid FROM {} WHERE spname IN ({}) ORDER BY taxid".format(  # noqa: S608 - table is fixed internally and values use parameters
                     table,
                     _sql_placeholders(chunk),
                 )

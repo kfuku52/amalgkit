@@ -35,6 +35,7 @@ _DCF_FIELD_TYPES = {
     'ruv_selected_penalized_score': 'float',
     'ruv_penalty': 'float',
     'latent_family': 'nullable_str',
+    'group_error_message': 'nullable_str',
     'ruv_residual_method': 'nullable_str',
     'ruv_pvalue_method': 'nullable_str',
     'ruv_fallback_reason': 'nullable_str',
