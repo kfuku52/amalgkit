@@ -18,6 +18,7 @@ from amalgkit.per_species_finalize_python import (
     _transform_raw_to_tpm,
 )
 from amalgkit import per_species_tables as per_species_tables_module
+from tests.support.per_species import build_per_species_args
 
 
 @pytest.mark.parametrize(('seed', 'expected'), [(37, 37), ('auto', None)])
@@ -125,47 +126,12 @@ def _inject_latent_batch_signal(input_dir, species_tag):
 
 
 def _build_args(tmp_path):
-    return SimpleNamespace(
-        out_dir=str(tmp_path / 'out'),
-        redo=False,
-        metadata='inferred',
-        input_dir='inferred',
-        sample_group=None,
-        sample_group_color='DEFAULT',
-        batch=None,
-        threads='auto',
+    return build_per_species_args(
+        tmp_path,
         internal_jobs='auto',
-        internal_cpu_budget='auto',
-        dist_method='pearson',
         mapping_rate=0.20,
         correlation_threshold=0.30,
-        plot_intermediate=False,
-        one_outlier_per_iter=False,
-        norm='log2p1-fpkm',
-        clip_negative=True,
-        maintain_zero=True,
-        batch_effect_alg='no',
-        skip_curation=False,
-        disable_auto_outlier_filter=False,
         worker_mode='finalize',
-        ruvseq_control_genes='auto',
-        ruvseq_k='auto',
-        ruvseq_k_max=5,
-        ruvseq_control_top_n=1000,
-        ruvseq_min_controls=100,
-        seed='auto',
-        sva_nsv='auto',
-        sva_B='auto',
-        sva_B_auto_max=100,
-        sva_backend='python',
-        combatseq_backend='python',
-        ruvseq_backend='python',
-        python_executable='python',
-        latent_family='nb',
-        latent_k='auto',
-        latent_k_max=5,
-        latent_max_iter=200,
-        latent_tol=1e-5,
     )
 
 
@@ -377,6 +343,7 @@ def test_fpkm_transform_rejects_invalid_tmm_library_size(invalid_value):
         )
 
 
+@pytest.mark.integration
 def test_generate_per_species_tables_uses_python_finalize_worker_for_skip_curation(tmp_path):
     fixture = _write_species_input_fixture(tmp_path)
     args = _build_args(tmp_path)
@@ -399,6 +366,7 @@ def test_generate_per_species_tables_uses_python_finalize_worker_for_skip_curati
     assert (tmp_path / 'out' / 'per_species' / fixture['species_tag'] / 'per_species_completion_flag.txt').is_file()
 
 
+@pytest.mark.integration
 def test_generate_per_species_tables_uses_python_finalize_worker_for_disable_auto_outlier_filter(tmp_path):
     fixture = _write_species_input_fixture(tmp_path)
     args = _build_args(tmp_path)
@@ -427,6 +395,7 @@ def test_generate_per_species_tables_uses_python_finalize_worker_for_disable_aut
     assert {'target_id', 'tau', 'highest', 'order'}.issubset(set(tau_df.columns))
 
 
+@pytest.mark.integration
 def test_generate_per_species_tables_supports_python_finalize_worker_for_latent_glm(tmp_path):
     fixture = _write_species_input_fixture(tmp_path)
     _inject_latent_batch_signal(fixture['input_dir'], fixture['species_tag'])

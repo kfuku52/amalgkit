@@ -13,6 +13,7 @@ from amalgkit.cross_species_filter import (
     _prepare_metadata_table,
     _resolve_matrix_for_embedding,
     _resolve_correlation_matrix,
+    _save_sample_number_heatmap_pdf,
     _select_single_copy_orthogroups,
     generate_input_symlinks,
     get_sample_groups,
@@ -856,6 +857,7 @@ class TestCrossSpeciesFilterMain:
 
         assert (existing_dir / 'old.txt').read_text() == 'old'
 
+    @pytest.mark.integration
     def test_run_cross_species_filter_writes_restored_plot_outputs(self, tmp_path, monkeypatch):
         out_dir = tmp_path / 'out'
         orthogroup_path = self._write_cross_species_fixture(out_dir)
@@ -889,3 +891,18 @@ class TestCrossSpeciesFilterMain:
         assert (cross_species_dir / 'cross_species_group_mean_correlation_boxplot.pdf').is_file()
         assert (cross_species_dir / 'cross_species_group_mean_tsne.pdf').is_file()
         assert (cross_species_dir / 'cross_species_delta_pcc_boxplot.pdf').is_file()
+
+
+@pytest.mark.slow
+def test_sample_number_heatmap_renders_real_pdf(tmp_path):
+    metadata_df = pandas.DataFrame(
+        {
+            'scientific_name': ['Species A', 'Species A', 'Species B'],
+            'sample_group': ['leaf', 'root', 'leaf'],
+            'exclusion': ['no', 'no', 'filtered'],
+        }
+    )
+    output_path = tmp_path / 'sample_number_heatmap.pdf'
+
+    assert _save_sample_number_heatmap_pdf(metadata_df, str(output_path)) == str(output_path)
+    assert output_path.read_bytes().startswith(b'%PDF')

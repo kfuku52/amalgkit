@@ -499,6 +499,7 @@ class TestCstmmMain:
 
         assert (existing_dir / 'old.txt').read_text() == 'old'
 
+    @pytest.mark.integration
     def test_python_single_species_backend_writes_counts_metadata_and_plots(self, tmp_path, monkeypatch):
         out_dir = tmp_path / 'out'
         merge_dir = out_dir / 'merge'
@@ -573,6 +574,7 @@ class TestCstmmMain:
         assert 'tmm_normalization_factor' in metadata_df.columns
         assert set(metadata_df['exclusion']) == {'no'}
 
+    @pytest.mark.integration
     def test_python_multi_species_backend_writes_counts_metadata_and_plots(self, tmp_path, monkeypatch):
         out_dir = tmp_path / 'out'
         merge_dir, orthogroup = self._write_multi_species_fixture(out_dir)

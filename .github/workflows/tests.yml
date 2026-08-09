@@ -15,7 +15,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.11', '3.12', '3.13', '3.14']
+        include:
+          - python-version: '3.11'
+            test_suite: full
+          - python-version: '3.12'
+            test_suite: fast
+          - python-version: '3.13'
+            test_suite: fast
+          - python-version: '3.14'
+            test_suite: full
 
     steps:
       - uses: actions/checkout@v6
@@ -32,8 +40,15 @@ jobs:
           python -m pip install -e ".[test]"
           python -m pip check
 
-      - name: Run tests
-        run: python -m pytest -q
+      - name: Run fast tests
+        if: matrix.test_suite == 'fast'
+        run: >-
+          python -m pytest -q -n 2
+          -m "not integration and not slow and not optional_dependency"
+
+      - name: Run full tests
+        if: matrix.test_suite == 'full'
+        run: python -m pytest -q -n 2
 
   minimum-dependencies:
     runs-on: ubuntu-latest
@@ -59,12 +74,13 @@ jobs:
             "scikit-learn==1.3.2" \
             "biopython==1.81" \
             "defusedxml==0.7.1" \
-            "pytest==8.0.0"
+            "pytest==8.0.0" \
+            "pytest-xdist>=3"
           python -m pip install --no-deps -e .
           python -m pip check
 
       - name: Run tests against dependency floor
-        run: python -m pytest -q
+        run: python -m pytest -q -n 2
 
   combatseq:
     runs-on: ubuntu-latest
@@ -105,7 +121,7 @@ jobs:
       - name: Install quality tools
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e ".[test,quality]"
+          python -m pip install -e ".[quality]"
           python -m pip check
 
       - name: Run Ruff

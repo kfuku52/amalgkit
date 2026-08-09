@@ -14,9 +14,22 @@ Before opening a pull request, run the same checks used by CI:
 
 ```bash
 ruff check .
-python -m pytest -q
+python -m pytest -q -n 2
 python -m build
 ```
+
+For the shortest development feedback loop, skip integration tests, deliberate
+wall-clock waits, real PDF rendering, and optional-dependency coverage:
+
+```bash
+python -m pytest -q -n 2 -m "not integration and not slow and not optional_dependency"
+```
+
+Run `python -m pytest -q` when debugging order or process-isolation issues in a
+single worker. Tests without a marker are expected to be deterministic and
+fast. Use `integration` for public workflows spanning multiple production
+components, `slow` for intentional process waits or real rendering, and
+`optional_dependency` for tests that require an optional project extra.
 
 Add a regression test for bug fixes. Keep external bioinformatics tools out of
 unit tests by injecting or mocking command runners and network clients.

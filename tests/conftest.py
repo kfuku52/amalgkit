@@ -1,5 +1,6 @@
 import pytest
 import pandas
+from pathlib import Path
 
 from amalgkit.util import Metadata
 
@@ -69,3 +70,80 @@ def sample_metadata_df():
 def sample_metadata(sample_metadata_df):
     """A Metadata object built from sample data."""
     return Metadata.from_DataFrame(sample_metadata_df)
+
+
+@pytest.fixture
+def stub_pdf_rendering(monkeypatch):
+    """Keep integration tests focused on plot orchestration, not PDF encoding."""
+    from matplotlib.figure import Figure
+    from amalgkit import cross_species_filter
+    from amalgkit import per_species_finalize_python
+    from amalgkit import per_species_python
+
+    def find_output_path(args, kwargs):
+        output_path = kwargs.get('out_pdf_path')
+        if output_path is not None:
+            return output_path
+        for value in reversed(args):
+            if isinstance(value, (str, Path)) and str(value).lower().endswith('.pdf'):
+                return value
+        raise AssertionError('Plot helper was called without a PDF output path.')
+
+    def write_plot_placeholder(*args, **kwargs):
+        output_path = find_output_path(args, kwargs)
+        path = Path(output_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b'%PDF-1.4\n% amalgkit test placeholder\n')
+        return str(path)
+
+    def write_pdf_placeholder(_figure, output_path, *args, **kwargs):
+        _ = (args, kwargs)
+        if hasattr(output_path, 'write'):
+            output_path.write(b'%PDF-1.4\n% amalgkit test placeholder\n')
+            return
+        path = Path(output_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b'%PDF-1.4\n% amalgkit test placeholder\n')
+
+    monkeypatch.setattr(Figure, 'savefig', write_pdf_placeholder)
+    for module, helper_names in (
+        (
+            cross_species_filter,
+            (
+                '_save_sample_number_heatmap_pdf',
+                '_save_group_cor_scatter_plot',
+                '_save_overview_pdf',
+                '_save_csfilter_scatter_plot',
+                '_save_heatmap_pdf',
+                '_save_within_group_histogram',
+                '_save_pca_pdf',
+                '_save_unaveraged_tsne_pdf',
+                '_save_averaged_heatmap_pdf',
+                '_save_averaged_dendrogram_pdf',
+                '_save_averaged_summary_pdf',
+                '_save_averaged_boxplot_pdf',
+                '_save_averaged_tsne_pdf',
+                '_save_delta_pcc_plot',
+                'save_exclusion_plot_pdf',
+            ),
+        ),
+        (
+            per_species_python,
+            ('_save_ws_scatter_plot', 'save_state_overview_pdf', 'save_tau_histogram_pdf'),
+        ),
+        (
+            per_species_finalize_python,
+            ('save_quick_state_comparison_plot', 'save_tau_histogram_pdf'),
+        ),
+    ):
+        for helper_name in helper_names:
+            monkeypatch.setattr(module, helper_name, write_plot_placeholder)
+
+
+@pytest.fixture(autouse=True)
+def stub_pdf_rendering_for_integration_tests(request):
+    """Use cheap PDF placeholders except in explicitly slow rendering tests."""
+    is_integration = request.node.get_closest_marker('integration') is not None
+    is_real_rendering = request.node.get_closest_marker('slow') is not None
+    if is_integration and not is_real_rendering:
+        request.getfixturevalue('stub_pdf_rendering')

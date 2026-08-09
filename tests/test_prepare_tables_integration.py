@@ -1,11 +1,13 @@
-from types import SimpleNamespace
-
 import pandas
 import pytest
 
 from amalgkit.command_context import PerSpeciesTableContext
 from amalgkit.per_species_tables import generate_per_species_tables
 from amalgkit.util import Metadata
+from tests.support.per_species import build_per_species_args
+
+
+pytestmark = pytest.mark.integration
 
 
 def _write_prepare_fixture(tmp_path, species='Testus example'):
@@ -97,31 +99,7 @@ def _write_sample_group_drop_fixture(tmp_path):
 
 
 def _build_prepare_args(tmp_path):
-    return SimpleNamespace(
-        out_dir=str(tmp_path / 'out'),
-        redo=False,
-        metadata='inferred',
-        input_dir='inferred',
-        sample_group=None,
-        sample_group_color='DEFAULT',
-        batch=None,
-        threads='auto',
-        internal_jobs=1,
-        internal_cpu_budget='auto',
-        dist_method='pearson',
-        mapping_rate=0.0,
-        correlation_threshold=0.3,
-        plot_intermediate=False,
-        one_outlier_per_iter=False,
-        norm='log2p1-fpkm',
-        clip_negative=True,
-        maintain_zero=True,
-        batch_effect_alg='no',
-        skip_curation=False,
-        margin_threshold=0.0,
-        robust_z_threshold=-2.5,
-        worker_mode='prepare_tables',
-    )
+    return build_per_species_args(tmp_path)
 
 
 def test_prepare_tables_python_writes_round_and_final_summaries(tmp_path):

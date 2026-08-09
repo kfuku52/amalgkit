@@ -1,0 +1,51 @@
+from types import SimpleNamespace
+
+
+def build_per_species_args(tmp_path, **overrides):
+    """Build the shared argument surface used by per-species workflow tests."""
+    values = {
+        'out_dir': str(tmp_path / 'out'),
+        'redo': False,
+        'metadata': 'inferred',
+        'input_dir': 'inferred',
+        'sample_group': None,
+        'sample_group_color': 'DEFAULT',
+        'batch': None,
+        'threads': 'auto',
+        'internal_jobs': 1,
+        'internal_cpu_budget': 'auto',
+        'dist_method': 'pearson',
+        'mapping_rate': 0.0,
+        'correlation_threshold': 0.3,
+        'plot_intermediate': False,
+        'one_outlier_per_iter': False,
+        'norm': 'log2p1-fpkm',
+        'clip_negative': True,
+        'maintain_zero': True,
+        'batch_effect_alg': 'no',
+        'skip_curation': False,
+        'disable_auto_outlier_filter': False,
+        'margin_threshold': 0.0,
+        'robust_z_threshold': -2.5,
+        'worker_mode': 'prepare_tables',
+        'ruvseq_control_genes': 'auto',
+        'ruvseq_k': 'auto',
+        'ruvseq_k_max': 5,
+        'ruvseq_control_top_n': 1000,
+        'ruvseq_min_controls': 100,
+        'seed': 'auto',
+        'sva_nsv': 'auto',
+        'sva_B': 'auto',
+        'sva_B_auto_max': 100,
+        'sva_backend': 'python',
+        'combatseq_backend': 'python',
+        'ruvseq_backend': 'python',
+        'python_executable': 'python',
+        'latent_family': 'nb',
+        'latent_k': 'auto',
+        'latent_k_max': 5,
+        'latent_max_iter': 200,
+        'latent_tol': 1e-5,
+    }
+    values.update(overrides)
+    return SimpleNamespace(**values)

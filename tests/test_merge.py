@@ -780,6 +780,7 @@ def test_merge_main_prunes_stale_species_outputs(tmp_path, monkeypatch):
     assert (out_dir / 'merge' / 'merge_summary.pdf').exists()
 
 
+@pytest.mark.slow
 def test_generate_merge_plot_pdfs_writes_python_pdf_outputs(tmp_path):
     merge_dir = tmp_path / 'merge'
     merge_dir.mkdir()

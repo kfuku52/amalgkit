@@ -150,6 +150,7 @@ def test_summarize_busco_species_tables_counts_unique_buscos(tmp_path):
     assert total_buscos == 4
 
 
+@pytest.mark.slow
 def test_generate_busco_species_plot_writes_pdf(tmp_path):
     busco_dir = tmp_path / 'busco'
     busco_dir.mkdir()

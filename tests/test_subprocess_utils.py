@@ -68,6 +68,7 @@ def test_run_logged_check_call_reports_missing_executable():
         )
 
 
+@pytest.mark.slow
 def test_run_logged_command_applies_timeout_to_real_subprocess():
     # A genuinely slow command is killed after a short timeout instead of
     # blocking forever.
@@ -209,6 +210,7 @@ def test_probe_dependency_command_has_a_short_default_timeout():
     assert observed['timeout'] == float(DEPENDENCY_PROBE_TIMEOUT_SECONDS)
 
 
+@pytest.mark.slow
 def test_probe_dependency_command_kills_a_hanging_probe():
     with pytest.raises(TimeoutError, match='timed out'):
         probe_dependency_command(

@@ -142,6 +142,7 @@ def test_merge_metadata_by_run_warns_before_promoting_incompatible_numeric_colum
     assert observed['mapping_rate'].tolist() == ['not_available', 0.2]
 
 
+@pytest.mark.slow
 def test_save_exclusion_plot_pdf_writes_pdf(tmp_path):
     metadata_df = pandas.DataFrame(
         {

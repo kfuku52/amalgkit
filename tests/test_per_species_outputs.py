@@ -1,5 +1,6 @@
 import numpy
 import pandas
+import pytest
 
 from amalgkit.per_species_outputs import (
     CORRELATION_STAT_COLUMNS,
@@ -127,6 +128,7 @@ def test_save_correlation_statistics_appends_rounds():
     assert stats_round_2.index.tolist() == ['round_1', 'round_2']
 
 
+@pytest.mark.slow
 def test_save_tau_histogram_pdf_writes_pdf(tmp_path):
     counts_df = pandas.DataFrame(
         {
@@ -160,6 +162,7 @@ def test_save_tau_histogram_pdf_writes_pdf(tmp_path):
     assert result['num_no_expression'] == 1
 
 
+@pytest.mark.slow
 def test_save_state_overview_pdf_writes_pdf(tmp_path):
     counts_df = pandas.DataFrame(
         {

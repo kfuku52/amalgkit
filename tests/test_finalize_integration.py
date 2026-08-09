@@ -1,11 +1,13 @@
-from types import SimpleNamespace
-
 import pandas
 import pytest
 
 from amalgkit.command_context import PerSpeciesTableContext
 from amalgkit.per_species_tables import generate_per_species_tables
 from amalgkit.util import Metadata
+from tests.support.per_species import build_per_species_args
+
+
+pytestmark = pytest.mark.integration
 
 
 def _write_finalize_fixture(tmp_path, sample_groups, bioprojects, species='Finalizus example', include_optional_columns=True):
@@ -73,50 +75,14 @@ def _inject_latent_batch_signal(input_dir, species_tag):
 
 
 def _build_finalize_args(tmp_path, **overrides):
-    data = {
-        'out_dir': str(tmp_path / 'out'),
-        'redo': False,
-        'metadata': 'inferred',
-        'input_dir': 'inferred',
-        'sample_group': None,
-        'sample_group_color': 'DEFAULT',
-        'batch': None,
-        'threads': 'auto',
-        'internal_jobs': 1,
-        'internal_cpu_budget': 'auto',
-        'dist_method': 'pearson',
-        'mapping_rate': 0.0,
-        'correlation_threshold': 0.3,
-        'plot_intermediate': False,
-        'one_outlier_per_iter': False,
-        'norm': 'log2p1-fpkm',
-        'clip_negative': True,
-        'maintain_zero': True,
+    return build_per_species_args(tmp_path, **{
         'batch_effect_alg': 'sva',
-        'skip_curation': False,
         'disable_auto_outlier_filter': True,
         'worker_mode': 'finalize',
-        'ruvseq_control_genes': 'auto',
-        'ruvseq_k': 'auto',
-        'ruvseq_k_max': 5,
-        'ruvseq_control_top_n': 1000,
-        'ruvseq_min_controls': 100,
         'seed': '7',
-        'sva_nsv': 'auto',
-        'sva_B': 'auto',
         'sva_B_auto_max': 80,
-        'sva_backend': 'python',
-        'combatseq_backend': 'python',
-        'ruvseq_backend': 'python',
-        'python_executable': 'python',
-        'latent_family': 'nb',
-        'latent_k': 'auto',
-        'latent_k_max': 5,
-        'latent_max_iter': 200,
-        'latent_tol': 1e-5,
-    }
-    data.update(overrides)
-    return SimpleNamespace(**data)
+        **overrides,
+    })
 
 
 def _run_finalize_python(tmp_path, fixture, **overrides):
@@ -210,6 +176,7 @@ def test_finalize_python_sva_supports_positive_manual_nsv(tmp_path):
     assert corrected_tc.shape[1] == 4
 
 
+@pytest.mark.slow
 def test_finalize_python_sva_plots_work_when_optional_metadata_columns_missing(tmp_path):
     fixture = _write_finalize_fixture(
         tmp_path=tmp_path,
@@ -224,6 +191,7 @@ def test_finalize_python_sva_plots_work_when_optional_metadata_columns_missing(t
     assert (plot_dir / '{}.before_after.sva.pdf'.format(fixture['species_tag'])).exists()
 
 
+@pytest.mark.optional_dependency
 def test_finalize_python_combatseq_runs_end_to_end(tmp_path):
     pytest.importorskip('inmoose.pycombat')
     fixture = _write_finalize_fixture(

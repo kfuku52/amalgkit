@@ -2,6 +2,7 @@ import subprocess
 import sys
 
 import pandas
+import pytest
 
 from amalgkit import batch_effect_runner
 
@@ -244,6 +245,7 @@ def test_batch_effect_runner_supports_sva_zero_case_and_writes_outputs(tmp_path,
     assert sv.shape == (2, 0)
 
 
+@pytest.mark.slow
 def test_batch_effect_runner_module_entrypoint_executes_main(tmp_path):
     counts_path = tmp_path / 'counts.tsv'
     metadata_path = tmp_path / 'metadata.tsv'

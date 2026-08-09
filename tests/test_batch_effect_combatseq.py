@@ -4,6 +4,9 @@ import pandas
 from amalgkit.batch_effect_combatseq import run_combatseq_backend
 
 
+pytestmark = pytest.mark.optional_dependency
+
+
 pytest.importorskip('inmoose.pycombat')
 
 

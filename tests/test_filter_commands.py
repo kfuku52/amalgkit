@@ -13,6 +13,9 @@ from amalgkit import csfilter as csfilter_module
 from amalgkit import finalize as finalize_module
 
 
+pytestmark = pytest.mark.integration
+
+
 def _base_metadata():
     return Metadata.from_DataFrame(pandas.DataFrame({
         'run': ['R1', 'R2'],
