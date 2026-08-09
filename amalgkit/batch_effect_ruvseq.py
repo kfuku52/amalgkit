@@ -3,7 +3,8 @@ import warnings
 
 import numpy
 import pandas
-from scipy.stats import chi2, f_oneway
+from scipy.special import gammaln
+from scipy.stats import chi2, f
 
 from amalgkit.normalization_tmm import calc_factor_quantile
 
@@ -102,6 +103,35 @@ def compute_factor_r2(values, factor_values):
     return float(r2)
 
 
+def _leading_pca_scores(centered, n_pc):
+    values = numpy.asarray(centered, dtype=float)
+    resolved_pc = min(max(0, int(n_pc)), min(values.shape))
+    if resolved_pc == 0:
+        return numpy.zeros((values.shape[0], 0), dtype=float)
+    eigenvalues, eigenvectors = numpy.linalg.eigh(values @ values.T)
+    order = numpy.argsort(eigenvalues)[::-1]
+    descending = numpy.maximum(eigenvalues[order], 0.0)
+    scale = float(descending[0]) if descending.size > 0 else 0.0
+    tolerance = numpy.finfo(float).eps * max(values.shape) * scale
+    boundary_index = resolved_pc - 1
+    requires_svd = (
+        (not numpy.isfinite(scale))
+        or scale <= 0.0
+        or descending[boundary_index] <= tolerance
+    )
+    if resolved_pc < descending.size:
+        boundary_gap = descending[boundary_index] - descending[resolved_pc]
+        requires_svd = requires_svd or boundary_gap <= tolerance
+    if requires_svd:
+        left, singular_values, _right = numpy.linalg.svd(values, full_matrices=False)
+        return (
+            left[:, :resolved_pc]
+            * singular_values[:resolved_pc].reshape(1, -1)
+        )
+    singular_values = numpy.sqrt(descending[:resolved_pc])
+    return eigenvectors[:, order[:resolved_pc]] * singular_values.reshape(1, -1)
+
+
 def score_ruvseq_components(mat_df, metadata_df, n_pc=3, batch_column='bioproject', sample_group_column='sample_group'):
     if (mat_df.shape[1] < 3) or (mat_df.shape[0] < 2):
         return {'score': math.nan, 'group_score': math.nan, 'batch_score': math.nan}
@@ -109,12 +139,11 @@ def score_ruvseq_components(mat_df, metadata_df, n_pc=3, batch_column='bioprojec
     samples_by_genes = mat_df.transpose().to_numpy(dtype=float)
     centered = samples_by_genes - numpy.mean(samples_by_genes, axis=0, keepdims=True)
     try:
-        u, s, _vh = numpy.linalg.svd(centered, full_matrices=False)
+        pcs = _leading_pca_scores(centered, n_pc=n_pc)
     except numpy.linalg.LinAlgError:
         return {'score': math.nan, 'group_score': math.nan, 'batch_score': math.nan}
-    if s.size == 0:
+    if pcs.shape[1] == 0:
         return {'score': math.nan, 'group_score': math.nan, 'batch_score': math.nan}
-    pcs = u[:, : min(int(n_pc), u.shape[1])] * s[: min(int(n_pc), s.size)].reshape(1, -1)
     batch_values = (
         aligned_metadata.loc[:, batch_column].fillna('not_provided').astype(str).tolist()
         if batch_column in aligned_metadata.columns else
@@ -223,18 +252,17 @@ def _compute_glm_pvalues_and_residuals(counts_df, design_df, effective_lib_sizes
         _record_ruv_fallback(diagnostics, 'statsmodels_unavailable')
         return None, None
     x_full = design_df.to_numpy(dtype=float)
-    x_null = numpy.ones((design_df.shape[0], 1), dtype=float)
     offset = numpy.log(pandas.Series(effective_lib_sizes, index=counts_df.columns, dtype=float).to_numpy(dtype=float))
+    offset_scale = numpy.exp(offset)
+    offset_scale_sum = float(numpy.sum(offset_scale))
     residuals = numpy.empty(counts_df.shape, dtype=float)
     pvalues = numpy.ones((counts_df.shape[0],), dtype=float)
     rank_full = int(numpy.linalg.matrix_rank(x_full))
-    rank_null = int(numpy.linalg.matrix_rank(x_null))
-    df_diff = max(1, rank_full - rank_null)
+    df_diff = max(1, rank_full - 1)
     for row_idx in range(counts_df.shape[0]):
         y = counts_df.iloc[row_idx, :].to_numpy(dtype=float)
         try:
             poisson_full = sm.GLM(y, x_full, family=sm.families.Poisson(), offset=offset).fit(maxiter=100, disp=0)
-            poisson_null = sm.GLM(y, x_null, family=sm.families.Poisson(), offset=offset).fit(maxiter=100, disp=0)
         except Exception as exc:
             _record_ruv_fallback(
                 diagnostics,
@@ -243,21 +271,32 @@ def _compute_glm_pvalues_and_residuals(counts_df, design_df, effective_lib_sizes
             return None, None
         alpha = _estimate_nb_alpha_from_poisson_fit(y=y, mu=poisson_full.fittedvalues)
         fit_full = poisson_full
-        fit_null = poisson_null
+        y_sum = float(numpy.sum(y))
+        null_mean = offset_scale * (y_sum / offset_scale_sum)
+        poisson_null_llf = float(
+            numpy.sum(y * numpy.log(null_mean) - null_mean - gammaln(y + 1.0))
+        )
+        null_llf = poisson_null_llf
         if alpha > RUVSEQ_POISSON_ALPHA_THRESHOLD:
             try:
                 nb_family = sm.families.NegativeBinomial(alpha=max(alpha, 1e-8))
                 fit_full = sm.GLM(y, x_full, family=nb_family, offset=offset).fit(maxiter=100, disp=0)
-                fit_null = sm.GLM(y, x_null, family=nb_family, offset=offset).fit(maxiter=100, disp=0)
+                fit_null = sm.GLM(
+                    y,
+                    numpy.ones((design_df.shape[0], 1), dtype=float),
+                    family=nb_family,
+                    offset=offset,
+                ).fit(maxiter=100, disp=0)
+                null_llf = float(fit_null.llf)
             except Exception:
                 diagnostics['ruv_nb_fallback_genes'] = int(
                     diagnostics.get('ruv_nb_fallback_genes', 0)
                 ) + 1
                 _record_ruv_fallback(diagnostics, 'negative_binomial_glm_failed')
                 fit_full = poisson_full
-                fit_null = poisson_null
+                null_llf = poisson_null_llf
         residuals[row_idx, :] = numpy.asarray(fit_full.resid_deviance, dtype=float).reshape(-1)
-        llf_stat = max(0.0, 2.0 * float(fit_full.llf - fit_null.llf))
+        llf_stat = max(0.0, 2.0 * float(fit_full.llf - null_llf))
         pvalues[row_idx] = float(chi2.sf(llf_stat, df_diff))
     residuals_df = pandas.DataFrame(residuals, index=counts_df.index, columns=counts_df.columns)
     pvalues_series = pandas.Series(pvalues, index=counts_df.index, dtype=float)
@@ -271,27 +310,58 @@ def _compute_group_pvalues(seq_uq_df, sample_groups, diagnostics=None):
     levels = [level for level in sorted(groups.unique().tolist()) if level != '']
     if len(levels) <= 1:
         return pandas.Series(numpy.ones((seq_uq_df.shape[0],), dtype=float), index=seq_uq_df.index)
+    with numpy.errstate(divide='ignore', invalid='ignore'):
+        log_mat = numpy.log(seq_uq_df.to_numpy(dtype=float))
+    finite_log = numpy.isfinite(log_mat)
+    finite_counts = numpy.sum(finite_log, axis=1)
+    row_centers = numpy.divide(
+        numpy.sum(numpy.where(finite_log, log_mat, 0.0), axis=1),
+        finite_counts,
+        out=numpy.zeros((seq_uq_df.shape[0],), dtype=float),
+        where=finite_counts > 0,
+    )
+    centered_log_mat = numpy.where(
+        finite_log,
+        log_mat - row_centers.reshape(-1, 1),
+        0.0,
+    )
+    sums = numpy.zeros((seq_uq_df.shape[0], len(levels)), dtype=float)
+    sum_squares = numpy.zeros_like(sums)
+    counts = numpy.zeros_like(sums)
+    for level_idx, level in enumerate(levels):
+        level_mask = groups.eq(level).to_numpy()
+        values = centered_log_mat[:, level_mask]
+        finite = finite_log[:, level_mask]
+        sums[:, level_idx] = numpy.sum(values, axis=1)
+        sum_squares[:, level_idx] = numpy.sum(values ** 2, axis=1)
+        counts[:, level_idx] = numpy.sum(finite, axis=1)
+    active = counts > 0
+    active_groups = numpy.sum(active, axis=1)
+    total_counts = numpy.sum(counts, axis=1)
+    safe_counts = numpy.where(active, counts, 1.0)
+    group_correction = numpy.where(active, (sums ** 2) / safe_counts, 0.0)
+    total_sums = numpy.sum(sums, axis=1)
+    total_correction = numpy.divide(
+        total_sums ** 2,
+        total_counts,
+        out=numpy.zeros_like(total_sums),
+        where=total_counts > 0,
+    )
+    ss_between = numpy.maximum(numpy.sum(group_correction, axis=1) - total_correction, 0.0)
+    ss_within = numpy.maximum(numpy.sum(sum_squares - group_correction, axis=1), 0.0)
+    df_between = active_groups - 1
+    df_within = total_counts - active_groups
+    valid = (active_groups > 1) & (df_within > 0)
+    f_stat = numpy.full((seq_uq_df.shape[0],), numpy.nan, dtype=float)
+    regular = valid & (ss_within > 0)
+    f_stat[regular] = (
+        ss_between[regular] / df_between[regular]
+    ) / (
+        ss_within[regular] / df_within[regular]
+    )
+    f_stat[valid & (ss_within == 0) & (ss_between > 0)] = numpy.inf
     pvalues = numpy.ones((seq_uq_df.shape[0],), dtype=float)
-    log_mat = numpy.log(seq_uq_df.to_numpy(dtype=float))
-    for idx in range(seq_uq_df.shape[0]):
-        arrays = []
-        for level in levels:
-            level_values = log_mat[idx, groups.eq(level).to_numpy()]
-            level_values = level_values[numpy.isfinite(level_values)]
-            if level_values.size == 0:
-                continue
-            arrays.append(level_values)
-        if len(arrays) <= 1:
-            pvalues[idx] = 1.0
-            continue
-        try:
-            pvalues[idx] = float(f_oneway(*arrays).pvalue)
-        except Exception:
-            diagnostics['ruv_anova_failure_genes'] = int(
-                diagnostics.get('ruv_anova_failure_genes', 0)
-            ) + 1
-            _record_ruv_fallback(diagnostics, 'one_way_anova_failed')
-            pvalues[idx] = 1.0
+    pvalues[valid] = f.sf(f_stat[valid], df_between[valid], df_within[valid])
     return pandas.Series(pvalues, index=seq_uq_df.index, dtype=float)
 
 
@@ -343,7 +413,10 @@ def select_ruvseq_controls(
 
 
 def compute_design_residuals(seq_uq_df, design_df):
-    samples_by_genes = numpy.log(seq_uq_df.to_numpy(dtype=float)).transpose()
+    with numpy.errstate(divide='ignore', invalid='ignore'):
+        samples_by_genes = numpy.log(
+            seq_uq_df.to_numpy(dtype=float)
+        ).transpose()
     x = design_df.to_numpy(dtype=float)
     beta, _, _, _ = numpy.linalg.lstsq(x, samples_by_genes, rcond=None)
     fitted = x @ beta
@@ -351,32 +424,52 @@ def compute_design_residuals(seq_uq_df, design_df):
     return pandas.DataFrame(residuals.transpose(), index=seq_uq_df.index, columns=seq_uq_df.columns)
 
 
-def ruvr_correct_counts(seq_uq_df, controls, k, residuals_df, center=True, round_counts=True, epsilon=1.0, tolerance=1e-8, is_log=False):
+def _compute_ruvr_basis(residuals_df, controls, center=True, tolerance=1e-8):
+    residuals = residuals_df.to_numpy(dtype=float).transpose()
+    if center:
+        residuals = residuals - numpy.mean(residuals, axis=0, keepdims=True)
+    controls = numpy.asarray(controls, dtype=bool).reshape(-1)
+    if controls.size != residuals.shape[1]:
+        raise ValueError('controls must have one element per gene.')
+    e_controls = residuals[:, controls]
+    residual_scale = float(numpy.max(numpy.abs(e_controls))) if e_controls.size > 0 else 0.0
+    if residual_scale <= RUVSEQ_RESIDUAL_NOISE_FLOOR:
+        return numpy.zeros((residuals.shape[0], 0), dtype=float)
+    eigenvectors, singular_values, _right_vectors = numpy.linalg.svd(
+        e_controls,
+        full_matrices=False,
+    )
+    positive = singular_values > float(tolerance)
+    return eigenvectors[:, positive]
+
+
+def ruvr_correct_counts(seq_uq_df, controls, k, residuals_df, center=True, round_counts=True, epsilon=1.0, tolerance=1e-8, is_log=False, residual_basis=None):
     x = seq_uq_df.to_numpy(dtype=float)
-    residuals = residuals_df.to_numpy(dtype=float)
     if (not is_log) and numpy.any(numpy.abs(x - numpy.round(x)) > 1e-8):
         pass
     y = x.transpose() if is_log else numpy.log(x + float(epsilon)).transpose()
-    e = residuals.transpose()
-    if center:
-        e = e - numpy.mean(e, axis=0, keepdims=True)
     controls = numpy.asarray(controls, dtype=bool).reshape(-1)
     if controls.size != x.shape[0]:
         raise ValueError('controls must have one element per gene.')
     if int(k) <= 0:
         return seq_uq_df.copy(), pandas.DataFrame(index=seq_uq_df.columns)
-    e_controls = e[:, controls]
-    residual_scale = float(numpy.max(numpy.abs(e_controls))) if e_controls.size > 0 else 0.0
-    if residual_scale <= RUVSEQ_RESIDUAL_NOISE_FLOOR:
+    basis = residual_basis
+    if basis is None:
+        basis = _compute_ruvr_basis(
+            residuals_df=residuals_df,
+            controls=controls,
+            center=center,
+            tolerance=tolerance,
+        )
+    basis = numpy.asarray(basis, dtype=float)
+    if basis.ndim != 2 or basis.shape[0] != x.shape[1]:
+        raise ValueError('residual_basis must have one row per sample.')
+    if basis.shape[1] == 0:
         return seq_uq_df.copy(), pandas.DataFrame(index=seq_uq_df.columns)
-    u, s, _vh = numpy.linalg.svd(e_controls, full_matrices=False)
-    positive = numpy.where(s > float(tolerance))[0]
-    if positive.size == 0:
-        return seq_uq_df.copy(), pandas.DataFrame(index=seq_uq_df.columns)
-    resolved_k = min(int(k), int(positive[-1] + 1))
+    resolved_k = min(int(k), basis.shape[1])
     if resolved_k <= 0:
         return seq_uq_df.copy(), pandas.DataFrame(index=seq_uq_df.columns)
-    w = u[:, :resolved_k]
+    w = basis[:, :resolved_k]
     alpha, _, _, _ = numpy.linalg.lstsq(w, y, rcond=None)
     corrected_y = y - (w @ alpha)
     if is_log:
@@ -409,7 +502,21 @@ def resolve_ruvseq_k_and_matrix(
         selected_k = int(k_setting)
         if selected_k < 0:
             selected_k = 1
-        corrected_df, w_df = ruvr_correct_counts(seq_uq_df, controls, selected_k, residuals_df)
+        if selected_k == 0:
+            corrected_df = seq_uq_df.copy()
+            w_df = pandas.DataFrame(index=seq_uq_df.columns)
+        else:
+            residual_basis = _compute_ruvr_basis(
+                residuals_df=residuals_df,
+                controls=controls,
+            )
+            corrected_df, w_df = ruvr_correct_counts(
+                seq_uq_df,
+                controls,
+                selected_k,
+                residuals_df,
+                residual_basis=residual_basis,
+            )
         resolved_k = int(w_df.shape[1])
         comp = score_ruvseq_components(
             mat_df=corrected_df,
@@ -429,6 +536,10 @@ def resolve_ruvseq_k_and_matrix(
             'baseline_group_score': math.nan,
             'penalty': 0.0,
         }
+    residual_basis = _compute_ruvr_basis(
+        residuals_df=residuals_df,
+        controls=controls,
+    )
     max_k = max(1, int(k_max))
     max_allowed = max(0, seq_uq_df.shape[1] - 1)
     max_k = min(max_k, max_allowed)
@@ -449,7 +560,13 @@ def resolve_ruvseq_k_and_matrix(
     best_matrix = seq_uq_df.copy()
     best_w = pandas.DataFrame(index=seq_uq_df.columns)
     for k in range(1, max_k + 1):
-        corrected_df, w_df = ruvr_correct_counts(seq_uq_df, controls, k, residuals_df)
+        corrected_df, w_df = ruvr_correct_counts(
+            seq_uq_df,
+            controls,
+            k,
+            residuals_df,
+            residual_basis=residual_basis,
+        )
         resolved_k = int(w_df.shape[1])
         if resolved_k <= 0:
             continue

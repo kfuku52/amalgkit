@@ -5069,6 +5069,15 @@ def validate_paired_fastq_record_counts(sra_stat, output_dir, ext):
                         count2,
                     )
                 )
+            for record, path in [(record1, path1), (record2, path2)]:
+                sequence = record[1].rstrip(b'\r\n')
+                quality = record[3].rstrip(b'\r\n')
+                if len(sequence) != len(quality):
+                    raise ValueError(
+                        'Malformed FASTQ (sequence and quality lengths differ): {}'.format(
+                            path
+                        )
+                    )
             count += 1
             core1, mate1 = parse_paired_fastq_header(record1[0])
             core2, mate2 = parse_paired_fastq_header(record2[0])
@@ -5094,6 +5103,10 @@ def validate_paired_fastq_record_counts(sra_stat, output_dir, ext):
                         mate2,
                     )
                 )
+    if count <= 0:
+        raise ValueError(
+            'FASTQ file contains no records: {}, {}.'.format(path1, path2)
+        )
     return count, count
 
 def rename_fastq(sra_stat, output_dir, inext, outext, validate_fastq=False):
@@ -5123,9 +5136,16 @@ def rename_fastq(sra_stat, output_dir, inext, outext, validate_fastq=False):
         inbase1 = os.path.join(output_dir, sra_stat['sra_id'] + '_1')
         inbase2 = os.path.join(output_dir, sra_stat['sra_id'] + '_2')
         if validate_fastq:
-            validate_single_file(inbase1 + inext)
-            validate_single_file(inbase2 + inext)
-            validate_paired_fastq_record_counts(sra_stat, output_dir, inext)
+            try:
+                validate_paired_fastq_record_counts(sra_stat, output_dir, inext)
+            except Exception as exc:
+                raise ValueError(
+                    'FASTQ validation failed for paired files {}, {}. {}'.format(
+                        inbase1 + inext,
+                        inbase2 + inext,
+                        exc,
+                    )
+                ) from exc
         rename_single_file(inbase1 + inext, inbase1 + outext)
         rename_single_file(inbase2 + inext, inbase2 + outext)
     set_current_intermediate_extension(sra_stat, outext)
@@ -5629,10 +5649,6 @@ def validate_getfastq_resume_output(sra_stat, state=None, is_private=False, full
     for output_name in output_names:
         if output_name.endswith('.safely_removed'):
             continue
-        output_path = os.path.join(run_dir, output_name)
-        record_count = shared_validate_fastq_structure(output_path)
-        if record_count <= 0:
-            raise ValueError('Final getfastq FASTQ contains no reads: {}'.format(output_path))
         actual_output_names.append(output_name)
     if sra_stat['layout'] == 'paired':
         if len(actual_output_names) == 1:
@@ -5646,6 +5662,16 @@ def validate_getfastq_resume_output(sra_stat, state=None, is_private=False, full
                 output_dir=run_dir,
                 ext='.amalgkit.fastq.gz',
             )
+    else:
+        for output_name in actual_output_names:
+            output_path = os.path.join(run_dir, output_name)
+            record_count = shared_validate_fastq_structure(output_path)
+            if record_count <= 0:
+                raise ValueError(
+                    'Final getfastq FASTQ contains no reads: {}'.format(
+                        output_path
+                    )
+                )
     return {'stats_row': stats_row, 'outputs': current_snapshots, 'zero_output_stage': zero_output_stage}
 
 
@@ -6643,6 +6669,84 @@ def _allocate_second_round_ranges_for_pending_runs(metadata, pending_run_ids):
     return metadata
 
 
+def _process_getfastq_second_round_run(
+    args,
+    row_index,
+    sra_id,
+    run_row_df,
+    g,
+    runtime_context=None,
+):
+    run_metadata = Metadata.from_DataFrame(run_row_df)
+    local_row_index = run_metadata.df.index[0]
+    lock_path = resolve_getfastq_run_lock_path(args=args, sra_id=sra_id)
+    with acquire_exclusive_lock(
+        lock_path=lock_path,
+        lock_label='getfastq run {}'.format(sra_id),
+    ):
+        (
+            run_metadata,
+            sra_stat,
+            resume_result,
+            reprocessed_first_round,
+        ) = _inspect_getfastq_run_after_lock(
+            args=args,
+            metadata=run_metadata,
+            row_index=local_row_index,
+            sra_id=sra_id,
+            g=g,
+            runtime_context=runtime_context,
+        )
+        if (
+            resume_result is not None
+            and resume_result['phase'] == GETFASTQ_PHASE_COMPLETE
+        ):
+            return {
+                'row_index': row_index,
+                'sra_id': sra_id,
+                'row': run_metadata.df.loc[local_row_index, :].copy(),
+                'completion_phase': GETFASTQ_PHASE_COMPLETE,
+            }
+        if reprocessed_first_round:
+            run_metadata = _allocate_second_round_ranges_for_pending_runs(
+                metadata=run_metadata,
+                pending_run_ids=[sra_id],
+            )
+        write_getfastq_run_state(
+            args,
+            sra_stat,
+            g,
+            run_metadata,
+            GETFASTQ_PHASE_SECOND_ROUND_IN_PROGRESS,
+        )
+        run_metadata = sequence_extraction_2nd_round(
+            args,
+            sra_stat,
+            run_metadata,
+            g,
+            runtime_context=runtime_context,
+        )
+        write_getfastq_stats(
+            sra_stat=sra_stat,
+            metadata=run_metadata,
+            output_dir=sra_stat['getfastq_sra_dir'],
+        )
+        write_getfastq_run_state(
+            args,
+            sra_stat,
+            g,
+            run_metadata,
+            GETFASTQ_PHASE_COMPLETE,
+            full_validation=False,
+        )
+        return {
+            'row_index': row_index,
+            'sra_id': sra_id,
+            'row': run_metadata.df.loc[local_row_index, :].copy(),
+            'completion_phase': GETFASTQ_PHASE_COMPLETE,
+        }
+
+
 def maybe_run_getfastq_second_round(
     args,
     metadata,
@@ -6712,68 +6816,128 @@ def maybe_run_getfastq_second_round(
                 metadata=metadata,
                 pending_run_ids=pending_run_ids,
             )
-            for _, sra_id in run_rows:
-                if sra_id not in pending_run_ids:
-                    continue
-                lock_path = resolve_getfastq_run_lock_path(args=args, sra_id=sra_id)
-                with acquire_exclusive_lock(
-                    lock_path=lock_path,
-                    lock_label='getfastq run {}'.format(sra_id),
-                ):
-                    (
-                        metadata,
-                        sra_stat,
-                        resume_result,
-                        reprocessed_first_round,
-                    ) = (
-                        _inspect_getfastq_run_after_lock(
-                            args=args,
-                            metadata=metadata,
-                            row_index=row_index_by_run[sra_id],
-                            sra_id=sra_id,
-                            g=g,
+            try:
+                second_round_jobs = max(1, int(getattr(args, 'internal_jobs', 1)))
+            except (TypeError, ValueError):
+                second_round_jobs = 1
+            ordered_pending_rows = [
+                (row_index, sra_id)
+                for row_index, sra_id in run_rows
+                if sra_id in pending_run_ids
+            ]
+            if second_round_jobs > 1 and len(ordered_pending_rows) > 1:
+                worker_count = min(second_round_jobs, len(ordered_pending_rows))
+                print(
+                    'Running 2nd-round extraction for {:,} SRA runs with {:,} parallel jobs.'.format(
+                        len(ordered_pending_rows),
+                        worker_count,
+                    ),
+                    flush=True,
+                )
+                runtime_context_by_run = {
+                    sra_id: GetfastqRuntimeContext()
+                    for _row_index, sra_id in ordered_pending_rows
+                }
+                results_by_row, failures = run_tasks_with_optional_threads(
+                    task_items=ordered_pending_rows,
+                    task_fn=lambda run_row: _process_getfastq_second_round_run(
+                        args=args,
+                        row_index=run_row[0],
+                        sra_id=run_row[1],
+                        run_row_df=metadata.df.loc[[run_row[0]], :].copy(),
+                        g=g,
+                        runtime_context=runtime_context_by_run[run_row[1]],
+                    ),
+                    max_workers=worker_count,
+                    fail_fast=True,
+                )
+                if failures:
+                    details = '; '.join([
+                        '{}: {}'.format(run_row[1], exc)
+                        for run_row, exc in failures
+                    ])
+                    raise RuntimeError(
+                        'getfastq 2nd-round extraction failed for {}/{} SRA runs. {}'.format(
+                            len(failures),
+                            len(ordered_pending_rows),
+                            details,
+                        )
+                    )
+                for run_row in ordered_pending_rows:
+                    run_result = results_by_row[run_row]
+                    row_series = run_result['row']
+                    common_columns = [
+                        column_name
+                        for column_name in metadata.df.columns
+                        if column_name in row_series.index
+                    ]
+                    metadata.df.loc[run_result['row_index'], common_columns] = (
+                        row_series.loc[common_columns].to_numpy()
+                    )
+                    completion_phase_by_run[run_result['sra_id']] = (
+                        run_result['completion_phase']
+                    )
+            else:
+                for _, sra_id in ordered_pending_rows:
+                    lock_path = resolve_getfastq_run_lock_path(args=args, sra_id=sra_id)
+                    with acquire_exclusive_lock(
+                        lock_path=lock_path,
+                        lock_label='getfastq run {}'.format(sra_id),
+                    ):
+                        (
+                            metadata,
+                            sra_stat,
+                            resume_result,
+                            reprocessed_first_round,
+                        ) = (
+                            _inspect_getfastq_run_after_lock(
+                                args=args,
+                                metadata=metadata,
+                                row_index=row_index_by_run[sra_id],
+                                sra_id=sra_id,
+                                g=g,
+                                runtime_context=runtime_context,
+                            )
+                        )
+                        if (
+                            resume_result is not None
+                            and resume_result['phase'] == GETFASTQ_PHASE_COMPLETE
+                        ):
+                            completion_phase_by_run[sra_id] = GETFASTQ_PHASE_COMPLETE
+                            continue
+                        if reprocessed_first_round:
+                            metadata = _allocate_second_round_ranges_for_pending_runs(
+                                metadata=metadata,
+                                pending_run_ids=[sra_id],
+                            )
+                        write_getfastq_run_state(
+                            args,
+                            sra_stat,
+                            g,
+                            metadata,
+                            GETFASTQ_PHASE_SECOND_ROUND_IN_PROGRESS,
+                        )
+                        metadata = sequence_extraction_2nd_round(
+                            args,
+                            sra_stat,
+                            metadata,
+                            g,
                             runtime_context=runtime_context,
                         )
-                    )
-                    if (
-                        resume_result is not None
-                        and resume_result['phase'] == GETFASTQ_PHASE_COMPLETE
-                    ):
-                        completion_phase_by_run[sra_id] = GETFASTQ_PHASE_COMPLETE
-                        continue
-                    if reprocessed_first_round:
-                        metadata = _allocate_second_round_ranges_for_pending_runs(
+                        write_getfastq_stats(
+                            sra_stat=sra_stat,
                             metadata=metadata,
-                            pending_run_ids=[sra_id],
+                            output_dir=sra_stat['getfastq_sra_dir'],
                         )
-                    write_getfastq_run_state(
-                        args,
-                        sra_stat,
-                        g,
-                        metadata,
-                        GETFASTQ_PHASE_SECOND_ROUND_IN_PROGRESS,
-                    )
-                    metadata = sequence_extraction_2nd_round(
-                        args,
-                        sra_stat,
-                        metadata,
-                        g,
-                        runtime_context=runtime_context,
-                    )
-                    write_getfastq_stats(
-                        sra_stat=sra_stat,
-                        metadata=metadata,
-                        output_dir=sra_stat['getfastq_sra_dir'],
-                    )
-                    write_getfastq_run_state(
-                        args,
-                        sra_stat,
-                        g,
-                        metadata,
-                        GETFASTQ_PHASE_COMPLETE,
-                        full_validation=False,
-                    )
-                    completion_phase_by_run[sra_id] = GETFASTQ_PHASE_COMPLETE
+                        write_getfastq_run_state(
+                            args,
+                            sra_stat,
+                            g,
+                            metadata,
+                            GETFASTQ_PHASE_COMPLETE,
+                            full_validation=False,
+                        )
+                        completion_phase_by_run[sra_id] = GETFASTQ_PHASE_COMPLETE
     else:
         print('Sufficient data were obtained in the 1st-round sequence extraction. Proceeding without the 2nd round.')
     for sra_id in pending_run_ids:

@@ -23,6 +23,11 @@ from amalgkit.outlier_utils import flag_margin_outliers
 from amalgkit.runtime_utils import build_species_token_map
 
 
+CROSS_SPECIES_HEATMAP_MAX_INCHES = 20.0
+CROSS_SPECIES_HEATMAP_MAX_LABELS = 80
+CROSS_SPECIES_TSNE_MAX_FEATURES = 50
+
+
 def _normalize_sample_groups(values):
     groups = []
     for value in values:
@@ -317,12 +322,28 @@ def _extract_ortholog_unaveraged_expression_table(df_singleog, unaveraged_tcs):
 
 
 def _safe_corr(left_values, right_values, method):
+    if str(method).lower() == 'pearson':
+        try:
+            left = numpy.asarray(left_values, dtype=float).reshape(-1)
+            right = numpy.asarray(right_values, dtype=float).reshape(-1)
+        except (TypeError, ValueError):
+            left = pandas.to_numeric(pandas.Series(left_values), errors='coerce').to_numpy(dtype=float)
+            right = pandas.to_numeric(pandas.Series(right_values), errors='coerce').to_numpy(dtype=float)
+        valid = numpy.isfinite(left) & numpy.isfinite(right)
+        if int(numpy.sum(valid)) <= 1:
+            return numpy.nan
+        left = left[valid]
+        right = right[valid]
+        left = left - numpy.mean(left)
+        right = right - numpy.mean(right)
+        denom = float(numpy.sqrt(numpy.dot(left, left) * numpy.dot(right, right)))
+        if denom <= 0.0:
+            return numpy.nan
+        return float(numpy.dot(left, right) / denom)
     left = pandas.to_numeric(pandas.Series(left_values), errors='coerce')
     right = pandas.to_numeric(pandas.Series(right_values), errors='coerce')
     valid = left.notna() & right.notna()
-    if int(valid.sum()) <= 1:
-        return numpy.nan
-    if left.loc[valid].nunique() <= 1 or right.loc[valid].nunique() <= 1:
+    if int(valid.sum()) <= 1 or left.loc[valid].nunique() <= 1 or right.loc[valid].nunique() <= 1:
         return numpy.nan
     try:
         return float(left.loc[valid].corr(right.loc[valid], method=method))
@@ -418,7 +439,10 @@ def _calculate_correlation_within_group(df_metadata, ortholog_matrix, correction
     return out
 
 
-def _resolve_matrix_for_embedding(matrix_df, missing_strategy):
+def _resolve_matrix_for_embedding(matrix_df, missing_strategy, cache=None):
+    cache_key = ('filled', id(matrix_df), str(missing_strategy).lower())
+    if cache is not None and cache_key in cache:
+        return cache[cache_key]
     if str(missing_strategy).lower() == 'strict':
         out = matrix_df.dropna(axis=0, how='any').copy()
     else:
@@ -426,16 +450,63 @@ def _resolve_matrix_for_embedding(matrix_df, missing_strategy):
             matrix_df=matrix_df,
             strategy=missing_strategy,
         )
+    if cache is not None:
+        cache[cache_key] = out
     return out
 
 
-def _compute_pca_coordinates(matrix_df, missing_strategy):
+def _resolve_correlation_matrix(matrix_df, missing_strategy='row_mean', cache=None):
+    strategy_key = str(missing_strategy).lower()
+    cache_key = ('correlation', id(matrix_df), strategy_key)
+    if cache is not None and cache_key in cache:
+        return cache[cache_key]
+    filled = _resolve_matrix_for_embedding(
+        matrix_df,
+        missing_strategy=missing_strategy,
+        cache=cache,
+    )
+    corr = filled.corr(method='pearson').fillna(0.0)
+    if cache is not None:
+        cache[cache_key] = corr
+        if strategy_key == 'row_mean':
+            cache.pop(('filled', id(matrix_df), strategy_key), None)
+    return corr
+
+
+def _evict_embedding_intermediates(cache, matrix_df, missing_strategy=None):
+    if cache is None:
+        return
+    matrix_id = id(matrix_df)
+    strategy_key = (
+        None
+        if missing_strategy is None
+        else str(missing_strategy).lower()
+    )
+    for cache_key in list(cache):
+        if len(cache_key) < 2 or cache_key[1] != matrix_id:
+            continue
+        if strategy_key is None:
+            cache.pop(cache_key, None)
+            continue
+        if (
+            len(cache_key) >= 3
+            and cache_key[2] == strategy_key
+            and cache_key[0] in {'filled', 'correlation'}
+        ):
+            cache.pop(cache_key, None)
+
+
+def _compute_pca_coordinates(matrix_df, missing_strategy, cache=None):
     if matrix_df.shape[1] <= 1:
         return pandas.DataFrame(index=matrix_df.columns, columns=['PC1', 'PC2', 'PC3', 'PC4', 'PC5'])
-    filled = _resolve_matrix_for_embedding(matrix_df, missing_strategy=missing_strategy)
+    filled = _resolve_matrix_for_embedding(matrix_df, missing_strategy=missing_strategy, cache=cache)
     if filled.shape[0] == 0:
         return pandas.DataFrame(index=matrix_df.columns, columns=['PC1', 'PC2', 'PC3', 'PC4', 'PC5'])
-    tc_corr = filled.corr(method='pearson').fillna(0.0)
+    tc_corr = _resolve_correlation_matrix(
+        matrix_df,
+        missing_strategy=missing_strategy,
+        cache=cache,
+    )
     eigvals, eigvecs = numpy.linalg.eigh(tc_corr.to_numpy(dtype=float))
     order = numpy.argsort(eigvals)[::-1]
     eigvals = eigvals[order]
@@ -447,14 +518,18 @@ def _compute_pca_coordinates(matrix_df, missing_strategy):
     return out
 
 
-def _compute_mds_coordinates(matrix_df, missing_strategy):
+def _compute_mds_coordinates(matrix_df, missing_strategy, cache=None):
     out = pandas.DataFrame(index=matrix_df.columns, columns=['MDS1', 'MDS2'], dtype=float)
     if matrix_df.shape[1] <= 1:
         return out
-    filled = _resolve_matrix_for_embedding(matrix_df, missing_strategy=missing_strategy)
+    filled = _resolve_matrix_for_embedding(matrix_df, missing_strategy=missing_strategy, cache=cache)
     if filled.shape[0] == 0:
         return out
-    corr = filled.corr(method='pearson').fillna(0.0).to_numpy(dtype=float)
+    corr = _resolve_correlation_matrix(
+        matrix_df,
+        missing_strategy=missing_strategy,
+        cache=cache,
+    ).to_numpy(dtype=float)
     dist = 1.0 - corr
     dist = (dist + dist.T) / 2.0
     numpy.fill_diagonal(dist, 0.0)
@@ -745,17 +820,33 @@ def _save_within_group_histogram(df_metadata, out_pdf_path):
     return out_pdf_path
 
 
-def _save_heatmap_pdf(matrix_df, out_pdf_path):
+def _heatmap_tick_positions(num_items):
+    if int(num_items) <= 0:
+        return []
+    step = max(1, int(numpy.ceil(float(num_items) / CROSS_SPECIES_HEATMAP_MAX_LABELS)))
+    return list(range(0, int(num_items), step))
+
+
+def _save_heatmap_pdf(matrix_df, out_pdf_path, cache=None):
     if matrix_df.shape[1] == 0:
         return None
-    corr = _resolve_matrix_for_embedding(matrix_df, missing_strategy='row_mean').corr(method='pearson').fillna(0.0)
+    corr = _resolve_correlation_matrix(
+        matrix_df,
+        missing_strategy='row_mean',
+        cache=cache,
+    )
     os.makedirs(os.path.dirname(os.path.realpath(out_pdf_path)), exist_ok=True)
-    fig, ax = plt.subplots(figsize=(max(4.0, 0.25 * corr.shape[0]), max(4.0, 0.25 * corr.shape[0])))
+    figure_size = min(
+        CROSS_SPECIES_HEATMAP_MAX_INCHES,
+        max(4.0, 0.25 * corr.shape[0]),
+    )
+    fig, ax = plt.subplots(figsize=(figure_size, figure_size))
     im = ax.imshow(corr.to_numpy(dtype=float), vmin=-1.0, vmax=1.0, cmap='coolwarm')
-    ax.set_xticks(range(corr.shape[0]))
-    ax.set_xticklabels(corr.columns.tolist(), rotation=90, fontsize=6)
-    ax.set_yticks(range(corr.shape[0]))
-    ax.set_yticklabels(corr.index.tolist(), fontsize=6)
+    tick_positions = _heatmap_tick_positions(corr.shape[0])
+    ax.set_xticks(tick_positions)
+    ax.set_xticklabels([corr.columns[idx] for idx in tick_positions], rotation=90, fontsize=6)
+    ax.set_yticks(tick_positions)
+    ax.set_yticklabels([corr.index[idx] for idx in tick_positions], fontsize=6)
     fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
     fig.tight_layout()
     fig.savefig(out_pdf_path)
@@ -810,11 +901,30 @@ def _resolve_tsne_perplexity(num_samples):
     return min(30, max_perplexity)
 
 
-def _compute_tsne_coordinates(matrix_df, missing_strategy):
+def _reduce_tsne_features(samples_by_features):
+    values = numpy.asarray(samples_by_features, dtype=float)
+    max_components = min(
+        CROSS_SPECIES_TSNE_MAX_FEATURES,
+        values.shape[0] - 1,
+        values.shape[1],
+    )
+    if values.shape[1] <= CROSS_SPECIES_TSNE_MAX_FEATURES or max_components < 1:
+        return values
+    centered = values - numpy.mean(values, axis=0, keepdims=True)
+    eigenvalues, eigenvectors = numpy.linalg.eigh(centered @ centered.T)
+    order = numpy.argsort(eigenvalues)[::-1][:max_components]
+    scales = numpy.sqrt(numpy.maximum(eigenvalues[order], 0.0))
+    return eigenvectors[:, order] * scales.reshape(1, -1)
+
+
+def _compute_tsne_coordinates(matrix_df, missing_strategy, cache=None):
+    cache_key = ('tsne', id(matrix_df), str(missing_strategy).lower())
+    if cache is not None and cache_key in cache:
+        return cache[cache_key]
     out = pandas.DataFrame(index=matrix_df.columns, columns=['TSNE1', 'TSNE2'], dtype=float)
     if matrix_df.shape[1] < 4:
         return out
-    filled = _resolve_matrix_for_embedding(matrix_df, missing_strategy=missing_strategy)
+    filled = _resolve_matrix_for_embedding(matrix_df, missing_strategy=missing_strategy, cache=cache)
     if filled.shape[0] == 0 or filled.shape[1] < 4:
         return out
     perplexity = _resolve_tsne_perplexity(filled.shape[1])
@@ -825,18 +935,21 @@ def _compute_tsne_coordinates(matrix_df, missing_strategy):
     except ImportError:
         return out
     try:
+        samples_by_features = _reduce_tsne_features(filled.T.to_numpy(dtype=float))
         coords = TSNE(
             n_components=2,
             perplexity=float(perplexity),
             random_state=1,
             init='pca',
             learning_rate='auto',
-            method='exact',
-        ).fit_transform(filled.T.to_numpy(dtype=float))
+            method='barnes_hut',
+        ).fit_transform(samples_by_features)
     except ValueError:
         return out
     out.loc[filled.columns, 'TSNE1'] = coords[:, 0]
     out.loc[filled.columns, 'TSNE2'] = coords[:, 1]
+    if cache is not None:
+        cache[cache_key] = out
     return out
 
 
@@ -902,18 +1015,23 @@ def _averaged_plot_labels(label_df):
     return labels
 
 
-def _plot_corr_heatmap(ax, matrix_df, labels, title):
+def _plot_corr_heatmap(ax, matrix_df, labels, title, cache=None):
     if matrix_df.shape[1] == 0:
         ax.text(0.5, 0.5, 'No heatmap data', ha='center', va='center', fontsize=8)
         ax.set_axis_off()
         return None
-    corr = _resolve_matrix_for_embedding(matrix_df, missing_strategy='row_mean').corr(method='pearson').fillna(0.0)
+    corr = _resolve_correlation_matrix(
+        matrix_df,
+        missing_strategy='row_mean',
+        cache=cache,
+    )
     image = ax.imshow(corr.to_numpy(dtype=float), vmin=-1.0, vmax=1.0, cmap='coolwarm', aspect='auto')
     ax.set_title(title, fontsize=8)
-    ax.set_xticks(range(len(labels)))
-    ax.set_xticklabels(labels, rotation=90, fontsize=6)
-    ax.set_yticks(range(len(labels)))
-    ax.set_yticklabels(labels, fontsize=6)
+    tick_positions = _heatmap_tick_positions(len(labels))
+    ax.set_xticks(tick_positions)
+    ax.set_xticklabels([labels[idx] for idx in tick_positions], rotation=90, fontsize=6)
+    ax.set_yticks(tick_positions)
+    ax.set_yticklabels([labels[idx] for idx in tick_positions], fontsize=6)
     return image
 
 
@@ -952,7 +1070,7 @@ def _scatter_embedding_panel(ax, plot_df, x_col, y_col, title, font_size=8, labe
     ax.grid(color='#d0d0d0', linewidth=0.6)
 
 
-def _draw_dendrogram(ax, matrix_df, labels, title):
+def _draw_dendrogram(ax, matrix_df, labels, title, cache=None):
     if matrix_df.shape[1] <= 1:
         ax.text(0.5, 0.5, 'No dendrogram data', ha='center', va='center', fontsize=8)
         ax.set_axis_off()
@@ -964,7 +1082,11 @@ def _draw_dendrogram(ax, matrix_df, labels, title):
         ax.text(0.5, 0.5, 'SciPy not available', ha='center', va='center', fontsize=8)
         ax.set_axis_off()
         return
-    corr = _resolve_matrix_for_embedding(matrix_df, missing_strategy='row_mean').corr(method='pearson').fillna(0.0)
+    corr = _resolve_correlation_matrix(
+        matrix_df,
+        missing_strategy='row_mean',
+        cache=cache,
+    )
     dist = 1.0 - corr.to_numpy(dtype=float)
     dist = (dist + dist.T) / 2.0
     numpy.fill_diagonal(dist, 0.0)
@@ -983,13 +1105,25 @@ def _draw_dendrogram(ax, matrix_df, labels, title):
     ax.tick_params(axis='y', labelsize=7)
 
 
-def _save_averaged_heatmap_pdf(averaged_inputs, out_pdf_path):
+def _save_averaged_heatmap_pdf(averaged_inputs, out_pdf_path, cache=None):
     label_df = averaged_inputs['labels']
     labels = _averaged_plot_labels(label_df)
     os.makedirs(os.path.dirname(os.path.realpath(out_pdf_path)), exist_ok=True)
     fig, axes = plt.subplots(1, 2, figsize=(10.8, 4.8))
-    image = _plot_corr_heatmap(axes[0], averaged_inputs['uncorrected'], labels, 'Uncorrected')
-    image = _plot_corr_heatmap(axes[1], averaged_inputs['corrected'], labels, 'Corrected')
+    image = _plot_corr_heatmap(
+        axes[0],
+        averaged_inputs['uncorrected'],
+        labels,
+        'Uncorrected',
+        cache=cache,
+    )
+    image = _plot_corr_heatmap(
+        axes[1],
+        averaged_inputs['corrected'],
+        labels,
+        'Corrected',
+        cache=cache,
+    )
     if image is not None:
         fig.colorbar(image, ax=axes, fraction=0.025, pad=0.04)
     fig.tight_layout()
@@ -998,20 +1132,20 @@ def _save_averaged_heatmap_pdf(averaged_inputs, out_pdf_path):
     return out_pdf_path
 
 
-def _save_averaged_dendrogram_pdf(averaged_inputs, out_pdf_path):
+def _save_averaged_dendrogram_pdf(averaged_inputs, out_pdf_path, cache=None):
     label_df = averaged_inputs['labels']
     labels = _averaged_plot_labels(label_df)
     os.makedirs(os.path.dirname(os.path.realpath(out_pdf_path)), exist_ok=True)
     fig, axes = plt.subplots(2, 1, figsize=(10.8, 6.4))
-    _draw_dendrogram(axes[0], averaged_inputs['uncorrected'], labels, 'Uncorrected')
-    _draw_dendrogram(axes[1], averaged_inputs['corrected'], labels, 'Corrected')
+    _draw_dendrogram(axes[0], averaged_inputs['uncorrected'], labels, 'Uncorrected', cache=cache)
+    _draw_dendrogram(axes[1], averaged_inputs['corrected'], labels, 'Corrected', cache=cache)
     fig.tight_layout()
     fig.savefig(out_pdf_path)
     plt.close(fig)
     return out_pdf_path
 
 
-def _save_averaged_boxplot_pdf(averaged_inputs, out_pdf_path):
+def _save_averaged_boxplot_pdf(averaged_inputs, out_pdf_path, cache=None):
     label_df = averaged_inputs['labels']
     if label_df.shape[0] == 0:
         return None
@@ -1039,7 +1173,11 @@ def _save_averaged_boxplot_pdf(averaged_inputs, out_pdf_path):
             ax.text(0.5, 0.5, 'No boxplot data', ha='center', va='center', fontsize=8)
             ax.set_axis_off()
             continue
-        corr = _resolve_matrix_for_embedding(matrix_df, missing_strategy='row_mean').corr(method='pearson').fillna(0.0).to_numpy(dtype=float)
+        corr = _resolve_correlation_matrix(
+            matrix_df,
+            missing_strategy='row_mean',
+            cache=cache,
+        ).to_numpy(dtype=float)
         values = []
         for mask in categories:
             group_vals = corr[pair_mask & mask]
@@ -1063,8 +1201,12 @@ def _save_averaged_boxplot_pdf(averaged_inputs, out_pdf_path):
     return out_pdf_path
 
 
-def _save_unaveraged_tsne_pdf(df_metadata, matrix_df, out_pdf_path, missing_strategy, correction_label):
-    coords = _compute_tsne_coordinates(matrix_df, missing_strategy=missing_strategy)
+def _save_unaveraged_tsne_pdf(df_metadata, matrix_df, out_pdf_path, missing_strategy, correction_label, cache=None):
+    coords = _compute_tsne_coordinates(
+        matrix_df,
+        missing_strategy=missing_strategy,
+        cache=cache,
+    )
     if coords.shape[0] == 0:
         return None
     plot_df = df_metadata.copy()
@@ -1080,9 +1222,13 @@ def _save_unaveraged_tsne_pdf(df_metadata, matrix_df, out_pdf_path, missing_stra
     return out_pdf_path
 
 
-def _save_averaged_tsne_pdf(averaged_inputs, out_pdf_path, missing_strategy):
+def _save_averaged_tsne_pdf(averaged_inputs, out_pdf_path, missing_strategy, cache=None):
     label_df = averaged_inputs['labels'].copy()
-    coords = _compute_tsne_coordinates(averaged_inputs['corrected'], missing_strategy=missing_strategy)
+    coords = _compute_tsne_coordinates(
+        averaged_inputs['corrected'],
+        missing_strategy=missing_strategy,
+        cache=cache,
+    )
     if coords.shape[0] == 0 or label_df.shape[0] == 0:
         return None
     label_df.loc[:, 'TSNE1'] = label_df['averaged_id'].map(coords['TSNE1'])
@@ -1096,7 +1242,7 @@ def _save_averaged_tsne_pdf(averaged_inputs, out_pdf_path, missing_strategy):
     return out_pdf_path
 
 
-def _save_averaged_summary_pdf(averaged_inputs, out_pdf_path, missing_strategy):
+def _save_averaged_summary_pdf(averaged_inputs, out_pdf_path, missing_strategy, cache=None):
     label_df = averaged_inputs['labels'].copy()
     if label_df.shape[0] == 0:
         return None
@@ -1109,9 +1255,14 @@ def _save_averaged_summary_pdf(averaged_inputs, out_pdf_path, missing_strategy):
                 axes[row_idx, col_idx].text(0.5, 0.5, 'No data', ha='center', va='center', fontsize=8)
                 axes[row_idx, col_idx].set_axis_off()
             continue
-        pca_df = _compute_pca_coordinates(matrix_df, missing_strategy=missing_strategy)
-        tsne_df = _compute_tsne_coordinates(matrix_df, missing_strategy=missing_strategy)
-        mds_coords = _compute_mds_coordinates(matrix_df, missing_strategy=missing_strategy)
+        pca_df = _compute_pca_coordinates(matrix_df, missing_strategy=missing_strategy, cache=cache)
+        tsne_df = _compute_tsne_coordinates(matrix_df, missing_strategy=missing_strategy, cache=cache)
+        mds_coords = _compute_mds_coordinates(matrix_df, missing_strategy=missing_strategy, cache=cache)
+        _evict_embedding_intermediates(
+            cache,
+            matrix_df,
+            missing_strategy=missing_strategy,
+        )
         plot_df = label_df.copy()
         plot_df.loc[:, 'PC1'] = plot_df['averaged_id'].map(pca_df['PC1'])
         plot_df.loc[:, 'PC2'] = plot_df['averaged_id'].map(pca_df['PC2'])
@@ -1226,12 +1377,19 @@ def _save_delta_pcc_plot(input_table_dir, out_pdf_path):
     return out_pdf_path
 
 
-def _save_overview_pdf(matrix_df, df_metadata, out_pdf_path):
+def _save_overview_pdf(matrix_df, df_metadata, out_pdf_path, cache=None):
     os.makedirs(os.path.dirname(os.path.realpath(out_pdf_path)), exist_ok=True)
     fig, axes = plt.subplots(2, 2, figsize=(9.6, 7.2))
     heatmap_path = out_pdf_path + '.heatmap.tmp.pdf'
     _ = heatmap_path
-    corr = _resolve_matrix_for_embedding(matrix_df, missing_strategy='row_mean').corr(method='pearson').fillna(0.0) if matrix_df.shape[1] > 0 else pandas.DataFrame()
+    corr = (
+        _resolve_correlation_matrix(
+            matrix_df,
+            missing_strategy='row_mean',
+            cache=cache,
+        )
+        if matrix_df.shape[1] > 0 else pandas.DataFrame()
+    )
     if corr.shape[0] > 0:
         im = axes[0, 0].imshow(corr.to_numpy(dtype=float), vmin=-1.0, vmax=1.0, cmap='coolwarm')
         axes[0, 0].set_title('Sample correlation', fontsize=8)
@@ -1365,15 +1523,40 @@ def run_cross_species_filter(args, context=None):
             single_copy_threshold=single_copy_threshold,
         )
         orthologs = _extract_ortholog_unaveraged_expression_table(df_singleog, unaveraged_tcs)
+        del unaveraged_tcs
+        embedding_cache = {}
+        missing_strategy = str(getattr(args, 'missing_strategy', 'em_pca'))
         df_metadata = _calculate_correlation_within_group(df_metadata, orthologs['uncorrected'], 'uncorrected')
         df_metadata = _calculate_correlation_within_group(df_metadata, orthologs['corrected'], 'corrected')
         pca_corrected = _compute_pca_coordinates(
             orthologs['corrected'],
-            missing_strategy=str(getattr(args, 'missing_strategy', 'em_pca')),
+            missing_strategy=missing_strategy,
+            cache=embedding_cache,
+        )
+        _compute_tsne_coordinates(
+            orthologs['corrected'],
+            missing_strategy=missing_strategy,
+            cache=embedding_cache,
+        )
+        _evict_embedding_intermediates(
+            embedding_cache,
+            orthologs['corrected'],
+            missing_strategy=missing_strategy,
         )
         pca_uncorrected = _compute_pca_coordinates(
             orthologs['uncorrected'],
-            missing_strategy=str(getattr(args, 'missing_strategy', 'em_pca')),
+            missing_strategy=missing_strategy,
+            cache=embedding_cache,
+        )
+        _compute_tsne_coordinates(
+            orthologs['uncorrected'],
+            missing_strategy=missing_strategy,
+            cache=embedding_cache,
+        )
+        _evict_embedding_intermediates(
+            embedding_cache,
+            orthologs['uncorrected'],
+            missing_strategy=missing_strategy,
         )
         df_metadata = _assign_pca_to_metadata(df_metadata, pca_corrected, 'corrected')
         df_metadata = _assign_pca_to_metadata(df_metadata, pca_uncorrected, 'uncorrected')
@@ -1389,9 +1572,18 @@ def run_cross_species_filter(args, context=None):
         df_metadata.to_csv(os.path.join(stage_dir, 'metadata.tsv'), sep='\t', index=False)
         _save_sample_number_heatmap_pdf(df_metadata, os.path.join(stage_dir, 'cross_species_sample_number_heatmap.pdf'))
         _save_group_cor_scatter_plot(df_metadata, os.path.join(stage_dir, 'cross_species_group_cor_scatter.pdf'))
-        _save_overview_pdf(orthologs['corrected'], df_metadata, os.path.join(stage_dir, 'cross_species_overview.pdf'))
+        _save_overview_pdf(
+            orthologs['corrected'],
+            df_metadata,
+            os.path.join(stage_dir, 'cross_species_overview.pdf'),
+            cache=embedding_cache,
+        )
         _save_csfilter_scatter_plot(df_metadata, os.path.join(stage_dir, 'cross_species_csfilter_scatter.pdf'))
-        _save_heatmap_pdf(orthologs['corrected'], os.path.join(stage_dir, 'cross_species_heatmap.pdf'))
+        _save_heatmap_pdf(
+            orthologs['corrected'],
+            os.path.join(stage_dir, 'cross_species_heatmap.pdf'),
+            cache=embedding_cache,
+        )
         _save_within_group_histogram(df_metadata, os.path.join(stage_dir, 'cross_species_within_group_cor.pdf'))
         _save_pca_pdf(df_metadata, os.path.join(stage_dir, 'cross_species_run_pca_pc12_pre_correction.pdf'), suffix='uncorrected', pcs=(1, 2))
         _save_pca_pdf(df_metadata, os.path.join(stage_dir, 'cross_species_run_pca_pc12_post_correction.pdf'), suffix='corrected', pcs=(1, 2))
@@ -1401,28 +1593,53 @@ def run_cross_species_filter(args, context=None):
             df_metadata,
             orthologs['uncorrected'],
             os.path.join(stage_dir, 'cross_species_run_tsne_pre_correction.pdf'),
-            missing_strategy=str(getattr(args, 'missing_strategy', 'em_pca')),
+            missing_strategy=missing_strategy,
             correction_label='Uncorrected',
+            cache=embedding_cache,
         )
         _save_unaveraged_tsne_pdf(
             df_metadata,
             orthologs['corrected'],
             os.path.join(stage_dir, 'cross_species_run_tsne_post_correction.pdf'),
-            missing_strategy=str(getattr(args, 'missing_strategy', 'em_pca')),
+            missing_strategy=missing_strategy,
             correction_label='Corrected',
+            cache=embedding_cache,
         )
-        _save_averaged_heatmap_pdf(averaged_inputs, os.path.join(stage_dir, 'cross_species_group_mean_correlation_heatmap.pdf'))
-        _save_averaged_dendrogram_pdf(averaged_inputs, os.path.join(stage_dir, 'cross_species_group_mean_dendrogram.pdf'))
+        _evict_embedding_intermediates(
+            embedding_cache,
+            orthologs['uncorrected'],
+        )
+        _evict_embedding_intermediates(
+            embedding_cache,
+            orthologs['corrected'],
+        )
+        del orthologs
+        _save_averaged_heatmap_pdf(
+            averaged_inputs,
+            os.path.join(stage_dir, 'cross_species_group_mean_correlation_heatmap.pdf'),
+            cache=embedding_cache,
+        )
+        _save_averaged_dendrogram_pdf(
+            averaged_inputs,
+            os.path.join(stage_dir, 'cross_species_group_mean_dendrogram.pdf'),
+            cache=embedding_cache,
+        )
         _save_averaged_summary_pdf(
             averaged_inputs,
             os.path.join(stage_dir, 'cross_species_group_mean_summary.pdf'),
-            missing_strategy=str(getattr(args, 'missing_strategy', 'em_pca')),
+            missing_strategy=missing_strategy,
+            cache=embedding_cache,
         )
-        _save_averaged_boxplot_pdf(averaged_inputs, os.path.join(stage_dir, 'cross_species_group_mean_correlation_boxplot.pdf'))
+        _save_averaged_boxplot_pdf(
+            averaged_inputs,
+            os.path.join(stage_dir, 'cross_species_group_mean_correlation_boxplot.pdf'),
+            cache=embedding_cache,
+        )
         _save_averaged_tsne_pdf(
             averaged_inputs,
             os.path.join(stage_dir, 'cross_species_group_mean_tsne.pdf'),
-            missing_strategy=str(getattr(args, 'missing_strategy', 'em_pca')),
+            missing_strategy=missing_strategy,
+            cache=embedding_cache,
         )
         _save_delta_pcc_plot(
             input_table_dir=input_table_dir,

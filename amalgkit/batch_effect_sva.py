@@ -7,6 +7,10 @@ import pandas
 from scipy import interpolate, stats
 
 
+SVA_LFDR_MIN_GRID_POINTS = 512
+SVA_LFDR_MAX_GRID_POINTS = 4096
+
+
 @dataclass
 class SVAEstimate:
     nsv: Optional[int]
@@ -145,6 +149,86 @@ def _normalized_singular_energy(singular_values, ndf):
     return (values ** 2) / denom
 
 
+def _singular_values_from_gram(matrix):
+    """Compute singular values from the smaller Gram matrix."""
+    values = numpy.asarray(matrix, dtype=float)
+    if values.ndim != 2:
+        raise ValueError('matrix must be two-dimensional.')
+    if values.size == 0:
+        return numpy.zeros((0,), dtype=float)
+    gram = values.T @ values if values.shape[0] >= values.shape[1] else values @ values.T
+    eigenvalues = numpy.linalg.eigvalsh(gram)
+    eigenvalues = numpy.maximum(eigenvalues, 0.0)
+    return numpy.sqrt(eigenvalues[::-1])
+
+
+def _top_right_singular_vectors(matrix, n_components):
+    """Return leading right singular vectors from a sample-sized Gram matrix."""
+    values = numpy.asarray(matrix, dtype=float)
+    if values.ndim != 2:
+        raise ValueError('matrix must be two-dimensional.')
+    resolved = min(max(0, int(n_components)), min(values.shape))
+    if resolved == 0:
+        return numpy.zeros((values.shape[1], 0), dtype=float)
+    if values.shape[0] >= values.shape[1]:
+        eigenvalues, eigenvectors = numpy.linalg.eigh(values.T @ values)
+        order = numpy.argsort(eigenvalues)[::-1]
+        descending = eigenvalues[order]
+        if _gram_components_require_svd_fallback(
+            descending,
+            resolved,
+            values.shape,
+        ):
+            return numpy.linalg.svd(values, full_matrices=False)[2].T[:, :resolved]
+        return eigenvectors[:, order[:resolved]]
+    eigenvalues, left_vectors = numpy.linalg.eigh(values @ values.T)
+    order = numpy.argsort(eigenvalues)[::-1]
+    descending = eigenvalues[order]
+    if _gram_components_require_svd_fallback(
+        descending,
+        resolved,
+        values.shape,
+    ):
+        return numpy.linalg.svd(values, full_matrices=False)[2].T[:, :resolved]
+    order = order[:resolved]
+    singular_values = numpy.sqrt(numpy.maximum(eigenvalues[order], 0.0))
+    right_vectors = numpy.zeros((values.shape[1], resolved), dtype=float)
+    usable = singular_values > numpy.finfo(float).eps
+    if usable.any():
+        right_vectors[:, usable] = (
+            values.T @ left_vectors[:, order[usable]]
+        ) / singular_values[usable]
+    return right_vectors
+
+
+def _gram_components_require_svd_fallback(eigenvalues_descending, num_components, matrix_shape):
+    eigenvalues = numpy.maximum(
+        numpy.asarray(eigenvalues_descending, dtype=float),
+        0.0,
+    )
+    if eigenvalues.size == 0:
+        return True
+    scale = float(eigenvalues[0])
+    if (not numpy.isfinite(scale)) or scale <= 0.0:
+        return True
+    tolerance = numpy.finfo(float).eps * max(matrix_shape) * scale
+    boundary_index = int(num_components) - 1
+    if eigenvalues[boundary_index] <= tolerance:
+        return True
+    if int(num_components) < eigenvalues.size:
+        boundary_gap = eigenvalues[boundary_index] - eigenvalues[int(num_components)]
+        if boundary_gap <= tolerance:
+            return True
+    return False
+
+
+def _resolve_lfdr_grid_size(num_values):
+    return min(
+        SVA_LFDR_MAX_GRID_POINTS,
+        max(SVA_LFDR_MIN_GRID_POINTS, int(num_values)),
+    )
+
+
 def _permute_rows_without_replacement(matrix, rng):
     values = numpy.asarray(matrix, dtype=float)
     if values.ndim != 2:
@@ -278,7 +362,7 @@ def estimate_num_sv_be(
     if ndf <= 0:
         return SVAEstimate(nsv=0, method='be')
 
-    singular_values = numpy.linalg.svd(residual, full_matrices=False, compute_uv=False)
+    singular_values = _singular_values_from_gram(residual)
     if float(numpy.sum(singular_values[:ndf] ** 2)) <= 0:
         return SVAEstimate(nsv=None, method='be')
     observed = _normalized_singular_energy(singular_values, ndf=ndf)
@@ -290,7 +374,7 @@ def estimate_num_sv_be(
     for idx in range(B_value):
         residual_perm = _permute_rows_without_replacement(residual, rng)
         residual_perm = _residualize_by_design(residual_perm, hat)
-        permuted_singular_values = numpy.linalg.svd(residual_perm, full_matrices=False, compute_uv=False)
+        permuted_singular_values = _singular_values_from_gram(residual_perm)
         if float(numpy.sum(permuted_singular_values[:ndf] ** 2)) <= 0:
             return SVAEstimate(nsv=None, method='be')
         permuted_stats[idx, :] = _normalized_singular_energy(
@@ -467,7 +551,8 @@ def edge_lfdr(
             if numpy.allclose(x, x[0]):
                 x = x + numpy.linspace(-eps, eps, num=x.shape[0])
             kde = stats.gaussian_kde(x, bw_method=lambda obj: obj.scotts_factor() * adj)
-            grid = numpy.linspace(float(numpy.min(x)), float(numpy.max(x)), max(512, p.size))
+            grid_size = _resolve_lfdr_grid_size(p.size)
+            grid = numpy.linspace(float(numpy.min(x)), float(numpy.max(x)), grid_size)
             density_values = kde(grid)
             spline = interpolate.UnivariateSpline(grid, density_values, s=len(grid))
             y = spline(x)
@@ -478,7 +563,8 @@ def edge_lfdr(
             if numpy.allclose(x, x[0]):
                 x = x + numpy.linspace(-eps, eps, num=x.shape[0])
             kde = stats.gaussian_kde(x, bw_method=lambda obj: obj.scotts_factor() * adj)
-            grid = numpy.linspace(float(numpy.min(x)), float(numpy.max(x)), max(512, p.size))
+            grid_size = _resolve_lfdr_grid_size(p.size)
+            grid = numpy.linspace(float(numpy.min(x)), float(numpy.max(x)), grid_size)
             density_values = kde(grid)
             spline = interpolate.UnivariateSpline(grid, density_values, s=len(grid))
             y = spline(x)
@@ -550,13 +636,13 @@ def irwsva_build(data_matrix, mod_matrix, mod0_matrix=None, nsv=1, B_iterations=
         pprob = pprob_gam * (1.0 - pprob_b)
         dats = data * pprob.reshape(-1, 1)
         dats = dats - numpy.mean(dats, axis=1, keepdims=True)
-        _svd_u, _svd_s, svd_vh = numpy.linalg.svd(dats, full_matrices=False)
-        current_sv = _stabilize_surrogate_matrix(svd_vh.T[:, :nsv], mod)
+        right_vectors = _top_right_singular_vectors(dats, n_components=nsv)
+        current_sv = _stabilize_surrogate_matrix(right_vectors, mod)
         if current_sv.shape[1] == 0:
             current_sv = _orthogonal_complement_basis(mod)[:, :nsv]
 
-    _svd_u, _svd_s, svd_vh = numpy.linalg.svd(dats, full_matrices=False)
-    sv = _stabilize_surrogate_matrix(svd_vh.T[:, :nsv], mod)
+    right_vectors = _top_right_singular_vectors(dats, n_components=nsv)
+    sv = _stabilize_surrogate_matrix(right_vectors, mod)
     if sv.shape[1] == 0:
         sv = _orthogonal_complement_basis(mod)[:, :nsv]
     return {

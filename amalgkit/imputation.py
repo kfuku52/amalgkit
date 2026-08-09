@@ -30,6 +30,77 @@ def _row_mean_impute(values):
     return out
 
 
+def _truncated_svd_reconstruction(centered, num_pc):
+    """Return the rank-``num_pc`` SVD reconstruction without a full SVD.
+
+    Expression matrices are normally much taller than they are wide.  The
+    non-zero singular vectors can therefore be recovered exactly from the
+    smaller Gram matrix, avoiding computation of singular vectors that the
+    imputation step immediately discards.
+    """
+    values = numpy.asarray(centered, dtype=float)
+    if values.ndim != 2:
+        raise ValueError('centered must be a two-dimensional matrix.')
+    resolved_pc = min(max(0, int(num_pc)), min(values.shape))
+    if resolved_pc < 1:
+        raise ValueError('PCA could not resolve a principal component.')
+    if values.shape[0] >= values.shape[1]:
+        eigenvalues, eigenvectors = numpy.linalg.eigh(values.T @ values)
+        order = numpy.argsort(eigenvalues)[::-1]
+        descending = eigenvalues[order]
+        if _gram_components_require_svd_fallback(
+            descending,
+            resolved_pc,
+            values.shape,
+        ):
+            return _full_svd_reconstruction(values, resolved_pc)
+        top = eigenvectors[:, order[:resolved_pc]]
+        return (values @ top) @ top.T
+    eigenvalues, eigenvectors = numpy.linalg.eigh(values @ values.T)
+    order = numpy.argsort(eigenvalues)[::-1]
+    descending = eigenvalues[order]
+    if _gram_components_require_svd_fallback(
+        descending,
+        resolved_pc,
+        values.shape,
+    ):
+        return _full_svd_reconstruction(values, resolved_pc)
+    top = eigenvectors[:, order[:resolved_pc]]
+    return top @ (top.T @ values)
+
+
+def _full_svd_reconstruction(values, num_pc):
+    left, singular_values, right = numpy.linalg.svd(values, full_matrices=False)
+    return (
+        left[:, :num_pc] * singular_values[:num_pc].reshape(1, -1)
+    ).dot(right[:num_pc, :])
+
+
+def _gram_components_require_svd_fallback(eigenvalues_descending, num_components, matrix_shape):
+    eigenvalues = numpy.maximum(
+        numpy.asarray(eigenvalues_descending, dtype=float),
+        0.0,
+    )
+    if eigenvalues.size == 0:
+        return True
+    scale = float(eigenvalues[0])
+    if (not numpy.isfinite(scale)) or scale <= 0.0:
+        return True
+    tolerance = (
+        numpy.finfo(float).eps
+        * max(matrix_shape)
+        * scale
+    )
+    boundary_index = int(num_components) - 1
+    if eigenvalues[boundary_index] <= tolerance:
+        return True
+    if int(num_components) < eigenvalues.size:
+        boundary_gap = eigenvalues[boundary_index] - eigenvalues[int(num_components)]
+        if boundary_gap <= tolerance:
+            return True
+    return False
+
+
 def _fit_nipals(values, num_pc, max_iter, tol):
     residual = numpy.asarray(values, dtype=float).copy()
     scores = []
@@ -94,13 +165,10 @@ def _iterative_pca_impute(values, missing_mask, num_pc, max_iter, tol, strategy)
             )
             reconstructed = scores.dot(loadings.T)
         else:
-            left, singular_values, right = numpy.linalg.svd(centered, full_matrices=False)
-            resolved_pc = min(int(num_pc), singular_values.size)
-            if resolved_pc < 1:
-                raise ValueError('PCA could not resolve a principal component.')
-            reconstructed = (
-                left[:, :resolved_pc] * singular_values[:resolved_pc].reshape(1, -1)
-            ).dot(right[:resolved_pc, :])
+            reconstructed = _truncated_svd_reconstruction(
+                centered=centered,
+                num_pc=num_pc,
+            )
         reconstructed = reconstructed + column_means.reshape(1, -1)
         old_values = imputed[missing_mask].copy()
         new_values = reconstructed[missing_mask]

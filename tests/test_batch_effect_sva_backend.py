@@ -40,6 +40,18 @@ def test_clean_y_matrix_is_noop_when_sv_matrix_is_empty():
     numpy.testing.assert_allclose(adjusted, y)
 
 
+def test_top_right_singular_vectors_preserve_svd_basis_for_zero_rank_matrix():
+    values = numpy.zeros((250, 12), dtype=float)
+    expected = numpy.linalg.svd(values, full_matrices=False)[2].T[:, :2]
+
+    observed = batch_effect_sva_module._top_right_singular_vectors(
+        values,
+        n_components=2,
+    )
+
+    numpy.testing.assert_array_equal(observed, expected)
+
+
 def test_run_sva_backend_returns_noop_for_explicit_nsv_zero():
     counts = pandas.DataFrame(
         {'RUN1': [1.0, 2.0], 'RUN2': [3.0, 4.0]},

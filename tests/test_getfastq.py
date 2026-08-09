@@ -2944,6 +2944,45 @@ class TestRenameFastq:
         assert not (tmp_path / 'SRR001_1.amalgkit.fastq.gz').exists()
         assert not (tmp_path / 'SRR001_2.amalgkit.fastq.gz').exists()
 
+    def test_rejects_paired_sequence_quality_length_mismatch_in_single_pass(self, tmp_path):
+        sra_stat = {'sra_id': 'SRR001', 'layout': 'paired'}
+        path1 = tmp_path / 'SRR001_1.fastq.gz'
+        path2 = tmp_path / 'SRR001_2.fastq.gz'
+        with gzip.open(path1, 'wt') as handle:
+            handle.write('@spotA/1\nACGT\n+\nIII\n')
+        self._write_header_fastq_gz(path2, ['@spotA/2'])
+
+        with pytest.raises(ValueError, match='sequence and quality lengths differ'):
+            rename_fastq(
+                sra_stat,
+                str(tmp_path),
+                '.fastq.gz',
+                '.amalgkit.fastq.gz',
+                validate_fastq=True,
+            )
+
+        assert path1.exists()
+        assert path2.exists()
+
+    def test_rejects_empty_paired_final_fastq(self, tmp_path):
+        sra_stat = {'sra_id': 'SRR001', 'layout': 'paired'}
+        path1 = tmp_path / 'SRR001_1.fastq.gz'
+        path2 = tmp_path / 'SRR001_2.fastq.gz'
+        with gzip.open(path1, 'wt'), gzip.open(path2, 'wt'):
+            pass
+
+        with pytest.raises(ValueError, match='contains no records'):
+            rename_fastq(
+                sra_stat,
+                str(tmp_path),
+                '.fastq.gz',
+                '.amalgkit.fastq.gz',
+                validate_fastq=True,
+            )
+
+        assert path1.exists()
+        assert path2.exists()
+
     def test_rejects_equal_count_paired_mate_order_mismatch(self, tmp_path):
         sra_stat = {'sra_id': 'SRR001', 'layout': 'paired'}
         path1 = tmp_path / 'SRR001_1.fastq.gz'
@@ -3269,6 +3308,27 @@ class TestGetfastqResume:
 
         with pytest.raises(ValueError, match='read count mismatch'):
             validate_getfastq_resume_output(sra_stat)
+
+    def test_paired_full_validation_uses_only_synchronized_scan(self, tmp_path, monkeypatch):
+        args, metadata, g, sra_stat, run_dir = self._make_case(
+            tmp_path,
+            layout='paired',
+        )
+        _ = (args, g)
+        self._write_fastq(run_dir / 'SRR001_1.amalgkit.fastq.gz', num_records=2)
+        self._write_fastq(run_dir / 'SRR001_2.amalgkit.fastq.gz', num_records=2)
+        write_getfastq_stats(sra_stat, metadata, str(run_dir))
+
+        monkeypatch.setattr(
+            'amalgkit.getfastq.shared_validate_fastq_structure',
+            lambda _path: (_ for _ in ()).throw(
+                AssertionError('paired validation must not scan each file first')
+            ),
+        )
+
+        validated = validate_getfastq_resume_output(sra_stat)
+
+        assert len(validated['outputs']) == 2
 
     def test_rejects_equal_count_paired_outputs_with_mismatched_ids(self, tmp_path):
         args, metadata, g, sra_stat, run_dir = self._make_case(tmp_path, layout='paired')
@@ -3860,6 +3920,98 @@ class TestMaybeRunGetfastqSecondRound:
             ('SRR002', GETFASTQ_PHASE_SECOND_ROUND_IN_PROGRESS),
             ('SRR002', GETFASTQ_PHASE_COMPLETE),
         ]
+
+    def test_parallel_second_round_merges_isolated_run_metadata(self, tmp_path, monkeypatch):
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001', 'SRR002'],
+            'bp_amalgkit': [100, 100],
+            'bp_until_target_size': [900, 900],
+            'rate_obtained': [0.1, 0.1],
+            'spot_length_amalgkit': [100, 100],
+            'total_spots': [100, 100],
+            'spot_end_1st': [2, 2],
+            'spot_start_2nd': [0, 0],
+            'spot_end_2nd': [0, 0],
+        }))
+        metadata.df.index = [10, 20]
+        args = SimpleNamespace(
+            out_dir=str(tmp_path),
+            download_lock_dir=str(tmp_path / 'locks'),
+            tol=1,
+            internal_jobs=2,
+        )
+        g = {'max_bp': 2000, 'num_bp_per_sra': 1000}
+        observed_workers = []
+
+        def fake_inspect_after_lock(args, metadata, row_index, sra_id, g, runtime_context=None):
+            _ = (args, g, runtime_context)
+            return (
+                metadata,
+                {
+                    'sra_id': sra_id,
+                    'layout': 'single',
+                    'metadata_idx': row_index,
+                    'getfastq_sra_dir': str(tmp_path / 'getfastq' / sra_id),
+                },
+                {
+                    'phase': GETFASTQ_PHASE_FIRST_ROUND,
+                    'stats_row': metadata.df.loc[row_index, :],
+                },
+                False,
+            )
+
+        def fake_second_round(args, sra_stat, metadata, g, runtime_context=None):
+            _ = (args, g, runtime_context)
+            row_index = sra_stat['metadata_idx']
+            metadata.df.at[row_index, 'bp_amalgkit'] = (
+                501 if sra_stat['sra_id'] == 'SRR001' else 502
+            )
+            return metadata
+
+        def fake_run_tasks(task_items, task_fn, max_workers, fail_fast=False):
+            _ = fail_fast
+            observed_workers.append(max_workers)
+            return {item: task_fn(item) for item in task_items}, []
+
+        monkeypatch.setattr(
+            'amalgkit.getfastq._inspect_getfastq_run_after_lock',
+            fake_inspect_after_lock,
+        )
+        monkeypatch.setattr(
+            'amalgkit.getfastq.sequence_extraction_2nd_round',
+            fake_second_round,
+        )
+        monkeypatch.setattr(
+            'amalgkit.getfastq.write_getfastq_run_state',
+            lambda *_args, **_kwargs: None,
+        )
+        monkeypatch.setattr(
+            'amalgkit.getfastq.write_getfastq_stats',
+            lambda **_kwargs: None,
+        )
+        monkeypatch.setattr(
+            'amalgkit.getfastq.run_tasks_with_optional_threads',
+            fake_run_tasks,
+        )
+
+        observed = maybe_run_getfastq_second_round(
+            args=args,
+            metadata=metadata,
+            run_rows=[(10, 'SRR001'), (20, 'SRR002')],
+            g=g,
+            flag_private_file=False,
+            flag_any_output_file_present=False,
+            completion_phase_by_run={
+                'SRR001': GETFASTQ_PHASE_FIRST_ROUND,
+                'SRR002': GETFASTQ_PHASE_FIRST_ROUND,
+            },
+        )
+
+        assert observed_workers == [2]
+        assert observed.df.loc[10, 'bp_amalgkit'] == 501
+        assert observed.df.loc[20, 'bp_amalgkit'] == 502
+        assert observed.df.loc[10, 'spot_start_2nd'] == 3
+        assert observed.df.loc[20, 'spot_start_2nd'] == 3
 
 
 class TestFastpMetrics:

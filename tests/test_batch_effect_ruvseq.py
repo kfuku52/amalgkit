@@ -1,6 +1,7 @@
 import numpy
 import pandas
 import pytest
+from scipy.stats import f_oneway
 
 import amalgkit.batch_effect_ruvseq as batch_effect_ruvseq
 from amalgkit.batch_effect_ruvseq import (
@@ -54,6 +55,92 @@ def test_run_ruvseq_backend_reports_wholesale_glm_fallback(monkeypatch):
     assert summary['ruv_fallback_reason'] == 'forced_glm_failure'
     assert summary['ruv_nb_fallback_genes'] == 0
     assert summary['ruv_anova_failure_genes'] == 0
+
+
+def test_run_ruvseq_backend_k_zero_survives_sparse_fallback_residuals(monkeypatch):
+    counts_df = pandas.DataFrame(
+        {
+            'RUN1': [0.0, 5.0, 0.0],
+            'RUN2': [0.0, 6.0, 1.0],
+            'RUN3': [10.0, 0.0, 0.0],
+            'RUN4': [9.0, 0.0, 2.0],
+        },
+        index=['G1', 'G2', 'G3'],
+    )
+    metadata_df = pandas.DataFrame(
+        {
+            'run': list(counts_df.columns),
+            'sample_group': ['A', 'A', 'B', 'B'],
+            'bioproject': ['BP1', 'BP2', 'BP1', 'BP2'],
+        }
+    )
+    def force_glm_failure(counts_df, design_df, effective_lib_sizes, diagnostics=None):
+        _ = (counts_df, design_df, effective_lib_sizes)
+        batch_effect_ruvseq._record_ruv_fallback(
+            diagnostics,
+            'forced_glm_failure',
+        )
+        return None, None
+
+    monkeypatch.setattr(
+        batch_effect_ruvseq,
+        '_compute_glm_pvalues_and_residuals',
+        force_glm_failure,
+    )
+
+    with pytest.warns(UserWarning, match='fallback estimation path'):
+        corrected_df, w_df, summary = run_ruvseq_backend(
+            counts_df=counts_df,
+            metadata_df=metadata_df,
+            control_mode='all',
+            k_setting='0',
+            min_controls=2,
+        )
+
+    pandas.testing.assert_frame_equal(corrected_df, counts_df)
+    assert w_df.shape == (counts_df.shape[1], 0)
+    assert summary['resolved_ruv_k'] == 0
+
+
+def test_vectorized_group_pvalues_are_stable_for_high_count_low_variance_rows():
+    rng = numpy.random.default_rng(8)
+    sample_groups = numpy.repeat(['A', 'B', 'C'], 10)
+    rows = []
+    for base, noise, effect in [
+        (1e6, 1, 10),
+        (1e7, 10, 100),
+        (1e9, 100, 10),
+        (1e12, 1000, 100),
+    ]:
+        values = base + rng.integers(-noise, noise + 1, 30)
+        values[sample_groups == 'C'] += effect
+        rows.append(values)
+    values = numpy.asarray(rows, dtype=float)
+    log_values = numpy.log(values)
+    expected = numpy.asarray([
+        f_oneway(*[
+            row[sample_groups == level]
+            for level in ['A', 'B', 'C']
+        ]).pvalue
+        for row in log_values
+    ])
+
+    observed = batch_effect_ruvseq._compute_group_pvalues(
+        pandas.DataFrame(values),
+        sample_groups,
+    ).to_numpy(dtype=float)
+
+    numpy.testing.assert_allclose(observed, expected, rtol=1e-10, atol=1e-12)
+
+
+def test_leading_pca_scores_preserve_svd_basis_at_degenerate_boundary():
+    values = numpy.eye(6, dtype=float)
+    left, singular_values, _right = numpy.linalg.svd(values, full_matrices=False)
+    expected = left[:, :2] * singular_values[:2].reshape(1, -1)
+
+    observed = batch_effect_ruvseq._leading_pca_scores(values, n_pc=2)
+
+    numpy.testing.assert_array_equal(observed, expected)
 
 
 def test_ruvr_correct_counts_preserves_shape_and_nonnegative_values():

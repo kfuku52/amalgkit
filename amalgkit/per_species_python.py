@@ -104,17 +104,39 @@ def _compute_sample_group_correlation_metrics(tc, sra, selected_sample_groups, d
         columns=tc_ave.columns.astype(str),
         dtype=float,
     )
-    for run_id in corr_by_group.index:
-        sample_values = pandas.to_numeric(tc.loc[:, run_id], errors='coerce')
-        for sample_group in corr_by_group.columns:
-            try:
-                corr_value = sample_values.corr(
-                    pandas.to_numeric(tc_ave.loc[:, sample_group], errors='coerce'),
-                    method=str(dist_method),
-                )
-            except ValueError:
-                corr_value = numpy.nan
-            corr_by_group.loc[run_id, sample_group] = corr_value
+    tc_numeric = tc.apply(pandas.to_numeric, errors='coerce').to_numpy(dtype=float)
+    tc_ave_numeric = tc_ave.apply(pandas.to_numeric, errors='coerce').to_numpy(dtype=float)
+    can_vectorize = (
+        str(dist_method).lower() == 'pearson'
+        and numpy.isfinite(tc_numeric).all()
+        and numpy.isfinite(tc_ave_numeric).all()
+    )
+    if can_vectorize:
+        tc_centered = tc_numeric - numpy.mean(tc_numeric, axis=0, keepdims=True)
+        tc_ave_centered = tc_ave_numeric - numpy.mean(tc_ave_numeric, axis=0, keepdims=True)
+        numerators = tc_centered.T @ tc_ave_centered
+        denominators = numpy.sqrt(
+            numpy.sum(tc_centered ** 2, axis=0).reshape(-1, 1)
+            * numpy.sum(tc_ave_centered ** 2, axis=0).reshape(1, -1)
+        )
+        corr_by_group.loc[:, :] = numpy.divide(
+            numerators,
+            denominators,
+            out=numpy.full_like(numerators, numpy.nan),
+            where=denominators > 0,
+        )
+    else:
+        for run_id in corr_by_group.index:
+            sample_values = pandas.to_numeric(tc.loc[:, run_id], errors='coerce')
+            for sample_group in corr_by_group.columns:
+                try:
+                    corr_value = sample_values.corr(
+                        pandas.to_numeric(tc_ave.loc[:, sample_group], errors='coerce'),
+                        method=str(dist_method),
+                    )
+                except ValueError:
+                    corr_value = numpy.nan
+                corr_by_group.loc[run_id, sample_group] = corr_value
     run_values = out.loc[:, 'run'].astype(str).tolist()
     sample_group_values = out.loc[:, 'sample_group'].astype(str).tolist()
     within_values = []

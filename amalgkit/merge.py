@@ -331,9 +331,12 @@ def load_quant_tables_once(detected_sra_ids, quant_out_paths, value_columns):
 
 def write_species_merged_quant_tables(merge_species_dir, sp_filled, detected_sra_ids, target_ids, table_values, value_columns):
     for col in value_columns:
-        merged = pandas.DataFrame({'target_id': target_ids})
-        for file_idx, sra_id in enumerate(detected_sra_ids):
-            merged[sra_id] = table_values[col][file_idx]
+        merged_columns = {'target_id': target_ids}
+        merged_columns.update({
+            sra_id: table_values[col][file_idx]
+            for file_idx, sra_id in enumerate(detected_sra_ids)
+        })
+        merged = pandas.DataFrame(merged_columns, copy=False)
         outfile_name = sp_filled + '_' + col + '.tsv'
         outfile = os.path.join(merge_species_dir, outfile_name)
         print('Writing output file:', outfile)

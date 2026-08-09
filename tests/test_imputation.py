@@ -4,7 +4,18 @@ import numpy
 import pandas
 import pytest
 
-from amalgkit.imputation import impute_expression
+from amalgkit.imputation import _truncated_svd_reconstruction, impute_expression
+
+
+def test_truncated_svd_reconstruction_matches_full_svd_at_degenerate_boundary():
+    values = numpy.zeros((8, 4), dtype=float)
+    values[:4, :4] = numpy.eye(4)
+    left, singular_values, right = numpy.linalg.svd(values, full_matrices=False)
+    expected = (left[:, :1] * singular_values[:1]).dot(right[:1, :])
+
+    observed = _truncated_svd_reconstruction(values, num_pc=1)
+
+    numpy.testing.assert_allclose(observed, expected, atol=0.0, rtol=0.0)
 
 
 def test_impute_expression_row_mean_fills_missing_values():

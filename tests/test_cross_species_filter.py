@@ -7,10 +7,12 @@ from types import SimpleNamespace
 from amalgkit.cross_species_filter import (
     _apply_csfilter_outlier_flags,
     _calculate_correlation_within_group,
+    _evict_embedding_intermediates,
     _load_expression_tables,
     _normalize_cross_species_metadata_table,
     _prepare_metadata_table,
     _resolve_matrix_for_embedding,
+    _resolve_correlation_matrix,
     _select_single_copy_orthogroups,
     generate_input_symlinks,
     get_sample_groups,
@@ -311,6 +313,43 @@ def test_embedding_missing_strategies_perform_iterative_imputation():
     numpy.testing.assert_allclose(nipals.where(observed).stack(), matrix.stack())
     assert not numpy.allclose(em_pca.to_numpy(), row_mean.to_numpy())
     assert not numpy.allclose(nipals.to_numpy(), row_mean.to_numpy())
+
+
+def test_embedding_cache_releases_large_intermediates_but_keeps_coordinates():
+    matrix = pandas.DataFrame(
+        [
+            [1.0, 2.0, 3.0, numpy.nan],
+            [2.0, 4.0, numpy.nan, 8.0],
+            [4.0, 3.0, 2.0, 1.0],
+            [5.0, 7.0, 9.0, 11.0],
+            [8.0, 6.0, 4.0, 2.0],
+        ],
+        columns=['A', 'B', 'C', 'D'],
+    )
+    cache = {}
+
+    _resolve_correlation_matrix(matrix, missing_strategy='row_mean', cache=cache)
+
+    assert ('correlation', id(matrix), 'row_mean') in cache
+    assert ('filled', id(matrix), 'row_mean') not in cache
+
+    _resolve_correlation_matrix(matrix, missing_strategy='em_pca', cache=cache)
+    coordinates_key = ('tsne', id(matrix), 'em_pca')
+    cache[coordinates_key] = pandas.DataFrame(index=matrix.columns)
+
+    _evict_embedding_intermediates(
+        cache,
+        matrix,
+        missing_strategy='em_pca',
+    )
+
+    assert ('filled', id(matrix), 'em_pca') not in cache
+    assert ('correlation', id(matrix), 'em_pca') not in cache
+    assert coordinates_key in cache
+
+    _evict_embedding_intermediates(cache, matrix)
+
+    assert not any(key[1] == id(matrix) for key in cache)
 
 
 def test_embedding_imputation_preserves_observed_negative_values_and_imputes_nonfinite():
