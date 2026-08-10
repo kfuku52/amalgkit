@@ -1,0 +1,117 @@
+name: Nightly End-to-End
+
+on:
+  schedule:
+    - cron: '17 18 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-e2e
+  cancel-in-progress: true
+
+jobs:
+  yeast-private-fastq:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Python and real bioinformatics tools
+        uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-name: amalgkit-e2e
+          condarc: |
+            channels:
+              - conda-forge
+              - bioconda
+            channel_priority: strict
+          create-args: >-
+            python=3.11
+            sra-tools>=3
+            seqkit
+            kallisto
+          cache-environment: true
+
+      - name: Install AMALGKIT
+        shell: bash -el {0}
+        run: |
+          python -m pip install --upgrade pip "setuptools>=83"
+          python -m pip install -e ".[test]"
+
+      - name: Prepare bundled references and a private FASTQ
+        shell: bash -el {0}
+        run: |
+          amalgkit dataset --name yeast --out_dir e2e-work
+          python - <<'PY'
+          import gzip
+          from pathlib import Path
+
+          reference = Path('e2e-work/fasta/Saccharomyces_cerevisiae.fa.gz')
+          sequence_parts = []
+          with gzip.open(reference, 'rt', encoding='utf-8') as handle:
+              for line in handle:
+                  if line.startswith('>'):
+                      if sequence_parts:
+                          break
+                      continue
+                  sequence_parts.append(line.strip())
+          read = ''.join(sequence_parts)[:75]
+          target = Path('e2e-work/private-fastq/Saccharomyces_cerevisiae/nightly.fastq')
+          target.parent.mkdir(parents=True, exist_ok=True)
+          with target.open('w', encoding='utf-8') as handle:
+              for index in range(20):
+                  handle.write('@nightly{}\n{}\n+\n{}\n'.format(index, read, 'I' * len(read)))
+          PY
+
+      - name: Run private-FASTQ integration through merge
+        shell: bash -el {0}
+        run: |
+          mkdir -p e2e-work/metadata e2e-work/logs
+          amalgkit --log_file e2e-work/logs/integrate.jsonl integrate \
+            --out_dir e2e-work \
+            --fastq_dir e2e-work/private-fastq \
+            --output_metadata e2e-work/metadata/metadata.tsv \
+            --threads 2
+          amalgkit --log_file e2e-work/logs/getfastq.jsonl getfastq \
+            --out_dir e2e-work \
+            --metadata e2e-work/metadata/metadata.tsv \
+            --threads 2 \
+            --max_bp 10000 \
+            --fastp no \
+            --rrna_filter no \
+            --contam_filter no
+          amalgkit --log_file e2e-work/logs/quant.jsonl quant \
+            --out_dir e2e-work \
+            --metadata e2e-work/metadata/metadata.tsv \
+            --threads 2 \
+            --build_index yes \
+            --clean_fastq no
+          amalgkit --log_file e2e-work/logs/merge.jsonl merge \
+            --out_dir e2e-work \
+            --metadata e2e-work/metadata/metadata.tsv \
+            --threads 2
+          amalgkit sanity \
+            --out_dir e2e-work \
+            --metadata e2e-work/metadata/metadata.tsv \
+            --check getfastq,index,quant,merge \
+            --strict yes \
+            --strict_level error
+
+      - name: Run performance benchmarks
+        shell: bash -el {0}
+        run: python benchmarks/benchmark_core.py --output e2e-work/benchmark-results.json
+
+      - name: Upload diagnostics and benchmark history
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-e2e-${{ github.run_id }}
+          path: |
+            e2e-work/logs
+            e2e-work/benchmark-results.json
+            e2e-work/sanity
+          if-no-files-found: warn

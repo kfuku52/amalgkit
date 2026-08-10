@@ -11,6 +11,7 @@ from amalgkit.cli_utils import (
     should_print_runtime_banner,
 )
 from amalgkit.exceptions import AmalgkitExit
+from amalgkit.logging_utils import configure_logging, get_logger
 
 SCRIPT_DIR = os.path.realpath(os.path.dirname(__file__))
 SCRIPT_PARENT_DIR = os.path.realpath(os.path.dirname(SCRIPT_DIR))
@@ -66,6 +67,11 @@ def main(argv=None):
     if argv is None:
         argv = sys.argv
     args = parser.parse_args(argv[1:])
+    configure_logging(
+        level=getattr(args, 'log_level', None),
+        log_file=getattr(args, 'log_file', None),
+    )
+    logger = get_logger('main')
     active_command = resolve_active_command(argv)
     try:
         if should_print_runtime_banner(active_command):
@@ -83,9 +89,12 @@ def main(argv=None):
                 print(exc.message)
         return exc.exit_code
     except KeyboardInterrupt:
+        logger.warning('command_interrupted', extra={'event': 'command_interrupted', 'command': active_command})
         sys.stderr.write('Interrupted.\n')
         return 130
     except Exception as exc:
+        if not getattr(args, '_amalgkit_failure_logged', False):
+            logger.exception('command_failed', extra={'event': 'command_failed', 'command': active_command})
         if getattr(args, 'debug', False):
             traceback.print_exc()
             return 1

@@ -22,6 +22,7 @@ from amalgkit.metadata_utils import Metadata, load_metadata
 from amalgkit.output_utils import atomic_write_dataframe
 from amalgkit.parallel_utils import (
     is_auto_parallel_option,
+    raise_task_failures,
     resolve_detected_cpu_count,
     run_tasks_with_optional_threads,
     validate_positive_int_option,
@@ -1032,7 +1033,10 @@ def scan_all_run_fastq_stats(run_specs, accurate_size, threads=1, seqkit_exe='se
     )
     if failures:
         details = '; '.join(['{}: {}'.format(run_specs[idx]['run'], exc) for idx, exc in failures])
-        raise RuntimeError('FASTQ stats scan failed for {}/{} runs. {}'.format(len(failures), len(run_specs), details))
+        raise_task_failures(
+            failures,
+            'FASTQ stats scan failed for {}/{} runs. {}'.format(len(failures), len(run_specs), details),
+        )
 
     stats_by_run = {}
     for idx, stats in stats_by_spec_idx.items():

@@ -2,6 +2,7 @@ import numpy
 import pandas
 import pytest
 import os
+import pathlib
 from types import SimpleNamespace
 
 from amalgkit.merge import (
@@ -767,9 +768,14 @@ def test_merge_main_prunes_stale_species_outputs(tmp_path, monkeypatch):
         'amalgkit.merge.write_updated_metadata',
         lambda _m, path, _a, max_workers='auto': pandas.DataFrame({'run': ['R1']}).to_csv(path, sep='\t', index=False),
     )
+
+    def fake_generate_merge_plots(merge_dir, path_metadata_merge):
+        pathlib.Path(merge_dir, 'merge_summary.pdf').write_text('ok', encoding='utf-8')
+        return path_metadata_merge
+
     monkeypatch.setattr(
         'amalgkit.merge.generate_merge_plot_pdfs',
-        lambda merge_dir, path_metadata_merge: (open(os.path.join(merge_dir, 'merge_summary.pdf'), 'w').write('ok'), path_metadata_merge),
+        fake_generate_merge_plots,
     )
 
     merge_main(args)

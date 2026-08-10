@@ -9,6 +9,7 @@ import sys
 import time
 
 from amalgkit.__init__ import __version__
+from amalgkit.logging_utils import get_logger
 
 EXPRESSION_NORMALIZATION_METHODS = tuple(
     '{}-{}'.format(log_method, abundance_method)
@@ -175,6 +176,14 @@ def resolve_external_tool_status(executable_name, version_commands):
     return 'FOUND ({}; version unavailable)'.format(tool_path)
 
 
+def resolve_external_tool_availability(executable_name):
+    """Return a cheap PATH-only status without executing the external tool."""
+    tool_path = shutil.which(executable_name)
+    if tool_path is None:
+        return 'MISSING'
+    return 'FOUND ({})'.format(tool_path)
+
+
 def print_runtime_banner(argv):
     print('AMALGKIT version: {}'.format(__version__))
     print('AMALGKIT command: {}'.format(' '.join(argv)))
@@ -190,13 +199,13 @@ def print_runtime_banner(argv):
         )
     active_command = resolve_active_command(argv)
     relevant_labels = COMMAND_EXTERNAL_TOOL_LABELS.get(active_command, set())
-    for label, executable_name, version_commands in EXTERNAL_TOOL_SPECS:
+    for label, executable_name, _version_commands in EXTERNAL_TOOL_SPECS:
         if label not in relevant_labels:
             continue
         print(
             'AMALGKIT tool {}: {}'.format(
                 label,
-                resolve_external_tool_status(executable_name, version_commands),
+                resolve_external_tool_availability(executable_name),
             )
         )
 
@@ -254,9 +263,35 @@ def build_timed_command_handler(command_name, module_name, function_name):
     def command(args):
         sys.stdout.write('amalgkit {}: start\n'.format(command_name))
         start = time.time()
-        module = importlib.import_module(module_name)
-        getattr(module, function_name)(args)
-        print('Time elapsed: {:,} sec'.format(int(time.time() - start)))
+        logger = get_logger('command')
+        logger.info(
+            'command_start',
+            extra={'event': 'command_start', 'command': command_name},
+        )
+        try:
+            module = importlib.import_module(module_name)
+            getattr(module, function_name)(args)
+        except Exception:
+            setattr(args, '_amalgkit_failure_logged', True)
+            logger.exception(
+                'command_failed',
+                extra={
+                    'event': 'command_failed',
+                    'command': command_name,
+                    'duration_seconds': round(time.time() - start, 6),
+                },
+            )
+            raise
+        elapsed = time.time() - start
+        logger.info(
+            'command_end',
+            extra={
+                'event': 'command_end',
+                'command': command_name,
+                'duration_seconds': round(elapsed, 6),
+            },
+        )
+        print('Time elapsed: {:,} sec'.format(int(elapsed)))
         sys.stdout.write('amalgkit {}: end\n'.format(command_name))
 
     return command

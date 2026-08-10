@@ -36,6 +36,17 @@ from amalgkit.fastq_utils import (
     validate_fastq_structure as shared_validate_fastq_structure,
 )
 from amalgkit.getfastq_stats import read_getfastq_stats_row
+from amalgkit.getfastq_file_state import (
+    RunFileState as _BaseRunFileState,
+    list_run_dir_files,
+)
+from amalgkit.getfastq_probes import (
+    detect_fasterq_spot_range_support,
+    ensure_supported_fasterq_dump_version,
+    parse_fasterq_dump_version as parse_fasterq_dump_version,
+    parse_fasterq_dump_written_reads,
+    parse_fasterq_dump_written_spots,
+)
 from amalgkit.metadata_utils import (
     Metadata,
     detect_layout_from_file,
@@ -47,6 +58,7 @@ from amalgkit.metadata_utils import (
 )
 from amalgkit.parallel_utils import (
     is_auto_parallel_option,
+    raise_task_failures,
     resolve_thread_worker_allocation,
     resolve_worker_allocation,
     run_tasks_with_optional_threads,
@@ -337,39 +349,11 @@ def append_file_binary(src_path, dst_path, chunk_size=8 * 1024 * 1024):
             src_handle.seek(offset)
         shutil.copyfileobj(src_handle, dst_handle, length=chunk_size)
 
-def list_run_dir_files(work_dir):
-    try:
-        with os.scandir(work_dir) as entries:
-            return {
-                entry.name
-                for entry in entries
-                if entry.is_file()
-            }
-    except FileNotFoundError:
-        return set()
+class RunFileState(_BaseRunFileState):
+    """Compatibility facade using the historical monkeypatchable file lister."""
 
-class RunFileState:
     def __init__(self, work_dir, files=None):
-        self.work_dir = work_dir
-        if files is None:
-            self.files = list_run_dir_files(work_dir)
-        else:
-            self.files = set(files)
-
-    def has(self, filename):
-        return filename in self.files
-
-    def path(self, filename):
-        return os.path.join(self.work_dir, filename)
-
-    def add(self, filename):
-        self.files.add(filename)
-
-    def discard(self, filename):
-        self.files.discard(filename)
-
-    def to_set(self):
-        return set(self.files)
+        super().__init__(work_dir=work_dir, files=files, file_lister=list_run_dir_files)
 
 def _resolve_run_file_state(work_dir, files=None, file_state=None):
     if isinstance(file_state, RunFileState):
@@ -755,7 +739,7 @@ def concat_fastq(args, metadata, output_dir, g):
         )
         if failures:
             details = '; '.join(['{}: {}'.format(subext, exc) for subext, exc in failures])
-            raise RuntimeError('Concatenation failed for {}/{} read group(s). {}'.format(
+            raise_task_failures(failures, 'Concatenation failed for {}/{} read group(s). {}'.format(
                 len(failures),
                 len(subexts),
                 details,
@@ -2911,57 +2895,6 @@ def calculate_written_spots_from_trim_counts(trimmed_counts):
         return None
     return max(num_pair1, num_pair2) + num_single
 
-def parse_fasterq_dump_written_spots(stdout_txt, stderr_txt):
-    combined = '\n'.join([stdout_txt or '', stderr_txt or ''])
-    matched = re.findall(r'^\s*spots\s+written\s*:\s*([0-9][0-9,]*)\s*$', combined, flags=re.IGNORECASE | re.MULTILINE)
-    if len(matched) == 0:
-        return None
-    return int(matched[-1].replace(',', ''))
-
-def parse_fasterq_dump_written_reads(stdout_txt, stderr_txt):
-    combined = '\n'.join([stdout_txt or '', stderr_txt or ''])
-    matched = re.findall(r'^\s*reads\s+written\s*:\s*([0-9][0-9,]*)\s*$', combined, flags=re.IGNORECASE | re.MULTILINE)
-    if len(matched) == 0:
-        return None
-    return int(matched[-1].replace(',', ''))
-
-
-def detect_fasterq_spot_range_support(help_stdout_txt, help_stderr_txt=''):
-    combined = '\n'.join([str(help_stdout_txt or ''), str(help_stderr_txt or '')])
-    if combined.strip() == '':
-        return True
-    has_start = ('-N|' in combined) or ('--minSpotId' in combined) or ('--min-spot-id' in combined.lower())
-    has_end = ('-X|' in combined) or ('--maxSpotId' in combined) or ('--max-spot-id' in combined.lower())
-    return bool(has_start and has_end)
-
-
-def parse_fasterq_dump_version(version_stdout_txt, version_stderr_txt=''):
-    combined = '\n'.join([str(version_stdout_txt or ''), str(version_stderr_txt or '')])
-    matched = re.search(r'\b([0-9]+)\.([0-9]+)(?:\.([0-9]+))?\b', combined)
-    if matched is None:
-        return None
-    major = int(matched.group(1))
-    minor = int(matched.group(2))
-    patch = int(matched.group(3) or 0)
-    return (major, minor, patch)
-
-
-def ensure_supported_fasterq_dump_version(version_stdout_txt, version_stderr_txt='', executable_name='fasterq-dump'):
-    version_parts = parse_fasterq_dump_version(version_stdout_txt, version_stderr_txt)
-    if version_parts is None:
-        raise RuntimeError(
-            'Could not determine fasterq-dump version from {} output. '
-            'sra-tools >= 3 is required for amalgkit getfastq.'.format(executable_name)
-        )
-    if version_parts[0] < 3:
-        version_txt = '{}.{}.{}'.format(*version_parts)
-        raise RuntimeError(
-            'Unsupported fasterq-dump version detected: {} from {}. '
-            'sra-tools >= 3 is required for amalgkit getfastq.'.format(version_txt, executable_name)
-        )
-    return version_parts
-
-
 def resolve_fasterq_spot_range_support(args):
     raw = getattr(args, '_fasterq_supports_spot_range', None)
     if raw is None:
@@ -3056,7 +2989,7 @@ def compress_fasterq_output_files(sra_stat, args, files=None, file_state=None, r
         )
         if failures:
             details = '; '.join(['{}: {}'.format(fastq_paths[idx], exc) for idx, exc in failures])
-            raise RuntimeError('FASTQ compression with seqkit failed for {}/{} file(s). {}'.format(
+            raise_task_failures(failures, 'FASTQ compression with seqkit failed for {}/{} file(s). {}'.format(
                 len(failures),
                 len(fastq_paths),
                 details,
@@ -5304,7 +5237,10 @@ def rename_reads(sra_stat, args, output_dir, files=None, file_state=None, return
                         '{}: {}'.format(rewrite_jobs[job_idx][0], exc)
                         for job_idx, exc in failures
                     ])
-                    raise RuntimeError('Trinity read-header rewrite with seqkit failed for paired FASTQ(s). {}'.format(details))
+                    raise_task_failures(
+                        failures,
+                        'Trinity read-header rewrite with seqkit failed for paired FASTQ(s). {}'.format(details),
+                    )
             run_file_state.add(sra_stat['sra_id'] + '_1' + outext)
             run_file_state.add(sra_stat['sra_id'] + '_2' + outext)
     if args.remove_tmp:
@@ -6469,7 +6405,10 @@ def sequence_extraction_2nd_round(args, sra_stat, metadata, g, runtime_context=N
         )
         if failures:
             details = '; '.join(['{}: {}'.format(subext, exc) for subext, exc in failures])
-            raise RuntimeError('2nd-round FASTQ merge failed for {}. {}'.format(sra_id, details))
+            raise_task_failures(
+                failures,
+                '2nd-round FASTQ merge failed for {}. {}'.format(sra_id, details),
+            )
     if layout == 'paired':
         validate_paired_fastq_record_counts(sra_stat, sra_stat['getfastq_sra_dir'], ext_main)
     metadata.df.at[ind_sra, 'time_end_2nd'] = time.time()
@@ -6835,7 +6774,10 @@ def run_first_round_getfastq(args, metadata, run_rows, g, jobs, runtime_context=
         run_results_by_id[run_row[1]] = run_result
     if failures:
         details = '; '.join(['{}: {}'.format(run_row[1], err) for run_row, err in failures])
-        raise RuntimeError('getfastq failed for {}/{} SRA runs. {}'.format(len(failures), len(run_rows), details))
+        raise_task_failures(
+            failures,
+            'getfastq failed for {}/{} SRA runs. {}'.format(len(failures), len(run_rows), details),
+        )
     return run_results_by_id
 
 
@@ -7153,7 +7095,8 @@ def maybe_run_getfastq_second_round(
                         '{}: {}'.format(run_row[1], exc)
                         for run_row, exc in failures
                     ])
-                    raise RuntimeError(
+                    raise_task_failures(
+                        failures,
                         'getfastq 2nd-round extraction failed for {}/{} SRA runs. {}'.format(
                             len(failures),
                             len(ordered_pending_rows),

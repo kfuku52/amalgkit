@@ -1,6 +1,5 @@
 import datetime
 import json
-import math
 import numpy as np
 import os
 import pandas
@@ -15,6 +14,11 @@ from amalgkit.metadata_utils import (
     load_metadata,
 )
 from amalgkit.output_utils import atomic_output_path, atomic_write_dataframe
+from amalgkit.output_contracts import (
+    BUSCO_REQUIRED_COLUMNS,
+    validate_nonempty_table,
+    validate_quant_run_info_json,
+)
 from amalgkit.parallel_utils import (
     is_auto_parallel_option,
     resolve_detected_cpu_count,
@@ -773,17 +777,6 @@ def check_quant_output(args, sra_ids, output_dir):
 
 
 SANITY_CHECK_NAMES = ['getfastq', 'index', 'quant', 'merge', 'busco', 'finalize']
-BUSCO_REQUIRED_COLUMNS = [
-    'busco_id',
-    'status',
-    'sequence',
-    'score',
-    'length',
-    'orthodb_url',
-    'description',
-]
-
-
 def _resolve_sanity_check_path(args, subdir_name, attr_name):
     custom_path = getattr(args, attr_name, None)
     if custom_path:
@@ -1080,85 +1073,19 @@ def _validate_nonempty_table(
     require_non_target_columns=False,
     numeric_nonnegative_columns=(),
 ):
-    try:
-        df = _read_tsv_head(path, comment=comment)
-    except Exception as exc:
-        return 'Failed to read {}: {}'.format(context, exc)
-    missing_columns = [col for col in required_columns if col not in df.columns]
-    if missing_columns:
-        return 'Missing required column(s) in {}: {}'.format(context, ', '.join(missing_columns))
-    if require_non_target_columns and (len(df.columns) <= len(required_columns)):
-        return '{} did not include any data columns beyond {}.'.format(context, ', '.join(required_columns))
-    if require_data_rows and (df.shape[0] == 0):
-        return '{} did not contain any data rows.'.format(context)
-    numeric_columns = [
-        column for column in numeric_nonnegative_columns if column in df.columns
-    ]
-    scan_columns = list(numeric_columns)
-    if 'target_id' in df.columns:
-        scan_columns.append('target_id')
-    if scan_columns:
-        saw_data_row = False
-        saw_valid_target = False
-        seen_target_ids = set()
-        try:
-            chunks = pandas.read_csv(
-                path,
-                sep='\t',
-                header=0,
-                comment=comment,
-                usecols=scan_columns,
-                chunksize=10000,
-                low_memory=False,
-            )
-            for chunk in chunks:
-                saw_data_row = saw_data_row or (chunk.shape[0] > 0)
-                if 'target_id' in chunk.columns:
-                    target_ids = chunk['target_id'].fillna('').astype(str).str.strip()
-                    if target_ids.eq('').any():
-                        return '{} contains missing target_id values.'.format(context)
-                    duplicate_target_ids = set(target_ids.loc[target_ids.duplicated()].tolist())
-                    duplicate_target_ids.update(set(target_ids.tolist()).intersection(seen_target_ids))
-                    if duplicate_target_ids:
-                        return '{} contains duplicate target_id values: {}.'.format(
-                            context,
-                            ', '.join(sorted(duplicate_target_ids)[:5]),
-                        )
-                    seen_target_ids.update(target_ids.tolist())
-                    saw_valid_target = saw_valid_target or bool(target_ids.ne('').any())
-                for column in numeric_columns:
-                    numeric = pandas.to_numeric(chunk[column], errors='coerce')
-                    values = numeric.to_numpy(dtype=float)
-                    if numeric.isna().any() or (not np.isfinite(values).all()):
-                        return '{} contains non-finite values in "{}".'.format(context, column)
-                    if (numeric < 0).any():
-                        return '{} contains negative values in "{}".'.format(context, column)
-        except Exception as exc:
-            return 'Failed to scan {}: {}'.format(context, exc)
-        if require_data_rows and not saw_data_row:
-            return '{} did not contain any data rows.'.format(context)
-        if require_data_rows and ('target_id' in df.columns) and not saw_valid_target:
-            return '{} did not contain valid target_id values.'.format(context)
-    return ''
+    return validate_nonempty_table(
+        path=path,
+        required_columns=required_columns,
+        context=context,
+        comment=comment,
+        require_data_rows=require_data_rows,
+        require_non_target_columns=require_non_target_columns,
+        numeric_nonnegative_columns=numeric_nonnegative_columns,
+    )
 
 
 def _validate_quant_run_info_json(path):
-    try:
-        with open(path, 'r', encoding='utf-8') as handle:
-            payload = json.load(handle)
-    except Exception as exc:
-        return 'Failed to read quant run info JSON: {}'.format(exc)
-    if not isinstance(payload, dict):
-        return 'quant run info JSON must contain an object.'
-    if 'p_pseudoaligned' not in payload:
-        return 'quant run info JSON is missing "p_pseudoaligned".'
-    try:
-        value = float(payload.get('p_pseudoaligned'))
-    except (TypeError, ValueError):
-        return 'quant run info JSON has an invalid "p_pseudoaligned" value.'
-    if (not math.isfinite(value)) or (value < 0.0) or (value > 100.0):
-        return 'quant run info JSON has out-of-range "p_pseudoaligned": {}'.format(value)
-    return ''
+    return validate_quant_run_info_json(path)
 
 
 def _validate_fastq_file(path):

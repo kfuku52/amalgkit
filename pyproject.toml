@@ -33,7 +33,7 @@ dependencies = [
   "pandas>=2.0.3",
   "scipy>=1.10.1",
   "matplotlib>=3.7.5",
-  "statsmodels>=0.14",
+  "statsmodels>=0.14.0",
   "scikit-learn>=1.5.0",
   "biopython>=1.87",
   "defusedxml>=0.7.1",
@@ -41,8 +41,8 @@ dependencies = [
 
 [project.optional-dependencies]
 combatseq = ["inmoose"]
-test = ["pytest>=9.0.3", "pytest-xdist>=3"]
-quality = ["build>=1.3", "pip-audit>=2.9", "ruff>=0.15", "twine>=6"]
+test = ["pytest>=9.0.3", "pytest-xdist>=3", "pytest-cov>=7"]
+quality = ["build>=1.3", "mypy>=1.19", "pip-audit>=2.9", "ruff>=0.15", "twine>=6"]
 
 [project.scripts]
 amalgkit = "amalgkit.cli_entry:main"
@@ -79,10 +79,29 @@ amalgkit = [
 testpaths = ["tests"]
 addopts = "--strict-markers"
 markers = [
+  "benchmark: measures performance-sensitive kernels outside the default test run",
   "integration: exercises multiple production components through their public workflow",
   "slow: performs intentional real rendering, process waiting, or other comparatively slow work",
   "optional_dependency: requires a dependency from an optional project extra",
 ]
+filterwarnings = [
+  "error",
+  "ignore:Perfect separation or prediction detected:statsmodels.tools.sm_exceptions.PerfectSeparationWarning",
+  "ignore:Could not resolve taxid for .*:UserWarning",
+  "ignore:Batch seqkit stats scan failed.*:UserWarning",
+  "ignore:seqkit stats failed for .* Falling back to Python FASTQ parser.*:UserWarning",
+  "ignore:All samples of sample_group .* are marked for exclusion.*:UserWarning",
+  'ignore:.*sample\(s\) in .*sample_group\(s\) could not be robustly scored.*:UserWarning',
+]
+
+[tool.coverage.run]
+branch = true
+source = ["amalgkit"]
+
+[tool.coverage.report]
+fail_under = 75
+show_missing = true
+skip_empty = true
 
 [tool.ruff]
 target-version = "py311"
@@ -92,7 +111,25 @@ line-length = 120
 select = ["E4", "E7", "E9", "F", "S", "B023", "RUF012", "C901"]
 
 [tool.ruff.lint.mccabe]
-max-complexity = 60
+max-complexity = 50
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["S"]
+
+[tool.mypy]
+python_version = "3.11"
+check_untyped_defs = true
+follow_imports = "skip"
+ignore_missing_imports = true
+files = [
+  "amalgkit/cross_species_computation.py",
+  "amalgkit/command_context.py",
+  "amalgkit/getfastq_file_state.py",
+  "amalgkit/getfastq_probes.py",
+  "amalgkit/linalg_utils.py",
+  "amalgkit/logging_utils.py",
+  "amalgkit/output_contracts.py",
+  "amalgkit/parallel_utils.py",
+  "amalgkit/subprocess_utils.py",
+  "amalgkit/text_utils.py",
+]

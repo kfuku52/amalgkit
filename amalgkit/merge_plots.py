@@ -6,6 +6,7 @@ import numpy
 import pandas
 
 from amalgkit.filter_utils import save_exclusion_plot_pdf
+from amalgkit.runtime_utils import format_species_label as _format_species_label
 
 
 def _load_pyplot():
@@ -28,15 +29,6 @@ def _is_non_excluded(df):
         return pandas.Series([False] * df.shape[0], index=df.index, dtype=bool)
     normalized = _normalize_exclusion_values(df.loc[:, 'exclusion'])
     return normalized.eq('no').fillna(False)
-
-
-def _format_species_label(value):
-    tokens = str(value).replace('_', ' ').split()
-    if len(tokens) >= 2:
-        return '{}\n{}'.format(tokens[0], ' '.join(tokens[1:]))
-    if len(tokens) == 1:
-        return tokens[0]
-    return ''
 
 
 def _ordered_unique(values):

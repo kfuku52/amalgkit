@@ -9,6 +9,7 @@ from amalgkit.cli_utils import (
     positive_float_or_auto,
     strtobool,
 )
+from amalgkit.subprocess_utils import DEPENDENCY_PROBE_TIMEOUT_SECONDS
 
 
 def positive_int(value):
@@ -69,6 +70,18 @@ def build_parser(command_handlers, command_names, version, prog=None):
         '--debug',
         action='store_true',
         help='Show a full traceback for unexpected errors. This global option must precede the command name.',
+    )
+    parser.add_argument(
+        '--log_level',
+        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
+        default=None,
+        help='default=disabled: Emit structured JSON logs to stderr at this level. This global option must precede the command name.',
+    )
+    parser.add_argument(
+        '--log_file',
+        default=None,
+        metavar='PATH',
+        help='Optional JSONL log file. This global option must precede the command name.',
     )
     subparsers = parser.add_subparsers()
 
@@ -378,9 +391,9 @@ def build_parser(command_handlers, command_names, version, prog=None):
                      required=False, action='store',
                      help='default=%(default)s (48 h): Wall-clock timeout applied to each external\n'
                           ' tool invocation. 0 disables the timeout.')
-    pge.add_argument('--dependency_probe_timeout_seconds', metavar='INT', default=300, type=int,
+    pge.add_argument('--dependency_probe_timeout_seconds', metavar='INT', default=DEPENDENCY_PROBE_TIMEOUT_SECONDS, type=int,
                      required=False, action='store',
-                     help='default=%(default)s (5 min): Wall-clock timeout applied to each dependency\n'
+                     help='default=%(default)s sec: Wall-clock timeout applied to each dependency\n'
                           ' version/help probe run at startup. 0 disables the timeout.')
     pge.set_defaults(handler=command_handlers['getfastq'])
 
@@ -423,9 +436,9 @@ def build_parser(command_handlers, command_names, version, prog=None):
                      required=False, action='store',
                      help='default=%(default)s (12 h): Wall-clock timeout applied to each external\n'
                           ' tool invocation. 0 disables the timeout.')
-    pqu.add_argument('--dependency_probe_timeout_seconds', metavar='INT', default=300, type=int,
+    pqu.add_argument('--dependency_probe_timeout_seconds', metavar='INT', default=DEPENDENCY_PROBE_TIMEOUT_SECONDS, type=int,
                      required=False, action='store',
-                     help='default=%(default)s (5 min): Wall-clock timeout applied to each dependency\n'
+                     help='default=%(default)s sec: Wall-clock timeout applied to each dependency\n'
                           ' version/help probe run at startup. 0 disables the timeout.')
     pqu.set_defaults(handler=command_handlers['quant'])
 

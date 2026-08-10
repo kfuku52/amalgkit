@@ -28,8 +28,10 @@ from amalgkit.metadata_utils import (
     load_metadata,
 )
 from amalgkit.output_utils import atomic_output_path
+from amalgkit.output_contracts import validate_quant_output_files
 from amalgkit.parallel_utils import (
     is_auto_parallel_option,
+    raise_task_failures,
     resolve_detected_cpu_count,
     resolve_thread_worker_allocation,
     run_tasks_with_optional_threads,
@@ -196,53 +198,9 @@ def _preserve_unknown_quant_sidecars(sra_id, source_dir, stage_dir):
 
 
 def validate_quant_outputs(sra_id, output_dir):
+    """Compatibility wrapper around the shared quant output contract."""
     sra_id = validate_safe_path_component(sra_id, label='run ID')
-    abundance_path = os.path.join(output_dir, sra_id + '_abundance.tsv')
-    run_info_path = os.path.join(output_dir, sra_id + '_run_info.json')
-    if (not os.path.isfile(abundance_path)) or os.path.getsize(abundance_path) <= 0:
-        return False, 'Missing or empty quant abundance table: {}'.format(abundance_path)
-    if (not os.path.isfile(run_info_path)) or os.path.getsize(run_info_path) <= 0:
-        return False, 'Missing or empty quant run-info JSON: {}'.format(run_info_path)
-    try:
-        abundance = pandas.read_csv(abundance_path, sep='\t')
-    except Exception as exc:
-        return False, 'Failed to read quant abundance table: {}'.format(exc)
-    required_columns = ['target_id', 'length', 'eff_length', 'est_counts', 'tpm']
-    missing = [column for column in required_columns if column not in abundance.columns]
-    if missing:
-        return False, 'Quant abundance table is missing column(s): {}'.format(', '.join(missing))
-    if abundance.shape[0] == 0:
-        return False, 'Quant abundance table contains no data rows.'
-    if abundance['target_id'].fillna('').astype(str).str.strip().eq('').any():
-        return False, 'Quant abundance table contains an empty target_id.'
-    normalized_target_ids = abundance['target_id'].fillna('').astype(str).str.strip()
-    if normalized_target_ids.duplicated().any():
-        return False, 'Quant abundance table contains duplicate target_id values.'
-    for column in ['length', 'eff_length', 'est_counts', 'tpm']:
-        numeric = pandas.to_numeric(abundance[column], errors='coerce')
-        if numeric.isna().any() or (not numpy.isfinite(numeric.to_numpy(dtype=float)).all()):
-            return False, 'Quant abundance column "{}" contains non-finite values.'.format(column)
-        if (numeric < 0).any():
-            return False, 'Quant abundance column "{}" contains negative values.'.format(column)
-    try:
-        with open(run_info_path, 'r', encoding='utf-8') as handle:
-            run_info = json.load(
-                handle,
-                parse_constant=lambda value: (_ for _ in ()).throw(
-                    ValueError('non-standard numeric constant {}'.format(value))
-                ),
-            )
-    except Exception as exc:
-        return False, 'Failed to read quant run-info JSON: {}'.format(exc)
-    if not isinstance(run_info, dict) or 'p_pseudoaligned' not in run_info:
-        return False, 'Quant run-info JSON is missing p_pseudoaligned.'
-    try:
-        pseudoaligned = float(run_info['p_pseudoaligned'])
-    except (TypeError, ValueError):
-        return False, 'Quant run-info JSON has an invalid p_pseudoaligned.'
-    if (not math.isfinite(pseudoaligned)) or pseudoaligned < 0.0 or pseudoaligned > 100.0:
-        return False, 'Quant run-info JSON has an out-of-range p_pseudoaligned.'
-    return True, ''
+    return validate_quant_output_files(sra_id=sra_id, output_dir=output_dir)
 
 
 def quant_output_exists(sra_id, output_dir):
@@ -2141,7 +2099,8 @@ def pre_resolve_species_indices(args, tasks, runtime_context=None):
             '{}:{}: {}'.format(target[0], target[1], err)
             for target, err in failures
         ])
-        raise RuntimeError(
+        raise_task_failures(
+            failures,
             'Failed to pre-resolve index for {}/{} target(s). {}'.format(
                 len(failures),
                 len(unique_targets),
@@ -2339,4 +2298,7 @@ def quant_main(args):
     )
     if failures:
         details = '; '.join(['{}: {}'.format(task[0], err) for task, err in failures])
-        raise RuntimeError('quant failed for {}/{} SRA runs. {}'.format(len(failures), len(tasks), details))
+        raise_task_failures(
+            failures,
+            'quant failed for {}/{} SRA runs. {}'.format(len(failures), len(tasks), details),
+        )

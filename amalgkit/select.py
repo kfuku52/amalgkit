@@ -11,7 +11,7 @@ from amalgkit.arg_utils import clone_namespace
 from amalgkit.filter_utils import staged_output_dir
 from amalgkit.metadata_utils import Metadata, load_metadata, SELECT_SAMPLING_STRATEGIES
 from amalgkit.output_utils import atomic_write_dataframe
-from amalgkit.parallel_utils import resolve_worker_allocation, run_tasks_with_optional_threads
+from amalgkit.parallel_utils import raise_task_failures, resolve_worker_allocation, run_tasks_with_optional_threads
 from amalgkit.runtime_utils import (
     resolve_species_token,
     safe_join_component,
@@ -330,6 +330,68 @@ def load_select_rules_table(select_rules_tsv):
     return rules_df
 
 
+def _validate_filter_select_rule(rule_id, action, columns, target_column, outcome, parameter_name):
+    if action == 'exclude_if_lt_parameter':
+        if len(columns) != 1:
+            raise ValueError(
+                'Filter select rule "{}" must define exactly one column for action=exclude_if_lt_parameter.'.format(rule_id)
+            )
+        if target_column == '':
+            target_column = SELECT_DEFAULT_TARGET_COLUMN
+        if outcome == '':
+            raise ValueError('Filter select rule "{}" must define outcome.'.format(rule_id))
+        if parameter_name == '':
+            raise ValueError('Filter select rule "{}" must define parameter_name.'.format(rule_id))
+    elif action == 'exclude_if_empty':
+        if len(columns) == 0:
+            raise ValueError(
+                'Filter select rule "{}" must define at least one column for action=exclude_if_empty.'.format(rule_id)
+            )
+        if target_column == '':
+            target_column = SELECT_DEFAULT_TARGET_COLUMN
+        if outcome == '':
+            raise ValueError('Filter select rule "{}" must define outcome.'.format(rule_id))
+    elif action == 'exclude_if_missing_selected_rank':
+        if len(columns) != 1:
+            raise ValueError(
+                'Filter select rule "{}" must define exactly one column template for action=exclude_if_missing_selected_rank.'.format(rule_id)
+            )
+        if target_column == '':
+            target_column = SELECT_DEFAULT_TARGET_COLUMN
+        if outcome == '':
+            raise ValueError('Filter select rule "{}" must define outcome.'.format(rule_id))
+        if parameter_name == '':
+            raise ValueError('Filter select rule "{}" must define parameter_name.'.format(rule_id))
+    else:
+        raise ValueError('Unsupported filter action in select rule "{}": {}'.format(rule_id, action))
+    return target_column, outcome
+
+
+def _validate_validate_select_rule(rule_id, action, outcome):
+    if action == 'hint_organ':
+        if outcome not in SELECT_NORMALIZE_ORGANS:
+            raise ValueError(
+                'Validate select rule "{}" has unsupported organ outcome: {}'.format(rule_id, outcome)
+            )
+    elif action == 'hint_review':
+        if outcome == '':
+            outcome = 'review'
+        if outcome != 'review':
+            raise ValueError(
+                'Validate select rule "{}" with action=hint_review must use outcome=review.'.format(rule_id)
+            )
+    elif action == 'ignore_segment':
+        if outcome == '':
+            outcome = 'ignore'
+        if outcome != 'ignore':
+            raise ValueError(
+                'Validate select rule "{}" with action=ignore_segment must use outcome=ignore.'.format(rule_id)
+            )
+    else:
+        raise ValueError('Unsupported validate action in select rule "{}": {}'.format(rule_id, action))
+    return outcome
+
+
 def read_select_config(select_rules_tsv):
     rules_df = load_select_rules_table(select_rules_tsv)
     rules = []
@@ -443,51 +505,14 @@ def read_select_config(select_rules_tsv):
                     'Control select rule "{}" has unsupported scope_mode: {}'.format(rule_id, scope_mode)
                 )
         elif stage == 'filter':
-            if action == 'exclude_if_lt_parameter':
-                if len(columns) != 1:
-                    raise ValueError(
-                        'Filter select rule "{}" must define exactly one column for action=exclude_if_lt_parameter.'.format(rule_id)
-                    )
-                if target_column == '':
-                    target_column = SELECT_DEFAULT_TARGET_COLUMN
-                if outcome == '':
-                    raise ValueError(
-                        'Filter select rule "{}" must define outcome.'.format(rule_id)
-                    )
-                if parameter_name == '':
-                    raise ValueError(
-                        'Filter select rule "{}" must define parameter_name.'.format(rule_id)
-                    )
-            elif action == 'exclude_if_empty':
-                if len(columns) == 0:
-                    raise ValueError(
-                        'Filter select rule "{}" must define at least one column for action=exclude_if_empty.'.format(rule_id)
-                    )
-                if target_column == '':
-                    target_column = SELECT_DEFAULT_TARGET_COLUMN
-                if outcome == '':
-                    raise ValueError(
-                        'Filter select rule "{}" must define outcome.'.format(rule_id)
-                    )
-            elif action == 'exclude_if_missing_selected_rank':
-                if len(columns) != 1:
-                    raise ValueError(
-                        'Filter select rule "{}" must define exactly one column template for action=exclude_if_missing_selected_rank.'.format(rule_id)
-                    )
-                if target_column == '':
-                    target_column = SELECT_DEFAULT_TARGET_COLUMN
-                if outcome == '':
-                    raise ValueError(
-                        'Filter select rule "{}" must define outcome.'.format(rule_id)
-                    )
-                if parameter_name == '':
-                    raise ValueError(
-                        'Filter select rule "{}" must define parameter_name.'.format(rule_id)
-                    )
-            else:
-                raise ValueError(
-                    'Unsupported filter action in select rule "{}": {}'.format(rule_id, action)
-                )
+            target_column, outcome = _validate_filter_select_rule(
+                rule_id,
+                action,
+                columns,
+                target_column,
+                outcome,
+                parameter_name,
+            )
         elif stage == 'dedup':
             if action != 'exclude_redundant_by_best_numeric':
                 raise ValueError(
@@ -506,29 +531,7 @@ def read_select_config(select_rules_tsv):
                     'Dedup select rule "{}" must define outcome.'.format(rule_id)
                 )
         elif stage == 'validate':
-            if action == 'hint_organ':
-                if outcome not in SELECT_NORMALIZE_ORGANS:
-                    raise ValueError(
-                        'Validate select rule "{}" has unsupported organ outcome: {}'.format(rule_id, outcome)
-                    )
-            elif action == 'hint_review':
-                if outcome == '':
-                    outcome = 'review'
-                if outcome != 'review':
-                    raise ValueError(
-                        'Validate select rule "{}" with action=hint_review must use outcome=review.'.format(rule_id)
-                    )
-            elif action == 'ignore_segment':
-                if outcome == '':
-                    outcome = 'ignore'
-                if outcome != 'ignore':
-                    raise ValueError(
-                        'Validate select rule "{}" with action=ignore_segment must use outcome=ignore.'.format(rule_id)
-                    )
-            else:
-                raise ValueError(
-                    'Unsupported validate action in select rule "{}": {}'.format(rule_id, action)
-                )
+            outcome = _validate_validate_select_rule(rule_id, action, outcome)
         rules.append({
             'rule_id': rule_id,
             'stage': stage,
@@ -1886,7 +1889,8 @@ def select_batch_main(args):
                     for task, err in failures
                 ]
             )
-            raise RuntimeError(
+            raise_task_failures(
+                failures,
                 'select batch failed for {}/{} species. {}'.format(
                     len(failures),
                     len(task_items),

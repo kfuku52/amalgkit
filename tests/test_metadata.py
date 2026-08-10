@@ -21,6 +21,17 @@ from amalgkit.metadata import (
 from amalgkit.util import Metadata
 
 
+def test_metadata_dataframe_factories_are_static_and_copy_input():
+    source = pandas.DataFrame({'run': ['SRR001']})
+
+    canonical = Metadata.from_dataframe(source)
+    legacy = Metadata.from_DataFrame(source)
+
+    source.loc[0, 'run'] = 'changed'
+    assert canonical.df.loc[0, 'run'] == 'SRR001'
+    assert legacy.df.loc[0, 'run'] == 'SRR001'
+
+
 class TestFetchSraXml:
     class _DummyTree:
         def __init__(self, root):

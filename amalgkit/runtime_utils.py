@@ -26,6 +26,16 @@ _CONTROL_CHARACTER_PATTERN = re.compile(r'[\x00-\x1f\x7f]')
 _SPECIES_TOKEN_PATTERN = re.compile(r'^[0-9A-Za-z._-]+$')
 
 
+def format_species_label(value):
+    """Format an underscore/space-separated species name on two plot lines."""
+    tokens = str(value).replace('_', ' ').split()
+    if len(tokens) >= 2:
+        return '{}\n{}'.format(tokens[0], ' '.join(tokens[1:]))
+    if len(tokens) == 1:
+        return tokens[0]
+    return ''
+
+
 def validate_safe_path_component(value, label='Path component'):
     component = str(value).strip()
     if component == '':

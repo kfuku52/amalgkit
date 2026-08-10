@@ -1,6 +1,7 @@
 import pytest
 import pandas
 import gzip
+import pathlib
 import subprocess
 import xml.etree.ElementTree as ET
 from contextlib import contextmanager
@@ -1316,7 +1317,7 @@ class TestContamFilterDbPathResolution:
         observed = ensure_mmseqs_contam_taxonomy_db_exists(args)
         assert observed == db_path
         assert len(calls) == 1
-        assert open(db_path).read() == 'rebuilt'
+        assert pathlib.Path(db_path).read_text(encoding='utf-8') == 'rebuilt'
         assert os.path.isfile(db_path + '.ready')
 
 class TestGetfastqXmlRetrieval:

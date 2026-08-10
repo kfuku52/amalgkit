@@ -49,7 +49,7 @@ def test_runtime_banner_reports_all_scientific_python_dependencies(monkeypatch, 
         'resolve_dependency_version',
         lambda package_name, _module_name: 'version-for-{}'.format(package_name),
     )
-    monkeypatch.setattr(cli_utils, 'resolve_external_tool_status', lambda *_args: 'MISSING')
+    monkeypatch.setattr(cli_utils, 'resolve_external_tool_availability', lambda *_args: 'MISSING')
 
     cli_utils.print_runtime_banner(['amalgkit', 'finalize'])
 
@@ -74,7 +74,7 @@ def test_runtime_banner_skips_external_probes_for_metadata_only_command(monkeypa
     def fail_external_probe(*_args):
         raise AssertionError('metadata must not execute unrelated external tools')
 
-    monkeypatch.setattr(cli_utils, 'resolve_external_tool_status', fail_external_probe)
+    monkeypatch.setattr(cli_utils, 'resolve_external_tool_availability', fail_external_probe)
 
     cli_utils.print_runtime_banner(['amalgkit', 'metadata'])
 
@@ -85,11 +85,11 @@ def test_runtime_banner_probes_only_tools_relevant_to_active_command(monkeypatch
     monkeypatch.setattr(cli_utils, 'resolve_dependency_version', lambda *_args: '1.0')
     observed = []
 
-    def record_probe(executable_name, _version_commands):
+    def record_probe(executable_name):
         observed.append(executable_name)
         return 'MISSING'
 
-    monkeypatch.setattr(cli_utils, 'resolve_external_tool_status', record_probe)
+    monkeypatch.setattr(cli_utils, 'resolve_external_tool_availability', record_probe)
 
     cli_utils.print_runtime_banner(['amalgkit', 'quant'])
 
@@ -97,3 +97,18 @@ def test_runtime_banner_probes_only_tools_relevant_to_active_command(monkeypatch
     output = capsys.readouterr().out
     assert 'AMALGKIT tool kallisto:' in output
     assert 'AMALGKIT tool fastp:' not in output
+
+
+def test_runtime_banner_does_not_execute_external_tools(monkeypatch, capsys):
+    monkeypatch.setattr(cli_utils, 'resolve_dependency_version', lambda *_args: '1.0')
+    monkeypatch.setattr(cli_utils.shutil, 'which', lambda executable: '/tools/' + executable)
+
+    def fail_command(*_args, **_kwargs):
+        raise AssertionError('runtime banner must not execute an external tool')
+
+    monkeypatch.setattr(cli_utils.subprocess, 'run', fail_command)
+
+    cli_utils.print_runtime_banner(['amalgkit', 'getfastq'])
+
+    output = capsys.readouterr().out
+    assert 'AMALGKIT tool fasterq-dump: FOUND (/tools/fasterq-dump)' in output

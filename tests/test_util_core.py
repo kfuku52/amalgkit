@@ -3,6 +3,8 @@ import time
 
 import pytest
 
+from amalgkit.parallel_utils import raise_task_failures
+
 from amalgkit.util import (
     strtobool,
     parse_bool_flags,
@@ -146,6 +148,31 @@ class TestRunTasksWithOptionalThreads:
 
         assert results == {}
         assert [task for task, _exc in failures] == [1]
+
+    def test_parallel_failure_order_follows_input_order(self):
+        def worker(value):
+            if value == 1:
+                time.sleep(0.02)
+            raise ValueError('bad {}'.format(value))
+
+        _results, failures = run_tasks_with_optional_threads(
+            [1, 2],
+            worker,
+            max_workers=2,
+        )
+
+        assert [task for task, _exc in failures] == [1, 2]
+
+    def test_summary_error_retains_original_exceptions_as_cause(self):
+        original = ValueError('root cause')
+
+        with pytest.raises(RuntimeError, match='workflow failed') as exc_info:
+            raise_task_failures([('run-1', original)], 'workflow failed')
+
+        assert exc_info.value.failures == (('run-1', original),)
+        assert isinstance(exc_info.value.__cause__, ExceptionGroup)
+        assert exc_info.value.__cause__.exceptions == (original,)
+        assert "Parallel task: 'run-1'" in original.__notes__
 
 class TestValidatePositiveIntOption:
     def test_accepts_positive(self):

@@ -8,6 +8,8 @@ from matplotlib.lines import Line2D
 import numpy
 import pandas
 
+from amalgkit.cross_species_computation import resolve_tsne_perplexity as _resolve_tsne_perplexity
+
 from amalgkit.per_species_common import sample_group_mean, sample_group_to_tau
 
 
@@ -259,15 +261,6 @@ def _compute_mds_coords(corr_df):
         value = max(float(eigvals[idx]), 0.0)
         coords[:, idx] = eigvecs[:, idx] * numpy.sqrt(value)
     return coords
-
-
-def _resolve_tsne_perplexity(num_samples):
-    if int(num_samples) < 4:
-        return None
-    max_perplexity = int((int(num_samples) - 1) // 3)
-    if max_perplexity < 1:
-        return None
-    return min(30, max_perplexity)
 
 
 def _compute_tsne_coords(counts_df):

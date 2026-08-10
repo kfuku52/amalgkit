@@ -20,7 +20,12 @@ from amalgkit.metadata_utils import (
     load_metadata,
 )
 from amalgkit.orthology_utils import parse_busco_species_name
-from amalgkit.parallel_utils import resolve_thread_worker_allocation, run_tasks_with_optional_threads
+from amalgkit.output_contracts import BUSCO_REQUIRED_COLUMNS
+from amalgkit.parallel_utils import (
+    raise_task_failures,
+    resolve_thread_worker_allocation,
+    run_tasks_with_optional_threads,
+)
 from amalgkit.runtime_utils import (
     normalize_species_token,
     resolve_species_token,
@@ -31,15 +36,7 @@ from amalgkit.runtime_utils import (
 from amalgkit.subprocess_utils import resolve_timeout_seconds, run_checked_command
 
 
-REQUIRED_COLUMNS = [
-    'busco_id',
-    'status',
-    'sequence',
-    'score',
-    'length',
-    'orthodb_url',
-    'description',
-]
+REQUIRED_COLUMNS = list(BUSCO_REQUIRED_COLUMNS)
 
 
 FASTA_SUFFIXES = ('.fa', '.fasta', '.fa.gz', '.fasta.gz')
@@ -991,7 +988,10 @@ def run_busco_species_jobs(
     )
     if failures:
         details = '; '.join(['{}: {}'.format(sp, err) for sp, err in failures])
-        raise RuntimeError('BUSCO failed for {}/{} species. {}'.format(len(failures), len(species), details))
+        raise_task_failures(
+            failures,
+            'BUSCO failed for {}/{} species. {}'.format(len(failures), len(species), details),
+        )
 
 
 def busco_main(args):

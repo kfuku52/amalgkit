@@ -1,11 +1,20 @@
 import math
+import shutil
 import subprocess
+import threading
+import time
+from typing import Any
 
+from amalgkit.logging_utils import get_logger
 
 # Dependency probes run `--version`/`-h` and should answer within seconds. They
 # get their own short default so a hanging executable cannot block startup for
 # as long as the analysis-call limits allow.
-DEPENDENCY_PROBE_TIMEOUT_SECONDS = 300
+DEPENDENCY_PROBE_TIMEOUT_SECONDS = 30
+
+_DEFAULT_SUBPROCESS_RUN = subprocess.run
+_DEPENDENCY_PROBE_CACHE: dict[tuple[str, tuple[str, ...], float | None], Any] = {}
+_DEPENDENCY_PROBE_CACHE_LOCK = threading.Lock()
 
 
 def resolve_timeout_seconds(args, attribute_name, default_seconds):
@@ -32,15 +41,15 @@ def resolve_timeout_seconds(args, attribute_name, default_seconds):
 
 
 def format_command(command):
-    return ' '.join([str(part) for part in command])
+    return " ".join([str(part) for part in command])
 
 
 def decode_command_output(output):
     if output is None:
-        return ''
+        return ""
     if isinstance(output, str):
         return output
-    return output.decode('utf8', errors='replace')
+    return output.decode("utf8", errors="replace")
 
 
 def print_command_output(stdout_txt, stderr_txt, stdout_label=None, stderr_label=None):
@@ -51,23 +60,19 @@ def print_command_output(stdout_txt, stderr_txt, stdout_label=None, stderr_label
     if stdout_label is not None:
         print(stdout_label, flush=True)
         print(stdout_txt, flush=True)
-    elif stdout_txt != '':
+    elif stdout_txt != "":
         print(stdout_txt, flush=True)
     if stderr_label is not None:
         print(stderr_label, flush=True)
         print(stderr_txt, flush=True)
-    elif stderr_txt != '':
+    elif stderr_txt != "":
         print(stderr_txt, flush=True)
 
 
 def _timeout_error_message(timeout_seconds, command_txt, exc):
-    timeout_txt = '' if timeout_seconds is None else ' after {:,} sec'.format(int(float(timeout_seconds)))
-    stderr_txt = decode_command_output(getattr(exc, 'stderr', None))
-    return 'Command timed out{}: {}\n{}'.format(
-        timeout_txt,
-        command_txt,
-        stderr_txt.rstrip(),
-    )
+    timeout_txt = "" if timeout_seconds is None else f" after {int(float(timeout_seconds)):,} sec"
+    stderr_txt = decode_command_output(getattr(exc, "stderr", None))
+    return f"Command timed out{timeout_txt}: {command_txt}\n{stderr_txt.rstrip()}"
 
 
 def _run_command_with_timeout(runner, command, timeout_seconds):
@@ -93,7 +98,7 @@ def run_logged_command(
     command,
     runner=subprocess.run,
     print_command=True,
-    command_prefix='Command',
+    command_prefix="Command",
     print_output=False,
     stdout_label=None,
     stderr_label=None,
@@ -101,8 +106,14 @@ def run_logged_command(
     timeout_seconds=None,
 ):
     command_txt = format_command(command)
+    logger = get_logger("subprocess")
+    started_at_ns = time.monotonic_ns()
+    logger.debug(
+        "external_command_start",
+        extra={"event": "external_command_start", "command": command_txt},
+    )
     if print_command:
-        print('{}: {}'.format(command_prefix, command_txt), flush=True)
+        print(f"{command_prefix}: {command_txt}", flush=True)
     try:
         result = _run_command_with_timeout(
             runner=runner,
@@ -110,17 +121,34 @@ def run_logged_command(
             timeout_seconds=timeout_seconds,
         )
     except subprocess.TimeoutExpired as exc:
-        raise TimeoutError(
-            _timeout_error_message(timeout_seconds, command_txt, exc)
-        ) from exc
+        logger.exception(
+            "external_command_timeout",
+            extra={
+                "event": "external_command_timeout",
+                "command": command_txt,
+                "duration_seconds": round((time.monotonic_ns() - started_at_ns) / 1_000_000_000, 6),
+            },
+        )
+        raise TimeoutError(_timeout_error_message(timeout_seconds, command_txt, exc)) from exc
     except FileNotFoundError as exc:
+        logger.exception(
+            "external_command_not_found",
+            extra={"event": "external_command_not_found", "command": command_txt},
+        )
         if not_found_label is None:
             raise
-        raise FileNotFoundError(
-            '{} executable not found: {}'.format(not_found_label, command[0])
-        ) from exc
+        raise FileNotFoundError(f"{not_found_label} executable not found: {command[0]}") from exc
     stdout_txt = decode_command_output(result.stdout)
     stderr_txt = decode_command_output(result.stderr)
+    logger.debug(
+        "external_command_end",
+        extra={
+            "event": "external_command_end",
+            "command": command_txt,
+            "duration_seconds": round((time.monotonic_ns() - started_at_ns) / 1_000_000_000, 6),
+            "returncode": result.returncode,
+        },
+    )
     if print_output:
         print_command_output(
             stdout_txt=stdout_txt,
@@ -135,7 +163,7 @@ def run_checked_command(
     command,
     runner=subprocess.run,
     print_command=True,
-    command_prefix='Command',
+    command_prefix="Command",
     print_output=False,
     stdout_label=None,
     stderr_label=None,
@@ -161,7 +189,7 @@ def run_checked_command(
         elif failure_message is not None:
             message = failure_message
         else:
-            message = 'Command failed with exit code {}: {}'.format(result.returncode, command_txt)
+            message = f"Command failed with exit code {result.returncode}: {command_txt}"
         raise RuntimeError(message)
     return result, stdout_txt, stderr_txt
 
@@ -170,13 +198,13 @@ def run_logged_check_call(
     command,
     runner=subprocess.check_call,
     print_command=True,
-    command_prefix='Command',
+    command_prefix="Command",
     not_found_label=None,
     timeout_seconds=None,
 ):
     command_txt = format_command(command)
     if print_command:
-        print('{}: {}'.format(command_prefix, command_txt), flush=True)
+        print(f"{command_prefix}: {command_txt}", flush=True)
     try:
         if timeout_seconds is None:
             return runner(command)
@@ -187,15 +215,11 @@ def run_logged_check_call(
                 raise
             return runner(command)
     except subprocess.TimeoutExpired as exc:
-        raise TimeoutError(
-            _timeout_error_message(timeout_seconds, command_txt, exc)
-        ) from exc
+        raise TimeoutError(_timeout_error_message(timeout_seconds, command_txt, exc)) from exc
     except FileNotFoundError as exc:
         if not_found_label is None:
             raise
-        raise FileNotFoundError(
-            '{} executable not found: {}'.format(not_found_label, command[0])
-        ) from exc
+        raise FileNotFoundError(f"{not_found_label} executable not found: {command[0]}") from exc
 
 
 def probe_dependency_command(
@@ -204,7 +228,24 @@ def probe_dependency_command(
     runner=subprocess.run,
     timeout_seconds=DEPENDENCY_PROBE_TIMEOUT_SECONDS,
 ):
-    return run_checked_command(
+    cache_key = None
+    if runner is _DEFAULT_SUBPROCESS_RUN:
+        executable = shutil.which(str(command[0])) or str(command[0])
+        cache_key = (
+            executable,
+            tuple(str(part) for part in command[1:]),
+            None if timeout_seconds is None else float(timeout_seconds),
+        )
+        with _DEPENDENCY_PROBE_CACHE_LOCK:
+            cached = _DEPENDENCY_PROBE_CACHE.get(cache_key)
+        if cached is not None:
+            get_logger("subprocess").debug(
+                "dependency_probe_cache_hit",
+                extra={"event": "dependency_probe_cache_hit", "command": format_command(command)},
+            )
+            return cached
+
+    result = run_checked_command(
         command=command,
         runner=runner,
         print_command=False,
@@ -212,10 +253,16 @@ def probe_dependency_command(
         not_found_label=label,
         timeout_seconds=timeout_seconds,
         failure_message=lambda result, _stdout, _stderr, command_txt: (
-            '{} dependency probe failed with exit code {}: {}'.format(
-                label,
-                result.returncode,
-                command_txt,
-            )
+            f"{label} dependency probe failed with exit code {result.returncode}: {command_txt}"
         ),
     )
+    if cache_key is not None:
+        with _DEPENDENCY_PROBE_CACHE_LOCK:
+            _DEPENDENCY_PROBE_CACHE[cache_key] = result
+    return result
+
+
+def clear_dependency_probe_cache():
+    """Clear successful dependency-probe results, primarily for long-lived callers."""
+    with _DEPENDENCY_PROBE_CACHE_LOCK:
+        _DEPENDENCY_PROBE_CACHE.clear()

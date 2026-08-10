@@ -24,6 +24,7 @@ from amalgkit.runtime_utils import (
 )
 from amalgkit.parallel_utils import (
     is_auto_parallel_option,
+    raise_task_failures,
     resolve_worker_allocation,
     run_tasks_with_optional_threads,
 )
@@ -976,7 +977,8 @@ def _run_species_batch(args):
         details = '; '.join(
             ['{}: {}'.format(task[1] if isinstance(task, tuple) and len(task) >= 2 else task, err) for task, err in failures]
         )
-        raise RuntimeError(
+        raise_task_failures(
+            failures,
             'metadata batch failed for {}/{} species. {}'.format(
                 len(failures),
                 len(task_items),

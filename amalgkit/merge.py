@@ -8,6 +8,7 @@ from amalgkit.merge_plots import generate_merge_plots
 from amalgkit.metadata_utils import load_metadata, write_updated_metadata
 from amalgkit.parallel_utils import (
     is_auto_parallel_option,
+    raise_task_failures,
     resolve_worker_allocation,
     run_tasks_with_optional_threads,
     validate_positive_int_option,
@@ -308,7 +309,11 @@ def load_quant_tables_once(detected_sra_ids, quant_out_paths, value_columns):
                 '{} ({}): {}'.format(detected_sra_ids[file_idx], quant_out_paths[file_idx], exc)
                 for file_idx, exc in failures
             ])
-            raise ValueError('Failed to read one or more quant output tables. {}'.format(details))
+            raise_task_failures(
+                failures,
+                'Failed to read one or more quant output tables. {}'.format(details),
+                error_type=ValueError,
+            )
 
     for file_idx in range(len(quant_out_paths)):
         sra_id, current_target_ids, row_values = results_by_idx[file_idx]
@@ -433,7 +438,10 @@ def run_merge_species_jobs(metadata, quant_dir, merge_dir, run_abundance_paths, 
     )
     if failures:
         details = '; '.join(['{}: {}'.format(sp, err) for sp, err in failures])
-        raise RuntimeError('merge failed for {}/{} species. {}'.format(len(failures), len(spp), details))
+        raise_task_failures(
+            failures,
+            'merge failed for {}/{} species. {}'.format(len(failures), len(spp), details),
+        )
     total_detected = 0
     for sp in spp:
         detected = counts_by_species.get(sp, 0)

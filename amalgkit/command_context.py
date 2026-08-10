@@ -2,41 +2,42 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from typing import Any
 
 
 @dataclass
 class PerSpeciesTableContext:
-    metadata: object = None
+    metadata: Any | None = None
     input_dir: str | None = None
 
-    def resolve(self):
+    def resolve(self) -> tuple[Any, str]:
         if self.metadata is None:
-            raise ValueError('PerSpeciesTableContext.metadata is required.')
+            raise ValueError("PerSpeciesTableContext.metadata is required.")
         if self.input_dir is None:
-            raise ValueError('PerSpeciesTableContext.input_dir is required.')
+            raise ValueError("PerSpeciesTableContext.input_dir is required.")
         return self.metadata, self.input_dir
 
 
 @dataclass
 class CrossSpeciesFilterContext:
-    metadata: object = None
+    metadata: Any | None = None
 
 
 @dataclass
 class PrefetchedDirEntries:
-    entries: object = None
-    entries_sorted: list | tuple | None = None
+    entries: set[str] | list[str] | tuple[str, ...] | None = None
+    entries_sorted: list[str] | tuple[str, ...] | None = None
     path_dir: str | None = None
 
     @classmethod
-    def from_entries(cls, entries=None, path_dir=None):
+    def from_entries(cls, entries=None, path_dir=None) -> PrefetchedDirEntries:
         sorted_entries = None
         if isinstance(entries, (set, list, tuple)):
             sorted_entries = sorted(entries)
         real_path = os.path.realpath(path_dir) if isinstance(path_dir, str) else None
         return cls(entries=entries, entries_sorted=sorted_entries, path_dir=real_path)
 
-    def resolve_entries(self, path_dir):
+    def resolve_entries(self, path_dir: str) -> list[str] | tuple[str, ...] | set[str] | None:
         if (not isinstance(self.path_dir, str)) or (os.path.realpath(path_dir) != self.path_dir):
             return None
         if isinstance(self.entries_sorted, (list, tuple)):
@@ -48,15 +49,15 @@ class PrefetchedDirEntries:
 
 @dataclass
 class QuantRuntimeContext:
-    run_files_by_run: dict = field(default_factory=dict)
-    quant_backend_by_run: dict = field(default_factory=dict)
-    oarfish_seq_tech_by_run: dict = field(default_factory=dict)
-    species_identifier_values_by_run: dict = field(default_factory=dict)
-    resolved_index_cache: dict = field(default_factory=dict)
+    run_files_by_run: dict[str, set[str]] = field(default_factory=dict)
+    quant_backend_by_run: dict[str, str] = field(default_factory=dict)
+    oarfish_seq_tech_by_run: dict[str, str] = field(default_factory=dict)
+    species_identifier_values_by_run: dict[str, str] = field(default_factory=dict)
+    resolved_index_cache: dict[Any, Any] = field(default_factory=dict)
     prefetched_fasta: PrefetchedDirEntries = field(default_factory=PrefetchedDirEntries)
     prefetched_index: PrefetchedDirEntries = field(default_factory=PrefetchedDirEntries)
 
 
 @dataclass
 class GetfastqRuntimeContext:
-    mmseqs_dbtype_cache: dict = field(default_factory=dict)
+    mmseqs_dbtype_cache: dict[str, int] = field(default_factory=dict)

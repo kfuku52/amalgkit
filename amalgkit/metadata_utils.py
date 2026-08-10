@@ -11,6 +11,7 @@ import xml.etree.ElementTree as ET
 import numpy
 import pandas
 
+from amalgkit.cli_utils import strtobool
 from amalgkit.download_utils import get_ncbi_taxonomy
 from amalgkit.exceptions import AmalgkitExit
 from amalgkit.output_utils import atomic_write_dataframe
@@ -58,16 +59,6 @@ _TAXONOMY_LOOKUP_CACHE_LOCK = threading.Lock()
 _LINEAGE_BY_TAXID_CACHE = {}
 _RANK_BY_TAXID_CACHE = {}
 _SCIENTIFIC_NAME_BY_TAXID_CACHE = {}
-
-
-def strtobool(val):
-    val = val.lower()
-    if val in ("y", "yes", "t", "true", "on", "1"):
-        return True
-    elif val in ("n", "no", "f", "false", "off", "0"):
-        return False
-    else:
-        raise ValueError(f"invalid truth value {val!r}")
 
 
 def parse_bool_flags(values, column_name='value', default=''):
@@ -178,12 +169,20 @@ class Metadata:
         if is_empty:
             return None
 
-    def from_DataFrame(df):
+    @staticmethod
+    def from_dataframe(df):
+        """Build metadata from a pandas DataFrame without retaining shared state."""
         metadata = Metadata()
         metadata.df = df.copy(deep=True)
         metadata.reorder(omit_misc=False)
         return metadata
 
+    @staticmethod
+    def from_DataFrame(df):
+        """Backward-compatible alias for :meth:`from_dataframe`."""
+        return Metadata.from_dataframe(df)
+
+    @staticmethod
     def _normalize_xml_root(xml_root):
         if isinstance(xml_root, ET.ElementTree):
             return xml_root.getroot()
@@ -193,7 +192,9 @@ class Metadata:
             return xml_root.getroot()
         raise TypeError("Unknown input type.")
 
+    @staticmethod
     def from_xml_roots(xml_roots):
+        """Build metadata from one or more SRA XML roots."""
         metadata = Metadata()
 
         def get_first_text(entry, path):
@@ -465,7 +466,9 @@ class Metadata:
         metadata.reorder(omit_misc=False)
         return metadata
 
+    @staticmethod
     def from_xml(xml_root):
+        """Build metadata from a single SRA XML root."""
         return Metadata.from_xml_roots([xml_root])
 
     def add_standard_rank_taxids(self, args=None):

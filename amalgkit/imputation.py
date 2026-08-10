@@ -3,6 +3,8 @@ import warnings
 import numpy
 import pandas
 
+from amalgkit.linalg_utils import gram_components_require_svd_fallback as _gram_components_require_svd_fallback
+
 
 IMPUTATION_STRATEGIES = ('em_pca', 'nipals', 'row_mean')
 
@@ -74,31 +76,6 @@ def _full_svd_reconstruction(values, num_pc):
     return (
         left[:, :num_pc] * singular_values[:num_pc].reshape(1, -1)
     ).dot(right[:num_pc, :])
-
-
-def _gram_components_require_svd_fallback(eigenvalues_descending, num_components, matrix_shape):
-    eigenvalues = numpy.maximum(
-        numpy.asarray(eigenvalues_descending, dtype=float),
-        0.0,
-    )
-    if eigenvalues.size == 0:
-        return True
-    scale = float(eigenvalues[0])
-    if (not numpy.isfinite(scale)) or scale <= 0.0:
-        return True
-    tolerance = (
-        numpy.finfo(float).eps
-        * max(matrix_shape)
-        * scale
-    )
-    boundary_index = int(num_components) - 1
-    if eigenvalues[boundary_index] <= tolerance:
-        return True
-    if int(num_components) < eigenvalues.size:
-        boundary_gap = eigenvalues[boundary_index] - eigenvalues[int(num_components)]
-        if boundary_gap <= tolerance:
-            return True
-    return False
 
 
 def _fit_nipals(values, num_pc, max_iter, tol):

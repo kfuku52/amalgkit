@@ -10,6 +10,7 @@ import pandas
 
 from amalgkit.download_utils import acquire_exclusive_lock
 from amalgkit.output_utils import atomic_output_path, get_default_creation_mode
+from amalgkit.runtime_utils import format_species_label as _format_genus_species_label
 
 
 FILTER_METADATA_STATE_FILENAME = 'filter_metadata_state.json'
@@ -301,15 +302,6 @@ def copy_root_pdfs_to_species_dirs(src_dir, dst_dir, species_list):
         for name, src_path in root_pdfs:
             dst_name = build_species_prefixed_filename(species=species, filename=name)
             shutil.copy2(src_path, os.path.join(dst_species_dir, dst_name))
-
-
-def _format_genus_species_label(value):
-    tokens = str(value).replace('_', ' ').split()
-    if len(tokens) >= 2:
-        return '{}\n{}'.format(tokens[0], ' '.join(tokens[1:]))
-    if len(tokens) == 1:
-        return tokens[0]
-    return ''
 
 
 def save_exclusion_plot_pdf(df_metadata, out_pdf_path, y_label='Sample count', font_size=8):

@@ -1,4 +1,8 @@
 graft tests
+graft benchmarks
+graft requirements
+include ARCHITECTURE.md
+include CHANGELOG.md
 include README.md
 include LICENSE
 include CONTRIBUTING.md

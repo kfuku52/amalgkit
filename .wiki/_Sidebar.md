@@ -2,6 +2,7 @@
   * [Home](./Home)
   * [Installation and dependencies](./Installation-and-dependencies)
   * [Parallel processing](./Parallel-processing)
+  * [Architecture and development](./Architecture-and-development)
   * [Tutorial 1](./Tutorial-1)
 
 * Active commands

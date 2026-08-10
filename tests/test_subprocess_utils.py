@@ -6,6 +6,7 @@ import pytest
 
 from amalgkit.subprocess_utils import (
     DEPENDENCY_PROBE_TIMEOUT_SECONDS,
+    clear_dependency_probe_cache,
     probe_dependency_command,
     resolve_timeout_seconds,
     run_checked_command,
@@ -199,7 +200,7 @@ def test_resolve_timeout_seconds_falls_back_on_unusable_values():
 
 def test_probe_dependency_command_has_a_short_default_timeout():
     # A hanging `--version` must not block startup.
-    assert DEPENDENCY_PROBE_TIMEOUT_SECONDS == 300
+    assert DEPENDENCY_PROBE_TIMEOUT_SECONDS == 30
     observed = {}
 
     def fake_run(cmd, stdout=None, stderr=None, timeout=None):
@@ -208,6 +209,23 @@ def test_probe_dependency_command_has_a_short_default_timeout():
 
     probe_dependency_command(command=['dummy', '--version'], label='dummy', runner=fake_run)
     assert observed['timeout'] == float(DEPENDENCY_PROBE_TIMEOUT_SECONDS)
+
+
+def test_successful_default_dependency_probe_is_cached(tmp_path):
+    clear_dependency_probe_cache()
+    counter_path = tmp_path / 'probe-count.txt'
+    script = (
+        'from pathlib import Path; '
+        'p=Path({!r}); '
+        'p.write_text(str(int(p.read_text()) + 1) if p.exists() else "1")'
+    ).format(str(counter_path))
+    command = [sys.executable, '-c', script]
+
+    probe_dependency_command(command=command, label='python')
+    probe_dependency_command(command=command, label='python')
+
+    assert counter_path.read_text(encoding='utf-8') == '1'
+    clear_dependency_probe_cache()
 
 
 @pytest.mark.slow

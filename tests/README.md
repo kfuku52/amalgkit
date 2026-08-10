@@ -11,6 +11,7 @@ markers have narrower purposes:
 - `integration`: a public workflow spanning multiple production components.
 - `slow`: deliberate process waiting or real PDF rendering.
 - `optional_dependency`: coverage requiring an optional project extra.
+- `benchmark`: performance measurement kept out of the default correctness lane.
 
 Run the fast lane while developing:
 
@@ -21,8 +22,12 @@ python -m pytest -q -n 2 -m "not integration and not slow and not optional_depen
 Run every available test before merging:
 
 ```bash
-python -m pytest -q -n 2
+python -m pytest -q -n 2 --cov=amalgkit --cov-branch --cov-fail-under=75
 ```
+
+Warnings are errors unless `pyproject.toml` explicitly allows a known scientific
+or fallback warning. Tests that introduce a new expected warning should assert
+it locally or document a narrowly matched allow-list entry.
 
 Integration tests use lightweight PDF placeholders when they are checking plot
 orchestration and output naming. Dedicated `slow` tests retain real PDF

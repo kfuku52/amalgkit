@@ -28,10 +28,9 @@ amalgkit -h
 amalgkit help metadata
 ```
 
-AMALGKIT supports Linux and macOS with Python 3.11 or later. Git tags, GitHub
-Releases, and the Bioconda recipe are updated for major and minor versions, not
-for patch-only changes. The latest patch code remains available from the default
-branch, so run `amalgkit --version` when reproducing an analysis.
+AMALGKIT supports Linux and macOS with Python 3.11 or later. Every released
+version, including a patch version, has a matching Git tag and GitHub Release.
+Run `amalgkit --version` and retain that value when reproducing an analysis.
 
 `amalgkit getfastq` requires `fasterq-dump` from `sra-tools >= 3` on `PATH`.
 If you manage external tools separately, install it explicitly, for example:
@@ -43,6 +42,10 @@ mamba install -c conda-forge -c bioconda "sra-tools>=3"
 Commands such as `getfastq`, `quant`, and `busco` use additional external
 bioinformatics tools. See [Installation and dependencies](https://github.com/kfuku52/amalgkit/wiki/Installation-and-dependencies)
 for the command-by-command dependency table.
+
+For machine-readable diagnostics, place the global logging option before the
+command, for example `amalgkit --log_file ./quant.jsonl quant --out_dir ./work`.
+See [Architecture and development](https://github.com/kfuku52/amalgkit/wiki/Architecture-and-development).
 
 ## Commands
 See [Wiki](https://github.com/kfuku52/amalgkit/wiki) for detailed examples and option descriptions.

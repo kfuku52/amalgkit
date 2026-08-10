@@ -7,6 +7,7 @@ import pandas
 from scipy import interpolate, stats
 
 from amalgkit.batch_effect_common import align_metadata_to_counts
+from amalgkit.linalg_utils import gram_components_require_svd_fallback as _gram_components_require_svd_fallback
 
 
 SVA_LFDR_MIN_GRID_POINTS = 512
@@ -180,27 +181,6 @@ def _top_right_singular_vectors(matrix, n_components):
             values.T @ left_vectors[:, order[usable]]
         ) / singular_values[usable]
     return right_vectors
-
-
-def _gram_components_require_svd_fallback(eigenvalues_descending, num_components, matrix_shape):
-    eigenvalues = numpy.maximum(
-        numpy.asarray(eigenvalues_descending, dtype=float),
-        0.0,
-    )
-    if eigenvalues.size == 0:
-        return True
-    scale = float(eigenvalues[0])
-    if (not numpy.isfinite(scale)) or scale <= 0.0:
-        return True
-    tolerance = numpy.finfo(float).eps * max(matrix_shape) * scale
-    boundary_index = int(num_components) - 1
-    if eigenvalues[boundary_index] <= tolerance:
-        return True
-    if int(num_components) < eigenvalues.size:
-        boundary_gap = eigenvalues[boundary_index] - eigenvalues[int(num_components)]
-        if boundary_gap <= tolerance:
-            return True
-    return False
 
 
 def _resolve_lfdr_grid_size(num_values):

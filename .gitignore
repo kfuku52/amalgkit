@@ -6,7 +6,9 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 .coverage
+coverage.xml
 htmlcov/
+benchmark-results.json
 /data
 test_out/
 

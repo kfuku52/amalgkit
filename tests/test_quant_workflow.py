@@ -342,7 +342,7 @@ class TestQuantEdgeCases:
 
         def fake_build(index_path, fasta_file, sci_name):
             observed['fasta_file'] = fasta_file
-            open(index_path, 'w').write('idx')
+            pathlib.Path(index_path).write_text('idx', encoding='utf-8')
 
         monkeypatch.setattr('amalgkit.quant._build_kallisto_index', fake_build)
 
@@ -413,7 +413,7 @@ class TestQuantEdgeCases:
         def fake_build(index_path, fasta_file, sci_name):
             observed['fasta_file'] = fasta_file
             assert sci_name == 'Homo_sapiens'
-            open(index_path, 'w').write('idx')
+            pathlib.Path(index_path).write_text('idx', encoding='utf-8')
 
         monkeypatch.setattr('amalgkit.quant._build_kallisto_index', fake_build)
 

@@ -5,8 +5,6 @@ import shutil
 import sys
 from types import SimpleNamespace
 
-import pandas
-
 from amalgkit.arg_utils import clone_namespace
 from amalgkit.command_context import PerSpeciesTableContext
 from amalgkit.merge import build_merge_species_token_map
@@ -16,6 +14,7 @@ from amalgkit.per_species_python import (
     run_per_species_python_worker,
     should_use_python_per_species_worker,
 )
+from amalgkit.text_utils import normalize_unique_text
 
 
 def validate_per_species_metadata_columns(metadata, required_columns, context):
@@ -30,28 +29,15 @@ def validate_per_species_metadata_columns(metadata, required_columns, context):
 
 
 def get_sample_group(args, metadata):
-    def normalize_sample_groups(values):
-        groups = []
-        for value in values:
-            if value is None:
-                continue
-            if pandas.isna(value):
-                continue
-            normalized = str(value).strip()
-            if normalized == '':
-                continue
-            groups.append(normalized)
-        return list(dict.fromkeys(groups))
-
     def parse_sample_group_argument(sample_group_arg):
-        return normalize_sample_groups(re.split(r'[,\|]+', str(sample_group_arg)))
+        return normalize_unique_text(re.split(r'[,\|]+', str(sample_group_arg)))
 
     if args.sample_group is None:
         if 'sample_group' not in metadata.df.columns:
             txt = 'The "sample_group" column was not found in --metadata ({}). '
             txt += 'Please add this column or provide --sample_group.'
             raise ValueError(txt.format(args.metadata))
-        sample_group = normalize_sample_groups(metadata.df.loc[:, 'sample_group'].tolist())
+        sample_group = normalize_unique_text(metadata.df.loc[:, 'sample_group'].tolist())
     else:
         sample_group = parse_sample_group_argument(args.sample_group)
     if (len(sample_group)==0):

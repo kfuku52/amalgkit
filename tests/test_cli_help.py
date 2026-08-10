@@ -31,6 +31,8 @@ def test_root_help_documents_debug_tracebacks():
     out = run_cli('--help')
     assert out.returncode == 0
     assert '--debug' in out.stdout
+    assert '--log_level' in out.stdout
+    assert '--log_file' in out.stdout
     assert 'full traceback' in out.stdout.lower()
 
 
