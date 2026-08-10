@@ -1,0 +1,5 @@
+# Matplotlib 3.7.5 still calls deprecated camelCase pyparsing APIs. Pyparsing
+# 3.3 promotes those calls to warnings, which the test suite intentionally
+# treats as errors. Keep the transitive dependency at the newest compatible
+# pre-3.3 release when validating the declared direct-dependency floors.
+pyparsing==3.2.5

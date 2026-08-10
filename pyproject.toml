@@ -121,6 +121,7 @@ python_version = "3.11"
 check_untyped_defs = true
 follow_imports = "skip"
 ignore_missing_imports = true
+no_site_packages = true
 files = [
   "amalgkit/cross_species_computation.py",
   "amalgkit/command_context.py",

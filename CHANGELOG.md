@@ -5,6 +5,11 @@ Releases provide the commit-level generated notes for each version.
 
 ## Unreleased
 
+## 0.16.59 - 2026-08-10
+
+- Restored CI compatibility with pandas 3 string dtypes, current NumPy stubs,
+  and the minimum Matplotlib dependency set.
+
 ## 0.16.58 - 2026-08-10
 
 - Reduced startup dependency-probe latency and added successful probe caching.

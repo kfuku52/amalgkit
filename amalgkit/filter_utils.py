@@ -78,6 +78,11 @@ def merge_metadata_by_run(source_df, update_df):
                 source.loc[run_id, col] = value
             continue
 
+        if pandas.api.types.is_string_dtype(source_dtype) and not pandas.api.types.is_object_dtype(source_dtype):
+            for run_id, value in update_values.astype(str).items():
+                source.loc[run_id, col] = value
+            continue
+
         candidate = source[col].copy()
         try:
             with warnings.catch_warnings():

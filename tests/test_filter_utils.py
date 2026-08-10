@@ -142,6 +142,27 @@ def test_merge_metadata_by_run_warns_before_promoting_incompatible_numeric_colum
     assert observed['mapping_rate'].tolist() == ['not_available', 0.2]
 
 
+def test_merge_metadata_by_run_stringifies_updates_for_string_dtype():
+    source_df = pandas.DataFrame(
+        {
+            'run': pandas.Series(['R1', 'R2'], dtype='string'),
+            'total_spots': pandas.Series(['100', '200'], dtype='string'),
+        }
+    )
+    update_df = pandas.DataFrame(
+        {
+            'run': ['R1'],
+            'total_spots': [300],
+        }
+    )
+
+    observed = merge_metadata_by_run(source_df, update_df)
+
+    assert pandas.api.types.is_string_dtype(observed['total_spots'].dtype)
+    assert not pandas.api.types.is_object_dtype(observed['total_spots'].dtype)
+    assert observed['total_spots'].tolist() == ['300', '200']
+
+
 @pytest.mark.slow
 def test_save_exclusion_plot_pdf_writes_pdf(tmp_path):
     metadata_df = pandas.DataFrame(
