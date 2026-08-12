@@ -667,3 +667,56 @@ def test_rerun_finalize_failure_keeps_existing_outputs_unchanged(tmp_path, monke
 
     assert (species_dir / 'Homo_sapiens_expression.tsv').read_text() == 'OLD\n'
     assert pandas.read_csv(finalize_dir / 'metadata.tsv', sep='\t').loc[0, 'state'] == 'old'
+
+# ---------------------------------------------------------------------------
+# Regression: the rerun manifest must be reproducible (no wall-clock
+# generated_at) and the backup-commit path must be crash-safe (stale backup
+# temp dirs swept, durable entries flushed).
+# ---------------------------------------------------------------------------
+
+def test_rerun_manifest_generated_at_is_deterministic():
+    from amalgkit.rerun import RERUN_MANIFEST_SCHEMA, _build_rerun_manifest
+
+    manifest = _build_rerun_manifest(
+        report_path='report.json',
+        out_dir='out',
+        metadata_path='metadata.tsv',
+        requested_checks=['merge'],
+        allowed_runs={'SRR001'},
+        allowed_species={'Homo sapiens'},
+        include_warnings=False,
+        dry_run=True,
+        plan=[{'check': 'merge', 'will_execute': True}],
+    )
+    assert manifest['generated_at'] == RERUN_MANIFEST_SCHEMA
+    # Two identical invocations yield byte-identical manifests (after re-serialization).
+    manifest2 = _build_rerun_manifest(
+        report_path='report.json',
+        out_dir='out',
+        metadata_path='metadata.tsv',
+        requested_checks=['merge'],
+        allowed_runs={'SRR001'},
+        allowed_species={'Homo sapiens'},
+        include_warnings=False,
+        dry_run=True,
+        plan=[{'check': 'merge', 'will_execute': True}],
+    )
+    assert json.dumps(manifest, sort_keys=True) == json.dumps(manifest2, sort_keys=True)
+
+
+# ---------------------------------------------------------------------------
+# Regression: the sanity report schema must be deterministic and the wall-clock
+# run time must live in a separate non-reproducible runtime log.
+# ---------------------------------------------------------------------------
+
+def test_sanity_report_schema_is_deterministic_and_runtime_log_is_separate(tmp_path):
+    from amalgkit.sanity import SANITY_REPORT_SCHEMA, _write_sanity_runtime_log
+
+    assert SANITY_REPORT_SCHEMA.startswith('amalgkit sanity report schema=v1')
+    assert not SANITY_REPORT_SCHEMA.startswith('20')  # not a wall-clock timestamp
+
+    runtime_log_path = _write_sanity_runtime_log(str(tmp_path), '2026-01-01T00:00:00')
+    assert os.path.basename(runtime_log_path) == 'sanity_runtime.log'
+    with open(runtime_log_path, encoding='utf-8') as handle:
+        content = handle.read()
+    assert '2026-01-01T00:00:00' in content

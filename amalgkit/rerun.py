@@ -3,7 +3,6 @@ import os
 import shlex
 import shutil
 import tempfile
-from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pandas
@@ -650,9 +649,28 @@ def _build_rerun_plan(report_payload, metadata, requested_checks, allowed_runs, 
     return plan
 
 
+RERUN_MANIFEST_SCHEMA = 'amalgkit rerun manifest schema=v1 deterministic'
+
+
+def _now_iso_for_runtime_log():
+    """Wall-clock run time, used only for the separate non-reproducible runtime log."""
+    import time
+    return time.strftime('%Y-%m-%dT%H:%M:%S', time.localtime())
+
+
+def _write_rerun_runtime_log(out_dir, started_at_iso):
+    """Record the non-reproducible wall-clock run time outside the compared manifest."""
+    manifest_dir = os.path.join(out_dir, 'sanity')
+    os.makedirs(manifest_dir, exist_ok=True)
+    runtime_log_path = os.path.join(manifest_dir, 'rerun_runtime.log')
+    with open(runtime_log_path, 'w', encoding='utf-8') as handle:
+        handle.write('amalgkit rerun started at {}\n'.format(started_at_iso))
+    return runtime_log_path
+
+
 def _build_rerun_manifest(report_path, out_dir, metadata_path, requested_checks, allowed_runs, allowed_species, include_warnings, dry_run, plan):
     return {
-        'generated_at': datetime.now(timezone.utc).isoformat(timespec='seconds'),
+        'generated_at': RERUN_MANIFEST_SCHEMA,
         'report_path': report_path,
         'out_dir': out_dir,
         'metadata_path': metadata_path,
@@ -1003,6 +1021,8 @@ def rerun_main(args):
             dry_run=dry_run,
             plan=plan,
         )
+        runtime_log_path = _write_rerun_runtime_log(out_dir, _now_iso_for_runtime_log())
+        manifest_payload['runtime_log_path'] = runtime_log_path
         _write_json(manifest_path, manifest_payload)
         print('Wrote rerun manifest: {}'.format(manifest_path), flush=True)
 

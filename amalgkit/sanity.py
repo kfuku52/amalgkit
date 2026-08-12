@@ -1,4 +1,3 @@
-import datetime
 import json
 import numpy as np
 import os
@@ -1187,6 +1186,24 @@ def _build_sanity_summary_row(check_name, target_type, checked_items, issues, sc
     }
 
 
+SANITY_REPORT_SCHEMA = 'amalgkit sanity report schema=v1 deterministic'
+
+
+def _now_iso_for_runtime_log():
+    """Wall-clock run time, used only for the separate non-reproducible runtime log."""
+    import time
+    return time.strftime('%Y-%m-%dT%H:%M:%S', time.localtime())
+
+
+def _write_sanity_runtime_log(output_dir, started_at_iso):
+    """Record the non-reproducible wall-clock run time outside the compared report."""
+    runtime_log_path = os.path.join(output_dir, 'sanity_runtime.log')
+    with atomic_output_path(runtime_log_path, suffix='.log') as temporary_path:
+        with open(temporary_path, 'w', encoding='utf-8') as handle:
+            handle.write('amalgkit sanity run started at {}\n'.format(started_at_iso))
+    return runtime_log_path
+
+
 def _write_sanity_summary(output_dir, summary_rows):
     summary_path = os.path.join(output_dir, 'sanity_summary.tsv')
     summary_df = pandas.DataFrame(summary_rows, columns=[
@@ -2197,7 +2214,7 @@ def sanity_main(args):
     issues_path = _write_sanity_issues(output_dir, issues)
     comparison_path = _write_sanity_comparison(output_dir, previous_payload, summary_rows)
     report_payload = {
-        'generated_at': datetime.datetime.now().isoformat(),
+        'generated_at': SANITY_REPORT_SCHEMA,
         'metadata_path': metadata_path,
         'out_dir': out_dir,
         'run_filters': run_filters,
@@ -2209,6 +2226,8 @@ def sanity_main(args):
         'issues_path': issues_path,
         'comparison_path': comparison_path,
     }
+    runtime_log_path = _write_sanity_runtime_log(output_dir, _now_iso_for_runtime_log())
+    report_payload['runtime_log_path'] = runtime_log_path
     report_path = _write_sanity_report_json(output_dir, report_payload)
     _print_sanity_summary(summary_rows, summary_path)
     print('issues_path={}'.format(issues_path))
