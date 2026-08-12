@@ -8,6 +8,8 @@ from amalgkit.cross_species_filter import (
     _apply_csfilter_outlier_flags,
     _calculate_correlation_within_group,
     _evict_embedding_intermediates,
+    _compute_mds_coordinates,
+    _extract_ortholog_unaveraged_expression_table,
     _load_expression_tables,
     _normalize_cross_species_metadata_table,
     _prepare_metadata_table,
@@ -289,6 +291,39 @@ def test_cross_species_within_group_reference_leaves_evaluated_sample_out():
     expected = pandas.Series(target).corr(pandas.Series((species_b + species_c) / 2.0))
     assert numpy.isclose(observed, expected)
     assert not numpy.isclose(observed, 1.0)
+
+
+def test_extract_ortholog_expression_rejects_missing_gene_ids():
+    df_singleog = pandas.DataFrame(
+        {'Species_A': ['gene_1', 'missing_gene']},
+        index=['OG1', 'OG2'],
+    )
+    expression = pandas.DataFrame(
+        {'sample_1': [1.0]},
+        index=['gene_1'],
+    )
+    tables = {
+        'uncorrected': {'Species_A': expression},
+        'corrected': {'Species_A': expression},
+    }
+
+    with pytest.raises(ValueError, match='absent from the uncorrected expression table.*missing_gene'):
+        _extract_ortholog_unaveraged_expression_table(df_singleog, tables)
+
+
+def test_mds_coordinates_leave_dropped_constant_sample_unassigned():
+    matrix = pandas.DataFrame(
+        {
+            'sample_a': [1.0, 2.0, 3.0, 4.0],
+            'sample_b': [2.0, 4.0, 6.0, 8.0],
+            'constant_sample': [5.0, 5.0, 5.0, 5.0],
+        }
+    )
+
+    coordinates = _compute_mds_coordinates(matrix, missing_strategy='row_mean')
+
+    assert coordinates.loc['constant_sample'].isna().all()
+    assert coordinates.loc[['sample_a', 'sample_b']].notna().all().all()
 
 
 def test_embedding_missing_strategies_perform_iterative_imputation():

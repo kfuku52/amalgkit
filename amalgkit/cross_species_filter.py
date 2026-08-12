@@ -301,8 +301,19 @@ def _extract_ortholog_unaveraged_expression_table(df_singleog, unaveraged_tcs):
             if tc is None:
                 continue
             tc_prefixed = tc.copy()
+            tc_prefixed.index = tc_prefixed.index.astype(str)
             tc_prefixed.columns = ['{}_{}'.format(sp, col) for col in tc_prefixed.columns]
             row_idx = df_singleog.loc[:, sp].astype(str).tolist()
+            missing_ids = sorted(set(row_idx).difference(tc_prefixed.index))
+            if len(missing_ids) > 0:
+                raise ValueError(
+                    'Ortholog table references {} gene id(s) absent from the {} expression table for species {}: {}'.format(
+                        len(missing_ids),
+                        correction,
+                        sp,
+                        ', '.join(missing_ids),
+                    )
+                )
             tc_slice = tc_prefixed.reindex(row_idx)
             tc_slice.index = df_singleog.index
             slices.append(tc_slice)
