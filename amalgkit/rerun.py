@@ -399,6 +399,44 @@ def _create_staging_root(target_root, prefix):
     return tempfile.mkdtemp(prefix=prefix)
 
 
+BACKUP_TEMP_PREFIX = 'amalgkit_rerun_backup_'
+
+
+def _fsync_directory(path):
+    """Durably flush directory-entry renames for a directory (best-effort)."""
+    if path in [None, '']:
+        return
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
+def _sweep_stale_backup_temp_dirs(parent_dir):
+    """Remove backup temp dirs orphaned by a SIGKILL/crash before the next commit."""
+    if parent_dir in [None, ''] or not os.path.isdir(parent_dir):
+        return
+    try:
+        entries = os.listdir(parent_dir)
+    except OSError:
+        return
+    for name in entries:
+        if not name.startswith(BACKUP_TEMP_PREFIX):
+            continue
+        candidate = os.path.join(parent_dir, name)
+        if os.path.islink(candidate):
+            os.remove(candidate)
+            continue
+        if os.path.isdir(candidate):
+            shutil.rmtree(candidate, ignore_errors=True)
+
+
 def _commit_staged_paths(target_root, staged_root, relative_paths):
     absolute_target_root = os.path.abspath(target_root)
     absolute_staged_root = os.path.abspath(staged_root)
@@ -418,6 +456,7 @@ def _commit_staged_paths(target_root, staged_root, relative_paths):
     if parent_dir != '':
         os.makedirs(parent_dir, exist_ok=True)
     os.makedirs(target_root, exist_ok=True)
+    _sweep_stale_backup_temp_dirs(parent_dir)
     requested_paths = _normalize_relative_paths(relative_paths)
     replace_paths = [
         rel_path
@@ -427,7 +466,7 @@ def _commit_staged_paths(target_root, staged_root, relative_paths):
         )
     ]
     backup_root = tempfile.mkdtemp(
-        prefix='amalgkit_rerun_backup_',
+        prefix=BACKUP_TEMP_PREFIX,
         dir=parent_dir if parent_dir != '' else None,
     )
     committed_paths = []
@@ -449,6 +488,10 @@ def _commit_staged_paths(target_root, staged_root, relative_paths):
             os.makedirs(os.path.dirname(target_path), exist_ok=True)
             os.rename(staged_path, target_path)
             committed_paths.append(target_path)
+        # Persist the renames so a crash after commit cannot revert the durable entries.
+        _fsync_directory(target_root)
+        _fsync_directory(backup_root)
+        _fsync_directory(parent_dir)
     except Exception:
         for target_path in reversed(committed_paths):
             _remove_path_if_exists(target_path)
@@ -458,8 +501,12 @@ def _commit_staged_paths(target_root, staged_root, relative_paths):
             if os.path.lexists(backup_path):
                 os.rename(backup_path, target_path)
         shutil.rmtree(backup_root, ignore_errors=True)
+        _fsync_directory(target_root)
+        _fsync_directory(backup_root)
+        _fsync_directory(parent_dir)
         raise
     shutil.rmtree(backup_root, ignore_errors=True)
+    _fsync_directory(parent_dir)
 
 
 def _validate_staged_species_outputs(staged_root, species_tokens, required_suffixes, label):

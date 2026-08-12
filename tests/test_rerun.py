@@ -704,6 +704,55 @@ def test_rerun_manifest_generated_at_is_deterministic():
     assert json.dumps(manifest, sort_keys=True) == json.dumps(manifest2, sort_keys=True)
 
 
+def test_commit_staged_paths_sweeps_stale_backup_temp_dirs(tmp_path):
+    from amalgkit.rerun import _commit_staged_paths
+
+    target_root = tmp_path / 'target'
+    staged_root = tmp_path / 'stage'
+    target_root.mkdir()
+    staged_root.mkdir()
+    (target_root / 'summary.pdf').write_text('old', encoding='utf-8')
+    (staged_root / 'summary.pdf').write_text('new', encoding='utf-8')
+    parent_dir = tmp_path
+
+    # Simulate a crashed run that left an orphaned backup temp dir behind.
+    stale = parent_dir / 'amalgkit_rerun_backup_stale'
+    stale.mkdir()
+    (stale / 'orphan.txt').write_text('x', encoding='utf-8')
+
+    _commit_staged_paths(str(target_root), str(staged_root), ['summary.pdf'])
+
+    assert not stale.exists(), 'stale backup temp dir was not swept'
+    assert (target_root / 'summary.pdf').read_text(encoding='utf-8') == 'new'
+    leftovers = [
+        name for name in os.listdir(parent_dir)
+        if name.startswith('amalgkit_rerun_backup_')
+    ]
+    assert leftovers == []
+
+
+def test_commit_staged_paths_does_not_leave_backup_dirs_on_success(tmp_path):
+    from amalgkit.rerun import _commit_staged_paths
+
+    target_root = tmp_path / 'target'
+    staged_root = tmp_path / 'stage'
+    target_root.mkdir()
+    staged_root.mkdir()
+    (target_root / 'a.pdf').write_text('old-a', encoding='utf-8')
+    (staged_root / 'a.pdf').write_text('new-a', encoding='utf-8')
+    (staged_root / 'b.tsv').write_text('new-b', encoding='utf-8')
+
+    _commit_staged_paths(str(target_root), str(staged_root), ['a.pdf', 'b.tsv'])
+
+    assert (target_root / 'a.pdf').read_text(encoding='utf-8') == 'new-a'
+    assert (target_root / 'b.tsv').read_text(encoding='utf-8') == 'new-b'
+    leftovers = [
+        name for name in os.listdir(tmp_path)
+        if name.startswith('amalgkit_rerun_backup_')
+    ]
+    assert leftovers == []
+
+
 # ---------------------------------------------------------------------------
 # Regression: the sanity report schema must be deterministic and the wall-clock
 # run time must live in a separate non-reproducible runtime log.
