@@ -4,6 +4,7 @@ import numpy
 import gzip
 import http.client
 import ssl
+import os
 import subprocess
 from contextlib import contextmanager
 
@@ -1315,3 +1316,19 @@ def test_download_with_curl_rejects_redirect_to_disallowed_host(tmp_path, monkey
     )
     assert downloaded is False
     assert not output_path.exists()
+
+def test_download_temp_paths_are_unpredictable_and_exclusive(tmp_path, monkeypatch):
+    from amalgkit.getfastq import _create_secure_download_temp_path
+    output = str(tmp_path / 'SRR001.sra')
+    p1 = _create_secure_download_temp_path(output, '.urllibtmp')
+    p2 = _create_secure_download_temp_path(output, '.urllibtmp')
+    assert p1 != p2
+    # Names must not be the old guessable time-ns suffix.
+    assert '.urllibtmp.' in p1
+    import re as _re
+    assert not _re.search(r'\.urllibtmp\.\d{10,}$', p1)
+    # Created exclusively as a regular file, no symlink.
+    assert os.path.isfile(p1)
+    assert not os.path.islink(p1)
+    os.remove(p1)
+    os.remove(p2)

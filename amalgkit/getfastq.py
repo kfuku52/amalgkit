@@ -1267,12 +1267,36 @@ def maybe_acquire_source_download_slot(args, sra_source_name, wait=True):
         yield True, slot_path
 
 
+def _create_secure_download_temp_path(output_path, suffix):
+    """Create an unpredictable temp path in the output's directory.
+
+    Uses tempfile.mkstemp (secrets-based name, O_EXCL) so a time-ns suffix is
+    never guessable, then re-opens with O_EXCL + O_NOFOLLOW at the default mode
+    so the file cannot be raced into a symlink before it is written.
+    """
+    output_path = os.path.abspath(os.fspath(output_path))
+    parent_dir = os.path.dirname(output_path)
+    if parent_dir == '':
+        parent_dir = '.'
+    os.makedirs(parent_dir, exist_ok=True)
+    basename = os.path.basename(output_path)
+    fd, tmp_path = tempfile.mkstemp(prefix=basename + suffix + '.', dir=parent_dir)
+    os.close(fd)
+    os.unlink(tmp_path)
+    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+    if hasattr(os, 'O_NOFOLLOW'):
+        flags |= os.O_NOFOLLOW
+    fd = os.open(tmp_path, flags, 0o666)
+    os.close(fd)
+    return tmp_path
+
+
 def download_with_curl(source_url, output_path, args, sra_source_name, artifact_label='file'):
     assert_allowed_download_url(source_url)
     curl_exe = shutil.which('curl')
     if curl_exe is None:
         return False
-    tmp_path = output_path + '.curltmp.{}'.format(time.time_ns())
+    tmp_path = _create_secure_download_temp_path(output_path, '.curltmp')
     transfer_timeout = resolve_positive_timeout_seconds(
         args=args,
         attr_name='sra_download_transfer_timeout_seconds',
@@ -1329,6 +1353,9 @@ def download_with_curl(source_url, output_path, args, sra_source_name, artifact_
             )
         )
         return False
+    st = os.stat(tmp_path, follow_symlinks=False)
+    if not stat.S_ISREG(st.st_mode):
+        raise IsADirectoryError('curl output path exists but is not a regular file: {}'.format(tmp_path))
     os.replace(tmp_path, output_path)
     print('{} was downloaded with curl from {}'.format(artifact_label, sra_source_name), flush=True)
     return True
@@ -1345,7 +1372,15 @@ def download_with_urllib(source_url, output_path, timeout_seconds, urlopen_fn=No
         source_url,
         timeout=per_operation_timeout,
     ) as response:
-        with open(output_path, 'wb') as fout:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+        if hasattr(os, 'O_NOFOLLOW'):
+            flags |= os.O_NOFOLLOW
+        fd = os.open(output_path, flags, 0o666)
+        stat_result = os.fstat(fd)
+        if not stat.S_ISREG(stat_result.st_mode):
+            os.close(fd)
+            raise OSError('Download output path is not a regular file: {}'.format(output_path))
+        with os.fdopen(fd, 'wb') as fout:
             while True:
                 if (time.monotonic() - started_at) >= timeout_seconds:
                     raise TimeoutError(
@@ -1426,11 +1461,7 @@ def _download_file_from_source_without_semaphore(
         if method == 'curl':
             sys.stderr.write('Falling back to urllib.request after curl failure.\n')
     try:
-        tmp_path = output_path + '.urllibtmp.{}'.format(time.time_ns())
-        if os.path.exists(tmp_path):
-            if not os.path.isfile(tmp_path):
-                raise IsADirectoryError('Temporary download path exists but is not a file: {}'.format(tmp_path))
-            os.remove(tmp_path)
+        tmp_path = _create_secure_download_temp_path(output_path, '.urllibtmp')
         transfer_timeout = resolve_positive_timeout_seconds(
             args=args,
             attr_name='sra_download_transfer_timeout_seconds',
@@ -1611,7 +1642,7 @@ def download_public_original_fastq_files(
         for fastq_entry, suffix in assigned_fastqs:
             output_filename = sra_id + suffix + '.fastq.gz'
             output_path = os.path.join(work_dir, output_filename)
-            tmp_path = output_path + '.downloadtmp.{}'.format(time.time_ns())
+            tmp_path = _create_secure_download_temp_path(output_path, '.downloadtmp')
             tmp_paths.append(tmp_path)
             if os.path.exists(output_path):
                 if not os.path.isfile(output_path):
