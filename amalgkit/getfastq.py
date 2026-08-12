@@ -79,6 +79,7 @@ from amalgkit.sra_sources import (
     fetch_ena_run_file_report,
     is_allowed_url_host,
     normalize_sra_download_url,
+    read_bounded_response,
 )
 from amalgkit.sra import fetch_sra_xml as shared_fetch_sra_xml
 from amalgkit.subprocess_utils import (
@@ -873,7 +874,7 @@ def fetch_trace_run_xml_root(sra_id, timeout=30):
         trace_url,
         timeout=timeout,
     ) as response:
-        return parse_untrusted_xml_string(response.read())
+        return parse_untrusted_xml_string(read_bounded_response(response, timeout=float(timeout)))
 
 
 def _normalize_public_original_fastq_source_name(raw_name):

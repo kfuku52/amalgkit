@@ -7,6 +7,7 @@ from amalgkit.sra_sources import (
     fetch_ena_run_file_report,
     normalize_sra_download_url,
     parse_ena_run_file_report,
+    read_bounded_response,
 )
 
 
@@ -117,3 +118,17 @@ def test_is_allowed_url_host_rejects_ssrf_and_private_targets():
         'not a url',
     ]:
         assert not is_allowed_url_host(bad)
+
+def test_fetch_ena_report_rejects_oversized_body():
+    big = (b'run_accession\tsra_ftp\tfastq_ftp\nSRR1\t\t\n' + b'x' * (9 * 1024 * 1024))
+    with pytest.raises(ValueError, match='byte metadata read limit'):
+        fetch_ena_run_file_report(
+            'SRR1', timeout=30,
+            urlopen_fn=lambda url, timeout: BytesIO(big),
+        )
+
+def test_read_bounded_response_caps_bytes():
+    from io import BytesIO
+    with pytest.raises(ValueError, match='byte metadata read limit'):
+        read_bounded_response(BytesIO(b'z' * 100), max_bytes=10, timeout=30)
+    assert read_bounded_response(BytesIO(b'hello'), max_bytes=100, timeout=30) == b'hello'

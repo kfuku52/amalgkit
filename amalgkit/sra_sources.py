@@ -77,6 +77,36 @@ def build_allowed_host_opener():
     """Return an opener that refuses redirects to non-allow-listed hosts."""
     return urllib.request.build_opener(_AllowedHostRedirectHandler)
 
+MAX_METADATA_READ_BYTES = 8 * 1024 * 1024  # 8 MiB fail-closed cap for metadata bodies
+_METADATA_READ_CHUNK = 64 * 1024
+
+def read_bounded_response(response, max_bytes=MAX_METADATA_READ_BYTES, timeout=30):
+    """Read a response in chunks, capped by byte count and a wall-clock deadline.
+
+    Fails closed (raises) if either limit is exceeded so an unbounded remote
+    body can never be fully slurped into memory.
+    """
+    deadline = float(timeout)
+    started_at = time.monotonic()
+    total = 0
+    chunks = []
+    while True:
+        remaining = int(max_bytes) - total
+        if remaining <= 0:
+            raise ValueError(
+                'Response exceeded the {:,} byte metadata read limit.'.format(int(max_bytes))
+            )
+        if (time.monotonic() - started_at) >= deadline:
+            raise TimeoutError(
+                'Metadata response exceeded the {:.0f} sec read deadline.'.format(deadline)
+            )
+        chunk = response.read(min(_METADATA_READ_CHUNK, remaining))
+        if not chunk:
+            break
+        chunks.append(chunk)
+        total += len(chunk)
+    return b''.join(chunks)
+
 
 def normalize_accession_text(value):
     if value is None:
@@ -160,7 +190,7 @@ def fetch_ena_run_file_report(run_accession, timeout=30, urlopen_fn=None):
     })
     report_url = '{}?{}'.format(_ENA_FILEREPORT_URL, query)
     with urlopen_fn(report_url, timeout=float(timeout)) as response:  # noqa: S310 - fixed ENA HTTPS endpoint
-        report_bytes = response.read()
+        report_bytes = read_bounded_response(response, timeout=float(timeout))
     report_text = report_bytes.decode('utf-8', errors='strict')
     return parse_ena_run_file_report(report_text=report_text, run_accession=run_accession)
 
