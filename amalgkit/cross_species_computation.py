@@ -170,7 +170,16 @@ def resolve_correlation_matrix(
         missing_strategy=missing_strategy,
         cache=cache,
     )
-    corr = filled.corr(method="pearson").fillna(0.0)
+    corr = filled.corr(method="pearson")
+    # A zero-variance sample has an undefined Pearson correlation with every other
+    # sample, which pandas reports as NaN. Those NaNs were previously coerced to a
+    # measured 0.0, entering the PCA/MDS/t-SNE/heatmap decompositions as a fabricated
+    # "uncorrelated" value and biasing them. Keep the NaN and drop the degenerate
+    # constant-variance samples instead: they carry no information for any embedding.
+    # After imputation every non-degenerate sample pair is finite, so the retained
+    # matrix is fully finite.
+    defined = corr.notna().any(axis=0)
+    corr = corr.loc[defined, defined]
     if cache is not None:
         cache[cache_key] = corr
         if strategy_key == "row_mean":
