@@ -18,6 +18,24 @@ FILTER_METADATA_STATE_SCHEMA_VERSION = 1
 FILTER_COMMANDS = ('wsfilter', 'csfilter')
 
 
+def _require_unique_nonempty_run_ids(run_series, context):
+    normalized = run_series.fillna('').astype(str).str.strip()
+    if bool(normalized.eq('').any()):
+        raise ValueError(
+            '{} metadata contains empty run IDs; every row must have a run identifier.'.format(
+                context
+            )
+        )
+    duplicated = set(normalized.loc[normalized.duplicated()].tolist())
+    if duplicated:
+        raise ValueError(
+            '{} metadata contains duplicate run IDs: {}.'.format(
+                context,
+                ', '.join(sorted(duplicated)[:5]),
+            )
+        )
+
+
 def merge_metadata_by_run(source_df, update_df):
     if 'run' not in source_df.columns:
         raise ValueError('Source metadata is missing required "run" column.')
@@ -27,7 +45,9 @@ def merge_metadata_by_run(source_df, update_df):
     update = update_df.copy()
     source['run'] = source['run'].fillna('').astype(str).str.strip()
     update['run'] = update['run'].fillna('').astype(str).str.strip()
-    update = update.loc[update['run'] != '', :].drop_duplicates(subset=['run'], keep='last')
+    _require_unique_nonempty_run_ids(source['run'], 'Source')
+    update = update.loc[update['run'] != '', :]
+    _require_unique_nonempty_run_ids(update['run'], 'Updated')
     source = source.set_index('run', drop=False)
     update = update.set_index('run', drop=False)
     source_run_ids = set(source.index.tolist())
