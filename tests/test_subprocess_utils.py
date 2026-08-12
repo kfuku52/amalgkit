@@ -7,6 +7,7 @@ import pytest
 from amalgkit.subprocess_utils import (
     DEPENDENCY_PROBE_TIMEOUT_SECONDS,
     clear_dependency_probe_cache,
+    format_command,
     probe_dependency_command,
     resolve_timeout_seconds,
     run_checked_command,
@@ -236,3 +237,13 @@ def test_probe_dependency_command_kills_a_hanging_probe():
             label='dummy',
             timeout_seconds=0.2,
         )
+
+def test_format_command_redacts_signed_url_query_and_userinfo():
+    url = 'https://sra-pub-run-odp.s3.amazonaws.com/sra/SRR1/SRR1.sra?X-Amz-Signature=SECRET&X-Amz-Credential=AKIA'
+    redacted = format_command(['curl', '-L', '-o', '/tmp/x.sra', url])
+    assert 'SECRET' not in redacted
+    assert 'AKIA' not in redacted
+    assert 'sra-pub-run-odp.s3.amazonaws.com/sra/SRR1/SRR1.sra' in redacted
+    userinfo = format_command(['curl', 'https://user:hunter2@ftp.sra.ebi.ac.uk/x.sra'])
+    assert 'hunter2' not in userinfo
+    assert 'ftp.sra.ebi.ac.uk' in userinfo

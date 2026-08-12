@@ -3,6 +3,7 @@ import shutil
 import subprocess
 import threading
 import time
+import urllib.parse
 from typing import Any
 
 from amalgkit.logging_utils import get_logger
@@ -40,8 +41,29 @@ def resolve_timeout_seconds(args, attribute_name, default_seconds):
     return timeout_seconds
 
 
+def redact_url_for_logging(value):
+    """Strip query/fragment/userinfo from download URLs before logging or printing.
+
+    Signed/requester-pays URLs embed credentials in the query string; only
+    scheme+host+path may be logged so tokens never reach stderr or the JSONL log.
+    """
+    text = str(value)
+    if '://' not in text:
+        return text
+    try:
+        parts = urllib.parse.urlsplit(text)
+    except ValueError:
+        return text
+    if parts.scheme.casefold() not in ('http', 'https', 'ftp', 'gs', 's3'):
+        return text
+    netloc = parts.netloc
+    if '@' in netloc:
+        netloc = netloc.rsplit('@', 1)[1]
+    return urllib.parse.urlunsplit((parts.scheme, netloc, parts.path, '', ''))
+
+
 def format_command(command):
-    return " ".join([str(part) for part in command])
+    return " ".join([redact_url_for_logging(part) for part in command])
 
 
 def decode_command_output(output):

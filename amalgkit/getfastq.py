@@ -82,6 +82,7 @@ from amalgkit.subprocess_utils import (
     DEPENDENCY_PROBE_TIMEOUT_SECONDS,
     format_command,
     probe_dependency_command,
+    redact_url_for_logging,
     resolve_timeout_seconds,
     run_checked_command,
     run_logged_command,
@@ -1364,9 +1365,9 @@ def _download_file_from_source_without_semaphore(
             )
         )
         return False
-    print("Trying to fetch {} for {} from {}: {}".format(artifact_label, sra_id, sra_source_name, source_url_original))
+    print("Trying to fetch {} for {} from {}: {}".format(artifact_label, sra_id, sra_source_name, redact_url_for_logging(source_url_original)))
     if source_url != source_url_original:
-        print("Converted {} URL for urllib: {}".format(sra_source_name, source_url))
+        print("Converted {} URL for urllib: {}".format(sra_source_name, redact_url_for_logging(source_url)))
     if source_url == 'nan':
         sys.stderr.write("Skipping. No URL for {}.\n".format(sra_source_name))
         return False
