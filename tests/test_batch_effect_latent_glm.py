@@ -1,6 +1,7 @@
 import numpy
 import pandas
 
+import amalgkit.batch_effect_latent_glm as latent_glm
 from amalgkit.batch_effect_latent_glm import run_latent_glm_backend
 
 
@@ -210,3 +211,53 @@ def test_run_latent_glm_backend_reports_zero_negatives_when_no_clipping_occurs()
     assert summary['negative_values_before_clip'] == 0
     assert summary['negative_values_after_clip'] == 0
     assert (corrected_df.to_numpy(dtype=float) >= 0).all()
+
+
+def test_latent_updates_use_current_iteration_residuals(monkeypatch):
+    # The latent pattern is deliberately mixed with the sample-group design
+    # effect, so each latent update must use the residual after fitting the
+    # current design-plus-latent model rather than the initial design residual.
+    counts_df = pandas.DataFrame(
+        {
+            'R1': [120, 24, 18, 30, 42, 21, 15, 33],
+            'R2': [100, 30, 22, 27, 38, 20, 17, 29],
+            'R3': [80, 36, 26, 24, 35, 18, 19, 25],
+            'R4': [35, 90, 48, 22, 20, 40, 28, 16],
+            'R5': [30, 75, 42, 25, 18, 34, 24, 19],
+            'R6': [25, 60, 36, 28, 16, 30, 21, 22],
+        },
+        index=['G{}'.format(i + 1) for i in range(8)],
+        dtype=float,
+    )
+    metadata_df = pandas.DataFrame(
+        {
+            'run': list(counts_df.columns),
+            'sample_group': ['A', 'A', 'A', 'B', 'B', 'B'],
+        }
+    )
+    calls = []
+    original_weighted_residuals = latent_glm._weighted_residuals
+
+    def recording_weighted_residuals(residual_matrix, normalized_counts, fitted_matrix, family):
+        calls.append((residual_matrix.copy(), fitted_matrix.copy()))
+        return original_weighted_residuals(residual_matrix, normalized_counts, fitted_matrix, family)
+
+    monkeypatch.setattr(latent_glm, '_weighted_residuals', recording_weighted_residuals)
+    corrected_df, latent_df, summary = run_latent_glm_backend(
+        counts_df=counts_df,
+        metadata_df=metadata_df,
+        family='poisson',
+        k_setting='1',
+        k_max=1,
+        max_iter=4,
+        tol=1e-6,
+    )
+
+    assert summary['resolved_latent_k'] == 1
+    assert latent_df.shape == (6, 1)
+    assert numpy.isfinite(corrected_df.to_numpy(dtype=float)).all()
+    assert len(calls) >= 2
+    _initial_residuals, _initial_fitted = calls[0]
+    for residuals, fitted in calls[1:]:
+        expected = latent_glm._prepare_input_arrays(counts_df)[4] - fitted
+        numpy.testing.assert_allclose(residuals, expected)

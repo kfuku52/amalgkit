@@ -196,12 +196,13 @@ def _fit_latent_model(
     converged = False
     iterations = 0
     objective = numpy.nan
+    previous_latent = None
     for iteration in range(int(max_iter)):
         design_augmented = numpy.column_stack([design_matrix, latent])
         coefficients, fitted = _fit_linear_effects(response_matrix, design_augmented)
         residuals = response_matrix - fitted
         weighted_design_residuals, _gene_weights = _weighted_residuals(
-            design_residuals,
+            residuals,
             normalized_counts=normalized_counts,
             fitted_matrix=fitted,
             family=family,
@@ -214,10 +215,17 @@ def _fit_latent_model(
         iterations = iteration + 1
         weighted_model_residuals = residuals * _gene_weights
         objective = _objective_value(weighted_model_residuals)
-        if _subspace_distance(latent, updated_latent) <= float(tol):
+        current_distance = _subspace_distance(latent, updated_latent)
+        cycle_distance = (
+            _subspace_distance(previous_latent, updated_latent)
+            if previous_latent is not None
+            else numpy.inf
+        )
+        if current_distance <= float(tol) or cycle_distance <= float(tol):
             latent = updated_latent
             converged = True
             break
+        previous_latent = latent
         latent = updated_latent
         if latent.shape[1] == 0:
             break
