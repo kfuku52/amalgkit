@@ -612,6 +612,11 @@ def _normalize_oarfish_quant_columns(quant_df):
             rename_map[column_name] = 'target_id'
         elif normalized in {'len', 'length'}:
             rename_map[column_name] = 'length'
+        elif normalized in {'efflength', 'effectivelength', 'effective_length'}:
+            # oarfish bulk output currently reports only the annotated length and
+            # has no notion of effective length, but if a genuine effective-length
+            # column is ever emitted, preserve it instead of fabricating it below.
+            rename_map[column_name] = 'eff_length'
         elif normalized in {'numreads', 'numread', 'estcounts', 'estcount'}:
             rename_map[column_name] = 'est_counts'
         elif normalized == 'tpm':
@@ -677,10 +682,30 @@ def adapt_oarfish_outputs(output_dir, sra_id, sra_stat, output_prefix, seq_tech)
     else:
         tpm = pandas.Series(_compute_compatibility_tpm(est_counts.to_numpy(), lengths.to_numpy()))
 
+    if 'eff_length' in quant_df.columns:
+        eff_length = pandas.to_numeric(quant_df['eff_length'], errors='coerce')
+        eff_length_values = eff_length.to_numpy(dtype=float)
+        if eff_length.isna().any() or not numpy.isfinite(eff_length_values).all():
+            raise ValueError(
+                'oarfish quant output contains non-finite values in eff_length.'
+            )
+        if (eff_length < 0).any():
+            raise ValueError(
+                'oarfish quant output contains negative values in eff_length.'
+            )
+        eff_length_source = 'effective_length'
+    else:
+        # oarfish has no notion of effective length (long-read protocols have
+        # no fragment-length bias), so the annotated length is the appropriate
+        # denominator. It is NOT a true effective length; flag this in the
+        # run-info so consumers can tell it apart from a real one.
+        eff_length = lengths
+        eff_length_source = 'annotated_length'
+
     abundance_df = pandas.DataFrame({
         'target_id': target_ids,
         'length': lengths,
-        'eff_length': lengths,
+        'eff_length': eff_length,
         'est_counts': est_counts,
         'tpm': tpm,
     })
@@ -708,6 +733,7 @@ def adapt_oarfish_outputs(output_dir, sra_id, sra_stat, output_prefix, seq_tech)
     p_pseudoaligned = mapped_reads / total_reads * 100.0
     run_info = dict(meta_info)
     run_info['quant_backend'] = 'oarfish'
+    run_info['eff_length_source'] = eff_length_source
     run_info['oarfish_seq_tech'] = seq_tech
     run_info['num_processed'] = total_reads
     run_info['num_pseudoaligned'] = mapped_reads

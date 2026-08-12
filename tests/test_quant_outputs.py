@@ -287,3 +287,66 @@ def test_adapt_oarfish_outputs_uses_utf8_for_json_io(tmp_path, monkeypatch):
 
     assert json.loads(run_info_path.read_text(encoding='utf-8'))['note'] == '葉'
     assert [encoding for _path, encoding in observed] == ['utf-8', 'utf-8']
+
+
+def _write_oarfish_quant(tmp_path, header, rows, meta='{}'):
+    output_prefix = tmp_path / 'SRR001'
+    output_prefix.with_suffix('.quant').write_text(header + '\n' + rows, encoding='utf-8')
+    output_prefix.with_suffix('.meta_info.json').write_text(meta, encoding='utf-8')
+    return output_prefix
+
+
+def test_adapt_oarfish_outputs_marks_annotated_eff_length_source(tmp_path):
+    output_prefix = _write_oarfish_quant(
+        tmp_path,
+        'tname\tlen\tnum_reads',
+        'tx1\t1000\t4\ntx2\t500\t1',
+    )
+    adapt_oarfish_outputs(
+        output_dir=str(tmp_path),
+        sra_id='SRR001',
+        sra_stat={'total_spot': 10},
+        output_prefix=str(output_prefix),
+        seq_tech='ont-cdna',
+    )
+    run_info = json.loads((tmp_path / 'SRR001_run_info.json').read_text(encoding='utf-8'))
+    assert run_info['eff_length_source'] == 'annotated_length'
+    abundance_df = pandas.read_csv(tmp_path / 'SRR001_abundance.tsv', sep='\t')
+    # oarfish has no effective length; the column carries the annotated length,
+    # which is not a genuine effective length.
+    assert (abundance_df['eff_length'] == abundance_df['length']).all()
+
+
+def test_adapt_oarfish_outputs_preserves_genuine_eff_length(tmp_path):
+    output_prefix = _write_oarfish_quant(
+        tmp_path,
+        'tname\tlen\teffective_length\tnum_reads',
+        'tx1\t1000\t900\t4\ntx2\t500\t450\t1',
+    )
+    adapt_oarfish_outputs(
+        output_dir=str(tmp_path),
+        sra_id='SRR001',
+        sra_stat={'total_spot': 10},
+        output_prefix=str(output_prefix),
+        seq_tech='ont-cdna',
+    )
+    run_info = json.loads((tmp_path / 'SRR001_run_info.json').read_text(encoding='utf-8'))
+    assert run_info['eff_length_source'] == 'effective_length'
+    abundance_df = pandas.read_csv(tmp_path / 'SRR001_abundance.tsv', sep='\t')
+    assert abundance_df['eff_length'].tolist() == [900, 450]
+
+
+def test_adapt_oarfish_outputs_rejects_nonfinite_genuine_eff_length(tmp_path):
+    output_prefix = _write_oarfish_quant(
+        tmp_path,
+        'tname\tlen\teff_length\tnum_reads',
+        'tx1\t1000\tnan\t4',
+    )
+    with pytest.raises(ValueError, match='non-finite values in eff_length'):
+        adapt_oarfish_outputs(
+            output_dir=str(tmp_path),
+            sra_id='SRR001',
+            sra_stat={'total_spot': 10},
+            output_prefix=str(output_prefix),
+            seq_tech='ont-cdna',
+        )

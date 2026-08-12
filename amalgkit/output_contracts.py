@@ -10,6 +10,12 @@ from collections.abc import Iterable, Sequence
 import numpy
 import pandas
 
+# Quant abundance table contract. Every producer (kallisto, oarfish) must emit
+# these columns. For kallisto, "eff_length" is a true effective length. oarfish
+# has no notion of effective length (long-read protocols have no fragment-length
+# bias) and emits the annotated transcript length in that column instead; the
+# run-info JSON records "eff_length_source" as "annotated_length" (oarfish) or
+# "effective_length" (a producer that provided a genuine effective length).
 QUANT_ABUNDANCE_REQUIRED_COLUMNS = (
     "target_id",
     "length",
@@ -137,6 +143,12 @@ def validate_quant_run_info_json(path: str) -> str:
         return 'quant run info JSON has an invalid "p_pseudoaligned" value.'
     if not math.isfinite(value) or value < 0.0 or value > 100.0:
         return f'quant run info JSON has out-of-range "p_pseudoaligned": {value}'
+    eff_length_source = payload.get("eff_length_source")
+    if eff_length_source is not None and eff_length_source not in {
+        "annotated_length",
+        "effective_length",
+    }:
+        return 'quant run info JSON has an invalid "eff_length_source" value.'
     return ""
 
 

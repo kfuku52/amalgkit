@@ -45,3 +45,21 @@ def test_quant_run_info_rejects_nonstandard_nonfinite_number(tmp_path):
     run_info.write_text('{"p_pseudoaligned": NaN}', encoding="utf-8")
 
     assert "out-of-range" in output_contracts.validate_quant_run_info_json(str(run_info))
+
+
+def test_quant_run_info_accepts_valid_eff_length_source(tmp_path):
+    run_info = tmp_path / "run_info.json"
+    run_info.write_text(
+        json.dumps({"p_pseudoaligned": 50, "eff_length_source": "annotated_length"}),
+        encoding="utf-8",
+    )
+    assert output_contracts.validate_quant_run_info_json(str(run_info)) == ""
+
+
+def test_quant_run_info_rejects_invalid_eff_length_source(tmp_path):
+    run_info = tmp_path / "run_info.json"
+    run_info.write_text(
+        json.dumps({"p_pseudoaligned": 50, "eff_length_source": "length"}),
+        encoding="utf-8",
+    )
+    assert "eff_length_source" in output_contracts.validate_quant_run_info_json(str(run_info))
