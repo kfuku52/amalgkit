@@ -398,3 +398,59 @@ def test_run_sva_backend_auto_transformed_duplicate_groups_falls_back_to_leek():
     assert summary['trace_nsv'] == [0, 0]
     assert summary['trace_method'] == ['leek', 'leek']
     numpy.testing.assert_allclose(corrected.to_numpy(), transformed.to_numpy(), rtol=0.0, atol=1e-8)
+
+
+def test_clean_y_matrix_survives_collinear_surrogate_matrix():
+    # Regression: clean_y_matrix solved X.T@X with a bare numpy.linalg.solve and
+    # crashed when a surrogate variable made the augmented design singular. It
+    # must fall back to the pseudoinverse like _compute_hat_matrix does.
+    y = numpy.array([[10.0, 12.0, 40.0, 42.0], [11.0, 13.0, 41.0, 43.0]])
+    mod = numpy.array([[1.0, 0.0], [1.0, 0.0], [1.0, 1.0], [1.0, 1.0]])
+    sv = mod.copy()  # collinear with mod -> X.T@X singular
+    adjusted = clean_y_matrix(y, mod, sv)
+    assert adjusted.shape == y.shape
+    assert numpy.isfinite(adjusted).all()
+
+
+def test_run_sva_backend_raw_counts_are_clipped_nonnegative_with_recorded_overshoot():
+    # Regression: SVA was run on raw counts and clean_y_matrix overshot below
+    # zero. The correction must run on the log2(counts+1) scale, transform back
+    # to the raw-count scale, clip at 0, and record how many values were
+    # clipped so the corrected matrix stays non-negative.
+    rng = numpy.random.default_rng(0)
+    n_genes, n_runs = 80, 8
+    counts = numpy.zeros((n_genes, n_runs))
+    for g in range(64):
+        if g < 32:
+            counts[g, :4] = rng.poisson(500)
+            counts[g, 4:] = rng.poisson(5)
+        else:
+            counts[g, :4] = rng.poisson(5)
+            counts[g, 4:] = rng.poisson(500)
+    for g in range(64, 80):
+        base = rng.poisson(1, size=8)
+        if g % 2 == 0:
+            base[:4] = base[:4] + 2
+        counts[g, :] = base
+    counts_df = pandas.DataFrame(
+        counts, index=[f"G{i}" for i in range(n_genes)],
+        columns=[f"RUN{i}" for i in range(n_runs)],
+    )
+    metadata = pandas.DataFrame({
+        "run": list(counts_df.columns),
+        "sample_group": ["A", "A", "B", "B"] * 2,
+        "bioproject": ["BP0", "BP1", "BP0", "BP1"] * 2,
+    })
+    corrected, sv_df, summary = run_sva_backend(
+        counts_df=counts_df,
+        metadata_df=metadata,
+        nsv_setting="1",
+        B_setting="5",
+        B_auto_max=100,
+        random_seed=0,
+    )
+    values = corrected.to_numpy(dtype=float)
+    assert numpy.all(values >= 0.0)
+    # Corrected values are on the raw-count scale, not log2(counts+1).
+    assert float(values.max()) > 50.0
+    assert summary["sva_preclip_negative_count"] > 0

@@ -79,7 +79,11 @@ def clean_y_matrix(y_matrix, mod_matrix, sv_matrix):
     if svs.shape[1] == 0:
         return y.copy()
     X = numpy.hstack([mod, svs])
-    hat = numpy.linalg.solve(X.T @ X, X.T)
+    xtx = X.T @ X
+    try:
+        hat = numpy.linalg.solve(xtx, X.T)
+    except numpy.linalg.LinAlgError:
+        hat = numpy.linalg.pinv(xtx) @ X.T
     beta = hat @ y.T
     P = mod.shape[1]
     adjusted = y - (X[:, P:] @ beta[P:, :]).T
@@ -91,6 +95,17 @@ def _coerce_int(value):
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _is_raw_count_matrix(matrix):
+    """Return True when a matrix is on the raw (integer, non-negative) count scale.
+    """
+    values = numpy.asarray(matrix, dtype=float)
+    if values.size == 0:
+        return False
+    if (not numpy.all(numpy.isfinite(values))) or (not numpy.all(values >= 0)):
+        return False
+    return bool(numpy.all(numpy.isclose(values, numpy.round(values))))
 
 
 def _compute_hat_matrix(design_matrix):
@@ -770,6 +785,12 @@ def run_sva_backend(
     mod_matrix, _mod_names = build_sample_group_design_matrix(sample_groups)
     _mod0_matrix, _mod0_names = build_intercept_only_design_matrix(aligned_metadata.shape[0])
     counts_matrix = counts_df.to_numpy(dtype=float, copy=False)
+    on_raw_count_scale = _is_raw_count_matrix(counts_matrix)
+    # SVA assumes continuous, roughly-symmetric data; raw counts fed straight
+    # through clean_y_matrix overshoot below zero. For raw counts, run the
+    # whole correction on the log2(counts+1) scale and transform back so the
+    # corrected matrix stays on the original count scale and non-negative.
+    correction_matrix = numpy.log2(counts_matrix + 1.0) if on_raw_count_scale else counts_matrix
     resolved = resolve_sva_parameters(
         num_samples=counts_df.shape[1],
         design_columns=mod_matrix.shape[1],
@@ -777,7 +798,7 @@ def run_sva_backend(
         B_setting=B_setting,
         B_auto_max=B_auto_max,
         estimate_nsv_at_B=lambda B_value, max_nsv: estimate_num_sv_at_B(
-            data_matrix=counts_matrix,
+            data_matrix=correction_matrix,
             mod_matrix=mod_matrix,
             B_value=B_value,
             max_nsv=max_nsv,
@@ -800,10 +821,11 @@ def run_sva_backend(
             'trace_B': resolved.trace_B,
             'trace_nsv': resolved.trace_nsv,
             'trace_method': resolved.trace_method,
+            'sva_preclip_negative_count': 0,
         }
         return counts_df.copy(), empty_sv, summary
     irw = irwsva_build(
-        data_matrix=counts_matrix,
+        data_matrix=correction_matrix,
         mod_matrix=mod_matrix,
         mod0_matrix=_mod0_matrix,
         nsv=resolved.nsv,
@@ -811,10 +833,14 @@ def run_sva_backend(
     )
     sv_matrix = numpy.asarray(irw['sv'], dtype=float)
     corrected_matrix = clean_y_matrix(
-        y_matrix=counts_matrix,
+        y_matrix=correction_matrix,
         mod_matrix=mod_matrix,
         sv_matrix=sv_matrix,
     )
+    if on_raw_count_scale:
+        corrected_matrix = numpy.exp2(corrected_matrix) - 1.0
+    preclip_negative_count = int(numpy.sum(corrected_matrix < 0))
+    corrected_matrix = numpy.clip(corrected_matrix, 0.0, None)
     sv_columns = ['sv{}'.format(idx + 1) for idx in range(sv_matrix.shape[1])]
     corrected_df = pandas.DataFrame(
         corrected_matrix,
@@ -840,5 +866,6 @@ def run_sva_backend(
         'trace_B': resolved.trace_B,
         'trace_nsv': resolved.trace_nsv,
         'trace_method': resolved.trace_method,
+        'sva_preclip_negative_count': preclip_negative_count,
     }
     return corrected_df, sv_df, summary
