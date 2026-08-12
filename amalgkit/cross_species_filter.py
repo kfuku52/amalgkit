@@ -376,11 +376,12 @@ def _compute_mds_coordinates(matrix_df, missing_strategy, cache=None):
     filled = _resolve_matrix_for_embedding(matrix_df, missing_strategy=missing_strategy, cache=cache)
     if filled.shape[0] == 0:
         return out
-    corr = _resolve_correlation_matrix(
+    corr_df = _resolve_correlation_matrix(
         matrix_df,
         missing_strategy=missing_strategy,
         cache=cache,
-    ).to_numpy(dtype=float)
+    )
+    corr = corr_df.to_numpy(dtype=float)
     dist = 1.0 - corr
     dist = (dist + dist.T) / 2.0
     numpy.fill_diagonal(dist, 0.0)
@@ -395,8 +396,11 @@ def _compute_mds_coordinates(matrix_df, missing_strategy, cache=None):
     for idx in range(min(2, eigvecs.shape[1])):
         value = max(float(eigvals[idx]), 0.0)
         coords[:, idx] = eigvecs[:, idx] * numpy.sqrt(value)
-    out.loc[filled.columns, 'MDS1'] = coords[:, 0]
-    out.loc[filled.columns, 'MDS2'] = coords[:, 1]
+    # Assign positionally against the correlation matrix's own index (which may
+    # be a strict subset after constant-variance samples are dropped upstream),
+    # not against `filled.columns`. coords rows align 1:1 with corr_df.index.
+    out.loc[corr_df.index, 'MDS1'] = coords[:, 0]
+    out.loc[corr_df.index, 'MDS2'] = coords[:, 1]
     return out
 
 
