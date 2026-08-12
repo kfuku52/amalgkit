@@ -829,3 +829,49 @@ def test_generate_merge_plot_pdfs_writes_python_pdf_outputs(tmp_path):
     for path in expected_paths:
         assert path.exists()
         assert path.stat().st_size > 0
+
+
+def test_merge_species_quant_tables_rejects_duplicate_target_ids_within_run(tmp_path):
+    quant_dir = tmp_path / 'quant'
+    merge_dir = tmp_path / 'merge'
+    (quant_dir / 'SRR001').mkdir(parents=True)
+    pandas.DataFrame({
+        'target_id': ['g1', 'g1', 'g2'],
+        'eff_length': [1.1, 1.2, 1.3],
+        'est_counts': [2.1, 2.2, 2.3],
+        'tpm': [3.1, 3.2, 3.3],
+    }).to_csv(quant_dir / 'SRR001' / 'SRR001_abundance.tsv', sep='\t', index=False)
+
+    metadata = Metadata.from_DataFrame(pandas.DataFrame({
+        'run': ['SRR001'],
+        'scientific_name': ['Species A'],
+        'exclusion': ['no'],
+    }))
+
+    with pytest.raises(ValueError, match='duplicate target_id values: g1'):
+        merge_species_quant_tables('Species A', metadata, str(quant_dir), str(merge_dir))
+
+    assert not list((merge_dir / 'Species_A').glob('*.tsv')) if (merge_dir / 'Species_A').exists() else True
+
+
+def test_merge_species_quant_tables_rejects_missing_target_id_within_run(tmp_path):
+    quant_dir = tmp_path / 'quant'
+    merge_dir = tmp_path / 'merge'
+    (quant_dir / 'SRR001').mkdir(parents=True)
+    pandas.DataFrame({
+        'target_id': ['g1', '', 'g2'],
+        'eff_length': [1.1, 1.2, 1.3],
+        'est_counts': [2.1, 2.2, 2.3],
+        'tpm': [3.1, 3.2, 3.3],
+    }).to_csv(quant_dir / 'SRR001' / 'SRR001_abundance.tsv', sep='\t', index=False)
+
+    metadata = Metadata.from_DataFrame(pandas.DataFrame({
+        'run': ['SRR001'],
+        'scientific_name': ['Species A'],
+        'exclusion': ['no'],
+    }))
+
+    with pytest.raises(ValueError, match='missing target_id values'):
+        merge_species_quant_tables('Species A', metadata, str(quant_dir), str(merge_dir))
+
+    assert not list((merge_dir / 'Species_A').glob('*.tsv')) if (merge_dir / 'Species_A').exists() else True
