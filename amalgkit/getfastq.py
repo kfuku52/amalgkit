@@ -74,7 +74,10 @@ from amalgkit.runtime_utils import (
 from amalgkit.sra_sources import (
     DDBJ_SRA_LINK_COLUMN,
     ENA_SRA_LINK_COLUMN,
+    assert_allowed_download_url,
+    build_allowed_host_opener,
     fetch_ena_run_file_report,
+    is_allowed_url_host,
     normalize_sra_download_url,
 )
 from amalgkit.sra import fetch_sra_xml as shared_fetch_sra_xml
@@ -1264,6 +1267,7 @@ def maybe_acquire_source_download_slot(args, sra_source_name, wait=True):
 
 
 def download_with_curl(source_url, output_path, args, sra_source_name, artifact_label='file'):
+    assert_allowed_download_url(source_url)
     curl_exe = shutil.which('curl')
     if curl_exe is None:
         return False
@@ -1281,18 +1285,30 @@ def download_with_curl(source_url, output_path, args, sra_source_name, artifact_
         '--retry-delay', '2',
         '--connect-timeout', '20',
         '--max-time', str(int(transfer_timeout)),
+        '--max-redirs', '10',
+        '--write-out', '%{url_effective}',
         '-o', tmp_path,
         source_url,
     ]
-    out, _stdout_txt, _stderr_txt = run_logged_command(
+    out, stdout_txt, _stderr_txt = run_logged_command(
         command=command,
         runner=subprocess.run,
         timeout_seconds=resolve_getfastq_tool_timeout_seconds(args),
         print_command=True,
-        print_output=should_print_getfastq_command_output(args),
+        print_output=False,
         stdout_label='curl stdout:',
         stderr_label='curl stderr:',
     )
+    effective_url = (stdout_txt or '').strip()
+    if effective_url and not is_allowed_url_host(effective_url):
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        sys.stderr.write(
+            'curl followed a redirect to a non-allowed host for {} download from {}.\n'.format(
+                str(artifact_label).lower(), sra_source_name
+            )
+        )
+        return False
     if out.returncode != 0:
         if os.path.exists(tmp_path):
             os.remove(tmp_path)
@@ -1318,8 +1334,9 @@ def download_with_curl(source_url, output_path, args, sra_source_name, artifact_
 
 
 def download_with_urllib(source_url, output_path, timeout_seconds, urlopen_fn=None):
+    assert_allowed_download_url(source_url)
     if urlopen_fn is None:
-        urlopen_fn = urllib.request.urlopen
+        urlopen_fn = build_allowed_host_opener().open
     timeout_seconds = float(timeout_seconds)
     started_at = time.monotonic()
     per_operation_timeout = max(1.0, min(timeout_seconds, 60.0))

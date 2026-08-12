@@ -1,3 +1,5 @@
+import pytest
+
 from io import BytesIO
 
 from amalgkit.sra_sources import (
@@ -96,3 +98,22 @@ def test_fetch_ena_report_uses_official_filereport_endpoint():
     assert 'accession=SRR000001' in observed['url']
     assert observed['timeout'] == 12.0
     assert parsed['sra_urls'] == ['https://ftp.sra.ebi.ac.uk/path/run.sra']
+
+def test_is_allowed_url_host_rejects_ssrf_and_private_targets():
+    from amalgkit.sra_sources import is_allowed_url_host
+    assert is_allowed_url_host('https://sra-pub-run-odp.s3.amazonaws.com/x.sra')
+    assert is_allowed_url_host('https://ftp.sra.ebi.ac.uk/x.sra')
+    assert is_allowed_url_host('https://storage.googleapis.com/b/x')
+    assert is_allowed_url_host('https://ddbj.nig.ac.jp/x.sra')
+    assert is_allowed_url_host('https://sra-downloadb.be-md.ncbi.nlm.nih.gov/x.sra')
+    for bad in [
+        'http://169.254.169.254/latest/meta-data/',
+        'http://127.0.0.1/x',
+        'http://192.168.1.5/x',
+        'http://evil.example/run.sra',
+        'https://s3.amazonaws.com/foo.sra',
+        'https://attacker.s3.amazonaws.com/x.sra',
+        '',
+        'not a url',
+    ]:
+        assert not is_allowed_url_host(bad)

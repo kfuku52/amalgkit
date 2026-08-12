@@ -1,6 +1,8 @@
 import csv
 import io
+import ipaddress
 import re
+import time
 import urllib.parse
 import urllib.request
 from urllib.parse import urlsplit, urlunsplit
@@ -16,6 +18,64 @@ _DDBJ_EXPERIMENT_ACCESSION_PATTERN = re.compile(r'^DRX\d+$', re.IGNORECASE)
 _ENA_SRA_HOST = 'ftp.sra.ebi.ac.uk'
 _ENA_FILEREPORT_URL = 'https://www.ebi.ac.uk/ena/portal/api/filereport'
 _DDBJ_DRA_PUBLIC_ROOT = 'https://ddbj.nig.ac.jp/public/ddbj_database/dra'
+
+# Hosts amalgkit is allowed to contact for SRA/ENA/cloud downloads and for its
+# own fixed metadata endpoints. Anything else (including private/link-local IP
+# literals) is rejected as an SSRF vector.
+ALLOWED_DOWNLOAD_HOSTS = frozenset({
+    'ftp.sra.ebi.ac.uk',
+    'ddbj.nig.ac.jp',
+    'storage.googleapis.com',
+    'sra-downloadb.be-md.ncbi.nlm.nih.gov',
+    'sra-download.be-md.ncbi.nlm.nih.gov',
+    'www.ebi.ac.uk',            # ENA filereport endpoint (fixed)
+    'trace.ncbi.nlm.nih.gov',   # NCBI trace XML endpoint (fixed)
+})
+ALLOWED_SRA_S3_HOST_PREFIX = 'sra-pub-run-'
+ALLOWED_SRA_S3_HOST_SUFFIX = '.s3.amazonaws.com'
+
+def is_allowed_url_host(url):
+    try:
+        parsed = urlsplit(str(url or ''))
+    except ValueError:
+        return False
+    host = parsed.hostname
+    if not host:
+        return False
+    host = host.lower().rstrip('.')
+    try:
+        addr = ipaddress.ip_address(host)
+    except ValueError:
+        addr = None
+    if addr is not None:
+        return not (
+            addr.is_private or addr.is_loopback or addr.is_link_local
+            or addr.is_unspecified or addr.is_multicast or addr.is_reserved
+        )
+    if host in ALLOWED_DOWNLOAD_HOSTS:
+        return True
+    if (
+        host.startswith(ALLOWED_SRA_S3_HOST_PREFIX)
+        and host.endswith(ALLOWED_SRA_S3_HOST_SUFFIX)
+    ):
+        return True
+    return False
+
+def assert_allowed_download_url(url):
+    if not is_allowed_url_host(url):
+        raise ValueError(
+            'URL host is not an allowed SRA/ENA/cloud download host: {}'.format(url)
+        )
+
+class _AllowedHostRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if not is_allowed_url_host(newurl):
+            raise ValueError('Redirect to a non-allowed download host: {}'.format(newurl))
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+def build_allowed_host_opener():
+    """Return an opener that refuses redirects to non-allow-listed hosts."""
+    return urllib.request.build_opener(_AllowedHostRedirectHandler)
 
 
 def normalize_accession_text(value):

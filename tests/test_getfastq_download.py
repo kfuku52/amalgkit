@@ -534,7 +534,7 @@ class TestDownloadSraUrlSchemes:
         monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
         output_path = tmp_path / 'SRR001.sra'
         downloaded = download_with_curl(
-            source_url='https://example.org/empty.sra',
+            source_url='https://ftp.sra.ebi.ac.uk/empty.sra',
             output_path=str(output_path),
             args=SimpleNamespace(
                 dump_print=False,
@@ -703,7 +703,7 @@ class TestDownloadSraUrlSchemes:
             sra_id=sra_id,
             aws_link='',
             gcp_link='',
-            ncbi_link='https://example.invalid/path/to.sra',
+            ncbi_link='https://sra-downloadb.be-md.ncbi.nlm.nih.gov/path/to.sra',
         )
         sra_stat = {'sra_id': sra_id}
         args = self._make_args(sra_download_method='curl')
@@ -1282,3 +1282,36 @@ class TestDownloadSraUrlSchemes:
         assert flag_private_file is False
         assert flag_any_output_file_present is False
         assert last_getfastq_sra_dir == '/tmp/getfastq/{}'.format(sra_id)
+
+def test_download_with_curl_rejects_disallowed_host(tmp_path, monkeypatch):
+    monkeypatch.setattr('amalgkit.getfastq.shutil.which', lambda name: '/usr/bin/curl')
+    with pytest.raises(ValueError, match='not an allowed SRA/ENA/cloud download host'):
+        download_with_curl(
+            source_url='http://169.254.169.254/latest/meta-data/',
+            output_path=str(tmp_path / 'x.sra'),
+            args=SimpleNamespace(sra_download_transfer_timeout_seconds=60),
+            sra_source_name='NCBI',
+            artifact_label='SRA file',
+        )
+
+def test_download_with_curl_rejects_redirect_to_disallowed_host(tmp_path, monkeypatch):
+    monkeypatch.setattr('amalgkit.getfastq.shutil.which', lambda name: '/usr/bin/curl')
+
+    def fake_run(cmd, stdout=None, stderr=None):
+        out_path = cmd[cmd.index('-o') + 1]
+        with open(out_path, 'wb') as fh:
+            fh.write(b'data')
+        # The effective URL curl followed redirects to is a malicious host.
+        return subprocess.CompletedProcess(cmd, 0, stdout=b'http://evil.example/run.sra', stderr=b'')
+
+    monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
+    output_path = tmp_path / 'SRR001.sra'
+    downloaded = download_with_curl(
+        source_url='https://ftp.sra.ebi.ac.uk/run.sra',
+        output_path=str(output_path),
+        args=SimpleNamespace(sra_download_transfer_timeout_seconds=60),
+        sra_source_name='ENA',
+        artifact_label='SRA file',
+    )
+    assert downloaded is False
+    assert not output_path.exists()
