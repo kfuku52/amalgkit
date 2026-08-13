@@ -5,6 +5,10 @@ Releases provide the commit-level generated notes for each version.
 
 ## Unreleased
 
+- Restored major/minor-only release automation: patch-only versions no longer
+  create Git tags or GitHub Releases and therefore do not trigger Bioconda
+  autobump pull requests.
+
 ## 0.16.59 - 2026-08-10
 
 - Restored CI compatibility with pandas 3 string dtypes, current NumPy stubs,

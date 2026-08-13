@@ -1102,6 +1102,8 @@ class TestSanityMain:
         assert (out_dir / 'sanity' / 'sanity_issues.tsv').exists()
         with open(out_dir / 'sanity' / 'sanity_report.json', 'r', encoding='utf-8') as handle:
             report_payload = json.load(handle)
+        assert report_payload['schema_version'] == 1
+        assert 'generated_at' not in report_payload
         assert report_payload['requested_checks'] == ['getfastq', 'index', 'quant', 'merge', 'busco', 'finalize']
 
     def test_strict_mode_raises_after_writing_summary(self, tmp_path, monkeypatch):

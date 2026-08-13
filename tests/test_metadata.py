@@ -1,5 +1,6 @@
 import xml.etree.ElementTree as ET
 import json
+import os
 import pathlib
 from contextlib import contextmanager
 
@@ -1163,3 +1164,63 @@ def test_prepare_single_metadata_skips_taxonomy_lookup_when_resolve_names_disabl
     ]:
         assert column in prepared.df.columns
         assert prepared.df[column].isna().all()
+
+# ---------------------------------------------------------------------------
+# Regression: existing metadata must be verified against the requested query
+# instead of returning a success (exit 0) no-op for any pre-existing output.
+# ---------------------------------------------------------------------------
+
+def test_existing_metadata_mismatched_query_returns_nonzero(tmp_path, monkeypatch):
+    from amalgkit.exceptions import AmalgkitExit
+    from amalgkit.metadata import (
+        METADATA_STALE_OUTPUT_EXIT,
+        _build_metadata_cache_fingerprint,
+        _metadata_output_paths,
+        _run_single_query,
+        _write_json_atomic,
+    )
+
+    out_dir = tmp_path / 'out'
+    paths = _metadata_output_paths(str(out_dir))
+    os.makedirs(paths['metadata_dir'], exist_ok=True)
+    pandas.DataFrame({'run': ['SRR_OLD'], 'scientific_name': ['Old sp']}).to_csv(
+        paths['metadata_path'], sep='\t', index=False
+    )
+    args = SimpleNamespace(redo=False, resolve_names=False, out_dir=str(out_dir))
+    old_fp = _build_metadata_cache_fingerprint(
+        args=args, search_string='oldquery', species_name=None, query_label=None, mode='single'
+    )
+    _write_json_atomic({'cache_fingerprint': old_fp, 'search_string': 'oldquery'}, paths['query_info_path'])
+
+    # Requesting a DIFFERENT query must NOT silently succeed.
+    with pytest.raises(AmalgkitExit) as excinfo:
+        _run_single_query(args=args, out_dir=str(out_dir), search_string='newquery', mode='single')
+    assert excinfo.value.exit_code == METADATA_STALE_OUTPUT_EXIT
+    assert excinfo.value.exit_code != 0
+
+
+def test_existing_metadata_matching_query_is_genuine_noop(tmp_path, monkeypatch):
+    from amalgkit.exceptions import AmalgkitExit
+    from amalgkit.metadata import (
+        _build_metadata_cache_fingerprint,
+        _metadata_output_paths,
+        _run_single_query,
+        _write_json_atomic,
+    )
+
+    out_dir = tmp_path / 'out'
+    paths = _metadata_output_paths(str(out_dir))
+    os.makedirs(paths['metadata_dir'], exist_ok=True)
+    pandas.DataFrame({'run': ['SRR_OLD'], 'scientific_name': ['Old sp']}).to_csv(
+        paths['metadata_path'], sep='\t', index=False
+    )
+    args = SimpleNamespace(redo=False, resolve_names=False, out_dir=str(out_dir))
+    fp = _build_metadata_cache_fingerprint(
+        args=args, search_string='samenew', species_name=None, query_label=None, mode='single'
+    )
+    _write_json_atomic({'cache_fingerprint': fp, 'search_string': 'samenew'}, paths['query_info_path'])
+
+    with pytest.raises(AmalgkitExit) as excinfo:
+        _run_single_query(args=args, out_dir=str(out_dir), search_string='samenew', mode='single')
+    assert excinfo.value.exit_code == 0
+    assert excinfo.value.use_stderr is False
