@@ -511,3 +511,30 @@ class TestPerSpeciesTableGeneration:
 
         with pytest.raises(ValueError, match='Missing required metadata column\\(s\\) for per-species table generation: scientific_name'):
             list_selected_species(metadata)
+
+# ---------------------------------------------------------------------------
+# Regression: the per-species completion flag must be reproducible, not
+# carrying a wall-clock timestamp that makes two identical runs differ.
+# ---------------------------------------------------------------------------
+
+def test_completion_flag_content_is_deterministic(tmp_path):
+    from amalgkit.per_species_tables import (
+        COMPLETION_FLAG_SCHEMA,
+        get_completion_flag_path,
+        write_completion_flag,
+    )
+
+    per_species_dir = tmp_path / 'per_species'
+    (per_species_dir / 'Sp_A').mkdir(parents=True)
+    write_completion_flag(str(per_species_dir), 'Sp_A')
+
+    flag_path = get_completion_flag_path(str(per_species_dir), 'Sp_A')
+    with open(flag_path, encoding='utf-8') as handle:
+        content = handle.read()
+    assert COMPLETION_FLAG_SCHEMA in content
+    # No wall-clock timestamp embedded.
+    assert 'completed at ' not in content
+    # Two identical runs produce byte-identical flag content.
+    write_completion_flag(str(per_species_dir), 'Sp_A')
+    with open(flag_path, encoding='utf-8') as handle:
+        assert handle.read() == content

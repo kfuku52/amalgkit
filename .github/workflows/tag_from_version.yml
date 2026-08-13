@@ -56,12 +56,21 @@ jobs:
           match = re.fullmatch(r'(\d+)\.(\d+)\.(\d+)(?:[a-z]+\d+)?', version) if isinstance(version, str) else None
           if match is None:
               raise SystemExit('Invalid or missing __version__ in {}'.format(init_path))
+          should_release = int(match.group(3)) == 0
           with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
               output.write('version={}\n'.format(version))
               output.write('tag=v{}\n'.format(version))
+              output.write('should_release={}\n'.format(str(should_release).lower()))
           PY
 
+      - name: Skip patch-only release
+        if: steps.package.outputs.should_release != 'true'
+        env:
+          VERSION: ${{ steps.package.outputs.version }}
+        run: echo "Skipping Git tag, GitHub Release, and Bioconda autobump for patch-only version $VERSION."
+
       - name: Create version tag
+        if: steps.package.outputs.should_release == 'true'
         id: tag
         env:
           EVENT_NAME: ${{ github.event_name }}
@@ -87,13 +96,13 @@ jobs:
           fi
 
       - name: Build release distributions
-        if: steps.tag.outputs.skip != 'true'
+        if: steps.package.outputs.should_release == 'true' && steps.tag.outputs.skip != 'true'
         run: |
           python -m pip install --upgrade pip build
           python -m build
 
       - name: Create GitHub Release if missing
-        if: steps.tag.outputs.skip != 'true'
+        if: steps.package.outputs.should_release == 'true' && steps.tag.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.package.outputs.tag }}

@@ -1,8 +1,10 @@
 import math
+import re
 import shutil
 import subprocess
 import threading
 import time
+import urllib.parse
 from typing import Any
 
 from amalgkit.logging_utils import get_logger
@@ -40,8 +42,39 @@ def resolve_timeout_seconds(args, attribute_name, default_seconds):
     return timeout_seconds
 
 
+_URL_TOKEN_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://[^\s]+")
+
+
+def _redact_url_token(url):
+    scheme = url.split("://", 1)[0].casefold()
+    try:
+        parts = urllib.parse.urlsplit(url)
+        host = parts.hostname
+        port = parts.port
+    except ValueError:
+        return "{}://<redacted>".format(scheme)
+    if host is None:
+        return "{}://<redacted>".format(scheme)
+    if ":" in host:
+        host = "[{}]".format(host)
+    netloc = host if port is None else "{}:{}".format(host, port)
+    return urllib.parse.urlunsplit((scheme, netloc, parts.path, "", ""))
+
+
+def redact_url_for_logging(value):
+    """Strip query, fragment, and userinfo from every URL-like command token.
+
+    Signed/requester-pays URLs embed credentials in the query string; only
+    scheme+host+path may be logged so tokens never reach stderr or the JSONL
+    log. Malformed URLs fail closed instead of returning the secret-bearing
+    input unchanged.
+    """
+    text = str(value)
+    return _URL_TOKEN_PATTERN.sub(lambda match: _redact_url_token(match.group(0)), text)
+
+
 def format_command(command):
-    return " ".join([str(part) for part in command])
+    return " ".join([redact_url_for_logging(part) for part in command])
 
 
 def decode_command_output(output):
