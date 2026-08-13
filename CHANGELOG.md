@@ -5,6 +5,9 @@ Releases provide the commit-level generated notes for each version.
 
 ## Unreleased
 
+- Preserved undefined cross-species correlations without fabricating zeroes,
+  retained valid absent/multicopy ortholog cells, and aligned finite-only
+  embeddings and dendrogram labels.
 - Hardened SRA/ENA download handling by validating each HTTPS redirect before
   connecting, using exact endpoint allowlists and private temporary directories,
   and redacting credentials from URL-like command arguments.

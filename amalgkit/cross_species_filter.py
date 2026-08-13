@@ -11,6 +11,7 @@ from amalgkit.command_context import CrossSpeciesFilterContext
 from amalgkit.cross_species_computation import (
     calculate_correlation_within_group as _calculate_correlation_within_group,
     resolve_correlation_matrix as _resolve_correlation_matrix,
+    resolve_finite_correlation_matrix as _resolve_finite_correlation_matrix,
     resolve_matrix_for_embedding as _resolve_matrix_for_embedding,
     resolve_tsne_perplexity as _resolve_tsne_perplexity,
 )
@@ -303,15 +304,33 @@ def _extract_ortholog_unaveraged_expression_table(df_singleog, unaveraged_tcs):
             tc_prefixed = tc.copy()
             tc_prefixed.index = tc_prefixed.index.astype(str)
             tc_prefixed.columns = ['{}_{}'.format(sp, col) for col in tc_prefixed.columns]
-            row_idx = df_singleog.loc[:, sp].astype(str).tolist()
-            missing_ids = sorted(set(row_idx).difference(tc_prefixed.index))
+            raw_gene_ids = df_singleog.loc[:, sp]
+            row_idx = []
+            present_ids = []
+            for raw_gene_id in raw_gene_ids.tolist():
+                if pandas.isna(raw_gene_id):
+                    gene_id = None
+                else:
+                    normalized_gene_id = str(raw_gene_id).strip()
+                    gene_id = (
+                        normalized_gene_id
+                        if normalized_gene_id not in {'', '-'} and ',' not in normalized_gene_id
+                        else None
+                    )
+                row_idx.append(gene_id)
+                if gene_id is not None:
+                    present_ids.append(gene_id)
+            missing_ids = sorted(set(present_ids).difference(tc_prefixed.index))
             if len(missing_ids) > 0:
+                examples = ', '.join(missing_ids[:10])
+                if len(missing_ids) > 10:
+                    examples += ', ...'
                 raise ValueError(
                     'Ortholog table references {} gene id(s) absent from the {} expression table for species {}: {}'.format(
                         len(missing_ids),
                         correction,
                         sp,
-                        ', '.join(missing_ids),
+                        examples,
                     )
                 )
             tc_slice = tc_prefixed.reindex(row_idx)
@@ -342,7 +361,7 @@ def _evict_embedding_intermediates(cache, matrix_df, missing_strategy=None):
         if (
             len(cache_key) >= 3
             and cache_key[2] == strategy_key
-            and cache_key[0] in {'filled', 'correlation'}
+            and cache_key[0] in {'filled', 'correlation', 'finite_correlation'}
         ):
             cache.pop(cache_key, None)
 
@@ -353,7 +372,7 @@ def _compute_pca_coordinates(matrix_df, missing_strategy, cache=None):
     filled = _resolve_matrix_for_embedding(matrix_df, missing_strategy=missing_strategy, cache=cache)
     if filled.shape[0] == 0:
         return pandas.DataFrame(index=matrix_df.columns, columns=['PC1', 'PC2', 'PC3', 'PC4', 'PC5'])
-    tc_corr = _resolve_correlation_matrix(
+    tc_corr = _resolve_finite_correlation_matrix(
         matrix_df,
         missing_strategy=missing_strategy,
         cache=cache,
@@ -376,7 +395,7 @@ def _compute_mds_coordinates(matrix_df, missing_strategy, cache=None):
     filled = _resolve_matrix_for_embedding(matrix_df, missing_strategy=missing_strategy, cache=cache)
     if filled.shape[0] == 0:
         return out
-    corr_df = _resolve_correlation_matrix(
+    corr_df = _resolve_finite_correlation_matrix(
         matrix_df,
         missing_strategy=missing_strategy,
         cache=cache,
@@ -917,6 +936,8 @@ def _scatter_embedding_panel(ax, plot_df, x_col, y_col, title, font_size=8, labe
 
 
 def _draw_dendrogram(ax, matrix_df, labels, title, cache=None):
+    if len(labels) != matrix_df.shape[1]:
+        raise ValueError('Dendrogram labels must align with the expression matrix columns.')
     if matrix_df.shape[1] <= 1:
         ax.text(0.5, 0.5, 'No dendrogram data', ha='center', va='center', fontsize=8)
         ax.set_axis_off()
@@ -928,11 +949,17 @@ def _draw_dendrogram(ax, matrix_df, labels, title, cache=None):
         ax.text(0.5, 0.5, 'SciPy not available', ha='center', va='center', fontsize=8)
         ax.set_axis_off()
         return
-    corr = _resolve_correlation_matrix(
+    corr = _resolve_finite_correlation_matrix(
         matrix_df,
         missing_strategy='row_mean',
         cache=cache,
     )
+    if corr.shape[0] <= 1:
+        ax.text(0.5, 0.5, 'No dendrogram data', ha='center', va='center', fontsize=8)
+        ax.set_axis_off()
+        return
+    label_by_sample = dict(zip(matrix_df.columns, labels))
+    aligned_labels = [label_by_sample[sample_id] for sample_id in corr.index]
     dist = 1.0 - corr.to_numpy(dtype=float)
     dist = (dist + dist.T) / 2.0
     numpy.fill_diagonal(dist, 0.0)
@@ -940,7 +967,7 @@ def _draw_dendrogram(ax, matrix_df, labels, title, cache=None):
     linkage_matrix = linkage(condensed, method='average')
     dendrogram(
         linkage_matrix,
-        labels=labels,
+        labels=aligned_labels,
         ax=ax,
         leaf_rotation=90,
         leaf_font_size=6,

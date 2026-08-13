@@ -171,20 +171,35 @@ def resolve_correlation_matrix(
         cache=cache,
     )
     corr = filled.corr(method="pearson")
-    # A zero-variance sample has an undefined Pearson correlation with every other
-    # sample, which pandas reports as NaN. Those NaNs were previously coerced to a
-    # measured 0.0, entering the PCA/MDS/t-SNE/heatmap decompositions as a fabricated
-    # "uncorrelated" value and biasing them. Keep the NaN and drop the degenerate
-    # constant-variance samples instead: they carry no information for any embedding.
-    # After imputation every non-degenerate sample pair is finite, so the retained
-    # matrix is fully finite.
-    defined = corr.notna().any(axis=0)
-    corr = corr.loc[defined, defined]
     if cache is not None:
         cache[cache_key] = corr
         if strategy_key == "row_mean":
             cache.pop(("filled", id(matrix_df), strategy_key), None)
     return corr
+
+
+def resolve_finite_correlation_matrix(
+    matrix_df: pandas.DataFrame,
+    missing_strategy: str = "row_mean",
+    cache: dict | None = None,
+) -> pandas.DataFrame:
+    """Return the fully defined sample subset required by eigendecompositions."""
+    strategy_key = str(missing_strategy).lower()
+    cache_key = ("finite_correlation", id(matrix_df), strategy_key)
+    if cache is not None and cache_key in cache:
+        return cache[cache_key]
+    corr = resolve_correlation_matrix(
+        matrix_df,
+        missing_strategy=missing_strategy,
+        cache=cache,
+    )
+    defined = corr.notna().any(axis=0)
+    finite_corr = corr.loc[defined, defined]
+    if finite_corr.size > 0 and not numpy.isfinite(finite_corr.to_numpy(dtype=float)).all():
+        raise ValueError("Non-degenerate sample correlations must be finite after imputation.")
+    if cache is not None:
+        cache[cache_key] = finite_corr
+    return finite_corr
 
 
 def resolve_tsne_perplexity(num_samples: int) -> int | None:

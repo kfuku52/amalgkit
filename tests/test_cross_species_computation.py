@@ -3,6 +3,7 @@ import pandas
 
 from amalgkit.cross_species_computation import (
     resolve_correlation_matrix,
+    resolve_finite_correlation_matrix,
     resolve_matrix_for_embedding,
     resolve_tsne_perplexity,
     safe_correlation,
@@ -32,7 +33,7 @@ def test_resolve_matrix_for_embedding_strict_and_cache():
     assert resolve_matrix_for_embedding(matrix, 'row_mean', cache=cache) is imputed
 
 
-def test_resolve_correlation_matrix_drops_undefined_constant_sample():
+def test_resolve_correlation_matrix_preserves_undefined_constant_sample():
     matrix = pandas.DataFrame(
         {
             'sample_a': [1.0, 2.0, 3.0, 4.0],
@@ -43,9 +44,24 @@ def test_resolve_correlation_matrix_drops_undefined_constant_sample():
 
     correlation = resolve_correlation_matrix(matrix)
 
+    assert correlation.index.tolist() == ['sample_a', 'sample_b', 'constant_sample']
+    assert correlation.loc['constant_sample'].isna().all()
+    assert correlation.loc[:, 'constant_sample'].isna().all()
+
+
+def test_resolve_finite_correlation_matrix_drops_undefined_constant_sample():
+    matrix = pandas.DataFrame(
+        {
+            'sample_a': [1.0, 2.0, 3.0, 4.0],
+            'sample_b': [2.0, 4.0, 6.0, 8.0],
+            'constant_sample': [5.0, 5.0, 5.0, 5.0],
+        }
+    )
+
+    correlation = resolve_finite_correlation_matrix(matrix)
+
     assert correlation.index.tolist() == ['sample_a', 'sample_b']
-    assert 'constant_sample' not in correlation.columns
-    assert not numpy.isclose(correlation.to_numpy(), 0.0).any()
+    assert numpy.isfinite(correlation.to_numpy()).all()
 
 
 def test_resolve_tsne_perplexity_is_valid_for_sample_count():
