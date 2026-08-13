@@ -1,6 +1,5 @@
 import csv
 import io
-import ipaddress
 import re
 import time
 import urllib.parse
@@ -26,51 +25,38 @@ ALLOWED_DOWNLOAD_HOSTS = frozenset({
     'ftp.sra.ebi.ac.uk',
     'ddbj.nig.ac.jp',
     'storage.googleapis.com',
+    'sra-pub-run-odp.s3.amazonaws.com',
     'sra-downloadb.be-md.ncbi.nlm.nih.gov',
     'sra-download.be-md.ncbi.nlm.nih.gov',
     'www.ebi.ac.uk',            # ENA filereport endpoint (fixed)
     'trace.ncbi.nlm.nih.gov',   # NCBI trace XML endpoint (fixed)
 })
-ALLOWED_SRA_S3_HOST_PREFIX = 'sra-pub-run-'
-ALLOWED_SRA_S3_HOST_SUFFIX = '.s3.amazonaws.com'
 
-def is_allowed_url_host(url):
+def is_allowed_download_url(url):
     try:
         parsed = urlsplit(str(url or ''))
+        host = parsed.hostname
+        port = parsed.port
     except ValueError:
         return False
-    host = parsed.hostname
-    if not host:
+    if parsed.scheme.casefold() != 'https' or not host:
         return False
     host = host.lower().rstrip('.')
-    try:
-        addr = ipaddress.ip_address(host)
-    except ValueError:
-        addr = None
-    if addr is not None:
-        return not (
-            addr.is_private or addr.is_loopback or addr.is_link_local
-            or addr.is_unspecified or addr.is_multicast or addr.is_reserved
-        )
-    if host in ALLOWED_DOWNLOAD_HOSTS:
-        return True
-    if (
-        host.startswith(ALLOWED_SRA_S3_HOST_PREFIX)
-        and host.endswith(ALLOWED_SRA_S3_HOST_SUFFIX)
-    ):
-        return True
-    return False
+    return (
+        parsed.username is None
+        and parsed.password is None
+        and port in (None, 443)
+        and host in ALLOWED_DOWNLOAD_HOSTS
+    )
 
 def assert_allowed_download_url(url):
-    if not is_allowed_url_host(url):
-        raise ValueError(
-            'URL host is not an allowed SRA/ENA/cloud download host: {}'.format(url)
-        )
+    if not is_allowed_download_url(url):
+        raise ValueError('URL scheme or host is not an allowed SRA/ENA/cloud download endpoint.')
 
 class _AllowedHostRedirectHandler(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
-        if not is_allowed_url_host(newurl):
-            raise ValueError('Redirect to a non-allowed download host: {}'.format(newurl))
+        if not is_allowed_download_url(newurl):
+            raise ValueError('Redirect to a non-allowed SRA/ENA/cloud download endpoint.')
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 def build_allowed_host_opener():
@@ -90,21 +76,27 @@ def read_bounded_response(response, max_bytes=MAX_METADATA_READ_BYTES, timeout=3
     started_at = time.monotonic()
     total = 0
     chunks = []
+    max_bytes = int(max_bytes)
+    if max_bytes < 0:
+        raise ValueError('Metadata read byte limit must not be negative.')
     while True:
-        remaining = int(max_bytes) - total
-        if remaining <= 0:
+        if (time.monotonic() - started_at) >= deadline:
+            raise TimeoutError(
+                'Metadata response exceeded the {:.0f} sec read deadline.'.format(deadline)
+            )
+        chunk = response.read(min(_METADATA_READ_CHUNK, max_bytes - total + 1))
+        if not chunk:
+            break
+        chunks.append(chunk)
+        total += len(chunk)
+        if total > max_bytes:
             raise ValueError(
-                'Response exceeded the {:,} byte metadata read limit.'.format(int(max_bytes))
+                'Response exceeded the {:,} byte metadata read limit.'.format(max_bytes)
             )
         if (time.monotonic() - started_at) >= deadline:
             raise TimeoutError(
                 'Metadata response exceeded the {:.0f} sec read deadline.'.format(deadline)
             )
-        chunk = response.read(min(_METADATA_READ_CHUNK, remaining))
-        if not chunk:
-            break
-        chunks.append(chunk)
-        total += len(chunk)
     return b''.join(chunks)
 
 

@@ -241,9 +241,22 @@ def test_probe_dependency_command_kills_a_hanging_probe():
 def test_format_command_redacts_signed_url_query_and_userinfo():
     url = 'https://sra-pub-run-odp.s3.amazonaws.com/sra/SRR1/SRR1.sra?X-Amz-Signature=SECRET&X-Amz-Credential=AKIA'
     redacted = format_command(['curl', '-L', '-o', '/tmp/x.sra', url])
-    assert 'SECRET' not in redacted
-    assert 'AKIA' not in redacted
-    assert 'sra-pub-run-odp.s3.amazonaws.com/sra/SRR1/SRR1.sra' in redacted
+    assert redacted == (
+        'curl -L -o /tmp/x.sra '
+        'https://sra-pub-run-odp.s3.amazonaws.com/sra/SRR1/SRR1.sra'
+    )
     userinfo = format_command(['curl', 'https://user:hunter2@ftp.sra.ebi.ac.uk/x.sra'])
-    assert 'hunter2' not in userinfo
-    assert 'ftp.sra.ebi.ac.uk' in userinfo
+    assert userinfo == 'curl https://ftp.sra.ebi.ac.uk/x.sra'
+
+
+def test_format_command_redacts_embedded_malformed_and_unknown_scheme_urls():
+    assert format_command([
+        'tool',
+        '--url=https://user:SECRET@ftp.sra.ebi.ac.uk/x?token=SECRET',
+    ]) == 'tool --url=https://ftp.sra.ebi.ac.uk/x'
+    assert format_command(['tool', 'https://[broken?token=SECRET']) == (
+        'tool https://<redacted>'
+    )
+    assert format_command(['tool', 'custom://user:SECRET@host/x?token=SECRET']) == (
+        'tool custom://host/x'
+    )

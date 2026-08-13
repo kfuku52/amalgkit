@@ -5,6 +5,7 @@ import gzip
 import http.client
 import ssl
 import os
+import stat
 import subprocess
 from contextlib import contextmanager
 
@@ -1286,7 +1287,7 @@ class TestDownloadSraUrlSchemes:
 
 def test_download_with_curl_rejects_disallowed_host(tmp_path, monkeypatch):
     monkeypatch.setattr('amalgkit.getfastq.shutil.which', lambda name: '/usr/bin/curl')
-    with pytest.raises(ValueError, match='not an allowed SRA/ENA/cloud download host'):
+    with pytest.raises(ValueError, match='not an allowed SRA/ENA/cloud download endpoint'):
         download_with_curl(
             source_url='http://169.254.169.254/latest/meta-data/',
             output_path=str(tmp_path / 'x.sra'),
@@ -1297,13 +1298,22 @@ def test_download_with_curl_rejects_disallowed_host(tmp_path, monkeypatch):
 
 def test_download_with_curl_rejects_redirect_to_disallowed_host(tmp_path, monkeypatch):
     monkeypatch.setattr('amalgkit.getfastq.shutil.which', lambda name: '/usr/bin/curl')
+    requested_urls = []
 
     def fake_run(cmd, stdout=None, stderr=None):
+        requested_urls.append(cmd[-1])
         out_path = cmd[cmd.index('-o') + 1]
         with open(out_path, 'wb') as fh:
             fh.write(b'data')
-        # The effective URL curl followed redirects to is a malicious host.
-        return subprocess.CompletedProcess(cmd, 0, stdout=b'http://evil.example/run.sra', stderr=b'')
+        return subprocess.CompletedProcess(
+            cmd,
+            0,
+            stdout=(
+                b'AMALGKIT_CURL_STATUS:302\n'
+                b'AMALGKIT_CURL_REDIRECT:http://169.254.169.254/latest/meta-data/\n'
+            ),
+            stderr=b'',
+        )
 
     monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
     output_path = tmp_path / 'SRR001.sra'
@@ -1315,20 +1325,82 @@ def test_download_with_curl_rejects_redirect_to_disallowed_host(tmp_path, monkey
         artifact_label='SRA file',
     )
     assert downloaded is False
+    assert requested_urls == ['https://ftp.sra.ebi.ac.uk/run.sra']
     assert not output_path.exists()
 
-def test_download_temp_paths_are_unpredictable_and_exclusive(tmp_path, monkeypatch):
-    from amalgkit.getfastq import _create_secure_download_temp_path
+
+def test_download_with_curl_validates_each_allowed_redirect_before_connecting(tmp_path, monkeypatch):
+    monkeypatch.setattr('amalgkit.getfastq.shutil.which', lambda name: '/usr/bin/curl')
+    requested_urls = []
+
+    def fake_run(cmd, stdout=None, stderr=None):
+        requested_urls.append(cmd[-1])
+        out_path = cmd[cmd.index('-o') + 1]
+        with open(out_path, 'wb') as handle:
+            handle.write(b'final' if len(requested_urls) == 2 else b'redirect')
+        if len(requested_urls) == 1:
+            response = (
+                b'AMALGKIT_CURL_STATUS:302\n'
+                b'AMALGKIT_CURL_REDIRECT:https://sra-download.be-md.ncbi.nlm.nih.gov/final.sra\n'
+            )
+        else:
+            response = b'AMALGKIT_CURL_STATUS:200\nAMALGKIT_CURL_REDIRECT:\n'
+        return subprocess.CompletedProcess(cmd, 0, stdout=response, stderr=b'')
+
+    monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
+    output_path = tmp_path / 'SRR001.sra'
+    assert download_with_curl(
+        source_url='https://ftp.sra.ebi.ac.uk/run.sra',
+        output_path=str(output_path),
+        args=SimpleNamespace(sra_download_transfer_timeout_seconds=60),
+        sra_source_name='ENA',
+        artifact_label='SRA file',
+    )
+    assert requested_urls == [
+        'https://ftp.sra.ebi.ac.uk/run.sra',
+        'https://sra-download.be-md.ncbi.nlm.nih.gov/final.sra',
+    ]
+    assert output_path.read_bytes() == b'final'
+
+
+def test_download_with_urllib_refuses_preexisting_symlink(tmp_path):
+    from io import BytesIO
+
+    from amalgkit.getfastq import download_with_urllib
+
+    victim_path = tmp_path / 'victim'
+    victim_path.write_bytes(b'original')
+    output_path = tmp_path / 'output'
+    output_path.symlink_to(victim_path)
+
+    class _Response(BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            self.close()
+
+    with pytest.raises(FileExistsError):
+        download_with_urllib(
+            source_url='https://ftp.sra.ebi.ac.uk/run.sra',
+            output_path=str(output_path),
+            timeout_seconds=30,
+            urlopen_fn=lambda _url, timeout: _Response(b'attacker-controlled'),
+        )
+
+    assert victim_path.read_bytes() == b'original'
+
+
+def test_download_temp_path_is_inside_private_unpredictable_directory(tmp_path):
+    from amalgkit.getfastq import _secure_download_temp_path
+
     output = str(tmp_path / 'SRR001.sra')
-    p1 = _create_secure_download_temp_path(output, '.urllibtmp')
-    p2 = _create_secure_download_temp_path(output, '.urllibtmp')
-    assert p1 != p2
-    # Names must not be the old guessable time-ns suffix.
-    assert '.urllibtmp.' in p1
-    import re as _re
-    assert not _re.search(r'\.urllibtmp\.\d{10,}$', p1)
-    # Created exclusively as a regular file, no symlink.
-    assert os.path.isfile(p1)
-    assert not os.path.islink(p1)
-    os.remove(p1)
-    os.remove(p2)
+    with _secure_download_temp_path(output, '.urllibtmp') as first_path:
+        first_parent = os.path.dirname(first_path)
+        assert os.path.basename(first_path) == 'payload'
+        assert not os.path.exists(first_path)
+        assert stat.S_IMODE(os.stat(first_parent).st_mode) == 0o700
+    assert not os.path.exists(first_parent)
+
+    with _secure_download_temp_path(output, '.urllibtmp') as second_path:
+        assert os.path.dirname(second_path) != first_parent

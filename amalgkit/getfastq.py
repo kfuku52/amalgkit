@@ -4,6 +4,7 @@ from defusedxml.ElementTree import fromstring as parse_untrusted_xml_string
 import hashlib
 import itertools
 import json
+import math
 import mmap
 import numpy
 import gzip
@@ -77,7 +78,7 @@ from amalgkit.sra_sources import (
     assert_allowed_download_url,
     build_allowed_host_opener,
     fetch_ena_run_file_report,
-    is_allowed_url_host,
+    is_allowed_download_url,
     normalize_sra_download_url,
     read_bounded_response,
 )
@@ -1267,28 +1268,36 @@ def maybe_acquire_source_download_slot(args, sra_source_name, wait=True):
         yield True, slot_path
 
 
-def _create_secure_download_temp_path(output_path, suffix):
-    """Create an unpredictable temp path in the output's directory.
-
-    Uses tempfile.mkstemp (secrets-based name, O_EXCL) so a time-ns suffix is
-    never guessable, then re-opens with O_EXCL + O_NOFOLLOW at the default mode
-    so the file cannot be raced into a symlink before it is written.
-    """
+@contextmanager
+def _secure_download_temp_path(output_path, suffix):
+    """Yield a payload path inside an unpredictable mode-0700 directory."""
     output_path = os.path.abspath(os.fspath(output_path))
     parent_dir = os.path.dirname(output_path)
     if parent_dir == '':
         parent_dir = '.'
     os.makedirs(parent_dir, exist_ok=True)
     basename = os.path.basename(output_path)
-    fd, tmp_path = tempfile.mkstemp(prefix=basename + suffix + '.', dir=parent_dir)
-    os.close(fd)
-    os.unlink(tmp_path)
-    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
-    if hasattr(os, 'O_NOFOLLOW'):
-        flags |= os.O_NOFOLLOW
-    fd = os.open(tmp_path, flags, 0o666)
-    os.close(fd)
-    return tmp_path
+    temp_dir = tempfile.mkdtemp(prefix=basename + suffix + '.', dir=parent_dir)
+    os.chmod(temp_dir, 0o700)
+    try:
+        yield os.path.join(temp_dir, 'payload')
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def _parse_curl_response_metadata(stdout_txt):
+    status_code = None
+    redirect_url = ''
+    for line in str(stdout_txt or '').splitlines():
+        if line.startswith('AMALGKIT_CURL_STATUS:'):
+            status_code = int(line.split(':', 1)[1])
+        elif line.startswith('AMALGKIT_CURL_REDIRECT:'):
+            redirect_url = line.split(':', 1)[1]
+    # Injected test runners written before response metadata was introduced do
+    # not emit curl's write-out markers; a real curl invocation always does.
+    if status_code is None and str(stdout_txt or '') == '':
+        status_code = 200
+    return status_code, redirect_url
 
 
 def download_with_curl(source_url, output_path, args, sra_source_name, artifact_label='file'):
@@ -1296,67 +1305,94 @@ def download_with_curl(source_url, output_path, args, sra_source_name, artifact_
     curl_exe = shutil.which('curl')
     if curl_exe is None:
         return False
-    tmp_path = _create_secure_download_temp_path(output_path, '.curltmp')
     transfer_timeout = resolve_positive_timeout_seconds(
         args=args,
         attr_name='sra_download_transfer_timeout_seconds',
         default_seconds=SRA_DOWNLOAD_TRANSFER_TIMEOUT_SECONDS,
     )
-    command = [
-        curl_exe,
-        '-L',
-        '--fail',
-        '--retry', '3',
-        '--retry-delay', '2',
-        '--connect-timeout', '20',
-        '--max-time', str(int(transfer_timeout)),
-        '--max-redirs', '10',
-        '--write-out', '%{url_effective}',
-        '-o', tmp_path,
-        source_url,
-    ]
-    out, stdout_txt, _stderr_txt = run_logged_command(
-        command=command,
-        runner=subprocess.run,
-        timeout_seconds=resolve_getfastq_tool_timeout_seconds(args),
-        print_command=True,
-        print_output=False,
-        stdout_label='curl stdout:',
-        stderr_label='curl stderr:',
-    )
-    effective_url = (stdout_txt or '').strip()
-    if effective_url and not is_allowed_url_host(effective_url):
-        if os.path.exists(tmp_path):
-            os.remove(tmp_path)
-        sys.stderr.write(
-            'curl followed a redirect to a non-allowed host for {} download from {}.\n'.format(
-                str(artifact_label).lower(), sra_source_name
+    current_url = source_url
+    transfer_started_at = time.monotonic()
+    with _secure_download_temp_path(output_path, '.curltmp') as tmp_path:
+        for redirect_count in range(11):
+            remaining_timeout = transfer_timeout - (time.monotonic() - transfer_started_at)
+            if remaining_timeout <= 0:
+                sys.stderr.write('curl download exceeded its total transfer deadline.\n')
+                return False
+            if os.path.lexists(tmp_path):
+                if os.path.islink(tmp_path) or not os.path.isfile(tmp_path):
+                    raise OSError('curl output path is not a regular file in its private directory.')
+                os.remove(tmp_path)
+            command = [
+                curl_exe,
+                '--fail',
+                '--retry', '3',
+                '--retry-delay', '2',
+                '--connect-timeout', '20',
+                '--max-time', str(max(1, math.ceil(remaining_timeout))),
+                '--proto', '=https',
+                '--write-out',
+                'AMALGKIT_CURL_STATUS:%{http_code}\\nAMALGKIT_CURL_REDIRECT:%{redirect_url}\\n',
+                '-o', tmp_path,
+                current_url,
+            ]
+            tool_timeout = resolve_getfastq_tool_timeout_seconds(args)
+            if tool_timeout is None:
+                tool_timeout = remaining_timeout
+            else:
+                tool_timeout = min(tool_timeout, remaining_timeout)
+            out, stdout_txt, _stderr_txt = run_logged_command(
+                command=command,
+                runner=subprocess.run,
+                timeout_seconds=tool_timeout,
+                print_command=True,
+                print_output=False,
+                stdout_label='curl stdout:',
+                stderr_label='curl stderr:',
             )
-        )
-        return False
-    if out.returncode != 0:
-        if os.path.exists(tmp_path):
-            os.remove(tmp_path)
-        sys.stderr.write('curl failed {} download from {}.\n'.format(str(artifact_label).lower(), sra_source_name))
-        return False
-    if not os.path.exists(tmp_path):
-        sys.stderr.write('curl download did not create output file for {}.\n'.format(sra_source_name))
-        return False
-    if not os.path.isfile(tmp_path):
-        raise IsADirectoryError('curl output path exists but is not a file: {}'.format(tmp_path))
-    if os.path.getsize(tmp_path) <= 0:
-        os.remove(tmp_path)
-        sys.stderr.write(
-            'curl produced an empty {} from {}.\n'.format(
-                str(artifact_label).lower(),
-                sra_source_name,
-            )
-        )
-        return False
-    st = os.stat(tmp_path, follow_symlinks=False)
-    if not stat.S_ISREG(st.st_mode):
-        raise IsADirectoryError('curl output path exists but is not a regular file: {}'.format(tmp_path))
-    os.replace(tmp_path, output_path)
+            if out.returncode != 0:
+                sys.stderr.write(
+                    'curl failed {} download from {}.\n'.format(
+                        str(artifact_label).lower(),
+                        sra_source_name,
+                    )
+                )
+                return False
+            status_code, redirect_url = _parse_curl_response_metadata(stdout_txt)
+            if status_code is None:
+                raise RuntimeError('curl did not report an HTTP response status.')
+            if 300 <= status_code < 400:
+                if redirect_url == '' or redirect_count >= 10:
+                    sys.stderr.write('curl redirect limit or redirect metadata failure.\n')
+                    return False
+                next_url = urllib.parse.urljoin(current_url, redirect_url)
+                if not is_allowed_download_url(next_url):
+                    sys.stderr.write(
+                        'curl refused a redirect to a non-allowed endpoint before connecting.\n'
+                    )
+                    return False
+                current_url = next_url
+                continue
+            if not 200 <= status_code < 300:
+                sys.stderr.write('curl returned unexpected HTTP status {}.\n'.format(status_code))
+                return False
+            if not os.path.lexists(tmp_path):
+                sys.stderr.write('curl download did not create output file for {}.\n'.format(sra_source_name))
+                return False
+            st = os.stat(tmp_path, follow_symlinks=False)
+            if not stat.S_ISREG(st.st_mode):
+                raise OSError('curl output path is not a regular file in its private directory.')
+            if st.st_size <= 0:
+                sys.stderr.write(
+                    'curl produced an empty {} from {}.\n'.format(
+                        str(artifact_label).lower(),
+                        sra_source_name,
+                    )
+                )
+                return False
+            os.replace(tmp_path, output_path)
+            break
+        else:
+            return False
     print('{} was downloaded with curl from {}'.format(artifact_label, sra_source_name), flush=True)
     return True
 
@@ -1372,7 +1408,7 @@ def download_with_urllib(source_url, output_path, timeout_seconds, urlopen_fn=No
         source_url,
         timeout=per_operation_timeout,
     ) as response:
-        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
         if hasattr(os, 'O_NOFOLLOW'):
             flags |= os.O_NOFOLLOW
         fd = os.open(output_path, flags, 0o666)
@@ -1386,7 +1422,7 @@ def download_with_urllib(source_url, output_path, timeout_seconds, urlopen_fn=No
                     raise TimeoutError(
                         'urllib download exceeded {:.0f} sec: {}'.format(
                             timeout_seconds,
-                            source_url,
+                            redact_url_for_logging(source_url),
                         )
                     )
                 chunk = response.read(SRA_DOWNLOAD_IO_CHUNK_SIZE)
@@ -1444,7 +1480,7 @@ def _download_file_from_source_without_semaphore(
         sys.stderr.write(
             'Skipping {} download source because the URL has no host: {}\n'.format(
                 sra_source_name,
-                source_url,
+                redact_url_for_logging(source_url),
             )
         )
         return False
@@ -1461,30 +1497,38 @@ def _download_file_from_source_without_semaphore(
         if method == 'curl':
             sys.stderr.write('Falling back to urllib.request after curl failure.\n')
     try:
-        tmp_path = _create_secure_download_temp_path(output_path, '.urllibtmp')
-        transfer_timeout = resolve_positive_timeout_seconds(
-            args=args,
-            attr_name='sra_download_transfer_timeout_seconds',
-            default_seconds=SRA_DOWNLOAD_TRANSFER_TIMEOUT_SECONDS,
-        )
-        download_with_urllib(
-            source_url=source_url,
-            output_path=tmp_path,
-            timeout_seconds=transfer_timeout,
-        )
-        if os.path.exists(tmp_path):
-            if not os.path.isfile(tmp_path):
-                raise IsADirectoryError('Temporary download path exists but is not a file: {}'.format(tmp_path))
-            if os.path.getsize(tmp_path) <= 0:
-                os.remove(tmp_path)
-                sys.stderr.write("urllib.request produced an empty {} from {}.\n".format(str(artifact_label).lower(), sra_source_name))
-                return False
-            os.replace(tmp_path, output_path)
-            print('{} was downloaded with urllib.request from {}'.format(artifact_label, sra_source_name), flush=True)
-            return True
+        with _secure_download_temp_path(output_path, '.urllibtmp') as tmp_path:
+            transfer_timeout = resolve_positive_timeout_seconds(
+                args=args,
+                attr_name='sra_download_transfer_timeout_seconds',
+                default_seconds=SRA_DOWNLOAD_TRANSFER_TIMEOUT_SECONDS,
+            )
+            download_with_urllib(
+                source_url=source_url,
+                output_path=tmp_path,
+                timeout_seconds=transfer_timeout,
+            )
+            if os.path.exists(tmp_path):
+                if os.path.islink(tmp_path) or not os.path.isfile(tmp_path):
+                    raise OSError('Temporary urllib output is not a regular file.')
+                if os.path.getsize(tmp_path) <= 0:
+                    sys.stderr.write(
+                        "urllib.request produced an empty {} from {}.\n".format(
+                            str(artifact_label).lower(),
+                            sra_source_name,
+                        )
+                    )
+                    return False
+                os.replace(tmp_path, output_path)
+                print(
+                    '{} was downloaded with urllib.request from {}'.format(
+                        artifact_label,
+                        sra_source_name,
+                    ),
+                    flush=True,
+                )
+                return True
     except urllib.error.HTTPError as e:
-        if 'tmp_path' in locals() and os.path.exists(tmp_path):
-            os.remove(tmp_path)
         if (sra_source_name == 'GCP') and (e.code == 400):
             details = ''
             try:
@@ -1497,13 +1541,7 @@ def _download_file_from_source_without_semaphore(
                 sys.stderr.write(txt)
         sys.stderr.write("urllib.request failed {} download from {}.\n".format(str(artifact_label).lower(), sra_source_name))
     except RECOVERABLE_DOWNLOAD_EXCEPTIONS:
-        if 'tmp_path' in locals() and os.path.exists(tmp_path):
-            os.remove(tmp_path)
         sys.stderr.write("urllib.request failed {} download from {}.\n".format(str(artifact_label).lower(), sra_source_name))
-    except Exception:
-        if 'tmp_path' in locals() and os.path.exists(tmp_path):
-            os.remove(tmp_path)
-        raise
     return False
 
 
@@ -1637,43 +1675,40 @@ def download_public_original_fastq_files(
     remove_raw_fastq_artifacts(sra_stat=sra_stat)
     start, end = normalize_requested_spot_range(start=start, end=end)
     created_paths = []
-    tmp_paths = []
     try:
         for fastq_entry, suffix in assigned_fastqs:
             output_filename = sra_id + suffix + '.fastq.gz'
             output_path = os.path.join(work_dir, output_filename)
-            tmp_path = _create_secure_download_temp_path(output_path, '.downloadtmp')
-            tmp_paths.append(tmp_path)
             if os.path.exists(output_path):
                 if not os.path.isfile(output_path):
                     raise IsADirectoryError('Fallback FASTQ path exists but is not a file: {}'.format(output_path))
                 os.remove(output_path)
-            is_downloaded = download_file_from_candidate_sources(
-                sra_id=sra_id,
-                source_candidates=fastq_entry['sources'],
-                output_path=tmp_path,
-                args=args,
-                artifact_label='Original FASTQ file',
-            )
-            if not is_downloaded:
-                raise FileNotFoundError(
-                    'Original FASTQ file download failed for {} ({})'.format(
-                        sra_id,
-                        fastq_entry.get('filename', 'unknown'),
-                    )
-                )
-            if is_full_requested_spot_range(sra_stat=sra_stat, start=start, end=end):
-                os.replace(tmp_path, output_path)
-            else:
-                run_seqkit_range_command(
-                    input_path=tmp_path,
-                    output_path=output_path,
-                    start=start,
-                    end=end,
+            with _secure_download_temp_path(output_path, '.downloadtmp') as tmp_path:
+                is_downloaded = download_file_from_candidate_sources(
+                    sra_id=sra_id,
+                    source_candidates=fastq_entry['sources'],
+                    output_path=tmp_path,
                     args=args,
-                    command_label='Original FASTQ spot-range trim with seqkit',
+                    artifact_label='Original FASTQ file',
                 )
-                os.remove(tmp_path)
+                if not is_downloaded:
+                    raise FileNotFoundError(
+                        'Original FASTQ file download failed for {} ({})'.format(
+                            sra_id,
+                            fastq_entry.get('filename', 'unknown'),
+                        )
+                    )
+                if is_full_requested_spot_range(sra_stat=sra_stat, start=start, end=end):
+                    os.replace(tmp_path, output_path)
+                else:
+                    run_seqkit_range_command(
+                        input_path=tmp_path,
+                        output_path=output_path,
+                        start=start,
+                        end=end,
+                        args=args,
+                        command_label='Original FASTQ spot-range trim with seqkit',
+                    )
             created_paths.append(output_path)
         print(
             'Public original FASTQ fallback succeeded for {} with {:,} file(s).'.format(
@@ -1685,9 +1720,6 @@ def download_public_original_fastq_files(
         return RunFileState(work_dir=work_dir)
     except Exception as exc:
         sys.stderr.write('Public original FASTQ fallback failed for {}: {}\n'.format(sra_id, exc))
-        for tmp_path in tmp_paths:
-            if os.path.exists(tmp_path):
-                os.remove(tmp_path)
         for output_path in created_paths:
             if os.path.exists(output_path):
                 os.remove(output_path)

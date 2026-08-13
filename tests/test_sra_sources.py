@@ -5,6 +5,7 @@ from io import BytesIO
 from amalgkit.sra_sources import (
     build_ena_sra_download_url,
     fetch_ena_run_file_report,
+    is_allowed_download_url,
     normalize_sra_download_url,
     parse_ena_run_file_report,
     read_bounded_response,
@@ -100,24 +101,28 @@ def test_fetch_ena_report_uses_official_filereport_endpoint():
     assert observed['timeout'] == 12.0
     assert parsed['sra_urls'] == ['https://ftp.sra.ebi.ac.uk/path/run.sra']
 
-def test_is_allowed_url_host_rejects_ssrf_and_private_targets():
-    from amalgkit.sra_sources import is_allowed_url_host
-    assert is_allowed_url_host('https://sra-pub-run-odp.s3.amazonaws.com/x.sra')
-    assert is_allowed_url_host('https://ftp.sra.ebi.ac.uk/x.sra')
-    assert is_allowed_url_host('https://storage.googleapis.com/b/x')
-    assert is_allowed_url_host('https://ddbj.nig.ac.jp/x.sra')
-    assert is_allowed_url_host('https://sra-downloadb.be-md.ncbi.nlm.nih.gov/x.sra')
+def test_is_allowed_download_url_accepts_only_exact_https_endpoints():
+    assert is_allowed_download_url('https://sra-pub-run-odp.s3.amazonaws.com/x.sra')
+    assert is_allowed_download_url('https://ftp.sra.ebi.ac.uk/x.sra')
+    assert is_allowed_download_url('https://storage.googleapis.com/b/x')
+    assert is_allowed_download_url('https://ddbj.nig.ac.jp/x.sra')
+    assert is_allowed_download_url('https://sra-downloadb.be-md.ncbi.nlm.nih.gov/x.sra')
     for bad in [
         'http://169.254.169.254/latest/meta-data/',
         'http://127.0.0.1/x',
         'http://192.168.1.5/x',
+        'https://8.8.8.8/x',
+        'ftp://ftp.sra.ebi.ac.uk/x.sra',
+        'https://user:secret@ftp.sra.ebi.ac.uk/x.sra',
+        'https://ftp.sra.ebi.ac.uk:444/x.sra',
         'http://evil.example/run.sra',
         'https://s3.amazonaws.com/foo.sra',
         'https://attacker.s3.amazonaws.com/x.sra',
+        'https://sra-pub-run-attacker.s3.amazonaws.com/x.sra',
         '',
         'not a url',
     ]:
-        assert not is_allowed_url_host(bad)
+        assert not is_allowed_download_url(bad)
 
 def test_fetch_ena_report_rejects_oversized_body():
     big = (b'run_accession\tsra_ftp\tfastq_ftp\nSRR1\t\t\n' + b'x' * (9 * 1024 * 1024))
@@ -132,3 +137,4 @@ def test_read_bounded_response_caps_bytes():
     with pytest.raises(ValueError, match='byte metadata read limit'):
         read_bounded_response(BytesIO(b'z' * 100), max_bytes=10, timeout=30)
     assert read_bounded_response(BytesIO(b'hello'), max_bytes=100, timeout=30) == b'hello'
+    assert read_bounded_response(BytesIO(b'z' * 10), max_bytes=10, timeout=30) == b'z' * 10

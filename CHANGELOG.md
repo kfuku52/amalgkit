@@ -5,6 +5,9 @@ Releases provide the commit-level generated notes for each version.
 
 ## Unreleased
 
+- Hardened SRA/ENA download handling by validating each HTTPS redirect before
+  connecting, using exact endpoint allowlists and private temporary directories,
+  and redacting credentials from URL-like command arguments.
 - Restored major/minor-only release automation: patch-only versions no longer
   create Git tags or GitHub Releases and therefore do not trigger Bioconda
   autobump pull requests.
