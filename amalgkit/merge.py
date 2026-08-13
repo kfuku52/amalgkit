@@ -282,7 +282,27 @@ def load_quant_tables_once(detected_sra_ids, quant_out_paths, value_columns):
                 )
             ) from e
         row_values = {col: quant_df[col].to_numpy() for col in value_columns}
-        current_target_ids = quant_df['target_id'].to_numpy()
+        target_ids_series = quant_df['target_id'].fillna('').astype(str).str.strip()
+        missing_target_ids = target_ids_series.eq('')
+        if bool(missing_target_ids.any()):
+            raise ValueError(
+                'Quant output table for run {} ({}) contains missing target_id values.'.format(
+                    sra_id,
+                    quant_out_path,
+                )
+            )
+        duplicated_target_ids = set(
+            target_ids_series.loc[target_ids_series.duplicated()].tolist()
+        )
+        if duplicated_target_ids:
+            raise ValueError(
+                'Quant output table for run {} ({}) contains duplicate target_id values: {}.'.format(
+                    sra_id,
+                    quant_out_path,
+                    ', '.join(sorted(duplicated_target_ids)[:5]),
+                )
+            )
+        current_target_ids = target_ids_series.to_numpy(dtype=str, copy=False)
         return sra_id, current_target_ids, row_values
 
     if len(quant_out_paths) <= 1:

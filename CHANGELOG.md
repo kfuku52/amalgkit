@@ -5,6 +5,9 @@ Releases provide the commit-level generated notes for each version.
 
 ## Unreleased
 
+- Rejected ambiguous metadata merges with empty or duplicate run IDs and
+  prevented missing, duplicate, or whitespace-padded quantification target IDs
+  from corrupting merged abundance tables.
 - Made SVA input scales explicit: raw and fractional estimated counts are
   corrected on the log(count + 1) scale, pre-transformed inputs retain valid
   negative values, and collinear surrogate variables cannot remove protected

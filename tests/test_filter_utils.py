@@ -273,3 +273,75 @@ def test_atomic_output_can_replace_read_only_file_and_preserves_mode(tmp_path):
 
     assert output_path.read_text(encoding='utf-8') == 'new\n'
     assert os.stat(output_path).st_mode & 0o777 == 0o444
+
+
+def test_merge_metadata_by_run_rejects_duplicate_source_run_ids():
+    source_df = pandas.DataFrame(
+        {
+            'run': ['R1', 'R1', 'R2'],
+            'mapping_rate': [0.1, 0.2, 0.3],
+        }
+    )
+    update_df = pandas.DataFrame(
+        {
+            'run': ['R1'],
+            'mapping_rate': [0.9],
+        }
+    )
+
+    with pytest.raises(ValueError, match='Source metadata contains duplicate run IDs: R1'):
+        merge_metadata_by_run(source_df, update_df)
+
+
+def test_merge_metadata_by_run_rejects_empty_source_run_ids():
+    source_df = pandas.DataFrame(
+        {
+            'run': ['R1', '', 'R2'],
+            'mapping_rate': [0.1, 0.2, 0.3],
+        }
+    )
+    update_df = pandas.DataFrame(
+        {
+            'run': ['R1'],
+            'mapping_rate': [0.9],
+        }
+    )
+
+    with pytest.raises(ValueError, match='Source metadata contains empty run IDs'):
+        merge_metadata_by_run(source_df, update_df)
+
+
+def test_merge_metadata_by_run_rejects_duplicate_update_run_ids():
+    source_df = pandas.DataFrame(
+        {
+            'run': ['R1', 'R2'],
+            'mapping_rate': [0.1, 0.2],
+        }
+    )
+    update_df = pandas.DataFrame(
+        {
+            'run': ['R1', 'R1'],
+            'mapping_rate': [0.7, 0.9],
+        }
+    )
+
+    with pytest.raises(ValueError, match='Updated metadata contains duplicate run IDs: R1'):
+        merge_metadata_by_run(source_df, update_df)
+
+
+def test_merge_metadata_by_run_rejects_empty_update_run_ids():
+    source_df = pandas.DataFrame(
+        {
+            'run': ['R1', 'R2'],
+            'mapping_rate': [0.1, 0.2],
+        }
+    )
+    update_df = pandas.DataFrame(
+        {
+            'run': ['R1', ''],
+            'mapping_rate': [0.9, 0.8],
+        }
+    )
+
+    with pytest.raises(ValueError, match='Updated metadata contains empty run IDs'):
+        merge_metadata_by_run(source_df, update_df)
