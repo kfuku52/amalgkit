@@ -46,7 +46,6 @@ def merge_metadata_by_run(source_df, update_df):
     source['run'] = source['run'].fillna('').astype(str).str.strip()
     update['run'] = update['run'].fillna('').astype(str).str.strip()
     _require_unique_nonempty_run_ids(source['run'], 'Source')
-    update = update.loc[update['run'] != '', :]
     _require_unique_nonempty_run_ids(update['run'], 'Updated')
     source = source.set_index('run', drop=False)
     update = update.set_index('run', drop=False)

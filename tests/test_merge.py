@@ -875,3 +875,34 @@ def test_merge_species_quant_tables_rejects_missing_target_id_within_run(tmp_pat
         merge_species_quant_tables('Species A', metadata, str(quant_dir), str(merge_dir))
 
     assert not list((merge_dir / 'Species_A').glob('*.tsv')) if (merge_dir / 'Species_A').exists() else True
+
+
+def test_merge_species_quant_tables_normalizes_target_ids_before_comparison_and_output(tmp_path):
+    quant_dir = tmp_path / 'quant'
+    merge_dir = tmp_path / 'merge'
+    for run_id, target_ids in [('SRR001', [' g1 ', 'g2']), ('SRR002', ['g1', 'g2'])]:
+        run_dir = quant_dir / run_id
+        run_dir.mkdir(parents=True)
+        pandas.DataFrame({
+            'target_id': target_ids,
+            'eff_length': [1.1, 1.2],
+            'est_counts': [2.1, 2.2],
+            'tpm': [3.1, 3.2],
+        }).to_csv(run_dir / (run_id + '_abundance.tsv'), sep='\t', index=False)
+
+    metadata = Metadata.from_DataFrame(pandas.DataFrame({
+        'run': ['SRR001', 'SRR002'],
+        'scientific_name': ['Species A', 'Species A'],
+        'exclusion': ['no', 'no'],
+    }))
+
+    merged_count = merge_species_quant_tables(
+        'Species A',
+        metadata,
+        str(quant_dir),
+        str(merge_dir),
+    )
+
+    assert merged_count == 2
+    merged = pandas.read_csv(merge_dir / 'Species_A' / 'Species_A_est_counts.tsv', sep='\t')
+    assert merged['target_id'].tolist() == ['g1', 'g2']

@@ -327,3 +327,21 @@ def test_merge_metadata_by_run_rejects_duplicate_update_run_ids():
 
     with pytest.raises(ValueError, match='Updated metadata contains duplicate run IDs: R1'):
         merge_metadata_by_run(source_df, update_df)
+
+
+def test_merge_metadata_by_run_rejects_empty_update_run_ids():
+    source_df = pandas.DataFrame(
+        {
+            'run': ['R1', 'R2'],
+            'mapping_rate': [0.1, 0.2],
+        }
+    )
+    update_df = pandas.DataFrame(
+        {
+            'run': ['R1', ''],
+            'mapping_rate': [0.9, 0.8],
+        }
+    )
+
+    with pytest.raises(ValueError, match='Updated metadata contains empty run IDs'):
+        merge_metadata_by_run(source_df, update_df)
