@@ -51,6 +51,8 @@ DEFAULT_ORGAN_TERMS = {
     'root': ['root'],
 }
 METADATA_AUTO_MAX_SPECIES_JOBS = 4
+# Distinct non-zero no-op status: existing metadata does not match the requested query.
+METADATA_STALE_OUTPUT_EXIT = 2
 
 
 def merge_xml_chunk(root, chunk):
@@ -527,12 +529,6 @@ def _run_single_query(
 ):
     paths = _metadata_output_paths(out_dir if out_dir is not None else args.out_dir)
     metadata_path = paths['metadata_path']
-    if os.path.exists(metadata_path) and (not getattr(args, 'redo', False)) and (not allow_cached):
-        raise AmalgkitExit(
-            'Output file already exists (set --redo yes to overwrite): {}'.format(metadata_path),
-            exit_code=0,
-            use_stderr=False,
-        )
 
     search_term = _normalize_search_string(
         search_string if search_string is not None else getattr(args, 'search_string', None)
@@ -548,6 +544,26 @@ def _run_single_query(
         query_label=query_label,
         mode=mode,
     )
+
+    if os.path.exists(metadata_path) and (not getattr(args, 'redo', False)) and (not allow_cached):
+        existing_matches_requested = bool(
+            isinstance(previous_info, dict)
+            and previous_info.get('cache_fingerprint') == cache_fingerprint
+        )
+        if existing_matches_requested:
+            raise AmalgkitExit(
+                'Output file already exists for the requested query '
+                '(set --redo yes to overwrite): {}'.format(metadata_path),
+                exit_code=0,
+                use_stderr=False,
+            )
+        raise AmalgkitExit(
+            'Existing metadata does not match the requested query '
+            '(set --redo yes to overwrite): {}'.format(metadata_path),
+            exit_code=METADATA_STALE_OUTPUT_EXIT,
+            use_stderr=True,
+        )
+
     used_cached_metadata = bool(
         os.path.exists(metadata_path)
         and (not getattr(args, 'redo', False))
