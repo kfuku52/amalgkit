@@ -67,27 +67,38 @@ def clean_y_matrix(y_matrix, mod_matrix, sv_matrix):
     mod = numpy.asarray(mod_matrix, dtype=float)
     svs = numpy.asarray(sv_matrix, dtype=float)
     if y.ndim != 2:
-        raise ValueError('y_matrix must be two-dimensional.')
+        raise ValueError("y_matrix must be two-dimensional.")
     if mod.ndim != 2:
-        raise ValueError('mod_matrix must be two-dimensional.')
+        raise ValueError("mod_matrix must be two-dimensional.")
     if svs.ndim != 2:
-        raise ValueError('sv_matrix must be two-dimensional.')
+        raise ValueError("sv_matrix must be two-dimensional.")
     if mod.shape[0] != y.shape[1]:
-        raise ValueError('mod_matrix row count must match sample count.')
+        raise ValueError("mod_matrix row count must match sample count.")
     if svs.shape[0] != y.shape[1]:
-        raise ValueError('sv_matrix row count must match sample count.')
+        raise ValueError("sv_matrix row count must match sample count.")
     if svs.shape[1] == 0:
         return y.copy()
-    X = numpy.hstack([mod, svs])
-    xtx = X.T @ X
-    try:
-        hat = numpy.linalg.solve(xtx, X.T)
-    except numpy.linalg.LinAlgError:
-        hat = numpy.linalg.pinv(xtx) @ X.T
-    beta = hat @ y.T
-    P = mod.shape[1]
-    adjusted = y - (X[:, P:] @ beta[P:, :]).T
-    return adjusted
+    # Only remove the part of the surrogate-variable space that is orthogonal
+    # to the protected biological design. A pseudoinverse of [mod, sv] is not
+    # enough when those matrices are collinear: the minimum-norm solution can
+    # split a protected group effect between their coefficients and remove it.
+    mod_coefficients, _, _, _ = numpy.linalg.lstsq(mod, svs, rcond=None)
+    residual_svs = svs - (mod @ mod_coefficients)
+    left, singular_values, _right = numpy.linalg.svd(residual_svs, full_matrices=False)
+    if singular_values.size == 0:
+        return y.copy()
+    original_singular_values = numpy.linalg.svd(svs, compute_uv=False)
+    reference_scale = max(
+        1.0,
+        float(original_singular_values[0]) if original_singular_values.size > 0 else 0.0,
+    )
+    tolerance = numpy.finfo(float).eps * max(residual_svs.shape) * reference_scale
+    rank = int(numpy.sum(singular_values > tolerance))
+    if rank == 0:
+        return y.copy()
+    independent_svs = left[:, :rank]
+    unwanted = independent_svs @ (independent_svs.T @ y.T)
+    return y - unwanted.T
 
 
 def _coerce_int(value):
@@ -95,17 +106,6 @@ def _coerce_int(value):
         return int(value)
     except (TypeError, ValueError):
         return None
-
-
-def _is_raw_count_matrix(matrix):
-    """Return True when a matrix is on the raw (integer, non-negative) count scale.
-    """
-    values = numpy.asarray(matrix, dtype=float)
-    if values.size == 0:
-        return False
-    if (not numpy.all(numpy.isfinite(values))) or (not numpy.all(values >= 0)):
-        return False
-    return bool(numpy.all(numpy.isclose(values, numpy.round(values))))
 
 
 def _compute_hat_matrix(design_matrix):
@@ -769,28 +769,35 @@ def resolve_sva_parameters(
 def run_sva_backend(
     counts_df,
     metadata_df,
-    nsv_setting='auto',
-    B_setting='auto',
+    nsv_setting="auto",
+    B_setting="auto",
     B_auto_max=100,
-    sample_group_column='sample_group',
+    sample_group_column="sample_group",
     random_seed=0,
+    input_scale="transformed",
 ):
     aligned_metadata = _align_metadata_to_counts(
         counts_df=counts_df,
         metadata_df=metadata_df,
     )
     if sample_group_column not in metadata_df.columns:
-        raise ValueError('Missing required metadata column: {}'.format(sample_group_column))
+        raise ValueError("Missing required metadata column: {}".format(sample_group_column))
     sample_groups = aligned_metadata.loc[:, sample_group_column]
     mod_matrix, _mod_names = build_sample_group_design_matrix(sample_groups)
     _mod0_matrix, _mod0_names = build_intercept_only_design_matrix(aligned_metadata.shape[0])
     counts_matrix = counts_df.to_numpy(dtype=float, copy=False)
-    on_raw_count_scale = _is_raw_count_matrix(counts_matrix)
-    # SVA assumes continuous, roughly-symmetric data; raw counts fed straight
-    # through clean_y_matrix overshoot below zero. For raw counts, run the
-    # whole correction on the log2(counts+1) scale and transform back so the
-    # corrected matrix stays on the original count scale and non-negative.
-    correction_matrix = numpy.log2(counts_matrix + 1.0) if on_raw_count_scale else counts_matrix
+    input_scale = str(input_scale).strip().lower()
+    if input_scale not in {"counts", "transformed"}:
+        raise ValueError("SVA input_scale must be either counts or transformed.")
+    if not numpy.isfinite(counts_matrix).all():
+        raise ValueError("SVA input must contain only finite values.")
+    if input_scale == "counts" and numpy.any(counts_matrix < 0):
+        raise ValueError("SVA count-scale input must not contain negative values.")
+    # Count estimates may be fractional (for example, kallisto est_counts), so
+    # integer-value heuristics cannot determine the scale reliably. Callers
+    # explicitly select the scale; count input follows svaseq's log(count + 1)
+    # transform and is mapped back only after correction.
+    correction_matrix = numpy.log1p(counts_matrix) if input_scale == "counts" else counts_matrix
     resolved = resolve_sva_parameters(
         num_samples=counts_df.shape[1],
         design_columns=mod_matrix.shape[1],
@@ -808,20 +815,21 @@ def run_sva_backend(
     if resolved.nsv <= 0:
         empty_sv = pandas.DataFrame(index=counts_df.columns)
         summary = {
-            'backend': 'sva',
-            'method': resolved.method,
-            'skip_reason': 'sva_nsv_zero',
-            'stable': resolved.stable,
-            'corrected_run_ids': [],
-            'uncorrected_run_ids': [str(col) for col in counts_df.columns],
-            'resolved_sva_nsv': resolved.nsv,
-            'resolved_sva_B': resolved.B,
-            'sva_estimation_method': resolved.method,
-            'sva_stable': resolved.stable,
-            'trace_B': resolved.trace_B,
-            'trace_nsv': resolved.trace_nsv,
-            'trace_method': resolved.trace_method,
-            'sva_preclip_negative_count': 0,
+            "backend": "sva",
+            "method": resolved.method,
+            "skip_reason": "sva_nsv_zero",
+            "stable": resolved.stable,
+            "corrected_run_ids": [],
+            "uncorrected_run_ids": [str(col) for col in counts_df.columns],
+            "resolved_sva_nsv": resolved.nsv,
+            "resolved_sva_B": resolved.B,
+            "sva_estimation_method": resolved.method,
+            "sva_stable": resolved.stable,
+            "trace_B": resolved.trace_B,
+            "trace_nsv": resolved.trace_nsv,
+            "trace_method": resolved.trace_method,
+            "sva_input_scale": input_scale,
+            "sva_preclip_negative_count": 0,
         }
         return counts_df.copy(), empty_sv, summary
     irw = irwsva_build(
@@ -831,17 +839,18 @@ def run_sva_backend(
         nsv=resolved.nsv,
         B_iterations=resolved.B,
     )
-    sv_matrix = numpy.asarray(irw['sv'], dtype=float)
+    sv_matrix = numpy.asarray(irw["sv"], dtype=float)
     corrected_matrix = clean_y_matrix(
         y_matrix=correction_matrix,
         mod_matrix=mod_matrix,
         sv_matrix=sv_matrix,
     )
-    if on_raw_count_scale:
-        corrected_matrix = numpy.exp2(corrected_matrix) - 1.0
-    preclip_negative_count = int(numpy.sum(corrected_matrix < 0))
-    corrected_matrix = numpy.clip(corrected_matrix, 0.0, None)
-    sv_columns = ['sv{}'.format(idx + 1) for idx in range(sv_matrix.shape[1])]
+    preclip_negative_count = 0
+    if input_scale == "counts":
+        corrected_matrix = numpy.expm1(corrected_matrix)
+        preclip_negative_count = int(numpy.sum(corrected_matrix < 0))
+        corrected_matrix = numpy.clip(corrected_matrix, 0.0, None)
+    sv_columns = ["sv{}".format(idx + 1) for idx in range(sv_matrix.shape[1])]
     corrected_df = pandas.DataFrame(
         corrected_matrix,
         index=counts_df.index,
@@ -853,19 +862,20 @@ def run_sva_backend(
         columns=sv_columns,
     )
     summary = {
-        'backend': 'sva',
-        'method': 'irw',
-        'skip_reason': '',
-        'stable': resolved.stable,
-        'corrected_run_ids': [str(col) for col in counts_df.columns],
-        'uncorrected_run_ids': [],
-        'resolved_sva_nsv': resolved.nsv,
-        'resolved_sva_B': resolved.B,
-        'sva_estimation_method': resolved.method,
-        'sva_stable': resolved.stable,
-        'trace_B': resolved.trace_B,
-        'trace_nsv': resolved.trace_nsv,
-        'trace_method': resolved.trace_method,
-        'sva_preclip_negative_count': preclip_negative_count,
+        "backend": "sva",
+        "method": "irw",
+        "skip_reason": "",
+        "stable": resolved.stable,
+        "corrected_run_ids": [str(col) for col in counts_df.columns],
+        "uncorrected_run_ids": [],
+        "resolved_sva_nsv": resolved.nsv,
+        "resolved_sva_B": resolved.B,
+        "sva_estimation_method": resolved.method,
+        "sva_stable": resolved.stable,
+        "trace_B": resolved.trace_B,
+        "trace_nsv": resolved.trace_nsv,
+        "trace_method": resolved.trace_method,
+        "sva_input_scale": input_scale,
+        "sva_preclip_negative_count": preclip_negative_count,
     }
     return corrected_df, sv_df, summary

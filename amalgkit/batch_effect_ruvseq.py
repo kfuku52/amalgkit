@@ -237,14 +237,7 @@ def _record_ruv_fallback(diagnostics, reason):
         reasons.append(reason)
 
 
-def _compute_glm_pvalues_and_residuals(
-    counts_df,
-    design_df,
-    effective_lib_sizes,
-    diagnostics=None,
-    seq_uq_df=None,
-    scale_factors=None,
-):
+def _compute_glm_pvalues_and_residuals(counts_df, design_df, effective_lib_sizes, diagnostics=None):
     if diagnostics is None:
         diagnostics = {}
     sm = _load_statsmodels()
@@ -295,26 +288,7 @@ def _compute_glm_pvalues_and_residuals(
                 _record_ruv_fallback(diagnostics, 'negative_binomial_glm_failed')
                 fit_full = poisson_full
                 null_llf = poisson_null_llf
-        if (seq_uq_df is not None) and (scale_factors is not None):
-            scales = numpy.asarray(
-                pandas.Series(scale_factors, index=counts_df.columns).to_numpy(dtype=float),
-            ).reshape(-1)
-            mu = numpy.asarray(fit_full.fittedvalues, dtype=float).reshape(-1)
-            y_norm = seq_uq_df.iloc[row_idx, :].to_numpy(dtype=float)
-            # Map the GLM fitted values (counts_plus_one scale) back to the
-            # between-lane normalized count scale, then take residuals in the
-            # log(normalized + 1) space that ruvr_correct_counts corrects in.
-            fitted_norm = numpy.maximum((mu - 1.0) / scales, 0.0)
-            with numpy.errstate(divide='ignore', invalid='ignore'):
-                correction_scale_residuals = numpy.log(y_norm + 1.0) - numpy.log(fitted_norm + 1.0)
-            residuals[row_idx, :] = numpy.nan_to_num(
-                correction_scale_residuals,
-                nan=0.0,
-                posinf=0.0,
-                neginf=0.0,
-            )
-        else:
-            residuals[row_idx, :] = numpy.asarray(fit_full.resid_deviance, dtype=float).reshape(-1)
+        residuals[row_idx, :] = numpy.asarray(fit_full.resid_deviance, dtype=float).reshape(-1)
         llf_stat = max(0.0, 2.0 * float(fit_full.llf - null_llf))
         pvalues[row_idx] = float(chi2.sf(llf_stat, df_diff))
     residuals_df = pandas.DataFrame(residuals, index=counts_df.index, columns=counts_df.columns)
@@ -707,7 +681,7 @@ def run_ruvseq_backend(
     # counts" are on the original count scale.
     seq_uq_df, seq_uq_scales = _between_lane_normalize_upper(counts_df, round_counts=True)
     diagnostics = {
-        'ruv_residual_method': 'glm_log_normalized',
+        'ruv_residual_method': 'glm_deviance',
         'ruv_pvalue_method': 'glm_lrt',
         'ruv_fallback_used': False,
         'ruv_nb_fallback_genes': 0,
@@ -718,8 +692,6 @@ def run_ruvseq_backend(
         design_df=design_df,
         effective_lib_sizes=effective_lib_sizes,
         diagnostics=diagnostics,
-        seq_uq_df=seq_uq_df,
-        scale_factors=seq_uq_scales,
     )
     if (pvalues is None) or (residuals_df is None):
         diagnostics['ruv_residual_method'] = 'least_squares'

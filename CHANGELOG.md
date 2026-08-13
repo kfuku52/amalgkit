@@ -5,6 +5,10 @@ Releases provide the commit-level generated notes for each version.
 
 ## Unreleased
 
+- Made SVA input scales explicit: raw and fractional estimated counts are
+  corrected on the log(count + 1) scale, pre-transformed inputs retain valid
+  negative values, and collinear surrogate variables cannot remove protected
+  sample-group effects.
 - Preserved undefined cross-species correlations without fabricating zeroes,
   retained valid absent/multicopy ortholog cells, and aligned finite-only
   embeddings and dendrogram labels.

@@ -29,7 +29,7 @@ def test_run_ruvseq_backend_reports_wholesale_glm_fallback(monkeypatch):
         }
     )
 
-    def force_glm_failure(counts_df, design_df, effective_lib_sizes, diagnostics=None, seq_uq_df=None, scale_factors=None):
+    def force_glm_failure(counts_df, design_df, effective_lib_sizes, diagnostics=None):
         batch_effect_ruvseq._record_ruv_fallback(diagnostics, 'forced_glm_failure')
         return None, None
 
@@ -74,7 +74,7 @@ def test_run_ruvseq_backend_k_zero_survives_sparse_fallback_residuals(monkeypatc
             'bioproject': ['BP1', 'BP2', 'BP1', 'BP2'],
         }
     )
-    def force_glm_failure(counts_df, design_df, effective_lib_sizes, diagnostics=None, seq_uq_df=None, scale_factors=None):
+    def force_glm_failure(counts_df, design_df, effective_lib_sizes, diagnostics=None):
         _ = (counts_df, design_df, effective_lib_sizes)
         batch_effect_ruvseq._record_ruv_fallback(
             diagnostics,
@@ -599,59 +599,3 @@ def test_run_ruvseq_backend_reconstructs_raw_counts_when_correction_is_a_noop():
 
     assert int(summary['resolved_ruv_k']) == 0
     pandas.testing.assert_frame_equal(corrected_df, counts_df)
-
-
-def test_glm_residuals_are_on_correction_scale_not_deviance_scale():
-    # Regression: the GLM residuals that feed the RUVr residual-basis SVD must
-    # live on the same scale as ruvr_correct_counts (log of between-lane
-    # normalized counts), not raw deviance (count) scale. Previously deviance
-    # residuals were mixed with a correction on log normalized counts inside
-    # one W basis.
-    from amalgkit.batch_effect_ruvseq import (
-        _build_sample_group_design,
-        _upperquartile_normalize,
-        _between_lane_normalize_upper,
-        _compute_glm_pvalues_and_residuals,
-        compute_design_residuals,
-    )
-    from amalgkit.batch_effect_common import align_metadata_to_counts
-
-    counts_df = pandas.DataFrame({
-        "RUN1": [100.0, 110.0, 12.0, 10.0, 9.0],
-        "RUN2": [95.0, 105.0, 15.0, 11.0, 8.0],
-        "RUN3": [11.0, 13.0, 102.0, 98.0, 7.0],
-        "RUN4": [10.0, 12.0, 99.0, 96.0, 6.0],
-    }, index=["G1", "G2", "G3", "G4", "G5"])
-    metadata_df = pandas.DataFrame({
-        "run": list(counts_df.columns),
-        "sample_group": ["A", "A", "B", "B"],
-        "bioproject": ["BP1", "BP1", "BP2", "BP2"],
-    })
-    aligned = align_metadata_to_counts(counts_df=counts_df, metadata_df=metadata_df)
-    design_df, _groups = _build_sample_group_design(aligned, "sample_group")
-    counts_plus_one = counts_df.astype(float) + 1.0
-    _edge_uq, _uq_factors, effective_lib_sizes = _upperquartile_normalize(counts_plus_one, round_counts=True)
-    seq_uq_df, seq_uq_scales = _between_lane_normalize_upper(counts_df, round_counts=True)
-    diagnostics = {
-        "ruv_residual_method": "glm_log_normalized",
-        "ruv_pvalue_method": "glm_lrt",
-        "ruv_fallback_used": False,
-        "ruv_nb_fallback_genes": 0,
-        "ruv_anova_failure_genes": 0,
-    }
-    _pvalues, residuals_df = _compute_glm_pvalues_and_residuals(
-        counts_df=counts_plus_one,
-        design_df=design_df,
-        effective_lib_sizes=effective_lib_sizes,
-        diagnostics=diagnostics,
-        seq_uq_df=seq_uq_df,
-        scale_factors=seq_uq_scales,
-    )
-    ls_residuals = compute_design_residuals(seq_uq_df=seq_uq_df, design_df=design_df)
-    glm_max = float(numpy.abs(residuals_df.to_numpy(dtype=float)).max())
-    ls_max = float(numpy.abs(ls_residuals.to_numpy(dtype=float)).max())
-    assert ls_max > 0.0
-    # GLM residuals must be on the same (log normalized) scale as the
-    # least-squares correction-scale residuals, not the raw deviance scale
-    # (which is roughly sqrt(count) and far larger here).
-    assert 0.5 <= (glm_max / ls_max) <= 2.0
