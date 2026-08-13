@@ -143,9 +143,17 @@ def test_calc_norm_factors_tmm_matches_edger_toy_example():
 
     factors = calc_norm_factors_tmm(counts, lib_size=library_sizes)
 
-    # Ordering depends on the resolved reference column; compare sorted arrays.
-    expected = sorted([1.0 / numpy.sqrt(2.0)] * 2 + [numpy.sqrt(2.0)] * 2)
-    observed = sorted(factors.to_numpy(dtype=float).tolist())
-    numpy.testing.assert_allclose(observed, expected, rtol=0.0, atol=1e-9)
+    expected = pandas.Series(
+        [1.0 / numpy.sqrt(2.0)] * 2 + [numpy.sqrt(2.0)] * 2,
+        index=counts.columns,
+        dtype=float,
+    )
+    pandas.testing.assert_series_equal(
+        factors,
+        expected,
+        check_exact=False,
+        rtol=0.0,
+        atol=1e-9,
+    )
     # Symmetry constraint: normalized factors multiply to 1.
     numpy.testing.assert_allclose(factors.prod(), 1.0, rtol=0.0, atol=1e-9)
