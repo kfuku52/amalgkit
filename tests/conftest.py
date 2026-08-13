@@ -5,6 +5,56 @@ from pathlib import Path
 from amalgkit.util import Metadata
 
 
+def _valid_pdf_bytes():
+    """Build a structurally parseable minimal single-page PDF."""
+    objects = [
+        b'<< /Type /Catalog /Pages 2 0 R >>',
+        b'<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+        b'<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>',
+    ]
+    lines = [b'%PDF-1.4']
+    offsets = []
+    pos = len(b'%PDF-1.4') + 1
+    for number, body in enumerate(objects, start=1):
+        offsets.append(pos)
+        header = ('%d 0 obj' % number).encode()
+        lines.append(header)
+        lines.append(body)
+        lines.append(b'endobj')
+        pos += len(header) + 1 + len(body) + 1 + len(b'endobj') + 1
+    xref_offset = pos
+    lines.append(b'xref')
+    lines.append(b'0 %d' % (len(objects) + 1))
+    lines.append(b'0000000000 65535 f ')
+    for off in offsets:
+        lines.append(b'%010d 00000 n ' % off)
+    lines.append(b'trailer')
+    lines.append(b'<< /Size %d /Root 1 0 R >>' % (len(objects) + 1))
+    lines.append(b'startxref')
+    lines.append(b'%d' % xref_offset)
+    lines.append(b'%%EOF')
+    return b'\n'.join(lines) + b'\n'
+
+
+def _assert_parseable_pdf(data):
+    assert isinstance(data, bytes), 'placeholder PDF must be bytes'
+    assert data.startswith(b'%PDF-'), 'placeholder PDF must start with the %PDF- magic'
+    assert b'%%EOF' in data, 'placeholder PDF must contain a %%EOF trailer'
+
+
+def _write_valid_pdf(target):
+    """Write a structurally parseable minimal PDF to a path or file object."""
+    data = _valid_pdf_bytes()
+    _assert_parseable_pdf(data)
+    if hasattr(target, 'write'):
+        target.write(data)
+        return None
+    path = Path(target)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
+    return str(path)
+
+
 @pytest.fixture
 def sample_metadata_df():
     """A small realistic metadata DataFrame."""
@@ -91,19 +141,11 @@ def stub_pdf_rendering(monkeypatch):
 
     def write_plot_placeholder(*args, **kwargs):
         output_path = find_output_path(args, kwargs)
-        path = Path(output_path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(b'%PDF-1.4\n% amalgkit test placeholder\n')
-        return str(path)
+        return _write_valid_pdf(output_path)
 
     def write_pdf_placeholder(_figure, output_path, *args, **kwargs):
         _ = (args, kwargs)
-        if hasattr(output_path, 'write'):
-            output_path.write(b'%PDF-1.4\n% amalgkit test placeholder\n')
-            return
-        path = Path(output_path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(b'%PDF-1.4\n% amalgkit test placeholder\n')
+        _write_valid_pdf(output_path)
 
     monkeypatch.setattr(Figure, 'savefig', write_pdf_placeholder)
     for module, helper_names in (
