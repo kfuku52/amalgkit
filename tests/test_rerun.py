@@ -669,13 +669,12 @@ def test_rerun_finalize_failure_keeps_existing_outputs_unchanged(tmp_path, monke
     assert pandas.read_csv(finalize_dir / 'metadata.tsv', sep='\t').loc[0, 'state'] == 'old'
 
 # ---------------------------------------------------------------------------
-# Regression: the rerun manifest must be reproducible (no wall-clock
-# generated_at) and the backup-commit path must be crash-safe (stale backup
-# temp dirs swept, durable entries flushed).
+# Regression: the rerun manifest must be reproducible and interrupted
+# backup/commit transactions must recover without discarding the old outputs.
 # ---------------------------------------------------------------------------
 
-def test_rerun_manifest_generated_at_is_deterministic():
-    from amalgkit.rerun import RERUN_MANIFEST_SCHEMA, _build_rerun_manifest
+def test_rerun_manifest_has_explicit_deterministic_schema_version():
+    from amalgkit.rerun import RERUN_MANIFEST_SCHEMA_VERSION, _build_rerun_manifest
 
     manifest = _build_rerun_manifest(
         report_path='report.json',
@@ -688,7 +687,8 @@ def test_rerun_manifest_generated_at_is_deterministic():
         dry_run=True,
         plan=[{'check': 'merge', 'will_execute': True}],
     )
-    assert manifest['generated_at'] == RERUN_MANIFEST_SCHEMA
+    assert manifest['schema_version'] == RERUN_MANIFEST_SCHEMA_VERSION
+    assert 'generated_at' not in manifest
     # Two identical invocations yield byte-identical manifests (after re-serialization).
     manifest2 = _build_rerun_manifest(
         report_path='report.json',
@@ -704,7 +704,7 @@ def test_rerun_manifest_generated_at_is_deterministic():
     assert json.dumps(manifest, sort_keys=True) == json.dumps(manifest2, sort_keys=True)
 
 
-def test_commit_staged_paths_sweeps_stale_backup_temp_dirs(tmp_path):
+def test_commit_staged_paths_preserves_unjournaled_backup_for_manual_recovery(tmp_path):
     from amalgkit.rerun import _commit_staged_paths
 
     target_root = tmp_path / 'target'
@@ -715,20 +715,150 @@ def test_commit_staged_paths_sweeps_stale_backup_temp_dirs(tmp_path):
     (staged_root / 'summary.pdf').write_text('new', encoding='utf-8')
     parent_dir = tmp_path
 
-    # Simulate a crashed run that left an orphaned backup temp dir behind.
+    # An unknown backup may contain the only copy of user output and must not be deleted.
     stale = parent_dir / 'amalgkit_rerun_backup_stale'
     stale.mkdir()
     (stale / 'orphan.txt').write_text('x', encoding='utf-8')
 
-    _commit_staged_paths(str(target_root), str(staged_root), ['summary.pdf'])
+    with pytest.raises(RuntimeError, match='Unjournaled rerun backup was preserved'):
+        _commit_staged_paths(str(target_root), str(staged_root), ['summary.pdf'])
 
-    assert not stale.exists(), 'stale backup temp dir was not swept'
-    assert (target_root / 'summary.pdf').read_text(encoding='utf-8') == 'new'
+    assert (stale / 'orphan.txt').read_text(encoding='utf-8') == 'x'
+    assert (target_root / 'summary.pdf').read_text(encoding='utf-8') == 'old'
+
+
+class _SimulatedCrash(BaseException):
+    pass
+
+
+def _install_rename_crash(monkeypatch, rename_number):
+    import amalgkit.rerun as rerun_module
+
+    original_rename = rerun_module._durable_rename
+    call_count = {'value': 0}
+
+    def crash_after_rename(source_path, destination_path):
+        original_rename(source_path, destination_path)
+        call_count['value'] += 1
+        if call_count['value'] == rename_number:
+            raise _SimulatedCrash()
+
+    monkeypatch.setattr(rerun_module, '_durable_rename', crash_after_rename)
+    return rerun_module, original_rename
+
+
+def _assert_no_transaction_dirs(parent_dir):
     leftovers = [
         name for name in os.listdir(parent_dir)
         if name.startswith('amalgkit_rerun_backup_')
+        or name.startswith('amalgkit_rerun_cleanup_')
     ]
     assert leftovers == []
+
+
+def test_commit_staged_paths_recovers_crash_after_original_is_backed_up(tmp_path, monkeypatch):
+    target_root = tmp_path / 'target'
+    staged_root = tmp_path / 'stage'
+    target_root.mkdir()
+    staged_root.mkdir()
+    (target_root / 'summary.pdf').write_text('old', encoding='utf-8')
+    (staged_root / 'summary.pdf').write_text('new', encoding='utf-8')
+    rerun_module, original_rename = _install_rename_crash(monkeypatch, rename_number=1)
+
+    with pytest.raises(_SimulatedCrash):
+        rerun_module._commit_staged_paths(
+            str(target_root),
+            str(staged_root),
+            ['summary.pdf'],
+        )
+
+    monkeypatch.setattr(rerun_module, '_durable_rename', original_rename)
+    rerun_module._recover_interrupted_transactions(str(tmp_path), str(target_root))
+    assert (target_root / 'summary.pdf').read_text(encoding='utf-8') == 'old'
+    _assert_no_transaction_dirs(tmp_path)
+
+
+def test_commit_staged_paths_recovers_crash_after_new_output_is_installed(tmp_path, monkeypatch):
+    target_root = tmp_path / 'target'
+    staged_root = tmp_path / 'stage'
+    target_root.mkdir()
+    staged_root.mkdir()
+    (target_root / 'summary.pdf').write_text('old', encoding='utf-8')
+    (staged_root / 'summary.pdf').write_text('new', encoding='utf-8')
+    (staged_root / 'new.tsv').write_text('new-only', encoding='utf-8')
+    rerun_module, original_rename = _install_rename_crash(monkeypatch, rename_number=3)
+
+    with pytest.raises(_SimulatedCrash):
+        rerun_module._commit_staged_paths(
+            str(target_root),
+            str(staged_root),
+            ['summary.pdf', 'new.tsv'],
+        )
+
+    assert (target_root / 'summary.pdf').read_text(encoding='utf-8') == 'new'
+    assert (target_root / 'new.tsv').read_text(encoding='utf-8') == 'new-only'
+    monkeypatch.setattr(rerun_module, '_durable_rename', original_rename)
+    rerun_module._recover_interrupted_transactions(str(tmp_path), str(target_root))
+    assert (target_root / 'summary.pdf').read_text(encoding='utf-8') == 'old'
+    assert not (target_root / 'new.tsv').exists()
+    _assert_no_transaction_dirs(tmp_path)
+
+
+def test_interrupted_rollback_can_resume_safely(tmp_path, monkeypatch):
+    target_root = tmp_path / 'target'
+    staged_root = tmp_path / 'stage'
+    target_root.mkdir()
+    staged_root.mkdir()
+    for filename in ['a.pdf', 'b.tsv']:
+        (target_root / filename).write_text('old-' + filename, encoding='utf-8')
+        (staged_root / filename).write_text('new-' + filename, encoding='utf-8')
+
+    rerun_module, original_rename = _install_rename_crash(monkeypatch, rename_number=3)
+    with pytest.raises(_SimulatedCrash):
+        rerun_module._commit_staged_paths(
+            str(target_root),
+            str(staged_root),
+            ['a.pdf', 'b.tsv'],
+        )
+    monkeypatch.setattr(rerun_module, '_durable_rename', original_rename)
+
+    rerun_module, recovery_rename = _install_rename_crash(monkeypatch, rename_number=1)
+    with pytest.raises(_SimulatedCrash):
+        rerun_module._recover_interrupted_transactions(str(tmp_path), str(target_root))
+    monkeypatch.setattr(rerun_module, '_durable_rename', recovery_rename)
+
+    rerun_module._recover_interrupted_transactions(str(tmp_path), str(target_root))
+    assert (target_root / 'a.pdf').read_text(encoding='utf-8') == 'old-a.pdf'
+    assert (target_root / 'b.tsv').read_text(encoding='utf-8') == 'old-b.tsv'
+    _assert_no_transaction_dirs(tmp_path)
+
+
+def test_commit_staged_paths_keeps_new_output_after_committed_crash(tmp_path, monkeypatch):
+    import amalgkit.rerun as rerun_module
+
+    target_root = tmp_path / 'target'
+    staged_root = tmp_path / 'stage'
+    target_root.mkdir()
+    staged_root.mkdir()
+    (target_root / 'summary.pdf').write_text('old', encoding='utf-8')
+    (staged_root / 'summary.pdf').write_text('new', encoding='utf-8')
+    original_retire = rerun_module._retire_transaction_dir
+
+    def crash_before_cleanup(_backup_root):
+        raise _SimulatedCrash()
+
+    monkeypatch.setattr(rerun_module, '_retire_transaction_dir', crash_before_cleanup)
+    with pytest.raises(_SimulatedCrash):
+        rerun_module._commit_staged_paths(
+            str(target_root),
+            str(staged_root),
+            ['summary.pdf'],
+        )
+
+    monkeypatch.setattr(rerun_module, '_retire_transaction_dir', original_retire)
+    rerun_module._recover_interrupted_transactions(str(tmp_path), str(target_root))
+    assert (target_root / 'summary.pdf').read_text(encoding='utf-8') == 'new'
+    _assert_no_transaction_dirs(tmp_path)
 
 
 def test_commit_staged_paths_does_not_leave_backup_dirs_on_success(tmp_path):
@@ -759,10 +889,9 @@ def test_commit_staged_paths_does_not_leave_backup_dirs_on_success(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_sanity_report_schema_is_deterministic_and_runtime_log_is_separate(tmp_path):
-    from amalgkit.sanity import SANITY_REPORT_SCHEMA, _write_sanity_runtime_log
+    from amalgkit.sanity import SANITY_REPORT_SCHEMA_VERSION, _write_sanity_runtime_log
 
-    assert SANITY_REPORT_SCHEMA.startswith('amalgkit sanity report schema=v1')
-    assert not SANITY_REPORT_SCHEMA.startswith('20')  # not a wall-clock timestamp
+    assert SANITY_REPORT_SCHEMA_VERSION == 1
 
     runtime_log_path = _write_sanity_runtime_log(str(tmp_path), '2026-01-01T00:00:00')
     assert os.path.basename(runtime_log_path) == 'sanity_runtime.log'

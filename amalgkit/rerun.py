@@ -1,8 +1,11 @@
 import json
+import fcntl
+import hashlib
 import os
 import shlex
 import shutil
 import tempfile
+from contextlib import contextmanager
 from types import SimpleNamespace
 
 import pandas
@@ -400,34 +403,202 @@ def _create_staging_root(target_root, prefix):
 
 
 BACKUP_TEMP_PREFIX = 'amalgkit_rerun_backup_'
+CLEANUP_TEMP_PREFIX = 'amalgkit_rerun_cleanup_'
+TRANSACTION_MANIFEST_FILENAME = '.amalgkit-rerun-transaction.json'
+TRANSACTION_SCHEMA_VERSION = 1
+TRANSACTION_LOCK_PREFIX = '.amalgkit-rerun-transaction-'
 
 
 def _fsync_directory(path):
-    """Durably flush directory-entry renames for a directory (best-effort)."""
+    """Durably flush directory-entry changes for a directory."""
     if path in [None, '']:
         return
-    try:
-        fd = os.open(path, os.O_RDONLY)
-    except OSError:
-        return
+    fd = os.open(path, os.O_RDONLY)
     try:
         os.fsync(fd)
-    except OSError:
-        pass
     finally:
         os.close(fd)
 
 
-def _sweep_stale_backup_temp_dirs(parent_dir):
-    """Remove backup temp dirs orphaned by a SIGKILL/crash before the next commit."""
-    if parent_dir in [None, ''] or not os.path.isdir(parent_dir):
+def _fsync_file(path):
+    if os.path.islink(path) or not os.path.isfile(path):
         return
+    fd = os.open(path, os.O_RDONLY)
     try:
-        entries = os.listdir(parent_dir)
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _fsync_tree(path):
+    """Flush staged file contents and the directory entries that contain them."""
+    if os.path.islink(path):
+        raise ValueError('Refusing to fsync symbolic-link rerun path: {}'.format(path))
+    if os.path.isfile(path):
+        _fsync_file(path)
+        return
+    if not os.path.isdir(path):
+        raise FileNotFoundError('Rerun staged path disappeared before commit: {}'.format(path))
+    for current_root, dirnames, filenames in os.walk(path, topdown=False, followlinks=False):
+        for filename in filenames:
+            child_path = os.path.join(current_root, filename)
+            if not os.path.islink(child_path):
+                _fsync_file(child_path)
+        for dirname in dirnames:
+            child_path = os.path.join(current_root, dirname)
+            if not os.path.islink(child_path):
+                _fsync_directory(child_path)
+        _fsync_directory(current_root)
+
+
+def _ensure_directory_durable(path):
+    path = os.path.abspath(path)
+    missing_paths = []
+    cursor = path
+    while not os.path.exists(cursor):
+        missing_paths.append(cursor)
+        parent = os.path.dirname(cursor)
+        if parent == cursor:
+            break
+        cursor = parent
+    if os.path.lexists(path) and (os.path.islink(path) or not os.path.isdir(path)):
+        raise NotADirectoryError('Rerun directory path is not a regular directory: {}'.format(path))
+    os.makedirs(path, exist_ok=True)
+    for created_path in reversed(missing_paths):
+        _fsync_directory(created_path)
+        _fsync_directory(os.path.dirname(created_path))
+
+
+def _durable_rename(source_path, destination_path):
+    source_parent = os.path.dirname(source_path)
+    destination_parent = os.path.dirname(destination_path)
+    os.rename(source_path, destination_path)
+    _fsync_directory(source_parent)
+    if destination_parent != source_parent:
+        _fsync_directory(destination_parent)
+
+
+def _durable_remove_path(path):
+    if not os.path.lexists(path):
+        return
+    parent_dir = os.path.dirname(path)
+    _remove_path_if_exists(path)
+    _fsync_directory(parent_dir)
+
+
+def _transaction_lock_path(target_root):
+    target_root = os.path.realpath(target_root)
+    target_digest = hashlib.sha256(target_root.encode('utf-8')).hexdigest()[:16]
+    return os.path.join(
+        os.path.dirname(target_root),
+        '{}{}.lock'.format(TRANSACTION_LOCK_PREFIX, target_digest),
+    )
+
+
+@contextmanager
+def _target_transaction_lock(target_root):
+    lock_path = _transaction_lock_path(target_root)
+    _ensure_directory_durable(os.path.dirname(lock_path))
+    flags = os.O_RDWR | os.O_CREAT | getattr(os, 'O_NOFOLLOW', 0)
+    fd = os.open(lock_path, flags, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
+def _transaction_manifest_path(backup_root):
+    return os.path.join(backup_root, TRANSACTION_MANIFEST_FILENAME)
+
+
+def _write_transaction_manifest(backup_root, payload):
+    manifest_path = _transaction_manifest_path(backup_root)
+    temporary_path = manifest_path + '.tmp'
+    with open(temporary_path, 'w', encoding='utf-8') as handle:
+        json.dump(payload, handle, indent=2, sort_keys=True)
+        handle.write('\n')
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temporary_path, manifest_path)
+    _fsync_directory(backup_root)
+
+
+def _read_transaction_manifest(backup_root):
+    manifest_path = _transaction_manifest_path(backup_root)
+    if not os.path.isfile(manifest_path) or os.path.islink(manifest_path):
+        raise RuntimeError(
+            'Unjournaled rerun backup was preserved for manual recovery: {}'.format(backup_root)
+        )
+    try:
+        with open(manifest_path, 'r', encoding='utf-8') as handle:
+            payload = json.load(handle)
+    except (OSError, ValueError) as exc:
+        raise RuntimeError(
+            'Unreadable rerun transaction was preserved for manual recovery: {}'.format(
+                backup_root
+            )
+        ) from exc
+    if payload.get('schema_version') != TRANSACTION_SCHEMA_VERSION:
+        raise RuntimeError(
+            'Unsupported rerun transaction was preserved for manual recovery: {}'.format(
+                backup_root
+            )
+        )
+    if payload.get('state') not in {
+        'prepared',
+        'installing',
+        'rolling_back',
+        'rolled_back',
+        'committed',
+    }:
+        raise RuntimeError('Invalid rerun transaction state in: {}'.format(backup_root))
+    target_root = payload.get('target_root')
+    if not isinstance(target_root, str) or target_root == '':
+        raise RuntimeError('Invalid rerun transaction target in: {}'.format(backup_root))
+    entries = payload.get('paths')
+    if not isinstance(entries, list):
+        raise RuntimeError('Invalid rerun transaction path list in: {}'.format(backup_root))
+    seen_paths = set()
+    for entry in entries:
+        if (
+            not isinstance(entry, dict)
+            or not isinstance(entry.get('path'), str)
+            or not isinstance(entry.get('had_original'), bool)
+        ):
+            raise RuntimeError('Invalid rerun transaction path entry in: {}'.format(backup_root))
+        rel_path = validate_safe_path_component(entry['path'], label='rerun transaction path')
+        if rel_path in seen_paths:
+            raise RuntimeError('Duplicate rerun transaction path in: {}'.format(backup_root))
+        seen_paths.add(rel_path)
+    return payload
+
+
+def _cleanup_directory_path(backup_root):
+    backup_name = os.path.basename(backup_root)
+    suffix = backup_name[len(BACKUP_TEMP_PREFIX):]
+    return os.path.join(os.path.dirname(backup_root), CLEANUP_TEMP_PREFIX + suffix)
+
+
+def _retire_transaction_dir(backup_root):
+    """Move a resolved transaction out of the recovery namespace before deletion."""
+    if not os.path.lexists(backup_root):
+        return
+    cleanup_root = _cleanup_directory_path(backup_root)
+    _durable_rename(backup_root, cleanup_root)
+    try:
+        shutil.rmtree(cleanup_root)
     except OSError:
         return
-    for name in entries:
-        if not name.startswith(BACKUP_TEMP_PREFIX):
+    _fsync_directory(os.path.dirname(cleanup_root))
+
+
+def _sweep_resolved_cleanup_dirs(parent_dir):
+    if parent_dir in [None, ''] or not os.path.isdir(parent_dir):
+        return
+    for name in os.listdir(parent_dir):
+        if not name.startswith(CLEANUP_TEMP_PREFIX):
             continue
         candidate = os.path.join(parent_dir, name)
         if os.path.islink(candidate):
@@ -435,6 +606,88 @@ def _sweep_stale_backup_temp_dirs(parent_dir):
             continue
         if os.path.isdir(candidate):
             shutil.rmtree(candidate, ignore_errors=True)
+    _fsync_directory(parent_dir)
+
+
+def _recover_interrupted_transaction(backup_root, expected_target_root):
+    payload = _read_transaction_manifest(backup_root)
+    target_root = os.path.realpath(payload['target_root'])
+    if target_root != os.path.realpath(expected_target_root):
+        return False
+    state = payload['state']
+    if state in {'committed', 'rolled_back'}:
+        _retire_transaction_dir(backup_root)
+        return True
+
+    entries = payload['paths']
+    for entry in entries:
+        if not entry['had_original']:
+            continue
+        rel_path = entry['path']
+        target_path = safe_join_component(target_root, rel_path, label='rerun transaction path')
+        backup_path = safe_join_component(backup_root, rel_path, label='rerun transaction path')
+        if state == 'installing' and not os.path.lexists(backup_path):
+            raise RuntimeError(
+                'Incomplete rerun transaction is missing its required backup: {}'.format(
+                    backup_path
+                )
+            )
+        if state in {'prepared', 'rolling_back'} and not (
+            os.path.lexists(backup_path) or os.path.lexists(target_path)
+        ):
+            raise RuntimeError(
+                'Incomplete rerun transaction cannot restore missing output: {}'.format(
+                    target_path
+                )
+            )
+
+    payload['state'] = 'rolling_back'
+    _write_transaction_manifest(backup_root, payload)
+    for entry in entries:
+        rel_path = entry['path']
+        target_path = safe_join_component(target_root, rel_path, label='rerun transaction path')
+        backup_path = safe_join_component(backup_root, rel_path, label='rerun transaction path')
+        if entry['had_original']:
+            if not os.path.lexists(backup_path):
+                continue
+            _durable_remove_path(target_path)
+            _ensure_directory_durable(os.path.dirname(target_path))
+            _durable_rename(backup_path, target_path)
+        elif os.path.lexists(target_path):
+            _durable_remove_path(target_path)
+    _fsync_directory(target_root)
+    payload['state'] = 'rolled_back'
+    _write_transaction_manifest(backup_root, payload)
+    _retire_transaction_dir(backup_root)
+    return True
+
+
+def _recover_interrupted_transactions(parent_dir, target_root):
+    _sweep_resolved_cleanup_dirs(parent_dir)
+    if parent_dir in [None, ''] or not os.path.isdir(parent_dir):
+        return
+    for name in sorted(os.listdir(parent_dir)):
+        if not name.startswith(BACKUP_TEMP_PREFIX):
+            continue
+        backup_root = os.path.join(parent_dir, name)
+        if os.path.islink(backup_root) or not os.path.isdir(backup_root):
+            raise RuntimeError(
+                'Invalid rerun backup was preserved for manual recovery: {}'.format(backup_root)
+            )
+        _recover_interrupted_transaction(backup_root, target_root)
+
+
+def _recover_target_transactions(target_root):
+    absolute_target_root = os.path.abspath(target_root)
+    if os.path.lexists(absolute_target_root) and os.path.islink(absolute_target_root):
+        raise ValueError(
+            'Refusing to recover through symbolic-link rerun output root: {}'.format(
+                absolute_target_root
+            )
+        )
+    target_root = os.path.realpath(absolute_target_root)
+    with _target_transaction_lock(target_root):
+        _recover_interrupted_transactions(os.path.dirname(target_root), target_root)
 
 
 def _commit_staged_paths(target_root, staged_root, relative_paths):
@@ -452,11 +705,16 @@ def _commit_staged_paths(target_root, staged_root, relative_paths):
         )
     target_root = os.path.realpath(absolute_target_root)
     staged_root = os.path.realpath(absolute_staged_root)
+    with _target_transaction_lock(target_root):
+        _commit_staged_paths_locked(target_root, staged_root, relative_paths)
+
+
+def _commit_staged_paths_locked(target_root, staged_root, relative_paths):
     parent_dir = os.path.dirname(target_root)
     if parent_dir != '':
-        os.makedirs(parent_dir, exist_ok=True)
-    os.makedirs(target_root, exist_ok=True)
-    _sweep_stale_backup_temp_dirs(parent_dir)
+        _ensure_directory_durable(parent_dir)
+    _ensure_directory_durable(target_root)
+    _recover_interrupted_transactions(parent_dir, target_root)
     requested_paths = _normalize_relative_paths(relative_paths)
     replace_paths = [
         rel_path
@@ -465,48 +723,60 @@ def _commit_staged_paths(target_root, staged_root, relative_paths):
             safe_join_component(staged_root, rel_path, label='rerun relative path')
         )
     ]
+    if len(replace_paths) == 0:
+        return
+    for rel_path in replace_paths:
+        staged_path = safe_join_component(staged_root, rel_path, label='rerun relative path')
+        _fsync_tree(staged_path)
     backup_root = tempfile.mkdtemp(
         prefix=BACKUP_TEMP_PREFIX,
         dir=parent_dir if parent_dir != '' else None,
     )
-    committed_paths = []
-    backed_up_paths = []
+    _fsync_directory(parent_dir)
+    transaction = {
+        'schema_version': TRANSACTION_SCHEMA_VERSION,
+        'state': 'prepared',
+        'target_root': target_root,
+        'paths': [
+            {
+                'path': rel_path,
+                'had_original': os.path.lexists(
+                    safe_join_component(target_root, rel_path, label='rerun relative path')
+                ),
+            }
+            for rel_path in replace_paths
+        ],
+    }
     try:
-        for rel_path in replace_paths:
-            target_path = safe_join_component(target_root, rel_path, label='rerun relative path')
-            if not os.path.lexists(target_path):
+        _write_transaction_manifest(backup_root, transaction)
+        for entry in transaction['paths']:
+            if not entry['had_original']:
                 continue
+            rel_path = entry['path']
+            target_path = safe_join_component(target_root, rel_path, label='rerun relative path')
             backup_path = safe_join_component(backup_root, rel_path, label='rerun relative path')
-            os.makedirs(os.path.dirname(backup_path), exist_ok=True)
-            os.rename(target_path, backup_path)
-            backed_up_paths.append((rel_path, backup_path))
+            _ensure_directory_durable(os.path.dirname(backup_path))
+            _durable_rename(target_path, backup_path)
+        transaction['state'] = 'installing'
+        _write_transaction_manifest(backup_root, transaction)
         for rel_path in replace_paths:
             staged_path = safe_join_component(staged_root, rel_path, label='rerun relative path')
-            if not os.path.lexists(staged_path):
-                continue
             target_path = safe_join_component(target_root, rel_path, label='rerun relative path')
-            os.makedirs(os.path.dirname(target_path), exist_ok=True)
-            os.rename(staged_path, target_path)
-            committed_paths.append(target_path)
-        # Persist the renames so a crash after commit cannot revert the durable entries.
+            _ensure_directory_durable(os.path.dirname(target_path))
+            _durable_rename(staged_path, target_path)
         _fsync_directory(target_root)
         _fsync_directory(backup_root)
         _fsync_directory(parent_dir)
+        transaction['state'] = 'committed'
+        _write_transaction_manifest(backup_root, transaction)
     except Exception:
-        for target_path in reversed(committed_paths):
-            _remove_path_if_exists(target_path)
-        for rel_path, backup_path in reversed(backed_up_paths):
-            target_path = safe_join_component(target_root, rel_path, label='rerun relative path')
-            os.makedirs(os.path.dirname(target_path), exist_ok=True)
-            if os.path.lexists(backup_path):
-                os.rename(backup_path, target_path)
-        shutil.rmtree(backup_root, ignore_errors=True)
-        _fsync_directory(target_root)
-        _fsync_directory(backup_root)
-        _fsync_directory(parent_dir)
+        if os.path.isfile(_transaction_manifest_path(backup_root)):
+            _recover_interrupted_transaction(backup_root, target_root)
+        else:
+            shutil.rmtree(backup_root, ignore_errors=True)
+            _fsync_directory(parent_dir)
         raise
-    shutil.rmtree(backup_root, ignore_errors=True)
-    _fsync_directory(parent_dir)
+    _retire_transaction_dir(backup_root)
 
 
 def _validate_staged_species_outputs(staged_root, species_tokens, required_suffixes, label):
@@ -696,7 +966,7 @@ def _build_rerun_plan(report_payload, metadata, requested_checks, allowed_runs, 
     return plan
 
 
-RERUN_MANIFEST_SCHEMA = 'amalgkit rerun manifest schema=v1 deterministic'
+RERUN_MANIFEST_SCHEMA_VERSION = 1
 
 
 def _now_iso_for_runtime_log():
@@ -717,7 +987,7 @@ def _write_rerun_runtime_log(out_dir, started_at_iso):
 
 def _build_rerun_manifest(report_path, out_dir, metadata_path, requested_checks, allowed_runs, allowed_species, include_warnings, dry_run, plan):
     return {
-        'generated_at': RERUN_MANIFEST_SCHEMA,
+        'schema_version': RERUN_MANIFEST_SCHEMA_VERSION,
         'report_path': report_path,
         'out_dir': out_dir,
         'metadata_path': metadata_path,
@@ -825,6 +1095,7 @@ def rerun_merge_check(args, metadata, target_species, force_all_species=False, d
     if dry_run:
         return
     merge_dir = os.path.join(args.out_dir, 'merge')
+    _recover_target_transactions(merge_dir)
     quant_dir = os.path.join(args.out_dir, 'quant')
     species_token_by_name = _build_rerun_species_token_map(metadata)
     target_species_dirs = [species_token_by_name[species] for species in target_species]
@@ -965,6 +1236,7 @@ def rerun_finalize_check(args, metadata, target_species, force_all_species=False
     if dry_run:
         return
     finalize_dir = os.path.join(args.out_dir, 'finalize')
+    _recover_target_transactions(finalize_dir)
     species_token_by_name = _build_rerun_species_token_map(metadata)
     target_species_dirs = [species_token_by_name[species] for species in target_species]
     redo = _resolve_rerun_redo(args)

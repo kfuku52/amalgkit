@@ -1186,7 +1186,7 @@ def _build_sanity_summary_row(check_name, target_type, checked_items, issues, sc
     }
 
 
-SANITY_REPORT_SCHEMA = 'amalgkit sanity report schema=v1 deterministic'
+SANITY_REPORT_SCHEMA_VERSION = 1
 
 
 def _now_iso_for_runtime_log():
@@ -2214,7 +2214,7 @@ def sanity_main(args):
     issues_path = _write_sanity_issues(output_dir, issues)
     comparison_path = _write_sanity_comparison(output_dir, previous_payload, summary_rows)
     report_payload = {
-        'generated_at': SANITY_REPORT_SCHEMA,
+        'schema_version': SANITY_REPORT_SCHEMA_VERSION,
         'metadata_path': metadata_path,
         'out_dir': out_dir,
         'run_filters': run_filters,
