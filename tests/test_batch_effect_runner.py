@@ -239,6 +239,8 @@ def test_batch_effect_runner_supports_sva_zero_case_and_writes_outputs(tmp_path,
     summary = batch_effect_runner.read_backend_summary_dcf(summary_path)
     assert summary['resolved_sva_nsv'] == 0
     assert summary['skip_reason'] == 'sva_nsv_zero'
+    assert summary['sva_input_scale'] == 'counts'
+    assert summary['sva_preclip_negative_count'] == 0
     corrected = pandas.read_csv(corrected_path, sep='\t', index_col=0)
     assert corrected.shape == (2, 2)
     sv = pandas.read_csv(sv_path, sep='\t', index_col=0)

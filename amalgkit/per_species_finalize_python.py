@@ -390,9 +390,12 @@ def _run_batch_effect_step(counts_df, metadata_df, eff_length_df, args):
                 B_auto_max=int(getattr(args, 'sva_B_auto_max', 100)),
                 sample_group_column='sample_group',
                 random_seed=getattr(args, 'seed', 0),
+                input_scale='transformed',
             )
             batch_info['resolved_sva_nsv'] = summary.get('resolved_sva_nsv')
             batch_info['resolved_sva_B'] = summary.get('resolved_sva_B')
+            batch_info['sva_input_scale'] = summary.get('sva_input_scale')
+            batch_info['sva_preclip_negative_count'] = summary.get('sva_preclip_negative_count')
             batch_info['sva_estimation_method'] = summary.get('sva_estimation_method')
             batch_info['sva_stable'] = summary.get('sva_stable')
             batch_info['skip_reason'] = summary.get('skip_reason', '')

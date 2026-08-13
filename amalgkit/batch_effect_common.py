@@ -58,6 +58,8 @@ class BatchEffectResult:
     uncorrected_run_ids: List[str] = field(default_factory=list)
     resolved_sva_nsv: Optional[int] = None
     resolved_sva_B: Optional[int] = None
+    sva_input_scale: Optional[str] = None
+    sva_preclip_negative_count: Optional[int] = None
     resolved_ruv_k: Optional[int] = None
     resolved_ruv_controls: Optional[int] = None
     ruv_residual_method: Optional[str] = None
@@ -87,6 +89,8 @@ class BatchEffectResult:
             'uncorrected_run_ids': normalize_run_ids(self.uncorrected_run_ids),
             'resolved_sva_nsv': self.resolved_sva_nsv,
             'resolved_sva_B': self.resolved_sva_B,
+            'sva_input_scale': self.sva_input_scale,
+            'sva_preclip_negative_count': self.sva_preclip_negative_count,
             'resolved_ruv_k': self.resolved_ruv_k,
             'resolved_ruv_controls': self.resolved_ruv_controls,
             'ruv_residual_method': self.ruv_residual_method,
@@ -118,6 +122,8 @@ def initialize_batch_info(run_ids=(), batch_effect_alg='no'):
         'uncorrected_runs': normalized_runs,
         'resolved_sva_nsv': None,
         'resolved_sva_B': None,
+        'sva_input_scale': None,
+        'sva_preclip_negative_count': None,
         'sva_estimation_method': None,
         'sva_stable': None,
         'resolved_ruv_k': None,
@@ -236,6 +242,10 @@ def build_batch_effect_summary_dataframe(
                 'random_seed': random_seed,
                 'resolved_sva_nsv': _summary_scalar(_batch_info_value(batch_info, 'resolved_sva_nsv')),
                 'resolved_sva_B': _summary_scalar(_batch_info_value(batch_info, 'resolved_sva_B')),
+                'sva_input_scale': _summary_scalar(_batch_info_value(batch_info, 'sva_input_scale')),
+                'sva_preclip_negative_count': _summary_scalar(
+                    _batch_info_value(batch_info, 'sva_preclip_negative_count')
+                ),
                 'sva_estimation_method': _summary_scalar(_batch_info_value(batch_info, 'sva_estimation_method')),
                 'sva_stable': _summary_scalar(_batch_info_value(batch_info, 'sva_stable', 'stable')),
                 'resolved_ruv_k': _summary_scalar(_batch_info_value(batch_info, 'resolved_ruv_k')),
