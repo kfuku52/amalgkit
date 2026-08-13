@@ -1,5 +1,6 @@
 import os
 import pytest
+import matplotlib.pyplot as plt
 import numpy
 import pandas
 from types import SimpleNamespace
@@ -8,11 +9,16 @@ from amalgkit.cross_species_filter import (
     _apply_csfilter_outlier_flags,
     _calculate_correlation_within_group,
     _evict_embedding_intermediates,
+    _compute_mds_coordinates,
+    _extract_ortholog_unaveraged_expression_table,
     _load_expression_tables,
     _normalize_cross_species_metadata_table,
     _prepare_metadata_table,
+    _plot_corr_heatmap,
     _resolve_matrix_for_embedding,
     _resolve_correlation_matrix,
+    _save_averaged_boxplot_pdf,
+    _save_averaged_dendrogram_pdf,
     _save_sample_number_heatmap_pdf,
     _select_single_copy_orthogroups,
     generate_input_symlinks,
@@ -289,6 +295,98 @@ def test_cross_species_within_group_reference_leaves_evaluated_sample_out():
     expected = pandas.Series(target).corr(pandas.Series((species_b + species_c) / 2.0))
     assert numpy.isclose(observed, expected)
     assert not numpy.isclose(observed, 1.0)
+
+
+def test_extract_ortholog_expression_rejects_missing_gene_ids():
+    df_singleog = pandas.DataFrame(
+        {'Species_A': ['gene_1', 'missing_gene']},
+        index=['OG1', 'OG2'],
+    )
+    expression = pandas.DataFrame(
+        {'sample_1': [1.0]},
+        index=['gene_1'],
+    )
+    tables = {
+        'uncorrected': {'Species_A': expression},
+        'corrected': {'Species_A': expression},
+    }
+
+    with pytest.raises(ValueError, match='absent from the uncorrected expression table.*missing_gene'):
+        _extract_ortholog_unaveraged_expression_table(df_singleog, tables)
+
+
+def test_extract_ortholog_expression_preserves_absent_and_multicopy_cells():
+    df_singleog = pandas.DataFrame(
+        {'Species_A': ['gene_1', pandas.NA, 'gene_2,gene_3']},
+        index=['OG1', 'OG_absent', 'OG_multicopy'],
+    )
+    expression = pandas.DataFrame(
+        {'sample_1': [1.0]},
+        index=['gene_1'],
+    )
+    tables = {
+        'uncorrected': {'Species_A': expression},
+        'corrected': {'Species_A': expression},
+    }
+
+    observed = _extract_ortholog_unaveraged_expression_table(df_singleog, tables)
+
+    for correction in ['uncorrected', 'corrected']:
+        assert observed[correction].loc['OG1', 'Species_A_sample_1'] == 1.0
+        assert observed[correction].loc[['OG_absent', 'OG_multicopy']].isna().all().all()
+
+
+def test_mds_coordinates_leave_dropped_constant_sample_unassigned():
+    matrix = pandas.DataFrame(
+        {
+            'sample_a': [1.0, 2.0, 3.0, 4.0],
+            'sample_b': [2.0, 4.0, 6.0, 8.0],
+            'constant_sample': [5.0, 5.0, 5.0, 5.0],
+        }
+    )
+
+    coordinates = _compute_mds_coordinates(matrix, missing_strategy='row_mean')
+
+    assert coordinates.loc['constant_sample'].isna().all()
+    assert coordinates.loc[['sample_a', 'sample_b']].notna().all().all()
+
+
+def test_averaged_plots_handle_constant_sample_without_losing_label_alignment(tmp_path):
+    matrix = pandas.DataFrame(
+        {
+            'sample_a': [1.0, 2.0, 3.0, 4.0],
+            'constant_sample': [5.0, 5.0, 5.0, 5.0],
+            'sample_b': [2.0, 4.0, 5.0, 8.0],
+        }
+    )
+    label_df = pandas.DataFrame(
+        {
+            'averaged_id': matrix.columns,
+            'species_tag': ['A', 'A', 'B'],
+            'scientific_name': ['Species A', 'Constant species', 'Species B'],
+            'sample_group': ['leaf', 'root', 'leaf'],
+            'num_run': [1, 1, 1],
+            'num_bp': [100, 100, 100],
+        }
+    )
+    averaged_inputs = {
+        'labels': label_df,
+        'uncorrected': matrix,
+        'corrected': matrix,
+    }
+
+    fig, ax = plt.subplots()
+    labels = ['Species A', 'Constant species', 'Species B']
+    image = _plot_corr_heatmap(ax, matrix, labels, 'demo')
+    assert image.get_array().shape == (3, 3)
+    assert [label.get_text() for label in ax.get_xticklabels()] == labels
+    plt.close(fig)
+
+    outputs = [tmp_path / 'dendrogram.pdf', tmp_path / 'boxplot.pdf']
+    _save_averaged_dendrogram_pdf(averaged_inputs, str(outputs[0]))
+    _save_averaged_boxplot_pdf(averaged_inputs, str(outputs[1]))
+
+    assert all(path.stat().st_size > 0 for path in outputs)
 
 
 def test_embedding_missing_strategies_perform_iterative_imputation():

@@ -7,6 +7,7 @@ import pytest
 from amalgkit.subprocess_utils import (
     DEPENDENCY_PROBE_TIMEOUT_SECONDS,
     clear_dependency_probe_cache,
+    format_command,
     probe_dependency_command,
     resolve_timeout_seconds,
     run_checked_command,
@@ -236,3 +237,26 @@ def test_probe_dependency_command_kills_a_hanging_probe():
             label='dummy',
             timeout_seconds=0.2,
         )
+
+def test_format_command_redacts_signed_url_query_and_userinfo():
+    url = 'https://sra-pub-run-odp.s3.amazonaws.com/sra/SRR1/SRR1.sra?X-Amz-Signature=SECRET&X-Amz-Credential=AKIA'
+    redacted = format_command(['curl', '-L', '-o', '/tmp/x.sra', url])
+    assert redacted == (
+        'curl -L -o /tmp/x.sra '
+        'https://sra-pub-run-odp.s3.amazonaws.com/sra/SRR1/SRR1.sra'
+    )
+    userinfo = format_command(['curl', 'https://user:hunter2@ftp.sra.ebi.ac.uk/x.sra'])
+    assert userinfo == 'curl https://ftp.sra.ebi.ac.uk/x.sra'
+
+
+def test_format_command_redacts_embedded_malformed_and_unknown_scheme_urls():
+    assert format_command([
+        'tool',
+        '--url=https://user:SECRET@ftp.sra.ebi.ac.uk/x?token=SECRET',
+    ]) == 'tool --url=https://ftp.sra.ebi.ac.uk/x'
+    assert format_command(['tool', 'https://[broken?token=SECRET']) == (
+        'tool https://<redacted>'
+    )
+    assert format_command(['tool', 'custom://user:SECRET@host/x?token=SECRET']) == (
+        'tool custom://host/x'
+    )

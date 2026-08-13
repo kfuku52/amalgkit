@@ -1,4 +1,3 @@
-import datetime
 import os
 import re
 import shutil
@@ -51,10 +50,12 @@ def get_sample_group(args, metadata):
 def get_completion_flag_path(per_species_dir, sp):
     return os.path.join(per_species_dir, sp, 'per_species_completion_flag.txt')
 
+COMPLETION_FLAG_SCHEMA = 'amalgkit per-species table generation completed (schema=1)'
+
 def write_completion_flag(per_species_dir, sp):
     completion_flag_path = get_completion_flag_path(per_species_dir, sp)
     with open(completion_flag_path, 'w') as f:
-        f.write('amalgkit per-species table generation completed at {}\n'.format(datetime.datetime.now()))
+        f.write(COMPLETION_FLAG_SCHEMA + '\n')
 
 def register_exit_status(per_species_dir, sp, exit_status, failed_species):
     if exit_status == 0:

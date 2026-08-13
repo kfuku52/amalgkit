@@ -37,6 +37,12 @@ def build_parser():
     parser.add_argument('--sva_nsv', required=False, default='auto')
     parser.add_argument('--sva_B', required=False, default='auto')
     parser.add_argument('--sva_B_auto_max', required=False, default='100')
+    parser.add_argument(
+        '--sva_input_scale',
+        choices=('counts', 'transformed'),
+        required=False,
+        default='counts',
+    )
     parser.add_argument('--batch_column', required=False, default='bioproject')
     parser.add_argument('--sample_group_column', required=False, default='sample_group')
     parser.add_argument('--ruvseq_control_mode', required=False, default='auto')
@@ -88,6 +94,7 @@ def main(argv=None):
                 B_auto_max=args.sva_B_auto_max,
                 sample_group_column=args.sample_group_column,
                 random_seed=args.random_seed,
+                input_scale=args.sva_input_scale,
             )
         except (ValueError, RuntimeError, numpy.linalg.LinAlgError) as exc:
             return _write_failure_summary(

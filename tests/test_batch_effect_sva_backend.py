@@ -398,3 +398,148 @@ def test_run_sva_backend_auto_transformed_duplicate_groups_falls_back_to_leek():
     assert summary['trace_nsv'] == [0, 0]
     assert summary['trace_method'] == ['leek', 'leek']
     numpy.testing.assert_allclose(corrected.to_numpy(), transformed.to_numpy(), rtol=0.0, atol=1e-8)
+
+
+def test_clean_y_matrix_ignores_surrogates_collinear_with_protected_design():
+    y = numpy.array([[10.0, 12.0, 40.0, 42.0], [11.0, 13.0, 41.0, 43.0]])
+    mod = numpy.array([[1.0, 0.0], [1.0, 0.0], [1.0, 1.0], [1.0, 1.0]])
+    sv = mod.copy()
+
+    adjusted = clean_y_matrix(y, mod, sv)
+
+    numpy.testing.assert_allclose(adjusted, y, rtol=0.0, atol=1e-12)
+
+
+def test_clean_y_matrix_removes_only_surrogate_space_orthogonal_to_design():
+    mod = numpy.array([[1.0, 0.0], [1.0, 0.0], [1.0, 1.0], [1.0, 1.0]])
+    nuisance = numpy.array([1.0, -1.0, 1.0, -1.0])
+    sv = numpy.column_stack([mod[:, 1], mod[:, 1] + nuisance])
+    protected_signal = numpy.array([[10.0, 10.0, 40.0, 40.0]])
+    y = protected_signal + (5.0 * nuisance.reshape(1, -1))
+
+    adjusted = clean_y_matrix(y, mod, sv)
+
+    numpy.testing.assert_allclose(adjusted, protected_signal, rtol=0.0, atol=1e-12)
+    numpy.testing.assert_allclose(mod.T @ adjusted.T, mod.T @ y.T, rtol=0.0, atol=1e-12)
+
+
+def test_run_sva_backend_count_scale_is_clipped_nonnegative_with_recorded_overshoot():
+    # Regression: SVA was run on raw counts and clean_y_matrix overshot below
+    # zero. The correction must run on the log(counts+1) scale, transform back
+    # to the count scale, clip at 0, and record how many values were
+    # clipped so the corrected matrix stays non-negative.
+    rng = numpy.random.default_rng(0)
+    n_genes, n_runs = 80, 8
+    counts = numpy.zeros((n_genes, n_runs))
+    for g in range(64):
+        if g < 32:
+            counts[g, :4] = rng.poisson(500)
+            counts[g, 4:] = rng.poisson(5)
+        else:
+            counts[g, :4] = rng.poisson(5)
+            counts[g, 4:] = rng.poisson(500)
+    for g in range(64, 80):
+        base = rng.poisson(1, size=8)
+        if g % 2 == 0:
+            base[:4] = base[:4] + 2
+        counts[g, :] = base
+    counts_df = pandas.DataFrame(
+        counts,
+        index=[f"G{i}" for i in range(n_genes)],
+        columns=[f"RUN{i}" for i in range(n_runs)],
+    )
+    metadata = pandas.DataFrame(
+        {
+            "run": list(counts_df.columns),
+            "sample_group": ["A", "A", "B", "B"] * 2,
+            "bioproject": ["BP0", "BP1", "BP0", "BP1"] * 2,
+        }
+    )
+    corrected, sv_df, summary = run_sva_backend(
+        counts_df=counts_df,
+        metadata_df=metadata,
+        nsv_setting="1",
+        B_setting="5",
+        B_auto_max=100,
+        random_seed=0,
+        input_scale="counts",
+    )
+    values = corrected.to_numpy(dtype=float)
+    assert numpy.all(values >= 0.0)
+    # Corrected values are on the count scale, not log(counts+1).
+    assert float(values.max()) > 50.0
+    assert summary["sva_input_scale"] == "counts"
+    assert summary["sva_preclip_negative_count"] > 0
+
+
+def test_run_sva_backend_explicit_count_scale_accepts_fractional_estimated_counts(monkeypatch):
+    counts = pandas.DataFrame(
+        {
+            "RUN1": [1.25, 3.5],
+            "RUN2": [2.75, 4.125],
+            "RUN3": [5.5, 1.75],
+            "RUN4": [6.25, 2.5],
+        },
+        index=["G1", "G2"],
+    )
+    metadata = pandas.DataFrame(
+        {
+            "run": list(counts.columns),
+            "sample_group": ["A", "A", "B", "B"],
+        }
+    )
+    observed = {}
+
+    def capture_irwsva(data_matrix, mod_matrix, mod0_matrix, nsv, B_iterations):
+        observed["data_matrix"] = data_matrix.copy()
+        return {"sv": numpy.zeros((counts.shape[1], 1), dtype=float)}
+
+    monkeypatch.setattr(batch_effect_sva_module, "irwsva_build", capture_irwsva)
+
+    corrected, _sv_df, summary = run_sva_backend(
+        counts_df=counts,
+        metadata_df=metadata,
+        nsv_setting="1",
+        B_setting="2",
+        input_scale="counts",
+    )
+
+    numpy.testing.assert_allclose(observed["data_matrix"], numpy.log1p(counts.to_numpy()))
+    pandas.testing.assert_frame_equal(corrected, counts)
+    assert summary["sva_input_scale"] == "counts"
+
+
+def test_run_sva_backend_transformed_scale_preserves_legitimate_negative_values(monkeypatch):
+    transformed = pandas.DataFrame(
+        {
+            "RUN1": [-2.5, -1.2],
+            "RUN2": [-2.0, -1.0],
+            "RUN3": [-3.0, -1.5],
+            "RUN4": [-2.8, -1.4],
+        },
+        index=["G1", "G2"],
+    )
+    metadata = pandas.DataFrame(
+        {
+            "run": list(transformed.columns),
+            "sample_group": ["A", "A", "B", "B"],
+        }
+    )
+
+    monkeypatch.setattr(
+        batch_effect_sva_module,
+        "irwsva_build",
+        lambda **_kwargs: {"sv": numpy.zeros((transformed.shape[1], 1), dtype=float)},
+    )
+
+    corrected, _sv_df, summary = run_sva_backend(
+        counts_df=transformed,
+        metadata_df=metadata,
+        nsv_setting="1",
+        B_setting="2",
+        input_scale="transformed",
+    )
+
+    pandas.testing.assert_frame_equal(corrected, transformed)
+    assert summary["sva_input_scale"] == "transformed"
+    assert summary["sva_preclip_negative_count"] == 0

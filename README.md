@@ -28,9 +28,11 @@ amalgkit -h
 amalgkit help metadata
 ```
 
-AMALGKIT supports Linux and macOS with Python 3.11 or later. Every released
-version, including a patch version, has a matching Git tag and GitHub Release.
-Run `amalgkit --version` and retain that value when reproducing an analysis.
+AMALGKIT supports Linux and macOS with Python 3.11 or later. Git tags, GitHub
+Releases, and Bioconda recipe updates are limited to versions whose patch
+component is zero (for example, `0.17.0` or `1.0.0`). Patch-only changes remain
+available from the default branch. Run `amalgkit --version` and retain that
+value when reproducing an analysis.
 
 `amalgkit getfastq` requires `fasterq-dump` from `sra-tools >= 3` on `PATH`.
 If you manage external tools separately, install it explicitly, for example:
