@@ -32,6 +32,7 @@ from amalgkit.exceptions import AmalgkitExit
 from amalgkit.fastq_utils import (
     count_fastq_records_and_bases as shared_count_fastq_records_and_bases,
     count_fastq_records as shared_count_fastq_records,
+    is_gzip_fastq_path,
     map_seqkit_stats_rows,
     parse_seqkit_stats_row_records_and_bases as _parse_seqkit_stats_row_records_and_bases,
     validate_fastq_structure as shared_validate_fastq_structure,
@@ -6523,7 +6524,12 @@ def sequence_extraction_private(metadata, sra_stat, args, runtime_context=None):
                         'Private output path exists but is not a file/symlink: {}'.format(path_to)
                     )
                 os.remove(path_to)
-            os.symlink(src=path_from, dst=path_to)
+            if is_gzip_fastq_path(path_from):
+                os.symlink(src=path_from, dst=path_to)
+            else:
+                with atomic_output_path(path_to, suffix='.fastq.gz') as tmp_path:
+                    with open(path_from, 'rb') as source, gzip.open(tmp_path, 'wb') as destination:
+                        shutil.copyfileobj(source, destination)
         elif os.path.exists(path_from):
             sys.stderr.write('Private fastq path exists but is not a file: {}\n'.format(path_from))
         else:
