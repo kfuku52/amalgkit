@@ -8,7 +8,6 @@ import matplotlib.pyplot as plt
 import numpy
 import pandas
 
-from amalgkit.imputation import impute_expression
 from amalgkit.normalization_tmm import run_tmm_rounds_for_cstmm
 from amalgkit.orthology_utils import (
     DEFAULT_SINGLE_COPY_THRESHOLD,
@@ -92,13 +91,14 @@ def _copy_eff_length_file(dir_count, dir_cstmm, species_name):
 
 
 def _get_df_nonzero(df_counts):
+    """Drop empty samples but keep pairwise-missing ortholog cells as NaN.
+
+    TMM must see observed single-copy counts only. Imputing those holes
+    before factor estimation treats invented values as conserved 1:1
+    observations and biases every downstream CSTMM-scaled count.
+    """
     is_zero_col = (df_counts.sum(axis=0, skipna=True) == 0)
-    df_nonzero = df_counts.loc[:, ~is_zero_col].copy()
-    return impute_expression(
-        df_nonzero,
-        strategy='em_pca',
-        minimum_imputed_value=0.0,
-    )
+    return df_counts.loc[:, ~is_zero_col].copy()
 
 
 def _get_singlecopy_bool_index(df_gc, spp_filled, percent_singlecopy_threshold=50.0):
