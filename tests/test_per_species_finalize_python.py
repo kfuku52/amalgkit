@@ -475,3 +475,42 @@ def test_generate_per_species_tables_supports_python_finalize_worker_for_latent_
     assert (corrected_df.to_numpy(dtype=float) >= 0.0).all()
     assert (plots_dir / '{}.before_after.latent_glm.pdf'.format(species_tag)).is_file()
     assert (plots_dir / '{}.tau_hist.latent_glm.pdf'.format(species_tag)).is_file()
+
+
+def test_transform_raw_to_tpm_is_cpm_when_effective_length_is_one():
+    counts = pandas.DataFrame({'SRR001': [10.0, 10.0]}, index=['short', 'long'])
+    eff = pandas.DataFrame({'SRR001': [1.0, 1.0]}, index=['short', 'long'])
+    tpm = _transform_raw_to_tpm(counts, eff)
+    assert numpy.allclose(tpm['SRR001'], [5.0e5, 5.0e5])
+
+
+def test_apply_transformation_rejects_fpkm_without_effective_length():
+    counts = pandas.DataFrame({'SRR001': [10.0, 10.0]}, index=['short', 'long'])
+    eff = pandas.DataFrame({'SRR001': [1.0, 1.0]}, index=['short', 'long'])
+    metadata = pandas.DataFrame({'run': ['SRR001']})
+    with pytest.raises(ValueError, match='FPKM is undefined'):
+        _apply_transformation_logic(
+            counts,
+            eff,
+            'log2p1-fpkm',
+            'no',
+            'before_batch',
+            metadata,
+            {'SRR001': 'none'},
+        )
+
+
+def test_apply_transformation_keeps_tpm_for_unlength_normalized_runs():
+    counts = pandas.DataFrame({'SRR001': [10.0, 10.0]}, index=['short', 'long'])
+    eff = pandas.DataFrame({'SRR001': [1.0, 1.0]}, index=['short', 'long'])
+    metadata = pandas.DataFrame({'run': ['SRR001']})
+    transformed = _apply_transformation_logic(
+        counts,
+        eff,
+        'none-tpm',
+        'no',
+        'before_batch',
+        metadata,
+        {'SRR001': 'none'},
+    )
+    assert numpy.allclose(transformed['SRR001'], [5.0e5, 5.0e5])

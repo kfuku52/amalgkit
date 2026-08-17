@@ -592,16 +592,21 @@ def rename_kallisto_outputs(output_dir, sra_id):
         os.replace(src_path, dst_path)
 
 
-def _compute_compatibility_tpm(counts, lengths):
+def _compute_counts_per_million(counts):
+    """Return unlength-normalized counts per million.
+
+    Oarfish does not include an effective-length term. Compatibility TPM for
+    that backend is therefore per-million scaling of estimated counts, not
+    counts divided by annotated transcript length.
+    """
     counts = numpy.asarray(counts, dtype=float)
-    lengths = numpy.asarray(lengths, dtype=float)
-    with numpy.errstate(divide='ignore', invalid='ignore'):
-        rate = counts / lengths
-    rate[~numpy.isfinite(rate)] = 0.0
-    denom = float(numpy.nansum(rate))
-    if denom <= 0:
-        return numpy.zeros(rate.shape[0], dtype=float)
-    return rate * 1e6 / denom
+    finite = numpy.isfinite(counts) & (counts >= 0.0)
+    total = float(numpy.nansum(numpy.where(finite, counts, 0.0)))
+    if total <= 0:
+        return numpy.zeros(counts.shape[0], dtype=float)
+    tpm = numpy.zeros(counts.shape[0], dtype=float)
+    tpm[finite] = counts[finite] * 1e6 / total
+    return tpm
 
 
 def _normalize_oarfish_quant_columns(quant_df):
@@ -675,12 +680,12 @@ def adapt_oarfish_outputs(output_dir, sra_id, sra_stat, output_prefix, seq_tech)
                 'oarfish quant output contains invalid values in tpm.'
             )
     else:
-        tpm = pandas.Series(_compute_compatibility_tpm(est_counts.to_numpy(), lengths.to_numpy()))
+        tpm = pandas.Series(_compute_counts_per_million(est_counts.to_numpy()))
 
     abundance_df = pandas.DataFrame({
         'target_id': target_ids,
         'length': lengths,
-        'eff_length': lengths,
+        'eff_length': numpy.ones(len(target_ids), dtype=float),
         'est_counts': est_counts,
         'tpm': tpm,
     })
@@ -708,6 +713,7 @@ def adapt_oarfish_outputs(output_dir, sra_id, sra_stat, output_prefix, seq_tech)
     p_pseudoaligned = mapped_reads / total_reads * 100.0
     run_info = dict(meta_info)
     run_info['quant_backend'] = 'oarfish'
+    run_info['length_model'] = 'none'
     run_info['oarfish_seq_tech'] = seq_tech
     run_info['num_processed'] = total_reads
     run_info['num_pseudoaligned'] = mapped_reads

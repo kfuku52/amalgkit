@@ -5,6 +5,8 @@ Releases provide the commit-level generated notes for each version.
 
 ## Unreleased
 
+- Defined Oarfish abundance as unlength-normalized counts per million, stored annotated length separately from a unit effective-length term, and rejected FPKM for those runs because the transformation is undefined without an effective length.
+
 - Rejected ambiguous metadata merges with empty or duplicate run IDs and
   prevented missing, duplicate, or whitespace-padded quantification target IDs
   from corrupting merged abundance tables.
