@@ -11,6 +11,8 @@ from amalgkit.command_context import PerSpeciesTableContext
 from amalgkit.metadata_utils import Metadata
 from amalgkit.per_species_finalize_python import (
     _apply_transformation_logic,
+    _compute_corr_matrix,
+    _compute_pca_coordinates,
     _compute_tsne_coordinates,
     _compute_distance_matrix,
     _resolve_scientific_name,
@@ -475,3 +477,23 @@ def test_generate_per_species_tables_supports_python_finalize_worker_for_latent_
     assert (corrected_df.to_numpy(dtype=float) >= 0.0).all()
     assert (plots_dir / '{}.before_after.latent_glm.pdf'.format(species_tag)).is_file()
     assert (plots_dir / '{}.tau_hist.latent_glm.pdf'.format(species_tag)).is_file()
+
+
+def test_compute_corr_matrix_preserves_undefined_constant_sample():
+    counts = pandas.DataFrame(
+        {
+            'A': [1.0, 2.0, 3.0, 4.0],
+            'B': [2.0, 4.0, 6.0, 8.0],
+            'C': [5.0, 5.0, 5.0, 5.0],
+        }
+    )
+
+    corr = _compute_corr_matrix(counts, 'pearson')
+    pca = _compute_pca_coordinates(corr)
+
+    assert corr.loc['C'].isna().all()
+    assert corr.loc[:, 'C'].isna().all()
+    assert numpy.isfinite(pca[0]).all()
+    assert numpy.isfinite(pca[1]).all()
+    assert numpy.isnan(pca[2]).all()
+    assert numpy.isclose(corr.loc['A', 'B'], 1.0)

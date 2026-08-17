@@ -178,6 +178,26 @@ def resolve_correlation_matrix(
     return corr
 
 
+def finite_correlation_block(corr_df: pandas.DataFrame) -> pandas.DataFrame:
+    """Drop samples whose self-correlation is undefined and return a finite block.
+
+    A constant sample produces an all-NaN row/column, including a NaN diagonal.
+    Fabricating r=0 there corrupts PCA, MDS, and dendrograms.  Correlations
+    between otherwise defined samples must remain finite; reject partial NaN
+    patterns instead of silently discarding additional usable samples.
+    """
+    if corr_df.empty:
+        return corr_df.copy()
+    if corr_df.shape[0] != corr_df.shape[1] or not corr_df.index.equals(corr_df.columns):
+        raise ValueError("Correlation matrix must be square with matching index and columns.")
+    values = corr_df.to_numpy(dtype=float)
+    defined = numpy.isfinite(numpy.diag(values))
+    block = corr_df.loc[defined, defined]
+    if block.size > 0 and not numpy.isfinite(block.to_numpy(dtype=float)).all():
+        raise ValueError("Correlations between defined samples must be finite.")
+    return block
+
+
 def resolve_finite_correlation_matrix(
     matrix_df: pandas.DataFrame,
     missing_strategy: str = "row_mean",
@@ -193,8 +213,7 @@ def resolve_finite_correlation_matrix(
         missing_strategy=missing_strategy,
         cache=cache,
     )
-    defined = corr.notna().any(axis=0)
-    finite_corr = corr.loc[defined, defined]
+    finite_corr = finite_correlation_block(corr)
     if finite_corr.size > 0 and not numpy.isfinite(finite_corr.to_numpy(dtype=float)).all():
         raise ValueError("Non-degenerate sample correlations must be finite after imputation.")
     if cache is not None:

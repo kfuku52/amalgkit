@@ -8,6 +8,7 @@ from matplotlib.lines import Line2D
 import numpy
 import pandas
 
+from amalgkit.cross_species_computation import finite_correlation_block
 from amalgkit.cross_species_computation import resolve_tsne_perplexity as _resolve_tsne_perplexity
 
 from amalgkit.per_species_common import sample_group_mean, sample_group_to_tau
@@ -218,8 +219,7 @@ def _plot_corr_method(dist_method):
 
 
 def _compute_corr_matrix(counts_df, dist_method):
-    corr_df = counts_df.corr(method=_plot_corr_method(dist_method))
-    return corr_df.fillna(0.0)
+    return counts_df.corr(method=_plot_corr_method(dist_method))
 
 
 def _compute_distance_matrix(corr_df):
@@ -229,8 +229,16 @@ def _compute_distance_matrix(corr_df):
     return dist
 
 
-def _compute_pca_coords(corr_df):
-    matrix = corr_df.to_numpy(dtype=float)
+def _map_block_coordinates(corr_df, block_df, block_coords):
+    coords = numpy.full((corr_df.shape[0], 2), numpy.nan, dtype=float)
+    positions = {name: idx for idx, name in enumerate(corr_df.index)}
+    for block_idx, name in enumerate(block_df.index):
+        coords[positions[name], :] = block_coords[block_idx, :]
+    return coords
+
+
+def _spectral_coords(corr_block):
+    matrix = corr_block.to_numpy(dtype=float)
     n = matrix.shape[0]
     coords = numpy.zeros((n, 2), dtype=float)
     if n <= 1:
@@ -245,8 +253,7 @@ def _compute_pca_coords(corr_df):
     return coords
 
 
-def _compute_mds_coords(corr_df):
-    dist = _compute_distance_matrix(corr_df)
+def _classic_mds_coords(dist):
     n = dist.shape[0]
     coords = numpy.zeros((n, 2), dtype=float)
     if n <= 1:
@@ -261,6 +268,20 @@ def _compute_mds_coords(corr_df):
         value = max(float(eigvals[idx]), 0.0)
         coords[:, idx] = eigvecs[:, idx] * numpy.sqrt(value)
     return coords
+
+
+def _compute_pca_coords(corr_df):
+    block = finite_correlation_block(corr_df)
+    return _map_block_coordinates(corr_df, block, _spectral_coords(block))
+
+
+def _compute_mds_coords(corr_df):
+    block = finite_correlation_block(corr_df)
+    return _map_block_coordinates(
+        corr_df,
+        block,
+        _classic_mds_coords(_compute_distance_matrix(block)),
+    )
 
 
 def _compute_tsne_coords(counts_df):
@@ -310,11 +331,12 @@ def _draw_embedding_panel(ax, coords, metadata_df, title, x_label, y_label, font
     bp_colors = _bioproject_color_map(metadata_df.loc[:, 'bioproject'].fillna('').astype(str).tolist())
     facecolors = [group_colors[str(value)] for value in metadata_df.loc[:, 'sample_group'].fillna('').astype(str)]
     edgecolors = [bp_colors[str(value)] for value in metadata_df.loc[:, 'bioproject'].fillna('').astype(str)]
+    finite = numpy.isfinite(coords).all(axis=1)
     ax.scatter(
-        coords[:, 0],
-        coords[:, 1],
-        c=facecolors,
-        edgecolors=edgecolors,
+        coords[finite, 0],
+        coords[finite, 1],
+        c=[color for keep, color in zip(finite, facecolors) if keep],
+        edgecolors=[color for keep, color in zip(finite, edgecolors) if keep],
         s=50.0,
         linewidths=0.8,
         alpha=0.9,
@@ -337,10 +359,15 @@ def _draw_dendrogram_panel(ax, corr_df, metadata_df, font_size=8):
         ax.text(0.5, 0.5, 'SciPy not available', ha='center', va='center', fontsize=font_size)
         ax.set_axis_off()
         return
-    dist = _compute_distance_matrix(corr_df)
+    block = finite_correlation_block(corr_df)
+    if block.shape[0] <= 1:
+        ax.text(0.5, 0.5, 'No dendrogram data', ha='center', va='center', fontsize=font_size)
+        ax.set_axis_off()
+        return
+    dist = _compute_distance_matrix(block)
     condensed = squareform(dist, checks=False)
     linkage_matrix = linkage(condensed, method='average')
-    labels = metadata_df.loc[:, 'run'].astype(str).tolist()
+    labels = [str(name) for name in block.index]
     dendrogram(
         linkage_matrix,
         labels=labels,
@@ -464,7 +491,7 @@ def save_state_overview_pdf(
     fig, axes = plt.subplots(5, 2, figsize=(12.0, 18.0))
     _draw_dendrogram_panel(axes[0, 0], corr_df, metadata, font_size=font_size)
     axes[0, 0].set_title('Dendrogram', fontsize=font_size)
-    image = axes[0, 1].imshow(corr_df.to_numpy(dtype=float), vmin=-1.0, vmax=1.0, cmap='coolwarm')
+    image = axes[0, 1].imshow(numpy.ma.masked_invalid(corr_df.to_numpy(dtype=float)), vmin=-1.0, vmax=1.0, cmap='coolwarm')
     axes[0, 1].set_title('Sample correlation', fontsize=font_size)
     axes[0, 1].set_xticks(range(len(run_order)))
     axes[0, 1].set_xticklabels(run_order, rotation=90, fontsize=max(4, font_size - 2))

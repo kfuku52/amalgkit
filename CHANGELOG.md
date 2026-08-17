@@ -5,6 +5,8 @@ Releases provide the commit-level generated notes for each version.
 
 ## Unreleased
 
+- Preserved undefined within-species sample correlations instead of fabricating r=0 (including a zero self-correlation) in finalize/overview embeddings.
+
 - Rejected ambiguous metadata merges with empty or duplicate run IDs and
   prevented missing, duplicate, or whitespace-padded quantification target IDs
   from corrupting merged abundance tables.
