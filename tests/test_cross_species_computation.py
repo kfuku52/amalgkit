@@ -1,5 +1,6 @@
 import numpy
 import pandas
+import pytest
 
 from amalgkit.cross_species_computation import (
     finite_correlation_block,
@@ -86,3 +87,18 @@ def test_finite_correlation_block_drops_constant_sample():
 
     assert block.index.tolist() == ['sample_a', 'sample_b']
     assert numpy.isfinite(block.to_numpy()).all()
+
+
+def test_finite_correlation_block_rejects_partial_undefined_correlations():
+    corr = pandas.DataFrame(
+        [
+            [1.0, 0.4, 0.5],
+            [0.4, 1.0, numpy.nan],
+            [0.5, numpy.nan, 1.0],
+        ],
+        index=['sample_a', 'sample_b', 'sample_c'],
+        columns=['sample_a', 'sample_b', 'sample_c'],
+    )
+
+    with pytest.raises(ValueError, match='Correlations between defined samples must be finite'):
+        finite_correlation_block(corr)

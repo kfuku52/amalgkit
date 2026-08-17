@@ -179,21 +179,23 @@ def resolve_correlation_matrix(
 
 
 def finite_correlation_block(corr_df: pandas.DataFrame) -> pandas.DataFrame:
-    """Return the largest fully defined principal submatrix of a correlation matrix.
+    """Drop samples whose self-correlation is undefined and return a finite block.
 
-    A constant or otherwise undefined sample produces an all-NaN row/column.
-    Fabricating r=0 there, including a zero diagonal, corrupts PCA, MDS, and
-    dendrograms. Embed this block and map dropped samples back as missing.
+    A constant sample produces an all-NaN row/column, including a NaN diagonal.
+    Fabricating r=0 there corrupts PCA, MDS, and dendrograms.  Correlations
+    between otherwise defined samples must remain finite; reject partial NaN
+    patterns instead of silently discarding additional usable samples.
     """
     if corr_df.empty:
         return corr_df.copy()
-    defined = corr_df.notna().any(axis=0)
+    if corr_df.shape[0] != corr_df.shape[1] or not corr_df.index.equals(corr_df.columns):
+        raise ValueError("Correlation matrix must be square with matching index and columns.")
+    values = corr_df.to_numpy(dtype=float)
+    defined = numpy.isfinite(numpy.diag(values))
     block = corr_df.loc[defined, defined]
-    if block.size == 0:
-        return block
-    values = block.to_numpy(dtype=float)
-    fully_defined = numpy.isfinite(values).all(axis=0) & numpy.isfinite(values).all(axis=1)
-    return block.loc[fully_defined, fully_defined]
+    if block.size > 0 and not numpy.isfinite(block.to_numpy(dtype=float)).all():
+        raise ValueError("Correlations between defined samples must be finite.")
+    return block
 
 
 def resolve_finite_correlation_matrix(
