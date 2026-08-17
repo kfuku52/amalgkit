@@ -6501,39 +6501,57 @@ def sequence_extraction_2nd_round(args, sra_stat, metadata, g, runtime_context=N
     print('')
     return metadata
 
+def is_private_file_value(value):
+    return str(value).strip().lower() == 'yes'
+
+
 def sequence_extraction_private(metadata, sra_stat, args, runtime_context=None):
     runtime_context = ensure_getfastq_runtime_context(runtime_context)
     ind_sra = sra_stat.get('metadata_idx', get_metadata_row_index_by_run(metadata, sra_stat['sra_id']))
-    for col in ['read1_path','read2_path']:
-        path_from_raw = metadata.df.at[ind_sra, col]
+    required_columns = ['read1_path']
+    if str(sra_stat.get('layout', '')).strip().lower() == 'paired':
+        required_columns.append('read2_path')
+    staged = []
+    errors = []
+    for col in ['read1_path', 'read2_path']:
+        path_from_raw = metadata.df.at[ind_sra, col] if col in metadata.df.columns else None
         if pandas.isna(path_from_raw):
-            sys.stderr.write('Private fastq file path is missing in metadata column "{}".\n'.format(col))
-            continue
-        path_from = str(path_from_raw).strip()
+            path_from = ''
+        else:
+            path_from = str(path_from_raw).strip()
         if path_from == '' or path_from.lower() == 'nan':
-            sys.stderr.write('Private fastq file path is missing in metadata column "{}".\n'.format(col))
+            if col in required_columns:
+                errors.append('Private fastq file path is missing in metadata column "{}".'.format(col))
             continue
         suffix = ''
         if sra_stat['layout'] == 'paired':
             suffix = '_1' if col == 'read1_path' else '_2'
         path_to = os.path.join(sra_stat['getfastq_sra_dir'], sra_stat['sra_id'] + suffix + '.fastq.gz')
-        if os.path.isfile(path_from):
-            if os.path.lexists(path_to):
-                if os.path.isdir(path_to) and (not os.path.islink(path_to)):
-                    raise IsADirectoryError(
-                        'Private output path exists but is not a file/symlink: {}'.format(path_to)
-                    )
-                os.remove(path_to)
-            if is_gzip_fastq_path(path_from):
-                os.symlink(src=path_from, dst=path_to)
+        source = os.path.realpath(path_from)
+        if not os.path.isfile(source):
+            if col not in required_columns:
+                continue
+            if os.path.exists(path_from) or os.path.exists(source):
+                errors.append('Private fastq path exists but is not a file: {}'.format(path_from))
             else:
-                with atomic_output_path(path_to, suffix='.fastq.gz') as tmp_path:
-                    with open(path_from, 'rb') as source, gzip.open(tmp_path, 'wb') as destination:
-                        shutil.copyfileobj(source, destination)
-        elif os.path.exists(path_from):
-            sys.stderr.write('Private fastq path exists but is not a file: {}\n'.format(path_from))
+                errors.append('Private fastq file not found: {}'.format(path_from))
+            continue
+        staged.append((source, path_to, path_from))
+    if errors:
+        raise FileNotFoundError(' '.join(errors))
+    for source, path_to, path_from in staged:
+        if os.path.lexists(path_to):
+            if os.path.isdir(path_to) and (not os.path.islink(path_to)):
+                raise IsADirectoryError(
+                    'Private output path exists but is not a file/symlink: {}'.format(path_to)
+                )
+            os.remove(path_to)
+        if is_gzip_fastq_path(path_from) or is_gzip_fastq_path(source):
+            os.symlink(src=source, dst=path_to)
         else:
-            sys.stderr.write('Private fastq file not found: {}\n'.format(path_from))
+            with atomic_output_path(path_to, suffix='.fastq.gz') as tmp_path:
+                with open(source, 'rb') as handle, gzip.open(tmp_path, 'wb') as destination:
+                    shutil.copyfileobj(handle, destination)
     set_current_intermediate_extension(sra_stat, '.fastq.gz')
     latest_stage_counts = None
     latest_stage_source = None
@@ -6774,7 +6792,7 @@ def _process_getfastq_run_locked(
     print('Total bases:', "{:,}".format(int(run_metadata.df.at[0, 'total_bases'])), 'bp')
     flag_private_file = False
     if 'private_file' in run_metadata.df.columns:
-        if run_metadata.df.at[0, 'private_file'] == 'yes':
+        if is_private_file_value(run_metadata.df.at[0, 'private_file']):
             print('Processing {} as private data. --max_bp is disabled.'.format(sra_id), flush=True)
             flag_private_file = True
             sequence_extraction_private(run_metadata, sra_stat, args, runtime_context=runtime_context)
