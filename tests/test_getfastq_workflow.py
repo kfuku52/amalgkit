@@ -15,6 +15,7 @@ from amalgkit.command_context import GetfastqRuntimeContext
 from amalgkit.getfastq import (
     rename_reads,
     sequence_extraction_private,
+    is_private_file_value,
     compress_fasterq_output_files,
     getfastq_main,
     check_getfastq_dependency,
@@ -128,7 +129,7 @@ class TestSequenceExtractionPrivate:
 
         assert (sra_dir / 'SRR001.fastq.gz').exists()
 
-    def test_warns_when_private_path_is_directory(self, tmp_path, monkeypatch, capsys):
+    def test_rejects_when_private_path_is_directory(self, tmp_path, monkeypatch, capsys):
         read1_dir = tmp_path / 'read1_dir'
         read1_dir.mkdir()
         metadata = Metadata.from_DataFrame(pandas.DataFrame({
@@ -155,10 +156,8 @@ class TestSequenceExtractionPrivate:
         monkeypatch.setattr('amalgkit.getfastq.get_or_detect_intermediate_extension', lambda *_args, **_kwargs: '.fastq.gz')
         monkeypatch.setattr('amalgkit.getfastq.rename_fastq', lambda *_args, **_kwargs: None)
 
-        sequence_extraction_private(metadata=metadata, sra_stat=sra_stat, args=args)
-        err = capsys.readouterr().err
-
-        assert 'exists but is not a file' in err
+        with pytest.raises(FileNotFoundError, match='exists but is not a file'):
+            sequence_extraction_private(metadata=metadata, sra_stat=sra_stat, args=args)
 
     def test_raises_when_private_output_path_is_directory(self, tmp_path, monkeypatch):
         read1_path = tmp_path / 'input_R1.fastq.gz'
@@ -1436,3 +1435,69 @@ class TestRenameReadsSeqkitCompression:
         assert first_header1 == '@r0/1'
         assert first_header2 == '@r0/2'
         assert sorted(observed_threads) == ['1', '1']
+
+
+def test_is_private_file_value_normalizes_case_and_padding():
+    assert is_private_file_value('yes') is True
+    assert is_private_file_value('YES') is True
+    assert is_private_file_value(' Yes ') is True
+    assert is_private_file_value('no') is False
+
+
+def test_sequence_extraction_private_resolves_relative_gzip_symlink(tmp_path, monkeypatch):
+    source = tmp_path / 'input.fastq.gz'
+    source.write_bytes(b'\x1f\x8b')
+    work = tmp_path / 'work'
+    work.mkdir()
+    metadata = Metadata.from_DataFrame(pandas.DataFrame({
+        'run': ['SRR001'],
+        'read1_path': ['input.fastq.gz'],
+        'read2_path': [numpy.nan],
+        'lib_layout': ['single'],
+        'total_spots': [1],
+        'total_bases': [4],
+        'spot_length': [4],
+        'scientific_name': ['sp'],
+        'exclusion': ['no'],
+    }))
+    sra_stat = {
+        'sra_id': 'SRR001',
+        'layout': 'single',
+        'getfastq_sra_dir': str(work),
+    }
+    args = SimpleNamespace(fastp=False)
+    monkeypatch.setattr('amalgkit.getfastq.set_current_intermediate_extension', lambda *_a, **_k: None)
+    monkeypatch.setattr('amalgkit.getfastq.get_or_detect_intermediate_extension', lambda *_a, **_k: '.fastq.gz')
+    monkeypatch.setattr('amalgkit.getfastq.rename_fastq', lambda *_a, **_k: None)
+    monkeypatch.setattr('amalgkit.getfastq.write_getfastq_stats', lambda **_k: None)
+    monkeypatch.chdir(tmp_path)
+
+    sequence_extraction_private(metadata=metadata, sra_stat=sra_stat, args=args)
+
+    dest = work / 'SRR001.fastq.gz'
+    assert dest.is_symlink()
+    assert os.path.realpath(dest) == os.path.realpath(source)
+
+
+def test_sequence_extraction_private_rejects_missing_paired_mate(tmp_path):
+    read1 = tmp_path / 'input_R1.fastq.gz'
+    read1.write_text('dummy')
+    metadata = Metadata.from_DataFrame(pandas.DataFrame({
+        'run': ['SRR001'],
+        'read1_path': [str(read1)],
+        'read2_path': [numpy.nan],
+        'lib_layout': ['paired'],
+        'total_spots': [1],
+        'total_bases': [4],
+        'spot_length': [4],
+        'scientific_name': ['sp'],
+        'exclusion': ['no'],
+    }))
+    sra_stat = {
+        'sra_id': 'SRR001',
+        'layout': 'paired',
+        'getfastq_sra_dir': str(tmp_path / 'work'),
+    }
+    (tmp_path / 'work').mkdir()
+    with pytest.raises(FileNotFoundError, match='read2_path'):
+        sequence_extraction_private(metadata=metadata, sra_stat=sra_stat, args=SimpleNamespace(fastp=False))

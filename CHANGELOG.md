@@ -5,6 +5,8 @@ Releases provide the commit-level generated notes for each version.
 
 ## Unreleased
 
+- Resolved private FASTQ inputs by absolute path, rejected missing mates before filtering, and treated Yes/YES/padded private_file flags as private.
+
 - Rejected ambiguous metadata merges with empty or duplicate run IDs and
   prevented missing, duplicate, or whitespace-padded quantification target IDs
   from corrupting merged abundance tables.
