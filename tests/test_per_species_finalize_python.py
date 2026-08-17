@@ -19,6 +19,8 @@ from amalgkit.per_species_finalize_python import (
     _run_batch_effect_step,
     _transform_raw_to_fpkm,
     _transform_raw_to_tpm,
+    load_quant_model_table,
+    resolve_length_models,
 )
 from amalgkit import per_species_tables as per_species_tables_module
 from tests.support.per_species import build_per_species_args
@@ -516,6 +518,23 @@ def test_apply_transformation_keeps_tpm_for_unlength_normalized_runs():
         {'SRR001': 'none'},
     )
     assert numpy.allclose(transformed['SRR001'], [5.0e5, 5.0e5])
+
+
+def test_quant_model_validation_rejects_duplicates_and_missing_runs(tmp_path):
+    path = tmp_path / 'Species_A_quant_model.tsv'
+    path.write_text(
+        'run\tbackend\tlength_model\n'
+        'SRR001\toarfish\tnone\n'
+        'SRR001\toarfish\tnone\n'
+    )
+    with pytest.raises(ValueError, match='duplicate run values'):
+        load_quant_model_table(path)
+
+    model = pandas.DataFrame(
+        {'run': ['SRR001'], 'backend': ['oarfish'], 'length_model': ['none']}
+    )
+    with pytest.raises(ValueError, match=r'missing run\(s\): SRR002'):
+        resolve_length_models(['SRR001', 'SRR002'], model)
 
 
 def test_compute_corr_matrix_preserves_undefined_constant_sample():

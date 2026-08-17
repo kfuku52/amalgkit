@@ -310,7 +310,7 @@ class TestPerSpeciesTableGeneration:
             lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError('run_per_species_job should not be called')),
         )
 
-        with pytest.raises(ValueError, match='TPM and TMM are incompatible'):
+        with pytest.raises(ValueError, match="untransformed '\\*-none'"):
             generate_per_species_tables(args)
 
     def test_tpm_does_not_false_positive_on_input_dir_name(self, tmp_path, monkeypatch):

@@ -293,22 +293,38 @@ def load_quant_model_table(path):
     out['length_model'] = out['length_model'].fillna('').astype(str).str.strip().str.lower()
     if 'backend' in out.columns:
         out['backend'] = out['backend'].fillna('').astype(str).str.strip().str.lower()
-    return out.loc[out['run'] != '', :].copy()
+    if out['run'].eq('').any():
+        raise ValueError('Quant model table contains an empty run value.')
+    if out['run'].duplicated().any():
+        duplicated = out.loc[out['run'].duplicated(keep=False), 'run'].drop_duplicates().tolist()
+        raise ValueError('Quant model table contains duplicate run values: {}'.format(', '.join(duplicated)))
+    return out
 
 
 def resolve_length_models(run_ids, quant_model=None):
     models = {}
+    require_complete = False
     if isinstance(quant_model, dict):
-        models.update({str(key): str(value) for key, value in quant_model.items()})
+        models.update({str(key): str(value).strip().lower() for key, value in quant_model.items()})
+        require_complete = len(models) > 0
     elif quant_model is not None and hasattr(quant_model, 'itertuples') and not quant_model.empty:
+        require_complete = True
         for row in quant_model.itertuples(index=False):
-            models[str(row.run)] = str(row.length_model)
+            run_id = str(row.run).strip()
+            if run_id in models:
+                raise ValueError('Quant model contains duplicate run value: {}'.format(run_id))
+            models[run_id] = str(row.length_model).strip().lower()
+    normalized_run_ids = [str(run_id) for run_id in run_ids]
+    if require_complete:
+        missing = [run_id for run_id in normalized_run_ids if run_id not in models]
+        if missing:
+            raise ValueError('Quant model is missing run(s): {}'.format(', '.join(missing)))
     resolved = {}
-    for run_id in run_ids:
-        length_model = models.get(str(run_id), 'effective')
+    for run_id in normalized_run_ids:
+        length_model = models.get(run_id, 'effective')
         if length_model not in {'effective', 'none'}:
             raise ValueError('Unsupported length_model for run {}: {}'.format(run_id, length_model))
-        resolved[str(run_id)] = length_model
+        resolved[run_id] = length_model
     return resolved
 
 

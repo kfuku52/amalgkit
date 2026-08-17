@@ -91,6 +91,20 @@ def _copy_eff_length_file(dir_count, dir_cstmm, species_name):
     shutil.copy2(src, dst)
 
 
+def _copy_quant_model_file(dir_count, dir_cstmm, species_name):
+    species_dir = os.path.join(dir_count, species_name)
+    quant_model_files = _list_matching_files(species_dir, r'.*quant_model\.tsv$')
+    if len(quant_model_files) == 0:
+        return None
+    if len(quant_model_files) > 1:
+        raise ValueError('Multiple *quant_model.tsv files found: {}'.format(species_name))
+    src = os.path.join(species_dir, quant_model_files[0])
+    dst = os.path.join(dir_cstmm, species_name, '{}_quant_model.tsv'.format(species_name))
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    shutil.copy2(src, dst)
+    return dst
+
+
 def _get_df_nonzero(df_counts):
     is_zero_col = (df_counts.sum(axis=0, skipna=True) == 0)
     df_nonzero = df_counts.loc[:, ~is_zero_col].copy()
@@ -223,6 +237,7 @@ def save_corrected_output_files_python(uncorrected_by_species, roundtrip, dir_co
         species_dir = os.path.join(dir_cstmm, species_name)
         os.makedirs(species_dir, exist_ok=True)
         _copy_eff_length_file(dir_count=dir_count, dir_cstmm=dir_cstmm, species_name=species_name)
+        _copy_quant_model_file(dir_count=dir_count, dir_cstmm=dir_cstmm, species_name=species_name)
         out_path = os.path.join(species_dir, '{}_cstmm_counts.tsv'.format(species_name))
         dat_out.to_csv(out_path, sep='\t', index=False)
         corrected[species_name] = dat_out.set_index('target_id')

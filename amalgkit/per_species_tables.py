@@ -253,7 +253,8 @@ def generate_per_species_tables(args, context=None):
     if ('tpm' in str(runtime_args.norm).lower()) and has_cstmm_counts_input(input_dir, selected_species):
         txt = ("TPM and TMM are incompatible. "
                "If input data are CSTMM-normalized, "
-               "please switch --norm to any of the 'fpkm' normalization methods instead.")
+               "use an FPKM method only for effective-length models, or an untransformed "
+               "'*-none' abundance method for runs without an effective-length model.")
         raise ValueError(txt)
     os.makedirs(per_species_dir, exist_ok=True)
     failed_species = set()
