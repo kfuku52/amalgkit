@@ -95,7 +95,7 @@ def test_direct_tmm_helpers_reject_invalid_counts_library_sizes_and_factors():
         )
 
 
-def test_cstmm_reference_uses_iterative_pca_for_structured_missing_values():
+def test_cstmm_tmm_input_keeps_pairwise_missing_ortholog_cells():
     counts = pandas.DataFrame(
         [
             [1.0, 2.0, 3.0, numpy.nan],
@@ -107,10 +107,10 @@ def test_cstmm_reference_uses_iterative_pca_for_structured_missing_values():
         columns=['RUN1', 'RUN2', 'RUN3', 'RUN4'],
     )
 
-    imputed = _get_df_nonzero(counts)
+    observed = _get_df_nonzero(counts)
 
-    assert not imputed.isna().any().any()
-    assert not numpy.isclose(imputed.loc[0, 'RUN4'], 2.0)
+    assert observed.isna().any().any()
+    assert numpy.isnan(observed.loc[0, 'RUN4'])
 
 
 def test_imputation_minimum_applies_only_to_imputed_values():
@@ -659,3 +659,23 @@ class TestCstmmMain:
             'exclusion',
         ]
         assert excluded.tolist() == ['no_cstmm_output']
+
+
+def test_cstmm_tmm_factors_ignore_imputed_ortholog_holes():
+    from amalgkit.imputation import impute_expression
+    from amalgkit.normalization_tmm import calc_norm_factors_tmm, run_tmm_rounds_for_cstmm
+
+    counts = pandas.DataFrame(
+        {
+            'A_R1': [10.0, 12.0, 8.0, 20.0, 18.0, 22.0],
+            'B_R1': [numpy.nan, numpy.nan, numpy.nan, 21.0, 19.0, 23.0],
+        }
+    )
+    libs = pandas.Series({'A_R1': 1000.0, 'B_R1': 1100.0})
+    observed = run_tmm_rounds_for_cstmm(counts, lib_size=libs).round2_factors
+    imputed = calc_norm_factors_tmm(
+        impute_expression(counts, strategy='em_pca', minimum_imputed_value=0.0),
+        lib_size=libs,
+    )
+    assert numpy.isnan(counts.loc[0, 'B_R1'])
+    assert not numpy.allclose(observed.to_numpy(dtype=float), imputed.to_numpy(dtype=float))

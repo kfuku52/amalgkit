@@ -5,6 +5,8 @@ Releases provide the commit-level generated notes for each version.
 
 ## Unreleased
 
+- Estimated CSTMM TMM factors from pairwise-observed single-copy counts instead of EM-PCA–imputed ortholog holes.
+
 - Rejected ambiguous metadata merges with empty or duplicate run IDs and
   prevented missing, duplicate, or whitespace-padded quantification target IDs
   from corrupting merged abundance tables.

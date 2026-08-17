@@ -15,7 +15,7 @@ class TMMRoundTripResult:
     library_sizes: pandas.Series
 
 
-def _as_matrix_with_columns(counts):
+def _as_matrix_with_columns(counts, allow_missing=False):
     if isinstance(counts, pandas.DataFrame):
         matrix = counts.to_numpy(dtype=float, copy=False)
         columns = [str(col) for col in counts.columns]
@@ -26,17 +26,20 @@ def _as_matrix_with_columns(counts):
         columns = ['sample{}'.format(i + 1) for i in range(matrix.shape[1])]
     if matrix.ndim != 2:
         raise ValueError('counts must be two-dimensional.')
-    if not numpy.isfinite(matrix).all():
-        raise ValueError('Counts must contain only finite values.')
-    if (matrix < 0).any():
+    if ((~numpy.isnan(matrix)) & (matrix < 0)).any():
         raise ValueError('Negative counts are not permitted.')
+    if allow_missing:
+        if numpy.isinf(matrix).any():
+            raise ValueError('Counts must contain only finite values.')
+    elif not numpy.isfinite(matrix).all():
+        raise ValueError('Counts must contain only finite values.')
     return matrix, columns
 
 
 def _coerce_library_sizes(lib_size, matrix, columns):
     nsamples = matrix.shape[1]
     if lib_size is None:
-        values = matrix.sum(axis=0, dtype=float)
+        values = numpy.nansum(matrix, axis=0, dtype=float)
     elif isinstance(lib_size, pandas.Series):
         values = lib_size.reindex(columns).to_numpy(dtype=float)
     else:
@@ -66,12 +69,12 @@ def _recycle(values, size):
     return numpy.resize(array, size)
 
 
-def calc_factor_quantile(data, lib_size, p=0.75):
-    matrix, columns = _as_matrix_with_columns(data)
+def calc_factor_quantile(data, lib_size, p=0.75, allow_missing=False):
+    matrix, columns = _as_matrix_with_columns(data, allow_missing=allow_missing)
     libs = _coerce_library_sizes(lib_size, matrix, columns).to_numpy(dtype=float)
     factors = numpy.ones((matrix.shape[1],), dtype=float)
     for idx in range(matrix.shape[1]):
-        factors[idx] = float(numpy.quantile(matrix[:, idx], q=p, method='linear'))
+        factors[idx] = float(numpy.nanquantile(matrix[:, idx], q=p, method='linear'))
     return pandas.Series(factors / libs, index=columns, dtype=float)
 
 
@@ -89,9 +92,9 @@ def calc_factor_tmm(
     ref_array = numpy.asarray(ref, dtype=float)
     if obs_array.ndim > 2 or ref_array.ndim > 2:
         raise ValueError('obs and ref must be one- or two-dimensional.')
-    if (not numpy.isfinite(obs_array).all()) or (not numpy.isfinite(ref_array).all()):
-        raise ValueError('TMM count vectors must contain only finite values.')
-    if (obs_array < 0).any() or (ref_array < 0).any():
+    if numpy.isinf(obs_array).any() or numpy.isinf(ref_array).any():
+        raise ValueError('TMM count vectors must not contain infinite values.')
+    if ((~numpy.isnan(obs_array)) & (obs_array < 0)).any() or ((~numpy.isnan(ref_array)) & (ref_array < 0)).any():
         raise ValueError('TMM count vectors must not contain negative values.')
     obs_vector = obs_array.reshape(-1, order='F')
     ref_vector = ref_array.reshape(-1, order='F')
@@ -154,14 +157,14 @@ def calc_factor_tmm(
     return float(2.0 ** factor_log)
 
 
-def _resolve_tmm_reference_column(matrix, lib_sizes):
+def _resolve_tmm_reference_column(matrix, lib_sizes, allow_missing=False):
     if isinstance(lib_sizes, pandas.Series):
         lib_size_values = lib_sizes.to_numpy(dtype=float)
     else:
         lib_size_values = numpy.asarray(lib_sizes, dtype=float).reshape(-1)
-    f75 = calc_factor_quantile(matrix, lib_size_values).to_numpy(dtype=float)
+    f75 = calc_factor_quantile(matrix, lib_size_values, allow_missing=allow_missing).to_numpy(dtype=float)
     if float(numpy.median(f75)) < 1e-20:
-        ref_column = int(numpy.argmax(numpy.sum(numpy.sqrt(matrix), axis=0)))
+        ref_column = int(numpy.argmax(numpy.nansum(numpy.sqrt(matrix), axis=0)))
     else:
         ref_column = int(numpy.argmin(numpy.abs(f75 - numpy.mean(f75))))
     return ref_column
@@ -183,8 +186,9 @@ def calc_norm_factors_tmm(
     sum_trim=0.05,
     do_weighting=True,
     acutoff=-1e10,
+    allow_missing=False,
 ):
-    matrix, columns = _as_matrix_with_columns(counts)
+    matrix, columns = _as_matrix_with_columns(counts, allow_missing=allow_missing)
     libs = _coerce_library_sizes(lib_size, matrix, columns)
     matrix = _remove_all_zero_rows(matrix)
     nsamples = matrix.shape[1]
@@ -192,7 +196,7 @@ def calc_norm_factors_tmm(
         return pandas.Series(numpy.ones((nsamples,), dtype=float), index=columns, dtype=float)
 
     if ref_column is None:
-        resolved_ref = _resolve_tmm_reference_column(matrix, libs)
+        resolved_ref = _resolve_tmm_reference_column(matrix, libs, allow_missing=allow_missing)
     else:
         resolved_ref = ref_column
     if numpy.isscalar(resolved_ref):
@@ -221,18 +225,23 @@ def calc_norm_factors_tmm(
 
 
 def run_tmm_rounds_for_cstmm(counts, lib_size=None):
-    matrix, columns = _as_matrix_with_columns(counts)
+    matrix, columns = _as_matrix_with_columns(counts, allow_missing=True)
     if matrix.shape[1] == 0:
         raise ValueError('TMM normalization requires at least one sample column.')
     if _remove_all_zero_rows(matrix).shape[0] == 0:
         raise ValueError('TMM normalization requires at least one positive count.')
     libs = _coerce_library_sizes(lib_size, matrix, columns)
     round1_counts = counts if isinstance(counts, pandas.DataFrame) else pandas.DataFrame(matrix, columns=columns)
-    round1 = calc_norm_factors_tmm(round1_counts, lib_size=libs, ref_column=None)
+    round1 = calc_norm_factors_tmm(round1_counts, lib_size=libs, ref_column=None, allow_missing=True)
     round1_values = round1.to_numpy(dtype=float)
-    round1_reference_column = _resolve_tmm_reference_column(_remove_all_zero_rows(matrix), libs)
+    round1_reference_column = _resolve_tmm_reference_column(_remove_all_zero_rows(matrix), libs, allow_missing=True)
     median_reference_columns = [_resolve_median_reference_column(round1_values)]
-    round2 = calc_norm_factors_tmm(round1_counts, lib_size=libs, ref_column=median_reference_columns)
+    round2 = calc_norm_factors_tmm(
+        round1_counts,
+        lib_size=libs,
+        ref_column=median_reference_columns,
+        allow_missing=True,
+    )
     return TMMRoundTripResult(
         round1_factors=round1,
         round1_reference_column=round1_reference_column,
