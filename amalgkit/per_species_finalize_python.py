@@ -16,6 +16,7 @@ from amalgkit.batch_effect_ruvseq import run_ruvseq_backend
 from amalgkit.batch_effect_sva import run_sva_backend
 from amalgkit.filter_utils import _format_genus_species_label
 from amalgkit.cli_utils import EXPRESSION_NORMALIZATION_METHODS
+from amalgkit.cross_species_computation import finite_correlation_block
 from amalgkit.runtime_utils import resolve_species_token
 from amalgkit.per_species_common import (
     append_round_summary,
@@ -505,40 +506,27 @@ def _run_batch_effect_step(counts_df, metadata_df, eff_length_df, args):
 
 
 def _compute_corr_matrix(counts_df, dist_method):
-    matrix = counts_df.corr(method=str(dist_method))
-    matrix = matrix.fillna(0.0)
-    return matrix
+    return counts_df.corr(method=str(dist_method))
 
 
 def _compute_distance_matrix(corr_df):
-    corr = corr_df.to_numpy(dtype=float)
-    corr = numpy.clip(corr, -1.0, 1.0)
+    corr = numpy.clip(corr_df.to_numpy(dtype=float), -1.0, 1.0)
     dist = 1.0 - corr
     dist = (dist + dist.T) / 2.0
-    dist[~numpy.isfinite(dist)] = 0.0
     dist = numpy.clip(dist, 0.0, 2.0)
     numpy.fill_diagonal(dist, 0.0)
     return dist
 
 
-def _compute_pca_coordinates(corr_df):
-    matrix = corr_df.to_numpy(dtype=float)
-    n = matrix.shape[0]
-    if n <= 1:
-        return numpy.zeros((n, 2), dtype=float)
-    eigvals, eigvecs = numpy.linalg.eigh(matrix)
-    order = numpy.argsort(eigvals)[::-1]
-    eigvals = eigvals[order]
-    eigvecs = eigvecs[:, order]
-    coords = numpy.zeros((n, 2), dtype=float)
-    for idx in range(min(2, n)):
-        value = max(0.0, float(eigvals[idx]))
-        coords[:, idx] = eigvecs[:, idx] * numpy.sqrt(value)
+def _map_block_coordinates(corr_df, block_df, block_coords):
+    coords = numpy.full((corr_df.shape[0], 2), numpy.nan, dtype=float)
+    positions = {name: idx for idx, name in enumerate(corr_df.index)}
+    for block_idx, name in enumerate(block_df.index):
+        coords[positions[name], :] = block_coords[block_idx, :]
     return coords
 
 
-def _compute_mds_coordinates(corr_df):
-    dist = _compute_distance_matrix(corr_df)
+def _classic_mds_coordinates(dist):
     n = dist.shape[0]
     if n <= 1:
         return numpy.zeros((n, 2), dtype=float)
@@ -553,6 +541,36 @@ def _compute_mds_coordinates(corr_df):
         value = max(0.0, float(eigvals[idx]))
         coords[:, idx] = eigvecs[:, idx] * numpy.sqrt(value)
     return coords
+
+
+def _spectral_coordinates(corr_block):
+    matrix = corr_block.to_numpy(dtype=float)
+    n = matrix.shape[0]
+    if n <= 1:
+        return numpy.zeros((n, 2), dtype=float)
+    eigvals, eigvecs = numpy.linalg.eigh(matrix)
+    order = numpy.argsort(eigvals)[::-1]
+    eigvals = eigvals[order]
+    eigvecs = eigvecs[:, order]
+    coords = numpy.zeros((n, 2), dtype=float)
+    for idx in range(min(2, n)):
+        value = max(0.0, float(eigvals[idx]))
+        coords[:, idx] = eigvecs[:, idx] * numpy.sqrt(value)
+    return coords
+
+
+def _compute_pca_coordinates(corr_df):
+    block = finite_correlation_block(corr_df)
+    return _map_block_coordinates(corr_df, block, _spectral_coordinates(block))
+
+
+def _compute_mds_coordinates(corr_df):
+    block = finite_correlation_block(corr_df)
+    return _map_block_coordinates(
+        corr_df,
+        block,
+        _classic_mds_coordinates(_compute_distance_matrix(block)),
+    )
 
 
 def _compute_tsne_coordinates(counts_df, random_seed=0):
@@ -602,8 +620,17 @@ def _draw_embedding_panel(ax, coords, colors, labels, title, font_size, x_label,
         ax.text(0.5, 0.5, 'No samples', ha='center', va='center', fontsize=font_size)
         ax.set_axis_off()
         return
-    ax.scatter(coords[:, 0], coords[:, 1], c=colors, s=50)
+    finite = numpy.isfinite(coords).all(axis=1)
+    if not bool(finite.any()):
+        ax.text(0.5, 0.5, 'No defined samples', ha='center', va='center', fontsize=font_size)
+        ax.set_axis_off()
+        return
+    plotted = coords[finite]
+    plotted_colors = [color for keep, color in zip(finite, colors) if keep]
+    ax.scatter(plotted[:, 0], plotted[:, 1], c=plotted_colors, s=50)
     for idx, label in enumerate(labels):
+        if not finite[idx]:
+            continue
         ax.text(coords[idx, 0], coords[idx, 1], str(label), fontsize=max(4, font_size - 2))
     ax.set_title(title, fontsize=font_size)
     ax.set_xlabel(x_label, fontsize=font_size)
@@ -624,12 +651,18 @@ def _draw_dendrogram_panel(ax, corr_df, labels, font_size, title):
         ax.set_axis_off()
         return
     try:
-        dist = _compute_distance_matrix(corr_df)
+        block = finite_correlation_block(corr_df)
+        if block.shape[0] <= 1:
+            ax.text(0.5, 0.5, 'No dendrogram data', ha='center', va='center', fontsize=font_size)
+            ax.set_axis_off()
+            return
+        block_labels = [labels[list(corr_df.index).index(name)] for name in block.index]
+        dist = _compute_distance_matrix(block)
         condensed = squareform(dist, checks=False)
         linkage_matrix = linkage(condensed, method='average')
         dendrogram(
             linkage_matrix,
-            labels=labels,
+            labels=block_labels,
             ax=ax,
             leaf_rotation=90,
             leaf_font_size=max(4, font_size - 2),
@@ -778,7 +811,7 @@ def save_quick_state_comparison_plot(
         (corr_after, axes[0, 1], 'After {}'.format(batch_effect_alg)),
     ]
     for corr_df, ax, title in heatmaps:
-        im = ax.imshow(corr_df.to_numpy(dtype=float), vmin=-1.0, vmax=1.0, cmap='coolwarm')
+        im = ax.imshow(numpy.ma.masked_invalid(corr_df.to_numpy(dtype=float)), vmin=-1.0, vmax=1.0, cmap='coolwarm')
         ax.set_title(title, fontsize=font_size)
         ax.set_xticks(range(len(labels)))
         ax.set_xticklabels(labels, rotation=90, fontsize=max(4, font_size - 2))

@@ -178,6 +178,24 @@ def resolve_correlation_matrix(
     return corr
 
 
+def finite_correlation_block(corr_df: pandas.DataFrame) -> pandas.DataFrame:
+    """Return the largest fully defined principal submatrix of a correlation matrix.
+
+    A constant or otherwise undefined sample produces an all-NaN row/column.
+    Fabricating r=0 there, including a zero diagonal, corrupts PCA, MDS, and
+    dendrograms. Embed this block and map dropped samples back as missing.
+    """
+    if corr_df.empty:
+        return corr_df.copy()
+    defined = corr_df.notna().any(axis=0)
+    block = corr_df.loc[defined, defined]
+    if block.size == 0:
+        return block
+    values = block.to_numpy(dtype=float)
+    fully_defined = numpy.isfinite(values).all(axis=0) & numpy.isfinite(values).all(axis=1)
+    return block.loc[fully_defined, fully_defined]
+
+
 def resolve_finite_correlation_matrix(
     matrix_df: pandas.DataFrame,
     missing_strategy: str = "row_mean",
@@ -193,8 +211,7 @@ def resolve_finite_correlation_matrix(
         missing_strategy=missing_strategy,
         cache=cache,
     )
-    defined = corr.notna().any(axis=0)
-    finite_corr = corr.loc[defined, defined]
+    finite_corr = finite_correlation_block(corr)
     if finite_corr.size > 0 and not numpy.isfinite(finite_corr.to_numpy(dtype=float)).all():
         raise ValueError("Non-degenerate sample correlations must be finite after imputation.")
     if cache is not None:

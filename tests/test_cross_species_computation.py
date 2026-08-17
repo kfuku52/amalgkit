@@ -2,6 +2,7 @@ import numpy
 import pandas
 
 from amalgkit.cross_species_computation import (
+    finite_correlation_block,
     resolve_correlation_matrix,
     resolve_finite_correlation_matrix,
     resolve_matrix_for_embedding,
@@ -69,3 +70,19 @@ def test_resolve_tsne_perplexity_is_valid_for_sample_count():
     assert resolve_tsne_perplexity(4) == 1
     assert resolve_tsne_perplexity(10) == 3
     assert resolve_tsne_perplexity(100) == 30
+
+
+def test_finite_correlation_block_drops_constant_sample():
+    corr = pandas.DataFrame(
+        {
+            'sample_a': [1.0, 1.0, numpy.nan],
+            'sample_b': [1.0, 1.0, numpy.nan],
+            'constant_sample': [numpy.nan, numpy.nan, numpy.nan],
+        },
+        index=['sample_a', 'sample_b', 'constant_sample'],
+    )
+
+    block = finite_correlation_block(corr)
+
+    assert block.index.tolist() == ['sample_a', 'sample_b']
+    assert numpy.isfinite(block.to_numpy()).all()
