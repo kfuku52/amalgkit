@@ -528,6 +528,11 @@ class TestCstmmMain:
             'G5\t1000\t1000\n'
             'G6\t1000\t1000\n'
         )
+        (species_dir / 'Species_A_quant_model.tsv').write_text(
+            'run\tbackend\tlength_model\n'
+            'R1\toarfish\tnone\n'
+            'R2\toarfish\tnone\n'
+        )
         args = SimpleNamespace(
             out_dir=str(out_dir),
             dir_count='inferred',
@@ -545,9 +550,11 @@ class TestCstmmMain:
         counts_path = out_dir / 'cstmm' / 'Species_A' / 'Species_A_cstmm_counts.tsv'
         metadata_path = out_dir / 'cstmm' / 'metadata.tsv'
         eff_length_path = out_dir / 'cstmm' / 'Species_A' / 'Species_A_eff_length.tsv'
+        quant_model_path = out_dir / 'cstmm' / 'Species_A' / 'Species_A_quant_model.tsv'
         assert counts_path.is_file()
         assert metadata_path.is_file()
         assert eff_length_path.is_file()
+        assert quant_model_path.is_file()
         assert (out_dir / 'cstmm' / 'cstmm_normalization_factor_histogram.scientific_name.pdf').is_file()
         assert (out_dir / 'cstmm' / 'cstmm_normalization_factor_histogram.sample_group.pdf').is_file()
         assert (out_dir / 'cstmm' / 'cstmm_normalization_factor_scatter.pdf').is_file()
@@ -573,6 +580,11 @@ class TestCstmmMain:
         assert 'tmm_library_size' in metadata_df.columns
         assert 'tmm_normalization_factor' in metadata_df.columns
         assert set(metadata_df['exclusion']) == {'no'}
+        quant_model_df = pandas.read_csv(quant_model_path, sep='\t')
+        assert quant_model_df.to_dict(orient='records') == [
+            {'run': 'R1', 'backend': 'oarfish', 'length_model': 'none'},
+            {'run': 'R2', 'backend': 'oarfish', 'length_model': 'none'},
+        ]
 
     @pytest.mark.integration
     def test_python_multi_species_backend_writes_counts_metadata_and_plots(self, tmp_path, monkeypatch):

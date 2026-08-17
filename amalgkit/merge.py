@@ -1,6 +1,7 @@
 import pandas
 import numpy
 
+import json
 import os
 import warnings
 from amalgkit.filter_utils import staged_output_dir
@@ -354,6 +355,34 @@ def load_quant_tables_once(detected_sra_ids, quant_out_paths, value_columns):
     return target_ids, table_values
 
 
+def collect_quant_models(detected_sra_ids, quant_out_paths):
+    rows = []
+    for sra_id, quant_out_path in zip(detected_sra_ids, quant_out_paths):
+        backend = 'kallisto'
+        length_model = 'effective'
+        run_info_path = os.path.join(os.path.dirname(quant_out_path), sra_id + '_run_info.json')
+        if os.path.isfile(run_info_path):
+            with open(run_info_path, encoding='utf-8') as handle:
+                info = json.load(handle)
+            if isinstance(info, dict):
+                backend = str(info.get('quant_backend') or backend).strip().lower() or backend
+                length_model = str(info.get('length_model') or length_model).strip().lower() or length_model
+        if length_model not in {'effective', 'none'}:
+            raise ValueError(
+                'Unsupported length_model for run {} ({}): {}'.format(sra_id, run_info_path, length_model)
+            )
+        rows.append({'run': sra_id, 'backend': backend, 'length_model': length_model})
+    return pandas.DataFrame(rows, columns=['run', 'backend', 'length_model'])
+
+
+def write_species_quant_model(merge_species_dir, sp_filled, detected_sra_ids, quant_out_paths):
+    model = collect_quant_models(detected_sra_ids, quant_out_paths)
+    outfile = os.path.join(merge_species_dir, sp_filled + '_quant_model.tsv')
+    print('Writing output file:', outfile)
+    model.to_csv(outfile, sep='\t', index=False)
+    return outfile
+
+
 def write_species_merged_quant_tables(merge_species_dir, sp_filled, detected_sra_ids, target_ids, table_values, value_columns):
     for col in value_columns:
         merged_columns = {'target_id': target_ids}
@@ -413,6 +442,12 @@ def merge_species_quant_tables(sp, metadata, quant_dir, merge_dir, run_abundance
         target_ids=target_ids,
         table_values=table_values,
         value_columns=value_columns,
+    )
+    write_species_quant_model(
+        merge_species_dir=merge_species_dir,
+        sp_filled=sp_filled,
+        detected_sra_ids=detected_sra_ids,
+        quant_out_paths=quant_out_paths,
     )
     return len(quant_out_paths)
 

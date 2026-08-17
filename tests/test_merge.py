@@ -1,6 +1,7 @@
 import numpy
 import pandas
 import pytest
+import json
 import os
 import pathlib
 from types import SimpleNamespace
@@ -906,3 +907,38 @@ def test_merge_species_quant_tables_normalizes_target_ids_before_comparison_and_
     assert merged_count == 2
     merged = pandas.read_csv(merge_dir / 'Species_A' / 'Species_A_est_counts.tsv', sep='\t')
     assert merged['target_id'].tolist() == ['g1', 'g2']
+
+
+def test_merge_species_quant_tables_propagates_oarfish_length_model(tmp_path):
+    quant_dir = tmp_path / 'quant'
+    merge_dir = tmp_path / 'merge'
+    run_dir = quant_dir / 'SRR001'
+    run_dir.mkdir(parents=True)
+    pandas.DataFrame({
+        'target_id': ['short', 'long'],
+        'length': [100, 1000],
+        'eff_length': [1.0, 1.0],
+        'est_counts': [10.0, 10.0],
+        'tpm': [5.0e5, 5.0e5],
+    }).to_csv(run_dir / 'SRR001_abundance.tsv', sep='\t', index=False)
+    (run_dir / 'SRR001_run_info.json').write_text(
+        json.dumps({'quant_backend': 'oarfish', 'length_model': 'none'}),
+        encoding='utf-8',
+    )
+    metadata = Metadata.from_DataFrame(pandas.DataFrame({
+        'run': ['SRR001'],
+        'scientific_name': ['Species A'],
+        'exclusion': ['no'],
+    }))
+
+    n = merge_species_quant_tables('Species A', metadata, str(quant_dir), str(merge_dir))
+
+    assert n == 1
+    model = pandas.read_csv(merge_dir / 'Species_A' / 'Species_A_quant_model.tsv', sep='\t')
+    tpm = pandas.read_csv(merge_dir / 'Species_A' / 'Species_A_tpm.tsv', sep='\t')
+    eff = pandas.read_csv(merge_dir / 'Species_A' / 'Species_A_eff_length.tsv', sep='\t')
+    assert list(model['run']) == ['SRR001']
+    assert list(model['backend']) == ['oarfish']
+    assert list(model['length_model']) == ['none']
+    assert numpy.allclose(tpm['SRR001'], [5.0e5, 5.0e5])
+    assert numpy.allclose(eff['SRR001'], [1.0, 1.0])

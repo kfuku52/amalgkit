@@ -5,6 +5,7 @@ import builtins
 from contextlib import contextmanager
 
 import pytest
+import numpy
 import pandas
 
 from amalgkit.output_utils import atomic_output_path
@@ -287,3 +288,29 @@ def test_adapt_oarfish_outputs_uses_utf8_for_json_io(tmp_path, monkeypatch):
 
     assert json.loads(run_info_path.read_text(encoding='utf-8'))['note'] == '葉'
     assert [encoding for _path, encoding in observed] == ['utf-8', 'utf-8']
+
+
+def test_adapt_oarfish_outputs_uses_unlength_normalized_tpm(tmp_path):
+    output_prefix = tmp_path / 'SRR001'
+    output_prefix.with_suffix('.quant').write_text(
+        'tname\tlen\tnum_reads\nshort\t100\t10\nlong\t1000\t10\n',
+        encoding='utf-8',
+    )
+    output_prefix.with_suffix('.meta_info.json').write_text('{}', encoding='utf-8')
+
+    adapt_oarfish_outputs(
+        output_dir=str(tmp_path),
+        sra_id='SRR001',
+        sra_stat={'total_spot': 20},
+        output_prefix=str(output_prefix),
+        seq_tech='ont-cdna',
+    )
+
+    abundance = pandas.read_csv(tmp_path / 'SRR001_abundance.tsv', sep='\t')
+    run_info = json.loads((tmp_path / 'SRR001_run_info.json').read_text(encoding='utf-8'))
+    assert list(abundance['length']) == [100, 1000]
+    assert list(abundance['eff_length']) == [1.0, 1.0]
+    assert list(abundance['est_counts']) == [10, 10]
+    assert numpy.allclose(abundance['tpm'], [5.0e5, 5.0e5])
+    assert run_info['quant_backend'] == 'oarfish'
+    assert run_info['length_model'] == 'none'

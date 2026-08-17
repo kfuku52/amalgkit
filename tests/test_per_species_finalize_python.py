@@ -19,6 +19,8 @@ from amalgkit.per_species_finalize_python import (
     _run_batch_effect_step,
     _transform_raw_to_fpkm,
     _transform_raw_to_tpm,
+    load_quant_model_table,
+    resolve_length_models,
 )
 from amalgkit import per_species_tables as per_species_tables_module
 from tests.support.per_species import build_per_species_args
@@ -477,6 +479,62 @@ def test_generate_per_species_tables_supports_python_finalize_worker_for_latent_
     assert (corrected_df.to_numpy(dtype=float) >= 0.0).all()
     assert (plots_dir / '{}.before_after.latent_glm.pdf'.format(species_tag)).is_file()
     assert (plots_dir / '{}.tau_hist.latent_glm.pdf'.format(species_tag)).is_file()
+
+
+def test_transform_raw_to_tpm_is_cpm_when_effective_length_is_one():
+    counts = pandas.DataFrame({'SRR001': [10.0, 10.0]}, index=['short', 'long'])
+    eff = pandas.DataFrame({'SRR001': [1.0, 1.0]}, index=['short', 'long'])
+    tpm = _transform_raw_to_tpm(counts, eff)
+    assert numpy.allclose(tpm['SRR001'], [5.0e5, 5.0e5])
+
+
+def test_apply_transformation_rejects_fpkm_without_effective_length():
+    counts = pandas.DataFrame({'SRR001': [10.0, 10.0]}, index=['short', 'long'])
+    eff = pandas.DataFrame({'SRR001': [1.0, 1.0]}, index=['short', 'long'])
+    metadata = pandas.DataFrame({'run': ['SRR001']})
+    with pytest.raises(ValueError, match='FPKM is undefined'):
+        _apply_transformation_logic(
+            counts,
+            eff,
+            'log2p1-fpkm',
+            'no',
+            'before_batch',
+            metadata,
+            {'SRR001': 'none'},
+        )
+
+
+def test_apply_transformation_keeps_tpm_for_unlength_normalized_runs():
+    counts = pandas.DataFrame({'SRR001': [10.0, 10.0]}, index=['short', 'long'])
+    eff = pandas.DataFrame({'SRR001': [1.0, 1.0]}, index=['short', 'long'])
+    metadata = pandas.DataFrame({'run': ['SRR001']})
+    transformed = _apply_transformation_logic(
+        counts,
+        eff,
+        'none-tpm',
+        'no',
+        'before_batch',
+        metadata,
+        {'SRR001': 'none'},
+    )
+    assert numpy.allclose(transformed['SRR001'], [5.0e5, 5.0e5])
+
+
+def test_quant_model_validation_rejects_duplicates_and_missing_runs(tmp_path):
+    path = tmp_path / 'Species_A_quant_model.tsv'
+    path.write_text(
+        'run\tbackend\tlength_model\n'
+        'SRR001\toarfish\tnone\n'
+        'SRR001\toarfish\tnone\n'
+    )
+    with pytest.raises(ValueError, match='duplicate run values'):
+        load_quant_model_table(path)
+
+    model = pandas.DataFrame(
+        {'run': ['SRR001'], 'backend': ['oarfish'], 'length_model': ['none']}
+    )
+    with pytest.raises(ValueError, match=r'missing run\(s\): SRR002'):
+        resolve_length_models(['SRR001', 'SRR002'], model)
 
 
 def test_compute_corr_matrix_preserves_undefined_constant_sample():

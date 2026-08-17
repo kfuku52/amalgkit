@@ -22,6 +22,8 @@ from amalgkit.per_species_common import (
 )
 from amalgkit.per_species_finalize_python import (
     _apply_transformation_logic,
+    load_quant_model_table,
+    resolve_length_models,
     _exclude_inappropriate_sample_from_eff_length,
     _exclude_inappropriate_sample_from_tc,
     _get_species_metadata,
@@ -445,7 +447,11 @@ def _run_prepare_or_wsfilter_python_worker(args, metadata, species_tag, input_di
     tc = sorted_out['tc']
     sra = sorted_out['sra']
     eff_length_species = _exclude_inappropriate_sample_from_eff_length(eff_length_df, tc)
-    tc_original = _apply_transformation_logic(tc, eff_length_species, args.norm, 'no', 'before_batch', sra)
+    length_models = resolve_length_models(
+        list(tc.columns),
+        load_quant_model_table(os.path.join(os.path.dirname(count_path), species_tag + '_quant_model.tsv')),
+    )
+    tc_original = _apply_transformation_logic(tc, eff_length_species, args.norm, 'no', 'before_batch', sra, length_models)
     correlation_statistics = save_correlation_statistics(
         counts_df=tc_original,
         metadata_df=sra,
@@ -468,7 +474,7 @@ def _run_prepare_or_wsfilter_python_worker(args, metadata, species_tag, input_di
         sra=sra,
         mapping_rate_cutoff=float(getattr(args, 'mapping_rate', 0.0)),
     )
-    tc = _apply_transformation_logic(tc, eff_length_species, args.norm, 'no', 'before_batch', sra)
+    tc = _apply_transformation_logic(tc, eff_length_species, args.norm, 'no', 'before_batch', sra, length_models)
     tc_before_filter = tc.copy()
     correlation_statistics = save_correlation_statistics(
         counts_df=tc_before_filter,

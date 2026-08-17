@@ -281,13 +281,81 @@ def _transform_raw_to_tpm(counts_df, eff_length_df):
     return pandas.DataFrame(values, index=counts_df.index, columns=counts_df.columns)
 
 
-def _apply_transformation_logic(counts_df, eff_length_df, transform_method, batch_effect_alg, step, metadata_df):
+def load_quant_model_table(path):
+    if (path is None) or (not os.path.isfile(path)):
+        return pandas.DataFrame(columns=['run', 'backend', 'length_model'])
+    model = pandas.read_csv(path, sep='\t', header=0)
+    missing = [column for column in ('run', 'length_model') if column not in model.columns]
+    if missing:
+        raise ValueError('Quant model table is missing required column(s): {}'.format(', '.join(missing)))
+    out = model.copy()
+    out['run'] = out['run'].fillna('').astype(str).str.strip()
+    out['length_model'] = out['length_model'].fillna('').astype(str).str.strip().str.lower()
+    if 'backend' in out.columns:
+        out['backend'] = out['backend'].fillna('').astype(str).str.strip().str.lower()
+    if out['run'].eq('').any():
+        raise ValueError('Quant model table contains an empty run value.')
+    if out['run'].duplicated().any():
+        duplicated = out.loc[out['run'].duplicated(keep=False), 'run'].drop_duplicates().tolist()
+        raise ValueError('Quant model table contains duplicate run values: {}'.format(', '.join(duplicated)))
+    return out
+
+
+def resolve_length_models(run_ids, quant_model=None):
+    models = {}
+    require_complete = False
+    if isinstance(quant_model, dict):
+        models.update({str(key): str(value).strip().lower() for key, value in quant_model.items()})
+        require_complete = len(models) > 0
+    elif quant_model is not None and hasattr(quant_model, 'itertuples') and not quant_model.empty:
+        require_complete = True
+        for row in quant_model.itertuples(index=False):
+            run_id = str(row.run).strip()
+            if run_id in models:
+                raise ValueError('Quant model contains duplicate run value: {}'.format(run_id))
+            models[run_id] = str(row.length_model).strip().lower()
+    normalized_run_ids = [str(run_id) for run_id in run_ids]
+    if require_complete:
+        missing = [run_id for run_id in normalized_run_ids if run_id not in models]
+        if missing:
+            raise ValueError('Quant model is missing run(s): {}'.format(', '.join(missing)))
+    resolved = {}
+    for run_id in normalized_run_ids:
+        length_model = models.get(run_id, 'effective')
+        if length_model not in {'effective', 'none'}:
+            raise ValueError('Unsupported length_model for run {}: {}'.format(run_id, length_model))
+        resolved[run_id] = length_model
+    return resolved
+
+
+def reject_undefined_length_transforms(run_ids, length_models, abundance_method):
+    if str(abundance_method) != 'fpkm':
+        return
+    undefined = [str(run_id) for run_id in run_ids if length_models.get(str(run_id), 'effective') == 'none']
+    if undefined:
+        raise ValueError(
+            'FPKM is undefined for runs whose quantification backend has no effective-length '
+            'model: {}. Use a TPM or untransformed abundance method.'.format(', '.join(undefined))
+        )
+
+
+def _apply_transformation_logic(
+    counts_df,
+    eff_length_df,
+    transform_method,
+    batch_effect_alg,
+    step,
+    metadata_df,
+    length_models=None,
+):
     transform_method = str(transform_method).strip().lower()
     if transform_method not in EXPRESSION_NORMALIZATION_METHODS:
         raise ValueError(
             'Unsupported expression normalization method: {}'.format(transform_method)
         )
     log_method, abundance_method = transform_method.split('-', 1)
+    resolved_models = resolve_length_models(list(counts_df.columns), length_models)
+    reject_undefined_length_transforms(list(counts_df.columns), resolved_models, abundance_method)
     batch_effect_alg = str(batch_effect_alg)
     if batch_effect_alg in {'no', 'sva'}:
         bool_fpkm_tpm = step == 'before_batch'
@@ -327,7 +395,7 @@ def _remove_nonexpressed_gene(counts_df):
     }
 
 
-def _run_batch_effect_step(counts_df, metadata_df, eff_length_df, args):
+def _run_batch_effect_step(counts_df, metadata_df, eff_length_df, args, length_models=None):
     transform_method = str(getattr(args, 'norm', 'log2p1-fpkm'))
     batch_effect_alg = str(getattr(args, 'batch_effect_alg', 'no'))
     clip_negative = bool(getattr(args, 'clip_negative', True))
@@ -342,6 +410,7 @@ def _run_batch_effect_step(counts_df, metadata_df, eff_length_df, args):
             batch_effect_alg=batch_effect_alg,
             step='after_batch',
             metadata_df=out['sra'],
+            length_models=length_models,
         )
         return {
             'tc': tc_batch_corrected,
@@ -361,6 +430,7 @@ def _run_batch_effect_step(counts_df, metadata_df, eff_length_df, args):
             batch_effect_alg=batch_effect_alg,
             step='after_batch',
             metadata_df=out['sra'],
+            length_models=length_models,
         )
         return {
             'tc': transformed,
@@ -497,6 +567,7 @@ def _run_batch_effect_step(counts_df, metadata_df, eff_length_df, args):
         batch_effect_alg=batch_effect_alg,
         step='after_batch',
         metadata_df=metadata_sorted,
+        length_models=length_models,
     )
     return {
         'tc': corrected_after,
@@ -901,6 +972,11 @@ def run_finalize_python_worker(args, metadata, species_tag, input_dir):
 
     counts_df = _normalize_dataframe_columns(_read_expression_tsv(count_path))
     eff_length_df = _normalize_dataframe_columns(_read_expression_tsv(eff_length_path))
+    quant_model_df = load_quant_model_table(os.path.join(species_dir, species_tag + '_quant_model.tsv'))
+    length_models = resolve_length_models(
+        [str(run_id) for run_id in counts_df.columns],
+        quant_model_df,
+    )
     metadata_all = _standardize_metadata_all(_normalize_metadata_df(metadata.df))
     scientific_name = _resolve_scientific_name(metadata_all, species_tag)
     selected_sample_groups = _resolve_selected_sample_groups(args, metadata_all)
@@ -923,8 +999,8 @@ def run_finalize_python_worker(args, metadata, species_tag, input_dir):
     tc = sorted_out['tc']
     sra = sorted_out['sra']
     eff_length_species = _exclude_inappropriate_sample_from_eff_length(eff_length_df, tc)
-    tc = _apply_transformation_logic(tc, eff_length_species, args.norm, args.batch_effect_alg, 'before_batch', sra)
-    tc_tmp = _apply_transformation_logic(tc, eff_length_species, args.norm, args.batch_effect_alg, 'before_batch_plot', sra)
+    tc = _apply_transformation_logic(tc, eff_length_species, args.norm, args.batch_effect_alg, 'before_batch', sra, length_models)
+    tc_tmp = _apply_transformation_logic(tc, eff_length_species, args.norm, args.batch_effect_alg, 'before_batch_plot', sra, length_models)
     is_input_zero = tc_tmp.eq(0)
 
     write_table_with_index_name(
@@ -992,7 +1068,7 @@ def run_finalize_python_worker(args, metadata, species_tag, input_dir):
     if not bool(getattr(args, 'disable_auto_outlier_filter', False)):
         return None
 
-    out = _run_batch_effect_step(tc, sra, eff_length_species, args)
+    out = _run_batch_effect_step(tc, sra, eff_length_species, args, length_models)
     tc_batch_corrected = out['tc']
     batch_info_current = out['batch_info']
     if str(getattr(args, 'batch_effect_alg', 'no')).lower() in {'sva', 'combatseq', 'ruvseq', 'latent_glm'}:
