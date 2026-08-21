@@ -87,10 +87,17 @@ second time.
 
 ## Using CSTMM Normalization in edgeR
 
-For edgeR, start from uncorrected estimated counts in the `merge` output (or
-HOG counts obtained by summing those uncorrected counts), and supply
-`tmm_effective_library_size` as the library size. Align metadata and count
-columns explicitly; the example below assumes the count columns are run IDs.
+Although CSTMM output is used directly by downstream amalgkit commands, the
+normalization can also be passed to external programs. edgeR fits
+negative-binomial models to uncorrected counts using library-size offsets, so
+CSTMM normalization is supplied through the effective library size rather than
+by altering the downstream count matrix.
+
+To connect CSTMM to edgeR, start from uncorrected estimated counts in the
+`merge` output (or HOG counts obtained by summing those uncorrected counts), and
+supply `tmm_effective_library_size` as the library size. Align metadata and
+count columns explicitly; the example below assumes the count columns are run
+IDs.
 
 ```r
 library(edgeR)
