@@ -58,8 +58,81 @@ amalgkit cstmm --out_dir ./ --orthogroup_table ""
 - `cstmm/cstmm_normalization_factor_histogram.sample_group.pdf`
 - `cstmm/cstmm_normalization_factor_histogram.scientific_name.pdf`
 - `cstmm/cstmm_mean_expression_boxplot.pdf`
+- `cstmm/metadata.tsv`
 - `cstmm/<Species>/<Species>_cstmm_counts.tsv`
 - `cstmm/<Species>/<Species>_eff_length.tsv`
+
+## Normalization Metadata
+
+`cstmm/metadata.tsv` records three related columns for each retained sample:
+
+| Column | Meaning |
+| --- | --- |
+| `tmm_library_size` | Sum of the uncorrected estimated counts for all targets in the corresponding `merge` output. This is the library size supplied when estimating the TMM factor. |
+| `tmm_normalization_factor` | Cross-species TMM factor estimated from the selected single-copy orthologs. |
+| `tmm_effective_library_size` | Product of `tmm_library_size` and `tmm_normalization_factor`; this is the effective library size for a raw-count model. |
+
+For sample `i`, the relationship is:
+
+```text
+tmm_effective_library_size[i]
+    = tmm_library_size[i] * tmm_normalization_factor[i]
+```
+
+The per-species `cstmm_counts.tsv` files already contain counts divided by the
+TMM normalization factor. They are used together with the original
+`tmm_library_size` by the normal amalgkit `wsfilter -> csfilter -> finalize`
+workflow. Do not apply `tmm_normalization_factor` to those corrected counts a
+second time.
+
+## Using CSTMM Normalization in edgeR
+
+For edgeR, start from uncorrected estimated counts in the `merge` output (or
+HOG counts obtained by summing those uncorrected counts), and supply
+`tmm_effective_library_size` as the library size. Align metadata and count
+columns explicitly; the example below assumes the count columns are run IDs.
+
+```r
+library(edgeR)
+
+cstmm_metadata <- read.delim(
+    "cstmm/metadata.tsv",
+    check.names = FALSE
+)
+
+sample_index <- match(colnames(hog_counts), cstmm_metadata$run)
+if (anyNA(sample_index)) {
+    stop("Some count columns do not match cstmm metadata run IDs")
+}
+
+effective_library_size <-
+    cstmm_metadata$tmm_effective_library_size[sample_index]
+if (any(!is.finite(effective_library_size) | effective_library_size <= 0)) {
+    stop("CSTMM effective library sizes must be finite and positive")
+}
+
+dge <- DGEList(
+    counts = hog_counts,
+    group = group,
+    lib.size = effective_library_size,
+    norm.factors = rep(1, length(effective_library_size))
+)
+
+keep <- filterByExpr(dge, group = group)
+dge <- dge[keep, , keep.lib.sizes = TRUE]
+
+design <- model.matrix(~ group)
+dge <- estimateDisp(dge, design)
+fit <- glmQLFit(dge, design)
+result <- glmQLFTest(fit, coef = 2)
+```
+
+Do not call `calcNormFactors()` in this workflow: that would estimate a new
+normalization from the downstream count matrix instead of using CSTMM. Also do
+not use `keep.lib.sizes = FALSE`, because it would replace the effective
+library sizes with post-filter column sums. If count columns use custom sample
+names rather than run IDs, construct and validate an explicit mapping before
+creating the `DGEList`.
 
 ## Useful Options
 

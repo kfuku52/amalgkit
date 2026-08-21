@@ -168,11 +168,15 @@ def _get_library_sizes(df_nonzero, uncorrected_by_species):
 
 
 def _build_norm_factor_frame(metadata_df, roundtrip):
+    sample_ids = list(roundtrip.round2_factors.index)
+    library_sizes = roundtrip.library_sizes.reindex(sample_ids).to_numpy(dtype=float)
+    normalization_factors = roundtrip.round2_factors.reindex(sample_ids).to_numpy(dtype=float)
     df_nf = pandas.DataFrame(
         {
-            'sample_id': list(roundtrip.round2_factors.index),
-            'tmm_library_size': roundtrip.library_sizes.reindex(roundtrip.round2_factors.index).to_numpy(dtype=float),
-            'tmm_normalization_factor': roundtrip.round2_factors.to_numpy(dtype=float),
+            'sample_id': sample_ids,
+            'tmm_library_size': library_sizes,
+            'tmm_normalization_factor': normalization_factors,
+            'tmm_effective_library_size': library_sizes * normalization_factors,
         }
     )
     return df_nf
@@ -202,7 +206,11 @@ def append_tmm_stats_to_metadata_python(metadata_df, roundtrip):
     ]
     df_nf = _build_norm_factor_frame(metadata_df=df_metadata, roundtrip=roundtrip)
     df_nf_keys = set(df_nf['sample_id'].astype(str))
-    out_cols = list(df_metadata.columns) + ['tmm_library_size', 'tmm_normalization_factor']
+    out_cols = list(df_metadata.columns) + [
+        'tmm_library_size',
+        'tmm_normalization_factor',
+        'tmm_effective_library_size',
+    ]
     merged = df_metadata.merge(df_nf, on='sample_id', how='left', sort=False)
     exclusion_norm = merged['exclusion'].astype(str).str.strip().str.lower()
     is_retained = exclusion_norm.eq('no')

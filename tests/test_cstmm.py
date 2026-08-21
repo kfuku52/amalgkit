@@ -151,6 +151,7 @@ def test_cstmm_metadata_join_honors_explicit_species_token():
     assert observed.loc[0, 'exclusion'] == 'no'
     assert observed.loc[0, 'tmm_library_size'] == 1000.0
     assert observed.loc[0, 'tmm_normalization_factor'] == 1.25
+    assert observed.loc[0, 'tmm_effective_library_size'] == 1250.0
 
 
 def _read_dcf(path):
@@ -579,6 +580,11 @@ class TestCstmmMain:
         metadata_df = pandas.read_csv(metadata_path, sep='\t')
         assert 'tmm_library_size' in metadata_df.columns
         assert 'tmm_normalization_factor' in metadata_df.columns
+        assert 'tmm_effective_library_size' in metadata_df.columns
+        numpy.testing.assert_allclose(
+            metadata_df['tmm_effective_library_size'],
+            metadata_df['tmm_library_size'] * metadata_df['tmm_normalization_factor'],
+        )
         assert set(metadata_df['exclusion']) == {'no'}
         quant_model_df = pandas.read_csv(quant_model_path, sep='\t')
         assert quant_model_df.to_dict(orient='records') == [
@@ -663,6 +669,13 @@ class TestCstmmMain:
         metadata_df = pandas.read_csv(metadata_path, sep='\t')
         assert 'tmm_library_size' in metadata_df.columns
         assert 'tmm_normalization_factor' in metadata_df.columns
+        assert 'tmm_effective_library_size' in metadata_df.columns
+        retained_factors = metadata_df['tmm_normalization_factor'].notna()
+        numpy.testing.assert_allclose(
+            metadata_df.loc[retained_factors, 'tmm_effective_library_size'],
+            metadata_df.loc[retained_factors, 'tmm_library_size']
+            * metadata_df.loc[retained_factors, 'tmm_normalization_factor'],
+        )
         assert set(metadata_df['single_copy_threshold']) == {75.0}
         retained = metadata_df.loc[metadata_df['scientific_name'] != 'Species B', 'exclusion']
         assert set(retained) == {'no'}

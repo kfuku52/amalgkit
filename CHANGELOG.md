@@ -5,6 +5,10 @@ Releases provide the commit-level generated notes for each version.
 
 ## Unreleased
 
+- Added `tmm_effective_library_size` to `cstmm/metadata.tsv` as the product of
+  `tmm_library_size` and `tmm_normalization_factor`, and documented safe edgeR
+  handoff without recomputing or double-applying TMM normalization.
+
 - Defined Oarfish abundance as unlength-normalized counts per million, stored annotated length separately from a unit effective-length term, propagated that model through merge and CSTMM outputs, and rejected FPKM for those runs because the transformation is undefined without an effective length.
 
 - Preserved undefined within-species sample correlations instead of fabricating r=0 (including a zero self-correlation) in finalize/overview embeddings.
