@@ -114,6 +114,32 @@ class TestGetfastqPrefetch:
 
         assert out == {'SRR001': {'SRR001.fastq.gz'}}
 
+    def test_prefetch_getfastq_run_files_accepts_symlinked_input_root(self, tmp_path):
+        out_dir = tmp_path / 'out'
+        out_dir.mkdir()
+        shared_getfastq = tmp_path / 'shared_getfastq'
+        run_dir = shared_getfastq / 'SRR001'
+        run_dir.mkdir(parents=True)
+        (run_dir / 'SRR001.fastq.gz').write_text('reads', encoding='utf-8')
+        (out_dir / 'getfastq').symlink_to(shared_getfastq, target_is_directory=True)
+        args = SimpleNamespace(out_dir=str(out_dir))
+
+        observed = prefetch_getfastq_run_files(args, [('SRR001', 'Species A')])
+
+        assert observed == {'SRR001': {'SRR001.fastq.gz'}}
+
+    def test_prefetch_getfastq_run_files_rejects_symlinked_run_directory(self, tmp_path):
+        out_dir = tmp_path / 'out'
+        getfastq_root = out_dir / 'getfastq'
+        getfastq_root.mkdir(parents=True)
+        outside = tmp_path / 'outside'
+        outside.mkdir()
+        (getfastq_root / 'SRR001').symlink_to(outside, target_is_directory=True)
+        args = SimpleNamespace(out_dir=str(out_dir))
+
+        with pytest.raises(ValueError, match='symbolic-link run ID'):
+            prefetch_getfastq_run_files(args, [('SRR001', 'Species A')])
+
     def test_run_quant_uses_prefetched_getfastq_files(self, tmp_path, monkeypatch):
         out_dir = tmp_path / 'out'
         out_dir.mkdir()
@@ -152,6 +178,34 @@ class TestGetfastqPrefetch:
         run_quant(args, metadata, 'SRR001', 'dummy.idx', runtime_context=runtime_context)
 
         assert called['kallisto'] == 1
+
+    def test_run_quant_accepts_symlinked_read_only_getfastq_root(self, tmp_path, monkeypatch):
+        out_dir = tmp_path / 'out'
+        out_dir.mkdir()
+        shared_getfastq = tmp_path / 'shared_getfastq'
+        run_dir = shared_getfastq / 'SRR001'
+        run_dir.mkdir(parents=True)
+        (run_dir / 'SRR001.fastq.gz').write_text('reads', encoding='utf-8')
+        (out_dir / 'getfastq').symlink_to(shared_getfastq, target_is_directory=True)
+        args = SimpleNamespace(
+            out_dir=str(out_dir),
+            redo=False,
+            clean_fastq=False,
+            threads=1,
+        )
+        metadata = make_single_run_quant_metadata()
+        observed = {}
+
+        def fake_call_kallisto(_args, in_files, _metadata, _sra_stat, output_dir, _index):
+            observed['in_files'] = in_files
+            write_valid_quant_outputs(output_dir)
+            return SimpleNamespace(returncode=0)
+
+        monkeypatch.setattr('amalgkit.quant.call_kallisto', fake_call_kallisto)
+
+        run_quant(args, metadata, 'SRR001', 'dummy.idx', backend='kallisto')
+
+        assert observed['in_files'] == [str(run_dir / 'SRR001.fastq.gz')]
 
     def test_run_quant_uses_getfastq_stats_without_mutating_source_metadata(self, tmp_path, monkeypatch, capsys):
         out_dir = tmp_path / 'out'

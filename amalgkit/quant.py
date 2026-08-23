@@ -39,6 +39,7 @@ from amalgkit.parallel_utils import (
 from amalgkit.runtime_utils import (
     normalize_species_token,
     resolve_species_token,
+    safe_join_existing_input_component,
     safe_join_component,
     validate_safe_path_component,
     validate_unique_species_tokens,
@@ -341,7 +342,7 @@ def _metadata_with_quant_input_sra_stats_for_tasks(args, metadata, tasks):
     quant_metadata = metadata
     getfastq_root = os.path.join(args.out_dir, 'getfastq')
     for sra_id, _sci_name in tasks:
-        output_dir_getfastq = safe_join_component(
+        output_dir_getfastq = safe_join_existing_input_component(
             getfastq_root,
             sra_id,
             label='run ID',
@@ -1331,7 +1332,7 @@ def _run_quant_unlocked(
         else:
             print('Continued. The output will not be overwritten. If you want to overwrite the results, set "--redo yes".')
             return
-    output_dir_getfastq = safe_join_component(
+    output_dir_getfastq = safe_join_existing_input_component(
         os.path.join(args.out_dir, 'getfastq'),
         sra_id,
         label='run ID',
@@ -2131,8 +2132,12 @@ def prefetch_getfastq_run_files(args, tasks):
     getfastq_root = os.path.join(args.out_dir, 'getfastq')
     prefetched = {}
     for run_id in run_ids:
-        run_dir = os.path.join(getfastq_root, run_id)
         try:
+            run_dir = safe_join_existing_input_component(
+                getfastq_root,
+                run_id,
+                label='run ID',
+            )
             with os.scandir(run_dir) as run_entries:
                 prefetched[run_id] = {
                     run_entry.name

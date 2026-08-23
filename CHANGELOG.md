@@ -5,6 +5,10 @@ Releases provide the commit-level generated notes for each version.
 
 ## Unreleased
 
+- Allowed `quant` to reuse a canonical, existing `getfastq` directory through
+  a symbolic-link input root while retaining path-component containment and
+  symbolic-link rejection for run directories and output roots.
+
 - Added `tmm_effective_library_size` to `cstmm/metadata.tsv` as the product of
   `tmm_library_size` and `tmm_normalization_factor`, and documented safe edgeR
   handoff without recomputing or double-applying TMM normalization.

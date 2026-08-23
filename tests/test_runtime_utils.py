@@ -3,6 +3,7 @@ import pytest
 from amalgkit.runtime_utils import (
     build_species_token_map,
     resolve_species_token,
+    safe_join_existing_input_component,
     safe_join_component,
     validate_safe_path_component,
     validate_unique_species_tokens,
@@ -48,6 +49,50 @@ def test_safe_join_component_rejects_symbolic_link_root(tmp_path):
 
     with pytest.raises(ValueError, match='symbolic-link output root'):
         safe_join_component(str(linked_root), 'SRR001', label='run ID')
+
+
+def test_safe_join_existing_input_component_accepts_symbolic_link_root(tmp_path):
+    real_root = tmp_path / 'real'
+    run_dir = real_root / 'SRR001'
+    run_dir.mkdir(parents=True)
+    linked_root = tmp_path / 'linked'
+    linked_root.symlink_to(real_root, target_is_directory=True)
+
+    observed = safe_join_existing_input_component(
+        str(linked_root),
+        'SRR001',
+        label='run ID',
+    )
+
+    assert observed == str(run_dir)
+
+
+def test_safe_join_existing_input_component_rejects_symbolic_link_leaf(tmp_path):
+    real_root = tmp_path / 'real'
+    real_root.mkdir()
+    outside = tmp_path / 'outside'
+    outside.mkdir()
+    (real_root / 'SRR001').symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ValueError, match='symbolic-link run ID'):
+        safe_join_existing_input_component(
+            str(real_root),
+            'SRR001',
+            label='run ID',
+        )
+
+
+def test_safe_join_existing_input_component_rejects_dangling_symbolic_link_root(tmp_path):
+    missing_root = tmp_path / 'missing'
+    linked_root = tmp_path / 'linked'
+    linked_root.symlink_to(missing_root, target_is_directory=True)
+
+    with pytest.raises(NotADirectoryError, match='existing directory'):
+        safe_join_existing_input_component(
+            str(linked_root),
+            'SRR001',
+            label='run ID',
+        )
 
 
 def test_explicit_species_token_must_be_canonical():

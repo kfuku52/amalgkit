@@ -173,6 +173,26 @@ def safe_join_component(root, component, label='Path component'):
     )
 
 
+def safe_join_existing_input_component(root, component, label='Path component'):
+    """Resolve one read-only input below its canonical directory root."""
+    component = validate_safe_path_component(component, label=label)
+    absolute_root = os.path.abspath(root)
+    resolved_root = os.path.realpath(absolute_root)
+    root_exists = os.path.lexists(absolute_root)
+    if root_exists and not os.path.isdir(resolved_root):
+        raise NotADirectoryError(
+            'Input root does not resolve to an existing directory: {}'.format(absolute_root)
+        )
+    candidate = os.path.join(resolved_root, component)
+    if os.path.lexists(candidate) and os.path.islink(candidate):
+        raise ValueError('Refusing symbolic-link {}: {}'.format(label, candidate))
+    return ensure_path_within_root(
+        root=resolved_root,
+        path=candidate,
+        label=label,
+    )
+
+
 def get_getfastq_run_dir(args, sra_id):
     sra_id = validate_safe_path_component(sra_id, label='Run ID')
     amalgkit_out_dir = os.path.realpath(args.out_dir)
