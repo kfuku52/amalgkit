@@ -372,6 +372,35 @@ class TestGetfastqPrefetch:
         assert pandas.isna(metadata.df.loc[0, 'total_bases'])
         assert pandas.isna(metadata.df.loc[0, 'spot_length'])
 
+    def test_quant_stats_fallback_normalizes_nullable_string_numeric_columns(self, tmp_path):
+        pandas.DataFrame([{
+            'run': 'SRR001',
+            'num_written': 10,
+            'bp_fastp_in': 1497,
+        }]).to_csv(tmp_path / 'getfastq_stats.tsv', sep='\t', index=False)
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001'],
+            'scientific_name': ['Species A'],
+            'lib_layout': ['single'],
+            'total_spots': pandas.Series([pandas.NA], dtype='string'),
+            'spot_length': pandas.Series([pandas.NA], dtype='string'),
+            'total_bases': pandas.Series([pandas.NA], dtype='string'),
+            'exclusion': ['no'],
+        }))
+
+        quant_metadata = _metadata_with_quant_input_sra_stats(
+            metadata,
+            'SRR001',
+            str(tmp_path),
+        )
+
+        assert quant_metadata.df.loc[0, 'total_spots'] == 10
+        assert quant_metadata.df.loc[0, 'total_bases'] == 1497
+        assert quant_metadata.df.loc[0, 'spot_length'] == 149.7
+        assert str(quant_metadata.df['spot_length'].dtype) == 'float64'
+        assert pandas.isna(metadata.df.loc[0, 'spot_length'])
+        assert str(metadata.df['spot_length'].dtype) == 'string'
+
     def test_run_quant_preserves_valid_sra_stats_when_getfastq_stats_differ(self, tmp_path, monkeypatch, capsys):
         out_dir = tmp_path / 'out'
         run_dir = out_dir / 'getfastq' / 'SRR001'

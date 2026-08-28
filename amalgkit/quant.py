@@ -318,6 +318,14 @@ def _metadata_with_quant_input_sra_stats(metadata, sra_id, output_dir_getfastq):
     idx = _metadata_row_index(quant_metadata, sra_id)
     recovered = []
     for column_name, value in replacements.items():
+        # pandas 3 preserves TSV numeric columns with missing values as a
+        # nullable string dtype and rejects assigning recovered numbers into
+        # that column. This copy is quant-only, so normalize the affected
+        # column explicitly before recording the numeric fallback.
+        quant_metadata.df[column_name] = pandas.to_numeric(
+            quant_metadata.df[column_name],
+            errors='coerce',
+        ).astype('float64')
         quant_metadata.df.at[idx, column_name] = value
         if column_name in {'total_spots', 'total_bases'}:
             recovered.append('{}={:,}'.format(column_name, value))
