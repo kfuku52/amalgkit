@@ -116,6 +116,12 @@ table and run-info JSON pass schema, row, finite-number, nonnegative-value, and
 pseudoalignment-range checks. `--redo yes` builds in a staging directory and
 replaces an existing valid result only after the new result validates.
 
+With the default `--clean_fastq yes`, owned FASTQ entries are replaced by
+`.safely_removed` markers after successful quantification. For private gzip
+inputs linked by `getfastq`, only those managed links are retired; source files
+are never removed. Cleanup failures restore the links/files and prior markers.
+If restoration itself fails, the error names the preserved recovery directory.
+
 ## Next Steps
 
 ```bash

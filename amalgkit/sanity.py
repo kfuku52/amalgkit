@@ -2,10 +2,12 @@ import json
 import numpy as np
 import os
 import pandas
+from amalgkit.table_io import read_identifier_tsv
 import re
 
 from amalgkit.exceptions import AmalgkitExit
 from amalgkit.fastq_utils import validate_fastq_structure
+from amalgkit.getfastq_resume import GETFASTQ_COMPLETION_FILENAME
 from amalgkit.merge_plots import _collect_est_count_summaries
 from amalgkit.metadata_utils import (
     get_newest_intermediate_file_extension,
@@ -999,7 +1001,7 @@ def _should_expect_merge_exclusion_pdf(metadata_df):
 
 
 def _expected_merge_root_output_filenames(root_path, metadata_out_path):
-    metadata_df = pandas.read_csv(metadata_out_path, sep='\t', low_memory=False)
+    metadata_df = read_identifier_tsv(metadata_out_path, identifier_columns=('run',), low_memory=False)
     expected = []
     if _has_merge_nonexcluded_numeric_values(metadata_df, 'mapping_rate'):
         expected.append('merge_mapping_rate.pdf')
@@ -1110,6 +1112,7 @@ def _validate_busco_table(path):
             comment='#',
             names=BUSCO_REQUIRED_COLUMNS,
             dtype=str,
+            keep_default_na=False,
             low_memory=False,
             nrows=10,
         )
@@ -1538,7 +1541,11 @@ def run_sanity_check_getfastq(args, metadata, uni_species, sra_ids, output_dir, 
                 message='getfastq output was not detected for this run.',
                 suggested_action='rerun_getfastq',
             ))
-    issues.extend(_validate_orphan_entries('getfastq', root_path, checked_runs, 'run'))
+    expected_entries = list(checked_runs)
+    completion_path = os.path.join(root_path, GETFASTQ_COMPLETION_FILENAME)
+    if os.path.isfile(completion_path) and not os.path.islink(completion_path):
+        expected_entries.append(GETFASTQ_COMPLETION_FILENAME)
+    issues.extend(_validate_orphan_entries('getfastq', root_path, expected_entries, 'run'))
     if os.path.isdir(root_path):
         run_files_map, _non_dir_runs = _scan_target_run_dirs(root_path, set(available))
         for sra_id in available:

@@ -1,13 +1,12 @@
 import math
-import re
 import shutil
 import subprocess
 import threading
 import time
-import urllib.parse
 from typing import Any
 
 from amalgkit.logging_utils import get_logger
+from amalgkit.redaction import redact_url_for_logging
 
 # Dependency probes run `--version`/`-h` and should answer within seconds. They
 # get their own short default so a hanging executable cannot block startup for
@@ -42,37 +41,6 @@ def resolve_timeout_seconds(args, attribute_name, default_seconds):
     return timeout_seconds
 
 
-_URL_TOKEN_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://[^\s]+")
-
-
-def _redact_url_token(url):
-    scheme = url.split("://", 1)[0].casefold()
-    try:
-        parts = urllib.parse.urlsplit(url)
-        host = parts.hostname
-        port = parts.port
-    except ValueError:
-        return "{}://<redacted>".format(scheme)
-    if host is None:
-        return "{}://<redacted>".format(scheme)
-    if ":" in host:
-        host = "[{}]".format(host)
-    netloc = host if port is None else "{}:{}".format(host, port)
-    return urllib.parse.urlunsplit((scheme, netloc, parts.path, "", ""))
-
-
-def redact_url_for_logging(value):
-    """Strip query, fragment, and userinfo from every URL-like command token.
-
-    Signed/requester-pays URLs embed credentials in the query string; only
-    scheme+host+path may be logged so tokens never reach stderr or the JSONL
-    log. Malformed URLs fail closed instead of returning the secret-bearing
-    input unchanged.
-    """
-    text = str(value)
-    return _URL_TOKEN_PATTERN.sub(lambda match: _redact_url_token(match.group(0)), text)
-
-
 def format_command(command):
     return " ".join([redact_url_for_logging(part) for part in command])
 
@@ -86,6 +54,8 @@ def decode_command_output(output):
 
 
 def print_command_output(stdout_txt, stderr_txt, stdout_label=None, stderr_label=None):
+    stdout_txt = redact_url_for_logging(stdout_txt)
+    stderr_txt = redact_url_for_logging(stderr_txt)
     if (stdout_label is None) and (stderr_label is None):
         print(stdout_txt, flush=True)
         print(stderr_txt, flush=True)
@@ -105,7 +75,7 @@ def print_command_output(stdout_txt, stderr_txt, stdout_label=None, stderr_label
 def _timeout_error_message(timeout_seconds, command_txt, exc):
     timeout_txt = "" if timeout_seconds is None else f" after {int(float(timeout_seconds)):,} sec"
     stderr_txt = decode_command_output(getattr(exc, "stderr", None))
-    return f"Command timed out{timeout_txt}: {command_txt}\n{stderr_txt.rstrip()}"
+    return redact_url_for_logging(f"Command timed out{timeout_txt}: {command_txt}\n{stderr_txt.rstrip()}")
 
 
 def _run_command_with_timeout(runner, command, timeout_seconds):
@@ -223,7 +193,7 @@ def run_checked_command(
             message = failure_message
         else:
             message = f"Command failed with exit code {result.returncode}: {command_txt}"
-        raise RuntimeError(message)
+        raise RuntimeError(redact_url_for_logging(message))
     return result, stdout_txt, stderr_txt
 
 

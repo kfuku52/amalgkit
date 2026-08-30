@@ -2,6 +2,29 @@
 
 `amalgkit cstmm` applies cross-species TMM normalization using single-copy genes. It is optional and Python-only.
 
+## Numerical conventions (0.16.74 and later)
+
+TMM uses inverse-variance weights, 30% M-value trimming and 5% A-value trimming,
+following the [edgeR TMM definition](https://bioconductor.org/packages/release/bioc/manuals/edgeR/man/edgeR.pdf).
+Zero-count pairs are excluded. Average ranks are computed from positive count
+ratios/products before logarithms and common library scaling, so rounding a log
+does not split an equal mathematical rank. Binary mantissas/exponents avoid
+overflow while constructing these rank keys; no decimal rounding tolerance is
+applied to the counts.
+
+Round 1 chooses the upper-quartile reference nearest the mean quartile, breaking
+an exact distance tie by original sample order. Round 2 chooses the median
+factor's sample. With an even number of samples, the two central factors are
+equally close to the true median, and the first of those samples in the input
+order is used. A rounded midpoint cannot change that choice.
+
+These rules can change factors for ties at trimming boundaries or an even
+median compared with older AMALGKIT versions or a specific edgeR/R math library.
+Existing results are not rewritten automatically; regenerate CSTMM and its
+downstream outputs together when adopting the new convention. Numeric tests
+use an independent 60-digit oracle and fixed-reference edgeR examples at
+`1e-12` tolerance; R is not a runtime dependency.
+
 Use it after `merge` when you want ortholog-aware normalization before `wsfilter`, `csfilter`, or `finalize`.
 
 ```text

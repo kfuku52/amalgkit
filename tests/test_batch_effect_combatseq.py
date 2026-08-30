@@ -133,3 +133,22 @@ def test_run_combatseq_backend_keeps_singleton_batch_uncorrected():
     assert summary['skip_reason'] == 'combatseq_singleton_kept'
     assert summary['uncorrected_run_ids'] == ['RUN5']
     assert summary['corrected_run_ids'] == ['RUN1', 'RUN2', 'RUN3', 'RUN4']
+
+
+@pytest.mark.parametrize('increment', [0.0, 0.25])
+def test_combatseq_column_replacement_preserves_values_and_inputs(monkeypatch, increment):
+    counts = _balanced_counts()
+    before = counts.copy(deep=True)
+    metadata = pandas.DataFrame({
+        'run': counts.columns, 'bioproject': ['A', 'A', 'B', 'B'],
+    })
+
+    def backend(**kwargs):
+        return kwargs['counts'].astype(float) + increment
+
+    monkeypatch.setattr('amalgkit.batch_effect_combatseq._load_pycombat_seq', lambda: backend)
+    corrected, _ = run_combatseq_backend(counts, metadata)
+
+    expected = counts if increment == 0 else counts.astype(float) + increment
+    pandas.testing.assert_frame_equal(corrected, expected)
+    pandas.testing.assert_frame_equal(counts, before)

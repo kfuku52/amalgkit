@@ -148,7 +148,23 @@ def run_combatseq_backend(
         corrected_df = run_without_group()
 
     corrected_full = counts_df.copy()
-    corrected_full.loc[:, corrected_run_ids] = corrected_df.loc[:, corrected_run_ids]
+    for run_id in corrected_run_ids:
+        values = corrected_df[run_id]
+        original_dtype = counts_df[run_id].dtype
+        if pandas.api.types.is_integer_dtype(original_dtype):
+            bounds = numpy.iinfo(getattr(original_dtype, 'numpy_dtype', original_dtype))
+            array = values.to_numpy(dtype=float)
+            if (
+                numpy.isfinite(array).all()
+                and (array == numpy.floor(array)).all()
+                and (array >= bounds.min).all()
+                and (array < int(bounds.max) + 1).all()
+            ):
+                # Retain the integer count contract only for lossless casts.
+                values = values.astype(original_dtype)
+        # Replacing the column supports pandas 3 without truncating fractional
+        # results or changing the untouched singleton-batch columns.
+        corrected_full[run_id] = values
     summary = {
         'backend': 'combatseq',
         'method': method,

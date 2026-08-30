@@ -1,0 +1,80 @@
+name: macOS Smoke
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'amalgkit/*file*.py'
+      - 'amalgkit/*output*.py'
+      - 'amalgkit/fastq*.py'
+      - 'amalgkit/getfastq*.py'
+      - 'amalgkit/quant.py'
+      - 'amalgkit/download_utils.py'
+      - 'amalgkit/filter_utils.py'
+      - 'amalgkit/runtime_utils.py'
+      - 'amalgkit/subprocess_utils.py'
+      - 'amalgkit/cli*.py'
+      - 'amalgkit/main.py'
+      - 'tests/test_*files.py'
+      - 'tests/test_filter_utils.py'
+      - 'tests/test_workflow_contracts.py'
+      - 'tests/test_quant_outputs.py'
+      - 'pyproject.toml'
+      - '.github/**'
+  pull_request:
+    branches: [master]
+    paths:
+      - 'amalgkit/*file*.py'
+      - 'amalgkit/*output*.py'
+      - 'amalgkit/fastq*.py'
+      - 'amalgkit/getfastq*.py'
+      - 'amalgkit/quant.py'
+      - 'amalgkit/download_utils.py'
+      - 'amalgkit/filter_utils.py'
+      - 'amalgkit/runtime_utils.py'
+      - 'amalgkit/subprocess_utils.py'
+      - 'amalgkit/cli*.py'
+      - 'amalgkit/main.py'
+      - 'tests/test_*files.py'
+      - 'tests/test_filter_utils.py'
+      - 'tests/test_workflow_contracts.py'
+      - 'tests/test_quant_outputs.py'
+      - 'pyproject.toml'
+      - '.github/**'
+  schedule:
+    - cron: '41 18 * * 0'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos-smoke:
+    runs-on: macos-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: ./.github/actions/python-env
+        with:
+          python-version: '3.13'
+
+      - name: Install package and test dependencies
+        run: |
+          uv pip install -e ".[test]"
+          uv pip check
+
+      - name: Exercise macOS filesystem and CLI paths
+        run: >-
+          python -m pytest -q
+          tests/test_filter_utils.py
+          tests/test_getfastq_files.py
+          tests/test_quant_outputs.py
+          tests/test_workflow_contracts.py
+          tests/test_cli_utils.py
+          tests/test_cli_help.py

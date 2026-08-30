@@ -10,6 +10,7 @@ import time
 
 from amalgkit.__init__ import __version__
 from amalgkit.logging_utils import get_logger
+from amalgkit.redaction import redact_url_for_logging
 
 EXPRESSION_NORMALIZATION_METHODS = tuple(
     '{}-{}'.format(log_method, abundance_method)
@@ -186,7 +187,7 @@ def resolve_external_tool_availability(executable_name):
 
 def print_runtime_banner(argv):
     print('AMALGKIT version: {}'.format(__version__))
-    print('AMALGKIT command: {}'.format(' '.join(argv)))
+    print('AMALGKIT command: {}'.format(redact_url_for_logging(' '.join(argv))))
     print('AMALGKIT bug report: https://github.com/kfuku52/amalgkit/issues')
     print('AMALGKIT os: {} (os.name={})'.format(describe_os(), os.name))
     print('AMALGKIT python: {}'.format(sys.version.split()[0]))

@@ -4,6 +4,7 @@ import warnings
 
 import numpy
 import pandas
+from amalgkit.table_io import read_annotation_tsv
 
 from amalgkit.parallel_utils import run_tasks_with_optional_threads as default_run_tasks_with_optional_threads
 
@@ -41,7 +42,7 @@ def get_single_copy_orthogroup_mask(
 
 
 def orthogroup2genecount(file_orthogroup, file_genecount, spp):
-    df = pandas.read_csv(file_orthogroup, sep='\t', header=0, low_memory=False)
+    df = read_annotation_tsv(file_orthogroup, header=0, low_memory=False)
     if 'busco_id' not in df.columns:
         raise ValueError('Column "busco_id" is required in orthogroup table: {}'.format(file_orthogroup))
     missing_species = [sp for sp in spp if sp not in df.columns]
@@ -108,6 +109,8 @@ def read_busco_species_table(path_to_table):
         comment='#',
         names=BUSCO_TABLE_COLUMNS,
         usecols=BUSCO_TABLE_USE_COLUMNS,
+        dtype=str,
+        keep_default_na=False,
     )
     busco_id_key = (
         tmp_table.loc[:, 'busco_id']

@@ -7,6 +7,7 @@ import warnings
 from contextlib import contextmanager
 
 import pandas
+from amalgkit.table_io import read_identifier_tsv
 
 from amalgkit.download_utils import acquire_exclusive_lock
 from amalgkit.output_utils import atomic_output_path, get_default_creation_mode
@@ -149,7 +150,7 @@ def load_merged_per_species_metadata(per_species_dir):
     if len(metadata_tables) == 0:
         raise FileNotFoundError('No per-species metadata table was found under: {}'.format(per_species_dir))
     frames = [
-        pandas.read_csv(path, sep='\t', low_memory=False)
+        read_identifier_tsv(path, identifier_columns=('run',), low_memory=False)
         for path in metadata_tables
     ]
     return pandas.concat(frames, axis=0, ignore_index=True, sort=False)
@@ -204,16 +205,23 @@ def staged_output_dir(target_dir, redo=False, prefix='amalgkit_stage_'):
             if os.path.isdir(target_dir):
                 target_mode = os.stat(target_dir, follow_symlinks=False).st_mode & 0o777
             os.chmod(stage_dir, target_mode)
-            if os.path.lexists(target_dir):
-                backup_path = tempfile.mkdtemp(prefix=prefix + 'backup_', dir=parent_dir if parent_dir != '' else None)
-                os.rmdir(backup_path)
-                os.rename(target_dir, backup_path)
             try:
+                if os.path.lexists(target_dir):
+                    backup_path = tempfile.mkdtemp(prefix=prefix + 'backup_', dir=parent_dir if parent_dir != '' else None)
+                    os.rmdir(backup_path)
+                    os.rename(target_dir, backup_path)
                 os.rename(stage_dir, target_dir)
-            except BaseException:
-                if (backup_path is not None) and (not os.path.lexists(target_dir)) and os.path.lexists(backup_path):
-                    os.rename(backup_path, target_dir)
-                    backup_path = None
+            except BaseException as exc:
+                # Include the first rename: an interrupt can arrive after the
+                # original output has moved but before rename returns to Python.
+                if (backup_path is not None) and os.path.lexists(backup_path):
+                    if not os.path.lexists(target_dir):
+                        try:
+                            os.rename(backup_path, target_dir)
+                        except BaseException as rollback_exc:
+                            exc.add_note('Output rollback failed: {}'.format(rollback_exc))
+                    if os.path.lexists(backup_path):
+                        exc.add_note('Previous output preserved for recovery at: {}'.format(backup_path))
                 raise
             committed = True
             if backup_path is not None:
@@ -222,16 +230,11 @@ def staged_output_dir(target_dir, redo=False, prefix='amalgkit_stage_'):
                 elif os.path.isdir(backup_path):
                     shutil.rmtree(backup_path)
                 backup_path = None
-    except Exception:
-        raise
     finally:
         if (not committed) and os.path.isdir(stage_dir):
             shutil.rmtree(stage_dir, ignore_errors=True)
-        if (not committed) and (backup_path is not None) and os.path.lexists(backup_path):
-            if os.path.islink(backup_path) or os.path.isfile(backup_path):
-                os.remove(backup_path)
-            elif os.path.isdir(backup_path):
-                shutil.rmtree(backup_path, ignore_errors=True)
+        # An un-restored backup can be the only copy of the previous output.
+        # It must survive failed rollback (including KeyboardInterrupt).
 
 
 def copy_per_species_plots(per_species_dir, dst_plot_dir):

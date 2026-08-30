@@ -1,5 +1,6 @@
 import json
 import os
+from pathlib import Path
 
 import pandas
 import pytest
@@ -243,6 +244,45 @@ def test_staged_output_directory_rechecks_no_redo_at_commit(tmp_path):
                     handle.write('second\n')
 
     assert (output_dir / 'writer.txt').read_text(encoding='utf-8') == 'second\n'
+
+
+@pytest.mark.parametrize('interrupt_after_backup', [False, True])
+@pytest.mark.parametrize('rollback_fails', [False, True])
+def test_staged_output_preserves_previous_data_on_failed_commit(
+    tmp_path, monkeypatch, interrupt_after_backup, rollback_fails,
+):
+    output_dir = tmp_path / 'result'
+    output_dir.mkdir()
+    (output_dir / 'old.txt').write_text('irreplaceable', encoding='utf-8')
+    real_rename = os.rename
+
+    def fail_rename(source, destination):
+        if Path(source) == output_dir:
+            real_rename(source, destination)
+            if interrupt_after_backup:
+                raise KeyboardInterrupt('after backup rename')
+        elif 'backup_' in Path(source).name:
+            if rollback_fails:
+                raise PermissionError('rollback denied')
+            real_rename(source, destination)
+        else:
+            raise PermissionError('commit denied')
+
+    monkeypatch.setattr(os, 'rename', fail_rename)
+    expected_error = KeyboardInterrupt if interrupt_after_backup else PermissionError
+    with pytest.raises(expected_error) as caught:
+        with staged_output_dir(str(output_dir), redo=True) as stage:
+            (Path(stage) / 'new.txt').write_text('new', encoding='utf-8')
+
+    if rollback_fails:
+        backups = list(tmp_path.glob('amalgkit_stage_backup_*'))
+        assert len(backups) == 1
+        assert (backups[0] / 'old.txt').read_text(encoding='utf-8') == 'irreplaceable'
+        assert str(backups[0]) in '\n'.join(caught.value.__notes__)
+    else:
+        assert (output_dir / 'old.txt').read_text(encoding='utf-8') == 'irreplaceable'
+        assert not list(tmp_path.glob('amalgkit_stage_backup_*'))
+    assert not Path(stage).exists()
 
 
 def test_atomic_and_staged_outputs_respect_restrictive_umask(tmp_path):

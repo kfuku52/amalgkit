@@ -193,6 +193,36 @@ def test_safe_fastq_cleanup_rolls_back_when_marker_write_fails(tmp_path, monkeyp
     assert all(not (tmp_path / (path.name + '.safely_removed')).exists() for path in fastq_paths)
 
 
+@pytest.mark.parametrize('interrupt', [False, True])
+def test_private_link_cleanup_rollback_preserves_sources_and_old_markers(tmp_path, monkeypatch, interrupt):
+    source = tmp_path / 'original.fastq.gz'
+    source.write_bytes(b'original reads')
+    work = tmp_path / 'work'
+    work.mkdir()
+    links = [work / 'R1.fastq.gz', work / 'R2.fastq.gz']
+    for link in links:
+        link.symlink_to('../original.fastq.gz')
+        pathlib.Path(str(link) + '.safely_removed').write_text('old marker', encoding='utf-8')
+    real_remove = os.remove
+
+    def fail_second_removal(path, *args, **kwargs):
+        if pathlib.Path(path).name == 'input_1':
+            raise KeyboardInterrupt() if interrupt else OSError('unlink denied')
+        return real_remove(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, 'remove', fail_second_removal)
+    with pytest.raises(KeyboardInterrupt if interrupt else OSError):
+        _safely_remove_quant_fastq_files([str(path) for path in links])
+
+    for link in links:
+        assert link.is_symlink()
+        assert os.readlink(link) == '../original.fastq.gz'
+        assert link.read_bytes() == b'original reads'
+        assert pathlib.Path(str(link) + '.safely_removed').read_text(encoding='utf-8') == 'old marker'
+    assert source.read_bytes() == b'original reads'
+    assert not list(work.glob('.amalgkit_quant_cleanup_*'))
+
+
 def test_index_ready_marker_invalidates_when_reference_changes(tmp_path):
     index_path = tmp_path / 'Species_A.idx'
     fasta_path = tmp_path / 'Species_A.fa'

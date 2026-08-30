@@ -34,6 +34,17 @@ def test_run_logged_command_decodes_non_utf8_output():
     assert stderr_txt != ''
 
 
+def test_subprocess_output_is_redacted_only_when_displayed(capsys):
+    url = 'https://user:SECRET@example.org/data?signature=SECRET'
+    _, stdout, stderr = run_logged_command(
+        ['dummy'],
+        runner=lambda *_args, **_kwargs: subprocess.CompletedProcess(['dummy'], 0, url, url),
+        print_output=True,
+    )
+    assert stdout == stderr == url
+    assert 'SECRET' not in capsys.readouterr().out
+
+
 def test_probe_dependency_command_reports_missing_executable():
     def fake_run(_cmd, stdout=None, stderr=None):
         raise FileNotFoundError('missing')

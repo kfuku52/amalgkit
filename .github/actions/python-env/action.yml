@@ -1,0 +1,25 @@
+name: Python environment
+description: Isolated Python with a shared uv download and wheel cache
+inputs:
+  python-version:
+    description: Supported interpreter version
+    required: true
+  cache-suffix:
+    description: Separate caches for dependency resolution policies
+    default: latest
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v6
+      with:
+        python-version: ${{ inputs.python-version }}
+    - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      with:
+        enable-cache: true
+        cache-suffix: ${{ inputs.cache-suffix }}
+        cache-dependency-glob: |
+          pyproject.toml
+          requirements/*.txt
+          .github/actions/python-env/action.yml
+        activate-environment: true
+        python-version: ${{ inputs.python-version }}

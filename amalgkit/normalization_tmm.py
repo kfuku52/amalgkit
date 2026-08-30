@@ -1,9 +1,9 @@
 import math
 from dataclasses import dataclass
+from fractions import Fraction
 
 import numpy
 import pandas
-from scipy.stats import rankdata
 
 
 @dataclass
@@ -75,6 +75,34 @@ def calc_factor_quantile(data, lib_size, p=0.75):
     return pandas.Series(factors / libs, index=columns, dtype=float)
 
 
+def _rank_count_expression(obs, ref, ref_libs, *, ratio):
+    """Average ranks before logs/library scaling can split equal count ratios.
+
+    Positive products/ratios are represented as mantissa + binary exponent to
+    avoid overflow/underflow. No decimal rounding or tolerance merges distinct
+    keys. A common library factor does not affect rank and is omitted.
+    """
+    obs_m, obs_e = numpy.frexp(obs)
+    ref_m, ref_e = numpy.frexp(ref)
+    mantissas = obs_m / ref_m if ratio else obs_m * ref_m
+    exponents = obs_e - ref_e if ratio else obs_e + ref_e
+    if not numpy.all(ref_libs == ref_libs[0]):
+        # Preserve the historical vector-reference API, where library sizes
+        # can vary per recycled element rather than being one common factor.
+        lib_m, lib_e = numpy.frexp(ref_libs)
+        mantissas = mantissas * lib_m if ratio else mantissas / lib_m
+        exponents = exponents + lib_e if ratio else exponents - lib_e
+    mantissas, shift = numpy.frexp(mantissas)
+    exponents = exponents + shift
+    order = numpy.lexsort((mantissas, exponents))
+    different = (exponents[order][1:] != exponents[order][:-1]) | (mantissas[order][1:] != mantissas[order][:-1])
+    starts = numpy.r_[0, numpy.flatnonzero(different) + 1]
+    ends = numpy.r_[starts[1:], len(order)]
+    ranks = numpy.empty(len(order), dtype=float)
+    ranks[order] = numpy.repeat((starts + ends + 1) / 2.0, ends - starts)
+    return ranks
+
+
 def calc_factor_tmm(
     obs,
     ref,
@@ -113,21 +141,23 @@ def calc_factor_tmm(
     if (not numpy.isfinite(n_ref_values).all()) or (n_ref_values <= 0).any():
         raise ValueError('libsize_ref must contain only finite positive values.')
     target_size = max(obs_vector.size, ref_vector.size)
-    obs_scaled = _recycle(obs_vector / n_obs, target_size)
-    ref_scaled = _recycle(ref_vector, target_size) / _recycle(n_ref_values, target_size)
-    log_r = numpy.log2(obs_scaled / ref_scaled)
-    abs_e = (numpy.log2(obs_scaled) + numpy.log2(ref_scaled)) / 2.0
-    left_var = _recycle((n_obs - obs_vector) / n_obs / obs_vector, target_size)
-    right_var = (
-        (_recycle(n_ref_values, target_size) - _recycle(ref_vector, target_size))
-        / _recycle(n_ref_values, target_size)
-        / _recycle(ref_vector, target_size)
-    )
-    variances = left_var + right_var
+    if not obs_vector.size or not ref_vector.size:
+        return 1.0
+    obs_counts = _recycle(obs_vector, target_size)
+    ref_counts = _recycle(ref_vector, target_size)
+    ref_libs = _recycle(n_ref_values, target_size)
+    positive = (obs_counts > 0) & (ref_counts > 0)
+    obs_counts, ref_counts, ref_libs = obs_counts[positive], ref_counts[positive], ref_libs[positive]
+    log_obs = numpy.log2(obs_counts) - math.log2(n_obs)
+    log_ref = numpy.log2(ref_counts) - numpy.log2(ref_libs)
+    log_r = log_obs - log_ref
+    abs_e = (log_obs + log_ref) / 2.0
+    with numpy.errstate(over='ignore', divide='ignore', invalid='ignore'):
+        variances = (n_obs - obs_counts) / n_obs / obs_counts + (ref_libs - ref_counts) / ref_libs / ref_counts
     finite = numpy.isfinite(log_r) & numpy.isfinite(abs_e) & (abs_e > acutoff)
     log_r = log_r[finite]
-    abs_e = abs_e[finite]
     variances = variances[finite]
+    obs_counts, ref_counts, ref_libs = obs_counts[finite], ref_counts[finite], ref_libs[finite]
     if log_r.size == 0:
         return 1.0
     if float(numpy.max(numpy.abs(log_r))) < 1e-6:
@@ -137,18 +167,21 @@ def calc_factor_tmm(
     hi_l = int(n + 1 - lo_l)
     lo_s = int(math.floor(n * sum_trim) + 1)
     hi_s = int(n + 1 - lo_s)
-    rank_log_r = rankdata(log_r, method='average')
-    rank_abs_e = rankdata(abs_e, method='average')
+    rank_log_r = _rank_count_expression(obs_counts, ref_counts, ref_libs, ratio=True)
+    rank_abs_e = _rank_count_expression(obs_counts, ref_counts, ref_libs, ratio=False)
     keep = (
         (rank_log_r >= lo_l) & (rank_log_r <= hi_l) &
         (rank_abs_e >= lo_s) & (rank_abs_e <= hi_s)
     )
-    if do_weighting:
-        numerator = numpy.nansum(log_r[keep] / variances[keep])
-        denominator = numpy.nansum(1.0 / variances[keep])
-        factor_log = numerator / denominator
-    else:
-        factor_log = float(numpy.nanmean(log_r[keep]))
+    if not keep.any():
+        return 1.0
+    with numpy.errstate(divide='ignore', invalid='ignore'):
+        if do_weighting:
+            numerator = numpy.nansum(log_r[keep] / variances[keep])
+            denominator = numpy.nansum(1.0 / variances[keep])
+            factor_log = numerator / denominator
+        else:
+            factor_log = float(numpy.mean(log_r[keep]))
     if numpy.isnan(factor_log):
         factor_log = 0.0
     return float(2.0 ** factor_log)
@@ -163,7 +196,11 @@ def _resolve_tmm_reference_column(matrix, lib_sizes):
     if float(numpy.median(f75)) < 1e-20:
         ref_column = int(numpy.argmax(numpy.sum(numpy.sqrt(matrix), axis=0)))
     else:
-        ref_column = int(numpy.argmin(numpy.abs(f75 - numpy.mean(f75))))
+        # Compare distances to the exact mean of the represented quartiles;
+        # forming a rounded mean can break an otherwise exact reference tie.
+        quartiles = [Fraction(float(value)) for value in f75]
+        mean_quartile = sum(quartiles) / len(quartiles)
+        ref_column = min(range(len(quartiles)), key=lambda index: abs(quartiles[index] - mean_quartile))
     return ref_column
 
 
@@ -171,8 +208,13 @@ def _resolve_median_reference_column(factors):
     values = numpy.asarray(factors, dtype=float).reshape(-1)
     if values.size == 0:
         raise ValueError('At least one TMM normalization factor is required.')
-    median_value = float(numpy.median(values))
-    return int(numpy.argmin(numpy.abs(values - median_value)))
+    if not numpy.isfinite(values).all() or (values <= 0).any():
+        raise ValueError('TMM normalization factors must be finite and positive.')
+    ordered = numpy.sort(values)
+    central = ordered[[(values.size - 1) // 2, values.size // 2]]
+    # For even n both central values are equally close to the true median.
+    # Choose the first input column, without subtracting a rounded midpoint.
+    return int(numpy.flatnonzero(numpy.isin(values, central))[0])
 
 
 def calc_norm_factors_tmm(
@@ -254,9 +296,7 @@ def apply_tmm_factors(counts, norm_factors):
             raise ValueError('norm_factors must match the number of sample columns.')
     if (not numpy.isfinite(factors).all()) or (factors <= 0).any():
         raise ValueError('norm_factors must contain only finite positive values.')
-    corrected = counts.copy()
-    corrected.loc[:, :] = counts.to_numpy(dtype=float, copy=False) / factors.reshape(1, -1)
-    return corrected
+    return pandas.DataFrame(_matrix / factors.reshape(1, -1), index=counts.index, columns=counts.columns)
 
 
 __all__ = [

@@ -36,6 +36,16 @@ amalgkit merge \
 
 Rows with `exclusion != no` are ignored.
 
+Each abundance table must contain data rows, unique nonempty `target_id` values,
+and finite nonnegative effective lengths, counts and TPM. Invalid inputs stop
+the merge with the run, path and offending column in the error; previously
+published merge outputs remain intact. Validation shares the quant/sanity
+contract and does not reread abundance tables.
+
+Target identifiers remain text throughout quant, merge, orthology joins and
+normalization: `0001`, `1` and `NA` are distinct IDs. Empty cells are missing
+identifiers; numeric missing values are still rejected in abundance columns.
+
 ## Main Outputs
 
 For each species:

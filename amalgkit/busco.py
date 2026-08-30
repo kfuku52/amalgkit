@@ -214,6 +214,7 @@ def normalize_busco_table(src_path, dest_path):
             comment='#',
             names=header,
             dtype=str,
+            keep_default_na=False,
             low_memory=False,
             compression=compression,
         )
@@ -224,6 +225,7 @@ def normalize_busco_table(src_path, dest_path):
             header=None,
             comment='#',
             dtype=str,
+            keep_default_na=False,
             low_memory=False,
             compression=compression,
         )
@@ -295,6 +297,7 @@ def summarize_busco_species_tables(
             comment='#',
             names=REQUIRED_COLUMNS,
             dtype=str,
+            keep_default_na=False,
             low_memory=False,
         )
         tmp = tmp.loc[_normalize_busco_id_series(tmp.loc[:, 'busco_id']) != 'buscoid', ['busco_id', 'status']].copy()

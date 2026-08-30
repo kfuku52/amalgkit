@@ -1,6 +1,6 @@
 import json
 
-import pandas
+from amalgkit.table_io import read_identifier_tsv
 
 from amalgkit.batch_effect_common import BatchEffectResult
 
@@ -45,7 +45,7 @@ _DCF_FIELD_TYPES = {
 
 
 def read_expression_matrix_tsv(path):
-    return pandas.read_csv(path, sep='\t', index_col=0)
+    return read_identifier_tsv(path, index_col=0)
 
 
 def write_expression_matrix_tsv(df, path):
@@ -53,7 +53,7 @@ def write_expression_matrix_tsv(df, path):
 
 
 def read_metadata_tsv(path):
-    return pandas.read_csv(path, sep='\t', low_memory=False)
+    return read_identifier_tsv(path, identifier_columns=('run',), low_memory=False)
 
 
 def write_backend_summary_json(summary, path):

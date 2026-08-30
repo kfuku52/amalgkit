@@ -10,6 +10,9 @@ from collections.abc import Iterable, Sequence
 import numpy
 import pandas
 
+from amalgkit.identifier_validation import TargetIdTracker
+from amalgkit.table_io import read_identifier_tsv
+
 QUANT_ABUNDANCE_REQUIRED_COLUMNS = (
     "target_id",
     "length",
@@ -27,6 +30,50 @@ BUSCO_REQUIRED_COLUMNS = (
     "orthodb_url",
     "description",
 )
+
+
+def validate_table_frame(
+    frame: pandas.DataFrame,
+    required_columns: Sequence[str],
+    context: str,
+    *,
+    require_data_rows: bool = True,
+    numeric_nonnegative_columns: Iterable[str] = (),
+) -> str:
+    """Validate already-loaded rows without reading a file a second time."""
+    missing = [column for column in required_columns if column not in frame.columns]
+    if missing:
+        return f"Missing required column(s) in {context}: {', '.join(missing)}"
+    if require_data_rows and frame.empty:
+        return f"{context} did not contain any data rows."
+    if "target_id" in frame.columns:
+        ids = frame["target_id"].fillna("").astype(str).str.strip()
+        if ids.eq("").any():
+            return f"{context} contains missing target_id values."
+        duplicates = ids.loc[ids.duplicated()]
+        if not duplicates.empty:
+            return f"{context} contains duplicate target_id values: {', '.join(sorted(set(duplicates))[:5])}."
+    for column in numeric_nonnegative_columns:
+        values = pandas.to_numeric(frame[column], errors="coerce").to_numpy(dtype=float)
+        if not numpy.isfinite(values).all():
+            return f'{context} contains non-finite values in "{column}".'
+        if (values < 0).any():
+            return f'{context} contains negative values in "{column}".'
+    return ""
+
+
+def read_quant_abundance(path: str, value_columns: Sequence[str], context: str) -> pandas.DataFrame:
+    """Read only needed quant columns once, preserving IDs and enforcing values."""
+    columns = ["target_id", *value_columns]
+    try:
+        frame = read_identifier_tsv(path, identifier_columns=("target_id",), usecols=columns)
+    except Exception as exc:
+        raise ValueError(f"Failed to read {context}: {exc}") from exc
+    error = validate_table_frame(frame, columns, context, numeric_nonnegative_columns=value_columns)
+    if error:
+        raise ValueError(error)
+    frame["target_id"] = frame["target_id"].str.strip()
+    return frame
 
 
 def validate_nonempty_table(
@@ -77,39 +124,36 @@ def validate_nonempty_table(
 
     saw_data_row = False
     saw_valid_target = False
-    seen_target_ids: set[str] = set()
     try:
-        with pandas.read_csv(
-            path,
-            sep="\t",
-            header=0,
-            comment=comment,
-            usecols=scan_columns,
-            chunksize=chunk_size,
-            low_memory=False,
-        ) as chunks:
+        with (
+            TargetIdTracker() as seen_target_ids,
+            pandas.read_csv(
+                path,
+                sep="\t",
+                header=0,
+                comment=comment,
+                usecols=scan_columns,
+                chunksize=chunk_size,
+                low_memory=False,
+                converters={"target_id": str},
+            ) as chunks,
+        ):
             for chunk in chunks:
                 saw_data_row = saw_data_row or chunk.shape[0] > 0
+                error = validate_table_frame(
+                    chunk, (), context, require_data_rows=False, numeric_nonnegative_columns=numeric_columns
+                )
+                if error:
+                    return error
                 if "target_id" in chunk.columns:
                     target_ids = chunk["target_id"].fillna("").astype(str).str.strip()
-                    if target_ids.eq("").any():
-                        return f"{context} contains missing target_id values."
-                    duplicate_target_ids = set(target_ids.loc[target_ids.duplicated()].tolist())
-                    duplicate_target_ids.update(set(target_ids.tolist()).intersection(seen_target_ids))
+                    duplicate_target_ids = seen_target_ids.add(target_ids.tolist())
                     if duplicate_target_ids:
                         return "{} contains duplicate target_id values: {}.".format(
                             context,
                             ", ".join(sorted(duplicate_target_ids)[:5]),
                         )
-                    seen_target_ids.update(target_ids.tolist())
                     saw_valid_target = saw_valid_target or bool(target_ids.ne("").any())
-                for column in numeric_columns:
-                    numeric = pandas.to_numeric(chunk[column], errors="coerce")
-                    values = numeric.to_numpy(dtype=float)
-                    if numeric.isna().any() or not numpy.isfinite(values).all():
-                        return f'{context} contains non-finite values in "{column}".'
-                    if (numeric < 0).any():
-                        return f'{context} contains negative values in "{column}".'
     except Exception as exc:
         return f"Failed to scan {context}: {exc}"
 

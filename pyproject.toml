@@ -123,6 +123,11 @@ follow_imports = "skip"
 ignore_missing_imports = true
 no_site_packages = true
 files = [
+  "amalgkit/fastq_cleanup.py",
+  "amalgkit/getfastq_resume.py",
+  "amalgkit/identifier_validation.py",
+  "amalgkit/redaction.py",
+  "amalgkit/table_io.py",
   "amalgkit/cross_species_computation.py",
   "amalgkit/command_context.py",
   "amalgkit/getfastq_file_state.py",

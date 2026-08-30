@@ -9,10 +9,11 @@ import stat
 import subprocess
 import sys
 import tempfile
-import warnings
 
 import numpy
 import pandas
+from amalgkit.table_io import read_annotation_tsv
+from amalgkit.fastq_cleanup import safely_remove_quant_fastq_files
 
 from amalgkit.arg_utils import clone_namespace
 from amalgkit.command_context import PrefetchedDirEntries, QuantRuntimeContext
@@ -645,7 +646,9 @@ def adapt_oarfish_outputs(output_dir, sra_id, sra_stat, output_prefix, seq_tech)
     if not os.path.isfile(meta_info_path):
         raise IsADirectoryError('oarfish output path exists but is not a file: {}'.format(meta_info_path))
 
-    quant_df = pandas.read_csv(quant_path, sep='\t', header=0)
+    # Oarfish accepts several target-column spellings. Read its small schema as
+    # text before normalizing names, then explicitly coerce measurement columns.
+    quant_df = read_annotation_tsv(quant_path, header=0)
     quant_df = _normalize_oarfish_quant_columns(quant_df)
     required_columns = ['target_id', 'length', 'est_counts']
     missing_columns = [col for col in required_columns if col not in quant_df.columns]
@@ -1211,109 +1214,8 @@ def resolve_input_fastq_files(sra_stat, output_dir_getfastq, ext, files=None):
     return [os.path.join(output_dir_getfastq, f) for f in matched]
 
 
-def _rollback_fastq_removal(records, quarantine_dir):
-    for record in records:
-        marker_path = record['marker_path']
-        if os.path.lexists(marker_path):
-            if os.path.islink(marker_path) or os.path.isfile(marker_path):
-                os.remove(marker_path)
-        marker_backup = record['marker_backup']
-        if os.path.lexists(marker_backup):
-            os.replace(marker_backup, marker_path)
-    for record in reversed(records):
-        input_path = record['input_path']
-        if os.path.lexists(input_path):
-            continue
-        source_path = None
-        if os.path.lexists(record['quarantine_path']):
-            source_path = record['quarantine_path']
-        elif os.path.lexists(record['backup_path']):
-            source_path = record['backup_path']
-        if source_path is not None:
-            os.replace(source_path, input_path)
-    shutil.rmtree(quarantine_dir, ignore_errors=True)
-
-
 def _safely_remove_quant_fastq_files(in_files):
-    normalized_inputs = [os.path.abspath(path) for path in in_files]
-    if len(normalized_inputs) == 0:
-        return
-    parent_dirs = {os.path.dirname(path) for path in normalized_inputs}
-    if len(parent_dirs) != 1:
-        raise ValueError('FASTQ cleanup requires all inputs to share one directory.')
-    parent_dir = parent_dirs.pop()
-    records = []
-    for index, input_path in enumerate(normalized_inputs):
-        if os.path.islink(input_path) or not os.path.isfile(input_path):
-            raise FileNotFoundError(
-                'FASTQ cleanup input is not a regular file: {}'.format(input_path)
-            )
-        marker_path = input_path + '.safely_removed'
-        if os.path.lexists(marker_path) and (
-            os.path.islink(marker_path) or not os.path.isfile(marker_path)
-        ):
-            raise ValueError(
-                'Refusing non-regular safe-removal marker: {}'.format(marker_path)
-            )
-        records.append({
-            'input_path': input_path,
-            'marker_path': marker_path,
-            'quarantine_path': '',
-            'backup_path': '',
-            'marker_backup': '',
-            'index': index,
-        })
-    quarantine_dir = tempfile.mkdtemp(
-        prefix='.amalgkit_quant_cleanup_',
-        dir=parent_dir,
-    )
-    for record in records:
-        suffix = str(record['index'])
-        record['quarantine_path'] = os.path.join(quarantine_dir, 'input_' + suffix)
-        record['backup_path'] = os.path.join(quarantine_dir, 'backup_' + suffix)
-        record['marker_backup'] = os.path.join(quarantine_dir, 'marker_' + suffix)
-    try:
-        for record in records:
-            os.replace(record['input_path'], record['quarantine_path'])
-        for record in records:
-            os.link(record['quarantine_path'], record['backup_path'])
-        for record in records:
-            if os.path.lexists(record['marker_path']):
-                os.replace(record['marker_path'], record['marker_backup'])
-        for record in records:
-            with atomic_output_path(
-                record['marker_path'],
-                suffix='.safely_removed',
-            ) as temporary_marker:
-                with open(temporary_marker, 'w', encoding='utf-8') as handle:
-                    handle.write(
-                        'This fastq file was safely removed after `amalgkit quant`.'
-                    )
-        for record in records:
-            os.remove(record['quarantine_path'])
-    except Exception:
-        _rollback_fastq_removal(records, quarantine_dir)
-        raise
-    cleanup_failed = False
-    for record in records:
-        try:
-            if os.path.lexists(record['backup_path']):
-                os.remove(record['backup_path'])
-            if os.path.lexists(record['marker_backup']):
-                os.remove(record['marker_backup'])
-        except OSError:
-            cleanup_failed = True
-    try:
-        os.rmdir(quarantine_dir)
-    except OSError:
-        cleanup_failed = True
-    if cleanup_failed:
-        warnings.warn(
-            'FASTQ cleanup committed, but quarantine cleanup was incomplete: {}'.format(
-                quarantine_dir
-            ),
-            RuntimeWarning,
-        )
+    return safely_remove_quant_fastq_files(in_files, atomic_writer=atomic_output_path)
 
 
 def _run_quant_unlocked(

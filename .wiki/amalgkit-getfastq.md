@@ -94,9 +94,16 @@ This compensation is for public SRA-derived runs, not private FASTQ files.
 
 With the default `--redo no`, `getfastq` resumes independently for each SRA run. A run is skipped only
 when its final FASTQ files, paired-record counts, `getfastq_stats.tsv`, saved processing phase, and an
-execution fingerprint covering target size, filters, and relevant run metadata are consistent. Legacy
+execution fingerprint covering target size, filters, mate conversion, and relevant run metadata are consistent. Legacy
 outputs produced by the same resumable format but interrupted before the state file was written are
 fully validated once and then adopted.
+
+Starting with 0.16.74, resume schema 3 includes
+`--treat_identical_paired_as_single`. States from schemas 1 and 2 cannot prove
+that option's setting and are invalidated; the first run after upgrading may
+therefore reprocess FASTQs. Downloaded `.sra` files are retained. Unmarked legacy
+outputs are not adopted when mate conversion is requested. Changing this option
+on a completed run also triggers reprocessing instead of silently skipping it.
 
 The first-round and complete phases are written atomically to `getfastq_run_state.json` inside each run
 directory. An interrupted second round is deliberately restarted for that run because its FASTQ merge

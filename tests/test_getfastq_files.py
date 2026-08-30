@@ -1270,6 +1270,30 @@ class TestGetfastqResume:
         assert inspect_getfastq_resume_output(args, sra_stat, g, metadata) is None
         assert not output_path.exists()
 
+    def test_mate_conversion_option_change_invalidates_completed_paired_output(self, tmp_path):
+        args, metadata, g, sra_stat, run_dir = self._make_case(tmp_path, layout='paired')
+        paths = [run_dir / ('SRR001_' + str(mate) + '.amalgkit.fastq.gz') for mate in (1, 2)]
+        for path in paths:
+            self._write_fastq(path)
+        write_getfastq_stats(sra_stat, metadata, str(run_dir))
+        args.treat_identical_paired_as_single = False
+        write_getfastq_run_state(args, sra_stat, g, metadata, GETFASTQ_PHASE_COMPLETE)
+        assert inspect_getfastq_resume_output(args, sra_stat, g, metadata)['phase'] == GETFASTQ_PHASE_COMPLETE
+
+        args.treat_identical_paired_as_single = True
+
+        assert inspect_getfastq_resume_output(args, sra_stat, g, metadata) is None
+        assert all(not path.exists() for path in paths)
+
+    def test_unmarked_output_cannot_prove_mate_conversion_setting(self, tmp_path):
+        args, metadata, g, sra_stat, run_dir = self._make_case(tmp_path, layout='paired')
+        for mate in (1, 2):
+            self._write_fastq(run_dir / ('SRR001_' + str(mate) + '.amalgkit.fastq.gz'))
+        write_getfastq_stats(sra_stat, metadata, str(run_dir))
+        args.treat_identical_paired_as_single = True
+
+        assert inspect_getfastq_resume_output(args, sra_stat, g, metadata) is None
+
     def test_incomplete_second_round_is_restarted_from_first_round(self, tmp_path):
         args, metadata, g, sra_stat, run_dir = self._make_case(tmp_path)
         output_path = run_dir / 'SRR001.amalgkit.fastq.gz'
@@ -1340,7 +1364,8 @@ class TestGetfastqResume:
         with pytest.raises(ValueError, match='contains no reads'):
             validate_getfastq_resume_output(sra_stat)
 
-    def test_schema_one_state_is_invalidated_by_schema_two(self, tmp_path):
+    @pytest.mark.parametrize('old_version', [1, 2])
+    def test_old_state_is_invalidated_by_schema_three(self, tmp_path, old_version):
         args, metadata, g, sra_stat, run_dir = self._make_case(tmp_path)
         output_path = run_dir / 'SRR001.amalgkit.fastq.gz'
         state_path = run_dir / 'getfastq_run_state.json'
@@ -1349,11 +1374,11 @@ class TestGetfastqResume:
         write_getfastq_run_state(args, sra_stat, g, metadata, GETFASTQ_PHASE_COMPLETE)
         with open(state_path, encoding='utf-8') as handle:
             state = json.load(handle)
-        state['schema_version'] = 1
+        state['schema_version'] = old_version
         with open(state_path, 'w', encoding='utf-8') as handle:
             json.dump(state, handle)
 
-        assert GETFASTQ_RESUME_SCHEMA_VERSION == 2
+        assert GETFASTQ_RESUME_SCHEMA_VERSION == 3
         assert inspect_getfastq_resume_output(args, sra_stat, g, metadata) is None
         assert not output_path.exists()
         assert not state_path.exists()

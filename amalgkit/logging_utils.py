@@ -9,6 +9,8 @@ import os
 import sys
 from typing import Any
 
+from amalgkit.redaction import redact_log_value
+
 LOGGER_NAME = "amalgkit"
 DEFAULT_LOG_LEVEL = "INFO"
 
@@ -41,7 +43,9 @@ class JsonLogFormatter(logging.Formatter):
                 payload[key] = value
         if record.exc_info:
             payload["exception"] = self.formatException(record.exc_info)
-        return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+        # Redact at the final boundary: exception causes and interpolated log
+        # messages can contain raw commands even when the command field is safe.
+        return json.dumps(redact_log_value(payload), ensure_ascii=False, sort_keys=True)
 
 
 def get_logger(name: str | None = None) -> logging.Logger:

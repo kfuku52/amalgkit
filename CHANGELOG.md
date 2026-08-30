@@ -5,6 +5,39 @@ Releases provide the commit-level generated notes for each version.
 
 ## Unreleased
 
+### 0.16.74 - 2026-08-31
+
+- Preserved previous output directories after failed commits, failed rollback
+  and interrupts; recovery paths are reported without deleting the last copy.
+- Redacted URL credentials in structured log fields, exception chains, timeout
+  diagnostics and debug tracebacks while keeping raw subprocess data usable.
+- Rejected empty, non-finite and negative quant tables before merge publication.
+  Preserved lexical gene/run identifiers through quant, orthology, normalization
+  and finalization, including leading zeroes and literal `NA` identifiers.
+- Allowed default quant cleanup of managed private-gzip symlinks without
+  deleting their source files, and made marker/input rollback interruption-safe.
+- Added mate-conversion settings to getfastq resume schema 3. Older state files
+  require reprocessing because they cannot prove the setting; `.sra` downloads
+  are retained.
+- Recognized the getfastq completion manifest during sanity checks instead of
+  reporting it as an orphan run output.
+- Stabilized TMM trimming ranks and reference ties, verified with independent
+  60-digit and edgeR fixtures. Boundary cases can differ from older results;
+  regenerate CSTMM and downstream outputs together to adopt the new convention.
+- Fixed integer DataFrame correction under pandas 3 in TMM and Combat-seq
+  without truncating fractional values or modifying input matrices.
+- Bounded duplicate-validation memory with a temporary SQLite inventory and
+  retained one canonical target vector while merging quant tables. Added
+  reproducible wall-time, allocation/RSS and output-hash benchmarks.
+- Extracted resume, FASTQ cleanup, table I/O, identifier validation and redaction
+  boundaries with shared formatting/type checks. Reused cached CI installs,
+  removed the duplicate Python 3.14 fast lane, gated macOS by relevant paths,
+  and extended real-tool E2E through default cleanup, TMM and finalization.
+- Verified built wheels outside the checkout by importing their installed
+  modules and extracting the bundled FASTA dataset.
+
+### Earlier default-branch updates
+
 - Allowed `quant` to reuse a canonical, existing `getfastq` directory through
   a symbolic-link input root while retaining path-component containment and
   symbolic-link rejection for run directories and output roots.

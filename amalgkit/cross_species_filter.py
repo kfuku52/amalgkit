@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 import numpy
 import pandas
+from amalgkit.table_io import read_annotation_tsv, read_identifier_tsv
 
 from amalgkit.command_context import CrossSpeciesFilterContext
 from amalgkit.cross_species_computation import (
@@ -221,7 +222,7 @@ def _prepare_metadata_table(dir_cross_species_input_table, selected_sample_group
             metadata_paths.append(path)
     if len(metadata_paths) == 0:
         raise FileNotFoundError('No metadata files found in the cross-species input table directory.')
-    frames = [pandas.read_csv(path, sep='\t', low_memory=False) for path in metadata_paths]
+    frames = [read_identifier_tsv(path, identifier_columns=('run',), low_memory=False) for path in metadata_paths]
     df_metadata = pandas.concat(frames, axis=0, ignore_index=True, sort=False)
     df_metadata = _normalize_cross_species_metadata_table(df_metadata)
     return df_metadata.loc[
@@ -266,8 +267,8 @@ def _load_expression_tables(dir_cross_species_input_table, spp_filled, batch_eff
     for sp, (uncorrected_name, corrected_name) in matched_tables.items():
         uncorrected_path = os.path.join(dir_cross_species_input_table, uncorrected_name)
         corrected_path = os.path.join(dir_cross_species_input_table, corrected_name)
-        out['uncorrected'][sp] = pandas.read_csv(uncorrected_path, sep='\t', index_col=0, low_memory=False)
-        out['corrected'][sp] = pandas.read_csv(corrected_path, sep='\t', index_col=0, low_memory=False)
+        out['uncorrected'][sp] = read_identifier_tsv(uncorrected_path, index_col=0, low_memory=False)
+        out['corrected'][sp] = read_identifier_tsv(corrected_path, index_col=0, low_memory=False)
         out['uncorrected'][sp].columns = out['uncorrected'][sp].columns.map(str)
         out['corrected'][sp].columns = out['corrected'][sp].columns.map(str)
     return out
@@ -279,8 +280,8 @@ def _select_single_copy_orthogroups(
     spp_filled,
     single_copy_threshold=DEFAULT_SINGLE_COPY_THRESHOLD,
 ):
-    df_gc = pandas.read_csv(file_genecount, sep='\t', low_memory=False).set_index('orthogroup_id')
-    df_og = pandas.read_csv(file_orthogroup_table, sep='\t', low_memory=False).set_index('busco_id')
+    df_gc = read_identifier_tsv(file_genecount, identifier_columns=('orthogroup_id',)).set_index('orthogroup_id')
+    df_og = read_annotation_tsv(file_orthogroup_table, low_memory=False).set_index('busco_id')
     present_species = [sp for sp in spp_filled if (sp in df_gc.columns) and (sp in df_og.columns)]
     if len(present_species) == 0:
         raise ValueError('No species columns overlapped between orthogroup inputs and per-species tables.')

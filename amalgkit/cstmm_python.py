@@ -7,6 +7,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy
 import pandas
+from amalgkit.table_io import read_annotation_tsv, read_identifier_tsv
 
 from amalgkit.imputation import impute_expression
 from amalgkit.normalization_tmm import run_tmm_rounds_for_cstmm
@@ -38,7 +39,7 @@ def _read_est_counts(dir_count, species_name):
     if len(infile) == 0:
         raise FileNotFoundError('No *est_counts.tsv files found: {}'.format(species_name))
     infile_path = os.path.join(species_dir, infile[0])
-    dat = pandas.read_csv(infile_path, sep='\t', index_col=0)
+    dat = read_identifier_tsv(infile_path, index_col=0)
     if 'length' in dat.columns:
         dat = dat.drop(columns=['length'])
     dat.columns = ['{}_{}'.format(species_name, col) for col in dat.columns]
@@ -62,7 +63,7 @@ def _get_spp_filled(dir_count, df_gc=None):
 
 
 def _read_genecount_table(file_genecount):
-    df_gc = pandas.read_csv(file_genecount, sep='\t')
+    df_gc = read_identifier_tsv(file_genecount, identifier_columns=('orthogroup_id',))
     if 'orthogroup_id' not in df_gc.columns:
         raise ValueError('Column "orthogroup_id" is required in genecount table: {}'.format(file_genecount))
     df_gc = df_gc.set_index('orthogroup_id')
@@ -70,7 +71,8 @@ def _read_genecount_table(file_genecount):
 
 
 def _read_orthogroup_table(file_orthogroup_table):
-    return pandas.read_csv(file_orthogroup_table, sep='\t', index_col=0)
+    frame = read_annotation_tsv(file_orthogroup_table)
+    return frame.set_index(frame.columns[0])
 
 
 def _load_uncorrected(dir_count, species_names):
@@ -393,7 +395,7 @@ def _run_cstmm_python(
     library_sizes = _get_library_sizes(df_nonzero=df_nonzero, uncorrected_by_species=uncorrected_by_species)
     roundtrip = run_tmm_rounds_for_cstmm(counts=df_nonzero, lib_size=library_sizes.reindex(df_nonzero.columns))
     metadata_path = os.path.join(dir_count, 'metadata.tsv')
-    df_metadata = pandas.read_csv(metadata_path, sep='\t')
+    df_metadata = read_identifier_tsv(metadata_path, identifier_columns=('run',))
     df_metadata = append_tmm_stats_to_metadata_python(metadata_df=df_metadata, roundtrip=roundtrip)
     if single_copy_threshold is not None:
         df_metadata['single_copy_threshold'] = validate_single_copy_threshold(single_copy_threshold)

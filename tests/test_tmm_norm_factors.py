@@ -1,9 +1,9 @@
 """Direct numeric tests for amalgkit's TMM normalization factors.
 
-The production TMM implementation (amalgkit/normalization_tmm.py) is a
-faithful re-implementation of edgeR's ``calcNormFactors(method="TMM")``
-(Robinson & Oshlack 2010).  The tests here pin it to real numeric values
-that were verified independently:
+The production TMM implementation (amalgkit/normalization_tmm.py) follows
+Robinson & Oshlack (2010), with deterministic ties at trimming/reference
+boundaries that can differ from edgeR's floating-point ordering. The tests
+pin it to numeric values that were verified independently:
 
 * ``calc_factor_tmm`` on a fixed pair of count vectors, hand-derived to
   ``352/2047`` (the trimmed mean of M-values collapses to a single gene).
@@ -15,8 +15,12 @@ They also retain the original structural checks (positive factors,
 reference-column bounds, symmetric identical-column behavior).
 """
 
+import json
+from pathlib import Path
+
 import numpy
 import pandas
+import pytest
 
 from amalgkit.normalization_tmm import (
     _resolve_median_reference_column,
@@ -25,6 +29,35 @@ from amalgkit.normalization_tmm import (
     calc_norm_factors_tmm,
     run_tmm_rounds_for_cstmm,
 )
+
+FIXTURES = Path(__file__).parent / 'fixtures'
+ORACLE_CASES = json.loads((FIXTURES / 'tmm.json').read_text())['cases']
+
+
+@pytest.mark.parametrize('case', ORACLE_CASES, ids=lambda case: 'oracle-' + str(case['case']))
+def test_tmm_rounds_match_independent_high_precision_oracle(case):
+    counts = numpy.array(case['counts'])
+    result = run_tmm_rounds_for_cstmm(counts, lib_size=case['library_sizes'])
+    assert result.round1_reference_column == case['round1_reference']
+    assert result.median_reference_columns == [case['round2_reference']]
+    numpy.testing.assert_allclose(result.round1_factors, case['round1'], rtol=1e-12, atol=1e-12)
+    numpy.testing.assert_allclose(result.round2_factors, case['round2'], rtol=1e-12, atol=1e-12)
+    fixed = calc_norm_factors_tmm(counts, lib_size=case['library_sizes'], ref_column=0)
+    numpy.testing.assert_allclose(fixed, case['fixed_first'], rtol=1e-12, atol=1e-12)
+    # Joint power-of-two scaling preserves rates and relative binomial weights.
+    scaled = calc_norm_factors_tmm(counts[::-1] * 8, lib_size=numpy.array(case['library_sizes']) * 8, ref_column=0)
+    numpy.testing.assert_allclose(scaled, fixed, rtol=1e-12, atol=1e-12)
+
+
+def test_fixed_reference_non_boundary_cases_match_edger():
+    reference = json.loads((FIXTURES / 'tmm-edger.json').read_text())
+    assert reference['edgeR_version']
+    for case in ORACLE_CASES:
+        expected = reference['fixed_first'].get(str(case['case']))
+        if expected is None:
+            continue
+        observed = calc_norm_factors_tmm(case['counts'], lib_size=case['library_sizes'], ref_column=0)
+        numpy.testing.assert_allclose(observed, expected, rtol=1e-12, atol=1e-12)
 
 
 def test_run_tmm_rounds_for_cstmm_returns_positive_factors_and_reference_columns():
@@ -77,7 +110,8 @@ def test_median_tmm_reference_uses_true_even_median_and_one_column():
     assert _resolve_median_reference_column([101.0, 1.0, 99.0, 2.0]) == 2
 
 
-def test_apply_tmm_factors_divides_each_sample_column():
+@pytest.mark.parametrize('dtype', ['int64', 'float64'])
+def test_apply_tmm_factors_divides_each_sample_column(dtype):
     counts = pandas.DataFrame(
         {
             'RUN1': [10.0, 20.0],
@@ -85,6 +119,8 @@ def test_apply_tmm_factors_divides_each_sample_column():
         },
         index=['G1', 'G2'],
     )
+    counts = counts.astype(dtype)
+    before = counts.copy(deep=True)
     factors = pandas.Series([2.0, 4.0], index=['RUN1', 'RUN2'])
 
     corrected = apply_tmm_factors(counts, factors)
@@ -97,6 +133,18 @@ def test_apply_tmm_factors_divides_each_sample_column():
         index=['G1', 'G2'],
     )
     pandas.testing.assert_frame_equal(corrected, expected)
+    pandas.testing.assert_frame_equal(counts, before)
+
+
+def test_even_median_reference_does_not_depend_on_rounded_midpoint():
+    # A rounded midpoint makes the second value one ULP closer by subtraction.
+    values = [0.7, numpy.nextafter(0.8, 1.0)]
+    assert _resolve_median_reference_column(values) == 0
+    assert _resolve_median_reference_column(list(reversed(values))) == 0
+
+
+def test_tmm_discards_zero_overlap_without_runtime_warnings():
+    assert calc_factor_tmm([0, 2, 0], [3, 0, 0], 10, 20) == 1.0
 
 
 def test_calc_factor_tmm_matches_hand_computed_trimmed_mean_of_m_values():

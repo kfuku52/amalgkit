@@ -1,7 +1,7 @@
 import os
 import sys
 
-import pandas
+from amalgkit.table_io import read_identifier_tsv
 
 
 def read_getfastq_stats_row(output_dir, sra_id, warning_writer=None):
@@ -9,7 +9,7 @@ def read_getfastq_stats_row(output_dir, sra_id, warning_writer=None):
     if not os.path.isfile(stats_path):
         return None
     try:
-        stats_df = pandas.read_csv(stats_path, sep='\t')
+        stats_df = read_identifier_tsv(stats_path, identifier_columns=('run',))
     except Exception as exc:
         if warning_writer is None:
             warning_writer = sys.stderr.write

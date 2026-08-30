@@ -12,6 +12,11 @@ concurrency:
   group: nightly-e2e
   cancel-in-progress: true
 
+env:
+  OMP_NUM_THREADS: '1'
+  OPENBLAS_NUM_THREADS: '1'
+  MKL_NUM_THREADS: '1'
+
 jobs:
   yeast-private-fastq:
     runs-on: ubuntu-latest
@@ -19,6 +24,11 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          enable-cache: true
+          cache-dependency-glob: pyproject.toml
 
       - name: Install Python and real bioinformatics tools
         uses: mamba-org/setup-micromamba@v2
@@ -39,35 +49,16 @@ jobs:
       - name: Install AMALGKIT
         shell: bash -el {0}
         run: |
-          python -m pip install --upgrade pip "setuptools>=83"
-          python -m pip install -e ".[test]"
+          uv pip install --python "$CONDA_PREFIX/bin/python" -e ".[test]"
+          uv pip check --python "$CONDA_PREFIX/bin/python"
 
-      - name: Prepare bundled references and a private FASTQ
+      - name: Prepare plain/gzip single/paired private FASTQs
         shell: bash -el {0}
         run: |
           amalgkit dataset --name yeast --out_dir e2e-work
-          python - <<'PY'
-          import gzip
-          from pathlib import Path
+          python .github/scripts/nightly_private_fastq.py prepare e2e-work
 
-          reference = Path('e2e-work/fasta/Saccharomyces_cerevisiae.fa.gz')
-          sequence_parts = []
-          with gzip.open(reference, 'rt', encoding='utf-8') as handle:
-              for line in handle:
-                  if line.startswith('>'):
-                      if sequence_parts:
-                          break
-                      continue
-                  sequence_parts.append(line.strip())
-          read = ''.join(sequence_parts)[:75]
-          target = Path('e2e-work/private-fastq/Saccharomyces_cerevisiae/nightly.fastq')
-          target.parent.mkdir(parents=True, exist_ok=True)
-          with target.open('w', encoding='utf-8') as handle:
-              for index in range(20):
-                  handle.write('@nightly{}\n{}\n+\n{}\n'.format(index, read, 'I' * len(read)))
-          PY
-
-      - name: Run private-FASTQ integration through merge
+      - name: Run private inputs through quant, normalization and finalize
         shell: bash -el {0}
         run: |
           mkdir -p e2e-work/metadata e2e-work/logs
@@ -88,22 +79,30 @@ jobs:
             --out_dir e2e-work \
             --metadata e2e-work/metadata/metadata.tsv \
             --threads 2 \
-            --build_index yes \
-            --clean_fastq no
+            --build_index yes
           amalgkit --log_file e2e-work/logs/merge.jsonl merge \
             --out_dir e2e-work \
             --metadata e2e-work/metadata/metadata.tsv \
             --threads 2
+          amalgkit --log_file e2e-work/logs/cstmm.jsonl cstmm --out_dir e2e-work
+          amalgkit --log_file e2e-work/logs/finalize.jsonl finalize \
+            --out_dir e2e-work \
+            --metadata e2e-work/cstmm/metadata.tsv \
+            --threads 2 --batch_effect_alg no
+          python .github/scripts/nightly_private_fastq.py verify e2e-work
           amalgkit sanity \
             --out_dir e2e-work \
             --metadata e2e-work/metadata/metadata.tsv \
-            --check getfastq,index,quant,merge \
+            --check getfastq,index,quant,merge,finalize \
             --strict yes \
-            --strict_level error
+            --strict_level warning
 
       - name: Run performance benchmarks
         shell: bash -el {0}
-        run: python benchmarks/benchmark_core.py --output e2e-work/benchmark-results.json
+        run: |
+          python benchmarks/benchmark_core.py --output e2e-work/benchmark-results.json
+          python benchmarks/benchmark_table_io.py --rows 1000000 --operation validate --output e2e-work/validation-benchmark.json
+          python benchmarks/benchmark_table_io.py --rows 100000 --runs 8 --operation merge --output e2e-work/merge-benchmark.json
 
       - name: Upload diagnostics and benchmark history
         if: always()
@@ -113,5 +112,8 @@ jobs:
           path: |
             e2e-work/logs
             e2e-work/benchmark-results.json
+            e2e-work/*-benchmark.json
+            e2e-work/private-input-sha256.json
             e2e-work/sanity
           if-no-files-found: warn
+          retention-days: 14

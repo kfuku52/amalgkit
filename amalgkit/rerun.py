@@ -9,6 +9,7 @@ from contextlib import contextmanager
 from types import SimpleNamespace
 
 import pandas
+from amalgkit.table_io import read_identifier_tsv
 
 from amalgkit.arg_utils import clone_namespace
 from amalgkit.command_context import PerSpeciesTableContext
@@ -876,7 +877,7 @@ def _copy_existing_merge_species_dirs(
 def _load_existing_metadata_table(path):
     if not os.path.isfile(path):
         return None
-    return pandas.read_csv(path, sep='\t', low_memory=False)
+    return read_identifier_tsv(path, identifier_columns=('run',), low_memory=False)
 
 
 def _print_targets(label, targets):

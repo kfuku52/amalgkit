@@ -12,6 +12,7 @@ from amalgkit.cli_utils import (
 )
 from amalgkit.exceptions import AmalgkitExit
 from amalgkit.logging_utils import configure_logging, get_logger
+from amalgkit.redaction import redact_url_for_logging
 
 SCRIPT_DIR = os.path.realpath(os.path.dirname(__file__))
 SCRIPT_PARENT_DIR = os.path.realpath(os.path.dirname(SCRIPT_DIR))
@@ -84,19 +85,23 @@ def main(argv=None):
     except AmalgkitExit as exc:
         if exc.message != '':
             if exc.use_stderr:
-                sys.stderr.write(exc.message.rstrip('\n') + '\n')
+                sys.stderr.write(redact_url_for_logging(exc.message).rstrip('\n') + '\n')
             else:
-                print(exc.message)
+                print(redact_url_for_logging(exc.message))
         return exc.exit_code
-    except KeyboardInterrupt:
+    except KeyboardInterrupt as exc:
         logger.warning('command_interrupted', extra={'event': 'command_interrupted', 'command': active_command})
         sys.stderr.write('Interrupted.\n')
+        for note in getattr(exc, '__notes__', ()):
+            sys.stderr.write(redact_url_for_logging(note) + '\n')
         return 130
     except Exception as exc:
         if not getattr(args, '_amalgkit_failure_logged', False):
             logger.exception('command_failed', extra={'event': 'command_failed', 'command': active_command})
         if getattr(args, 'debug', False):
-            traceback.print_exc()
+            sys.stderr.write(redact_url_for_logging(traceback.format_exc()))
             return 1
-        sys.stderr.write('ERROR: {}\n'.format(exc))
+        sys.stderr.write('ERROR: {}\n'.format(redact_url_for_logging(exc)))
+        for note in getattr(exc, '__notes__', ()):
+            sys.stderr.write(redact_url_for_logging(note) + '\n')
         return 1

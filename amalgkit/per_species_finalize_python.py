@@ -3,6 +3,7 @@ import warnings
 
 import numpy
 import pandas
+from amalgkit.table_io import read_identifier_tsv
 
 from amalgkit.batch_effect_common import (
     annotate_metadata_with_batch_info,
@@ -55,7 +56,7 @@ def should_use_python_finalize_worker(args):
 
 
 def _read_expression_tsv(path):
-    return pandas.read_csv(path, sep='\t', index_col=0, low_memory=False)
+    return read_identifier_tsv(path, index_col=0, low_memory=False)
 
 
 def _normalize_dataframe_columns(df):
@@ -284,7 +285,7 @@ def _transform_raw_to_tpm(counts_df, eff_length_df):
 def load_quant_model_table(path):
     if (path is None) or (not os.path.isfile(path)):
         return pandas.DataFrame(columns=['run', 'backend', 'length_model'])
-    model = pandas.read_csv(path, sep='\t', header=0)
+    model = read_identifier_tsv(path, identifier_columns=('run',), header=0)
     missing = [column for column in ('run', 'length_model') if column not in model.columns]
     if missing:
         raise ValueError('Quant model table is missing required column(s): {}'.format(', '.join(missing)))

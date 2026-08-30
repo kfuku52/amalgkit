@@ -4,6 +4,7 @@ import warnings
 
 import numpy
 import pandas
+from amalgkit.table_io import read_identifier_tsv
 
 from amalgkit.filter_utils import save_exclusion_plot_pdf
 from amalgkit.runtime_utils import format_species_label as _format_species_label
@@ -424,7 +425,7 @@ def _save_mean_expression_boxplot(metadata_df, merge_dir, out_path, font_size=8)
 
 
 def generate_merge_plots(merge_dir, metadata_path, font_size=8):
-    metadata_df = pandas.read_csv(metadata_path, sep='\t', low_memory=False)
+    metadata_df = read_identifier_tsv(metadata_path, identifier_columns=('run',), low_memory=False)
     if 'scientific_name' in metadata_df.columns:
         metadata_df.loc[:, 'scientific_name'] = metadata_df.loc[:, 'scientific_name'].fillna('').astype(str).str.strip()
     _save_species_boxplot_pdf(

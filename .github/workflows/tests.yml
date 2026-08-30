@@ -5,6 +5,7 @@ on:
     branches: [master]
   pull_request:
     branches: [master]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -13,49 +14,55 @@ concurrency:
   group: tests-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+# xdist supplies process parallelism; avoid nested BLAS/OpenMP pools.
+env:
+  OMP_NUM_THREADS: '1'
+  OPENBLAS_NUM_THREADS: '1'
+  MKL_NUM_THREADS: '1'
+
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.11', '3.12', '3.13', '3.14']
+        # Python 3.14 is covered by the complete suite below.
+        python-version: ['3.11', '3.12', '3.13']
 
     steps:
       - uses: actions/checkout@v6
 
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v6
+      - uses: ./.github/actions/python-env
         with:
           python-version: ${{ matrix.python-version }}
-          cache: pip
 
       - name: Install package and test dependencies
         run: |
-          python -m pip install --upgrade pip "setuptools>=83"
-          python -m pip install -e ".[test]"
-          python -m pip check
+          uv pip install -e ".[test]"
+          uv pip check
 
       - name: Run fast tests
         run: python -m pytest -q -n 2 -m "not integration and not slow and not optional_dependency"
 
   full-coverage:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
       - uses: actions/checkout@v6
 
-      - name: Set up Python 3.14
-        uses: actions/setup-python@v6
+      - uses: ./.github/actions/python-env
         with:
           python-version: '3.14'
-          cache: pip
 
       - name: Install package and test dependencies
         run: |
-          python -m pip install --upgrade pip "setuptools>=83"
-          python -m pip install -e ".[test]"
-          python -m pip check
+          uv pip install pip -e ".[test,quality]"
+          uv pip check
+
+      - name: Lint, formatting and typed boundaries
+        run: python .github/scripts/check_quality.py
 
       - name: Run full suite with branch coverage
         run: >-
@@ -71,30 +78,45 @@ jobs:
         with:
           name: coverage-python-3.14
           path: coverage.xml
+          retention-days: 7
+
+      - name: Audit installed dependencies
+        run: python -m pip_audit --local --skip-editable
+
+      - name: Build and validate distributions
+        run: |
+          python -m build
+          python -m twine check dist/*
+
+      - name: Smoke-test installed wheel outside the checkout
+        run: |
+          uv venv "$RUNNER_TEMP/wheel-smoke" --python 3.14
+          uv pip install --python "$RUNNER_TEMP/wheel-smoke/bin/python" dist/*.whl
+          cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/wheel-smoke/bin/python" -I "$GITHUB_WORKSPACE/.github/scripts/check_wheel.py"
 
   minimum-dependencies:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
       - uses: actions/checkout@v6
 
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v6
+      - uses: ./.github/actions/python-env
         with:
           python-version: '3.11'
-          cache: pip
+          cache-suffix: minimum
 
       - name: Install declared minimum dependencies
         run: |
-          python -m pip install --upgrade pip "setuptools>=83"
-          python -m pip install -r requirements/minimum.txt \
+          uv pip install pip -r requirements/minimum.txt \
             -c requirements/minimum-constraints.txt \
             "pip-audit>=2.9" \
             "pytest==9.0.3" \
             "pytest-xdist>=3" \
             "pytest-cov>=7"
-          python -m pip install --no-deps -e .
-          python -m pip check
+          uv pip install --no-deps -e .
+          uv pip check
 
       - name: Run tests against dependency floor
         run: python -m pytest -q -n 2
@@ -102,110 +124,25 @@ jobs:
       - name: Audit dependency floor
         run: python -m pip_audit --local --skip-editable
 
-  macos-smoke:
-    runs-on: macos-latest
-
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Set up Python 3.13
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.13'
-          cache: pip
-
-      - name: Install package and test dependencies
-        run: |
-          python -m pip install --upgrade pip "setuptools>=83"
-          python -m pip install -e ".[test]"
-          python -m pip check
-
-      - name: Exercise macOS filesystem and CLI paths
-        run: >-
-          python -m pytest -q
-          tests/test_filter_utils.py
-          tests/test_cli_utils.py
-          tests/test_cli_help.py
-
   combatseq:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
       - uses: actions/checkout@v6
 
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v6
+      - uses: ./.github/actions/python-env
         with:
           python-version: '3.11'
-          cache: pip
+          cache-suffix: combatseq
 
       - name: Install Combat-seq and test dependencies
         run: |
-          python -m pip install --upgrade pip "setuptools>=83"
-          python -m pip install -e ".[combatseq,test]" "pip-audit>=2.9"
-          python -m pip check
+          uv pip install pip -e ".[combatseq,test]" "pip-audit>=2.9"
+          uv pip check
 
       - name: Audit Combat-seq dependencies
         run: python -m pip_audit --local --skip-editable
 
-      - name: Run Combat-seq tests
-        run: >-
-          python -m pytest -q
-          tests/test_batch_effect_combatseq.py
-          tests/test_finalize_integration.py::test_finalize_python_combatseq_runs_end_to_end
-
-  quality:
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Set up Python 3.14
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.14'
-          cache: pip
-
-      - name: Install quality tools
-        run: |
-          python -m pip install --upgrade pip "setuptools>=83"
-          python -m pip install -e ".[quality]"
-          python -m pip check
-
-      - name: Run Ruff
-        run: ruff check .
-
-      - name: Check formatting on migrated module boundaries
-        run: >-
-          ruff format --check
-          amalgkit/command_context.py
-          amalgkit/cross_species_computation.py
-          amalgkit/getfastq_file_state.py
-          amalgkit/getfastq_probes.py
-          amalgkit/linalg_utils.py
-          amalgkit/logging_utils.py
-          amalgkit/output_contracts.py
-          amalgkit/parallel_utils.py
-          amalgkit/subprocess_utils.py
-          amalgkit/text_utils.py
-
-      - name: Check typed module boundaries
-        run: mypy
-
-      - name: Audit installed dependencies
-        run: python -m pip_audit --local --skip-editable
-
-      - name: Build distributions
-        run: python -m build
-
-      - name: Validate distribution metadata
-        run: python -m twine check dist/*
-
-      - name: Smoke-test the built wheel in a clean environment
-        run: |
-          python -m venv wheel-smoke
-          wheel-smoke/bin/python -m pip install --upgrade pip "setuptools>=83"
-          wheel-smoke/bin/python -m pip install dist/*.whl
-          wheel-smoke/bin/python -c "from importlib import resources; assert resources.files('amalgkit').joinpath('select_rule_sets/base/select_rules.tsv').is_file()"
-          wheel-smoke/bin/amalgkit --version
-          wheel-smoke/bin/amalgkit dataset --list
+      - name: Run all optional dependency tests
+        run: python -m pytest -q -m optional_dependency

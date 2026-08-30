@@ -7,6 +7,7 @@ import warnings
 from amalgkit.filter_utils import staged_output_dir
 from amalgkit.merge_plots import generate_merge_plots
 from amalgkit.metadata_utils import load_metadata, write_updated_metadata
+from amalgkit.output_contracts import read_quant_abundance
 from amalgkit.parallel_utils import (
     is_auto_parallel_option,
     raise_task_failures,
@@ -261,55 +262,38 @@ def collect_species_quant_outputs(sra_ids, sampled_sra_ids, detected_paths, quan
 
 def load_quant_tables_once(detected_sra_ids, quant_out_paths, value_columns):
     table_values = {col: [None] * len(quant_out_paths) for col in value_columns}
-    target_ids = None
+    if not quant_out_paths:
+        return None, table_values
+
+    def read_frame(file_idx):
+        return read_quant_abundance(
+            quant_out_paths[file_idx],
+            value_columns,
+            'quant output table for run {} ({})'.format(detected_sra_ids[file_idx], quant_out_paths[file_idx]),
+        )
+
+    first_frame = read_frame(0)
+    target_ids = first_frame['target_id'].to_numpy(copy=False)
+    for col in value_columns:
+        table_values[col][0] = first_frame[col].to_numpy()
+    del first_frame
 
     def read_one_quant_table(file_idx):
         sra_id = detected_sra_ids[file_idx]
         quant_out_path = quant_out_paths[file_idx]
-        usecols = ['target_id'] + value_columns
-        try:
-            quant_df = pandas.read_csv(
-                quant_out_path,
-                header=0,
-                sep='\t',
-                usecols=usecols,
-            )
-        except Exception as e:
-            raise ValueError(
-                'Failed to read quant output table for run {} ({}): {}'.format(
-                    sra_id,
-                    quant_out_path,
-                    e,
-                )
-            ) from e
+        quant_df = read_frame(file_idx)
         row_values = {col: quant_df[col].to_numpy() for col in value_columns}
-        target_ids_series = quant_df['target_id'].fillna('').astype(str).str.strip()
-        missing_target_ids = target_ids_series.eq('')
-        if bool(missing_target_ids.any()):
+        current_target_ids = quant_df['target_id'].to_numpy(copy=False)
+        if not numpy.array_equal(current_target_ids, target_ids):
             raise ValueError(
-                'Quant output table for run {} ({}) contains missing target_id values.'.format(
-                    sra_id,
-                    quant_out_path,
-                )
+                'Mismatched target_id rows across quant files for one species. '
+                'First run: {}, current run: {} ({})'.format(detected_sra_ids[0], sra_id, quant_out_path)
             )
-        duplicated_target_ids = set(
-            target_ids_series.loc[target_ids_series.duplicated()].tolist()
-        )
-        if duplicated_target_ids:
-            raise ValueError(
-                'Quant output table for run {} ({}) contains duplicate target_id values: {}.'.format(
-                    sra_id,
-                    quant_out_path,
-                    ', '.join(sorted(duplicated_target_ids)[:5]),
-                )
-            )
-        current_target_ids = target_ids_series.to_numpy(dtype=str, copy=False)
-        return sra_id, current_target_ids, row_values
+        # Retain a single ID vector, rather than one full copy for every run.
+        return row_values
 
     if len(quant_out_paths) <= 1:
         results_by_idx = {}
-        for file_idx in range(len(quant_out_paths)):
-            results_by_idx[file_idx] = read_one_quant_table(file_idx)
     else:
         max_workers = min(MERGE_QUANT_READ_MAX_WORKERS, len(quant_out_paths))
         print(
@@ -319,7 +303,7 @@ def load_quant_tables_once(detected_sra_ids, quant_out_paths, value_columns):
             ),
             flush=True,
         )
-        task_indices = list(range(len(quant_out_paths)))
+        task_indices = list(range(1, len(quant_out_paths)))
         results_by_idx, failures = run_tasks_with_optional_threads(
             task_items=task_indices,
             task_fn=read_one_quant_table,
@@ -336,20 +320,7 @@ def load_quant_tables_once(detected_sra_ids, quant_out_paths, value_columns):
                 error_type=ValueError,
             )
 
-    for file_idx in range(len(quant_out_paths)):
-        sra_id, current_target_ids, row_values = results_by_idx[file_idx]
-        if file_idx == 0:
-            target_ids = current_target_ids
-        elif (
-            (len(current_target_ids) != len(target_ids))
-            or (not numpy.array_equal(current_target_ids, target_ids))
-        ):
-            first_run = detected_sra_ids[0] if len(detected_sra_ids) > 0 else 'unknown'
-            txt = (
-                'Mismatched target_id rows across quant files for one species. '
-                'First run: {}, current run: {} ({})'
-            )
-            raise ValueError(txt.format(first_run, sra_id, quant_out_paths[file_idx]))
+    for file_idx, row_values in results_by_idx.items():
         for col in value_columns:
             table_values[col][file_idx] = row_values[col]
     return target_ids, table_values

@@ -13,8 +13,7 @@ python -m pip install -e ".[test,quality]"
 Before opening a pull request, run the same checks used by CI:
 
 ```bash
-ruff check .
-mypy
+python .github/scripts/check_quality.py
 python -m pytest -q -n 2 --cov=amalgkit --cov-branch --cov-fail-under=75
 python -m build
 ```
@@ -25,6 +24,17 @@ wall-clock waits, real PDF rendering, and optional-dependency coverage:
 ```bash
 python -m pytest -q -n 2 -m "not integration and not slow and not optional_dependency"
 ```
+
+CI installs into isolated environments with cached `uv` downloads/wheels. For
+the same local install path, `uv venv --python 3.14` followed by
+`uv pip install -e ".[test,quality]"` is an alternative to pip. This is a tooling
+choice, not a new runtime dependency or a dependency lock.
+
+When running several test processes, set `OMP_NUM_THREADS=1`,
+`OPENBLAS_NUM_THREADS=1` and `MKL_NUM_THREADS=1` to avoid nested native thread
+pools. CI uses these settings. Test the optional Combat-seq extra separately
+with `python -m pytest -q -m optional_dependency` after installing
+`.[combatseq,test]`; missing optional packages must not be mistaken for coverage.
 
 Run `python -m pytest -q` when debugging order or process-isolation issues in a
 single worker. Tests without a marker are expected to be deterministic and
@@ -37,12 +47,31 @@ unit tests by injecting or mocking command runners and network clients.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) before moving responsibilities between
 command modules. Migrated boundary modules are formatted and typed; add a newly
-migrated module to the CI format/mypy lists only after those checks pass. For a
+migrated module to `[tool.mypy].files` only after those checks pass. For a
 performance-sensitive change, run:
 
 ```bash
 python benchmarks/benchmark_core.py --quick --output benchmark-results.json
+python benchmarks/benchmark_table_io.py --rows 1000000 --operation validate --output validation.json
+python benchmarks/benchmark_table_io.py --rows 100000 --runs 8 --operation merge --output merge.json
 ```
+
+Run each table benchmark in a separate, otherwise idle process for both
+revisions. Compare the result hashes as well as wall time, Python allocation
+peak and process peak RSS. The reported wall time includes tracemalloc overhead;
+RSS includes interpreter/import allocations. Do not compare a cold concurrent
+test run with a warm isolated run as a speedup claim.
+
+The Python 3.14 full-suite job shares its install with lint, typing, dependency
+audit and distribution checks; the remaining supported Python versions have
+fast lanes. A separate minimum-dependency job still runs the full suite. macOS
+filesystem/CLI coverage runs for relevant paths, weekly and on manual dispatch.
+Nightly real-tool coverage includes plain/gzip and single/paired private FASTQs,
+default cleanup, merge, TMM and finalize. The wheel smoke test runs outside the
+checkout with isolated Python and actually extracts bundled FASTA data.
+
+TMM reference inputs and independent Decimal/edgeR oracles are described in
+[`tests/reference/README.md`](tests/reference/README.md).
 
 Package metadata and dependency floors live in `pyproject.toml`. When changing
 the supported Python or dependency range, update the CI matrix and README in the

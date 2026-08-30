@@ -18,6 +18,7 @@ from amalgkit.sanity import (
     check_getfastq_outputs,
     run_sanity_check_busco,
     run_sanity_check_finalize,
+    run_sanity_check_getfastq,
     run_sanity_check_index,
     run_sanity_check_merge,
     run_sanity_check_quant,
@@ -525,6 +526,42 @@ class TestCheckQuantOutput:
 # ---------------------------------------------------------------------------
 
 class TestCheckGetfastqOutputs:
+    @pytest.mark.parametrize('manifest_kind', ['file', 'directory', 'symlink'])
+    def test_completion_manifest_is_not_an_orphan_run(self, tmp_path, manifest_kind):
+        metadata_path = tmp_path / 'metadata.tsv'
+        metadata_df = pandas.DataFrame({
+            'scientific_name': ['Sp1'], 'run': ['RUN1'], 'lib_layout': ['single'],
+            'total_spots': [1], 'spot_length': [4], 'total_bases': [4], 'exclusion': ['no'],
+        })
+        metadata_df.to_csv(metadata_path, sep='\t', index=False)
+        metadata = Metadata.from_DataFrame(metadata_df)
+        run_dir = tmp_path / 'getfastq' / 'RUN1'
+        run_dir.mkdir(parents=True)
+        (run_dir / 'RUN1.amalgkit.fastq.gz.safely_removed').write_text('removed', encoding='utf-8')
+        manifest = run_dir.parent / 'getfastq_completion.json'
+        if manifest_kind == 'file':
+            manifest.write_text('{"status":"complete","run_count":1}', encoding='utf-8')
+        elif manifest_kind == 'directory':
+            manifest.mkdir()
+        else:
+            manifest.symlink_to(metadata_path)
+        (run_dir.parent / 'unexpected-run').mkdir()
+        output_dir = tmp_path / 'sanity'
+        output_dir.mkdir()
+
+        row, issues = run_sanity_check_getfastq(
+            args=make_sanity_args(tmp_path, out_dir=str(tmp_path)),
+            metadata=metadata, uni_species=['Sp1'], sra_ids=['RUN1'],
+            output_dir=str(output_dir), metadata_path=str(metadata_path),
+        )
+
+        assert row['unavailable_count'] == 0
+        assert not [issue for issue in issues if issue['severity'] == 'error']
+        expected_orphans = {'unexpected-run'}
+        if manifest_kind != 'file':
+            expected_orphans.add(manifest.name)
+        assert {issue['target_id'] for issue in issues if issue['issue_type'] == 'orphan_output'} == expected_orphans
+
     def test_outputs_present(self, tmp_path, sample_metadata):
         class Args:
             out_dir = str(tmp_path)
