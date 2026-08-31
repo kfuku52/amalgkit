@@ -69,6 +69,12 @@ Downloaded files must be non-empty. Transfer, TLS, HTTP, or malformed-provider f
 next enabled source instead of aborting the entire fallback chain. ENA locations are taken from its
 official filereport fields; AMALGKIT does not synthesize an `.sra` URL.
 
+Public original FASTQ fallback validates ENA's per-file MD5 and byte count
+when available and reads the entire gzip stream, including all CRC trailers,
+before publishing or trimming it. One corrupt transfer is downloaded again;
+a second integrity failure stops that fallback without publishing the broken
+file. This transfer retry does not resubmit a scheduler job or skip any run.
+
 ## FASTQ Processing
 
 Common options:

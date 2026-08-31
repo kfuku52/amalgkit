@@ -98,8 +98,24 @@ def test_fetch_ena_report_uses_official_filereport_endpoint():
 
     assert 'www.ebi.ac.uk/ena/portal/api/filereport?' in observed['url']
     assert 'accession=SRR000001' in observed['url']
+    assert 'fastq_md5' in observed['url'] and 'fastq_bytes' in observed['url']
     assert observed['timeout'] == 12.0
     assert parsed['sra_urls'] == ['https://ftp.sra.ebi.ac.uk/path/run.sra']
+
+
+def test_ena_integrity_is_bound_to_each_reported_file():
+    report = ('run_accession\tsra_ftp\tfastq_ftp\tfastq_md5\tfastq_bytes\n'
+              'SRR1\t\tftp.sra.ebi.ac.uk/a.gz;ftp.sra.ebi.ac.uk/b.gz\t'
+              + 'a' * 32 + ';' + 'b' * 32 + '\t100;200\n')
+    result = parse_ena_run_file_report(report, 'SRR1')
+    assert result['fastq_integrity'] == {
+        'https://ftp.sra.ebi.ac.uk/a.gz': {'expected_md5': 'a' * 32, 'expected_bytes': 100},
+        'https://ftp.sra.ebi.ac.uk/b.gz': {'expected_md5': 'b' * 32, 'expected_bytes': 200},
+    }
+    for changed in (report.replace('100;200', '100'), report.replace('100;200', '100;0'),
+                    report.replace('b' * 32, 'invalid'), report.replace('/b.gz', '/a.gz')):
+        with pytest.raises(ValueError, match='ENA FASTQ'):
+            parse_ena_run_file_report(changed, 'SRR1')
 
 def test_is_allowed_download_url_accepts_only_exact_https_endpoints():
     assert is_allowed_download_url('https://sra-pub-run-odp.s3.amazonaws.com/x.sra')

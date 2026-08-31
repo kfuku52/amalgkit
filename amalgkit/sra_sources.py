@@ -161,10 +161,29 @@ def parse_ena_run_file_report(report_text, run_accession):
     for row in reader:
         if normalize_accession_text(row.get('run_accession')) != run_accession:
             continue
-        return {
+        result = {
             'sra_urls': _split_ena_file_urls(row.get('sra_ftp')),
             'fastq_urls': _split_ena_file_urls(row.get('fastq_ftp')),
         }
+        if {'fastq_md5', 'fastq_bytes'} & set(reader.fieldnames):
+            raw_urls = [value.strip() for value in str(row.get('fastq_ftp') or '').split(';') if value.strip()]
+            checksums = str(row.get('fastq_md5') or '').split(';')
+            sizes = str(row.get('fastq_bytes') or '').split(';')
+            files = {}
+            if raw_urls and (len(raw_urls) != len(checksums) or len(raw_urls) != len(sizes)):
+                raise ValueError('ENA FASTQ integrity fields do not match its file list.')
+            for index, raw_url in enumerate(raw_urls):
+                md5 = checksums[index].strip().lower()
+                size = sizes[index].strip()
+                if re.fullmatch(r'[0-9a-f]{32}', md5) is None or re.fullmatch(r'[1-9][0-9]*', size) is None:
+                    raise ValueError('ENA FASTQ checksum or byte count is invalid.')
+                url = normalize_ena_file_url(raw_url)
+                identity = {'expected_md5': md5, 'expected_bytes': int(size)}
+                if url in files and files[url] != identity:
+                    raise ValueError('ENA FASTQ integrity identity is ambiguous.')
+                files[url] = identity
+            result['fastq_integrity'] = files
+        return result
     return {'sra_urls': [], 'fastq_urls': []}
 
 
@@ -177,7 +196,7 @@ def fetch_ena_run_file_report(run_accession, timeout=30, urlopen_fn=None):
     query = urllib.parse.urlencode({
         'accession': run_accession,
         'result': 'read_run',
-        'fields': 'run_accession,sra_ftp,fastq_ftp',
+        'fields': 'run_accession,sra_ftp,fastq_ftp,fastq_md5,fastq_bytes',
         'format': 'tsv',
     })
     report_url = '{}?{}'.format(_ENA_FILEREPORT_URL, query)

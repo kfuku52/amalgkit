@@ -7,6 +7,14 @@ than the Releases page for those changes.
 
 ## Unreleased
 
+### 0.16.76 - 2026-08-31
+
+- Verify public original FASTQ downloads against ENA's per-file MD5 and byte
+  count, then read every gzip member and trailer before publishing or trimming.
+  A corrupt transfer is retried once in private staging; persistent corruption
+  remains a failure and cannot become a completed run. Legacy sources without
+  published checksums still require a complete non-empty gzip stream.
+
 ### 0.16.75 - 2026-08-31
 
 - Made `cstmm --metadata` effective, validated species/run alignment, and excluded

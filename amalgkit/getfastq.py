@@ -29,6 +29,11 @@ from amalgkit.download_utils import (
     resolve_resource_lock_path,
 )
 from amalgkit.exceptions import AmalgkitExit
+from amalgkit.fastq_download_integrity import (
+    FastqDownloadIntegrityError,
+    validate_download as validate_original_fastq_download,
+    validate_integrity_metadata,
+)
 from amalgkit.fastq_utils import (
     count_fastq_records_and_bases as shared_count_fastq_records_and_bases,
     count_fastq_records as shared_count_fastq_records,
@@ -1091,7 +1096,7 @@ def _resolve_cached_sra_download_source_url(metadata, row_index, source_name, sr
     return resolved_url
 
 
-def _build_ena_original_fastq_entries(fastq_urls):
+def _build_ena_original_fastq_entries(fastq_urls, integrity=None):
     entries = []
     for url in fastq_urls:
         try:
@@ -1103,6 +1108,7 @@ def _build_ena_original_fastq_entries(fastq_urls):
         entries.append({
             'filename': filename,
             'sources': [{'source_name': 'ENA', 'url': url}],
+            **(integrity or {}).get(url, {}),
         })
     return entries
 
@@ -1166,7 +1172,7 @@ def resolve_sra_download_sources(metadata, sra_stat, args, force_refresh_dynamic
         if isinstance(ena_report, dict):
             sra_urls = ena_report.get('sra_urls', [])
             fastq_entries = _build_ena_original_fastq_entries(
-                ena_report.get('fastq_urls', [])
+                ena_report.get('fastq_urls', []), ena_report.get('fastq_integrity'),
             )
             if len(fastq_entries) > 0:
                 sra_stat['ena_public_original_fastqs'] = fastq_entries
@@ -1649,6 +1655,25 @@ def download_sra_from_source(sra_id, sra_source_name, source_url_original, path_
     )
 
 
+def download_verified_original_fastq(sra_id, entry, output_path, args):
+    validate_integrity_metadata(entry)
+    for attempt in range(2):
+        if os.path.exists(output_path):
+            os.remove(output_path)  # An unpublished payload in the private transfer directory.
+        if not download_file_from_candidate_sources(
+            sra_id=sra_id, source_candidates=entry['sources'], output_path=output_path,
+            args=args, artifact_label='Original FASTQ file',
+        ):
+            raise FileNotFoundError('Original FASTQ download failed for {}.'.format(sra_id))
+        try:
+            validate_original_fastq_download(output_path, entry)
+            return
+        except FastqDownloadIntegrityError:
+            if attempt:
+                raise
+            sys.stderr.write('Original FASTQ integrity failed for {}; retrying the transfer once.\n'.format(sra_id))
+
+
 def download_public_original_fastq_files(
     sra_stat,
     args,
@@ -1694,20 +1719,7 @@ def download_public_original_fastq_files(
                     raise IsADirectoryError('Fallback FASTQ path exists but is not a file: {}'.format(output_path))
                 os.remove(output_path)
             with _secure_download_temp_path(output_path, '.downloadtmp') as tmp_path:
-                is_downloaded = download_file_from_candidate_sources(
-                    sra_id=sra_id,
-                    source_candidates=fastq_entry['sources'],
-                    output_path=tmp_path,
-                    args=args,
-                    artifact_label='Original FASTQ file',
-                )
-                if not is_downloaded:
-                    raise FileNotFoundError(
-                        'Original FASTQ file download failed for {} ({})'.format(
-                            sra_id,
-                            fastq_entry.get('filename', 'unknown'),
-                        )
-                    )
+                download_verified_original_fastq(sra_id, fastq_entry, tmp_path, args)
                 if is_full_requested_spot_range(sra_stat=sra_stat, start=start, end=end):
                     os.replace(tmp_path, output_path)
                 else:
