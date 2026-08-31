@@ -13,6 +13,96 @@ from amalgkit.normalization_tmm import (
 )
 
 
+@pytest.fixture
+def cstmm_metadata_inputs(tmp_path):
+    species_dir = tmp_path / 'merge' / 'Species_A'
+    species_dir.mkdir(parents=True)
+    counts = pandas.DataFrame(
+        {'0001': [100, 110, 120, 130, 10, 11], 'NA': [90, 100, 110, 120, 20, 21],
+         'excluded': [10000, 3, 9, 2, 90000, 1], 'unsampled': [1, 2, 3, 4, 10000, 60000]},
+        index=['G1', 'G2', 'G3', 'G4', 'G5', 'G6'],
+    )
+    counts.rename_axis('target_id').to_csv(species_dir / 'Species_A_est_counts.tsv', sep='\t')
+    (counts * 0 + 1000).rename_axis('target_id').to_csv(species_dir / 'Species_A_eff_length.tsv', sep='\t')
+    metadata = pandas.DataFrame({
+        'run': counts.columns, 'scientific_name': 'Species A', 'sample_group': ['wt', 'stress', 'wt', 'wt'],
+        'exclusion': ['no', 'no', 'manual', 'no'], 'is_sampled': ['yes', 'yes', 'yes', 'no'],
+        'annotation': 'NA', 'tmm_library_size': 123, 'tmm_normalization_factor': 999,
+        'tmm_effective_library_size': 456, 'single_copy_threshold': 75,
+    })
+    path = tmp_path / 'reviewed.tsv'
+    metadata.to_csv(path, sep='\t', index=False)
+    # A different default makes accidental fallback observable.
+    metadata.assign(exclusion='no', is_sampled='yes', annotation='default').to_csv(
+        tmp_path / 'merge' / 'metadata.tsv', sep='\t', index=False)
+    args = SimpleNamespace(out_dir=str(tmp_path), dir_count='inferred', metadata=str(path), redo=True)
+    return args, counts, metadata, path
+
+
+def test_cstmm_uses_reviewed_metadata_and_excludes_runs_from_factors(cstmm_metadata_inputs, tmp_path, stub_pdf_rendering):
+    args, counts, _, _ = cstmm_metadata_inputs
+    cstmm_main(args)
+    selected = counts.loc[:, ['0001', 'NA']].astype(float)
+    expected = run_tmm_rounds_for_cstmm(selected)
+    observed = pandas.read_csv(tmp_path / 'cstmm' / 'Species_A' / 'Species_A_cstmm_counts.tsv', sep='\t', index_col=0)
+    pandas.testing.assert_frame_equal(observed, selected.div(expected.round2_factors).rename_axis('target_id'))
+    output = pandas.read_csv(tmp_path / 'cstmm' / 'metadata.tsv', sep='\t', dtype=str, keep_default_na=False).set_index('run')
+    assert output.loc['0001', 'sample_group'] == 'wt'
+    assert output.loc['NA', 'annotation'] == 'NA'
+    assert output.loc['excluded', 'exclusion'] == 'manual'
+    assert output.loc['excluded', 'tmm_normalization_factor'] == ''
+    assert output.loc['unsampled', 'exclusion'] == 'no_cstmm_output'
+    assert 'single_copy_threshold' not in output.columns
+    numpy.testing.assert_allclose(output.loc[['0001', 'NA'], 'tmm_library_size'].astype(float), selected.sum())
+
+
+@pytest.mark.parametrize('problem', ['missing_file', 'unknown_run', 'wrong_species', 'duplicate_run', 'bad_flag', 'all_excluded'])
+def test_cstmm_rejects_bad_metadata_without_replacing_outputs(cstmm_metadata_inputs, tmp_path, problem):
+    args, _, metadata, path = cstmm_metadata_inputs
+    output = tmp_path / 'cstmm'
+    output.mkdir()
+    marker = output / 'previous.txt'
+    marker.write_text('previous result')
+    expected = ValueError
+    if problem == 'missing_file':
+        path.unlink()
+        expected = FileNotFoundError
+    elif problem == 'unknown_run':
+        metadata = metadata.iloc[1:]
+    elif problem == 'wrong_species':
+        metadata.loc[0, 'scientific_name'] = 'Species B'
+    elif problem == 'duplicate_run':
+        metadata = pandas.concat([metadata, metadata.iloc[:1]])
+    elif problem == 'bad_flag':
+        metadata.loc[0, 'is_sampled'] = 'typo'
+    else:
+        metadata['exclusion'] = 'manual'
+    if problem != 'missing_file':
+        metadata.to_csv(path, sep='\t', index=False)
+    with pytest.raises(expected):
+        cstmm_main(args)
+    assert marker.read_text() == 'previous result'
+    assert list(output.iterdir()) == [marker]
+
+
+def test_cstmm_multi_species_honors_metadata_and_removes_excluded_species(tmp_path, stub_pdf_rendering):
+    merge_dir, orthogroup = TestCstmmMain._write_multi_species_fixture(tmp_path)
+    metadata = pandas.read_csv(merge_dir / 'metadata.tsv', sep='\t')
+    metadata.loc[metadata['scientific_name'].eq('Species B'), 'exclusion'] = 'manual'
+    path = tmp_path / 'reviewed.tsv'
+    metadata.to_csv(path, sep='\t', index=False)
+    cstmm_main(SimpleNamespace(out_dir=str(tmp_path), dir_count='inferred', metadata=str(path),
+                              orthogroup_table=str(orthogroup), dir_busco=None))
+    assert not (tmp_path / 'cstmm' / 'Species_B').exists()
+    output = pandas.read_csv(tmp_path / 'cstmm' / 'metadata.tsv', sep='\t')
+    assert output.loc[output['scientific_name'].eq('Species B'), 'exclusion'].tolist() == ['manual', 'manual']
+    assert 'single_copy_threshold' not in output.columns
+    original = pandas.read_csv(merge_dir / 'Species_A' / 'Species_A_est_counts.tsv', sep='\t', index_col=0)
+    expected = run_tmm_rounds_for_cstmm(original)
+    corrected = pandas.read_csv(tmp_path / 'cstmm' / 'Species_A' / 'Species_A_cstmm_counts.tsv', sep='\t', index_col=0)
+    pandas.testing.assert_frame_equal(corrected, original.div(expected.round2_factors))
+
+
 def test_tmm_rounds_reject_empty_and_all_zero_reference_matrices():
     with pytest.raises(ValueError, match='at least one sample column'):
         run_tmm_rounds_for_cstmm(pandas.DataFrame(index=['G1', 'G2']))

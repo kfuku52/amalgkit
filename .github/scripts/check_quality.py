@@ -12,3 +12,6 @@ for arguments in (['ruff', 'check', '.'], ['ruff', 'format', '--check', *boundar
     subprocess.run(  # noqa: S603 - fixed QA modules and repository-owned paths
         [sys.executable, '-m', *arguments], cwd=root, check=True,
     )
+subprocess.run(  # noqa: S603 - repository-owned documentation validator
+    [sys.executable, str(root / '.github/scripts/check_docs.py')], cwd=root, check=True,
+)

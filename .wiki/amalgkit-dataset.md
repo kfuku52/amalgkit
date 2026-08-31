@@ -65,6 +65,13 @@ Available rule sets are:
 - `plantae`
 - `vertebrate`
 
+These are editable starting points, not automatic selectors for every taxon.
+Currently all four presets include a `sample_group` parameter of
+`flower,leaf,root`. Change that parameter and the normalization/exclusion rules
+for other groups (for example, liver); changing the preset name alone is not
+sufficient. The separate yeast dataset supplies tutorial-specific rules that
+preserve manually reviewed groups.
+
 Run `amalgkit dataset --list` to show available datasets and rule sets in the installed version.
 
 ## Output Behavior
@@ -75,13 +82,23 @@ By default, `dataset` does not overwrite existing files. Add `--overwrite yes` w
 
 After `--name init`:
 
+Fill `work/species.tsv` and review `work/select_rules.tsv` first; both are templates.
+
 ```bash
 amalgkit metadata \
     --out_dir ./work \
     --species_tsv ./work/species.tsv \
     --entrez_email example@email.com
-amalgkit select --out_dir ./work/batch --species_tsv ./work/species.tsv
+amalgkit select \
+    --out_dir ./work/batch \
+    --species_tsv ./work/species.tsv \
+    --metadata_specieswise_dir ./work/metadata_specieswise \
+    --select_rules_tsv ./work/select_rules.tsv
 ```
+
+Continue from each species workspace listed in `work/batch/external_manifest.tsv`.
+Species-wise retrieval does not create `work/metadata/metadata.tsv`, and
+selection into `work/batch` does not infer rules from its parent directory.
 
 After `--rule_set base`:
 

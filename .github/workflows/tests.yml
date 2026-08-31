@@ -61,7 +61,7 @@ jobs:
           uv pip install pip -e ".[test,quality]"
           uv pip check
 
-      - name: Lint, formatting and typed boundaries
+      - name: Lint, formatting, typed boundaries and documentation
         run: python .github/scripts/check_quality.py
 
       - name: Run full suite with branch coverage

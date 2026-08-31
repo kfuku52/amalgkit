@@ -8,7 +8,7 @@
 
 `wsfilter` expects:
 
-- metadata from `metadata`, `integrate`, `select`, or a previous filter step
+- metadata from the matching `merge`/`cstmm` output or a previous filter step
 - abundance tables from `merge` or `cstmm`
 
 If `--input_dir inferred` is used, AMALGKIT reads:
@@ -17,19 +17,22 @@ If `--input_dir inferred` is used, AMALGKIT reads:
 out_dir/cstmm if it exists, otherwise out_dir/merge
 ```
 
-If `--metadata inferred` is used, AMALGKIT can reuse the newest prior filter metadata when available:
-
-```text
-out_dir/wsfilter/metadata.tsv
-out_dir/csfilter/metadata.tsv
-out_dir/metadata/metadata.tsv
-```
+With `--metadata inferred`, AMALGKIT uses the last successful filter recorded
+in `filter_metadata_state.json`, then the selected input directory's metadata.
+Legacy workspaces prefer `csfilter` over `wsfilter` with a warning, not by file
+modification time. See [metadata and normalization](https://github.com/kfuku52/amalgkit/wiki/Metadata-and-normalization)
+for the complete precedence rules and long-read settings.
 
 For the first filter pass, an explicit metadata path is often clearest:
 
 ```bash
-amalgkit wsfilter --out_dir ./ --metadata ./metadata/metadata.tsv
+amalgkit wsfilter --out_dir ./ --input_dir ./cstmm --metadata ./cstmm/metadata.tsv
 ```
+
+If CSTMM was skipped, use `--input_dir ./merge --metadata ./merge/metadata.tsv`.
+Do not use the original pre-CSTMM metadata with CSTMM counts: it lacks the
+original library sizes needed to preserve TMM during FPKM calculation.
+For Oarfish runs, add `--norm log2p1-none` to every downstream command.
 
 ## Basic Use
 

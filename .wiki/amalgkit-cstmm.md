@@ -37,7 +37,7 @@ merge -> cstmm -> wsfilter -> csfilter -> finalize
 
 - selected metadata
 - per-species count tables from `merge`
-- one ortholog source
+- one ortholog source when multiple input species directories exist
 
 Provide one of:
 
@@ -49,6 +49,20 @@ Provide one of:
 ```text
 out_dir/merge
 ```
+
+`--metadata inferred` reads `dir_count/metadata.tsv`, normally
+`out_dir/merge/metadata.tsv`. An explicit `--metadata` is read and validated:
+every count column must match a metadata species/run, honoring `species_token`
+when supplied. Keep rows for unwanted runs and mark their `exclusion` instead
+of removing them. Only `exclusion=no` rows participate; if `is_sampled` is
+populated, only `yes` rows participate. Duplicate identifiers, unmatched count
+columns, missing files, and an empty eligible input are errors.
+
+Excluded/unsampled runs are omitted from corrected count tables and factor
+estimation, while their annotations remain in the output metadata. Previous
+TMM statistics are recomputed. Ortholog selection uses species with eligible
+counts; if just one remains, standard TMM uses all its targets. Effective-length
+and quant-model sidecars are copied unchanged and may include additional runs.
 
 ## Examples
 
@@ -69,13 +83,13 @@ amalgkit cstmm \
 For single-species TMM:
 
 ```bash
-amalgkit cstmm --out_dir ./ --orthogroup_table ""
+amalgkit cstmm --out_dir ./
 ```
 
 ## Main Outputs
 
-- `cstmm/cstmm_multispecies_busco_table.tsv`
-- `cstmm/cstmm_orthogroup_genecount.tsv`
+- `cstmm/cstmm_multispecies_busco_table.tsv` (multiple input species, BUSCO mode)
+- `cstmm/cstmm_orthogroup_genecount.tsv` (multiple input species)
 - `cstmm/cstmm_exclusion.pdf`
 - `cstmm/cstmm_normalization_factor_scatter.pdf`
 - `cstmm/cstmm_normalization_factor_histogram.sample_group.pdf`
@@ -84,6 +98,11 @@ amalgkit cstmm --out_dir ./ --orthogroup_table ""
 - `cstmm/metadata.tsv`
 - `cstmm/<Species>/<Species>_cstmm_counts.tsv`
 - `cstmm/<Species>/<Species>_eff_length.tsv`
+- `cstmm/<Species>/<Species>_quant_model.tsv` (when present in merge input)
+
+For Oarfish input, use `--norm log2p1-none` in all downstream filters and
+finalization. FPKM is undefined for its length model, and TPM would cancel TMM.
+See the [long-read workflow](https://github.com/kfuku52/amalgkit/wiki/Metadata-and-normalization#counts-lengths-and-normalization).
 
 ## Normalization Metadata
 
@@ -127,7 +146,9 @@ library(edgeR)
 
 cstmm_metadata <- read.delim(
     "cstmm/metadata.tsv",
-    check.names = FALSE
+    check.names = FALSE,
+    colClasses = "character",
+    na.strings = ""
 )
 
 sample_index <- match(colnames(hog_counts), cstmm_metadata$run)
@@ -136,7 +157,7 @@ if (anyNA(sample_index)) {
 }
 
 effective_library_size <-
-    cstmm_metadata$tmm_effective_library_size[sample_index]
+    as.numeric(cstmm_metadata$tmm_effective_library_size[sample_index])
 if (any(!is.finite(effective_library_size) | effective_library_size <= 0)) {
     stop("CSTMM effective library sizes must be finite and positive")
 }
@@ -168,7 +189,7 @@ creating the `DGEList`.
 
 | Option | Use |
 | --- | --- |
-| `--metadata` | metadata table; inferred from `out_dir/metadata/metadata.tsv` |
+| `--metadata` | metadata table; inferred from `dir_count/metadata.tsv`, normally `out_dir/merge/metadata.tsv` |
 | `--dir_count` | merge output directory; inferred from `out_dir/merge` |
 | `--dir_busco` | directory of per-species BUSCO tables |
 | `--orthogroup_table` | OrthoFinder-style table, such as `Orthogroups.tsv` or `N0.tsv` |

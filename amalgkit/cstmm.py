@@ -67,6 +67,9 @@ def cstmm_main(args):
         dir_count = os.path.join(dir_out, 'merge')
     else:
         dir_count = os.path.realpath(args.dir_count)
+    metadata_path = getattr(args, 'metadata', 'inferred')
+    if metadata_path == 'inferred':
+        metadata_path = os.path.join(dir_count, 'metadata.tsv')
     count_files = get_count_files(dir_count)
     with staged_output_dir(
         dir_cstmm,
@@ -110,6 +113,7 @@ def cstmm_main(args):
                 dir_count=dir_count,
                 dir_cstmm=stage_dir,
                 species_name=species_name,
+                metadata_path=metadata_path,
             )
         else:
             run_cstmm_python_multi_species(
@@ -118,4 +122,5 @@ def cstmm_main(args):
                 file_genecount=file_genecount,
                 file_orthogroup_table=file_orthogroup_table,
                 single_copy_threshold=getattr(args, 'single_copy_threshold', DEFAULT_SINGLE_COPY_THRESHOLD),
+                metadata_path=metadata_path,
             )

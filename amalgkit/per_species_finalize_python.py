@@ -242,6 +242,29 @@ def _sort_tc_and_metadata(counts_df, metadata_df, sort_columns=('sample_group', 
     }
 
 
+def validate_cstmm_transform_metadata(count_path, metadata_df, transform_method):
+    """Prevent re-normalizing corrected counts with their own column sums."""
+    if not str(count_path).endswith('_cstmm_counts.tsv'):
+        return
+    metadata_df = metadata_df.loc[
+        metadata_df['exclusion'].fillna('').astype(str).str.strip().str.lower().eq('no')]
+    if metadata_df.empty:
+        return
+    abundance_method = str(transform_method).strip().lower().split('-')[-1]
+    if abundance_method == 'tpm':
+        raise ValueError('TPM and TMM are incompatible. Use FPKM for effective-length runs, '
+                         'or a *-none normalization for length_model=none.')
+    if abundance_method == 'fpkm':
+        message = ('CSTMM counts require finite positive tmm_library_size values from the original '
+                   'count libraries. Use cstmm/metadata.tsv or its filtered descendant, not '
+                   'metadata/metadata.tsv; recomputing library sizes from corrected counts cancels TMM.')
+        if 'tmm_library_size' not in metadata_df.columns:
+            raise ValueError(message)
+        sizes = pandas.to_numeric(metadata_df['tmm_library_size'], errors='coerce').to_numpy(dtype=float)
+        if ((~numpy.isfinite(sizes)) | (sizes <= 0)).any():
+            raise ValueError(message)
+
+
 def _transform_raw_to_fpkm(counts_df, eff_length_df, metadata_df):
     if 'tmm_library_size' in metadata_df.columns:
         metadata_indexed = metadata_df.copy().set_index('run')
@@ -984,6 +1007,7 @@ def run_finalize_python_worker(args, metadata, species_tag, input_dir):
     num_total_runs_species = int(metadata_all.loc[:, 'scientific_name'].astype(str).eq(scientific_name).sum())
     sra = _get_species_metadata(metadata_all, scientific_name, selected_sample_groups, counts_df.columns)
     num_runs_after_sample_group_filter = int(sra.shape[0])
+    validate_cstmm_transform_metadata(count_path, sra, args.norm)
 
     out_dir = os.path.realpath(args.out_dir)
     dir_per_species = os.path.join(out_dir, 'per_species')

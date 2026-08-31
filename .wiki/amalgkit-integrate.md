@@ -7,7 +7,7 @@
 Create metadata from private FASTQ files only:
 
 ```bash
-amalgkit integrate --fastq_dir ./private_fastq --out_dir ./
+amalgkit integrate --fastq_dir ./private_fastq --out_dir ./ --output_metadata ./metadata/with_private.tsv
 ```
 
 Append private FASTQ entries to existing metadata:
@@ -16,17 +16,14 @@ Append private FASTQ entries to existing metadata:
 amalgkit integrate \
     --fastq_dir ./private_fastq \
     --out_dir ./ \
-    --metadata ./metadata/metadata.tsv
+    --metadata ./metadata/metadata.tsv \
+    --output_metadata ./metadata/with_private.tsv
 ```
 
-Write to an explicit metadata path:
-
-```bash
-amalgkit integrate \
-    --fastq_dir ./private_fastq \
-    --out_dir ./ \
-    --output_metadata ./metadata/private_metadata.tsv
-```
+Use the first example in a new workspace without `metadata/metadata.tsv`.
+If that file already exists, inferred input uses merge mode; the second example
+makes the input explicit. Both examples write a separate output for review and
+preserve the original public metadata.
 
 ## Output Paths
 
@@ -34,6 +31,10 @@ Without `--output_metadata`:
 
 - standalone mode writes `out_dir/metadata_private_fastq.tsv`
 - merge mode writes `out_dir/metadata/metadata_updated_for_private_fastq.tsv`
+
+Neither path is the default input of `getfastq`, `quant`, or `merge`.
+Without an explicit handoff, private samples can be omitted or the next command
+can fail because `metadata/metadata.tsv` does not exist.
 
 ## FASTQ Discovery
 
@@ -81,11 +82,13 @@ Typical single-end name:
 
 ## Fields to Review
 
-`integrate` cannot infer every biological label. Before continuing, review:
+`integrate` cannot infer every biological label. Before continuing, review the
+generated `metadata/with_private.tsv`, including:
 
 - `scientific_name`
 - `sample_group`
 - `exclusion`
+- `is_sampled` (use `yes` for runs intended for processing)
 - `lib_layout`
 - `read1_path`
 - `read2_path`
@@ -101,9 +104,21 @@ Typical single-end name:
 
 ## Next Steps
 
+Install the [external dependencies](https://github.com/kfuku52/amalgkit/wiki/Installation-and-dependencies).
+Even private-only `getfastq` currently checks both `fasterq-dump` and SeqKit at
+startup. Supply a reference transcriptome for every species under `fasta/` as
+described in [quant](https://github.com/kfuku52/amalgkit/wiki/amalgkit-quant).
+
+After reviewing the generated metadata, pass the same path through all three
+commands. Then use the metadata exported by `merge` for finalization:
+
 ```bash
-amalgkit getfastq --out_dir ./
-amalgkit quant --out_dir ./ --build_index yes
-amalgkit merge --out_dir ./
-amalgkit finalize --out_dir ./ --batch_effect_alg no
+amalgkit getfastq --out_dir ./ --metadata ./metadata/with_private.tsv
+amalgkit quant --out_dir ./ --metadata ./metadata/with_private.tsv --build_index yes
+amalgkit merge --out_dir ./ --metadata ./metadata/with_private.tsv
+amalgkit finalize --out_dir ./ --input_dir ./merge --metadata ./merge/metadata.tsv --batch_effect_alg no
 ```
+
+This finalization example is for short reads. For Oarfish/long-read data, use
+`--norm log2p1-none`; see
+[metadata and normalization](https://github.com/kfuku52/amalgkit/wiki/Metadata-and-normalization).

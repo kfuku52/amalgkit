@@ -34,14 +34,20 @@ amalgkit csfilter \
     --dir_busco ./busco
 ```
 
-Without `wsfilter`:
+Without `wsfilter`, starting directly from CSTMM:
 
 ```bash
 amalgkit csfilter \
     --out_dir ./ \
-    --metadata ./metadata/metadata.tsv \
+    --input_dir ./cstmm \
+    --metadata ./cstmm/metadata.tsv \
     --dir_busco ./busco
 ```
+
+If CSTMM was skipped, use `--input_dir ./merge --metadata ./merge/metadata.tsv`.
+Metadata inference follows the last successful filter state, then the selected
+input directory; it does not use file modification times. For Oarfish runs,
+add `--norm log2p1-none`. See [metadata and normalization](https://github.com/kfuku52/amalgkit/wiki/Metadata-and-normalization).
 
 Using an orthogroup table:
 
@@ -58,7 +64,8 @@ amalgkit csfilter \
 - `csfilter/excluded.tsv`
 - `csfilter/csfilter_exclusion.pdf`
 - `csfilter/csfilter_overview.pdf`
-- `csfilter/csfilter_unaveraged_pca_PC12.pdf`
+- `csfilter/csfilter_run_pca_pc12_pre_correction.pdf`
+- `csfilter/csfilter_run_pca_pc12_post_correction.pdf`
 - `csfilter/csfilter_heatmap.pdf`
 - `csfilter/csfilter_within_group_cor.pdf`
 - `csfilter/csfilter_outlier_scatter.pdf`

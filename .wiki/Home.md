@@ -2,11 +2,18 @@
 
 AMALGKIT builds RNA-seq expression datasets from public SRA records and private FASTQ files. The current CLI is Python-only: the main pipeline no longer requires R, `Rscript`, or R packages.
 
+These pages track the **default branch**, including patch updates that are not
+published as GitHub Releases. The page footer identifies the synchronized
+version and source commit. Historical release notes retain their original scope.
+
 Good first pages:
 
 - [Installation and dependencies](https://github.com/kfuku52/amalgkit/wiki/Installation-and-dependencies)
 - [Tutorial 1](https://github.com/kfuku52/amalgkit/wiki/Tutorial-1)
 - [Parallel processing](https://github.com/kfuku52/amalgkit/wiki/Parallel-processing)
+- [Metadata and normalization](https://github.com/kfuku52/amalgkit/wiki/Metadata-and-normalization)
+- [Architecture and development](https://github.com/kfuku52/amalgkit/wiki/Architecture-and-development)
+- [Changelog, including patch updates](https://github.com/kfuku52/amalgkit/blob/master/CHANGELOG.md)
 - [GitHub releases](https://github.com/kfuku52/amalgkit/releases)
 
 ## Workflow Map

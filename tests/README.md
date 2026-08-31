@@ -32,3 +32,11 @@ it locally or document a narrowly matched allow-list entry.
 Integration tests use lightweight PDF placeholders when they are checking plot
 orchestration and output naming. Dedicated `slow` tests retain real PDF
 rendering coverage.
+
+`test_documented_workflows.py` executes the Wiki's yeast metadata edit and
+selection, private FASTQ metadata handoffs, the generated species-wise guide,
+and the long-read CSTMM/filter/finalize chain. Network responses and taxonomy
+lookups use small fixtures; Oarfish count/model tables are fixtures rather than
+an invocation of the external quantifier. `test_doc_tools.py` exercises drift
+detection and safe Wiki staging. Required documentation and scripts are included
+in the source distribution so these tests also run from an unpacked sdist.

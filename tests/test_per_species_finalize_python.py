@@ -21,7 +21,9 @@ from amalgkit.per_species_finalize_python import (
     _transform_raw_to_tpm,
     load_quant_model_table,
     resolve_length_models,
+    run_finalize_python_worker,
 )
+from amalgkit.per_species_python import _run_prepare_or_wsfilter_python_worker
 from amalgkit import per_species_tables as per_species_tables_module
 from tests.support.per_species import build_per_species_args
 
@@ -113,6 +115,43 @@ def _write_species_input_fixture(tmp_path, species='Finalizus example', sample_g
         'species': species,
         'species_tag': species_tag,
     }
+
+
+@pytest.mark.parametrize('worker', [_run_prepare_or_wsfilter_python_worker, run_finalize_python_worker])
+@pytest.mark.parametrize('problem', ['missing', 'invalid', 'tpm'])
+def test_workers_reject_cstmm_without_original_library_sizes(tmp_path, worker, problem):
+    fixture = _write_species_input_fixture(tmp_path)
+    species_dir = tmp_path / 'input' / fixture['species_tag']
+    (species_dir / (fixture['species_tag'] + '_est_counts.tsv')).rename(
+        species_dir / (fixture['species_tag'] + '_cstmm_counts.tsv'))
+    metadata = fixture['metadata']
+    if problem == 'invalid':
+        metadata.df['tmm_library_size'] = 0
+    args = build_per_species_args(tmp_path, skip_curation=True, norm='log2p1-tpm' if problem == 'tpm' else 'log2p1-fpkm')
+    with pytest.raises(ValueError, match='TPM and TMM|tmm_library_size'):
+        worker(args, metadata, fixture['species_tag'], fixture['input_dir'])
+    assert not (tmp_path / 'out' / 'per_species' / fixture['species_tag']).exists()
+
+
+@pytest.mark.parametrize('worker', [_run_prepare_or_wsfilter_python_worker, run_finalize_python_worker])
+def test_workers_preserve_tmm_scaling_with_excluded_metadata_rows(tmp_path, worker, stub_pdf_rendering):
+    fixture = _write_species_input_fixture(tmp_path)
+    species_tag = fixture['species_tag']
+    species_dir = tmp_path / 'input' / species_tag
+    count_path = species_dir / (species_tag + '_est_counts.tsv')
+    counts = pandas.read_csv(count_path, sep='\t', index_col=0)
+    count_path.rename(species_dir / (species_tag + '_cstmm_counts.tsv'))
+    metadata = fixture['metadata']
+    # Corrected counts need the pre-TMM library sizes, not their current sums.
+    library_sizes = counts.sum() * [2.0, 0.5, 1.0, 1.0]
+    metadata.df['tmm_library_size'] = metadata.df['run'].map(library_sizes)
+    metadata.df.loc[metadata.df['run'].eq('RUN04'), ['exclusion', 'tmm_library_size']] = ['manual', numpy.nan]
+    args = build_per_species_args(tmp_path, skip_curation=True, norm='log2p1-fpkm')
+    assert worker(args, metadata, species_tag, fixture['input_dir']) == 0
+    output = pandas.read_csv(tmp_path / 'out' / 'per_species' / species_tag / 'tables' /
+                             (species_tag + '.uncorrected.tc.tsv'), sep='\t', index_col=0)
+    expected = numpy.log2(counts.loc[:, ['RUN01', 'RUN02', 'RUN03']].div(library_sizes, axis=1).drop(columns='RUN04') * 1e6 + 1)
+    numpy.testing.assert_allclose(output, expected)
 
 
 def _inject_latent_batch_signal(input_dir, species_tag):

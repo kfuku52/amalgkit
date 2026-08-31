@@ -46,3 +46,16 @@ python benchmarks/benchmark_core.py --quick
 
 CI additionally runs the complete suite with branch coverage, a dependency-floor
 environment, distribution checks, and a scheduled real-tool end-to-end workflow.
+
+`check_quality.py` also validates documented CLI syntax, literal defaults and
+local links/headings. Small workflow tests execute the tutorial metadata edit,
+yeast selection, private-metadata handoffs, and generated workspace steps with
+network fixtures. The installed-wheel smoke test includes yeast selection.
+
+## Publishing documentation
+
+The canonical Wiki pages live in the main repository's `.wiki/` directory.
+After verification and the source push, maintainers compare and stage them in
+a separate Wiki checkout with `.github/scripts/sync_wiki.py`, review the diff,
+and commit/push the Wiki normally. The generated footer records the source
+version and commit. See the [publication procedure](https://github.com/kfuku52/amalgkit/blob/master/CONTRIBUTING.md#documentation-and-public-wiki).

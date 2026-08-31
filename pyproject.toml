@@ -52,7 +52,7 @@ Homepage = "https://github.com/kfuku52/amalgkit"
 Documentation = "https://github.com/kfuku52/amalgkit/wiki"
 Repository = "https://github.com/kfuku52/amalgkit.git"
 Issues = "https://github.com/kfuku52/amalgkit/issues"
-Changelog = "https://github.com/kfuku52/amalgkit/releases"
+Changelog = "https://github.com/kfuku52/amalgkit/blob/master/CHANGELOG.md"
 
 [tool.setuptools]
 include-package-data = false

@@ -88,17 +88,32 @@ def build_parser(command_handlers, command_names, version, prog=None):
     pp_meta = argparse.ArgumentParser(add_help=False)
     pp_meta.add_argument('--metadata', metavar='PATH', default='inferred', type=str, required=False, action='store',
                      help='default=%(default)s: "inferred" = out_dir/metadata/metadata.tsv. '
-                          'PATH to metadata table, the output file of `amalgkit metadata`. '
-                          'In wsfilter/csfilter/finalize, if "inferred" and prior filter metadata exists, the newest of '
-                          'out_dir/wsfilter/metadata.tsv and out_dir/csfilter/metadata.tsv is used automatically.')
+                          'PATH to a metadata table. After integrate, explicitly pass its output metadata path.')
+    pp_count_meta = argparse.ArgumentParser(add_help=False)
+    pp_count_meta.add_argument('--metadata', metavar='PATH', default='inferred',
+                              help='default=%(default)s: "inferred" = dir_count/metadata.tsv '
+                                   '(normally out_dir/merge/metadata.tsv). Explicit metadata must describe every count column; '
+                                   'exclusion and is_sampled control which runs are normalized.')
+    pp_filter_meta = argparse.ArgumentParser(add_help=False)
+    pp_filter_meta.add_argument('--metadata', metavar='PATH', default='inferred',
+                               help='default=%(default)s: Use the last successful filter recorded in filter_metadata_state.json; '
+                                    'legacy workspaces prefer csfilter over wsfilter with a warning. Otherwise use '
+                                    'input_dir/metadata.tsv (inferred input prefers cstmm over merge). '
+                                    'CSTMM-derived metadata is required for FPKM from CSTMM counts.')
     pp_out = argparse.ArgumentParser(add_help=False)
     pp_out.add_argument('--out_dir', metavar='PATH', default='./', type=str, required=False, action='store',
                      help='default=%(default)s: PATH to the directory where intermediate and output files are generated.')
     pp_batch = argparse.ArgumentParser(add_help=False)
     pp_batch.add_argument('--batch', metavar='INT', default=None, type=int, required=False, action='store',
-                     help='default=%(default)s: One-based index of metadata table (--metadata). '
-                          'If set, process only one SRA record. This function is intended for array job processing. '
+                     help='default=%(default)s: One-based run index after filtering metadata to is_sampled=yes, in table order. '
+                          'Process only this run. This function is intended for array job processing. '
                           'If multiple batch jobs run at the same time, total CPU demand scales with the number of concurrent batch jobs.')
+    pp_species_batch = argparse.ArgumentParser(add_help=False)
+    pp_species_batch.add_argument('--batch', metavar='INT', default=None, type=int,
+                                 help='default=%(default)s: One-based index into sorted unique scientific_name values '
+                                      'in the input metadata; select all rows of that species. Not a run index. '
+                                      'Species jobs are not equivalent to joint cross-species filtering; '
+                                      'do not run concurrent filter/finalize jobs into the same output directory.')
     pp_redo = argparse.ArgumentParser(add_help=False)
     pp_redo.add_argument('--redo', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
                      help='default=%(default)s: Redo the analysis even if previous output files are detected.')
@@ -472,10 +487,10 @@ def build_parser(command_handlers, command_names, version, prog=None):
     pbu.set_defaults(handler=command_handlers['busco'])
 
     pcs_help = 'Applying cross-species TMM normalization using single-copy genes. See `amalgkit cstmm -h`'
-    pcs = subparsers.add_parser('cstmm', help=pcs_help, parents=[pp_out, pp_meta, pp_redo])
+    pcs = subparsers.add_parser('cstmm', help=pcs_help, parents=[pp_out, pp_count_meta, pp_redo])
     pcs.add_argument('--orthogroup_table', metavar='PATH', default=None, type=str, required=False, action='store',
-                     help='default=%(default)s: PATH to orthogroup table, which is, for example, Orthogroups.tsv and N0.tsv in OrthoFinder.'
-                          'Specify `--orthogroup_table ""` for single-species TMM normalization.')
+                     help='default=%(default)s: PATH to an orthogroup table, such as Orthogroups.tsv or N0.tsv from OrthoFinder. '
+                          'Not required when the count input contains only one species.')
     pcs.add_argument('--dir_busco', metavar='PATH', default=None, type=str, required=False, action='store',
                      help='default=%(default)s: PATH to the directory where per-species BUSCO full tables are stored. '
                           'File names in this directory are expected to be GENUS_SPECIES_busco.tsv: e.g., Arabidopsis_thaliana_busco.tsv')
@@ -490,7 +505,7 @@ def build_parser(command_handlers, command_names, version, prog=None):
     pcs.set_defaults(handler=command_handlers['cstmm'])
 
     pws_help = 'Within-species outlier filtering. Outputs metadata.tsv + excluded.tsv + species PDFs (no plots/). See `amalgkit wsfilter -h`'
-    pws = subparsers.add_parser('wsfilter', help=pws_help, parents=[pp_out, pp_meta, pp_batch, pp_threads, pp_internal_jobs, pp_cpu_budget, pp_sg, pp_sgc, pp_redo])
+    pws = subparsers.add_parser('wsfilter', help=pws_help, parents=[pp_out, pp_filter_meta, pp_species_batch, pp_threads, pp_internal_jobs, pp_cpu_budget, pp_sg, pp_sgc, pp_redo])
     pws.add_argument('--input_dir', metavar='PATH', default='inferred', type=str, required=False, action='store',
                      help='default=%(default)s: PATH to `amalgkit merge` or `amalgkit cstmm` output folder. '
                           '"inferred" = out_dir/cstmm if exist, else out_dir/merge.')
@@ -522,7 +537,7 @@ def build_parser(command_handlers, command_names, version, prog=None):
     pws.set_defaults(handler=command_handlers['wsfilter'])
 
     pcsf_help = 'Cross-species outlier filtering. Outputs metadata.tsv + excluded.tsv + PDFs (no plots/). See `amalgkit csfilter -h`'
-    pcsf = subparsers.add_parser('csfilter', help=pcsf_help, parents=[pp_out, pp_meta, pp_batch, pp_threads, pp_internal_jobs, pp_cpu_budget, pp_sg, pp_sgc, pp_redo])
+    pcsf = subparsers.add_parser('csfilter', help=pcsf_help, parents=[pp_out, pp_filter_meta, pp_species_batch, pp_threads, pp_internal_jobs, pp_cpu_budget, pp_sg, pp_sgc, pp_redo])
     pcsf.add_argument('--input_dir', metavar='PATH', default='inferred', type=str, required=False, action='store',
                       help='default=%(default)s: PATH to `amalgkit merge` or `amalgkit cstmm` output folder. '
                            '"inferred" = out_dir/cstmm if exist, else out_dir/merge.')
@@ -555,7 +570,7 @@ def build_parser(command_handlers, command_names, version, prog=None):
     pcsf.set_defaults(handler=command_handlers['csfilter'])
 
     pfi_help = 'Final table export from filtered metadata. See `amalgkit finalize -h`'
-    pfi = subparsers.add_parser('finalize', help=pfi_help, parents=[pp_out, pp_meta, pp_batch, pp_threads, pp_internal_jobs, pp_cpu_budget, pp_sg, pp_sgc, pp_redo])
+    pfi = subparsers.add_parser('finalize', help=pfi_help, parents=[pp_out, pp_filter_meta, pp_species_batch, pp_threads, pp_internal_jobs, pp_cpu_budget, pp_sg, pp_sgc, pp_redo])
     pfi.add_argument('--input_dir', metavar='PATH', default='inferred', type=str, required=False, action='store',
                      help='default=%(default)s: PATH to `amalgkit merge` or `amalgkit cstmm` output folder. '
                           '"inferred" = out_dir/cstmm if exist, else out_dir/merge.')

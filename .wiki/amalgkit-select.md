@@ -13,7 +13,7 @@ Current releases use one TSV rule file. The former config-directory workflow has
 
 ## Basic Use
 
-Create a starter rule file, edit it if needed, then run `select`:
+Create a starter rule file, review and edit it for your biological groups, then run `select`:
 
 ```bash
 amalgkit dataset --rule_set base --out_dir ./ --overwrite yes
@@ -52,6 +52,13 @@ out_dir/select_rules.tsv
 
 Available bundled rule sets are `base`, `test`, `plantae`, and `vertebrate`.
 
+All four currently default to `sample_group=flower,leaf,root`. For liver or other
+non-plant groups, edit the `parameter` row with `parameter_name=sample_group`
+and review normalization/exclusion rules before selection. An incompatible
+group allowlist can leave zero rows. Omit that parameter row to keep all
+reviewed groups. The `yeast` dataset has separate rules without this allowlist
+or plant normalization; see [Tutorial 1](https://github.com/kfuku52/amalgkit/wiki/Tutorial-1).
+
 ```bash
 amalgkit dataset --list
 amalgkit dataset --rule_set plantae --out_dir ./ --overwrite yes
@@ -69,7 +76,8 @@ amalgkit metadata \
 amalgkit select \
     --out_dir ./work/batch \
     --species_tsv ./work/species.tsv \
-    --metadata_specieswise_dir ./work/metadata_specieswise
+    --metadata_specieswise_dir ./work/metadata_specieswise \
+    --select_rules_tsv ./work/select_rules.tsv
 ```
 
 Useful batch options:
@@ -92,6 +100,10 @@ Batch mode writes:
 - `select_queue.tsv`
 - `external_manifest.tsv`
 - manifest sidecars for `all_tissues_ge30`, `all_tissues_ge3`, `all_tissues_ge1`, and `any_tissues_ge1`
+
+Follow the species workspace paths in `external_manifest.tsv` for `getfastq`
+and later commands. The metadata inputs and root rules above are explicit:
+batch output under `work/batch` does not imply `work/batch/select_rules.tsv` exists.
 
 ## Main Outputs
 

@@ -11,9 +11,14 @@ AMALGKIT uses a shared CPU-budget model. In most runs, set only `--threads` and 
 | `--threads INT or auto` | total CPU budget for one AMALGKIT process |
 | `--internal_jobs INT or auto` | advanced override for internal worker count |
 | `--internal_cpu_budget INT or auto` | advanced cap used when automatic worker counts are chosen |
-| `--batch INT` | one-based metadata row selector for array-job execution |
+| `--batch INT` | one-based run or species selector, depending on the command |
 
-When `--batch` is set, AMALGKIT processes one metadata row and forces `--internal_jobs` to `1`. Total CPU demand then scales with the number of concurrent array tasks.
+`getfastq` and `quant` select one run after `is_sampled=yes` filtering, in table
+order. `wsfilter`, `csfilter`, and `finalize` select one species from sorted
+unique nonempty `scientific_name` values and keep all its rows before downstream
+exclusions. `--batch` disables internal worker parallelism in either case.
+Total CPU demand scales with the number of concurrent array tasks. See
+[metadata and batch selection](https://github.com/kfuku52/amalgkit/wiki/Metadata-and-normalization#what-does---batch-select).
 
 ## Practical Defaults
 
@@ -36,6 +41,10 @@ amalgkit finalize --out_dir ./ --threads 8
 
 `getfastq`, `quant`, `wsfilter`, `csfilter`, and `finalize` accept `--batch`.
 
+The following is a **run-level quant array**, with references/indices already
+prepared. Set the array size to the number of sampled rows in the metadata.
+Do not use the same size to represent species batches.
+
 ```bash
 #!/bin/bash
 #SBATCH --cpus-per-task=4
@@ -48,6 +57,12 @@ amalgkit quant \
 ```
 
 If 20 array tasks run at the same time with `--threads 4`, the job may use up to about 80 cores across the cluster.
+
+Prefer one `csfilter` process with internal parallelism: separate species jobs
+do not have the joint cross-species context. Do not run concurrent
+`wsfilter`/`csfilter`/`finalize` batches into the same output directory, because
+they publish shared metadata and result directories. Independent species jobs
+need separate output directories and explicit input/metadata paths.
 
 ## Shared Downloads and Locks
 

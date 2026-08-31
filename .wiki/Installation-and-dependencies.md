@@ -1,16 +1,21 @@
 ## Installation
 
-AMALGKIT runs on Python 3.9 or later.
+AMALGKIT requires Python 3.11 or later; CI covers Python 3.11–3.14 on Linux,
+with additional macOS smoke tests. These pages describe the current default
+branch, which can be newer than GitHub Releases or Bioconda packages.
 
 ```bash
-mamba install -c bioconda amalgkit
+mamba install -c conda-forge -c bioconda --strict-channel-priority amalgkit
 amalgkit -h
 ```
+
+Channel order and strict priority follow the
+[Bioconda installation guide](https://bioconda.github.io/index.html#with-conda).
 
 For the latest GitHub revision:
 
 ```bash
-pip install git+https://github.com/kfuku52/amalgkit
+pip install --upgrade git+https://github.com/kfuku52/amalgkit
 amalgkit help metadata
 ```
 
@@ -30,8 +35,8 @@ Some commands call external bioinformatics tools. Install only the tools needed 
 
 | Tool | Used by | Required when |
 | --- | --- | --- |
-| [sra-tools / fasterq-dump](https://github.com/ncbi/sra-tools) | `getfastq` | public SRA extraction |
-| [SeqKit](https://github.com/shenwei356/seqkit) | `integrate`, `getfastq` | FASTQ statistics and compression workflows |
+| [sra-tools / fasterq-dump](https://github.com/ncbi/sra-tools) | `getfastq` | required at startup for every invocation, including private-only runs; use `sra-tools >= 3` |
+| [SeqKit](https://github.com/shenwei356/seqkit) | `integrate`, `getfastq` | required by `getfastq`; `integrate` can fall back to Python FASTQ statistics when SeqKit is unavailable |
 | [fastp](https://github.com/OpenGene/fastp) | `getfastq` | `--fastp yes`, which is the default |
 | [kallisto](https://github.com/pachterlab/kallisto) | `quant` | short-read quantification |
 
@@ -39,7 +44,7 @@ Example environment for a short-read public-SRA workflow:
 
 ```bash
 mamba create -n amalgkit -c conda-forge -c bioconda \
-    amalgkit "sra-tools>=3" seqkit fastp kallisto
+    --strict-channel-priority amalgkit "sra-tools>=3" seqkit fastp kallisto
 mamba activate amalgkit
 ```
 
@@ -50,7 +55,7 @@ Install these only when using the corresponding feature:
 | Dependency | Required when |
 | --- | --- |
 | [inmoose](https://inmoose.readthedocs.io/) | `amalgkit finalize --batch_effect_alg combatseq` |
-| [oarfish](https://github.com/COMBINE-lab/oarfish) | `amalgkit quant --quant_backend oarfish` |
+| [oarfish](https://github.com/COMBINE-lab/oarfish) | `quant --quant_backend oarfish`, or `--quant_backend auto` when long-read metadata selects Oarfish |
 | [MMseqs2](https://github.com/soedinglab/MMseqs2) | `amalgkit getfastq --rrna_filter yes` or `--contam_filter yes` |
 | [BUSCO](https://busco.ezlab.org/) | `amalgkit busco --tool busco` |
 | [compleasm](https://github.com/huangnengCSU/compleasm) | `amalgkit busco --tool compleasm`, or `--tool auto` when compleasm is selected |
@@ -58,8 +63,12 @@ Install these only when using the corresponding feature:
 Example:
 
 ```bash
-mamba install -c conda-forge -c bioconda inmoose oarfish mmseqs2 busco compleasm
+mamba install -c conda-forge -c bioconda --strict-channel-priority inmoose oarfish mmseqs2 busco compleasm
 ```
+
+For Oarfish outputs, also choose a compatible downstream normalization; the
+default FPKM is not defined for this backend. See
+[metadata and normalization](https://github.com/kfuku52/amalgkit/wiki/Metadata-and-normalization).
 
 ## Commands Without Extra Executables
 

@@ -9,6 +9,7 @@ scaffold, and export packaged ``select_rules.tsv`` files for use with
 """
 
 import os
+import shlex
 import shutil
 
 from amalgkit.exceptions import AmalgkitExit
@@ -45,7 +46,7 @@ This workspace was initialized by `amalgkit dataset --name init`.
 ## Files
 - `species.tsv`: input table for `amalgkit metadata --species_tsv`. Required column: `scientific_name`. Optional column: `species_token`.
 - `organ_terms.tsv`: optional table for `amalgkit metadata --species_tsv --mode title_union` or `title_split`. Required columns: `sample_group`, `title_terms`. Separate multiple title terms with `;`.
-- `select_rules.tsv`: default rule set loaded by `amalgkit select --out_dir ...`.
+- `select_rules.tsv`: starter selection rules; pass this path explicitly when selecting into a different output directory.
 
 ## Directories
 - `fasta/`: reference FASTA files.
@@ -55,11 +56,20 @@ This workspace was initialized by `amalgkit dataset --name init`.
 - `metadata_specieswise/`: per-species metadata outputs for batch workflows.
 
 ## Quick Start
-1. Fill `species.tsv` if you want species-wise metadata retrieval.
+Run these steps from this workspace directory for species-wise metadata retrieval:
+
+1. Fill `species.tsv` (the generated template has no species rows).
 2. Optionally fill `organ_terms.tsv` for title-based batch queries.
-3. Review `select_rules.tsv`.
+3. Edit `select_rules.tsv` to match your biological groups. The starter rules target flower, leaf, and root; review both normalization rules and the `sample_group` parameter.
 4. Run `amalgkit metadata --out_dir ./ --species_tsv ./species.tsv`.
-5. Run `amalgkit select --out_dir ./`.
+5. Run `amalgkit select --out_dir ./batch --species_tsv ./species.tsv --metadata_specieswise_dir ./metadata_specieswise --select_rules_tsv ./select_rules.tsv`.
+
+Selection writes one workspace per species under `batch/`, plus `batch/external_manifest.tsv`.
+Use the workspace paths in that manifest for subsequent commands; `metadata/metadata.tsv`
+at this workspace root is not created by species-wise retrieval.
+
+For regular metadata retrieval or private FASTQ integration, follow the
+[Wiki](https://github.com/kfuku52/amalgkit/wiki) instead of mixing those modes with these paths.
 """
 
 # Available datasets and their descriptions
@@ -479,9 +489,16 @@ def dataset_main(args):
     print('')
     print('Example usage:')
     if init_paths is not None:
-        print(f'  amalgkit metadata --out_dir {args.out_dir} --species_tsv {init_paths["species_tsv"]}')
-        print(f'  amalgkit select --out_dir {args.out_dir}')
+        print('  Fill species.tsv and review select_rules.tsv before running:')
+        print('  ' + shlex.join(['amalgkit', 'metadata', '--out_dir', args.out_dir,
+                                '--species_tsv', init_paths['species_tsv']]))
+        print('  ' + shlex.join(['amalgkit', 'select', '--out_dir', os.path.join(args.out_dir, 'batch'),
+                                '--species_tsv', init_paths['species_tsv'],
+                                '--metadata_specieswise_dir', init_paths['workspace_dirs']['metadata_specieswise'],
+                                '--select_rules_tsv', rules_path or init_paths['select_rules_tsv']]))
     elif dataset_paths is not None:
-        print(f'  amalgkit dataset --out_dir {args.out_dir} --rule_set base --overwrite yes')
+        print('  Retrieve metadata and review sample groups and the extracted rules first, then run:')
+        print('  ' + shlex.join(['amalgkit', 'select', '--out_dir', args.out_dir,
+                                '--select_rules_tsv', rules_path or dataset_paths['select_rules_tsv']]))
     else:
-        print(f'  amalgkit select --out_dir {args.out_dir} --select_rules_tsv {rules_path}')
+        print('  ' + shlex.join(['amalgkit', 'select', '--out_dir', args.out_dir, '--select_rules_tsv', rules_path]))

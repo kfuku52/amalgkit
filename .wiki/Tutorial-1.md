@@ -19,6 +19,7 @@ The BUSCO and filtering steps are included so the tutorial demonstrates the cros
 
 - AMALGKIT installed
 - `fasterq-dump` from `sra-tools >= 3`
+- SeqKit (required by `getfastq`)
 - `fastp`, unless you pass `--fastp no`
 - `kallisto` for short-read quantification
 
@@ -59,6 +60,15 @@ less select_rules.tsv
 
 `amalgkit select` reads `select_rules.tsv` directly. The former config-directory workflow is no longer used by the current CLI.
 
+The yeast rules keep manually reviewed biological group assignments; they do
+not apply plant-organ rules or restrict groups to flower/leaf/root. Standard
+text cleanup still applies in `select`, including converting underscores to
+spaces (for example, `heat_stress` becomes `heat stress`).
+Their defaults require at least 1,000,000 spots and a species taxid, and sample
+at most 3 runs per species/group. Edit these parameters deliberately for other
+datasets. The bundled transcriptomes and sampling cap are for a small tutorial,
+not a production analysis.
+
 ## 3. Retrieve Metadata
 
 ```bash
@@ -80,24 +90,36 @@ Main output:
 python - <<'PY'
 import pandas as pd
 
-df = pd.read_csv('metadata/metadata.tsv', sep='\t')
+df = pd.read_csv('metadata/metadata.tsv', sep='\t', dtype=str, keep_default_na=False)
+if 'sample_group' not in df.columns:
+    df['sample_group'] = ''
 if 'genotype' in df.columns:
-    x = df['genotype'].fillna('').astype(str).str.lower().str.strip()
+    x = df['genotype'].str.lower().str.strip()
     x = x.str.replace(r'[\s.(),/]+', '_', regex=True)
     x = x.str.replace(r'_+', '_', regex=True).str.strip('_')
-    df['sample_group'] = x
-df.to_csv('metadata/metadata.tsv', sep='\t', index=False)
-print(sorted(df['sample_group'].dropna().astype(str).unique().tolist()))
+    usable = x.ne('')
+    df.loc[usable, 'sample_group'] = x.loc[usable]
+df.to_csv('metadata/metadata_grouped.tsv', sep='\t', index=False)
+print('Groups:', sorted(df['sample_group'].unique()))
+print('Rows needing a group:', int(df['sample_group'].str.strip().eq('').sum()))
 PY
 ```
+
+This writes a new table and preserves existing groups where genotype is empty,
+as well as lexical IDs and annotations such as `0001` and `NA`. Review
+`metadata/metadata_grouped.tsv` before continuing: genotype labels alone do not
+establish comparable biological groups across species. Resolve empty groups
+and any labels such as unknown/not-provided by consulting the sample metadata.
 
 ## 5. Select Samples
 
 ```bash
-amalgkit select --out_dir ./
+amalgkit select --out_dir ./ --metadata ./metadata/metadata_grouped.tsv
 ```
 
 `select` applies `select_rules.tsv` and updates metadata columns such as `exclusion`, `is_qualified`, and `is_sampled`.
+Its selected output is `metadata/metadata.tsv`, which the following commands
+read by default. Check that the intended species/groups still have sampled runs.
 
 ## 6. Download and Prepare FASTQ Files
 

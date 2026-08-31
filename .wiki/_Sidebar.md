@@ -2,6 +2,7 @@
   * [Home](./Home)
   * [Installation and dependencies](./Installation-and-dependencies)
   * [Parallel processing](./Parallel-processing)
+  * [Metadata and normalization](./Metadata-and-normalization)
   * [Architecture and development](./Architecture-and-development)
   * [Tutorial 1](./Tutorial-1)
 
@@ -22,6 +23,7 @@
   * [amalgkit rerun](./amalgkit-rerun)
 
 * Migration and release
+  * [Changelog](https://github.com/kfuku52/amalgkit/blob/master/CHANGELOG.md)
   * [GitHub releases](https://github.com/kfuku52/amalgkit/releases)
   * [v0.16.25 notes (historical)](./Release-notes-v0.16.25)
   * [Legacy config command](./amalgkit-config)

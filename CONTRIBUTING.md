@@ -68,7 +68,10 @@ fast lanes. A separate minimum-dependency job still runs the full suite. macOS
 filesystem/CLI coverage runs for relevant paths, weekly and on manual dispatch.
 Nightly real-tool coverage includes plain/gzip and single/paired private FASTQs,
 default cleanup, merge, TMM and finalize. The wheel smoke test runs outside the
-checkout with isolated Python and actually extracts bundled FASTA data.
+checkout with isolated Python, extracts bundled FASTA data, and runs yeast
+selection on synthetic metadata. Network-free documentation tests execute the
+tutorial's metadata edit and selection, private FASTQ metadata handoffs, and the
+generated species-wise workspace guide; NCBI/taxonomy responses are fixtures.
 
 TMM reference inputs and independent Decimal/edgeR oracles are described in
 [`tests/reference/README.md`](tests/reference/README.md).
@@ -90,3 +93,44 @@ or reuse or move an existing version tag.
 The Bioconda recipe follows these major and minor release tags. Do not update
 the Bioconda recipe for patch-only versions; patch fixes remain available from
 the default branch until the next major or minor release.
+
+## Documentation and public Wiki
+
+`.wiki/` is the canonical source for the public GitHub Wiki. Edit it in this
+repository, not directly in the Wiki UI. `check_quality.py` includes
+`check_docs.py`, which checks documented CLI commands, literal default-value
+tables, internal links and headings without HTTP requests. Historical release
+notes are exempt from current CLI/default checks. These checks do not execute
+external tools or prove the biological validity of examples.
+
+After the source changes pass tests and are committed and pushed to `master`,
+update a separate Wiki checkout. Review any public-only edits before applying:
+
+```bash
+git clone https://github.com/kfuku52/amalgkit.wiki.git /tmp/amalgkit-wiki
+# For an existing checkout, pull --ff-only first.
+git -C /tmp/amalgkit-wiki log -1 --format=%H
+python .github/scripts/sync_wiki.py --wiki-dir /tmp/amalgkit-wiki
+```
+
+The check exits nonzero if pages or publication provenance differ. Use the full
+Wiki commit printed above as `REVIEWED_WIKI_COMMIT` after reviewing the source
+and public differences:
+
+```bash
+python .github/scripts/sync_wiki.py --wiki-dir /tmp/amalgkit-wiki --apply --expect-head REVIEWED_WIKI_COMMIT
+git -C /tmp/amalgkit-wiki diff
+git -C /tmp/amalgkit-wiki add --all
+git -C /tmp/amalgkit-wiki commit -m "Sync verified default-branch documentation"
+git -C /tmp/amalgkit-wiki push origin master
+python .github/scripts/sync_wiki.py --wiki-dir /tmp/amalgkit-wiki
+```
+
+The script refuses dirty checkouts, an unexpected origin/head, symbolic-link
+targets, and public-only pages; it never deletes pages, commits, or pushes.
+Review public-only pages manually rather than discarding them. Do not force
+push if another editor updates the Wiki during publication. The generated
+`_Footer.md` identifies the source version and commit on every published page.
+Wiki publication uses the maintainer's existing Git permissions and is a
+separate completion step; the main repository CI does not publish it or claim
+that a successful source build means the public Wiki is synchronized.

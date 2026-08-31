@@ -17,13 +17,14 @@ If `--input_dir inferred` is used, AMALGKIT reads:
 out_dir/cstmm if it exists, otherwise out_dir/merge
 ```
 
-If `--metadata inferred` is used, AMALGKIT can reuse the newest prior filter metadata when available:
+With `--metadata inferred`, AMALGKIT uses the last successful filter recorded
+in `filter_metadata_state.json`, then the selected input directory's metadata.
+Legacy workspaces prefer `csfilter` over `wsfilter` with a warning, not by file
+modification time. See [metadata and normalization](https://github.com/kfuku52/amalgkit/wiki/Metadata-and-normalization).
 
-```text
-out_dir/wsfilter/metadata.tsv
-out_dir/csfilter/metadata.tsv
-out_dir/metadata/metadata.tsv
-```
+FPKM from CSTMM counts requires `cstmm/metadata.tsv` or a filtered descendant
+with valid `tmm_library_size`. For Oarfish runs, add `--norm log2p1-none`;
+the default FPKM transformation is undefined for their length model.
 
 For reproducible runs, pass the metadata path explicitly:
 
@@ -83,7 +84,7 @@ Per species:
 - `<Species>_batch_effect_summary.tsv`
 - `<Species>_curation_round_summary.tsv`
 - `<Species>_curation_final_summary.tsv`
-- `<Species>_batch_compare_<alg>.pdf`
+- `<Species>_before_after_<alg>.pdf` (when a batch-correction algorithm is selected)
 - `<Species>_tau_hist_<alg>.pdf`
 
 ## General Options
@@ -93,7 +94,7 @@ Per species:
 | `--norm` | `log2p1-fpkm` | expression transformation before optional batch correction |
 | `--clip_negative` | `yes` | clip negative corrected values to zero |
 | `--maintain_zero` | `yes` | preserve input zero values after correction |
-| `--seed` | `auto` | random seed for stochastic steps |
+| `--seed` | `0` | random seed for stochastic steps; `auto` requests an unseeded run |
 
 ## Backend-Specific Options
 

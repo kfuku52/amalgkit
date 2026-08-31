@@ -36,6 +36,7 @@ from amalgkit.per_species_finalize_python import (
     _standardize_metadata_all,
     run_finalize_python_worker,
     should_use_python_finalize_worker,
+    validate_cstmm_transform_metadata,
 )
 from amalgkit.per_species_outputs import (
     initialize_correlation_statistics,
@@ -434,6 +435,7 @@ def _run_prepare_or_wsfilter_python_worker(args, metadata, species_tag, input_di
     num_total_runs_species = int(metadata_all.loc[:, 'scientific_name'].astype(str).eq(scientific_name).sum())
     sra = _get_species_metadata(metadata_all, scientific_name, selected_sample_groups, counts_df.columns)
     num_runs_after_sample_group_filter = int(sra.shape[0])
+    validate_cstmm_transform_metadata(count_path, sra, args.norm)
 
     out_dir = os.path.realpath(args.out_dir)
     dir_per_species = os.path.join(out_dir, 'per_species')

@@ -1,6 +1,8 @@
 graft tests
 graft benchmarks
 graft requirements
+recursive-include .wiki *.md
+recursive-include .github/scripts *.py
 include ARCHITECTURE.md
 include CHANGELOG.md
 include README.md

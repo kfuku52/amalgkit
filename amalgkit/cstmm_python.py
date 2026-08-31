@@ -82,6 +82,62 @@ def _load_uncorrected(dir_count, species_names):
     }
 
 
+def _index_cstmm_metadata(metadata_df):
+    required_cols = {'scientific_name', 'run', 'exclusion'}
+    missing_cols = sorted(required_cols.difference(metadata_df.columns))
+    if missing_cols:
+        raise ValueError('Required metadata columns are missing for cstmm: {}'.format(', '.join(missing_cols)))
+    metadata = metadata_df.copy()
+    for column in ('scientific_name', 'run'):
+        metadata[column] = metadata[column].fillna('').astype(str).str.strip()
+        if metadata[column].eq('').any():
+            raise ValueError('cstmm metadata contains an empty {}.'.format(column))
+    token_by_species = build_species_token_map(
+        scientific_names=metadata['scientific_name'].tolist(),
+        explicit_tokens=(metadata['species_token'].fillna('').astype(str).str.strip().tolist()
+                         if 'species_token' in metadata.columns else None),
+        context='cstmm metadata',
+    )
+    metadata['sample_id'] = [
+        '{}_{}'.format(token_by_species[species], run)
+        for species, run in zip(metadata['scientific_name'], metadata['run'])
+    ]
+    duplicated = metadata['sample_id'].duplicated(keep=False)
+    if duplicated.any():
+        raise ValueError('Duplicate cstmm species/run identifiers: {}'.format(
+            ', '.join(metadata.loc[duplicated, 'sample_id'].drop_duplicates())))
+    return metadata
+
+
+def _select_cstmm_inputs(uncorrected_by_species, metadata_path):
+    metadata = _index_cstmm_metadata(read_annotation_tsv(metadata_path))
+    count_ids = {column for counts in uncorrected_by_species.values() for column in counts.columns}
+    unknown = sorted(count_ids.difference(metadata['sample_id']))
+    if unknown:
+        raise ValueError(
+            'Count columns have no matching species/run in cstmm metadata: {}. '
+            'Keep their metadata rows and set exclusion to exclude runs.'.format(', '.join(unknown)))
+    eligible = metadata['exclusion'].fillna('').astype(str).str.strip().str.lower().eq('no')
+    if 'is_sampled' in metadata.columns:
+        sampled = metadata['is_sampled'].fillna('').astype(str).str.strip().str.lower()
+        if sampled.ne('').any():
+            invalid = sorted(set(sampled).difference({'', 'yes', 'no'}))
+            if invalid:
+                raise ValueError('Column "is_sampled" contains invalid flag(s): {}'.format(', '.join(invalid)))
+            eligible &= sampled.eq('yes')
+    selected_ids = set(metadata.loc[eligible, 'sample_id'])
+    selected = {}
+    for species, counts in uncorrected_by_species.items():
+        columns = [column for column in counts.columns if column in selected_ids]
+        if columns:
+            selected[species] = counts if len(columns) == counts.shape[1] else counts.loc[:, columns].copy()
+    if not selected:
+        raise ValueError('No eligible cstmm count columns remained after exclusion/is_sampled filtering.')
+    print('cstmm metadata: {} ({} eligible count columns)'.format(
+        metadata_path, sum(counts.shape[1] for counts in selected.values())), flush=True)
+    return selected, metadata.drop(columns='sample_id')
+
+
 def _copy_eff_length_file(dir_count, dir_cstmm, species_name):
     species_dir = os.path.join(dir_count, species_name)
     eff_length_files = _list_matching_files(species_dir, r'.*eff_length\.tsv$')
@@ -134,7 +190,7 @@ def _get_df_exp_single_copy_ortholog(
 ):
     df_gc = _read_genecount_table(file_genecount=file_genecount)
     df_og = _read_orthogroup_table(file_orthogroup_table=file_orthogroup_table)
-    spp_filled = _get_spp_filled(dir_count=dir_count, df_gc=df_gc)
+    spp_filled = [species for species in uncorrected_by_species if species in df_gc.columns]
     is_singlecopy = _get_singlecopy_bool_index(
         df_gc=df_gc,
         spp_filled=spp_filled,
@@ -185,34 +241,11 @@ def _build_norm_factor_frame(metadata_df, roundtrip):
 
 
 def append_tmm_stats_to_metadata_python(metadata_df, roundtrip):
-    required_cols = {'scientific_name', 'run', 'exclusion'}
-    missing_cols = sorted(required_cols.difference(metadata_df.columns))
-    if missing_cols:
-        raise ValueError('Required metadata columns are missing for cstmm: {}'.format(', '.join(missing_cols)))
-    df_metadata = metadata_df.copy()
-    df_metadata['scientific_name'] = df_metadata['scientific_name'].astype(str).str.strip()
-    df_metadata['run'] = df_metadata['run'].astype(str).str.strip()
-    explicit_tokens = (
-        df_metadata['species_token'].fillna('').astype(str).str.strip().tolist()
-        if 'species_token' in df_metadata.columns
-        else None
-    )
-    token_by_species = build_species_token_map(
-        scientific_names=df_metadata['scientific_name'].tolist(),
-        explicit_tokens=explicit_tokens,
-        context='cstmm output',
-    )
-    df_metadata['sample_id'] = [
-        '{}_{}'.format(token_by_species[scientific_name], run_id)
-        for scientific_name, run_id in zip(df_metadata['scientific_name'], df_metadata['run'])
-    ]
+    stat_columns = ['tmm_library_size', 'tmm_normalization_factor', 'tmm_effective_library_size']
+    df_metadata = _index_cstmm_metadata(metadata_df.drop(columns=stat_columns, errors='ignore'))
     df_nf = _build_norm_factor_frame(metadata_df=df_metadata, roundtrip=roundtrip)
     df_nf_keys = set(df_nf['sample_id'].astype(str))
-    out_cols = list(df_metadata.columns) + [
-        'tmm_library_size',
-        'tmm_normalization_factor',
-        'tmm_effective_library_size',
-    ]
+    out_cols = list(df_metadata.columns) + stat_columns
     merged = df_metadata.merge(df_nf, on='sample_id', how='left', sort=False)
     exclusion_norm = merged['exclusion'].astype(str).str.strip().str.lower()
     is_retained = exclusion_norm.eq('no')
@@ -389,16 +422,17 @@ def _run_cstmm_python(
     df_sog,
     dir_count,
     dir_cstmm,
+    metadata_df,
     single_copy_threshold=None,
 ):
     df_nonzero = _get_df_nonzero(df_sog)
     library_sizes = _get_library_sizes(df_nonzero=df_nonzero, uncorrected_by_species=uncorrected_by_species)
     roundtrip = run_tmm_rounds_for_cstmm(counts=df_nonzero, lib_size=library_sizes.reindex(df_nonzero.columns))
-    metadata_path = os.path.join(dir_count, 'metadata.tsv')
-    df_metadata = read_identifier_tsv(metadata_path, identifier_columns=('run',))
-    df_metadata = append_tmm_stats_to_metadata_python(metadata_df=df_metadata, roundtrip=roundtrip)
+    df_metadata = append_tmm_stats_to_metadata_python(metadata_df=metadata_df, roundtrip=roundtrip)
     if single_copy_threshold is not None:
         df_metadata['single_copy_threshold'] = validate_single_copy_threshold(single_copy_threshold)
+    else:
+        df_metadata = df_metadata.drop(columns='single_copy_threshold', errors='ignore')
     df_metadata = df_metadata.loc[:, ~pandas.Index(df_metadata.columns).astype(str).str.startswith('Unnamed')]
     os.makedirs(dir_cstmm, exist_ok=True)
     df_metadata.to_csv(os.path.join(dir_cstmm, 'metadata.tsv'), sep='\t', index=False)
@@ -421,13 +455,16 @@ def _run_cstmm_python(
     return roundtrip
 
 
-def run_cstmm_python_single_species(dir_count, dir_cstmm, species_name):
+def run_cstmm_python_single_species(dir_count, dir_cstmm, species_name, metadata_path=None):
     uncorrected = {species_name: _read_est_counts(dir_count=dir_count, species_name=species_name)}
+    uncorrected, metadata = _select_cstmm_inputs(
+        uncorrected, metadata_path if metadata_path is not None else os.path.join(dir_count, 'metadata.tsv'))
     return _run_cstmm_python(
         uncorrected_by_species=uncorrected,
         df_sog=uncorrected[species_name],
         dir_count=dir_count,
         dir_cstmm=dir_cstmm,
+        metadata_df=metadata,
     )
 
 
@@ -437,22 +474,31 @@ def run_cstmm_python_multi_species(
     file_genecount,
     file_orthogroup_table,
     single_copy_threshold=DEFAULT_SINGLE_COPY_THRESHOLD,
+    metadata_path=None,
 ):
     single_copy_threshold = validate_single_copy_threshold(single_copy_threshold)
     df_gc = _read_genecount_table(file_genecount=file_genecount)
     species_names = _get_spp_filled(dir_count=dir_count, df_gc=df_gc)
     uncorrected = _load_uncorrected(dir_count=dir_count, species_names=species_names)
-    df_sog = _get_df_exp_single_copy_ortholog(
-        file_genecount=file_genecount,
-        file_orthogroup_table=file_orthogroup_table,
-        dir_count=dir_count,
-        uncorrected_by_species=uncorrected,
-        single_copy_threshold=single_copy_threshold,
-    )
+    uncorrected, metadata = _select_cstmm_inputs(
+        uncorrected, metadata_path if metadata_path is not None else os.path.join(dir_count, 'metadata.tsv'))
+    if len(uncorrected) == 1:
+        print('Only one species remains after metadata selection; applying standard TMM.', flush=True)
+        df_sog = next(iter(uncorrected.values()))
+        single_copy_threshold = None
+    else:
+        df_sog = _get_df_exp_single_copy_ortholog(
+            file_genecount=file_genecount,
+            file_orthogroup_table=file_orthogroup_table,
+            dir_count=dir_count,
+            uncorrected_by_species=uncorrected,
+            single_copy_threshold=single_copy_threshold,
+        )
     return _run_cstmm_python(
         uncorrected_by_species=uncorrected,
         df_sog=df_sog,
         dir_count=dir_count,
         dir_cstmm=dir_cstmm,
+        metadata_df=metadata,
         single_copy_threshold=single_copy_threshold,
     )

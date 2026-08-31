@@ -2,6 +2,11 @@
 
 `amalgkit getfastq` turns selected metadata rows into processed FASTQ files. For public data, it downloads SRA objects and extracts FASTQ with `fasterq-dump`. For private data prepared by `integrate`, it stages local FASTQ files into the same workflow.
 
+Startup checks require `fasterq-dump` from `sra-tools >= 3` and SeqKit even for
+private-only runs. Fastp is required unless `--fastp no` is used. See
+[installation and dependencies](https://github.com/kfuku52/amalgkit/wiki/Installation-and-dependencies).
+After `integrate`, pass its generated output path explicitly with `--metadata`.
+
 Optional processing includes:
 
 - `fastp`
@@ -153,7 +158,9 @@ For stage-by-stage removal fractions, compare `bp_*` columns.
 
 ## Array Jobs
 
-`--batch` processes one selected metadata row by one-based index:
+`--batch` selects one run by one-based index after `is_sampled=yes` filtering,
+preserving metadata row order. Filter/finalize commands instead select species;
+see [batch selection](https://github.com/kfuku52/amalgkit/wiki/Metadata-and-normalization#what-does---batch-select).
 
 ```bash
 amalgkit getfastq --out_dir ./ --batch 3

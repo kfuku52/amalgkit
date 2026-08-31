@@ -12,7 +12,7 @@ Supported backends:
 
 ## Basic Use
 
-Auto-select the backend:
+Auto-select the backend using already prepared indices:
 
 ```bash
 amalgkit quant --out_dir ./ --threads 8
@@ -45,6 +45,11 @@ amalgkit quant \
 ## Reference FASTA and Indices
 
 When `--build_index yes` is set, AMALGKIT expects one reference transcriptome FASTA per species under `--fasta_dir`.
+
+`--build_index` defaults to `no`; `quant` does not download reference FASTAs.
+Use `--build_index yes` for a new workspace after supplying the references, or
+provide existing indices compatible with the chosen backend. Automatic backend
+selection also requires Oarfish when metadata identifies a long-read run.
 
 If metadata contains `Mus musculus`, AMALGKIT searches for a FASTA file prefixed with `Mus_musculus`.
 
@@ -81,7 +86,8 @@ indices, thread counts, layouts, or sequencing-technology flags.
 
 ## Array Jobs
 
-`--batch` processes one selected metadata row by one-based index:
+`--batch` processes one run by one-based index after `is_sampled=yes` filtering,
+preserving metadata row order (unlike the species batches used by filters):
 
 ```bash
 amalgkit quant --out_dir ./ --batch 3
@@ -109,6 +115,15 @@ Typical per-run outputs include:
 - backend-specific auxiliary files
 
 `<RUN>_abundance.tsv` contains target ID, length, effective length, estimated counts, and TPM.
+
+For kallisto these are effective-length-normalized TPM values. For Oarfish,
+`length` is the annotated transcript length, `eff_length=1` is a placeholder,
+and `tpm` represents abundance per million without length correction (a supplied
+backend `tpm` column is preserved; otherwise it is computed from counts).
+Run-info records `length_model=none`, which `merge` propagates to a per-species
+quant-model sidecar. Do not apply FPKM to these runs. For CSTMM plus Oarfish,
+use `--norm log2p1-none` in `wsfilter`, `csfilter`, and `finalize`; TPM is also
+incompatible with CSTMM. See [metadata and normalization](https://github.com/kfuku52/amalgkit/wiki/Metadata-and-normalization).
 
 When selection columns are populated, only rows with `exclusion == no` and
 `is_sampled == yes` are quantified. A run is complete only after its abundance

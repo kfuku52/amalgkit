@@ -9,150 +9,106 @@
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ## Overview
-**AMALGKIT** (/əm`ælgkit/) is a toolkit to integrate RNA-seq data from [the NCBI SRA database](https://www.ncbi.nlm.nih.gov/sra) and from private fastq files to generate unbiased cross-species transcript abundance dataset for a large-scale evolutionary gene expression analysis.
 
-The README intentionally keeps the workflow summary text-based. The historical flowchart has been removed from this page because it drifts out of date faster than the CLI and wiki documentation.
+**AMALGKIT** (/əm`ælgkit/) integrates public SRA and private FASTQ data for
+cross-species gene-expression analysis. It supports sample selection,
+quantification, normalization, and filtering to help reduce technical bias;
+the resulting comparisons still depend on the input data and biological design.
+
+```mermaid
+flowchart LR
+    SRA[SRA metadata] --> select
+    select --> getfastq
+    FASTQ[Private FASTQ] --> integrate
+    integrate -->|explicit metadata path| getfastq
+    getfastq --> quant --> merge
+    merge --> finalize
+    merge --> cstmm --> wsfilter --> csfilter --> finalize
+    Orthologs[BUSCO / orthogroups] --> cstmm
+    Orthologs --> csfilter
+```
+
+CSTMM and the filters are optional; filters may be used in either order.
 
 ## Installation
+
+AMALGKIT requires Python 3.11 or later on Linux or macOS; CI covers Python 3.11–3.14.
+
 ```bash
-# Install the latest GitHub version with pip
-pip install git+https://github.com/kfuku52/amalgkit
+# Latest default-branch version (includes patch updates)
+pip install --upgrade git+https://github.com/kfuku52/amalgkit
 
-# Or install the packaged Bioconda version
-mamba install -c bioconda amalgkit
+# Or the packaged Bioconda version
+mamba install -c conda-forge -c bioconda --strict-channel-priority amalgkit
 
-# Show top-level commands
-amalgkit -h
-
-# Show command-specific help
+amalgkit --version
 amalgkit help metadata
 ```
 
-AMALGKIT supports Linux and macOS with Python 3.11 or later. Git tags, GitHub
-Releases, and Bioconda recipe updates are limited to versions whose patch
-component is zero (for example, `0.17.0` or `1.0.0`). Patch-only changes remain
-available from the default branch. Run `amalgkit --version` and retain that
-value when reproducing an analysis.
+`getfastq` requires `fasterq-dump` from `sra-tools >= 3` and SeqKit even for
+private-only runs, plus fastp unless `--fastp no` is used. `quant` requires
+kallisto for short reads or Oarfish for long reads, including automatic backend
+selection. See [installation and dependencies](https://github.com/kfuku52/amalgkit/wiki/Installation-and-dependencies).
 
-`amalgkit getfastq` requires `fasterq-dump` from `sra-tools >= 3` on `PATH`.
-If you manage external tools separately, install it explicitly, for example:
+Patch updates are available from the default branch and listed in
+[CHANGELOG.md](CHANGELOG.md). Tags, GitHub Releases, and Bioconda recipe updates
+are created only when the patch component is zero (for example, `0.17.0`).
+Record both the version and source revision for reproducible analyses.
 
-```bash
-mamba install -c conda-forge -c bioconda "sra-tools>=3"
-```
+## Getting started
 
-Commands such as `getfastq`, `quant`, and `busco` use additional external
-bioinformatics tools. See [Installation and dependencies](https://github.com/kfuku52/amalgkit/wiki/Installation-and-dependencies)
-for the command-by-command dependency table.
-
-For machine-readable diagnostics, place the global logging option before the
-command, for example `amalgkit --log_file ./quant.jsonl quant --out_dir ./work`.
-See [Architecture and development](https://github.com/kfuku52/amalgkit/wiki/Architecture-and-development).
-
-## Commands
-See [Wiki](https://github.com/kfuku52/amalgkit/wiki) for detailed examples and option descriptions.
-
-- [`amalgkit metadata`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-metadata): NCBI SRA metadata retrieval
-
-- [`amalgkit integrate`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-integrate): Appending local fastq info to a metadata table
-
-- [`amalgkit select`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-select): Selecting SRA entries for analysis
-
-- [`amalgkit getfastq`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-getfastq): Generating fastq files
-
-- [`amalgkit quant`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-quant): Transcript abundance estimation with auto-selected kallisto/oarfish backend
-
-- [`amalgkit merge`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-merge): Generating transcript abundance tables
-
-- [`amalgkit busco`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-busco): Generating BUSCO tables for downstream cstmm/csfilter
-
-- [`amalgkit cstmm`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-cstmm): Cross-species TMM normalization using single-copy genes
-
-- [`amalgkit wsfilter`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-wsfilter): Within-species outlier filtering (`metadata.tsv` + `excluded.tsv` + `wsfilter_exclusion.pdf` + `wsfilter/<Species>/<Species>_*.pdf`)
-
-- [`amalgkit csfilter`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-csfilter): Cross-species outlier filtering (`metadata.tsv` + `excluded.tsv` + `csfilter_exclusion.pdf` + `csfilter/*.pdf`)
-
-- [`amalgkit finalize`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-finalize): Export final tables from filtered metadata (with optional batch-effect removal)
-
-- [`amalgkit sanity`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-sanity): Checking the integrity of AMALGKIT input and output files
-
-- [`amalgkit rerun`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-rerun): Rerunning failed sanity targets from `sanity_report.json` and writing `rerun_manifest.json`
-
-- [`amalgkit dataset`](https://github.com/kfuku52/amalgkit/wiki/amalgkit-dataset): Extracting bundled test datasets
-
-Legacy commands from earlier AMALGKIT releases have been replaced:
-
-- `amalgkit config` -> `amalgkit dataset --rule_set ...` plus `select_rules.tsv`
-- `amalgkit curate` -> `amalgkit wsfilter`, `amalgkit csfilter`, and `amalgkit finalize`
-- `amalgkit csca` -> `amalgkit csfilter` and downstream `amalgkit finalize` outputs
-
-## Typical Workflows
-### Initialize an empty workspace
-```bash
-amalgkit dataset --name init --out_dir ./work
-```
-
-This writes `WORKSPACE_README.md` plus starter `species.tsv`, `organ_terms.tsv`, and `select_rules.tsv`.
-
-### Metadata to merged quantification tables
-```bash
-# 1. Retrieve metadata from SRA
-amalgkit metadata --search_string 'vertebrata[Organism] AND liver'
-
-# 2. Export/edit select rules, then select runs
-amalgkit dataset --out_dir ./ --rule_set base --overwrite yes
-amalgkit select --out_dir ./
-
-# 3. Optionally append private FASTQ files to metadata
-amalgkit integrate --out_dir ./ --fastq_dir ./private_fastq
-
-# 4. Download/process FASTQ, quantify, and merge per-species abundance tables
-amalgkit getfastq --out_dir ./
-amalgkit quant --out_dir ./
-amalgkit merge --out_dir ./
-```
-
-### Cross-species normalization and filtering
-```bash
-# Prepare single-copy ortholog tables
-amalgkit busco --out_dir ./ --lineage eukaryota_odb12
-
-# Cross-species TMM normalization
-amalgkit cstmm --out_dir ./ --dir_busco ./busco
-
-# Metadata filtering and final export
-amalgkit wsfilter --out_dir ./
-amalgkit csfilter --out_dir ./ --metadata ./wsfilter/metadata.tsv --dir_busco ./busco
-amalgkit finalize --out_dir ./ --metadata ./csfilter/metadata.tsv --batch_effect_alg no
-```
-
-`cstmm` and `csfilter` select single-copy orthogroups with `--single_copy_threshold PERCENT` (default: 50).
-`cstmm` records the selected percentage in `metadata.tsv`; when the option is omitted, `csfilter` inherits that value
-and rejects a conflicting explicit value. Metadata created by older versions has no recorded value and falls back to 50.
-
-## Split Filtering Workflow
-`wsfilter` and `csfilter` are decoupled filters that output `metadata.tsv`, `excluded.tsv`, exclusion summary PDF, and species PDFs (without a `plots/` directory).  
-Run one or both in any order, then export tables once with `finalize`.
-When `--metadata inferred` is used, `filter_metadata_state.json` identifies the metadata from the last successfully
-completed filter, so rerunning `wsfilter` or `csfilter` in either order does not depend on file modification times.
-For workspaces created by older versions without this state file, `csfilter/metadata.tsv` is preferred over
-`wsfilter/metadata.tsv` with an explicit compatibility warning.
+The [yeast tutorial](https://github.com/kfuku52/amalgkit/wiki/Tutorial-1) walks
+through metadata review, selection, quantification, and cross-species filtering.
+Its bundled FASTAs are small BUSCO-focused examples, not full transcriptomes.
 
 ```bash
-# Example: wsfilter -> csfilter -> finalize
-amalgkit wsfilter --out_dir ./
-amalgkit csfilter --out_dir ./ --metadata ./wsfilter/metadata.tsv --dir_busco ./busco
-amalgkit finalize --out_dir ./ --metadata ./csfilter/metadata.tsv --batch_effect_alg no
-```
-
-## Bundled Demo Data
-AMALGKIT ships with an empty workspace scaffold (`init`) and a small bundled dataset for smoke testing and examples. The `yeast` dataset uses small BUSCO-focused test FASTAs rather than full gene sets, so its BUSCO completeness is intentionally modest.
-
-```bash
-amalgkit dataset --list
-amalgkit dataset --name init --out_dir ./work
 amalgkit dataset --name yeast --out_dir ./demo
 ```
+
+For your own data, start an empty workspace and follow its generated guide:
+
+```bash
+amalgkit dataset --name init --out_dir ./work
+```
+
+Review the rules before selection: the base, test, plantae, and vertebrate
+presets currently select `flower,leaf,root`. Other groups, such as liver,
+require edits to both the group parameter and relevant rules. See
+[selection](https://github.com/kfuku52/amalgkit/wiki/amalgkit-select).
+
+Before quantification, supply one reference transcriptome per species under
+`fasta/` and use `--build_index yes`, or prepare matching backend indices under
+`index/`. These references/indices are not downloaded by `quant`.
+
+```bash
+# After preparing references and selected metadata in work/
+amalgkit getfastq --out_dir ./work
+amalgkit quant --out_dir ./work --build_index yes
+amalgkit merge --out_dir ./work
+amalgkit finalize --out_dir ./work --input_dir ./work/merge --metadata ./work/merge/metadata.tsv --batch_effect_alg no
+```
+
+For [private FASTQ](https://github.com/kfuku52/amalgkit/wiki/amalgkit-integrate),
+pass the generated `integrate` metadata explicitly through `getfastq`, `quant`,
+and `merge`. For CSTMM or long-read outputs, follow
+[metadata and normalization](https://github.com/kfuku52/amalgkit/wiki/Metadata-and-normalization):
+CSTMM FPKM needs the original library-size metadata, and Oarfish requires a
+compatible `--norm`, such as `log2p1-none`.
+
+## Command guides
+
+| Stage | Commands |
+| --- | --- |
+| Prepare inputs | [dataset](https://github.com/kfuku52/amalgkit/wiki/amalgkit-dataset), [metadata](https://github.com/kfuku52/amalgkit/wiki/amalgkit-metadata), [integrate](https://github.com/kfuku52/amalgkit/wiki/amalgkit-integrate), [select](https://github.com/kfuku52/amalgkit/wiki/amalgkit-select) |
+| Quantify | [getfastq](https://github.com/kfuku52/amalgkit/wiki/amalgkit-getfastq), [quant](https://github.com/kfuku52/amalgkit/wiki/amalgkit-quant), [merge](https://github.com/kfuku52/amalgkit/wiki/amalgkit-merge) |
+| Normalize and filter | [busco](https://github.com/kfuku52/amalgkit/wiki/amalgkit-busco), [cstmm](https://github.com/kfuku52/amalgkit/wiki/amalgkit-cstmm), [wsfilter](https://github.com/kfuku52/amalgkit/wiki/amalgkit-wsfilter), [csfilter](https://github.com/kfuku52/amalgkit/wiki/amalgkit-csfilter), [finalize](https://github.com/kfuku52/amalgkit/wiki/amalgkit-finalize) |
+| Check and recover | [sanity](https://github.com/kfuku52/amalgkit/wiki/amalgkit-sanity), [rerun](https://github.com/kfuku52/amalgkit/wiki/amalgkit-rerun) |
+
+See [parallel processing](https://github.com/kfuku52/amalgkit/wiki/Parallel-processing)
+for CPU budgets and command-specific batch units. Developer setup and structured
+logging are covered in [architecture and development](https://github.com/kfuku52/amalgkit/wiki/Architecture-and-development).
+The [Wiki home](https://github.com/kfuku52/amalgkit/wiki) also maps legacy
+`config`, `curate`, and `csca` commands to their replacements.
 
 ## Citation
 Although **AMALGKIT** supports novel unpublished functions, some functionalities including metadata curation, expression level quantification, and further curation steps have been described in this paper, in which we reported the transcriptome amalgamation of 21 vertebrate species.

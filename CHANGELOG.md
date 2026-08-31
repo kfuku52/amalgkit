@@ -1,9 +1,38 @@
 # Changelog
 
 All notable user-visible and maintainer-facing changes are recorded here. GitHub
-Releases provide the commit-level generated notes for each version.
+Releases provide generated notes only for tagged releases. Patch-only updates
+remain on the default branch and are recorded below; consult this file rather
+than the Releases page for those changes.
 
 ## Unreleased
+
+### 0.16.75 - 2026-08-31
+
+- Made `cstmm --metadata` effective, validated species/run alignment, and excluded
+  unselected runs from factor estimation and corrected count tables. Explicit
+  metadata must retain a row for every input count column; use exclusion flags
+  to remove runs. Previously ignored metadata overrides can now change results
+  or produce an actionable error. Recompute CSTMM and downstream outputs from
+  the matching merge inputs when adopting corrected selection.
+- Rejected FPKM from CSTMM counts without valid original `tmm_library_size`
+  values, preventing accidental cancellation of TMM when old metadata is used.
+- Migrated bundled yeast rules to the current parameter schema, preserved
+  reviewed biological group assignments instead of applying plant rules, and
+  limited tutorial sampling to three runs per species/group. Standard text
+  normalization still applies to group labels.
+- Fixed generated species-workspace instructions and CLI examples to pass the
+  correct metadata directories and rule file without replacing yeast rules.
+- Corrected private FASTQ metadata handoffs, reference/index prerequisites,
+  metadata inference, Oarfish abundance scales and compatible normalization,
+  run/species batch units, external dependencies, output names, and defaults.
+  Made the tutorial metadata edit non-destructive and preserved lexical IDs
+  and annotations. Shortened the README and restored a current workflow diagram.
+- Added network-free documentation syntax/default/link checks to existing CI,
+  executable small-fixture workflow examples, and installed-wheel yeast selection.
+- Added a guarded Wiki synchronization tool with version/source-commit footers
+  and documented the separate publication step. Aligned security-update and
+  changelog guidance with the default-branch patch release policy.
 
 ### 0.16.74 - 2026-08-31
 
