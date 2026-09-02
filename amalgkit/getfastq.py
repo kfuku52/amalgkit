@@ -1301,6 +1301,37 @@ def _secure_download_temp_path(output_path, suffix):
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
+def _assert_private_resume_directory(path):
+    """Create or validate a user-private directory for restartable payloads."""
+    if os.path.lexists(path):
+        st = os.stat(path, follow_symlinks=False)
+        if not stat.S_ISDIR(st.st_mode):
+            raise NotADirectoryError('FASTQ resume path is not a directory: {}'.format(path))
+        if st.st_uid != os.geteuid() or stat.S_IMODE(st.st_mode) != 0o700:
+            raise PermissionError('FASTQ resume directory ownership or mode is unsafe: {}'.format(path))
+        return
+    os.mkdir(path, 0o700)
+
+
+@contextmanager
+def _public_fastq_resume_directory(work_dir, args):
+    """Lock one stable private directory that survives interrupted downloads."""
+    resume_dir = os.path.join(work_dir, '.amalgkit-original-fastq-resume')
+    lock_path = os.path.join(work_dir, '.amalgkit-original-fastq-resume.lock')
+    timeout_seconds = resolve_positive_timeout_seconds(
+        args=args,
+        attr_name='sra_download_wait_timeout_seconds',
+        default_seconds=SRA_DOWNLOAD_WAIT_TIMEOUT_SECONDS,
+    )
+    with acquire_exclusive_lock(
+        lock_path,
+        lock_label='original FASTQ resume',
+        timeout_seconds=timeout_seconds,
+    ):
+        _assert_private_resume_directory(resume_dir)
+        yield resume_dir
+
+
 def _parse_curl_response_metadata(stdout_txt):
     status_code = None
     redirect_url = ''
@@ -1316,8 +1347,186 @@ def _parse_curl_response_metadata(stdout_txt):
     return status_code, redirect_url
 
 
-def download_with_curl(source_url, output_path, args, sra_source_name, artifact_label='file'):
+def _read_curl_content_range(header_path):
+    """Return the final bounded HTTP byte range reported by curl."""
+    try:
+        with open(header_path, 'rb') as handle:
+            raw = handle.read(1024 * 1024 + 1)
+    except FileNotFoundError:
+        return None
+    if len(raw) > 1024 * 1024:
+        raise RuntimeError('curl response headers exceeded the 1 MiB safety limit.')
+    matches = re.findall(
+        rb'(?im)^content-range:\s*bytes\s+([0-9]+)-([0-9]+)/([0-9]+|\*)\s*$',
+        raw,
+    )
+    if not matches:
+        return None
+    start, end, total = matches[-1]
+    return int(start), int(end), None if total == b'*' else int(total)
+
+
+def _assert_regular_owned_resume_payload(path):
+    if not os.path.lexists(path):
+        return 0
+    st = os.stat(path, follow_symlinks=False)
+    if (
+        not stat.S_ISREG(st.st_mode)
+        or st.st_uid != os.geteuid()
+        or st.st_nlink != 1
+    ):
+        raise OSError('FASTQ resume payload is not a private regular file: {}'.format(path))
+    return st.st_size
+
+
+def _download_with_curl_resumable(
+    source_url,
+    output_path,
+    args,
+    sra_source_name,
+    artifact_label,
+):
+    """Resume a stable partial only after validating the HTTP byte range."""
     assert_allowed_download_url(source_url)
+    curl_exe = shutil.which('curl')
+    if curl_exe is None:
+        return False
+    transfer_timeout = resolve_positive_timeout_seconds(
+        args=args,
+        attr_name='sra_download_transfer_timeout_seconds',
+        default_seconds=SRA_DOWNLOAD_TRANSFER_TIMEOUT_SECONDS,
+    )
+    current_url = source_url
+    transfer_started_at = time.monotonic()
+    restarted_from_zero = False
+    with _secure_download_temp_path(output_path, '.curlheaders') as header_path:
+        for redirect_count in range(11):
+            remaining_timeout = transfer_timeout - (time.monotonic() - transfer_started_at)
+            if remaining_timeout <= 0:
+                sys.stderr.write('curl download exceeded its total transfer deadline.\n')
+                return False
+            starting_size = _assert_regular_owned_resume_payload(output_path)
+            if os.path.lexists(header_path):
+                os.remove(header_path)
+            command = [
+                curl_exe,
+                '--fail',
+                '--retry', '3',
+                '--retry-delay', '2',
+                '--connect-timeout', '20',
+                '--max-time', str(max(1, math.ceil(remaining_timeout))),
+                '--proto', '=https',
+                '--dump-header', header_path,
+                '--write-out',
+                'AMALGKIT_CURL_STATUS:%{http_code}\nAMALGKIT_CURL_REDIRECT:%{redirect_url}\n',
+            ]
+            if starting_size:
+                command.extend(['--continue-at', '-'])
+            command.extend(['-o', output_path, current_url])
+            tool_timeout = resolve_getfastq_tool_timeout_seconds(args)
+            if tool_timeout is None:
+                tool_timeout = remaining_timeout
+            else:
+                tool_timeout = min(tool_timeout, remaining_timeout)
+            out, stdout_txt, _stderr_txt = run_logged_command(
+                command=command,
+                runner=subprocess.run,
+                timeout_seconds=tool_timeout,
+                print_command=True,
+                print_output=False,
+                stdout_label='curl stdout:',
+                stderr_label='curl stderr:',
+            )
+            status_code, redirect_url = _parse_curl_response_metadata(stdout_txt)
+            content_range = _read_curl_content_range(header_path)
+            if out.returncode != 0:
+                if starting_size and status_code == 200 and not restarted_from_zero:
+                    os.remove(output_path)
+                    restarted_from_zero = True
+                    sys.stderr.write(
+                        'Server ignored the requested HTTP byte range; restarting the transfer once.\n'
+                    )
+                    continue
+                sys.stderr.write(
+                    'curl failed {} download from {}; retaining a validated partial for resume.\n'.format(
+                        str(artifact_label).lower(),
+                        sra_source_name,
+                    )
+                )
+                return False
+            if status_code is None:
+                raise RuntimeError('curl did not report an HTTP response status.')
+            if 300 <= status_code < 400:
+                current_size = _assert_regular_owned_resume_payload(output_path)
+                if current_size != starting_size:
+                    with open(output_path, 'r+b') as handle:
+                        handle.truncate(starting_size)
+                if redirect_url == '' or redirect_count >= 10:
+                    sys.stderr.write('curl redirect limit or redirect metadata failure.\n')
+                    return False
+                next_url = urllib.parse.urljoin(current_url, redirect_url)
+                if not is_allowed_download_url(next_url):
+                    sys.stderr.write(
+                        'curl refused a redirect to a non-allowed endpoint before connecting.\n'
+                    )
+                    return False
+                current_url = next_url
+                continue
+            if not 200 <= status_code < 300:
+                sys.stderr.write('curl returned unexpected HTTP status {}.\n'.format(status_code))
+                return False
+            if starting_size:
+                valid_resume = (
+                    status_code == 206
+                    and content_range is not None
+                    and content_range[0] == starting_size
+                )
+                if not valid_resume:
+                    if restarted_from_zero:
+                        sys.stderr.write('Server returned an invalid HTTP byte range twice.\n')
+                        return False
+                    os.remove(output_path)
+                    restarted_from_zero = True
+                    sys.stderr.write(
+                        'Server ignored or changed the requested HTTP byte range; restarting the transfer once.\n'
+                    )
+                    continue
+            elif status_code == 206 and (
+                content_range is None or content_range[0] != 0
+            ):
+                os.remove(output_path)
+                sys.stderr.write('Server returned an invalid initial HTTP byte range.\n')
+                return False
+            if _assert_regular_owned_resume_payload(output_path) <= 0:
+                sys.stderr.write(
+                    'curl produced an empty {} from {}.\n'.format(
+                        str(artifact_label).lower(), sra_source_name
+                    )
+                )
+                return False
+            action = 'resumed' if starting_size else 'downloaded'
+            print('{} was {} with curl from {}'.format(artifact_label, action, sra_source_name), flush=True)
+            return True
+    return False
+
+
+def download_with_curl(
+    source_url,
+    output_path,
+    args,
+    sra_source_name,
+    artifact_label='file',
+    resume_existing=False,
+):
+    assert_allowed_download_url(source_url)
+    if resume_existing:
+        return _download_with_curl_resumable(
+            source_url=source_url,
+            output_path=output_path,
+            args=args,
+            sra_source_name=sra_source_name,
+            artifact_label=artifact_label,
+        )
     curl_exe = shutil.which('curl')
     if curl_exe is None:
         return False
@@ -1454,6 +1663,7 @@ def _download_file_from_source_without_semaphore(
     output_path,
     args,
     artifact_label,
+    resume_existing=False,
 ):
     try:
         source_url = normalize_url_for_urllib(
@@ -1508,6 +1718,7 @@ def _download_file_from_source_without_semaphore(
             args=args,
             sra_source_name=sra_source_name,
             artifact_label=artifact_label,
+            resume_existing=resume_existing,
         ):
             return True
         if method == 'curl':
@@ -1574,7 +1785,14 @@ def download_file_from_source(sra_id, sra_source_name, source_url_original, outp
     )
 
 
-def download_file_from_candidate_sources(sra_id, source_candidates, output_path, args, artifact_label):
+def download_file_from_candidate_sources(
+    sra_id,
+    source_candidates,
+    output_path,
+    args,
+    artifact_label,
+    resume_existing=False,
+):
     pending_sources = list(source_candidates)
     wait_reported_for = None
     wait_started_at = time.monotonic()
@@ -1597,13 +1815,18 @@ def download_file_from_candidate_sources(sra_id, source_candidates, output_path,
                     deferred_sources.append(source)
                     continue
                 try:
-                    is_downloaded = _download_file_from_source_without_semaphore(
+                    download_kwargs = dict(
                         sra_id=sra_id,
                         sra_source_name=source_name,
                         source_url_original=source_url,
                         output_path=output_path,
                         args=args,
                         artifact_label=artifact_label,
+                    )
+                    if resume_existing:
+                        download_kwargs['resume_existing'] = True
+                    is_downloaded = _download_file_from_source_without_semaphore(
+                        **download_kwargs
                     )
                 except (TypeError, ValueError, UnicodeError) as exc:
                     sys.stderr.write(
@@ -1657,18 +1880,38 @@ def download_sra_from_source(sra_id, sra_source_name, source_url_original, path_
 
 def download_verified_original_fastq(sra_id, entry, output_path, args):
     validate_integrity_metadata(entry)
+    if os.path.lexists(output_path):
+        current_size = _assert_regular_owned_resume_payload(output_path)
+        expected_size = entry.get('expected_bytes')
+        if expected_size is not None and current_size == expected_size:
+            try:
+                validate_original_fastq_download(output_path, entry)
+                print(
+                    'Validated complete original FASTQ resume payload for {}.'.format(sra_id),
+                    flush=True,
+                )
+                return
+            except FastqDownloadIntegrityError:
+                os.remove(output_path)
+        elif expected_size is None or current_size > expected_size:
+            os.remove(output_path)
+        elif current_size:
+            print(
+                'Resuming original FASTQ for {} at byte {:,}.'.format(sra_id, current_size),
+                flush=True,
+            )
     for attempt in range(2):
-        if os.path.exists(output_path):
-            os.remove(output_path)  # An unpublished payload in the private transfer directory.
         if not download_file_from_candidate_sources(
             sra_id=sra_id, source_candidates=entry['sources'], output_path=output_path,
-            args=args, artifact_label='Original FASTQ file',
+            args=args, artifact_label='Original FASTQ file', resume_existing=True,
         ):
             raise FileNotFoundError('Original FASTQ download failed for {}.'.format(sra_id))
         try:
             validate_original_fastq_download(output_path, entry)
             return
         except FastqDownloadIntegrityError:
+            if os.path.exists(output_path):
+                os.remove(output_path)
             if attempt:
                 raise
             sys.stderr.write('Original FASTQ integrity failed for {}; retrying the transfer once.\n'.format(sra_id))
@@ -1707,31 +1950,38 @@ def download_public_original_fastq_files(
     except Exception as exc:
         sys.stderr.write('Failed to assign public original FASTQ files for {}: {}\n'.format(sra_id, exc))
         return None
-    remove_raw_fastq_artifacts(sra_stat=sra_stat)
     start, end = normalize_requested_spot_range(start=start, end=end)
     created_paths = []
     try:
-        for fastq_entry, suffix in assigned_fastqs:
-            output_filename = sra_id + suffix + '.fastq.gz'
-            output_path = os.path.join(work_dir, output_filename)
-            if os.path.exists(output_path):
-                if not os.path.isfile(output_path):
-                    raise IsADirectoryError('Fallback FASTQ path exists but is not a file: {}'.format(output_path))
-                os.remove(output_path)
-            with _secure_download_temp_path(output_path, '.downloadtmp') as tmp_path:
-                download_verified_original_fastq(sra_id, fastq_entry, tmp_path, args)
+        with _public_fastq_resume_directory(work_dir=work_dir, args=args) as resume_dir:
+            remove_raw_fastq_artifacts(sra_stat=sra_stat)
+            staged_fastqs = []
+            for fastq_entry, suffix in assigned_fastqs:
+                output_filename = sra_id + suffix + '.fastq.gz'
+                output_path = os.path.join(work_dir, output_filename)
+                if os.path.exists(output_path):
+                    if not os.path.isfile(output_path):
+                        raise IsADirectoryError(
+                            'Fallback FASTQ path exists but is not a file: {}'.format(output_path)
+                        )
+                    os.remove(output_path)
+                resume_path = os.path.join(resume_dir, output_filename)
+                download_verified_original_fastq(sra_id, fastq_entry, resume_path, args)
+                staged_fastqs.append((resume_path, output_path))
+            for resume_path, output_path in staged_fastqs:
                 if is_full_requested_spot_range(sra_stat=sra_stat, start=start, end=end):
-                    os.replace(tmp_path, output_path)
+                    os.replace(resume_path, output_path)
                 else:
                     run_seqkit_range_command(
-                        input_path=tmp_path,
+                        input_path=resume_path,
                         output_path=output_path,
                         start=start,
                         end=end,
                         args=args,
                         command_label='Original FASTQ spot-range trim with seqkit',
                     )
-            created_paths.append(output_path)
+                created_paths.append(output_path)
+            shutil.rmtree(resume_dir)
         print(
             'Public original FASTQ fallback succeeded for {} with {:,} file(s).'.format(
                 sra_id,

@@ -20,7 +20,10 @@ from amalgkit.getfastq import (
     resolve_sra_download_sources,
     download_file_from_candidate_sources,
     download_file_from_source,
+    download_public_original_fastq_files,
     download_with_curl,
+    download_verified_original_fastq,
+    _public_fastq_resume_directory,
     download_sra,
     run_fasterq_dump,
     count_fastq_records,
@@ -1361,6 +1364,214 @@ def test_download_with_curl_validates_each_allowed_redirect_before_connecting(tm
         'https://sra-download.be-md.ncbi.nlm.nih.gov/final.sra',
     ]
     assert output_path.read_bytes() == b'final'
+
+
+def test_download_with_curl_resumes_only_a_matching_http_byte_range(tmp_path, monkeypatch):
+    monkeypatch.setattr('amalgkit.getfastq.shutil.which', lambda name: '/usr/bin/curl')
+    output_path = tmp_path / 'SRR001.fastq.gz'
+    output_path.write_bytes(b'ab')
+
+    def fake_run(cmd, stdout=None, stderr=None):
+        assert cmd[cmd.index('--continue-at') + 1] == '-'
+        header_path = cmd[cmd.index('--dump-header') + 1]
+        with open(header_path, 'wb') as handle:
+            handle.write(b'HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 2-5/6\r\n\r\n')
+        with open(cmd[cmd.index('-o') + 1], 'ab') as handle:
+            handle.write(b'cdef')
+        return subprocess.CompletedProcess(
+            cmd,
+            0,
+            stdout=b'AMALGKIT_CURL_STATUS:206\nAMALGKIT_CURL_REDIRECT:\n',
+            stderr=b'',
+        )
+
+    monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
+    assert download_with_curl(
+        source_url='https://ftp.sra.ebi.ac.uk/run.fastq.gz',
+        output_path=str(output_path),
+        args=SimpleNamespace(sra_download_transfer_timeout_seconds=60),
+        sra_source_name='ENA',
+        artifact_label='Original FASTQ file',
+        resume_existing=True,
+    )
+    assert output_path.read_bytes() == b'abcdef'
+
+
+def test_download_with_curl_restarts_when_server_ignores_range(tmp_path, monkeypatch):
+    monkeypatch.setattr('amalgkit.getfastq.shutil.which', lambda name: '/usr/bin/curl')
+    output_path = tmp_path / 'SRR001.fastq.gz'
+    output_path.write_bytes(b'ab')
+    commands = []
+
+    def fake_run(cmd, stdout=None, stderr=None):
+        commands.append(list(cmd))
+        header_path = cmd[cmd.index('--dump-header') + 1]
+        with open(header_path, 'wb') as handle:
+            handle.write(b'HTTP/1.1 200 OK\r\n\r\n')
+        if len(commands) == 1:
+            return subprocess.CompletedProcess(
+                cmd,
+                33,
+                stdout=b'AMALGKIT_CURL_STATUS:200\nAMALGKIT_CURL_REDIRECT:\n',
+                stderr=b'',
+            )
+        with open(cmd[cmd.index('-o') + 1], 'wb') as handle:
+            handle.write(b'fresh')
+        return subprocess.CompletedProcess(
+            cmd,
+            0,
+            stdout=b'AMALGKIT_CURL_STATUS:200\nAMALGKIT_CURL_REDIRECT:\n',
+            stderr=b'',
+        )
+
+    monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
+    assert download_with_curl(
+        source_url='https://ftp.sra.ebi.ac.uk/run.fastq.gz',
+        output_path=str(output_path),
+        args=SimpleNamespace(sra_download_transfer_timeout_seconds=60),
+        sra_source_name='ENA',
+        artifact_label='Original FASTQ file',
+        resume_existing=True,
+    )
+    assert '--continue-at' in commands[0]
+    assert '--continue-at' not in commands[1]
+    assert output_path.read_bytes() == b'fresh'
+
+
+def test_download_with_curl_retains_partial_after_transfer_failure(tmp_path, monkeypatch):
+    monkeypatch.setattr('amalgkit.getfastq.shutil.which', lambda name: '/usr/bin/curl')
+    output_path = tmp_path / 'SRR001.fastq.gz'
+    output_path.write_bytes(b'ab')
+
+    def fake_run(cmd, stdout=None, stderr=None):
+        header_path = cmd[cmd.index('--dump-header') + 1]
+        with open(header_path, 'wb') as handle:
+            handle.write(b'HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 2-2/6\r\n\r\n')
+        with open(cmd[cmd.index('-o') + 1], 'ab') as handle:
+            handle.write(b'c')
+        return subprocess.CompletedProcess(
+            cmd,
+            28,
+            stdout=b'AMALGKIT_CURL_STATUS:206\nAMALGKIT_CURL_REDIRECT:\n',
+            stderr=b'',
+        )
+
+    monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
+    assert not download_with_curl(
+        source_url='https://ftp.sra.ebi.ac.uk/run.fastq.gz',
+        output_path=str(output_path),
+        args=SimpleNamespace(sra_download_transfer_timeout_seconds=60),
+        sra_source_name='ENA',
+        artifact_label='Original FASTQ file',
+        resume_existing=True,
+    )
+    assert output_path.read_bytes() == b'abc'
+
+
+def test_original_fastq_resume_directory_survives_interruption(tmp_path):
+    args = SimpleNamespace(sra_download_wait_timeout_seconds=5)
+    with pytest.raises(RuntimeError, match='interrupt'):
+        with _public_fastq_resume_directory(str(tmp_path), args) as resume_dir:
+            payload = os.path.join(resume_dir, 'SRR001_1.fastq.gz')
+            with open(payload, 'wb') as handle:
+                handle.write(b'partial')
+            raise RuntimeError('interrupt')
+    with _public_fastq_resume_directory(str(tmp_path), args) as resume_dir:
+        with open(os.path.join(resume_dir, 'SRR001_1.fastq.gz'), 'rb') as handle:
+            assert handle.read() == b'partial'
+
+
+def test_paired_original_fastq_retry_reuses_the_verified_first_mate(tmp_path, monkeypatch):
+    sra_id = 'SRR001'
+    download_calls = []
+    mate2_attempts = {'count': 0}
+
+    def fake_download(**kwargs):
+        output_path = kwargs['output_path']
+        download_calls.append(os.path.basename(output_path))
+        if output_path.endswith('_2.fastq.gz'):
+            mate2_attempts['count'] += 1
+            if mate2_attempts['count'] == 1:
+                return False
+            payload = b'pair'
+        else:
+            payload = b'mate'
+        with open(output_path, 'wb') as handle:
+            handle.write(payload)
+        return True
+
+    monkeypatch.setattr('amalgkit.getfastq.download_file_from_candidate_sources', fake_download)
+    monkeypatch.setattr('amalgkit.getfastq.validate_original_fastq_download', lambda path, entry: None)
+    entries = [
+        {
+            'filename': '{}_1.fastq.gz'.format(sra_id),
+            'expected_bytes': 4,
+            'expected_md5': None,
+            'sources': [{'source_name': 'ENA', 'url': 'https://ftp.sra.ebi.ac.uk/read1'}],
+        },
+        {
+            'filename': '{}_2.fastq.gz'.format(sra_id),
+            'expected_bytes': 4,
+            'expected_md5': None,
+            'sources': [{'source_name': 'ENA', 'url': 'https://ftp.sra.ebi.ac.uk/read2'}],
+        },
+    ]
+    sra_stat = {
+        'sra_id': sra_id,
+        'getfastq_sra_dir': str(tmp_path),
+        'total_spot': 1,
+    }
+    args = SimpleNamespace(sra_download_wait_timeout_seconds=5)
+
+    assert download_public_original_fastq_files(
+        sra_stat=sra_stat,
+        args=args,
+        start=1,
+        end=1,
+        public_original_fastqs=entries,
+        source_description='test',
+    ) is None
+    assert (tmp_path / '.amalgkit-original-fastq-resume' / '{}_1.fastq.gz'.format(sra_id)).read_bytes() == b'mate'
+
+    assert download_public_original_fastq_files(
+        sra_stat=sra_stat,
+        args=args,
+        start=1,
+        end=1,
+        public_original_fastqs=entries,
+        source_description='test',
+    ) is not None
+    assert download_calls.count('{}_1.fastq.gz'.format(sra_id)) == 1
+    assert (tmp_path / '{}_1.fastq.gz'.format(sra_id)).read_bytes() == b'mate'
+    assert (tmp_path / '{}_2.fastq.gz'.format(sra_id)).read_bytes() == b'pair'
+    assert not (tmp_path / '.amalgkit-original-fastq-resume').exists()
+
+
+def test_verified_original_fastq_continues_short_partial(tmp_path, monkeypatch):
+    output_path = tmp_path / 'SRR001_1.fastq.gz'
+    output_path.write_bytes(b'ab')
+    observed = {}
+
+    def fake_download(**kwargs):
+        observed.update(kwargs)
+        with open(kwargs['output_path'], 'ab') as handle:
+            handle.write(b'cdef')
+        return True
+
+    monkeypatch.setattr('amalgkit.getfastq.download_file_from_candidate_sources', fake_download)
+    monkeypatch.setattr('amalgkit.getfastq.validate_original_fastq_download', lambda path, entry: None)
+    download_verified_original_fastq(
+        'SRR001',
+        {
+            'expected_bytes': 6,
+            'expected_md5': None,
+            'sources': [{'source_name': 'ENA', 'url': 'https://ftp.sra.ebi.ac.uk/run.fastq.gz'}],
+        },
+        str(output_path),
+        SimpleNamespace(),
+    )
+    assert observed['resume_existing'] is True
+    assert output_path.read_bytes() == b'abcdef'
 
 
 def test_download_with_urllib_refuses_preexisting_symlink(tmp_path):
