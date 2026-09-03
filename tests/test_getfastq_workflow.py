@@ -30,9 +30,15 @@ from amalgkit.util import Metadata
 
 
 class TestSequenceExtractionPrivate:
+    @staticmethod
+    def _write_gzip_fastq(path, sequences):
+        with gzip.open(path, 'wt') as handle:
+            for idx, sequence in enumerate(sequences):
+                handle.write('@read{}\n{}\n+\n{}\n'.format(idx, sequence, 'I' * len(sequence)))
+
     def test_uses_run_id_for_private_symlink_names(self, tmp_path, monkeypatch):
         read1_path = tmp_path / 'input_R1.fastq.gz'
-        read1_path.write_text('dummy')
+        self._write_gzip_fastq(read1_path, ['ACGT'])
         metadata = Metadata.from_DataFrame(pandas.DataFrame({
             'run': ['Homo_sapiens_sample1'],
             'read1_path': [str(read1_path)],
@@ -96,10 +102,15 @@ class TestSequenceExtractionPrivate:
         assert not output_path.is_symlink()
         with gzip.open(output_path, 'rt') as handle:
             assert handle.read() == fastq
+        assert metadata.df.loc[0, 'num_written'] == 1
+        assert metadata.df.loc[0, 'bp_written'] == 4
+        stats = pandas.read_csv(sra_dir / 'getfastq_stats.tsv', sep='\t')
+        assert stats.loc[0, 'num_written'] == 1
+        assert stats.loc[0, 'bp_written'] == 4
 
     def test_handles_missing_read2_path_without_type_error(self, tmp_path, monkeypatch):
         read1_path = tmp_path / 'input_R1.fastq.gz'
-        read1_path.write_text('dummy')
+        self._write_gzip_fastq(read1_path, ['ACGT'])
         metadata = Metadata.from_DataFrame(pandas.DataFrame({
             'run': ['SRR001'],
             'read1_path': [str(read1_path)],
@@ -128,7 +139,7 @@ class TestSequenceExtractionPrivate:
 
         assert (sra_dir / 'SRR001.fastq.gz').exists()
 
-    def test_warns_when_private_path_is_directory(self, tmp_path, monkeypatch, capsys):
+    def test_rejects_private_path_that_is_directory(self, tmp_path, monkeypatch, capsys):
         read1_dir = tmp_path / 'read1_dir'
         read1_dir.mkdir()
         metadata = Metadata.from_DataFrame(pandas.DataFrame({
@@ -155,7 +166,8 @@ class TestSequenceExtractionPrivate:
         monkeypatch.setattr('amalgkit.getfastq.get_or_detect_intermediate_extension', lambda *_args, **_kwargs: '.fastq.gz')
         monkeypatch.setattr('amalgkit.getfastq.rename_fastq', lambda *_args, **_kwargs: None)
 
-        sequence_extraction_private(metadata=metadata, sra_stat=sra_stat, args=args)
+        with pytest.raises(FileNotFoundError, match='Private FASTQ input was not staged'):
+            sequence_extraction_private(metadata=metadata, sra_stat=sra_stat, args=args)
         err = capsys.readouterr().err
 
         assert 'exists but is not a file' in err
@@ -194,8 +206,8 @@ class TestSequenceExtractionPrivate:
     def test_paired_fastp_counts_are_normalized_before_rrna(self, tmp_path, monkeypatch):
         read1_path = tmp_path / 'input_R1.fastq.gz'
         read2_path = tmp_path / 'input_R2.fastq.gz'
-        read1_path.write_text('dummy')
-        read2_path.write_text('dummy')
+        self._write_gzip_fastq(read1_path, ['AAAA', 'CC'])
+        self._write_gzip_fastq(read2_path, ['TT', 'GGG'])
         metadata = Metadata.from_DataFrame(pandas.DataFrame({
             'run': ['SRR001'],
             'read1_path': [str(read1_path)],
@@ -219,6 +231,8 @@ class TestSequenceExtractionPrivate:
         observed = {'known_input_counts': None}
 
         def fake_run_fastp(sra_stat, args, output_dir, metadata, **kwargs):
+            assert metadata.df.loc[0, 'num_written'] == 2
+            assert metadata.df.loc[0, 'bp_written'] == 11
             metadata.df.at[0, 'num_fastp_out'] += 6
             metadata.df.at[0, 'bp_fastp_out'] += 580
             return metadata
@@ -240,6 +254,33 @@ class TestSequenceExtractionPrivate:
         sequence_extraction_private(metadata=metadata, sra_stat=sra_stat, args=args)
 
         assert observed['known_input_counts'] == {'num_spots': 3, 'bp_total': 580}
+        assert metadata.df.loc[0, 'num_written'] == 2
+        assert metadata.df.loc[0, 'bp_written'] == 11
+
+    def test_rejects_mismatched_private_pairs(self, tmp_path, monkeypatch):
+        read1_path = tmp_path / 'input_R1.fastq.gz'
+        read2_path = tmp_path / 'input_R2.fastq.gz'
+        self._write_gzip_fastq(read1_path, ['AAAA', 'CCCC'])
+        self._write_gzip_fastq(read2_path, ['TTTT'])
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['SRR001'],
+            'read1_path': [str(read1_path)],
+            'read2_path': [str(read2_path)],
+            'lib_layout': ['paired'],
+        }))
+        sra_dir = tmp_path / 'work'
+        sra_dir.mkdir()
+        sra_stat = {
+            'sra_id': 'SRR001',
+            'layout': 'paired',
+            'getfastq_sra_dir': str(sra_dir),
+        }
+        args = SimpleNamespace(fastp=False)
+
+        monkeypatch.setattr('amalgkit.getfastq.set_current_intermediate_extension', lambda *_args, **_kwargs: None)
+
+        with pytest.raises(ValueError, match='Paired private FASTQ read count mismatch'):
+            sequence_extraction_private(metadata=metadata, sra_stat=sra_stat, args=args)
 
 
 class TestGetfastqMainJobs:
@@ -1096,6 +1137,7 @@ class TestMmseqsRrnaDbPreparation:
         assert os.path.isfile(db_path)
         assert os.path.isfile(db_path + '.ready')
         assert captured['createindex_cmd'][0:3] == ['mmseqs', 'createindex', db_path]
+        assert '-s' not in captured['createindex_cmd']
         assert captured['createindex_cmd'][captured['createindex_cmd'].index('--split-memory-limit') + 1] == '32G'
         assert os.path.isfile(db_path + '.idx')
         assert os.path.isfile(db_path + '.idx.index')
@@ -1228,6 +1270,7 @@ class TestMmseqsRrnaDbPreparation:
         ensure_mmseqs_rrna_search_index_exists(args=args, db_path=db_path)
         assert len(calls) == 1
         assert calls[0][0:3] == ['mmseqs', 'createindex', db_path]
+        assert '-s' not in calls[0]
         assert calls[0][calls[0].index('--split-memory-limit') + 1] == '16G'
 
         os.remove(db_path + '.idx.index')
@@ -1237,8 +1280,7 @@ class TestMmseqsRrnaDbPreparation:
 
         args.rrna_filter_sensitivity = 2.0
         ensure_mmseqs_rrna_search_index_exists(args=args, db_path=db_path)
-        assert len(calls) == 3
-        assert calls[-1][calls[-1].index('-s') + 1] == '2'
+        assert len(calls) == 2
 
 
 class TestFasterqSeqkitCompression:

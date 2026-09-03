@@ -2908,21 +2908,15 @@ def resolve_contam_filter_chunk_spots(args):
     return chunk_spots
 
 def resolve_rrna_filter_index_signature(args):
-    sensitivity = getattr(args, 'rrna_filter_sensitivity', 'auto')
     max_seqs = getattr(args, 'rrna_filter_max_seqs', 'auto')
     memory_limit = resolve_rrna_filter_memory_limit(args)
-    if is_auto_parallel_option(sensitivity):
-        sensitivity = 'auto'
-    else:
-        sensitivity = '{:g}'.format(float(sensitivity))
     if is_auto_parallel_option(max_seqs):
         max_seqs = 'auto'
     else:
         max_seqs = str(int(max_seqs))
     if memory_limit is None:
         memory_limit = 'auto'
-    return 'search_type=3\nsensitivity={}\nmax_seqs={}\nsplit_memory_limit={}\n'.format(
-        sensitivity,
+    return 'search_type=3\nkmer_score=0\nmax_seqs={}\nsplit_memory_limit={}\n'.format(
         max_seqs,
         memory_limit,
     )
@@ -3008,10 +3002,11 @@ def ensure_mmseqs_rrna_search_index_exists(args, db_path):
             '--threads',
             str(max(1, int(getattr(args, 'threads', 1)))),
         ]
-        command = append_mmseqs_sensitivity_option(
-            command=command,
-            raw_value=getattr(args, 'rrna_filter_sensitivity', 'auto'),
-        )
+        # MMseqs2 createindex uses the correct nucleotide k-mer threshold of 0
+        # unless -s is supplied. Passing the search sensitivity here makes it
+        # try to derive a protein-style threshold for the nucleotide k-mer
+        # size (15), which current MMseqs2 rejects. Search sensitivity still
+        # belongs on the subsequent easy-search command.
         command = append_mmseqs_positive_int_option(
             command=command,
             option_name='--max-seqs',
@@ -6641,6 +6636,87 @@ def sequence_extraction_2nd_round(args, sra_stat, metadata, g, runtime_context=N
     print('')
     return metadata
 
+def record_private_fastq_input_stats(metadata, sra_stat, args):
+    ind_sra = sra_stat.get('metadata_idx', get_metadata_row_index_by_run(metadata, sra_stat['sra_id']))
+    single_path = None
+    pair1_path = None
+    pair2_path = None
+    if sra_stat['layout'] == 'paired':
+        pair1_path = os.path.join(
+            sra_stat['getfastq_sra_dir'],
+            sra_stat['sra_id'] + '_1.fastq.gz',
+        )
+        pair2_path = os.path.join(
+            sra_stat['getfastq_sra_dir'],
+            sra_stat['sra_id'] + '_2.fastq.gz',
+        )
+        expected_paths = [pair1_path, pair2_path]
+    else:
+        single_path = os.path.join(
+            sra_stat['getfastq_sra_dir'],
+            sra_stat['sra_id'] + '.fastq.gz',
+        )
+        expected_paths = [single_path]
+    missing_paths = [path for path in expected_paths if not os.path.isfile(path)]
+    if missing_paths:
+        raise FileNotFoundError(
+            'Private FASTQ input was not staged for {}: {}'.format(
+                sra_stat['sra_id'],
+                ', '.join(missing_paths),
+            )
+        )
+    try:
+        stats_by_path = scan_fastq_records_and_bases_with_seqkit_batch(
+            path_fastq_paths=expected_paths,
+            args=args,
+        )
+        path_stats = {
+            path: stats_by_path[os.path.abspath(path)]
+            for path in expected_paths
+        }
+    except Exception as exc:
+        sys.stderr.write(
+            'seqkit stats scan failed for private FASTQ input. '
+            'Falling back to Python FASTQ parser. {}\n'.format(exc)
+        )
+        path_stats = {
+            path: count_fastq_records_and_bases(path)
+            for path in expected_paths
+        }
+    if sra_stat['layout'] == 'paired':
+        num_pair1, bp_pair1 = path_stats[pair1_path]
+        num_pair2, bp_pair2 = path_stats[pair2_path]
+        if num_pair1 != num_pair2:
+            raise ValueError(
+                'Paired private FASTQ read count mismatch for {}: {} has {:,} records, '
+                '{} has {:,} records.'.format(
+                    sra_stat['sra_id'],
+                    pair1_path,
+                    num_pair1,
+                    pair2_path,
+                    num_pair2,
+                )
+            )
+        num_spots = num_pair1
+        bp_total = bp_pair1 + bp_pair2
+    else:
+        num_spots, bp_total = path_stats[single_path]
+    if num_spots <= 0 or bp_total <= 0:
+        raise ValueError(
+            'Private FASTQ input contains no usable reads for {}.'.format(
+                sra_stat['sra_id']
+            )
+        )
+    metadata.df.at[ind_sra, 'num_dumped'] = num_spots
+    metadata.df.at[ind_sra, 'num_written'] = num_spots
+    metadata.df.at[ind_sra, 'bp_dumped'] = bp_total
+    metadata.df.at[ind_sra, 'bp_written'] = bp_total
+    metadata.df.at[ind_sra, 'bp_specified_for_extraction'] = bp_total
+    metadata.df.at[ind_sra, 'spot_length_amalgkit'] = float(bp_total) / float(num_spots)
+    metadata.df.at[ind_sra, 'layout_amalgkit'] = sra_stat['layout']
+    return metadata
+
+
 def sequence_extraction_private(metadata, sra_stat, args, runtime_context=None):
     runtime_context = ensure_getfastq_runtime_context(runtime_context)
     ind_sra = sra_stat.get('metadata_idx', get_metadata_row_index_by_run(metadata, sra_stat['sra_id']))
@@ -6674,6 +6750,7 @@ def sequence_extraction_private(metadata, sra_stat, args, runtime_context=None):
             sys.stderr.write('Private fastq path exists but is not a file: {}\n'.format(path_from))
         else:
             sys.stderr.write('Private fastq file not found: {}\n'.format(path_from))
+    metadata = record_private_fastq_input_stats(metadata=metadata, sra_stat=sra_stat, args=args)
     set_current_intermediate_extension(sra_stat, '.fastq.gz')
     latest_stage_counts = None
     latest_stage_source = None

@@ -7,6 +7,15 @@ than the Releases page for those changes.
 
 ## Unreleased
 
+### 0.16.78 - 2026-09-03
+
+- Recorded actual input spot and base counts for private FASTQ runs so
+  `getfastq_stats.tsv` no longer reports `num_written=0` for valid outputs.
+  Paired private inputs now fail early when mate record counts differ.
+- Kept rRNA search sensitivity on MMseqs2 `easy-search` while omitting it from
+  nucleotide `createindex`, avoiding invalid k-mer threshold derivation for
+  the nucleotide index without patching MMseqs2.
+
 ### 0.16.76 - 2026-08-31
 
 - Verify public original FASTQ downloads against ENA's per-file MD5 and byte
