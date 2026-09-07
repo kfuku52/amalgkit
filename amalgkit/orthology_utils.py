@@ -240,4 +240,4 @@ def generate_multisp_busco_table(dir_busco, outfile, run_tasks_with_optional_thr
     )
     for species_colname in species_order:
         merged_table[species_colname] = merged_table['busco_id'].map(species_series[species_colname])
-    merged_table.to_csv(outfile, sep='\t', index=None, doublequote=False)
+    merged_table.to_csv(outfile, sep='\t', index=False)

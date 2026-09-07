@@ -373,6 +373,29 @@ def test_merge_species_quant_tables_single_pass_reads(tmp_path, monkeypatch):
     assert list(eff.columns) == ['target_id', 'SRR001', 'SRR002']
 
 
+@pytest.mark.parametrize('species_name', ['Species A/B', '日本語'])
+def test_merge_species_quant_tables_honors_explicit_species_token(tmp_path, species_name):
+    quant_dir = tmp_path / 'quant'
+    run_dir = quant_dir / 'SRR001'
+    run_dir.mkdir(parents=True)
+    pandas.DataFrame({
+        'target_id': ['tx1'],
+        'eff_length': [100.0],
+        'est_counts': [3.0],
+        'tpm': [1e6],
+    }).to_csv(run_dir / 'SRR001_abundance.tsv', sep='\t', index=False)
+    metadata = Metadata.from_DataFrame(pandas.DataFrame({
+        'run': ['SRR001'],
+        'scientific_name': [species_name],
+        'species_token': ['Species_custom'],
+        'exclusion': ['no'],
+    }))
+
+    assert merge_species_quant_tables(species_name, metadata, str(quant_dir), str(tmp_path / 'merge')) == 1
+    result = pandas.read_csv(tmp_path / 'merge' / 'Species_custom' / 'Species_custom_est_counts.tsv', sep='\t')
+    assert result.to_dict('list') == {'target_id': ['tx1'], 'SRR001': [3.0]}
+
+
 def test_merge_species_quant_tables_rejects_unsafe_species_token(tmp_path):
     metadata = Metadata.from_DataFrame(pandas.DataFrame({
         'run': ['SRR001'],

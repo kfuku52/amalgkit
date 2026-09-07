@@ -3,6 +3,8 @@ import os
 import socket
 import time
 from io import BytesIO
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 
 import pytest
 from types import SimpleNamespace
@@ -16,6 +18,44 @@ from amalgkit.util import (
 # ---------------------------------------------------------------------------
 # strtobool
 # ---------------------------------------------------------------------------
+
+
+def test_directory_initialization_allows_concurrent_creators(tmp_path, monkeypatch):
+    directory = str(tmp_path / 'downloads')
+    barrier = Barrier(2)
+    makedirs = os.makedirs
+
+    def synchronized_makedirs(path, **kwargs):
+        if path == directory:
+            barrier.wait(timeout=5)
+        return makedirs(path, **kwargs)
+
+    monkeypatch.setattr(download_utils.os, 'makedirs', synchronized_makedirs)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(download_utils._ensure_regular_directory, [directory, directory]))
+
+    assert results == [directory, directory]
+    assert os.path.isdir(directory)
+
+
+@pytest.mark.parametrize('replacement', ['file', 'symlink'])
+def test_directory_initialization_rejects_concurrent_non_directory(tmp_path, monkeypatch, replacement):
+    directory = tmp_path / 'downloads'
+
+    def replace_directory(path, **kwargs):
+        if replacement == 'file':
+            directory.write_text('existing data')
+        else:
+            directory.symlink_to(tmp_path, target_is_directory=True)
+        raise FileExistsError(path)
+
+    monkeypatch.setattr(download_utils.os, 'makedirs', replace_directory)
+    with pytest.raises(NotADirectoryError, match='not a regular directory'):
+        download_utils._ensure_regular_directory(directory)
+    if replacement == 'file':
+        assert directory.read_text() == 'existing data'
+    else:
+        assert directory.is_symlink()
 
 
 class TestBoundedDownload:

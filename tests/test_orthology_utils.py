@@ -4,9 +4,26 @@ import pytest
 
 from amalgkit.orthology_utils import (
     DEFAULT_SINGLE_COPY_THRESHOLD,
+    generate_multisp_busco_table,
     get_single_copy_orthogroup_mask,
     validate_single_copy_threshold,
 )
+
+
+def test_busco_merge_preserves_quoted_annotation(tmp_path):
+    busco_dir = tmp_path / 'busco'
+    busco_dir.mkdir()
+    description = 'Protein with "quoted" annotation'
+    (busco_dir / 'Species_A.tsv').write_text(
+        'OG1\tComplete\tgene1\t100\t200\thttp://odb\t' + description + '\n'
+    )
+    output = tmp_path / 'merged.tsv'
+
+    generate_multisp_busco_table(str(busco_dir), str(output))
+
+    result = pandas.read_csv(output, sep='\t')
+    assert result.loc[0, 'description'] == description
+    assert result.loc[0, 'Species_A'] == 'gene1'
 
 
 def test_single_copy_orthogroup_mask_uses_percentage_of_species():

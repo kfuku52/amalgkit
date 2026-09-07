@@ -370,10 +370,9 @@ def write_species_merged_quant_tables(merge_species_dir, sp_filled, detected_sra
 
 def merge_species_quant_tables(sp, metadata, quant_dir, merge_dir, run_abundance_paths=None):
     print('processing: {}'.format(sp), flush=True)
-    sp_filled = build_merge_species_token_map(metadata).get(
-        str(sp).strip(),
-        merge_species_output_token(sp),
-    )
+    sp_filled = build_merge_species_token_map(metadata).get(str(sp).strip())
+    if sp_filled is None:
+        sp_filled = merge_species_output_token(sp)
     merge_species_dir = safe_join_component(
         merge_dir,
         sp_filled,

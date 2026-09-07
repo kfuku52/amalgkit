@@ -184,13 +184,17 @@ def _assert_regular_file_or_absent(path, label='Path'):
 
 def _ensure_regular_directory(path, label='Directory'):
     path = os.path.abspath(os.fspath(path))
-    if os.path.lexists(path):
-        if os.path.islink(path) or not os.path.isdir(path):
-            raise NotADirectoryError(
-                '{} exists but is not a regular directory: {}'.format(label, path)
-            )
-    else:
-        os.makedirs(path, exist_ok=False)
+    if not os.path.lexists(path):
+        try:
+            os.makedirs(path, exist_ok=False)
+        except FileExistsError:
+            # Another worker may initialize the shared download directory first.
+            # Validate its result below, including rejection of symbolic links.
+            pass
+    if os.path.islink(path) or not os.path.isdir(path):
+        raise NotADirectoryError(
+            '{} exists but is not a regular directory: {}'.format(label, path)
+        )
     return path
 
 
