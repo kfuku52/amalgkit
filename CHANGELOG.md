@@ -7,6 +7,17 @@ than the Releases page for those changes.
 
 ## Unreleased
 
+### 0.16.79 - 2026-09-08
+
+- Allowed concurrent creation of shared download directories while retaining
+  rejection of symbolic links and non-directory paths.
+- Honored explicit species tokens during merge and preserved quoted BUSCO
+  annotations when writing multi-species tables.
+- Preserved sample labels through TMM factor estimation and application, and
+  retained lexical batch/group labels such as `01` and `NA` in backend metadata.
+- Stabilized Pearson correlations for extreme finite scales and excluded
+  infinite pairs from Spearman and Kendall correlations.
+
 ### 0.16.78 - 2026-09-03
 
 - Recorded actual input spot and base counts for private FASTQ runs so
