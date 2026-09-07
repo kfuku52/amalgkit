@@ -18,7 +18,7 @@ class TMMRoundTripResult:
 def _as_matrix_with_columns(counts):
     if isinstance(counts, pandas.DataFrame):
         matrix = counts.to_numpy(dtype=float, copy=False)
-        columns = [str(col) for col in counts.columns]
+        columns = list(counts.columns)
     else:
         matrix = numpy.asarray(counts, dtype=float)
         if matrix.ndim != 2:

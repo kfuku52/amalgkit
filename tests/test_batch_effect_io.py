@@ -1,10 +1,30 @@
 import pytest
+import pandas
 
 from amalgkit.batch_effect_common import BatchEffectResult
 from amalgkit.batch_effect_io import (
     read_backend_summary_dcf,
+    read_metadata_tsv,
     write_backend_summary_dcf,
 )
+
+
+def test_batch_metadata_preserves_categorical_labels(tmp_path):
+    path = tmp_path / 'metadata.tsv'
+    path.write_text(
+        'run\tsample_group\tbioproject\tcustom_batch\n'
+        '0001\t01\tNA\t001\n'
+        'NA\t1\tNULL\t1\n'
+        '0003\t\t\t\n'
+    )
+    metadata = read_metadata_tsv(path)
+
+    assert metadata['run'].tolist() == ['0001', 'NA', '0003']
+    assert metadata['sample_group'].iloc[:2].tolist() == ['01', '1']
+    assert metadata['bioproject'].iloc[:2].tolist() == ['NA', 'NULL']
+    assert metadata['custom_batch'].iloc[:2].tolist() == ['001', '1']
+    assert pandas.isna(metadata.loc[2, 'sample_group'])
+    assert pandas.isna(metadata.loc[2, 'bioproject'])
 
 
 def test_backend_summary_dcf_round_trip_restores_known_field_types(tmp_path):

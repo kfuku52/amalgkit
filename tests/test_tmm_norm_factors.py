@@ -34,6 +34,23 @@ FIXTURES = Path(__file__).parent / 'fixtures'
 ORACLE_CASES = json.loads((FIXTURES / 'tmm.json').read_text())['cases']
 
 
+@pytest.mark.parametrize('columns', [[1, 2], [1, '1']])
+@pytest.mark.parametrize('explicit_library_sizes', [False, True])
+def test_tmm_preserves_sample_labels_through_factor_application(columns, explicit_library_sizes):
+    counts = pandas.DataFrame([[10., 20.], [30., 15.], [5., 40.]], columns=columns)
+    libraries = counts.sum().iloc[::-1] if explicit_library_sizes else None
+    result = run_tmm_rounds_for_cstmm(counts, lib_size=libraries)
+    expected = run_tmm_rounds_for_cstmm(counts.to_numpy())
+
+    assert result.round1_factors.index.tolist() == columns
+    assert result.round2_factors.index.tolist() == columns
+    assert result.library_sizes.index.tolist() == columns
+    numpy.testing.assert_allclose(result.round2_factors, expected.round2_factors)
+    corrected = apply_tmm_factors(counts, result.round2_factors)
+    assert corrected.columns.tolist() == columns
+    numpy.testing.assert_allclose(corrected, counts.to_numpy() / expected.round2_factors.to_numpy())
+
+
 @pytest.mark.parametrize('case', ORACLE_CASES, ids=lambda case: 'oracle-' + str(case['case']))
 def test_tmm_rounds_match_independent_high_precision_oracle(case):
     counts = numpy.array(case['counts'])

@@ -1,6 +1,6 @@
 import json
 
-from amalgkit.table_io import read_identifier_tsv
+from amalgkit.table_io import read_annotation_tsv, read_identifier_tsv
 
 from amalgkit.batch_effect_common import BatchEffectResult
 
@@ -53,7 +53,7 @@ def write_expression_matrix_tsv(df, path):
 
 
 def read_metadata_tsv(path):
-    return read_identifier_tsv(path, identifier_columns=('run',), low_memory=False)
+    return read_annotation_tsv(path, low_memory=False)
 
 
 def write_backend_summary_json(summary, path):

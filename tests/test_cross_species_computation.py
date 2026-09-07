@@ -23,6 +23,20 @@ def test_safe_correlation_uses_only_finite_pairs():
     assert numpy.isclose(observed, expected)
 
 
+@pytest.mark.parametrize('method', ['pearson', 'spearman', 'kendall'])
+def test_safe_correlation_excludes_infinite_pairs(method):
+    observed = safe_correlation([1, numpy.inf, 3, 4], [1, 0, 3, 4], method)
+    assert observed == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize('scale', [1e-100, 1e100, 1e307])
+@pytest.mark.parametrize('direction', [-1, 1])
+def test_safe_correlation_is_invariant_to_scale(scale, direction):
+    left = numpy.array([-3., -1., 1., 3.]) * scale
+    right = direction * left
+    assert safe_correlation(left, right, 'pearson') == pytest.approx(direction)
+
+
 def test_resolve_matrix_for_embedding_strict_and_cache():
     matrix = pandas.DataFrame([[1.0, 2.0], [numpy.nan, 4.0]], columns=['A', 'B'])
     cache = {}

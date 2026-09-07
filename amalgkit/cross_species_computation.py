@@ -22,15 +22,23 @@ def safe_correlation(left_values, right_values, method: str) -> float:
             return numpy.nan
         left = left[valid]
         right = right[valid]
+        # Correlation is scale invariant. Bound values before centering and
+        # squaring so finite inputs cannot overflow or underflow the norm.
+        left_scale = float(numpy.max(numpy.abs(left)))
+        right_scale = float(numpy.max(numpy.abs(right)))
+        if left_scale == 0.0 or right_scale == 0.0:
+            return numpy.nan
+        left = left / left_scale
+        right = right / right_scale
         left = left - numpy.mean(left)
         right = right - numpy.mean(right)
         denominator = float(numpy.sqrt(numpy.dot(left, left) * numpy.dot(right, right)))
         if denominator <= 0.0:
             return numpy.nan
-        return float(numpy.dot(left, right) / denominator)
+        return float(numpy.clip(numpy.dot(left, right) / denominator, -1.0, 1.0))
     left = pandas.to_numeric(pandas.Series(left_values), errors="coerce")
     right = pandas.to_numeric(pandas.Series(right_values), errors="coerce")
-    valid = left.notna() & right.notna()
+    valid = numpy.isfinite(left) & numpy.isfinite(right)
     if int(valid.sum()) <= 1 or left.loc[valid].nunique() <= 1 or right.loc[valid].nunique() <= 1:
         return numpy.nan
     try:
