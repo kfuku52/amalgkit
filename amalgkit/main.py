@@ -76,7 +76,7 @@ def main(argv=None):
     active_command = resolve_active_command(argv)
     try:
         if should_print_runtime_banner(active_command):
-            print_runtime_banner(argv)
+            print_runtime_banner(argv, args=args)
         if hasattr(args, 'handler'):
             args.handler(args)
         else:

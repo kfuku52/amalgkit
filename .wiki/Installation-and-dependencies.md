@@ -35,7 +35,7 @@ Some commands call external bioinformatics tools. Install only the tools needed 
 
 | Tool | Used by | Required when |
 | --- | --- | --- |
-| [sra-tools / fasterq-dump](https://github.com/ncbi/sra-tools) | `getfastq` | required at startup for every invocation, including private-only runs; use `sra-tools >= 3` |
+| [sra-tools / fasterq-dump](https://github.com/ncbi/sra-tools) | `getfastq` | required for SRA and private-input runs; GSA-only runs use native FASTQ retrieval; use `sra-tools >= 3` |
 | [SeqKit](https://github.com/shenwei356/seqkit) | `integrate`, `getfastq` | required by `getfastq`; `integrate` can fall back to Python FASTQ statistics when SeqKit is unavailable |
 | [fastp](https://github.com/OpenGene/fastp) | `getfastq` | `--fastp yes`, which is the default |
 | [kallisto](https://github.com/pachterlab/kallisto) | `quant` | short-read quantification |

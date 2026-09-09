@@ -71,6 +71,9 @@ def build_getfastq_run_fingerprint(
         "private_file",
         "read1_path",
         "read2_path",
+        "data_source",
+        "gsa_fastq_files",
+        "gsa_input_fingerprint",
     ]
     ind_sra = sra_stat.get("metadata_idx")
     if ind_sra is None:

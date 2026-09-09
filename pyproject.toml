@@ -123,6 +123,10 @@ follow_imports = "skip"
 ignore_missing_imports = true
 no_site_packages = true
 files = [
+  "amalgkit/gsa.py",
+  "amalgkit/gsa_fastq.py",
+  "amalgkit/gsa_select.py",
+  "amalgkit/gsa_snapshot.py",
   "amalgkit/fastq_cleanup.py",
   "amalgkit/getfastq_resume.py",
   "amalgkit/identifier_validation.py",

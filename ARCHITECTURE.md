@@ -35,6 +35,9 @@ not low-level reusable algorithms.
 | `table_io.py` | lexical identifier/annotation reads, separate from numeric missing values |
 | `identifier_validation.py` | exact duplicate detection with bounded RAM and a temporary SQLite inventory |
 | `fastq_cleanup.py` | reversible retirement of managed FASTQs and private-input links |
+| `gsa.py` | public GSA search, provider page parsing, and portable remote FASTQ manifests |
+| `gsa_fastq.py` | validated original FASTQ cache, real input counts, and paired spot extraction |
+| `gsa_select.py` / `gsa_snapshot.py` | deferred count-based selection and atomic measured metadata handoff |
 | `getfastq_resume.py` | versioned fingerprints, atomic state serialization and file identities |
 | `parallel_utils.py` | CPU allocation, deterministic task results, traceback-preserving failures |
 | `subprocess_utils.py` | command execution, timeouts, output decoding, successful probe cache |

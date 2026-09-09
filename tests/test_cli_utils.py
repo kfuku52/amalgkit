@@ -112,3 +112,13 @@ def test_runtime_banner_does_not_execute_external_tools(monkeypatch, capsys):
 
     output = capsys.readouterr().out
     assert 'AMALGKIT tool fasterq-dump: FOUND (/tools/fasterq-dump)' in output
+
+
+def test_runtime_banner_reports_explicit_executable_path(tmp_path, monkeypatch, capsys):
+    from types import SimpleNamespace
+    executable = tmp_path / 'seqkit'
+    executable.write_text('#!/bin/sh\nexit 0\n')
+    executable.chmod(0o700)
+    monkeypatch.setenv('PATH', '')
+    cli_utils.print_runtime_banner(['amalgkit', 'getfastq'], args=SimpleNamespace(seqkit_exe=str(executable)))
+    assert 'AMALGKIT tool seqkit: FOUND ({})'.format(executable) in capsys.readouterr().out

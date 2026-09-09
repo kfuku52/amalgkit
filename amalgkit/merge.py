@@ -5,6 +5,7 @@ import json
 import os
 import warnings
 from amalgkit.filter_utils import staged_output_dir
+from amalgkit.arg_utils import clone_namespace
 from amalgkit.merge_plots import generate_merge_plots
 from amalgkit.metadata_utils import load_metadata, write_updated_metadata
 from amalgkit.output_contracts import read_quant_abundance
@@ -175,6 +176,12 @@ def _read_fastp_stats_file(sra_id, fastp_stats_path):
     for col in GETFASTQ_MERGE_COLUMNS:
         if col in df_fastp.columns:
             values[col] = df_fastp.loc[0, col]
+    if 'data_source' in df_fastp and str(df_fastp.loc[0, 'data_source']).lower() == 'gsa':
+        if 'run' not in df_fastp or str(df_fastp.loc[0, 'run']) != sra_id:
+            return sra_id, None, False, 'GSA getfastq stats Run identity mismatch: {}'.format(fastp_stats_path)
+        values['_gsa_input'] = {key: df_fastp.loc[0, key] for key in
+                               ('gsa_fastq_files', 'gsa_input_fingerprint', 'total_spots', 'total_bases', 'spot_length', 'read_count_status')
+                               if key in df_fastp}
     return sra_id, values, True, None
 
 def merge_fastp_stats_into_metadata(metadata, out_dir, max_workers='auto'):
@@ -228,6 +235,48 @@ def merge_fastp_stats_into_metadata(metadata, out_dir, max_workers='auto'):
         if not bool(is_run.any()):
             warnings.warn('Run ID from fastp stats was not found in metadata. Skipping {}.'.format(sra_id))
             continue
+        gsa_input = values.pop('_gsa_input', None)
+        if gsa_input is None and str(metadata.df.loc[is_run].iloc[0].get('data_source', '')).lower() == 'gsa':
+            raise ValueError('GSA getfastq stats are missing input provenance: {}'.format(sra_id))
+        if gsa_input is not None:
+            current = metadata.df.loc[is_run].iloc[0]
+            if (str(current.get('data_source', '')).lower() != 'gsa'
+                    or json.loads(str(current.get('gsa_fastq_files', 'null'))) != json.loads(str(gsa_input.get('gsa_fastq_files', 'null')))):
+                raise ValueError('GSA getfastq stats do not match current input manifest: {}'.format(sra_id))
+            fingerprint = str(gsa_input.get('gsa_input_fingerprint', ''))
+            if (len(fingerprint) != 64 or any(char not in '0123456789abcdef' for char in fingerprint)
+                    or gsa_input.get('read_count_status') != 'measured'):
+                raise ValueError('Invalid measured GSA input provenance: {}'.format(sra_id))
+            current_fingerprint = str(current.get('gsa_input_fingerprint', '')).strip()
+            current_measured = current.get('read_count_status') == 'measured'
+            if (current_fingerprint or current_measured) and current_fingerprint != fingerprint:
+                raise ValueError('GSA getfastq stats do not match current input fingerprint: {}'.format(sra_id))
+            counts = {}
+            for col in ('total_spots', 'total_bases', 'spot_length'):
+                try:
+                    value = float(gsa_input.get(col))
+                    previous = float(current.get(col)) if current_measured else None
+                except (TypeError, ValueError) as exc:
+                    raise ValueError('Invalid measured GSA input counts: {}'.format(sra_id)) from exc
+                if (not numpy.isfinite(value) or value <= 0
+                        or (col != 'spot_length' and not value.is_integer())):
+                    raise ValueError('Invalid measured GSA input counts: {}'.format(sra_id))
+                matches = (numpy.isclose(previous, value, rtol=1e-12, atol=0) if current_measured and col == 'spot_length'
+                           else previous == value)
+                if current_measured and not matches:
+                    raise ValueError('GSA getfastq stats contradict current measured counts: {}'.format(sra_id))
+                counts[col] = value
+            if not numpy.isclose(counts['spot_length'], counts['total_bases'] / counts['total_spots'], rtol=1e-12, atol=0):
+                raise ValueError('Inconsistent measured GSA spot length: {}'.format(sra_id))
+            for col, value in counts.items():
+                metadata.df[col] = pandas.to_numeric(metadata.df[col], errors='coerce')
+                metadata.df.loc[is_run, col] = value
+            if 'gsa_input_fingerprint' not in metadata.df:
+                metadata.df['gsa_input_fingerprint'] = ''
+            metadata.df.loc[is_run, 'gsa_input_fingerprint'] = fingerprint
+            if 'read_count_status' not in metadata.df:
+                metadata.df['read_count_status'] = ''
+            metadata.df.loc[is_run, 'read_count_status'] = 'measured'
         for col, value in values.items():
             metadata.df.loc[is_run, col] = value
         num_detected += 1
@@ -507,7 +556,7 @@ def merge_main(args):
     merge_dir = os.path.realpath(os.path.join(out_dir, 'merge'))
     if os.path.exists(merge_dir) and (not os.path.isdir(merge_dir)):
         raise NotADirectoryError('Merge path exists but is not a directory: {}'.format(merge_dir))
-    metadata = load_metadata(args)
+    metadata = load_metadata(clone_namespace(args, _prefer_gsa_snapshot=True))
     validate_metadata_columns(
         metadata=metadata,
         required_columns=['run', 'scientific_name', 'exclusion'],

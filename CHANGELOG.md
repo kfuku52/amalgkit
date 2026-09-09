@@ -5,7 +5,36 @@ Releases provide generated notes only for tagged releases. Patch-only updates
 remain on the default branch and are recorded below; consult this file rather
 than the Releases page for those changes.
 
-## Unreleased
+### 0.16.80 - 2026-09-09
+
+- Automatically resumed interrupted original FASTQ transfers with bounded
+  retries and a shared transfer deadline, retaining partial inputs after retry
+  exhaustion. Download failures now report redacted error details and status.
+- Reported GSA input preparation time in getfastq and honored explicit tool
+  paths in the startup inventory.
+- Clarified exact species-stem reference FASTA naming in quant help and errors,
+  replacing a version-suffixed example that the reference lookup did not accept.
+
+- Added native public GSA short-read FASTQ retrieval from metadata accession or
+  species queries through getfastq, including portable file manifests, validated
+  resumable original-input caches, paired multi-file extraction, and measured
+  read counts. GSA-only runs no longer require SRA Toolkit.
+- Deferred GSA size-dependent selection until counts are measured and added a
+  fingerprint-checked metadata snapshot for quant/merge and concurrent batch jobs.
+- Kept complete accession collections across GSA array jobs and checked source
+  generations before publishing measurements. Extraction and merge verify input
+  content fingerprints; measured tables can be reused with supported pandas
+  versions. GSA mate parsing distinguishes explicit mate markers from sample
+  numbers, corrupt files receive independent bounded retries, and extraction
+  normalizes missing final FASTQ newlines before combining file groups.
+- Preserved allocated second-round spot ranges when restoring first-round
+  getfastq checkpoints, preventing a valid additional extraction from receiving
+  a zero range.
+- Preserved GSA JSON columns during selection, rebuilt deferred selection rules
+  on reselection, and enforced pending-selection checks for explicit downstream
+  metadata. Snapshot inputs now share immutable generations across array jobs,
+  source labels are normalized, and HTTP downloads validate declared transfer
+  lengths before accepting FASTQ inputs.
 
 ### 0.16.79 - 2026-09-08
 

@@ -1,9 +1,9 @@
 ## Overview
 
-`amalgkit getfastq` turns selected metadata rows into processed FASTQ files. For public data, it downloads SRA objects and extracts FASTQ with `fasterq-dump`. For private data prepared by `integrate`, it stages local FASTQ files into the same workflow.
+`amalgkit getfastq` turns selected metadata rows into processed FASTQ files. For SRA data, it downloads SRA objects and extracts FASTQ with `fasterq-dump`. For public GSA, it downloads FASTQ directly. For private data prepared by `integrate`, it stages local FASTQ files into the same workflow.
 
-Startup checks require `fasterq-dump` from `sra-tools >= 3` and SeqKit even for
-private-only runs. Fastp is required unless `--fastp no` is used. See
+Startup checks require SeqKit. SRA and private-input runs also require
+`fasterq-dump` from `sra-tools >= 3`; GSA-only runs do not. Fastp is required unless `--fastp no` is used. See
 [installation and dependencies](https://github.com/kfuku52/amalgkit/wiki/Installation-and-dependencies).
 After `integrate`, pass its generated output path explicitly with `--metadata`.
 
@@ -12,6 +12,9 @@ Optional processing includes:
 - `fastp`
 - MMseqs2 rRNA filtering
 - MMseqs2 contaminant filtering
+
+See [GSA native inputs](./GSA-native-inputs) for accession discovery, measured
+metadata, selection, original FASTQ caching, and resume.
 
 ## Inputs
 
@@ -50,6 +53,7 @@ By default, public downloads try enabled providers and continue to the next prov
 | GCP | `--gcp yes` |
 | ENA | `--ena yes` |
 | DDBJ for DRA accessions | `--ddbj yes` |
+| Public GSA FASTQ | selected automatically by GSA metadata or GSA accession |
 
 Provider concurrency caps use `--download_lock_dir`, which defaults to `out_dir/downloads/locks`.
 
@@ -60,6 +64,7 @@ Provider concurrency caps use `--download_lock_dir`, which defaults to `out_dir/
 | `--gcp_download_max_concurrency` | cap concurrent GCP downloads across processes |
 | `--ena_download_max_concurrency` | cap concurrent ENA downloads across processes |
 | `--ddbj_download_max_concurrency` | cap concurrent DDBJ downloads across processes |
+| `--gsa_download_max_concurrency` | cap concurrent GSA downloads across processes (default 2) |
 
 Set a cap to `0` or `auto` to disable throttling.
 

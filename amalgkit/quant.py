@@ -13,6 +13,7 @@ import tempfile
 import numpy
 import pandas
 from amalgkit.table_io import read_annotation_tsv
+from amalgkit.gsa_select import validate_selection_ready
 from amalgkit.fastq_cleanup import safely_remove_quant_fastq_files
 
 from amalgkit.arg_utils import clone_namespace
@@ -1585,7 +1586,11 @@ def _find_single_fasta_match(args, sci_name, runtime_context=None, alias_names=N
         raise ValueError(txt.format(sci_name, ', '.join(fasta_files)))
     if len(fasta_files) == 0:
         txt = 'Could not find reference fasta file for this species: {}\n'.format(sci_name)
-        txt += 'If the reference fasta file is correctly placed, the column "scientific_name" of the --metadata file may need to be edited.'
+        txt += 'Expected a filename stem matching scientific_name in {}: for example {}.fa.gz. '.format(
+            path_fasta_dir, str(sci_name).replace(' ', '_')
+        )
+        txt += ('Remove assembly/version suffixes from the filename; .fa, .fasta, .fa.gz, and .fasta.gz are supported. '
+                'The legacy _for_kallisto_index stem suffix is also accepted.')
         raise FileNotFoundError(txt)
     return matched_prefix, fasta_files[0]
 
@@ -2094,6 +2099,7 @@ def prepare_quant_runtime_context(args, tasks, metadata=None, backend_by_run=Non
 
 
 def build_quant_tasks(metadata):
+    validate_selection_ready(metadata.df)
     required_columns = ['run', 'scientific_name']
     missing_columns = [col for col in required_columns if col not in metadata.df.columns]
     if len(missing_columns) > 0:
@@ -2178,7 +2184,7 @@ def quant_main(args):
     quant_dir = os.path.join(out_dir, 'quant')
     if os.path.exists(quant_dir) and (not os.path.isdir(quant_dir)):
         raise NotADirectoryError('Quant path exists but is not a directory: {}'.format(quant_dir))
-    runtime_args = clone_namespace(args, threads=threads, internal_jobs=jobs, out_dir=out_dir)
+    runtime_args = clone_namespace(args, threads=threads, internal_jobs=jobs, out_dir=out_dir, _prefer_gsa_snapshot=True)
     metadata = load_metadata(runtime_args)
     tasks = build_quant_tasks(metadata)
     quant_metadata = _metadata_with_quant_input_sra_stats_for_tasks(

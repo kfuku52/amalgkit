@@ -88,6 +88,7 @@ def build_parser(command_handlers, command_names, version, prog=None):
     pp_meta = argparse.ArgumentParser(add_help=False)
     pp_meta.add_argument('--metadata', metavar='PATH', default='inferred', type=str, required=False, action='store',
                      help='default=%(default)s: "inferred" = out_dir/metadata/metadata.tsv. '
+                          'Quant/merge prefer a verified GSA measured snapshot when available. '
                           'PATH to a metadata table. After integrate, explicitly pass its output metadata path.')
     pp_count_meta = argparse.ArgumentParser(add_help=False)
     pp_count_meta.add_argument('--metadata', metavar='PATH', default='inferred',
@@ -151,11 +152,19 @@ def build_parser(command_handlers, command_names, version, prog=None):
                           'The number of colors should be the same as the number of selected sample groups. '
                           'By default, all colors are automatically assigned.')
 
-    pme_help = 'NCBI SRA metadata retrieval and curation. See `amalgkit metadata -h`'
+    pme_help = 'NCBI SRA or public GSA metadata retrieval and curation. See `amalgkit metadata -h`'
     pme = subparsers.add_parser('metadata', help=pme_help, parents=[pp_out, pp_redo, pp_download, pp_threads, pp_internal_jobs, pp_cpu_budget])
+    pme.add_argument('--source', choices=['ncbi', 'gsa'], default='ncbi',
+                     help='Metadata archive. GSA supports public short-read FASTQ data.')
+    pme.add_argument('--accession', default=None,
+                     help='GSA CRA/CRX/CRR/PRJCA accession; requires --source gsa. Exclusive with search/species input.')
+    pme.add_argument('--gsa_metadata_max_concurrency', default=1, type=nonnegative_int_or_auto,
+                     help='Concurrent GSA metadata requests across processes sharing download_lock_dir; 0 disables the limit.')
+    pme.add_argument('--gsa_metadata_timeout_seconds', default=30, type=int,
+                     help='GSA metadata request timeout in seconds (three attempts).')
     pme.add_argument('--search_string', metavar='STR', default=None, type=str, required=False, action='store',
-                     help='default=%(default)s: Entrez search string for one metadata query. '
-                          'Required unless --species_tsv is used. See https://www.ncbi.nlm.nih.gov/books/NBK25499/ for details. '
+                     help='default=%(default)s: Entrez query for --source ncbi, BIG Search query for --source gsa. '
+                          'Required unless --species_tsv or --accession is used. See https://www.ncbi.nlm.nih.gov/books/NBK25499/ for details. '
                           'The search string is used to identify SRA entries that can be found at https://www.ncbi.nlm.nih.gov/sra/ using the same string. '
                           'Example: "Cephalotus follicularis"[Organism] AND "Illumina"[Platform] AND "RNA-seq"[Strategy]')
     pme.add_argument('--species_tsv', metavar='PATH', default=None, type=str, required=False, action='store',
@@ -216,13 +225,19 @@ def build_parser(command_handlers, command_names, version, prog=None):
 
     pge_help = 'Retrieving fastq files. See `amalgkit getfastq -h`'
     pge = subparsers.add_parser('getfastq', help=pge_help, parents=[pp_out, pp_meta, pp_threads, pp_internal_jobs, pp_cpu_budget, pp_redo, pp_batch, pp_download])
+    pge.add_argument('--gsa_metadata_max_concurrency', default=1, type=nonnegative_int_or_auto,
+                     help='Concurrent GSA metadata requests across processes sharing download_lock_dir; 0 disables the limit.')
+    pge.add_argument('--gsa_metadata_timeout_seconds', default=30, type=int,
+                     help='GSA metadata request timeout in seconds (three attempts).')
+    pge.add_argument('--gsa_download_max_concurrency', default=2, type=nonnegative_int_or_auto,
+                     help='Concurrent GSA downloads across processes sharing download_lock_dir; 0 disables the limit.')
     pge.add_argument('--entrez_email', metavar='aaa@bbb.com', default='', type=str, required=False, action='store',
                      help='default=%(default)s: Your email address. See https://www.ncbi.nlm.nih.gov/books/NBK25497/')
     pge.add_argument('--id', metavar='XXXXX0000', default=None, type=str, required=False, action='store',
-                     help='default=%(default)s: BioProject/BioSample/SRR ID. This option can be used to directly specify '
+                     help='default=%(default)s: BioProject/BioSample/SRR or GSA CRA/CRX/CRR/PRJCA ID. This option can be used to directly specify '
                           'an ID to start FASTQ generation without running `amalgkit metadata` beforehand.')
     pge.add_argument('--id_list', metavar='PATH', default=None, type=str, required=False, action='store',
-                     help='default=%(default)s: Location of file containing a list of SRA IDs. Otherwise works like --id')
+                     help='default=%(default)s: File with SRA and/or GSA IDs, one per line. Otherwise works like --id')
     pge.add_argument('--layout', metavar='single|paired|auto', default='auto', type=str, required=False, action='store',
                      choices=['single', 'paired', 'auto'],
                      help='default=%(default)s: Library layout of RNA-seq data to be dumped. '
@@ -384,7 +399,7 @@ def build_parser(command_handlers, command_names, version, prog=None):
                           '0 disables the timeout.')
     pge.add_argument('--sra_download_method', metavar='auto|urllib|curl', default='auto', type=str, required=False, action='store',
                      choices=['auto', 'urllib', 'curl'],
-                     help='default=%(default)s: Method for downloading SRA objects from cloud URLs.')
+                     help='default=%(default)s: Method for public SRA/FASTQ downloads, including GSA.')
     pge.add_argument('--sra_download_wait_timeout_seconds', metavar='INT', default=86400, type=positive_int,
                      required=False, action='store',
                      help='default=%(default)s: Maximum seconds to wait for an available provider download slot.')
@@ -433,10 +448,11 @@ def build_parser(command_handlers, command_names, version, prog=None):
                      help='default=%(default)s: "inferred" = out_dir/fasta. '
                           'PATH to directory containing reference transcriptome fasta files used when building backend-specific quant indices '
                           '(see --build_index; kallisto .idx or oarfish .mmi). '
-                          'In this directory, file names of fasta files are expected to start with the string '
-                          'in the "scientific_name" column of the metadata table, with a space replaced with an underbar. '
-                          'Accepted suffixes include .fa, .fasta, .fa.gz, and .fasta.gz. '
-                          'Example: Arabidopsis_thaliana_v1.fasta for Arabidopsis thaliana.')
+                          'The filename stem must match "scientific_name" with spaces replaced by underscores; '
+                          'the legacy _for_kallisto_index stem suffix is also accepted. '
+                          'Accepted file suffixes include .fa, .fasta, .fa.gz, and .fasta.gz. '
+                          'Remove assembly/version suffixes from downloaded filenames. '
+                          'Example: Arabidopsis_thaliana.fasta for Arabidopsis thaliana.')
     pqu.add_argument('--build_index', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
                      help='default=%(default)s: Allows AMALGKIT to build quant backend indices from reference fasta files '
                           '(kallisto .idx or oarfish .mmi, depending on the selected backend). '

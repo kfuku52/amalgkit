@@ -10,7 +10,7 @@
 
 ## Overview
 
-**AMALGKIT** (/əm`ælgkit/) integrates public SRA and private FASTQ data for
+**AMALGKIT** (/əm`ælgkit/) integrates public SRA/GSA and private FASTQ data for
 cross-species gene-expression analysis. It supports sample selection,
 quantification, normalization, and filtering to help reduce technical bias;
 the resulting comparisons still depend on the input data and biological design.
@@ -18,6 +18,7 @@ the resulting comparisons still depend on the input data and biological design.
 ```mermaid
 flowchart LR
     SRA[SRA metadata] --> select
+    GSA[GSA metadata] --> select
     select --> getfastq
     FASTQ[Private FASTQ] --> integrate
     integrate -->|explicit metadata path| getfastq
@@ -45,8 +46,9 @@ amalgkit --version
 amalgkit help metadata
 ```
 
-`getfastq` requires `fasterq-dump` from `sra-tools >= 3` and SeqKit even for
-private-only runs, plus fastp unless `--fastp no` is used. `quant` requires
+`getfastq` requires SeqKit and fastp unless `--fastp no` is used. SRA and
+private-input runs also require `fasterq-dump` from `sra-tools >= 3`;
+[GSA-only runs](https://github.com/kfuku52/amalgkit/wiki/GSA-native-inputs) use native FASTQ retrieval. `quant` requires
 kallisto for short reads or Oarfish for long reads, including automatic backend
 selection. See [installation and dependencies](https://github.com/kfuku52/amalgkit/wiki/Installation-and-dependencies).
 

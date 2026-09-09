@@ -11,6 +11,10 @@ The merged tables are the standard input for:
 
 `merge` is Python-only in current releases.
 
+For GSA inputs, read-count checks can be deferred until getfastq measures the
+original FASTQs. See [GSA native inputs](./GSA-native-inputs) for the measured
+metadata snapshot and downstream handoff.
+
 ## Basic Use
 
 Use inferred metadata from `out_dir/metadata/metadata.tsv`:

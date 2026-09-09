@@ -1,5 +1,7 @@
 import copy
 import datetime
+import hashlib
+import io
 import json
 import os
 import re
@@ -161,6 +163,8 @@ class Metadata:
         exclusion_series = self.df.loc[:, 'exclusion'].fillna('').astype(str).str.strip()
         exclusion_series = exclusion_series.replace('', 'no')
         self.df['exclusion'] = exclusion_series
+        if 'data_source' in self.df:
+            self.df['data_source'] = self.df['data_source'].fillna('').astype(str).str.strip().str.lower()
         if 'sample_group' in self.df.columns:
             cols = list(self.df)
             cols.insert(1, cols.pop(cols.index('sample_group')))
@@ -837,6 +841,8 @@ class Metadata:
 
     def remove_specialchars(self):
         for col, dtype in zip(self.df.dtypes.index, self.df.dtypes.values):
+            if col in {'gsa_fastq_files', 'gsa_deferred_select'}:
+                continue
             if any([key in str(dtype) for key in ['str', 'object']]):
                 self.df.loc[:, col] = self.df[col].replace(r"[\r\n'\"|]", '', regex=True)
 
@@ -860,9 +866,13 @@ class Metadata:
 
 
 def load_metadata(args, dir_subcommand='metadata', batch_scope='run'):
+    snapshot_df = None
     if args.metadata == 'inferred':
         relative_path = os.path.join(args.out_dir, dir_subcommand, 'metadata.tsv')
         real_path = os.path.realpath(relative_path)
+        if getattr(args, '_prefer_gsa_snapshot', False) and dir_subcommand == 'metadata' and os.path.isfile(real_path):
+            from amalgkit.gsa_snapshot import preferred_gsa_snapshot
+            snapshot_df = preferred_gsa_snapshot(args, real_path, read_table=True)
     else:
         real_path = os.path.realpath(args.metadata)
     if not os.path.exists(real_path):
@@ -873,8 +883,12 @@ def load_metadata(args, dir_subcommand='metadata', batch_scope='run'):
     # Metadata is an annotation table first and a numeric table second. Keep
     # literal tokens such as "NA", "N/A", and "null" intact; individual
     # consumers explicitly coerce the numeric columns they use.
-    df = pandas.read_csv(
-        real_path,
+    source_bytes = None
+    if getattr(args, '_capture_gsa_source', False):
+        with open(real_path, 'rb') as handle:
+            source_bytes = handle.read()
+    df = snapshot_df if snapshot_df is not None else pandas.read_csv(
+        io.BytesIO(source_bytes) if source_bytes is not None else real_path,
         sep='\t',
         header=0,
         low_memory=False,
@@ -895,6 +909,12 @@ def load_metadata(args, dir_subcommand='metadata', batch_scope='run'):
             )
         df.loc[:, 'run'] = normalized_runs
     metadata = Metadata.from_DataFrame(df)
+    if getattr(args, '_prefer_gsa_snapshot', False):
+        from amalgkit.gsa_select import validate_selection_ready
+        validate_selection_ready(metadata.df)
+    if source_bytes is not None and 'data_source' in metadata.df and metadata.df['data_source'].eq('gsa').any():
+        from amalgkit.gsa_snapshot import capture_gsa_file_source
+        capture_gsa_file_source(args, metadata, real_path, hashlib.sha256(source_bytes).hexdigest(), source_bytes=source_bytes)
     if 'batch' not in dir(args):
         return metadata
     if args.batch is None:

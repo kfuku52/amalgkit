@@ -13,6 +13,7 @@ from Bio import Entrez
 from amalgkit.__init__ import __version__
 from amalgkit.arg_utils import clone_namespace
 from amalgkit.exceptions import AmalgkitExit
+from amalgkit.gsa import fetch_gsa_metadata, is_gsa_accession
 from amalgkit.metadata_utils import Metadata
 from amalgkit.output_utils import atomic_output_path, sanitize_dataframe_for_tsv
 from amalgkit.runtime_utils import (
@@ -113,6 +114,8 @@ def _build_metadata_cache_fingerprint(args, search_string, species_name, query_l
     fingerprint_payload = {
         'amalgkit_version': __version__,
         'search_string': str(search_string),
+        'source': getattr(args, 'source', 'ncbi'),
+        'gsa_title_terms': getattr(args, '_gsa_title_terms', None),
         'species': species_name,
         'query_label': query_label,
         'mode': mode,
@@ -388,6 +391,7 @@ def _build_query_info(
             'species': species_name,
             'query_label': query_label,
             'search_string': search_string,
+            'source': getattr(args, 'source', 'ncbi'),
             'record_id_count': record_id_count,
             'metadata_row_count': int(metadata.df.shape[0]),
             'resolve_names': bool(getattr(args, 'resolve_names', False)),
@@ -589,9 +593,15 @@ def _run_single_query(
             )
             used_cached_metadata = False
     if not used_cached_metadata:
-        print('Entrez search term:', search_term)
-        record_ids = _call_search_sra_record_ids(search_term, args=args)
-        metadata = Metadata.from_xml_roots(_call_iter_sra_xml_chunks(record_ids=record_ids, args=args))
+        if getattr(args, 'source', 'ncbi') == 'gsa':
+            print('GSA search/accession:', search_term)
+            metadata = fetch_gsa_metadata(search_term, args=args, species_name=species_name,
+                                          title_terms=getattr(args, '_gsa_title_terms', None))
+            record_ids = metadata.df['run'].tolist()
+        else:
+            print('Entrez search term:', search_term)
+            record_ids = _call_search_sra_record_ids(search_term, args=args)
+            metadata = Metadata.from_xml_roots(_call_iter_sra_xml_chunks(record_ids=record_ids, args=args))
         metadata = _prepare_single_metadata(metadata=metadata, args=args)
         metadata = _write_metadata_tsv_with_validation(
             df=metadata.df,
@@ -912,11 +922,24 @@ def _run_species_batch_task(
             query_token,
             label='metadata query label',
         )
+        gsa_title_terms = None
+        if getattr(args, 'source', 'ncbi') == 'gsa':
+            # Species and RNA-Seq are common conditions; title matching is local,
+            # so it cannot accidentally match another field in BIG Search.
+            search_string = '"{}" AND "RNA-Seq"'.format(species_name.replace('"', ''))
+            if mode != 'base':
+                if organ_terms is not None:
+                    gsa_title_terms = (sum((organ_terms[group] for group in ['flower', 'leaf', 'root']), [])
+                                       if mode == 'title_union' else organ_terms[query_label])
+                else:
+                    gsa_title_terms = (_split_title_terms(getattr(args, 'title_terms', 'flower,leaf,root'))
+                                       if mode == 'title_union' else [query_label])
         query_args = clone_namespace(
             args,
             out_dir=query_out_dir,
             search_string=search_string,
             species_tsv=None,
+            _gsa_title_terms=gsa_title_terms,
         )
         query_results.append(
             _run_single_query(
@@ -1007,6 +1030,13 @@ def metadata_main(args):
     Entrez.email = getattr(args, 'entrez_email', '')
     search_term = _normalize_search_string(getattr(args, 'search_string', None))
     species_tsv = getattr(args, 'species_tsv', None)
+    accession = getattr(args, 'accession', None)
+    if accession:
+        if getattr(args, 'source', 'ncbi') != 'gsa' or not is_gsa_accession(accession):
+            raise ValueError('--accession requires --source gsa and a CRA/CRX/CRR/PRJCA accession.')
+        if search_term or species_tsv:
+            raise ValueError('Use only one of --accession, --search_string, or --species_tsv.')
+        search_term = accession.strip()
     if species_tsv not in [None, '']:
         if search_term != '':
             raise ValueError('Use either --search_string or --species_tsv, not both.')
@@ -1020,7 +1050,7 @@ def metadata_main(args):
             record_id_count = int(record_id_count)
         except (TypeError, ValueError):
             record_id_count = None
-        if (record_id_count == 0) and (search_term != ''):
+        if (record_id_count == 0) and (search_term != '') and getattr(args, 'source', 'ncbi') == 'ncbi':
             sys.stderr.write(_build_zero_record_guidance(search_term))
         txt = (
             'No entry was found/survived in the metadata processing. '

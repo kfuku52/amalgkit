@@ -1290,7 +1290,7 @@ class TestDownloadSraUrlSchemes:
 
 def test_download_with_curl_rejects_disallowed_host(tmp_path, monkeypatch):
     monkeypatch.setattr('amalgkit.getfastq.shutil.which', lambda name: '/usr/bin/curl')
-    with pytest.raises(ValueError, match='not an allowed SRA/ENA/cloud download endpoint'):
+    with pytest.raises(ValueError, match='not an allowed SRA/ENA/GSA/cloud download endpoint'):
         download_with_curl(
             source_url='http://169.254.169.254/latest/meta-data/',
             output_path=str(tmp_path / 'x.sra'),

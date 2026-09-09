@@ -10,6 +10,10 @@ Supported backends:
 | `--quant_backend kallisto` | short-read RNA-seq |
 | `--quant_backend oarfish` | long-read RNA-seq |
 
+For GSA inputs, read-count checks can be deferred until getfastq measures the
+original FASTQs. See [GSA native inputs](./GSA-native-inputs) for the measured
+metadata snapshot and downstream handoff.
+
 ## Basic Use
 
 Auto-select the backend using already prepared indices:
@@ -51,7 +55,12 @@ Use `--build_index yes` for a new workspace after supplying the references, or
 provide existing indices compatible with the chosen backend. Automatic backend
 selection also requires Oarfish when metadata identifies a long-read run.
 
-If metadata contains `Mus musculus`, AMALGKIT searches for a FASTA file prefixed with `Mus_musculus`.
+If metadata contains `Mus musculus`, use a FASTA stem matching `Mus_musculus`,
+for example `Mus_musculus.fa.gz`. The legacy stem
+`Mus_musculus_for_kallisto_index` is also accepted. Extra assembly/version suffixes
+are not matched: rename downloaded references to the species stem and retain
+release/accession information separately. Keep only one matching reference per
+species.
 
 Accepted FASTA suffixes include:
 

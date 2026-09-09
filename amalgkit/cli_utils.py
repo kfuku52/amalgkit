@@ -185,7 +185,7 @@ def resolve_external_tool_availability(executable_name):
     return 'FOUND ({})'.format(tool_path)
 
 
-def print_runtime_banner(argv):
+def print_runtime_banner(argv, args=None):
     print('AMALGKIT version: {}'.format(__version__))
     print('AMALGKIT command: {}'.format(redact_url_for_logging(' '.join(argv))))
     print('AMALGKIT bug report: https://github.com/kfuku52/amalgkit/issues')
@@ -203,6 +203,7 @@ def print_runtime_banner(argv):
     for label, executable_name, _version_commands in EXTERNAL_TOOL_SPECS:
         if label not in relevant_labels:
             continue
+        executable_name = getattr(args, label.replace('-', '_') + '_exe', executable_name)
         print(
             'AMALGKIT tool {}: {}'.format(
                 label,

@@ -253,6 +253,18 @@ class TestFastpMetrics:
 
 
 class TestPrintReadStats:
+    def test_reports_gsa_input_time_without_inapplicable_sra_timings(self, capsys):
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['CRR001'], 'data_source': ['gsa'], 'gsa_input_seconds': [12.5],
+            'bp_dumped': [1000], 'bp_rejected': [0], 'bp_written': [1000],
+        }))
+        print_read_stats(SimpleNamespace(fastp=False, rrna_filter=False, contam_filter=False),
+                         metadata, {'max_bp': 1000}, individual=True)
+        output = capsys.readouterr().out
+        assert 'GSA input preparation wall time (download/cache and validation): 12.5 sec' in output
+        assert 'SRA download wall time' not in output
+        assert 'fasterq-dump wall time' not in output
+
     def test_includes_stage_duration_lines(self, capsys):
         metadata = Metadata.from_DataFrame(pandas.DataFrame({
             'run': ['SRR001', 'SRR002'],

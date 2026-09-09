@@ -1,11 +1,13 @@
 ## Overview
 
-`amalgkit metadata` queries the NCBI SRA and writes the metadata table used by downstream AMALGKIT commands.
+`amalgkit metadata` queries NCBI SRA (default) or public CNCB GSA and writes the metadata table used by downstream AMALGKIT commands.
 
-Run it in one of two modes:
+For NCBI, run it in one of two modes:
 
 - one Entrez query with `--search_string`
 - species-wise batch queries with `--species_tsv`
+
+For native GSA accessions and species searches, see [GSA native inputs](./GSA-native-inputs).
 
 ## Single Query
 
@@ -49,7 +51,9 @@ only by case are rejected to remain safe on case-insensitive filesystems.
 
 | Option | Use |
 | --- | --- |
-| `--search_string` | one Entrez query |
+| `--source ncbi/gsa` | metadata archive (default: NCBI) |
+| `--accession` | GSA CRA/CRX/CRR/PRJCA accession |
+| `--search_string` | one Entrez or BIG Search query, depending on source |
 | `--species_tsv` | species-wise batch queries |
 | `--mode base/title_union/title_split` | query construction mode for species-wise runs |
 | `--organ_terms_tsv` | sample group and title-term file |
@@ -59,7 +63,7 @@ only by case are rejected to remain safe on case-insensitive filesystems.
 | `--ncbi_metadata_max_concurrency` | throttle NCBI metadata requests across shared processes |
 
 Species-wise query results are reused only when the recorded query fingerprint
-matches the current search string, species, mode, name-resolution setting, and
+matches the current source, search string, species, mode, title terms, name-resolution setting, and
 AMALGKIT version. Changing one of those inputs refreshes the cached result.
 SRA experiment packages containing multiple runs produce one metadata row per
 run.

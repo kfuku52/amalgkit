@@ -11,6 +11,10 @@ It updates fields such as:
 
 Current releases use one TSV rule file. The former config-directory workflow has been removed.
 
+For GSA inputs, read-count checks can be deferred until getfastq measures the
+original FASTQs. See [GSA native inputs](./GSA-native-inputs) for the measured
+metadata snapshot and downstream handoff.
+
 ## Basic Use
 
 Create a starter rule file, review and edit it for your biological groups, then run `select`:

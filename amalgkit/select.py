@@ -7,6 +7,8 @@ import shutil
 import numpy
 import pandas
 
+from amalgkit.gsa_select import defer_unknown_count_filter, defer_unknown_count_dedup, reset_deferred_selection
+
 from amalgkit.arg_utils import clone_namespace
 from amalgkit.filter_utils import staged_output_dir
 from amalgkit.metadata_utils import Metadata, load_metadata, SELECT_SAMPLING_STRATEGIES
@@ -1138,6 +1140,7 @@ def is_select_cross_field_safe_context(text, assigned_group, conflict_organ):
 
 
 def prepare_select_metadata(metadata, select_rules):
+    reset_deferred_selection(metadata)
     metadata.remove_specialchars()
     metadata.df = apply_select_aggregate_rules(metadata.df, select_rules)
     metadata.df = normalize_select_metadata_frame(metadata.df, select_rules)
@@ -1358,6 +1361,7 @@ def resolve_select_rule_runtime_column(column_template, parameter_value):
 
 
 def apply_select_filter_rules(metadata, args, select_rules):
+    reset_deferred_selection(metadata, kind='min_spots')
     filter_rules = [rule for rule in select_rules if rule['stage'] == 'filter']
     if len(filter_rules) == 0:
         return metadata
@@ -1392,6 +1396,10 @@ def apply_select_filter_rules(metadata, args, select_rules):
             marked_mask = numeric_series.isna() | (~finite_mask) | (numeric_series <= 0)
             if threshold > 0:
                 marked_mask = marked_mask | (numeric_series < threshold)
+            deferred_mask = defer_unknown_count_filter(
+                metadata.df, column, threshold, target_column, rule['outcome'], protected_by_target[target_column],
+            )
+            marked_mask &= ~deferred_mask
         elif rule['action'] == 'exclude_if_missing_selected_rank':
             selected_rank = resolve_select_runtime_parameter(args, rule['parameter_name'], rule['rule_id'])
             if selected_rank != 'none':
@@ -1464,6 +1472,7 @@ def apply_select_redundant_biosample_filter(metadata, rule, enabled):
         key_series.append(series)
         valid_key_mask = valid_key_mask & (series != '')
     eligible_mask = (exclusion_series == 'no') & valid_key_mask
+    eligible_mask = defer_unknown_count_dedup(metadata.df, rule, eligible_mask)
     if not bool(eligible_mask.any()):
         print(
             '{}: Dedup rule "{}" complete: candidates=0, redundant_marked=0'.format(
@@ -1513,6 +1522,7 @@ def apply_select_redundant_biosample_filter(metadata, rule, enabled):
 
 
 def apply_select_filters(metadata, args, select_rules):
+    reset_deferred_selection(metadata)
     metadata = apply_select_exclude_rules(metadata, select_rules)
     metadata = apply_select_control_rules(metadata, select_rules)
     metadata = apply_select_filter_rules(metadata, args, select_rules)

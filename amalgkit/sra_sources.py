@@ -18,11 +18,13 @@ _ENA_SRA_HOST = 'ftp.sra.ebi.ac.uk'
 _ENA_FILEREPORT_URL = 'https://www.ebi.ac.uk/ena/portal/api/filereport'
 _DDBJ_DRA_PUBLIC_ROOT = 'https://ddbj.nig.ac.jp/public/ddbj_database/dra'
 
-# Hosts amalgkit is allowed to contact for SRA/ENA/cloud downloads and for its
+# Hosts amalgkit is allowed to contact for SRA/ENA/GSA/cloud downloads and for its
 # own fixed metadata endpoints. Anything else (including private/link-local IP
 # literals) is rejected as an SSRF vector.
 ALLOWED_DOWNLOAD_HOSTS = frozenset({
     'ftp.sra.ebi.ac.uk',
+    'download.cncb.ac.cn',      # GSA public FASTQ endpoint
+    'download.big.ac.cn',       # GSA legacy HTTPS endpoint
     'ddbj.nig.ac.jp',
     'storage.googleapis.com',
     'sra-pub-run-odp.s3.amazonaws.com',
@@ -51,12 +53,12 @@ def is_allowed_download_url(url):
 
 def assert_allowed_download_url(url):
     if not is_allowed_download_url(url):
-        raise ValueError('URL scheme or host is not an allowed SRA/ENA/cloud download endpoint.')
+        raise ValueError('URL scheme or host is not an allowed SRA/ENA/GSA/cloud download endpoint.')
 
 class _AllowedHostRedirectHandler(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         if not is_allowed_download_url(newurl):
-            raise ValueError('Redirect to a non-allowed SRA/ENA/cloud download endpoint.')
+            raise ValueError('Redirect to a non-allowed SRA/ENA/GSA/cloud download endpoint.')
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 def build_allowed_host_opener():

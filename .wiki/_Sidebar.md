@@ -3,6 +3,7 @@
   * [Installation and dependencies](./Installation-and-dependencies)
   * [Parallel processing](./Parallel-processing)
   * [Metadata and normalization](./Metadata-and-normalization)
+  * [GSA native inputs](./GSA-native-inputs)
   * [Architecture and development](./Architecture-and-development)
   * [Tutorial 1](./Tutorial-1)
 

@@ -1521,3 +1521,15 @@ class TestQuantEdgeCases:
 
         with pytest.raises(NotADirectoryError, match='Fasta path exists but is not a directory'):
             pre_resolve_species_indices(args, tasks)
+
+
+def test_versioned_reference_filename_error_explains_required_name(tmp_path):
+    from amalgkit.quant import _find_single_fasta_match
+    (tmp_path / 'Saccharomyces_cerevisiae.R64-1-1.cdna.all.fa.gz').write_bytes(b'not selected')
+    args = SimpleNamespace(out_dir=str(tmp_path), fasta_dir=str(tmp_path))
+    with pytest.raises(FileNotFoundError) as failure:
+        _find_single_fasta_match(args, 'Saccharomyces_cerevisiae')
+    message = str(failure.value)
+    assert 'Saccharomyces_cerevisiae.fa.gz' in message
+    assert str(tmp_path) in message
+    assert 'Remove assembly/version suffixes' in message

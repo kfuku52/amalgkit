@@ -29,6 +29,9 @@ from amalgkit.download_utils import (
     resolve_resource_lock_path,
 )
 from amalgkit.exceptions import AmalgkitExit
+from amalgkit.gsa import fetch_gsa_metadata, is_gsa_accession
+from amalgkit.gsa_snapshot import publish_gsa_snapshot, capture_gsa_accession_source
+from amalgkit.gsa_fastq import is_gsa_row, prepare_gsa_metadata, extract_run as extract_gsa_run
 from amalgkit.fastq_download_integrity import (
     FastqDownloadIntegrityError,
     validate_download as validate_original_fastq_download,
@@ -398,13 +401,16 @@ def _read_sra_id_list(path_id_list):
         ]
 
 def _fetch_single_sra_metadata_frame(args, sra_id, log_details=True):
-    search_term = getfastq_search_term(sra_id, args.entrez_additional_search_term)
-    if log_details:
-        print('Entrez search term:', search_term)
-        xml_root = _call_getfastq_getxml(search_term, args=args, verbose=True)
+    if is_gsa_accession(sra_id):
+        if getattr(args, 'entrez_additional_search_term', ''):
+            raise ValueError('--entrez_additional_search_term cannot be applied to GSA accessions.')
+        metadata_dict_tmp = fetch_gsa_metadata(sra_id, args=args)
     else:
-        xml_root = _call_getfastq_getxml(search_term, args=args, verbose=False)
-    metadata_dict_tmp = Metadata.from_xml(xml_root)
+        search_term = getfastq_search_term(sra_id, args.entrez_additional_search_term)
+        if log_details:
+            print('Entrez search term:', search_term)
+        xml_root = _call_getfastq_getxml(search_term, args=args, verbose=log_details)
+        metadata_dict_tmp = Metadata.from_xml(xml_root)
     if metadata_dict_tmp.df.shape[0] == 0:
         if log_details:
             print('No associated SRA. Skipping {}'.format(sra_id))
@@ -1259,6 +1265,7 @@ def resolve_download_semaphore_spec(source_name):
         'GCP': ('gcp_download_max_concurrency', 'gcp_download', 'GCP download'),
         'ENA': ('ena_download_max_concurrency', 'ena_download', 'ENA download'),
         'DDBJ': ('ddbj_download_max_concurrency', 'ddbj_download', 'DDBJ download'),
+        'GSA': ('gsa_download_max_concurrency', 'gsa_download', 'GSA download'),
     }
     return semaphore_specs.get(normalized)
 
@@ -1379,6 +1386,21 @@ def _assert_regular_owned_resume_payload(path):
     return st.st_size
 
 
+def _download_failure_detail(detail):
+    """Keep diagnostics short and redact URL credentials before truncating."""
+    return ' '.join(redact_url_for_logging(detail).split())[-1000:]
+
+
+def _report_curl_failure(out, status_code, stderr_txt, source, artifact):
+    sys.stderr.write(
+        'curl failed {} download from {} (exit={}, HTTP={}): {}\n'.format(
+            str(artifact).lower(), source, out.returncode,
+            status_code if status_code else 'unavailable',
+            _download_failure_detail(stderr_txt) or 'no error detail reported',
+        )
+    )
+
+
 def _download_with_curl_resumable(
     source_url,
     output_path,
@@ -1399,8 +1421,23 @@ def _download_with_curl_resumable(
     current_url = source_url
     transfer_started_at = time.monotonic()
     restarted_from_zero = False
+    retries = 0
+    redirect_count = 0
+
+    def retry_transfer():
+        nonlocal retries
+        remaining = transfer_timeout - (time.monotonic() - transfer_started_at)
+        delay = 2 ** retries
+        if retries >= 3 or remaining <= delay:
+            sys.stderr.write('curl automatic retries exhausted or transfer deadline reached; retaining partial input.\n')
+            return False
+        retries += 1
+        sys.stderr.write('Retrying original FASTQ transfer from the retained offset (retry {}/3).\n'.format(retries))
+        time.sleep(delay)
+        return True
+
     with _secure_download_temp_path(output_path, '.curlheaders') as header_path:
-        for redirect_count in range(11):
+        while True:
             remaining_timeout = transfer_timeout - (time.monotonic() - transfer_started_at)
             if remaining_timeout <= 0:
                 sys.stderr.write('curl download exceeded its total transfer deadline.\n')
@@ -1411,8 +1448,7 @@ def _download_with_curl_resumable(
             command = [
                 curl_exe,
                 '--fail',
-                '--retry', '3',
-                '--retry-delay', '2',
+                '--silent', '--show-error',
                 '--connect-timeout', '20',
                 '--max-time', str(max(1, math.ceil(remaining_timeout))),
                 '--proto', '=https',
@@ -1428,7 +1464,7 @@ def _download_with_curl_resumable(
                 tool_timeout = remaining_timeout
             else:
                 tool_timeout = min(tool_timeout, remaining_timeout)
-            out, stdout_txt, _stderr_txt = run_logged_command(
+            out, stdout_txt, stderr_txt = run_logged_command(
                 command=command,
                 runner=subprocess.run,
                 timeout_seconds=tool_timeout,
@@ -1440,19 +1476,39 @@ def _download_with_curl_resumable(
             status_code, redirect_url = _parse_curl_response_metadata(stdout_txt)
             content_range = _read_curl_content_range(header_path)
             if out.returncode != 0:
-                if starting_size and status_code == 200 and not restarted_from_zero:
+                _report_curl_failure(out, status_code, stderr_txt, sra_source_name, artifact_label)
+                if out.returncode == 33 and starting_size and status_code == 200 and not restarted_from_zero:
                     os.remove(output_path)
                     restarted_from_zero = True
                     sys.stderr.write(
                         'Server ignored the requested HTTP byte range; restarting the transfer once.\n'
                     )
                     continue
-                sys.stderr.write(
-                    'curl failed {} download from {}; retaining a validated partial for resume.\n'.format(
-                        str(artifact_label).lower(),
-                        sra_source_name,
-                    )
+                size = _assert_regular_owned_resume_payload(output_path)
+                if size < starting_size:
+                    if os.path.lexists(output_path):
+                        os.remove(output_path)
+                    sys.stderr.write('curl shortened the retained input; discarded invalid partial file.\n')
+                    return False
+                valid_partial = (
+                    (status_code == 200 and starting_size == 0)
+                    or (status_code == 206 and content_range is not None
+                        and content_range[0] == starting_size
+                        and content_range[1] >= content_range[0]
+                        and content_range[2] is not None
+                        and content_range[1] < content_range[2]
+                        and starting_size <= size <= content_range[1] + 1)
                 )
+                if size != starting_size and not valid_partial:
+                    with open(output_path, 'r+b') as handle:
+                        handle.truncate(starting_size)
+                    sys.stderr.write('Discarded unverified response bytes; keeping the previous resume offset.\n')
+                    return False
+                transient = out.returncode in (5, 6, 7, 18, 28, 35, 52, 55, 56, 92) or (
+                    out.returncode == 22 and status_code in (408, 429, 500, 502, 503, 504)
+                )
+                if transient and retry_transfer():
+                    continue
                 return False
             if status_code is None:
                 raise RuntimeError('curl did not report an HTTP response status.')
@@ -1471,6 +1527,7 @@ def _download_with_curl_resumable(
                     )
                     return False
                 current_url = next_url
+                redirect_count += 1
                 continue
             if not 200 <= status_code < 300:
                 sys.stderr.write('curl returned unexpected HTTP status {}.\n'.format(status_code))
@@ -1497,6 +1554,19 @@ def _download_with_curl_resumable(
                 os.remove(output_path)
                 sys.stderr.write('Server returned an invalid initial HTTP byte range.\n')
                 return False
+            if status_code == 206:
+                range_start, range_end, range_total = content_range
+                size = _assert_regular_owned_resume_payload(output_path)
+                if (range_end < range_start or range_total is None or range_end >= range_total
+                        or size != range_end + 1):
+                    os.remove(output_path)
+                    sys.stderr.write('curl returned inconsistent HTTP byte range metadata.\n')
+                    return False
+                if size != range_total:
+                    sys.stderr.write('curl response does not complete the declared HTTP byte range; retaining partial input.\n')
+                    if retry_transfer():
+                        continue
+                    return False
             if _assert_regular_owned_resume_payload(output_path) <= 0:
                 sys.stderr.write(
                     'curl produced an empty {} from {}.\n'.format(
@@ -1565,7 +1635,7 @@ def download_with_curl(
                 tool_timeout = remaining_timeout
             else:
                 tool_timeout = min(tool_timeout, remaining_timeout)
-            out, stdout_txt, _stderr_txt = run_logged_command(
+            out, stdout_txt, stderr_txt = run_logged_command(
                 command=command,
                 runner=subprocess.run,
                 timeout_seconds=tool_timeout,
@@ -1575,12 +1645,8 @@ def download_with_curl(
                 stderr_label='curl stderr:',
             )
             if out.returncode != 0:
-                sys.stderr.write(
-                    'curl failed {} download from {}.\n'.format(
-                        str(artifact_label).lower(),
-                        sra_source_name,
-                    )
-                )
+                status_code, _ = _parse_curl_response_metadata(stdout_txt)
+                _report_curl_failure(out, status_code, stderr_txt, sra_source_name, artifact_label)
                 return False
             status_code, redirect_url = _parse_curl_response_metadata(stdout_txt)
             if status_code is None:
@@ -1633,6 +1699,21 @@ def download_with_urllib(source_url, output_path, timeout_seconds, urlopen_fn=No
         source_url,
         timeout=per_operation_timeout,
     ) as response:
+        headers = getattr(response, 'headers', {})
+        length_header = headers.get('Content-Length')
+        expected_length = None
+        if length_header is not None:
+            if not re.fullmatch(r'[0-9]+', str(length_header).strip()):
+                raise ValueError('Invalid HTTP Content-Length')
+            expected_length = int(length_header)
+        status = getattr(response, 'status', None)
+        if status == 206:
+            match = re.fullmatch(r'bytes 0-([0-9]+)/([0-9]+)', str(headers.get('Content-Range', '')).strip())
+            if match is None or int(match[1]) + 1 != int(match[2]):
+                raise ValueError('HTTP response is only a partial input')
+            if expected_length is not None and expected_length != int(match[2]):
+                raise ValueError('HTTP Content-Length contradicts Content-Range')
+            expected_length = int(match[2])
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
         if hasattr(os, 'O_NOFOLLOW'):
             flags |= os.O_NOFOLLOW
@@ -1642,6 +1723,7 @@ def download_with_urllib(source_url, output_path, timeout_seconds, urlopen_fn=No
             os.close(fd)
             raise OSError('Download output path is not a regular file: {}'.format(output_path))
         with os.fdopen(fd, 'wb') as fout:
+            received = 0
             while True:
                 if (time.monotonic() - started_at) >= timeout_seconds:
                     raise TimeoutError(
@@ -1654,6 +1736,9 @@ def download_with_urllib(source_url, output_path, timeout_seconds, urlopen_fn=No
                 if not chunk:
                     break
                 fout.write(chunk)
+                received += len(chunk)
+            if expected_length is not None and received != expected_length:
+                raise OSError('Incomplete HTTP input: expected {} bytes, received {}'.format(expected_length, received))
 
 
 def _download_file_from_source_without_semaphore(
@@ -1721,6 +1806,9 @@ def _download_file_from_source_without_semaphore(
             resume_existing=resume_existing,
         ):
             return True
+        if resume_existing and shutil.which('curl') is not None and _assert_regular_owned_resume_payload(output_path) > 0:
+            sys.stderr.write('Retaining partial FASTQ after curl retries; rerun to resume instead of downloading from zero with urllib.\n')
+            return False
         if method == 'curl':
             sys.stderr.write('Falling back to urllib.request after curl failure.\n')
     try:
@@ -1766,9 +1854,11 @@ def _download_file_from_source_without_semaphore(
                 txt = 'GCP requester-pays bucket requires --gcp_project for billing context. '
                 txt += 'Continuing with other download sources.\n'
                 sys.stderr.write(txt)
-        sys.stderr.write("urllib.request failed {} download from {}.\n".format(str(artifact_label).lower(), sra_source_name))
-    except RECOVERABLE_DOWNLOAD_EXCEPTIONS:
-        sys.stderr.write("urllib.request failed {} download from {}.\n".format(str(artifact_label).lower(), sra_source_name))
+        sys.stderr.write("urllib.request failed {} download from {} ({}): {}\n".format(
+            str(artifact_label).lower(), sra_source_name, type(e).__name__, _download_failure_detail(e)))
+    except RECOVERABLE_DOWNLOAD_EXCEPTIONS as e:
+        sys.stderr.write("urllib.request failed {} download from {} ({}): {}\n".format(
+            str(artifact_label).lower(), sra_source_name, type(e).__name__, _download_failure_detail(e)))
     return False
 
 
@@ -2111,21 +2201,22 @@ def check_getfastq_dependency(args):
         )
         return out
 
-    fasterq_dump_exe = getattr(args, 'fasterq_dump_exe', 'fasterq-dump')
-    fasterq_version = probe_command([fasterq_dump_exe, '--version'], 'fasterq-dump')
-    ensure_supported_fasterq_dump_version(
-        version_stdout_txt=fasterq_version.stdout.decode('utf8', errors='replace'),
-        version_stderr_txt=fasterq_version.stderr.decode('utf8', errors='replace'),
-        executable_name=fasterq_dump_exe,
-    )
-    fasterq_help = probe_command([fasterq_dump_exe, '-h'], 'fasterq-dump')
-    help_stdout_txt = fasterq_help.stdout.decode('utf8', errors='replace')
-    help_stderr_txt = fasterq_help.stderr.decode('utf8', errors='replace')
-    setattr(
-        args,
-        '_fasterq_supports_spot_range',
-        detect_fasterq_spot_range_support(help_stdout_txt=help_stdout_txt, help_stderr_txt=help_stderr_txt),
-    )
+    if getattr(args, '_requires_sra_toolkit', True):
+        fasterq_dump_exe = getattr(args, 'fasterq_dump_exe', 'fasterq-dump')
+        fasterq_version = probe_command([fasterq_dump_exe, '--version'], 'fasterq-dump')
+        ensure_supported_fasterq_dump_version(
+            version_stdout_txt=fasterq_version.stdout.decode('utf8', errors='replace'),
+            version_stderr_txt=fasterq_version.stderr.decode('utf8', errors='replace'),
+            executable_name=fasterq_dump_exe,
+        )
+        fasterq_help = probe_command([fasterq_dump_exe, '-h'], 'fasterq-dump')
+        help_stdout_txt = fasterq_help.stdout.decode('utf8', errors='replace')
+        help_stderr_txt = fasterq_help.stderr.decode('utf8', errors='replace')
+        setattr(
+            args,
+            '_fasterq_supports_spot_range',
+            detect_fasterq_spot_range_support(help_stdout_txt=help_stdout_txt, help_stderr_txt=help_stderr_txt),
+        )
     seqkit_exe = resolve_seqkit_exe(args)
     probe_command([seqkit_exe, '--help'], 'seqkit')
     if bool(getattr(args, 'fastp', False)):
@@ -4198,6 +4289,13 @@ def write_getfastq_stats(sra_stat, metadata, output_dir):
             row[col] = metadata.df.at[ind_sra, col]
         else:
             row[col] = numpy.nan
+    if is_gsa_row(metadata.df.loc[ind_sra]):
+        for col in ('data_source', 'gsa_fastq_files', 'gsa_input_fingerprint', 'total_spots', 'total_bases', 'spot_length', 'read_count_status'):
+            row[col] = metadata.df.at[ind_sra, col]
+        row['gsa_input_seconds'] = metadata.df.loc[ind_sra].get('gsa_input_seconds', numpy.nan)
+        # Identical-mate conversion may change operational spot_length. Input
+        # provenance describes the original FASTQ, including both input mates.
+        row['spot_length'] = float(row['total_bases']) / float(row['total_spots'])
     row['percent_fastp_filtered'] = calculate_filtered_percent(row.get('bp_fastp_in'), row.get('bp_fastp_out'))
     row['percent_rrna_filtered'] = calculate_filtered_percent(row.get('bp_rrna_in'), row.get('bp_rrna_out'))
     row['percent_contam_filtered'] = calculate_filtered_percent(row.get('bp_contam_in'), row.get('bp_contam_out'))
@@ -5822,6 +5920,10 @@ def print_read_stats(args, metadata, g, sra_stat=None, individual=False):
         ('sec_sra_download', 'SRA download wall time'),
         ('sec_fasterq_dump', 'fasterq-dump wall time'),
     ]
+    if 'data_source' in metadata.df and metadata.df['data_source'].eq('gsa').any():
+        if metadata.df['data_source'].eq('gsa').all():
+            duration_specs = []
+        duration_specs.append(('gsa_input_seconds', 'GSA input preparation wall time (download/cache and validation)'))
     if sra_stat is None:
         df = metadata.df
         print('Target size (--max_bp): {:,} bp'.format(g['max_bp']))
@@ -5971,7 +6073,9 @@ def ensure_contam_filter_metadata_rank_taxids(metadata, args):
 def getfastq_metadata(args):
     if (args.id is not None) and (args.id_list is not None):
         raise ValueError('--id and --id_list are mutually exclusive. Specify only one.')
-    if args.id is not None:
+    if args.id is not None and is_gsa_accession(args.id):
+        metadata = Metadata.from_DataFrame(_fetch_single_sra_metadata_frame(args, args.id))
+    if args.id is not None and not is_gsa_accession(args.id):
         print('--id is specified. Downloading SRA metadata from Entrez.')
         Entrez.email = args.entrez_email
         sra_id = args.id
@@ -5988,7 +6092,7 @@ def getfastq_metadata(args):
             sci_series = metadata.df['scientific_name'].fillna('').astype(str).str.strip()
             metadata.df = metadata.df.loc[(sci_series == str(args.sci_name).strip()), :]
     if args.id_list is not None:
-        print('--id_list is specified. Downloading SRA metadata from Entrez.')
+        print('--id_list is specified. Retrieving metadata from the accession archive.')
         Entrez.email = args.entrez_email
         id_list_path = os.path.realpath(args.id_list)
         if not os.path.exists(id_list_path):
@@ -6011,6 +6115,8 @@ def getfastq_metadata(args):
     if (args.id is None)&(args.id_list is None):
         metadata = load_metadata(args)
     else:
+        if any(is_gsa_row(row) for _, row in metadata.df.iterrows()):
+            capture_gsa_accession_source(args, metadata, sra_id_list if args.id_list is not None else [args.id])
         metadata = _apply_batch_to_entrez_metadata(metadata, args)
     metadata.df['total_bases'] = pandas.to_numeric(metadata.df['total_bases'], errors='coerce')
     metadata.df['spot_length'] = pandas.to_numeric(metadata.df['spot_length'], errors='coerce')
@@ -6384,14 +6490,21 @@ def sequence_extraction(args, sra_stat, metadata, g, start, end, runtime_context
     prev_num_written = metadata.df.at[ind_sra, 'num_written']
     prev_bp_dumped = metadata.df.at[ind_sra, 'bp_dumped']
     prev_bp_written = metadata.df.at[ind_sra, 'bp_written']
-    metadata, sra_stat, run_file_state = run_fasterq_dump(
-        sra_stat,
-        args,
-        metadata,
-        start,
-        end,
-        return_file_state=True,
-    )
+    if is_gsa_row(metadata.df.loc[ind_sra]):
+        counts = extract_gsa_run(args, metadata.df.loc[ind_sra], sra_stat['getfastq_sra_dir'], start, end, return_stats=True)
+        for column, value in counts.items():
+            metadata.df.at[ind_sra, column] += value
+        run_file_state = RunFileState(work_dir=sra_stat['getfastq_sra_dir'])
+        set_current_intermediate_extension(sra_stat, '.fastq.gz')
+    else:
+        metadata, sra_stat, run_file_state = run_fasterq_dump(
+            sra_stat,
+            args,
+            metadata,
+            start,
+            end,
+            return_file_state=True,
+        )
     filter_order = get_filter_execution_order(args)
     if bool(getattr(args, 'treat_identical_paired_as_single', False)):
         metadata, sra_stat, run_file_state = maybe_treat_paired_as_single(
@@ -6995,7 +7108,10 @@ def _process_getfastq_run_locked(
             print('Processing {} as private data. --max_bp is disabled.'.format(sra_id), flush=True)
             flag_private_file = True
             sequence_extraction_private(run_metadata, sra_stat, args, runtime_context=runtime_context)
-    if not flag_private_file:
+    if not flag_private_file and is_gsa_row(run_metadata.df.iloc[0]):
+        print('Processing {} as publicly available GSA FASTQ.'.format(sra_id), flush=True)
+        run_metadata = sequence_extraction_1st_round(args, sra_stat, run_metadata, g, runtime_context=runtime_context)
+    elif not flag_private_file:
         print('Processing {} as publicly available data from SRA.'.format(sra_id), flush=True)
         download_started_at = time.perf_counter()
         download_sra(run_metadata, sra_stat, args, sra_stat['getfastq_sra_dir'], overwrite=False)
@@ -7223,6 +7339,8 @@ def _process_getfastq_second_round_run(
 ):
     run_metadata = Metadata.from_DataFrame(run_row_df)
     local_row_index = run_metadata.df.index[0]
+    range_columns = ['spot_start_2nd', 'spot_end_2nd']
+    planned_range = run_metadata.df.loc[local_row_index, range_columns].copy()
     lock_path = resolve_getfastq_run_lock_path(args=args, sra_id=sra_id)
     with acquire_exclusive_lock(
         lock_path=lock_path,
@@ -7256,6 +7374,10 @@ def _process_getfastq_second_round_run(
                 metadata=run_metadata,
                 pending_run_ids=[sra_id],
             )
+        else:
+            # First-round checkpoint restoration includes zero-valued second-
+            # round columns. Keep the allocation made from the validated stats.
+            run_metadata.df.loc[local_row_index, range_columns] = planned_range.to_numpy()
         write_getfastq_run_state(
             args,
             sra_stat,
@@ -7424,6 +7546,8 @@ def maybe_run_getfastq_second_round(
                     )
             else:
                 for _, sra_id in ordered_pending_rows:
+                    range_columns = ['spot_start_2nd', 'spot_end_2nd']
+                    planned_range = metadata.df.loc[row_index_by_run[sra_id], range_columns].copy()
                     lock_path = resolve_getfastq_run_lock_path(args=args, sra_id=sra_id)
                     with acquire_exclusive_lock(
                         lock_path=lock_path,
@@ -7455,6 +7579,8 @@ def maybe_run_getfastq_second_round(
                                 metadata=metadata,
                                 pending_run_ids=[sra_id],
                             )
+                        else:
+                            metadata.df.loc[row_index_by_run[sra_id], range_columns] = planned_range.to_numpy()
                         write_getfastq_run_state(
                             args,
                             sra_stat,
@@ -7677,7 +7803,7 @@ def getfastq_main(args):
         worker_option_name = 'rrna_filter_jobs'
         resolve_rrna_filter_chunk_spots(args)
         resolve_rrna_filter_memory_limit(args)
-    metadata_args = clone_namespace(args)
+    metadata_args = clone_namespace(args, _capture_gsa_source=True)
     metadata = getfastq_metadata(metadata_args)
     metadata = filter_getfastq_eligible_metadata(metadata)
     metadata = remove_experiment_without_run(metadata)
@@ -7691,8 +7817,14 @@ def getfastq_main(args):
         disable_workers=(getattr(args, 'batch', None) is not None),
         task_count=len(run_rows),
     )
-    runtime_args = clone_namespace(args, threads=threads, internal_jobs=jobs, rrna_filter_jobs=jobs)
+    runtime_args = clone_namespace(metadata_args, threads=threads, internal_jobs=jobs, rrna_filter_jobs=jobs)
+    runtime_args._requires_sra_toolkit = any(not is_gsa_row(row) for _, row in metadata.df.iterrows())
     check_getfastq_dependency(runtime_args)
+    metadata = prepare_gsa_metadata(runtime_args, metadata, download_file_from_candidate_sources)
+    if any(is_gsa_row(row) for _, row in metadata.df.iterrows()):
+        metadata = publish_gsa_snapshot(runtime_args, metadata)
+        metadata = filter_getfastq_eligible_metadata(metadata)
+        run_rows = list(zip(metadata.df.index.tolist(), metadata.df['run'].tolist()))
     metadata = ensure_contam_filter_metadata_rank_taxids(metadata, runtime_args)
     metadata = check_metadata_validity(metadata)
     g = initialize_global_params(runtime_args, metadata)
