@@ -50,7 +50,7 @@ def test_run_combatseq_backend_matches_expected_balanced_group_case():
     assert summary['group_fallback_used'] is False
 
 
-def test_run_combatseq_backend_falls_back_without_group_when_confounded():
+def test_run_combatseq_backend_skips_without_dropping_group_when_confounded():
     counts = pandas.DataFrame(
         {
             'RUN1': [100, 101, 102, 103, 10, 11, 12, 13, 50, 51],
@@ -67,23 +67,12 @@ def test_run_combatseq_backend_falls_back_without_group_when_confounded():
             'bioproject': ['BP1', 'BP1', 'BP2', 'BP2'],
         }
     )
-    with pytest.warns(UserWarning, match='fell back to batch-only correction'):
-        corrected, summary = run_combatseq_backend(counts_df=counts, metadata_df=metadata)
-    expected = pandas.DataFrame(
-        {
-            'RUN1': [24, 26, 28, 30, 33, 35, 37, 38, 47, 48],
-            'RUN2': [24, 26, 28, 30, 33, 35, 37, 38, 47, 48],
-            'RUN3': [22, 24, 26, 28, 31, 33, 34, 36, 44, 45],
-            'RUN4': [22, 24, 26, 28, 31, 33, 34, 36, 44, 45],
-        },
-        index=counts.index,
-    )
-    pandas.testing.assert_frame_equal(corrected, expected)
-    assert summary['method'] == 'no_group'
+    corrected, summary = run_combatseq_backend(counts_df=counts, metadata_df=metadata)
+    pandas.testing.assert_frame_equal(corrected, counts)
+    assert summary['method'] == 'skipped'
     assert summary['group_model_used'] is False
-    assert summary['group_fallback_used'] is True
-    assert 'confounded with the batches' in summary['group_error_message']
-    assert summary['skip_reason'] == ''
+    assert summary['group_fallback_used'] is False
+    assert summary['skip_reason'] == 'combatseq_confounded_design'
 
 
 def test_run_combatseq_backend_keeps_all_singleton_batches_uncorrected():
@@ -104,7 +93,7 @@ def test_run_combatseq_backend_keeps_all_singleton_batches_uncorrected():
     )
     corrected, summary = run_combatseq_backend(counts_df=counts, metadata_df=metadata)
     pandas.testing.assert_frame_equal(corrected, counts)
-    assert summary['method'] == 'all_singleton'
+    assert summary['method'] == 'skipped'
     assert summary['skip_reason'] == 'combatseq_all_singleton'
     assert summary['corrected_run_ids'] == []
     assert summary['uncorrected_run_ids'] == ['RUN1', 'RUN2', 'RUN3']
@@ -130,9 +119,10 @@ def test_run_combatseq_backend_keeps_singleton_batch_uncorrected():
     )
     corrected, summary = run_combatseq_backend(counts_df=counts, metadata_df=metadata)
     assert corrected.loc[:, 'RUN5'].tolist() == counts.loc[:, 'RUN5'].tolist()
-    assert summary['skip_reason'] == 'combatseq_singleton_kept'
-    assert summary['uncorrected_run_ids'] == ['RUN5']
-    assert summary['corrected_run_ids'] == ['RUN1', 'RUN2', 'RUN3', 'RUN4']
+    assert summary['skip_reason'] == 'combatseq_singleton_batch'
+    assert summary['uncorrected_run_ids'] == list(counts.columns)
+    assert summary['corrected_run_ids'] == []
+    pandas.testing.assert_frame_equal(corrected, counts)
 
 
 @pytest.mark.parametrize('increment', [0.0, 0.25])
@@ -140,7 +130,7 @@ def test_combatseq_column_replacement_preserves_values_and_inputs(monkeypatch, i
     counts = _balanced_counts()
     before = counts.copy(deep=True)
     metadata = pandas.DataFrame({
-        'run': counts.columns, 'bioproject': ['A', 'A', 'B', 'B'],
+        'run': counts.columns, 'bioproject': ['A', 'A', 'B', 'B'], 'sample_group': ['X', 'Y', 'X', 'Y'],
     })
 
     def backend(**kwargs):

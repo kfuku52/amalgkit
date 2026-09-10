@@ -7,6 +7,7 @@ import pandas
 from scipy import interpolate, stats
 
 from amalgkit.batch_effect_common import align_metadata_to_counts
+from amalgkit.batch_effect_contract import BatchModelError, batch_backend, matrix_change
 from amalgkit.linalg_utils import gram_components_require_svd_fallback as _gram_components_require_svd_fallback
 
 
@@ -273,39 +274,23 @@ def _stabilize_surrogate_matrix(sv_matrix, design_matrix, tol=1e-10):
     if sv.shape[1] == 0:
         return sv.copy()
 
-    basis = _orthogonal_complement_basis(design, tol=tol)
-    stabilized_columns = []
-    basis_index = 0
-
-    def accept_or_fallback(candidate_vector):
-        nonlocal basis_index
-        candidate = _normalize_vector(candidate_vector, tol=tol)
-        if candidate is not None:
-            extras = stabilized_columns + [candidate]
-            if _augmented_design_has_full_rank(design, numpy.column_stack(extras), tol=tol):
-                return candidate
-        while basis_index < basis.shape[1]:
-            fallback = basis[:, basis_index].copy()
-            basis_index += 1
-            for prev in stabilized_columns:
-                fallback = fallback - (prev @ fallback) * prev
-            fallback = _normalize_vector(fallback, tol=tol)
-            if fallback is None:
-                continue
-            extras = stabilized_columns + [fallback]
-            if _augmented_design_has_full_rank(design, numpy.column_stack(extras), tol=tol):
-                return fallback
-        return None
-
-    for col_index in range(sv.shape[1]):
-        accepted = accept_or_fallback(sv[:, col_index])
-        if accepted is None:
-            continue
-        stabilized_columns.append(accepted)
-
-    if len(stabilized_columns) == 0:
+    # Keep only combinations of the supplied candidates with independent
+    # residual directions. Never fill missing dimensions with an arbitrary basis.
+    residual = sv - design @ numpy.linalg.lstsq(design, sv, rcond=None)[0]
+    _left, singular, right = numpy.linalg.svd(residual, full_matrices=False)
+    threshold = max(tol, numpy.finfo(float).eps * max(sv.shape) * max(1.0, numpy.linalg.norm(sv)))
+    rank = int(numpy.sum(singular > threshold))
+    if rank == 0:
         return numpy.zeros((sv.shape[0], 0), dtype=float)
-    return numpy.column_stack(stabilized_columns)
+    supported = sv @ right[:rank].T
+    return supported / numpy.linalg.norm(supported, axis=0)
+
+
+def _supported_right_vectors(data, nsv, reference_scale=0.0):
+    _left, singular, right = numpy.linalg.svd(data, full_matrices=False)
+    threshold = numpy.finfo(float).eps * max(data.shape) * max(1.0, numpy.linalg.norm(data), reference_scale)
+    rank = min(nsv, int(numpy.sum(singular > threshold)))
+    return right[:rank].T
 
 
 def estimate_num_sv_be(
@@ -441,7 +426,10 @@ def estimate_num_sv_at_B(
     B_value,
     max_nsv,
     random_seed=0,
+    estimation_method='be_then_leek',
 ):
+    if estimation_method == 'leek':
+        return estimate_num_sv_leek(data_matrix, mod_matrix, max_nsv)
     try:
         be_estimate = estimate_num_sv_be(
             data_matrix=data_matrix,
@@ -454,6 +442,8 @@ def estimate_num_sv_at_B(
             return be_estimate
     except (FloatingPointError, ValueError, numpy.linalg.LinAlgError):
         pass
+    if estimation_method == 'be':
+        return SVAEstimate(nsv=None, method='failed')
     try:
         return estimate_num_sv_leek(
             data_matrix=data_matrix,
@@ -589,17 +579,15 @@ def irwsva_build(data_matrix, mod_matrix, mod0_matrix=None, nsv=1, B_iterations=
     sample_count = data.shape[1]
     identity = numpy.eye(sample_count)
     residual = data @ (identity - _compute_hat_matrix(mod))
-    eigvals, eigvecs = numpy.linalg.eigh(residual.T @ residual)
-    order = numpy.argsort(eigvals)[::-1]
-    eigvecs = eigvecs[:, order]
-    current_sv = _stabilize_surrogate_matrix(eigvecs[:, :nsv], mod)
-    if current_sv.shape[1] == 0:
-        current_sv = _orthogonal_complement_basis(mod)[:, :nsv]
-
+    current_sv = _stabilize_surrogate_matrix(_supported_right_vectors(residual, nsv, numpy.linalg.norm(data)), mod)
     pprob_gam = numpy.zeros((data.shape[0],), dtype=float)
     pprob_b = numpy.zeros((data.shape[0],), dtype=float)
     dats = data.copy()
+    completed_iterations = 0
     for _ in range(B_iterations):
+        if current_sv.shape[1] == 0:
+            break
+        completed_iterations += 1
         mod_b = numpy.hstack([mod, current_sv])
         mod0_b = numpy.hstack([mod0, current_sv])
         ptmp_b = f_pvalue(data, mod_b, mod0_b)
@@ -612,20 +600,15 @@ def irwsva_build(data_matrix, mod_matrix, mod0_matrix=None, nsv=1, B_iterations=
         pprob = pprob_gam * (1.0 - pprob_b)
         dats = data * pprob.reshape(-1, 1)
         dats = dats - numpy.mean(dats, axis=1, keepdims=True)
-        right_vectors = _top_right_singular_vectors(dats, n_components=nsv)
+        right_vectors = _supported_right_vectors(dats, current_sv.shape[1], numpy.linalg.norm(data))
         current_sv = _stabilize_surrogate_matrix(right_vectors, mod)
-        if current_sv.shape[1] == 0:
-            current_sv = _orthogonal_complement_basis(mod)[:, :nsv]
-
-    right_vectors = _top_right_singular_vectors(dats, n_components=nsv)
-    sv = _stabilize_surrogate_matrix(right_vectors, mod)
-    if sv.shape[1] == 0:
-        sv = _orthogonal_complement_basis(mod)[:, :nsv]
     return {
-        'sv': sv,
+        'sv': current_sv,
         'pprob_gam': pprob_gam,
         'pprob_b': pprob_b,
-        'n_svs': nsv,
+        'n_svs': current_sv.shape[1],
+        'irw_iterations_completed': completed_iterations,
+        'dropped_svs': nsv - current_sv.shape[1],
     }
 
 
@@ -707,7 +690,7 @@ def resolve_sva_parameters(
         return SVAParameterResolution(
             nsv=0 if estimate.nsv is None else int(estimate.nsv),
             B=B_default,
-            stable=True,
+            stable=estimate.nsv is not None,
             method='manual_B_{}'.format(estimate.method),
             trace_B=[int(B_default)],
             trace_nsv=[-1 if estimate.nsv is None else int(estimate.nsv)],
@@ -766,6 +749,7 @@ def resolve_sva_parameters(
     )
 
 
+@batch_backend('sva')
 def run_sva_backend(
     counts_df,
     metadata_df,
@@ -775,6 +759,9 @@ def run_sva_backend(
     sample_group_column="sample_group",
     random_seed=0,
     input_scale="transformed",
+    irw_iterations=5,
+    estimation_method="be",
+    protected_design=None,
 ):
     aligned_metadata = _align_metadata_to_counts(
         counts_df=counts_df,
@@ -782,9 +769,23 @@ def run_sva_backend(
     )
     if sample_group_column not in metadata_df.columns:
         raise ValueError("Missing required metadata column: {}".format(sample_group_column))
-    sample_groups = aligned_metadata.loc[:, sample_group_column]
-    mod_matrix, _mod_names = build_sample_group_design_matrix(sample_groups)
-    _mod0_matrix, _mod0_names = build_intercept_only_design_matrix(aligned_metadata.shape[0])
+    mod_matrix = protected_design.matrix.to_numpy(dtype=float)
+    _mod0_matrix = numpy.ones((len(aligned_metadata), 1))
+    if estimation_method not in {'be', 'leek', 'be_then_leek'}:
+        raise ValueError('SVA estimation method must be be, leek or be_then_leek.')
+    if int(irw_iterations) < 1:
+        raise ValueError('SVA IRW iterations must be positive.')
+    if str(B_setting) != 'auto' and int(B_setting) < 1:
+        raise ValueError('SVA permutation count must be positive.')
+    if int(B_auto_max) < 5:
+        raise ValueError('SVA B_auto_max must be at least 5.')
+    if mod_matrix.shape[1] <= 1 and str(nsv_setting) != '0':
+        raise BatchModelError('sva_design_failed', 'IRW SVA requires a biological contrast against the null design.')
+    if str(nsv_setting) != 'auto':
+        if int(nsv_setting) < 0:
+            raise ValueError('SVA nsv must be nonnegative.')
+        if int(nsv_setting) > max(0, counts_df.shape[1] - mod_matrix.shape[1] - 1):
+            raise BatchModelError('sva_insufficient_df', 'Requested nsv leaves no residual degrees of freedom.')
     counts_matrix = counts_df.to_numpy(dtype=float, copy=False)
     input_scale = str(input_scale).strip().lower()
     if input_scale not in {"counts", "transformed"}:
@@ -810,8 +811,11 @@ def run_sva_backend(
             B_value=B_value,
             max_nsv=max_nsv,
             random_seed=random_seed,
+            estimation_method=estimation_method,
         ),
     )
+    if resolved.method.endswith("failed"):
+        raise BatchModelError("sva_nsv_estimation_failed", "Could not estimate the number of surrogate variables.", {"trace_B": resolved.trace_B, "trace_method": resolved.trace_method})
     if resolved.nsv <= 0:
         empty_sv = pandas.DataFrame(index=counts_df.columns)
         summary = {
@@ -837,19 +841,28 @@ def run_sva_backend(
         mod_matrix=mod_matrix,
         mod0_matrix=_mod0_matrix,
         nsv=resolved.nsv,
-        B_iterations=resolved.B,
+        B_iterations=int(irw_iterations),
     )
     sv_matrix = numpy.asarray(irw["sv"], dtype=float)
+    actual_nsv = sv_matrix.shape[1]
+    if actual_nsv < resolved.nsv and str(nsv_setting) != 'auto':
+        raise BatchModelError('sva_degenerate_factors', 'Requested surrogate dimensions could not be estimated.',
+                              {'requested_sva_nsv': resolved.nsv, 'resolved_sva_nsv': actual_nsv})
+    if actual_nsv == 0:
+        raise BatchModelError('sva_degenerate_factors', 'No data-supported surrogate direction remained.')
     corrected_matrix = clean_y_matrix(
         y_matrix=correction_matrix,
         mod_matrix=mod_matrix,
         sv_matrix=sv_matrix,
     )
     preclip_negative_count = 0
+    postprocessing = []
     if input_scale == "counts":
         corrected_matrix = numpy.expm1(corrected_matrix)
         preclip_negative_count = int(numpy.sum(corrected_matrix < 0))
-        corrected_matrix = numpy.clip(corrected_matrix, 0.0, None)
+        clipped = numpy.clip(corrected_matrix, 0.0, None)
+        postprocessing.append(matrix_change(corrected_matrix, clipped, 'clip_negative', 'counts'))
+        corrected_matrix = clipped
     sv_columns = ["sv{}".format(idx + 1) for idx in range(sv_matrix.shape[1])]
     corrected_df = pandas.DataFrame(
         corrected_matrix,
@@ -868,7 +881,13 @@ def run_sva_backend(
         "stable": resolved.stable,
         "corrected_run_ids": [str(col) for col in counts_df.columns],
         "uncorrected_run_ids": [],
-        "resolved_sva_nsv": resolved.nsv,
+        "requested_sva_nsv": resolved.nsv,
+        "resolved_sva_nsv": actual_nsv,
+        "sva_dropped_svs": resolved.nsv - actual_nsv,
+        "sva_irw_iterations": int(irw_iterations),
+        "sva_irw_iterations_completed": irw.get("irw_iterations_completed", int(irw_iterations)),
+        "sva_irw_converged": None,
+        "nsv_selection_stable": resolved.stable,
         "resolved_sva_B": resolved.B,
         "sva_estimation_method": resolved.method,
         "sva_stable": resolved.stable,
@@ -877,5 +896,6 @@ def run_sva_backend(
         "trace_method": resolved.trace_method,
         "sva_input_scale": input_scale,
         "sva_preclip_negative_count": preclip_negative_count,
+        "postprocessing": postprocessing,
     }
     return corrected_df, sv_df, summary

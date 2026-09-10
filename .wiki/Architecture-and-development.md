@@ -59,3 +59,9 @@ After verification and the source push, maintainers compare and stage them in
 a separate Wiki checkout with `.github/scripts/sync_wiki.py`, review the diff,
 and commit/push the Wiki normally. The generated footer records the source
 version and commit. See the [publication procedure](https://github.com/kfuku52/amalgkit/blob/master/CONTRIBUTING.md#documentation-and-public-wiki).
+
+## Batch correction contract
+
+See [batch correction models and diagnostics](Batch-correction-models) for the
+whole-species skip policy, protected-design encoding, model scales, and schema 2
+outputs. Normalization and downstream aggregation retain their own definitions.

@@ -1,8 +1,8 @@
 import numpy
 import pandas
-import warnings
 
 from amalgkit.batch_effect_common import align_metadata_to_counts
+from amalgkit.batch_effect_contract import BatchModelError, batch_backend
 
 
 def _load_pycombat_seq():
@@ -22,10 +22,9 @@ def _align_metadata_to_counts(counts_df, metadata_df):
 
 def _coerce_corrected_matrix(corrected, index, columns):
     if isinstance(corrected, pandas.DataFrame):
-        corrected_df = corrected.copy()
-        corrected_df.index = index
-        corrected_df.columns = columns
-        return corrected_df
+        if not corrected.index.equals(index) or not corrected.columns.equals(columns):
+            raise RuntimeError('ComBat-seq returned reordered or changed IDs.')
+        return corrected.copy()
     values = numpy.asarray(corrected)
     if values.shape != (len(index), len(columns)):
         raise ValueError(
@@ -39,11 +38,13 @@ def _coerce_corrected_matrix(corrected, index, columns):
     return pandas.DataFrame(values, index=index, columns=columns)
 
 
+@batch_backend('combatseq', factors=False)
 def run_combatseq_backend(
     counts_df,
     metadata_df,
     batch_column='bioproject',
     sample_group_column='sample_group',
+    protected_design=None,
 ):
     if counts_df.shape[1] == 0:
         raise ValueError('counts_df must contain at least one sample column.')
@@ -56,97 +57,41 @@ def run_combatseq_backend(
         raise ValueError('Batch column contains empty values: {}'.format(batch_column))
     batch_sizes = batch_labels.value_counts()
 
-    corrected_run_ids = []
-    uncorrected_run_ids = []
-    for run_id, batch_label in zip(counts_df.columns, batch_labels):
-        if int(batch_sizes[batch_label]) > 1:
-            corrected_run_ids.append(str(run_id))
-        else:
-            uncorrected_run_ids.append(str(run_id))
-
-    if len(corrected_run_ids) == 0:
-        summary = {
-            'backend': 'combatseq',
-            'method': 'all_singleton',
-            'skip_reason': 'combatseq_all_singleton',
-            'stable': None,
-            'corrected_run_ids': [],
-            'uncorrected_run_ids': uncorrected_run_ids,
-            'batch_column': batch_column,
-            'group_model_used': False,
-            'group_fallback_used': False,
-        }
-        return counts_df.copy(), summary
-
-    combat_counts = counts_df.loc[:, corrected_run_ids]
-    combat_metadata = aligned_metadata.set_index('run').loc[corrected_run_ids, :]
-    combat_batches = combat_metadata.loc[:, batch_column].astype(str).tolist()
-    if len(set(combat_batches)) < 2:
-        summary = {
-            'backend': 'combatseq',
-            'method': 'insufficient_batches',
-            'skip_reason': 'combatseq_insufficient_batches',
-            'stable': None,
-            'corrected_run_ids': [],
-            'uncorrected_run_ids': [str(run_id) for run_id in counts_df.columns],
-            'batch_column': batch_column,
-            'group_model_used': False,
-            'group_fallback_used': False,
-        }
-        return counts_df.copy(), summary
-
+    diagnostics = {'group_model_used': False, 'group_fallback_used': False}
+    if (batch_sizes <= 1).any():
+        reason = 'combatseq_all_singleton' if (batch_sizes <= 1).all() else 'combatseq_singleton_batch'
+        raise BatchModelError(reason, 'ComBat-seq requires at least two samples in every batch.', diagnostics)
+    if len(batch_sizes) < 2:
+        raise BatchModelError('combatseq_insufficient_batches', 'ComBat-seq requires at least two batches.', diagnostics)
+    if protected_design.diagnostics['batch_design_confounded']:
+        raise BatchModelError('combatseq_confounded_design', 'Biological covariates and batch are not identifiable.', diagnostics)
+    if protected_design.diagnostics['batch_design_rank'] >= counts_df.shape[1]:
+        raise BatchModelError('combatseq_no_residual_df', 'No residual degrees of freedom for ComBat-seq.', diagnostics)
+    if counts_df.shape[0] == 0:
+        return counts_df.copy(), dict(backend='combatseq', method='empty', skip_reason='no_expressed_genes',
+                                     corrected_run_ids=[], uncorrected_run_ids=list(counts_df.columns))
     pycombat_seq = _load_pycombat_seq()
-
-    group_model_used = False
-    group_fallback_used = False
-    method = 'no_group'
-    group_error_message = ''
-
-    def run_without_group():
-        corrected = pycombat_seq(
-            counts=combat_counts,
-            batch=combat_batches,
-        )
-        return _coerce_corrected_matrix(
-            corrected=corrected,
-            index=combat_counts.index,
-            columns=combat_counts.columns,
-        )
-
-    if sample_group_column in combat_metadata.columns:
-        sample_groups = combat_metadata.loc[:, sample_group_column].fillna('').astype(str).str.strip()
-        if ((sample_groups != '').all()) and (sample_groups.nunique() > 1):
-            covariates = pandas.DataFrame(
-                {sample_group_column: sample_groups.tolist()},
-                index=combat_counts.columns,
-            )
-            try:
-                corrected = pycombat_seq(
-                    counts=combat_counts,
-                    batch=combat_batches,
-                    covar_mod=covariates,
-                )
-                group_model_used = True
-                method = 'group'
-                corrected_df = _coerce_corrected_matrix(
-                    corrected=corrected,
-                    index=combat_counts.index,
-                    columns=combat_counts.columns,
-                )
-            except (FloatingPointError, ValueError, numpy.linalg.LinAlgError) as exc:
-                group_fallback_used = True
-                group_error_message = str(exc)
-                warnings.warn(
-                    'Combat-seq could not fit the sample-group covariate model and '
-                    'fell back to batch-only correction: {}'.format(exc),
-                    stacklevel=2,
-                )
-                corrected_df = run_without_group()
-        else:
-            corrected_df = run_without_group()
-    else:
-        corrected_df = run_without_group()
-
+    covariates = protected_design.matrix
+    group_model_used = protected_design.diagnostics['group_protected'] and metadata_df[sample_group_column].nunique() > 1
+    method = 'group' if group_model_used else 'no_group'
+    call = {'counts': counts_df, 'batch': batch_labels.tolist()}
+    if covariates.shape[1] > 1:
+        # InMoose accepts a prebuilt patsy design and bypasses formula parsing.
+        # This also preserves continuous covariates and unusual category names.
+        # Keep the intercept: InMoose uses this matrix for within-batch
+        # dispersion fits before removing its intercept from the joint design.
+        from patsy import DesignInfo, DesignMatrix
+        call['covar_mod'] = DesignMatrix(covariates.to_numpy(dtype=float),
+                                         DesignInfo(list(covariates.columns)))
+    try:
+        corrected = pycombat_seq(**call)
+    except (FloatingPointError, ValueError, numpy.linalg.LinAlgError) as exc:
+        raise BatchModelError('combatseq_fit_failed', str(exc), dict(diagnostics, group_error_message=str(exc))) from exc
+    corrected_df = _coerce_corrected_matrix(corrected, counts_df.index, counts_df.columns)
+    if not numpy.isfinite(corrected_df.to_numpy(dtype=float)).all():
+        raise BatchModelError('combatseq_nonfinite_fit', 'ComBat-seq returned nonfinite values.', diagnostics)
+    corrected_run_ids = list(counts_df.columns)
+    uncorrected_run_ids = []
     corrected_full = counts_df.copy()
     for run_id in corrected_run_ids:
         values = corrected_df[run_id]
@@ -174,7 +119,7 @@ def run_combatseq_backend(
         'uncorrected_run_ids': uncorrected_run_ids,
         'batch_column': batch_column,
         'group_model_used': group_model_used,
-        'group_fallback_used': group_fallback_used,
-        'group_error_message': group_error_message,
+        'group_fallback_used': False,
+        'group_error_message': '',
     }
     return corrected_full, summary

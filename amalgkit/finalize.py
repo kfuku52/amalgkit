@@ -29,6 +29,15 @@ def _build_per_species_args(args, input_dir, tmp_out_dir):
     data.setdefault('norm', 'log2p1-fpkm')
     data.setdefault('clip_negative', True)
     data.setdefault('maintain_zero', True)
+    data.setdefault('batch_failure_policy', 'skip')
+    data.setdefault('batch_categorical_covariates', [])
+    data.setdefault('batch_continuous_covariates', [])
+    data.setdefault('combatseq_group_model', 'protect')
+    data.setdefault('sva_irw_iterations', 5)
+    data.setdefault('sva_estimation_method', 'be')
+    data.setdefault('latent_k_selection', 'manual')
+    data.setdefault('ruvseq_k_selection', 'manual')
+    data.setdefault('ruvseq_control_file', None)
     data.setdefault('batch', None)
     data.setdefault('threads', 'auto')
     data.setdefault('internal_jobs', 'auto')
@@ -73,6 +82,8 @@ def _simplify_table_filename(filename, species, batch_effect_alg):
         '{}.{}.curation_final_summary.tsv'.format(species, batch_effect_alg): '{}_curation_final_summary.tsv'.format(species),
         '{}.{}.batch_effect_summary.tsv'.format(species, batch_effect_alg): '{}_batch_effect_summary.tsv'.format(species),
     }
+    for suffix in ('diagnostics.json', 'design.tsv', 'factors.tsv', 'removal_basis.tsv'):
+        mapping['{}.{}.batch_effect_{}'.format(species, batch_effect_alg, suffix)] = '{}_batch_effect_{}'.format(species, suffix)
     if filename in mapping:
         return mapping[filename]
     prefix = '{}.'.format(species)
@@ -138,6 +149,10 @@ def finalize_main(args):
                 batch_effect_alg=per_species_args.batch_effect_alg,
             )
             copy_per_species_pdfs(per_species_dir=per_species_dir, dst_dir=stage_dir)
+            if 'batch_status' in merged_metadata:
+                skipped = merged_metadata.loc[merged_metadata['batch_status'].eq('skipped')]
+                for species_name, reason in skipped[['scientific_name', 'batch_skip_reason']].drop_duplicates().itertuples(index=False, name=None):
+                    print('Batch correction skipped: {}: {}'.format(species_name, reason))
             merged_metadata.to_csv(os.path.join(stage_dir, 'metadata.tsv'), sep='\t', index=False)
             save_exclusion_plot_pdf(
                 df_metadata=merged_metadata,

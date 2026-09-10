@@ -2014,6 +2014,37 @@ def run_sanity_check_busco(args, metadata, uni_species, sra_ids, output_dir, met
     return row, issues
 
 
+def _validate_finalize_batch_contract(species_dir, species_tag):
+    """Validate new diagnostic artifacts without rejecting historical outputs."""
+    summary_path = os.path.join(species_dir, species_tag + '_batch_effect_summary.tsv')
+    try:
+        summary = read_identifier_tsv(summary_path)
+        if 'schema_version' not in summary or summary.empty or int(summary.loc[0, 'schema_version']) < 2:
+            return ''
+        diagnostics_path = os.path.join(species_dir, species_tag + '_batch_effect_diagnostics.json')
+        with open(diagnostics_path, encoding='utf-8') as handle:
+            payload = json.load(handle)
+        if not isinstance(payload, dict) or payload.get('schema_version') != 2:
+            return 'Invalid batch diagnostic schema.'
+        if payload.get('status') not in {'corrected', 'skipped', 'not_needed'}:
+            return 'Invalid batch correction status.'
+        if payload['status'] != summary.loc[0, 'status']:
+            return 'Batch correction status differs between JSON and TSV.'
+        if payload['status'] == 'skipped' and int(summary.loc[0, 'corrected_run_count']) != 0:
+            return 'A skipped batch correction must not contain corrected runs.'
+        design = payload.get('design', {})
+        runs = design.get('design_run_ids', [])
+        if runs:
+            for suffix in ('design', 'factors', 'removal_basis'):
+                path = os.path.join(species_dir, species_tag + '_batch_effect_' + suffix + '.tsv')
+                matrix = read_identifier_tsv(path)
+                if 'run' not in matrix or matrix['run'].tolist() != runs:
+                    return 'Batch {} run order differs from the fitted design.'.format(suffix)
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        return 'Invalid or missing batch correction diagnostics: {}'.format(exc)
+    return ''
+
+
 def _validate_finalize_species_outputs(
     species,
     species_dir,
@@ -2070,6 +2101,14 @@ def _validate_finalize_species_outputs(
                 path=file_path,
                 message='finalize output is older than the metadata file.',
                 suggested_action='review_or_rerun',
+            ))
+    if os.path.isfile(os.path.join(species_dir, species_tag + '_batch_effect_summary.tsv')):
+        contract_error = _validate_finalize_batch_contract(species_dir, species_tag)
+        if contract_error:
+            issues.append(_build_issue(
+                check_name='finalize', severity='error', issue_type='invalid_batch_diagnostics',
+                target_type='species', target_id=species, path=species_dir,
+                message=contract_error, suggested_action='rerun_finalize',
             ))
     return issues
 

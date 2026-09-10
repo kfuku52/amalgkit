@@ -1,4 +1,6 @@
 import json
+import math
+import numpy
 
 from amalgkit.table_io import read_annotation_tsv, read_identifier_tsv
 
@@ -6,6 +8,31 @@ from amalgkit.batch_effect_common import BatchEffectResult
 
 
 _DCF_FIELD_TYPES = {
+    'schema_version': 'int',
+    'design': 'json',
+    'requested_parameters': 'json',
+    'package_versions': 'json',
+    'postprocessing': 'json',
+    'factor_values': 'json',
+    'removal_basis': 'json',
+    'ruv_effective_library_sizes': 'json',
+    'ruv_between_lane_scales': 'json',
+    'factor_columns': 'str_list',
+    'ruv_control_gene_ids': 'str_list',
+    'ruv_missing_control_gene_ids': 'str_list',
+    'design_rank': 'int',
+    'design_residual_df': 'int',
+    'batch_design_confounded': 'bool',
+    'sva_irw_iterations': 'int',
+    'sva_irw_iterations_completed': 'int',
+    'sva_irw_converged': 'bool',
+    'nsv_selection_stable': 'bool',
+    'sva_dropped_svs': 'int',
+    'requested_sva_nsv': 'int',
+    'requested_latent_k': 'int',
+    'requested_ruv_k': 'int',
+    'ruv_input_pseudocount': 'float',
+    'ruv_log_pseudocount': 'float',
     'stable': 'bool',
     'sva_stable': 'bool',
     'group_model_used': 'bool',
@@ -44,6 +71,18 @@ _DCF_FIELD_TYPES = {
 }
 
 
+
+def _json_safe(value):
+    if isinstance(value, numpy.generic):
+        return _json_safe(value.item())
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    return value
+
 def read_expression_matrix_tsv(path):
     return read_identifier_tsv(path, index_col=0)
 
@@ -62,7 +101,7 @@ def write_backend_summary_json(summary, path):
     else:
         payload = dict(summary)
     with open(path, 'w', encoding='utf-8') as handle:
-        json.dump(payload, handle, indent=2, sort_keys=True)
+        json.dump(_json_safe(payload), handle, indent=2, sort_keys=True, allow_nan=False)
         handle.write('\n')
 
 
@@ -78,7 +117,9 @@ def write_backend_summary_dcf(summary, path):
         payload = dict(summary)
     with open(path, 'w', encoding='utf-8') as handle:
         for key, value in payload.items():
-            if value is None:
+            if _DCF_FIELD_TYPES.get(key) == 'json':
+                text = json.dumps(_json_safe(value), allow_nan=False)
+            elif value is None:
                 text = ''
             elif isinstance(value, bool):
                 text = 'TRUE' if value else 'FALSE'
@@ -86,6 +127,7 @@ def write_backend_summary_dcf(summary, path):
                 text = '|'.join([str(item) for item in value])
             else:
                 text = str(value)
+            text = text.replace('\r', ' ').replace('\n', ' ')
             handle.write('{}: {}\n'.format(str(key), text))
 
 
@@ -93,6 +135,8 @@ def _parse_backend_summary_dcf_value(key, value):
     field_type = _DCF_FIELD_TYPES.get(key)
     if field_type is None:
         return value
+    if field_type == 'json':
+        return json.loads(value)
     if field_type == 'nullable_str':
         return None if value == '' else value
     if field_type == 'bool':

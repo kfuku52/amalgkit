@@ -136,7 +136,7 @@ def test_estimate_num_sv_be_default_seed_is_reproducible_and_auto_is_opt_in(monk
     assert observed_seeds == [0, 0, None]
 
 
-def test_run_sva_backend_supports_auto_nsv_when_estimate_is_zero():
+def test_run_sva_backend_distinguishes_unresolved_nsv_from_zero():
     counts = pandas.DataFrame(
         {
             'RUN1': [10.0, 5.0, 0.0],
@@ -161,9 +161,8 @@ def test_run_sva_backend_supports_auto_nsv_when_estimate_is_zero():
     pandas.testing.assert_frame_equal(corrected, counts)
     assert list(sv_df.index) == ['RUN1', 'RUN2', 'RUN3', 'RUN4']
     assert sv_df.shape == (4, 0)
-    assert summary['resolved_sva_nsv'] == 0
-    assert summary['resolved_sva_B'] == 5
-    assert summary['skip_reason'] == 'sva_nsv_zero'
+    assert summary['status'] == 'skipped'
+    assert summary['skip_reason'] == 'sva_nsv_estimation_failed'
 
 
 def test_estimate_num_sv_leek_returns_bounded_integer_estimate():
@@ -240,7 +239,7 @@ def test_f_pvalue_maps_perfect_full_model_fit_to_zero_probability():
     assert p_values[0] == 0.0
 
 
-def test_irwsva_build_returns_expected_shapes():
+def test_irwsva_build_drops_degenerate_weighted_directions():
     data = numpy.array([
         [10.0, 12.0, 40.0, 42.0],
         [11.0, 13.0, 41.0, 43.0],
@@ -256,13 +255,14 @@ def test_irwsva_build_returns_expected_shapes():
         nsv=1,
         B_iterations=2,
     )
-    assert out['sv'].shape == (4, 1)
+    assert out['sv'].shape == (4, 0)
     assert out['pprob_gam'].shape == (4,)
     assert out['pprob_b'].shape == (4,)
-    assert out['n_svs'] == 1
+    assert out['n_svs'] == 0
+    assert out['dropped_svs'] == 1
 
 
-def test_run_sva_backend_supports_positive_manual_nsv():
+def test_run_sva_backend_skips_unestimable_positive_manual_nsv():
     counts = pandas.DataFrame(
         {
             'RUN1': [10.0, 11.0, 50.0, 51.0],
@@ -284,12 +284,11 @@ def test_run_sva_backend_supports_positive_manual_nsv():
         B_auto_max=100,
         random_seed=7,
     )
-    assert corrected.shape == counts.shape
-    assert sv_df.shape == (4, 1)
-    assert summary['resolved_sva_nsv'] == 1
-    assert summary['resolved_sva_B'] == 5
-    assert summary['skip_reason'] == ''
-    assert summary['corrected_run_ids'] == ['RUN1', 'RUN2', 'RUN3', 'RUN4']
+    pandas.testing.assert_frame_equal(corrected, counts)
+    assert sv_df.shape == (4, 0)
+    assert summary['status'] == 'skipped'
+    assert summary['skip_reason'] == 'sva_degenerate_factors'
+    assert summary['corrected_run_ids'] == []
 
 
 def test_run_sva_backend_aligns_shuffled_metadata_by_run_and_ignores_extra_rows():
@@ -335,7 +334,7 @@ def test_run_sva_backend_aligns_shuffled_metadata_by_run_and_ignores_extra_rows(
     pandas.testing.assert_frame_equal(shuffled_sv, aligned_sv)
 
 
-def test_run_sva_backend_supports_positive_manual_nsv_on_transformed_duplicate_groups():
+def test_run_sva_backend_skips_positive_manual_nsv_on_transformed_duplicate_groups():
     runs = ['RUN01', 'RUN02', 'RUN03', 'RUN04']
     genes = [f'G{i:03d}' for i in range(1, 51)]
     counts = pandas.DataFrame(index=genes)
@@ -358,11 +357,10 @@ def test_run_sva_backend_supports_positive_manual_nsv_on_transformed_duplicate_g
         B_auto_max=80,
         random_seed=7,
     )
-    assert corrected.shape == transformed.shape
-    assert sv_df.shape == (4, 1)
-    assert summary['resolved_sva_nsv'] == 1
-    assert summary['resolved_sva_B'] == 5
-    numpy.testing.assert_allclose(corrected.to_numpy(), transformed.to_numpy(), rtol=0.0, atol=1e-8)
+    pandas.testing.assert_frame_equal(corrected, transformed)
+    assert sv_df.shape == (4, 0)
+    assert summary['resolved_sva_nsv'] == 0
+    assert summary['skip_reason'] == 'sva_degenerate_factors'
 
 
 def test_run_sva_backend_auto_transformed_duplicate_groups_falls_back_to_leek():
@@ -384,6 +382,7 @@ def test_run_sva_backend_auto_transformed_duplicate_groups_falls_back_to_leek():
         counts_df=transformed,
         metadata_df=metadata,
         nsv_setting='auto',
+        estimation_method='be_then_leek',
         B_setting='auto',
         B_auto_max=80,
         random_seed=7,

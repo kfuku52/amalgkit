@@ -11,6 +11,7 @@ from amalgkit.batch_effect_common import (
     initialize_batch_info,
     write_batch_effect_summary_tsv,
 )
+from amalgkit.batch_effect_contract import backend_options, read_control_gene_ids, matrix_change
 from amalgkit.batch_effect_combatseq import run_combatseq_backend
 from amalgkit.batch_effect_ruvseq import compute_factor_r2
 from amalgkit.batch_effect_latent_glm import run_latent_glm_backend
@@ -54,7 +55,7 @@ def should_use_python_finalize_worker(args):
         return str(getattr(args, 'combatseq_backend', 'python')).lower() == 'python'
     if batch_effect_alg == 'ruvseq':
         return str(getattr(args, 'ruvseq_backend', 'python')).lower() == 'python'
-    if batch_effect_alg == 'latent_glm':
+    if batch_effect_alg in {'latent_glm', 'latent_loglinear'}:
         return True
     return False
 
@@ -390,7 +391,7 @@ def _apply_transformation_logic(
     if batch_effect_alg in {'no', 'sva'}:
         bool_fpkm_tpm = step == 'before_batch'
         bool_log = step == 'before_batch'
-    elif batch_effect_alg in {'ruvseq', 'combatseq', 'latent_glm'}:
+    elif batch_effect_alg in {'ruvseq', 'combatseq', 'latent_glm', 'latent_loglinear'}:
         bool_fpkm_tpm = step in {'before_batch_plot', 'after_batch'}
         bool_log = step in {'before_batch_plot', 'after_batch'}
     else:
@@ -418,10 +419,10 @@ def _apply_transformation_logic(
 
 
 def _remove_nonexpressed_gene(counts_df):
-    gene_sum = counts_df.sum(axis=1)
+    zero_row = counts_df.eq(0).all(axis=1)
     return {
-        'tc_ex': counts_df.loc[gene_sum > 0, :].copy(),
-        'tc_ne': counts_df.loc[gene_sum == 0, :].copy(),
+        'tc_ex': counts_df.loc[~zero_row, :].copy(),
+        'tc_ne': counts_df.loc[zero_row, :].copy(),
     }
 
 
@@ -432,6 +433,7 @@ def _run_batch_effect_step(counts_df, metadata_df, eff_length_df, args, length_m
     if batch_effect_alg == 'no':
         out = _sort_tc_and_metadata(counts_df, metadata_df)
         batch_info = initialize_batch_info(run_ids=out['tc'].columns, batch_effect_alg=batch_effect_alg)
+        batch_info['batch_failure_policy'] = getattr(args, 'batch_failure_policy', 'skip')
         batch_info['skip_reason'] = 'batch_effect_alg_no'
         tc_batch_corrected = _apply_transformation_logic(
             counts_df=out['tc'],
@@ -448,26 +450,6 @@ def _run_batch_effect_step(counts_df, metadata_df, eff_length_df, args, length_m
             'batch_info': batch_info,
         }
 
-    if counts_df.shape[1] == 1:
-        out = _sort_tc_and_metadata(counts_df, metadata_df)
-        batch_info = initialize_batch_info(run_ids=out['tc'].columns, batch_effect_alg=batch_effect_alg)
-        batch_info['skip_reason'] = 'single_sample'
-        batch_info['batch_effect_alg_applied'] = 'no'
-        transformed = _apply_transformation_logic(
-            counts_df=out['tc'],
-            eff_length_df=eff_length_df,
-            transform_method=transform_method,
-            batch_effect_alg=batch_effect_alg,
-            step='after_batch',
-            metadata_df=out['sra'],
-            length_models=length_models,
-        )
-        return {
-            'tc': transformed,
-            'sva': None,
-            'batch_info': batch_info,
-        }
-
     out = _sort_tc_and_metadata(counts_df, metadata_df)
     counts_sorted = out['tc']
     metadata_sorted = out['sra']
@@ -477,118 +459,67 @@ def _run_batch_effect_step(counts_df, metadata_df, eff_length_df, args, length_m
     run_all = list(counts_expressed.columns)
     batch_info = initialize_batch_info(run_ids=run_all, batch_effect_alg=batch_effect_alg)
 
+    shared = backend_options(args)
     if batch_effect_alg == 'sva':
-        if metadata_sorted.loc[:, 'sample_group'].astype(str).nunique() <= 1:
-            batch_info['skip_reason'] = 'sva_design_failed'
-            corrected = counts_expressed.copy()
-            sv_info = None
-        else:
-            corrected, sv_df, summary = run_sva_backend(
-                counts_df=counts_expressed,
-                metadata_df=metadata_sorted,
-                nsv_setting=str(getattr(args, 'sva_nsv', 'auto')),
-                B_setting=str(getattr(args, 'sva_B', 'auto')),
-                B_auto_max=int(getattr(args, 'sva_B_auto_max', 100)),
-                sample_group_column='sample_group',
-                random_seed=getattr(args, 'seed', 0),
-                input_scale='transformed',
-            )
-            batch_info['resolved_sva_nsv'] = summary.get('resolved_sva_nsv')
-            batch_info['resolved_sva_B'] = summary.get('resolved_sva_B')
-            batch_info['sva_input_scale'] = summary.get('sva_input_scale')
-            batch_info['sva_preclip_negative_count'] = summary.get('sva_preclip_negative_count')
-            batch_info['sva_estimation_method'] = summary.get('sva_estimation_method')
-            batch_info['sva_stable'] = summary.get('sva_stable')
-            batch_info['skip_reason'] = summary.get('skip_reason', '')
-            batch_info['corrected_runs'] = summary.get('corrected_run_ids', [])
-            sv_info = sv_df
-        corrected_full = pandas.concat(
-            [corrected.loc[:, run_all], counts_nonexpressed.loc[:, run_all]],
-            axis=0,
-        ).reindex(index=counts_sorted.index, columns=run_all)
+        corrected, sv_info, summary = run_sva_backend(
+            counts_expressed, metadata_sorted,
+            nsv_setting=str(getattr(args, 'sva_nsv', 'auto')),
+            B_setting=str(getattr(args, 'sva_B', 'auto')),
+            B_auto_max=int(getattr(args, 'sva_B_auto_max', 100)),
+            random_seed=getattr(args, 'seed', 0), input_scale='transformed',
+            irw_iterations=int(getattr(args, 'sva_irw_iterations', 5)),
+            estimation_method=getattr(args, 'sva_estimation_method', 'be'), **shared,
+        )
     elif batch_effect_alg == 'combatseq':
         corrected, summary = run_combatseq_backend(
-            counts_df=counts_expressed,
-            metadata_df=metadata_sorted,
-            batch_column='bioproject',
-            sample_group_column='sample_group',
+            counts_expressed, metadata_sorted,
+            protect_group=getattr(args, 'combatseq_group_model', 'protect') == 'protect', **shared,
         )
-        batch_info['skip_reason'] = summary.get('skip_reason', '')
-        batch_info['corrected_runs'] = summary.get('corrected_run_ids', [])
-        batch_info['group_model_used'] = summary.get('group_model_used')
-        batch_info['group_fallback_used'] = summary.get('group_fallback_used')
-        batch_info['group_error_message'] = summary.get('group_error_message')
         sv_info = None
-        corrected_full = pandas.concat(
-            [corrected.loc[:, run_all], counts_nonexpressed.loc[:, run_all]],
-            axis=0,
-        ).reindex(index=counts_sorted.index, columns=run_all)
     elif batch_effect_alg == 'ruvseq':
-        corrected, w_df, summary = run_ruvseq_backend(
-            counts_df=counts_expressed,
-            metadata_df=metadata_sorted,
+        corrected, sv_info, summary = run_ruvseq_backend(
+            counts_expressed, metadata_sorted,
             control_mode=str(getattr(args, 'ruvseq_control_genes', 'auto')),
             k_setting=str(getattr(args, 'ruvseq_k', 'auto')),
             k_max=int(getattr(args, 'ruvseq_k_max', 5)),
             top_n=int(getattr(args, 'ruvseq_control_top_n', 1000)),
             min_controls=int(getattr(args, 'ruvseq_min_controls', 100)),
-            batch_column='bioproject',
-            sample_group_column='sample_group',
+            k_selection=getattr(args, 'ruvseq_k_selection', 'manual'),
+            control_gene_ids=read_control_gene_ids(getattr(args, 'ruvseq_control_file', None)), **shared,
         )
-        batch_info['resolved_ruv_k'] = summary.get('resolved_ruv_k')
-        batch_info['resolved_ruv_controls'] = summary.get('resolved_ruv_controls')
-        batch_info['ruv_baseline_score'] = summary.get('ruv_baseline_score')
-        batch_info['ruv_selected_score'] = summary.get('ruv_selected_score')
-        batch_info['ruv_selected_penalized_score'] = summary.get('ruv_selected_penalized_score')
-        batch_info['ruv_penalty'] = summary.get('ruv_penalty')
-        batch_info['ruv_residual_method'] = summary.get('ruv_residual_method')
-        batch_info['ruv_pvalue_method'] = summary.get('ruv_pvalue_method')
-        batch_info['ruv_fallback_used'] = summary.get('ruv_fallback_used')
-        batch_info['ruv_fallback_reason'] = summary.get('ruv_fallback_reason')
-        batch_info['ruv_nb_fallback_genes'] = summary.get('ruv_nb_fallback_genes')
-        batch_info['ruv_anova_failure_genes'] = summary.get('ruv_anova_failure_genes')
-        batch_info['skip_reason'] = summary.get('skip_reason', '')
-        batch_info['corrected_runs'] = summary.get('corrected_run_ids', [])
-        sv_info = w_df
-        corrected_full = pandas.concat(
-            [corrected.loc[:, run_all], counts_nonexpressed.loc[:, run_all]],
-            axis=0,
-        ).reindex(index=counts_sorted.index, columns=run_all)
-    elif batch_effect_alg == 'latent_glm':
-        corrected, latent_df, summary = run_latent_glm_backend(
-            counts_df=counts_expressed,
-            metadata_df=metadata_sorted,
+    elif batch_effect_alg in {'latent_glm', 'latent_loglinear'}:
+        corrected, sv_info, summary = run_latent_glm_backend(
+            counts_expressed, metadata_sorted,
             family=str(getattr(args, 'latent_family', 'nb')),
             k_setting=str(getattr(args, 'latent_k', 'auto')),
             k_max=int(getattr(args, 'latent_k_max', 5)),
-            sample_group_column='sample_group',
             max_iter=int(getattr(args, 'latent_max_iter', 200)),
             tol=float(getattr(args, 'latent_tol', 1e-5)),
+            k_selection=getattr(args, 'latent_k_selection', 'manual'), **shared,
         )
-        batch_info['resolved_latent_k'] = summary.get('resolved_latent_k')
-        batch_info['latent_family'] = summary.get('latent_family')
-        batch_info['latent_iterations'] = summary.get('latent_iterations')
-        batch_info['latent_objective'] = summary.get('latent_objective')
-        batch_info['latent_converged'] = summary.get('latent_converged', summary.get('stable'))
-        batch_info['skip_reason'] = summary.get('skip_reason', '')
-        batch_info['corrected_runs'] = summary.get('corrected_run_ids', [])
-        sv_info = latent_df
-        corrected_full = pandas.concat(
-            [corrected.loc[:, run_all], counts_nonexpressed.loc[:, run_all]],
-            axis=0,
-        ).reindex(index=counts_sorted.index, columns=run_all)
     else:
-        raise ValueError('Unsupported batch effect algorithm for Python finalize worker: {}'.format(batch_effect_alg))
+        raise ValueError('Unsupported batch effect algorithm: {}'.format(batch_effect_alg))
+    batch_info.update(summary)
+    batch_info['corrected_runs'] = summary.get('corrected_run_ids', [])
+    batch_info['gene_ids_fitted'] = list(counts_expressed.index) if summary.get('corrected_run_ids') else []
+    batch_info['gene_ids_not_fitted'] = list(
+        counts_nonexpressed.index if summary.get('corrected_run_ids') else counts_sorted.index
+    )
+    corrected_full = pandas.concat([corrected, counts_nonexpressed], axis=0).reindex(
+        index=counts_sorted.index, columns=run_all,
+    )
 
     corrected_runs = [run_id for run_id in batch_info['corrected_runs'] if run_id in run_all]
     batch_info['corrected_runs'] = corrected_runs
     batch_info['uncorrected_runs'] = [run_id for run_id in run_all if run_id not in corrected_runs]
-    batch_info['batch_effect_alg_applied'] = batch_effect_alg if len(corrected_runs) > 0 else 'no'
+    batch_info['batch_effect_alg_applied'] = summary.get('backend', batch_effect_alg) if len(corrected_runs) > 0 else 'no'
     if clip_negative and str(transform_method).startswith(('lognp1-', 'log2p1-')):
         negative_mask = corrected_full.to_numpy(dtype=float) < 0
         if negative_mask.any():
+            before_clip = corrected_full.to_numpy(dtype=float).copy()
             corrected_full = corrected_full.copy()
-            corrected_full.loc[:, :] = numpy.where(negative_mask, 0.0, corrected_full.to_numpy(dtype=float))
+            corrected_full.loc[:, :] = numpy.where(negative_mask, 0.0, before_clip)
+            batch_info.setdefault('postprocessing', []).append(matrix_change(before_clip, corrected_full, 'clip_negative', 'transformed' if batch_effect_alg == 'sva' else 'counts'))
 
     corrected_after = _apply_transformation_logic(
         counts_df=corrected_full,
@@ -999,6 +930,9 @@ def run_finalize_python_worker(args, metadata, species_tag, input_dir):
         os.path.join(species_dir, species_tag + '_est_counts.tsv'),
     ]
     count_path = next((path for path in count_path_candidates if os.path.isfile(path)), count_path_candidates[0])
+    if (count_path.endswith('_cstmm_counts.tsv') and getattr(args, 'batch_effect_alg', 'no') == 'combatseq'
+            and not getattr(args, 'skip_curation', False)):
+        raise ValueError('ComBat-seq requires raw counts, not CSTMM-divided counts. Select merge input or another backend.')
     eff_length_path = os.path.join(species_dir, species_tag + '_eff_length.tsv')
     if not os.path.isfile(count_path) or not os.path.isfile(eff_length_path):
         return 1
@@ -1033,9 +967,9 @@ def run_finalize_python_worker(args, metadata, species_tag, input_dir):
     tc = sorted_out['tc']
     sra = sorted_out['sra']
     eff_length_species = _exclude_inappropriate_sample_from_eff_length(eff_length_df, tc)
+    is_input_zero = tc.eq(0)
     tc = _apply_transformation_logic(tc, eff_length_species, args.norm, args.batch_effect_alg, 'before_batch', sra, length_models)
     tc_tmp = _apply_transformation_logic(tc, eff_length_species, args.norm, args.batch_effect_alg, 'before_batch_plot', sra, length_models)
-    is_input_zero = tc_tmp.eq(0)
 
     write_table_with_index_name(
         df=tc_tmp,
@@ -1109,7 +1043,16 @@ def run_finalize_python_worker(args, metadata, species_tag, input_dir):
     out = _run_batch_effect_step(tc, sra, eff_length_species, args, length_models)
     tc_batch_corrected = out['tc']
     batch_info_current = out['batch_info']
-    if str(getattr(args, 'batch_effect_alg', 'no')).lower() in {'sva', 'combatseq', 'ruvseq', 'latent_glm'}:
+    if bool(getattr(args, 'maintain_zero', True)):
+        before_zero_restore = tc_batch_corrected.to_numpy(dtype=float).copy()
+        tc_batch_corrected = tc_batch_corrected.copy()
+        aligned_zero = is_input_zero.reindex(index=tc_batch_corrected.index, columns=tc_batch_corrected.columns, fill_value=False)
+        tc_batch_corrected = tc_batch_corrected.mask(aligned_zero, 0.0)
+
+        batch_info_current.setdefault('postprocessing', []).append(matrix_change(before_zero_restore, tc_batch_corrected, 'preserve_observed_zero', str(args.norm)))
+    batch_info_current['final_matrix_scale'] = str(args.norm)
+    batch_info_current['qc_matrix_stage'] = 'final_saved_expression'
+    if str(getattr(args, 'batch_effect_alg', 'no')).lower() in {'sva', 'combatseq', 'ruvseq', 'latent_glm', 'latent_loglinear'}:
         save_quick_state_comparison_plot(
             tc_before=tc_tmp,
             tc_after=tc_batch_corrected,
@@ -1124,10 +1067,6 @@ def run_finalize_python_worker(args, metadata, species_tag, input_dir):
             random_seed=getattr(args, 'seed', 0),
             tau_options=tau_options_from_args(args),
         )
-    if bool(getattr(args, 'maintain_zero', True)):
-        tc_batch_corrected = tc_batch_corrected.copy()
-        aligned_zero = is_input_zero.reindex(index=tc_batch_corrected.index, columns=tc_batch_corrected.columns, fill_value=False)
-        tc_batch_corrected = tc_batch_corrected.mask(aligned_zero, 0.0)
 
     round_summary = append_round_summary(
         round_summary=round_summary,

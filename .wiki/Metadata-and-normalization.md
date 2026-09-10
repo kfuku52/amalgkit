@@ -109,3 +109,9 @@ paths for independent analyses. See
 [Parallel processing](https://github.com/kfuku52/amalgkit/wiki/Parallel-processing).
 
 Tau aggregation requires explicit replicate identities when using BioSample or donor weights. See [Tau and replicate aggregation](Tau-and-replicate-aggregation.md) for the `donor` metadata contract, project weighting, missing groups, and the distinction between linear tau inputs and transformed-scale mean tables.
+
+## Batch correction contract
+
+See [batch correction models and diagnostics](Batch-correction-models) for the
+whole-species skip policy, protected-design encoding, model scales, and schema 2
+outputs. Normalization and downstream aggregation retain their own definitions.

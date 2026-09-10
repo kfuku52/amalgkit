@@ -622,19 +622,31 @@ def build_parser(command_handlers, command_names, version, prog=None):
                      default='log2p1-fpkm', choices=EXPRESSION_NORMALIZATION_METHODS,
                      type=str, required=False, action='store',
                      help='default=%(default)s: Expression transformation before optional batch correction.')
-    pfi.add_argument('--batch_effect_alg', metavar='(no|sva|ruvseq|combatseq|latent_glm)',
-                     choices=['no', 'sva', 'ruvseq', 'combatseq', 'latent_glm'],
+    pfi.add_argument('--batch_effect_alg', metavar='(no|sva|ruvseq|combatseq|latent_loglinear|latent_glm)',
+                     choices=['no', 'sva', 'ruvseq', 'combatseq', 'latent_loglinear', 'latent_glm'],
                      default='no', type=str, required=False, action='store',
                      help='default=%(default)s: Batch-effect removal algorithm for finalized output tables.')
+    pfi.add_argument('--batch_failure_policy', choices=['skip', 'error'], default='skip',
+                     help='default=%(default)s: On model failure, retain the entire species without batch correction or stop. Invalid inputs always stop.')
+    pfi.add_argument('--batch_categorical_covariates', nargs='+', default=[], metavar='COLUMN',
+                     help='Additional categorical biological covariates to protect, besides sample_group.')
+    pfi.add_argument('--batch_continuous_covariates', nargs='+', default=[], metavar='COLUMN',
+                     help='Additional numeric biological covariates to protect (centered and scaled).')
+    pfi.add_argument('--combatseq_group_model', choices=['protect', 'batch_only'], default='protect',
+                     help='default=%(default)s: Protect sample_group; batch_only explicitly omits that protection.')
     pfi.add_argument('--clip_negative', metavar='yes|no', default='yes', type=strtobool, required=False, action='store',
                      help='default=%(default)s: Clip negative values to zero after batch effect removal.')
     pfi.add_argument('--maintain_zero', metavar='yes|no', default='yes', type=strtobool, required=False, action='store',
                      help='default=%(default)s: Preserve zero values from input after batch effect removal.')
-    pfi.add_argument('--ruvseq_control_genes', metavar='auto|all', choices=['auto', 'all'],
+    pfi.add_argument('--ruvseq_control_genes', metavar='auto|empirical|all|file', choices=['auto', 'empirical', 'all', 'file'],
                      default='auto', type=str, required=False, action='store',
                      help='default=%(default)s: Control-gene selection strategy when --batch_effect_alg ruvseq is used.')
+    pfi.add_argument('--ruvseq_control_file', metavar='PATH', default=None,
+                     help='One unique gene ID per line, without a header; requires --ruvseq_control_genes file.')
+    pfi.add_argument('--ruvseq_k_selection', choices=['manual', 'legacy'], default='manual',
+                     help='default=%(default)s: Specify k explicitly. legacy enables the uncalibrated PCA auto heuristic.')
     pfi.add_argument('--ruvseq_k', metavar='INT|auto', default='auto', type=nonnegative_int_or_auto, required=False, action='store',
-                     help='default=%(default)s: Number of unwanted factors for RUVSeq. "auto" selects k from PCA score tradeoff.')
+                     help='default=%(default)s: Number of unwanted factors for RUVSeq. Uncalibrated "auto" is skipped unless k_selection is legacy.')
     pfi.add_argument('--ruvseq_k_max', metavar='INT', default=5, type=int, required=False, action='store',
                      help='default=%(default)s: Maximum k considered when --ruvseq_k auto.')
     pfi.add_argument('--ruvseq_control_top_n', metavar='INT', default=1000, type=int, required=False, action='store',
@@ -646,10 +658,14 @@ def build_parser(command_handlers, command_names, version, prog=None):
                           '"auto" uses OS entropy and may produce non-reproducible results.')
     pfi.add_argument('--sva_nsv', metavar='INT|auto', default='auto', type=nonnegative_int_or_auto, required=False, action='store',
                      help='default=%(default)s: Number of surrogate variables for SVA. "auto" lets sva estimate n.sv.')
-    pfi.add_argument('--sva_B', metavar='INT|auto', default='auto', type=int_or_auto, required=False, action='store',
+    pfi.add_argument('--sva_B', '--sva_nsv_permutations', dest='sva_B', metavar='INT|auto', default='auto', type=int_or_auto, required=False, action='store',
                      help='default=%(default)s: Number of permutation iterations used by SVA. "auto" chooses B from sample size.')
     pfi.add_argument('--sva_B_auto_max', metavar='INT', default=100, type=int, required=False, action='store',
                      help='default=%(default)s: Upper bound for auto-selected SVA permutation iterations.')
+    pfi.add_argument('--sva_irw_iterations', type=int, default=5,
+                     help='default=%(default)s: IRW iterations, independent of nsv permutation count; not a convergence guarantee.')
+    pfi.add_argument('--sva_estimation_method', choices=['be', 'leek', 'be_then_leek'], default='be',
+                     help='default=%(default)s: Explicit nsv estimator; be_then_leek opts into estimator switching.')
     pfi.add_argument('--sva_backend', metavar='python', choices=['python'],
                      default='python', type=str, required=False, action='store',
                      help='default=%(default)s: Backend used for --batch_effect_alg sva.')
@@ -659,11 +675,13 @@ def build_parser(command_handlers, command_names, version, prog=None):
     pfi.add_argument('--ruvseq_backend', metavar='python', choices=['python'],
                      default='python', type=str, required=False, action='store',
                      help='default=%(default)s: Backend used for --batch_effect_alg ruvseq.')
-    pfi.add_argument('--latent_family', metavar='poisson|nb', choices=['poisson', 'nb'],
-                     default='nb', type=str, required=False, action='store',
-                     help='default=%(default)s: Likelihood family for --batch_effect_alg latent_glm.')
+    pfi.add_argument('--latent_weighting', '--latent_family', dest='latent_family', metavar='uniform|dispersion', choices=['uniform', 'dispersion', 'poisson', 'nb'],
+                     default='dispersion', type=str, required=False, action='store',
+                     help='default=%(default)s: Log-linear residual weighting, not a likelihood family. poisson/nb are legacy aliases.')
+    pfi.add_argument('--latent_k_selection', choices=['manual', 'legacy'], default='manual',
+                     help='default=%(default)s: Specify k explicitly. legacy enables the uncalibrated spectral auto heuristic.')
     pfi.add_argument('--latent_k', metavar='INT|auto', default='auto', type=nonnegative_int_or_auto, required=False, action='store',
-                     help='default=%(default)s: Number of latent factors for latent_glm. "auto" selects k from model diagnostics.')
+                     help='default=%(default)s: Number of experimental log-linear latent factors. "auto" is skipped unless k_selection is legacy.')
     pfi.add_argument('--latent_k_max', metavar='INT', default=5, type=int, required=False, action='store',
                      help='default=%(default)s: Maximum k considered when --latent_k auto.')
     pfi.add_argument('--latent_max_iter', metavar='INT', default=200, type=int, required=False, action='store',

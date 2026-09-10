@@ -42,8 +42,8 @@ def test_combatseq_skips_when_only_one_non_singleton_batch_remains():
     )
 
     pandas.testing.assert_frame_equal(corrected, counts)
-    assert summary['method'] == 'insufficient_batches'
-    assert summary['skip_reason'] == 'combatseq_insufficient_batches'
+    assert summary['method'] == 'skipped'
+    assert summary['skip_reason'] == 'combatseq_singleton_batch'
     assert summary['corrected_run_ids'] == []
     assert summary['uncorrected_run_ids'] == ['RUN1', 'RUN2', 'RUN3']
 
@@ -65,7 +65,7 @@ def test_batch_effect_runner_writes_combatseq_outputs(tmp_path, capsys, monkeypa
         'bioproject': ['BP1', 'BP1'],
     }).to_csv(metadata_path, sep='\t', index=False)
 
-    def fake_run_combatseq_backend(counts_df, metadata_df, batch_column, sample_group_column):
+    def fake_run_combatseq_backend(counts_df, metadata_df, batch_column, sample_group_column, **options):
         assert batch_column == 'bioproject'
         assert sample_group_column == 'sample_group'
         corrected = counts_df.copy()
@@ -156,7 +156,7 @@ def test_batch_effect_runner_writes_ruvseq_outputs(tmp_path, capsys, monkeypatch
         'bioproject': ['BP1', 'BP2'],
     }).to_csv(metadata_path, sep='\t', index=False)
 
-    def fake_run_ruvseq_backend(counts_df, metadata_df, control_mode, k_setting, k_max, top_n, min_controls, batch_column, sample_group_column):
+    def fake_run_ruvseq_backend(counts_df, metadata_df, control_mode, k_setting, k_max, top_n, min_controls, batch_column, sample_group_column, **options):
         assert control_mode == 'auto'
         assert k_setting == '1'
         assert str(k_max) == '3'
@@ -314,7 +314,7 @@ def test_batch_effect_runner_writes_latent_glm_outputs(tmp_path, capsys, monkeyp
         'bioproject': ['BP1', 'BP2'],
     }).to_csv(metadata_path, sep='\t', index=False)
 
-    def fake_run_latent_glm_backend(counts_df, metadata_df, family, k_setting, k_max, sample_group_column, max_iter, tol):
+    def fake_run_latent_glm_backend(counts_df, metadata_df, family, k_setting, k_max, sample_group_column, max_iter, tol, **options):
         assert family == 'poisson'
         assert k_setting == '1'
         assert str(k_max) == '4'
@@ -364,7 +364,8 @@ def test_batch_effect_runner_writes_latent_glm_outputs(tmp_path, capsys, monkeyp
     assert list(latent_df.columns) == ['latent_1']
 
 
-def test_batch_effect_runner_sva_value_error_writes_failure_summary(tmp_path):
+@pytest.mark.parametrize('policy,code_expected', [('skip', 0), ('error', 1)])
+def test_batch_effect_runner_sva_model_failure_honors_policy(tmp_path, policy, code_expected):
     # Regression: the sva branch previously caught only NotImplementedError,
     # so a real backend failure (e.g. design/alignment ValueError) crashed
     # with an uncaught traceback and wrote no out_summary artifact, unlike the
@@ -396,10 +397,11 @@ def test_batch_effect_runner_sva_value_error_writes_failure_summary(tmp_path):
         '--metadata_tsv', str(metadata_path),
         '--out_summary_json', str(summary_path),
         '--sva_nsv', 'auto',
+        '--batch_failure_policy', policy,
     ])
 
-    assert code == 1
+    assert code == code_expected
     assert summary_path.exists()
     payload = batch_effect_runner.read_backend_summary_json(summary_path)
     assert payload['backend'] == 'sva'
-    assert payload['skip_reason'] == 'sva_fit_failed'
+    assert payload['skip_reason'] == 'sva_design_failed'

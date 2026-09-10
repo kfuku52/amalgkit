@@ -39,7 +39,7 @@ def test_run_latent_glm_backend_manual_k_returns_nonnegative_counts_and_latent_s
     assert corrected_df.shape == counts_df.shape
     assert latent_df.shape == (counts_df.shape[1], 1)
     assert numpy.all(corrected_df.to_numpy(dtype=float) >= 0.0)
-    assert summary['backend'] == 'latent_glm'
+    assert summary['backend'] == 'latent_loglinear'
     assert summary['method'] == 'manual'
     assert summary['skip_reason'] == ''
     assert summary['resolved_latent_k'] == 1
@@ -55,6 +55,7 @@ def test_run_latent_glm_backend_auto_k_selects_positive_latent_dimension_for_str
         metadata_df=metadata_df,
         family='poisson',
         k_setting='auto',
+        k_selection='legacy',
         k_max=3,
         max_iter=50,
         tol=1e-6,
@@ -138,8 +139,9 @@ def test_latent_glm_nonconvergence_returns_original_counts():
     )
 
     pandas.testing.assert_frame_equal(corrected_df, counts_df)
-    assert latent_df.shape == (counts_df.shape[1], 1)
+    assert latent_df.shape == (counts_df.shape[1], 0)
     assert summary['skip_reason'] == 'latent_not_converged'
+    assert summary['status'] == 'skipped'
     assert summary['latent_converged'] is False
     assert summary['corrected_run_ids'] == []
 

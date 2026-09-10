@@ -147,6 +147,9 @@ def initialize_batch_info(run_ids=(), batch_effect_alg='no'):
         'latent_objective': None,
         'latent_converged': None,
         'skip_reason': 'not_run',
+        'schema_version': 2,
+        'status': 'not_needed',
+        'batch_failure_policy': 'skip',
     }
 
 
@@ -195,6 +198,9 @@ def annotate_metadata_with_batch_info(metadata_df, batch_info, run_column='run')
     is_corrected = run_values.isin(corrected_runs)
     annotated.loc[:, 'batch_corrected'] = numpy.where(is_corrected, 'yes', 'no')
     annotated.loc[:, 'batch_alg_used'] = numpy.where(is_corrected, used_alg, 'no')
+    status = _batch_info_value(batch_info, 'status', default='not_needed')
+    annotated.loc[:, 'batch_status'] = numpy.where(is_corrected, 'corrected', status)
+    annotated.loc[:, 'batch_skip_reason'] = _batch_info_value(batch_info, 'skip_reason', default='')
     return annotated
 
 
@@ -233,7 +239,7 @@ def build_batch_effect_summary_dataframe(
             random_seed = 'auto' if bool(pandas.isna(random_seed_value)) else str(random_seed_value)
         except TypeError:
             random_seed = str(random_seed_value)
-    return pandas.DataFrame(
+    table = pandas.DataFrame(
         [
             {
                 'scientific_name': str(scientific_name),
@@ -276,6 +282,15 @@ def build_batch_effect_summary_dataframe(
             }
         ]
     )
+    for key in ('schema_version', 'status', 'batch_failure_policy', 'design_rank', 'design_residual_df',
+                'batch_design_confounded', 'sva_irw_iterations', 'sva_irw_iterations_completed',
+                'nsv_selection_stable', 'sva_dropped_svs', 'latent_model', 'latent_weighting',
+                'latent_objective_kind', 'k_selection', 'ruv_control_mode', 'qc_matrix_stage',
+                'final_matrix_scale'):
+        table.loc[:, key] = _summary_scalar(_batch_info_value(batch_info, key))
+    operations = _batch_info_value(batch_info, 'postprocessing', default=[])
+    table.loc[:, 'postprocessing_changed_cells_sum'] = sum(op['changed_cells'] for op in operations)
+    return table
 
 
 def write_batch_effect_summary_tsv(
@@ -297,8 +312,30 @@ def write_batch_effect_summary_tsv(
         '{}.{}.batch_effect_summary.tsv'.format(species_tag, requested_alg),
     )
     summary_df.to_csv(out_path, sep='\t', index=False)
+    # JSON carries the complete contract; TSV remains a compact scalar summary.
+    from amalgkit.batch_effect_io import write_backend_summary_json
+    payload = _batch_info_to_mapping(batch_info)
+    payload['scientific_name'] = str(scientific_name)
+    payload['random_seed'] = str(random_seed_value)
+    prefix = os.path.join(dir_tsv, '{}.{}'.format(species_tag, requested_alg))
+    diagnostics_path = prefix + '.batch_effect_diagnostics.json'
+    write_backend_summary_json(payload, diagnostics_path)
+    design = payload.get('design', {})
+    runs = design.get('design_run_ids', [])
+    if runs:
+        design_df = pandas.DataFrame(design['design_matrix'], index=runs, columns=design['design_columns'])
+        design_df.to_csv(prefix + '.batch_effect_design.tsv', sep='\t', index_label='run')
+        for field, suffix in (('factor_values', 'factors'), ('removal_basis', 'removal_basis')):
+            values = payload.get(field)
+            if values is None:
+                values = [[] for _ in runs]
+            matrix = pandas.DataFrame(values, index=runs)
+            matrix.columns = payload.get('factor_columns', []) if field == 'factor_values' else [
+                'removed_{}'.format(i + 1) for i in range(matrix.shape[1])]
+            matrix.to_csv(prefix + '.batch_effect_{}.tsv'.format(suffix), sep='\t', index_label='run')
     return {
         'summary_path': out_path,
+        'diagnostics_path': diagnostics_path,
         'summary_df': summary_df,
     }
 

@@ -4,6 +4,7 @@ import sys
 import numpy
 
 from amalgkit.batch_effect_common import BatchEffectResult
+from amalgkit.batch_effect_contract import backend_options, read_control_gene_ids
 from amalgkit.batch_effect_combatseq import run_combatseq_backend
 from amalgkit.batch_effect_io import (
     read_backend_summary_dcf,
@@ -19,7 +20,7 @@ from amalgkit.batch_effect_ruvseq import run_ruvseq_backend
 from amalgkit.batch_effect_sva import run_sva_backend
 
 
-SUPPORTED_BACKENDS = ('sva', 'combatseq', 'ruvseq', 'latent_glm')
+SUPPORTED_BACKENDS = ('sva', 'combatseq', 'ruvseq', 'latent_glm', 'latent_loglinear')
 
 
 def build_parser():
@@ -27,6 +28,15 @@ def build_parser():
         description='Internal AMALGKIT helper for Python batch-effect backends.'
     )
     parser.add_argument('--backend', choices=SUPPORTED_BACKENDS, required=True)
+    parser.add_argument('--batch_failure_policy', choices=['skip', 'error'], default='skip')
+    parser.add_argument('--batch_categorical_covariates', nargs='+', default=[])
+    parser.add_argument('--batch_continuous_covariates', nargs='+', default=[])
+    parser.add_argument('--combatseq_group_model', choices=['protect', 'batch_only'], default='protect')
+    parser.add_argument('--sva_irw_iterations', type=int, default=5)
+    parser.add_argument('--sva_estimation_method', choices=['be', 'leek', 'be_then_leek'], default='be')
+    parser.add_argument('--ruvseq_k_selection', choices=['manual', 'legacy'], default='manual')
+    parser.add_argument('--ruvseq_control_file', default=None)
+    parser.add_argument('--latent_k_selection', choices=['manual', 'legacy'], default='manual')
     parser.add_argument('--counts_tsv', required=True)
     parser.add_argument('--metadata_tsv', required=True)
     parser.add_argument('--options_json', required=False, default=None)
@@ -35,7 +45,7 @@ def build_parser():
     parser.add_argument('--out_counts_tsv', required=False, default=None)
     parser.add_argument('--out_sv_tsv', required=False, default=None)
     parser.add_argument('--sva_nsv', required=False, default='auto')
-    parser.add_argument('--sva_B', required=False, default='auto')
+    parser.add_argument('--sva_B', '--sva_nsv_permutations', dest='sva_B', required=False, default='auto')
     parser.add_argument('--sva_B_auto_max', required=False, default='100')
     parser.add_argument(
         '--sva_input_scale',
@@ -50,7 +60,7 @@ def build_parser():
     parser.add_argument('--ruvseq_k_max', required=False, default='5')
     parser.add_argument('--ruvseq_control_top_n', required=False, default='1000')
     parser.add_argument('--ruvseq_min_controls', required=False, default='100')
-    parser.add_argument('--latent_family', required=False, default='nb')
+    parser.add_argument('--latent_weighting', '--latent_family', dest='latent_family', required=False, default='dispersion')
     parser.add_argument('--latent_k', required=False, default='auto')
     parser.add_argument('--latent_k_max', required=False, default='5')
     parser.add_argument('--latent_max_iter', required=False, default='200')
@@ -63,11 +73,14 @@ def _write_failure_summary(args, counts, metadata, exc, skip_reason):
     summary = BatchEffectResult(
         backend=args.backend,
         method='error',
-        skip_reason=skip_reason,
+        skip_reason=getattr(exc, 'reason', skip_reason),
         extra={
+            **getattr(exc, 'diagnostics', {}),
             'counts_shape': [int(counts.shape[0]), int(counts.shape[1])],
             'metadata_rows': int(metadata.shape[0]),
             'error_message': str(exc),
+            'status': 'error',
+            'batch_failure_policy': args.batch_failure_policy,
         },
     )
     if args.out_summary_json is not None:
@@ -95,6 +108,9 @@ def main(argv=None):
                 sample_group_column=args.sample_group_column,
                 random_seed=args.random_seed,
                 input_scale=args.sva_input_scale,
+                irw_iterations=args.sva_irw_iterations,
+                estimation_method=args.sva_estimation_method,
+                **backend_options(args),
             )
         except (ValueError, RuntimeError, numpy.linalg.LinAlgError) as exc:
             return _write_failure_summary(
@@ -120,6 +136,8 @@ def main(argv=None):
                 metadata_df=metadata,
                 batch_column=args.batch_column,
                 sample_group_column=args.sample_group_column,
+                protect_group=args.combatseq_group_model == 'protect',
+                **backend_options(args),
             )
         except (ImportError, ValueError, RuntimeError) as exc:
             return _write_failure_summary(
@@ -146,6 +164,9 @@ def main(argv=None):
                 k_max=args.ruvseq_k_max,
                 top_n=args.ruvseq_control_top_n,
                 min_controls=args.ruvseq_min_controls,
+                k_selection=args.ruvseq_k_selection,
+                control_gene_ids=read_control_gene_ids(args.ruvseq_control_file),
+                **backend_options(args),
                 batch_column=args.batch_column,
                 sample_group_column=args.sample_group_column,
             )
@@ -166,7 +187,7 @@ def main(argv=None):
         if args.out_summary_dcf is not None:
             write_backend_summary_dcf(summary, args.out_summary_dcf)
         return 0
-    if args.backend == 'latent_glm':
+    if args.backend in {'latent_glm', 'latent_loglinear'}:
         try:
             corrected_df, latent_df, summary = run_latent_glm_backend(
                 counts_df=counts,
@@ -176,7 +197,9 @@ def main(argv=None):
                 k_max=args.latent_k_max,
                 sample_group_column=args.sample_group_column,
                 max_iter=args.latent_max_iter,
-                tol=args.latent_tol,
+                tol=float(args.latent_tol),
+                k_selection=args.latent_k_selection,
+                **backend_options(args),
             )
         except (ValueError, RuntimeError, numpy.linalg.LinAlgError) as exc:
             return _write_failure_summary(

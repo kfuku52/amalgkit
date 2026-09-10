@@ -1,9 +1,11 @@
-from dataclasses import dataclass
+"""Experimental log-linear latent removal; the historical GLM name is an alias."""
+from dataclasses import dataclass, field
 
 import numpy
 import pandas
 
-from amalgkit.batch_effect_common import BatchEffectResult, normalize_run_ids
+from amalgkit.batch_effect_common import BatchEffectResult
+from amalgkit.batch_effect_contract import BatchModelError, batch_backend, orthogonal_basis, matrix_change
 
 
 EPS = 1e-8
@@ -22,6 +24,7 @@ class _LatentFit:
     # _fit_latent_model. corrected_df is already nonnegative, so this is the
     # only place the pre-clip negatives are observable.
     negative_values_before_clip: int = 0
+    postprocessing: list = field(default_factory=list)
 
 
 def _build_design_matrix(metadata_df, sample_group_column='sample_group'):
@@ -39,16 +42,7 @@ def _build_design_matrix(metadata_df, sample_group_column='sample_group'):
 
 
 def _orthonormal_basis(matrix):
-    if matrix.size == 0:
-        return numpy.zeros((matrix.shape[0], 0), dtype=float)
-    q, r = numpy.linalg.qr(matrix)
-    if r.ndim != 2 or r.shape[0] == 0 or r.shape[1] == 0:
-        return numpy.zeros((matrix.shape[0], 0), dtype=float)
-    diag = numpy.abs(numpy.diag(r))
-    rank = int(numpy.sum(diag > 1e-8))
-    if rank <= 0:
-        return numpy.zeros((matrix.shape[0], 0), dtype=float)
-    return q[:, :rank]
+    return orthogonal_basis(matrix)
 
 
 def _project_orthogonal_to_design(matrix, design_matrix):
@@ -66,16 +60,7 @@ def _orthonormalize_latent(latent_matrix, design_matrix):
         projected = latent_matrix.copy()
     else:
         projected = latent_matrix - basis.dot(basis.T).dot(latent_matrix)
-    if numpy.allclose(projected, 0.0):
-        return numpy.zeros((design_matrix.shape[0], 0), dtype=float)
-    q, r = numpy.linalg.qr(projected)
-    if r.ndim != 2 or r.shape[0] == 0 or r.shape[1] == 0:
-        return numpy.zeros((design_matrix.shape[0], 0), dtype=float)
-    diag = numpy.abs(numpy.diag(r))
-    rank = int(numpy.sum(diag > 1e-8))
-    if rank <= 0:
-        return numpy.zeros((design_matrix.shape[0], 0), dtype=float)
-    return q[:, :rank]
+    return orthogonal_basis(projected, reference_scale=numpy.linalg.norm(latent_matrix))
 
 
 def _subspace_distance(left, right):
@@ -136,9 +121,8 @@ def _objective_value(weighted_residual_matrix):
 
 
 def _prepare_input_arrays(counts_df):
-    observed_runs = normalize_run_ids(counts_df.columns)
+    observed_runs = list(counts_df.columns)
     counts = counts_df.loc[:, observed_runs].to_numpy(dtype=float)
-    counts = numpy.maximum(counts, 0.0)
     library_sizes = counts.sum(axis=0)
     if numpy.allclose(library_sizes, 0.0):
         library_sizes = numpy.ones_like(library_sizes)
@@ -241,26 +225,26 @@ def _fit_latent_model(
     latent_coefficients = coefficients[design_matrix.shape[1]:, :]
     latent_effect = latent.dot(latent_coefficients).T
     corrected_response = response_matrix - latent_effect
-    corrected_normalized = (
-        numpy.exp(numpy.clip(corrected_response, -MAX_EXPONENT, MAX_EXPONENT))
-        - 0.5
-    )
+    bounded_response = numpy.clip(corrected_response, -MAX_EXPONENT, MAX_EXPONENT)
+    corrected_normalized = numpy.exp(bounded_response) - 0.5
     negative_values_before_clip = int((corrected_normalized < 0).sum())
-    corrected = numpy.maximum(corrected_normalized, 0.0) * numpy.exp(offsets).reshape(1, -1)
+    clipped = numpy.maximum(corrected_normalized, 0.0)
+    postprocessing = [
+        matrix_change(corrected_response, bounded_response, 'limit_exponent', 'log_depth_normalized_counts'),
+        matrix_change(corrected_normalized, clipped, 'clip_negative', 'depth_normalized_counts'),
+    ]
+    corrected = clipped * numpy.exp(offsets).reshape(1, -1)
     corrected_df = pandas.DataFrame(corrected, index=counts_df.index, columns=run_ids)
     latent_df = pandas.DataFrame(
         latent,
         index=run_ids,
         columns=['latent_{}'.format(idx + 1) for idx in range(actual_k)],
     )
-    if numpy.isnan(objective):
-        weighted_residuals, _gene_weights = _weighted_residuals(
-            response_matrix - fitted,
-            normalized_counts=normalized_counts,
-            fitted_matrix=fitted,
-            family=family,
-        )
-        objective = _objective_value(weighted_residuals)
+    weighted_residuals, _gene_weights = _weighted_residuals(
+        response_matrix - fitted, normalized_counts=normalized_counts,
+        fitted_matrix=fitted, family=family,
+    )
+    objective = _objective_value(weighted_residuals)
     return _LatentFit(
         corrected_df,
         latent_df,
@@ -269,6 +253,7 @@ def _fit_latent_model(
         converged,
         actual_k,
         negative_values_before_clip,
+        postprocessing,
     )
 
 
@@ -308,6 +293,7 @@ def _resolve_auto_k(response_matrix, normalized_counts, design_matrix, family, m
     return max(1, min(resolved, max_allowed_k))
 
 
+@batch_backend('latent_loglinear')
 def run_latent_glm_backend(
     counts_df,
     metadata_df,
@@ -317,14 +303,23 @@ def run_latent_glm_backend(
     sample_group_column='sample_group',
     max_iter=200,
     tol=1e-5,
+    k_selection='manual',
+    protected_design=None,
 ):
     if counts_df.shape[1] == 0:
         raise ValueError('latent_glm backend requires at least one sample.')
+    family = {'uniform': 'poisson', 'dispersion': 'nb'}.get(family, family)
     if family not in {'poisson', 'nb'}:
         raise ValueError('Unsupported latent_glm family: {}'.format(family))
+    if k_selection not in {'manual', 'legacy'}:
+        raise ValueError('Latent k selection must be manual or legacy.')
+    if int(k_max) < 0 or int(max_iter) < 0 or not numpy.isfinite(tol) or tol <= 0:
+        raise ValueError('Invalid latent k_max, max_iter or tolerance.')
+    if str(k_setting) == 'auto' and k_selection != 'legacy':
+        raise BatchModelError('latent_auto_not_calibrated', 'Specify --latent_k INT; uncalibrated auto requires --latent_k_selection legacy.')
+    if str(k_setting) != 'auto' and int(k_setting) < 0:
+        raise ValueError('Latent k must be nonnegative.')
     counts = counts_df.copy()
-    counts.index = counts.index.map(str)
-    counts.columns = counts.columns.map(str)
     metadata = metadata_df.copy()
     if 'run' not in metadata.columns:
         raise ValueError('latent_glm backend requires a "run" column in metadata.')
@@ -332,8 +327,10 @@ def run_latent_glm_backend(
     metadata = metadata.set_index('run', drop=False).loc[list(counts.columns), :].reset_index(drop=True)
 
     run_ids, _counts_array, normalized_counts, offsets, response_matrix = _prepare_input_arrays(counts)
-    design_matrix, _design_columns = _build_design_matrix(metadata, sample_group_column=sample_group_column)
-    max_allowed_k = min(int(k_max), max(0, counts.shape[1] - _orthonormal_basis(design_matrix).shape[1]))
+    design_matrix = protected_design.matrix.to_numpy(dtype=float)
+    max_allowed_k = min(int(k_max), max(0, counts.shape[1] - _orthonormal_basis(design_matrix).shape[1] - 1))
+    if str(k_setting) != 'auto' and int(k_setting) > max_allowed_k:
+        raise BatchModelError('latent_insufficient_df', 'Requested k exceeds the supported rank or leaves no residual degrees of freedom.')
     manual_k = _resolve_manual_k(k_setting=k_setting, max_k=max_allowed_k)
 
     if manual_k is not None:
@@ -372,9 +369,12 @@ def run_latent_glm_backend(
         resolved_k = int(fit.actual_k)
         method = 'auto'
 
+    if manual_k is not None and resolved_k < manual_k:
+        raise BatchModelError('latent_degenerate_factors', 'Requested latent dimensions could not be estimated.',
+                              {'requested_latent_k': manual_k, 'resolved_latent_k': resolved_k})
     if resolved_k <= 0:
         summary = BatchEffectResult(
-            backend='latent_glm',
+            backend='latent_loglinear',
             method=method,
             skip_reason='latent_k_zero',
             stable=True,
@@ -386,27 +386,14 @@ def run_latent_glm_backend(
             latent_objective=float(fit.objective),
             negative_values_before_clip=0,
             negative_values_after_clip=0,
-            extra={'latent_converged': True},
+            extra={'latent_converged': True, 'latent_model': 'experimental_loglinear', 'latent_weighting': 'uniform' if family == 'poisson' else 'dispersion', 'k_selection': k_selection, 'latent_objective_kind': 'weighted_log_residual_mse', 'postprocessing': fit.postprocessing},
         ).to_jsonable()
         return counts.copy(), pandas.DataFrame(index=run_ids), summary
 
     if not fit.converged:
-        summary = BatchEffectResult(
-            backend='latent_glm',
-            method=method,
-            skip_reason='latent_not_converged',
-            stable=False,
-            corrected_run_ids=[],
-            uncorrected_run_ids=list(run_ids),
-            resolved_latent_k=int(resolved_k),
-            latent_family=family,
-            latent_iterations=int(fit.iterations),
-            latent_objective=float(fit.objective),
-            negative_values_before_clip=0,
-            negative_values_after_clip=0,
-            extra={'latent_converged': False},
-        ).to_jsonable()
-        return counts.copy(), fit.latent_df, summary
+        raise BatchModelError('latent_not_converged', 'Latent factor iteration did not converge.',
+                              {'latent_converged': False, 'resolved_latent_k': resolved_k,
+                               'latent_iterations': int(fit.iterations)})
 
     # The back-transform in _fit_latent_model (exp(corrected_response) - 0.5) can
     # go negative for low-count genes; it is floored there, so the count has to be
@@ -415,7 +402,7 @@ def run_latent_glm_backend(
     corrected_df = fit.corrected_df.loc[:, run_ids].clip(lower=0.0)
     negative_after = int((corrected_df.to_numpy(dtype=float) < 0).sum())
     summary = BatchEffectResult(
-        backend='latent_glm',
+        backend='latent_loglinear',
         method=method,
         skip_reason='',
         stable=bool(fit.converged),
@@ -427,7 +414,7 @@ def run_latent_glm_backend(
         latent_objective=float(fit.objective),
         negative_values_before_clip=negative_before,
         negative_values_after_clip=negative_after,
-        extra={'latent_converged': bool(fit.converged)},
+        extra={'latent_converged': bool(fit.converged), 'latent_model': 'experimental_loglinear', 'latent_weighting': 'uniform' if family == 'poisson' else 'dispersion', 'latent_objective_kind': 'weighted_log_residual_mse', 'k_selection': k_selection, 'postprocessing': fit.postprocessing},
     ).to_jsonable()
     return corrected_df, fit.latent_df, summary
 
@@ -435,3 +422,7 @@ def run_latent_glm_backend(
 __all__ = [
     'run_latent_glm_backend',
 ]
+
+
+# Import compatibility for the historical name; this is not a likelihood GLM.
+run_latent_loglinear_backend = run_latent_glm_backend

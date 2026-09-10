@@ -1,0 +1,4 @@
+R version 4.3.3 (2024-02-29)
+sva 3.50.0
+edgeR 4.0.16
+RUVr source https://raw.githubusercontent.com/drisso/RUVSeq/f560e84eb493f0c2d72279612f9e4ca99493b434/R/RUVr-methods.R

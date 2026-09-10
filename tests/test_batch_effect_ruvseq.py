@@ -1,6 +1,5 @@
 import numpy
 import pandas
-import pytest
 from scipy.stats import f_oneway
 
 import amalgkit.batch_effect_ruvseq as batch_effect_ruvseq
@@ -11,7 +10,7 @@ from amalgkit.batch_effect_ruvseq import (
 )
 
 
-def test_run_ruvseq_backend_reports_wholesale_glm_fallback(monkeypatch):
+def test_run_ruvseq_backend_skips_whole_matrix_when_glm_fails(monkeypatch):
     counts_df = pandas.DataFrame(
         {
             'RUN1': [100.0, 20.0, 80.0],
@@ -39,25 +38,16 @@ def test_run_ruvseq_backend_reports_wholesale_glm_fallback(monkeypatch):
         force_glm_failure,
     )
 
-    with pytest.warns(UserWarning, match='fallback estimation path'):
-        _corrected_df, _w_df, summary = run_ruvseq_backend(
-            counts_df=counts_df,
-            metadata_df=metadata_df,
-            control_mode='all',
-            k_setting='0',
-            k_max=2,
-            min_controls=2,
-        )
-
-    assert summary['ruv_residual_method'] == 'least_squares'
-    assert summary['ruv_pvalue_method'] == 'one_way_anova'
-    assert summary['ruv_fallback_used'] is True
-    assert summary['ruv_fallback_reason'] == 'forced_glm_failure'
-    assert summary['ruv_nb_fallback_genes'] == 0
-    assert summary['ruv_anova_failure_genes'] == 0
+    corrected, w, summary = run_ruvseq_backend(
+        counts_df, metadata_df, control_mode='all', k_setting=1, min_controls=2,
+    )
+    pandas.testing.assert_frame_equal(corrected, counts_df)
+    assert w.shape[1] == 0
+    assert summary['status'] == 'skipped'
+    assert summary['skip_reason'] == 'ruvseq_glm_failed'
 
 
-def test_run_ruvseq_backend_k_zero_survives_sparse_fallback_residuals(monkeypatch):
+def test_run_ruvseq_backend_k_zero_does_not_attempt_glm(monkeypatch):
     counts_df = pandas.DataFrame(
         {
             'RUN1': [0.0, 5.0, 0.0],
@@ -88,15 +78,9 @@ def test_run_ruvseq_backend_k_zero_survives_sparse_fallback_residuals(monkeypatc
         force_glm_failure,
     )
 
-    with pytest.warns(UserWarning, match='fallback estimation path'):
-        corrected_df, w_df, summary = run_ruvseq_backend(
-            counts_df=counts_df,
-            metadata_df=metadata_df,
-            control_mode='all',
-            k_setting='0',
-            min_controls=2,
-        )
-
+    corrected_df, w_df, summary = run_ruvseq_backend(
+        counts_df, metadata_df, control_mode='all', k_setting=0, min_controls=2,
+    )
     pandas.testing.assert_frame_equal(corrected_df, counts_df)
     assert w_df.shape == (counts_df.shape[1], 0)
     assert summary['resolved_ruv_k'] == 0
@@ -215,7 +199,7 @@ def test_run_ruvseq_backend_returns_nonnegative_corrected_matrix_and_summary():
     assert list(w_df.index) == list(counts_df.columns)
 
 
-def test_run_ruvseq_backend_auto_k_selects_positive_k_for_balanced_fixture():
+def test_run_ruvseq_backend_legacy_auto_can_keep_baseline():
     counts_df = pandas.DataFrame(
         {
             'RUN1': [100.0, 110.0, 12.0, 10.0, 9.0, 8.0],
@@ -238,14 +222,15 @@ def test_run_ruvseq_backend_auto_k_selects_positive_k_for_balanced_fixture():
         metadata_df=metadata_df,
         control_mode='auto',
         k_setting='auto',
+        k_selection='legacy',
         k_max=3,
         top_n=6,
         min_controls=2,
     )
 
     assert corrected_df.shape == counts_df.shape
-    assert int(summary['resolved_ruv_k']) >= 1
-    assert int(summary['resolved_ruv_k']) <= 3
+    assert int(summary['resolved_ruv_k']) == 0
+    pandas.testing.assert_frame_equal(corrected_df, counts_df)
     assert int(summary['resolved_ruv_controls']) >= 2
 
 
@@ -272,19 +257,20 @@ def test_run_ruvseq_backend_single_group_design_skip():
         metadata_df=metadata_df,
         control_mode='auto',
         k_setting='auto',
+        k_selection='legacy',
         k_max=3,
         top_n=4,
         min_controls=2,
     )
 
     pandas.testing.assert_frame_equal(corrected_df, counts_df)
-    assert summary['skip_reason'] == 'ruvseq_design_failed'
+    assert summary['skip_reason'] == 'ruvseq_controls_unidentifiable'
     assert pandas.isna(summary['resolved_ruv_k'])
     assert pandas.isna(summary['resolved_ruv_controls'])
     assert w_df.shape == (counts_df.shape[1], 0)
 
 
-def test_run_ruvseq_backend_rank_zero_returns_raw_counts_and_reports_k_zero():
+def test_run_ruvseq_backend_rank_zero_distinguishes_manual_failure_from_auto_zero():
     counts_df = pandas.DataFrame(
         {
             'RUN1': [10.0, 20.0, 30.0],
@@ -307,6 +293,7 @@ def test_run_ruvseq_backend_rank_zero_returns_raw_counts_and_reports_k_zero():
             counts_df=counts_df,
             metadata_df=metadata_df,
             k_setting=k_setting,
+            k_selection='legacy',
             k_max=2,
             min_controls=2,
         )
@@ -314,7 +301,8 @@ def test_run_ruvseq_backend_rank_zero_returns_raw_counts_and_reports_k_zero():
         pandas.testing.assert_frame_equal(corrected_df, counts_df)
         assert w_df.shape == (counts_df.shape[1], 0)
         assert summary['resolved_ruv_k'] == 0
-        assert summary['skip_reason'] == 'ruvseq_k_zero'
+        assert summary['skip_reason'] == ('ruvseq_degenerate_factors' if k_setting == '1' else 'ruvseq_k_zero')
+        assert summary['status'] == ('skipped' if k_setting == '1' else 'not_needed')
         assert summary['corrected_run_ids'] == []
 
 
@@ -376,7 +364,8 @@ def test_run_ruvseq_backend_no_op_correction_does_not_inflate_counts():
     pandas.testing.assert_frame_equal(corrected_df, counts_df)
     assert w_df.shape == (counts_df.shape[1], 0)
     assert summary['resolved_ruv_k'] == 0
-    assert summary['skip_reason'] == 'ruvseq_k_zero'
+    assert summary['skip_reason'] == 'ruvseq_degenerate_factors'
+    assert summary['status'] == 'skipped'
 
 
 def test_ruvr_correct_counts_returns_raw_counts_on_noise_floor_residuals():

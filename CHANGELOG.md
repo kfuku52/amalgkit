@@ -7,6 +7,15 @@ than the Releases page for those changes.
 
 ### Unreleased
 
+- Default batch-model failures to a whole-species skip, with an explicit strict
+  policy and shared biological-design diagnostics; remove ComBat group-dropping
+  retries and RUV model/control substitutions.
+- Remove unsupported SVA directions and separate IRW iterations from dimension
+  permutations. Name the experimental log-linear latent model accurately and
+  require explicit opt-in to uncalibrated latent/RUV automatic dimension criteria.
+- Align after-QC with saved expression values and export complete designs, factors,
+  removal bases and postprocessing diagnostics. See the batch-correction guide for
+  migration, count-input restrictions and scientific validation limits.
 - Calculate tau from linear arithmetic replicate means, with explicit donor,
   BioSample and project weights, fixed tissue panels and auditable input tables.
 - Preserve escaped tissue names across per-species and cross-species processing,

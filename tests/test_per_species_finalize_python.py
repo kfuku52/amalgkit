@@ -295,9 +295,7 @@ def test_batch_step_aligns_effective_lengths_after_gene_partitioning():
     assert result['tc'].loc['G2', 'RUN1'] == 0.0
 
 
-@pytest.mark.optional_dependency
-def test_combatseq_batch_step_preserves_group_fallback_diagnostics():
-    pytest.importorskip('inmoose.pycombat')
+def test_combatseq_batch_step_preserves_confounded_design_skip_diagnostics():
     counts = pandas.DataFrame(
         {
             'RUN1': [100, 101, 10, 11],
@@ -316,18 +314,20 @@ def test_combatseq_batch_step_preserves_group_fallback_diagnostics():
     )
     effective_lengths = pandas.DataFrame(100.0, index=counts.index, columns=counts.columns)
 
-    with pytest.warns(UserWarning, match='fell back to batch-only correction'):
-        result = _run_batch_effect_step(
-            counts_df=counts,
-            metadata_df=metadata,
-            eff_length_df=effective_lengths,
-            args=SimpleNamespace(norm='none-none', batch_effect_alg='combatseq', clip_negative=True),
-        )
+    result = _run_batch_effect_step(
+        counts_df=counts,
+        metadata_df=metadata,
+        eff_length_df=effective_lengths,
+        args=SimpleNamespace(norm='none-none', batch_effect_alg='combatseq', clip_negative=True),
+    )
 
     batch_info = result['batch_info']
     assert batch_info['group_model_used'] is False
-    assert batch_info['group_fallback_used'] is True
-    assert 'confounded with the batches' in batch_info['group_error_message']
+    assert batch_info['group_fallback_used'] is False
+    assert batch_info['status'] == 'skipped'
+    assert batch_info['skip_reason'] == 'combatseq_confounded_design'
+    assert batch_info['batch_effect_alg_applied'] == 'no'
+    pandas.testing.assert_frame_equal(result['tc'], counts.astype(float))
 
 
 def test_single_sample_batch_skip_still_applies_requested_normalization():

@@ -1,12 +1,12 @@
 import math
-import warnings
 
 import numpy
 import pandas
-from scipy.special import gammaln
+from scipy.special import gammaln, xlogy
 from scipy.stats import chi2, f
 
 from amalgkit.batch_effect_common import align_metadata_to_counts
+from amalgkit.batch_effect_contract import BatchModelError, batch_backend, removal_basis, matrix_change
 from amalgkit.normalization_tmm import calc_factor_quantile
 
 
@@ -242,8 +242,8 @@ def _compute_glm_pvalues_and_residuals(counts_df, design_df, effective_lib_sizes
         diagnostics = {}
     sm = _load_statsmodels()
     if sm is None:
-        _record_ruv_fallback(diagnostics, 'statsmodels_unavailable')
-        return None, None
+        raise ImportError('RUVSeq requires statsmodels.')
+    from statsmodels.tools.sm_exceptions import PerfectSeparationError
     x_full = design_df.to_numpy(dtype=float)
     offset = numpy.log(pandas.Series(effective_lib_sizes, index=counts_df.columns, dtype=float).to_numpy(dtype=float))
     offset_scale = numpy.exp(offset)
@@ -254,20 +254,22 @@ def _compute_glm_pvalues_and_residuals(counts_df, design_df, effective_lib_sizes
     df_diff = max(1, rank_full - 1)
     for row_idx in range(counts_df.shape[0]):
         y = counts_df.iloc[row_idx, :].to_numpy(dtype=float)
+        if not y.any():
+            residuals[row_idx, :] = 0.0
+            pvalues[row_idx] = numpy.nan
+            continue
         try:
             poisson_full = sm.GLM(y, x_full, family=sm.families.Poisson(), offset=offset).fit(maxiter=100, disp=0)
-        except Exception as exc:
-            _record_ruv_fallback(
-                diagnostics,
-                'poisson_glm_failed:{}'.format(exc.__class__.__name__),
-            )
-            return None, None
+        except (ValueError, FloatingPointError, numpy.linalg.LinAlgError, PerfectSeparationError) as exc:
+            raise BatchModelError('ruvseq_glm_failed', str(exc), {'failed_gene': str(counts_df.index[row_idx])}) from exc
+        if not poisson_full.converged:
+            raise BatchModelError('ruvseq_glm_not_converged', 'Poisson fit did not converge.', {'failed_gene': str(counts_df.index[row_idx])})
         alpha = _estimate_nb_alpha_from_poisson_fit(y=y, mu=poisson_full.fittedvalues)
         fit_full = poisson_full
         y_sum = float(numpy.sum(y))
         null_mean = offset_scale * (y_sum / offset_scale_sum)
         poisson_null_llf = float(
-            numpy.sum(y * numpy.log(null_mean) - null_mean - gammaln(y + 1.0))
+            numpy.sum(xlogy(y, null_mean) - null_mean - gammaln(y + 1.0))
         )
         null_llf = poisson_null_llf
         if alpha > RUVSEQ_POISSON_ALPHA_THRESHOLD:
@@ -281,16 +283,15 @@ def _compute_glm_pvalues_and_residuals(counts_df, design_df, effective_lib_sizes
                     offset=offset,
                 ).fit(maxiter=100, disp=0)
                 null_llf = float(fit_null.llf)
-            except Exception:
-                diagnostics['ruv_nb_fallback_genes'] = int(
-                    diagnostics.get('ruv_nb_fallback_genes', 0)
-                ) + 1
-                _record_ruv_fallback(diagnostics, 'negative_binomial_glm_failed')
-                fit_full = poisson_full
-                null_llf = poisson_null_llf
+            except (ValueError, FloatingPointError, numpy.linalg.LinAlgError, PerfectSeparationError) as exc:
+                raise BatchModelError('ruvseq_nb_glm_failed', str(exc), {'failed_gene': str(counts_df.index[row_idx])}) from exc
+            if not fit_full.converged or not fit_null.converged:
+                raise BatchModelError('ruvseq_glm_not_converged', 'NB fit did not converge.', {'failed_gene': str(counts_df.index[row_idx])})
         residuals[row_idx, :] = numpy.asarray(fit_full.resid_deviance, dtype=float).reshape(-1)
         llf_stat = max(0.0, 2.0 * float(fit_full.llf - null_llf))
         pvalues[row_idx] = float(chi2.sf(llf_stat, df_diff))
+        if not numpy.isfinite(pvalues[row_idx]) or not numpy.isfinite(residuals[row_idx]).all():
+            raise BatchModelError('ruvseq_nonfinite_fit', 'GLM produced nonfinite diagnostics.', {'failed_gene': str(counts_df.index[row_idx])})
     residuals_df = pandas.DataFrame(residuals, index=counts_df.index, columns=counts_df.columns)
     pvalues_series = pandas.Series(pvalues, index=counts_df.index, dtype=float)
     return pvalues_series, residuals_df
@@ -353,7 +354,7 @@ def _compute_group_pvalues(seq_uq_df, sample_groups, diagnostics=None):
         ss_within[regular] / df_within[regular]
     )
     f_stat[valid & (ss_within == 0) & (ss_between > 0)] = numpy.inf
-    pvalues = numpy.ones((seq_uq_df.shape[0],), dtype=float)
+    pvalues = numpy.full((seq_uq_df.shape[0],), numpy.nan, dtype=float)
     pvalues[valid] = f.sf(f_stat[valid], df_between[valid], df_within[valid])
     return pandas.Series(pvalues, index=seq_uq_df.index, dtype=float)
 
@@ -373,7 +374,7 @@ def select_ruvseq_controls(
     if str(mode).lower() == 'all':
         return controls
     if design_df.shape[1] <= 1:
-        return controls
+        raise BatchModelError('ruvseq_controls_unidentifiable', 'Empirical controls require a biological contrast; explicitly select all or file.')
     cpm_mat = _counts_per_million(
         counts_df=counts_df,
         effective_lib_sizes=effective_lib_sizes if effective_lib_sizes is not None else counts_df.sum(axis=0),
@@ -384,7 +385,7 @@ def select_ruvseq_controls(
     eligible = is_expressed & numpy.isfinite(pvalues_array)
     num_eligible = int(eligible.sum())
     if num_eligible < int(min_controls):
-        return controls
+        raise BatchModelError('ruvseq_insufficient_controls', 'Too few eligible empirical controls.', {'ruv_eligible_controls': num_eligible})
     n_select = min(int(top_n), num_eligible)
     ord_idx = numpy.argsort(pvalues_array[eligible])[::-1]
     idx_stage1 = numpy.where(eligible)[0][ord_idx[:n_select]]
@@ -398,7 +399,7 @@ def select_ruvseq_controls(
     keep_n = max(int(min_controls), int(math.floor(len(ord_mad) * 0.5)))
     keep_n = min(keep_n, len(ord_mad))
     if keep_n < int(min_controls):
-        return controls
+        raise BatchModelError('ruvseq_insufficient_controls', 'Control selection did not meet min_controls.', {'ruv_eligible_controls': num_eligible})
     chosen = idx_stage1[ord_mad[:keep_n]]
     controls = numpy.zeros((num_genes,), dtype=bool)
     controls[chosen] = True
@@ -407,7 +408,7 @@ def select_ruvseq_controls(
 
 def compute_design_residuals(seq_uq_df, design_df):
     with numpy.errstate(divide='ignore', invalid='ignore'):
-        samples_by_genes = numpy.log(
+        samples_by_genes = numpy.log1p(
             seq_uq_df.to_numpy(dtype=float)
         ).transpose()
     x = design_df.to_numpy(dtype=float)
@@ -436,7 +437,7 @@ def _compute_ruvr_basis(residuals_df, controls, center=True, tolerance=1e-8):
     return eigenvectors[:, positive]
 
 
-def ruvr_correct_counts(seq_uq_df, controls, k, residuals_df, center=True, round_counts=True, epsilon=1.0, tolerance=1e-8, is_log=False, residual_basis=None):
+def ruvr_correct_counts(seq_uq_df, controls, k, residuals_df, center=True, round_counts=True, epsilon=1.0, tolerance=1e-8, is_log=False, residual_basis=None, design_matrix=None):
     x = seq_uq_df.to_numpy(dtype=float)
     if (not is_log) and numpy.any(numpy.abs(x - numpy.round(x)) > 1e-8):
         pass
@@ -463,8 +464,11 @@ def ruvr_correct_counts(seq_uq_df, controls, k, residuals_df, center=True, round
     if resolved_k <= 0:
         return seq_uq_df.copy(), pandas.DataFrame(index=seq_uq_df.columns)
     w = basis[:, :resolved_k]
-    alpha, _, _, _ = numpy.linalg.lstsq(w, y, rcond=None)
-    corrected_y = y - (w @ alpha)
+    # W is retained for downstream GLMs; exploration removes only the part
+    # orthogonal to the explicitly protected design.
+    remove = w if design_matrix is None else removal_basis(w, design_matrix)
+    alpha, _, _, _ = numpy.linalg.lstsq(remove, y, rcond=None)
+    corrected_y = y - (remove @ alpha)
     if is_log:
         corrected = corrected_y.transpose()
     else:
@@ -473,6 +477,8 @@ def ruvr_correct_counts(seq_uq_df, controls, k, residuals_df, center=True, round
             corrected = numpy.round(corrected)
             corrected[corrected < 0] = 0
     corrected_df = pandas.DataFrame(corrected, index=seq_uq_df.index, columns=seq_uq_df.columns)
+    if not is_log:
+        corrected_df.attrs['postprocessing'] = [matrix_change(numpy.exp(corrected_y).T - float(epsilon), corrected, 'round_and_clip', 'upper_quartile_counts')]
     w_df = pandas.DataFrame(
         w,
         index=seq_uq_df.columns,
@@ -490,6 +496,7 @@ def resolve_ruvseq_k_and_matrix(
     k_max=5,
     batch_column='bioproject',
     sample_group_column='sample_group',
+    design_matrix=None,
 ):
     if str(k_setting) != 'auto':
         selected_k = int(k_setting)
@@ -509,6 +516,7 @@ def resolve_ruvseq_k_and_matrix(
                 selected_k,
                 residuals_df,
                 residual_basis=residual_basis,
+                design_matrix=design_matrix,
             )
         resolved_k = int(w_df.shape[1])
         comp = score_ruvseq_components(
@@ -534,7 +542,8 @@ def resolve_ruvseq_k_and_matrix(
         controls=controls,
     )
     max_k = max(1, int(k_max))
-    max_allowed = max(0, seq_uq_df.shape[1] - 1)
+    design_rank = 1 if design_matrix is None else numpy.linalg.matrix_rank(design_matrix)
+    max_allowed = max(0, seq_uq_df.shape[1] - design_rank - 1)
     max_k = min(max_k, max_allowed)
     baseline_comp = score_ruvseq_components(
         mat_df=seq_uq_df,
@@ -543,6 +552,8 @@ def resolve_ruvseq_k_and_matrix(
         sample_group_column=sample_group_column,
     )
     baseline_score = baseline_comp['score']
+    if not numpy.isfinite(baseline_score):
+        raise BatchModelError('ruvseq_auto_score_unavailable', 'Cannot compare automatic k candidates to a finite baseline.')
     baseline_group_score = baseline_comp['group_score']
     best_k = 0
     best_score = baseline_score
@@ -559,6 +570,7 @@ def resolve_ruvseq_k_and_matrix(
             k,
             residuals_df,
             residual_basis=residual_basis,
+            design_matrix=design_matrix,
         )
         resolved_k = int(w_df.shape[1])
         if resolved_k <= 0:
@@ -602,9 +614,7 @@ def resolve_ruvseq_k_and_matrix(
             continue
         if abs(float(penalized_score - best_penalized_score)) <= RUVSEQ_SCORE_TOLERANCE:
             should_replace = False
-            if (int(best_k) <= 0) and (int(resolved_k) > 0):
-                should_replace = True
-            elif (
+            if (
                 (int(best_k) > 0)
                 and (int(resolved_k) > 0)
                 and (int(resolved_k) < int(best_k))
@@ -634,6 +644,7 @@ def resolve_ruvseq_k_and_matrix(
     }
 
 
+@batch_backend('ruvseq')
 def run_ruvseq_backend(
     counts_df,
     metadata_df,
@@ -644,6 +655,9 @@ def run_ruvseq_backend(
     min_controls=100,
     batch_column='bioproject',
     sample_group_column='sample_group',
+    k_selection='manual',
+    control_gene_ids=None,
+    protected_design=None,
 ):
     method = 'manual' if str(k_setting) != 'auto' else 'auto'
     if counts_df.shape[0] == 0:
@@ -652,33 +666,30 @@ def run_ruvseq_backend(
             method=method,
             skip_reason='no_expressed_genes',
         )
-    aligned_metadata = _align_metadata_to_counts(counts_df=counts_df, metadata_df=metadata_df)
-    try:
-        design_df, sample_groups = _build_sample_group_design(
-            aligned_metadata=aligned_metadata,
-            sample_group_column=sample_group_column,
-        )
-    except ValueError:
-        return _build_ruvseq_skip_output(
-            counts_df=counts_df,
-            method=method,
-            skip_reason='ruvseq_design_failed',
-        )
-    if len(set(sample_groups)) <= 1:
-        return _build_ruvseq_skip_output(
-            counts_df=counts_df,
-            method=method,
-            skip_reason='ruvseq_design_failed',
-        )
-    counts_plus_one = counts_df.astype(float) + 1.0
-    _edge_uq_df, _uq_factors, effective_lib_sizes = _upperquartile_normalize(counts_plus_one, round_counts=True)
-    # The RUVr correction itself runs on the between-lane upper-quartile
-    # normalized matrix (library-size effects must be removed before the
-    # residual SVD). The +1 pseudo-count is used only for the GLM fit
-    # (counts_plus_one), not for the corrected matrix, which avoids inflating
-    # every corrected count by +1. The returned matrix is multiplied back by
-    # the between-lane scale factors in run_ruvseq_backend so "corrected
-    # counts" are on the original count scale.
+    if control_mode not in {'auto', 'empirical', 'all', 'file'}:
+        raise ValueError('Unknown RUV control mode.')
+    if control_gene_ids is not None and control_mode != 'file':
+        raise ValueError('A control gene file requires RUV control mode file.')
+    if k_selection not in {'manual', 'legacy'} or int(k_max) < 0 or int(min_controls) < 2 or int(top_n) < 1:
+        raise ValueError('Invalid RUV selection options.')
+    if str(k_setting) != 'auto' and int(k_setting) < 0:
+        raise ValueError('RUV k must be nonnegative.')
+    if str(k_setting) == '0':
+        output = _build_ruvseq_skip_output(counts_df, method, 'ruvseq_k_zero')
+        output[-1]['resolved_ruv_k'] = 0
+        return output
+    if str(k_setting) == 'auto' and k_selection != 'legacy':
+        raise BatchModelError('ruvseq_auto_not_calibrated', 'Specify --ruvseq_k INT; uncalibrated auto requires --ruvseq_k_selection legacy.')
+    aligned_metadata = metadata_df
+    design_df = protected_design.matrix
+    max_k = min(int(k_max), max(0, counts_df.shape[1] - design_df.shape[1] - 1))
+    if max_k == 0 or (str(k_setting) != 'auto' and int(k_setting) > max_k):
+        raise BatchModelError('ruvseq_insufficient_df', 'Requested k leaves no residual degrees of freedom.')
+    if (counts_df.sum(axis=0) <= 0).any():
+        raise BatchModelError('ruvseq_zero_library', 'Cannot estimate offsets for a zero-count library.')
+    # The count GLM uses the observed counts. The pseudo-count belongs only
+    # to the log transformation used for the exploratory corrected matrix.
+    _edge_uq_df, _uq_factors, effective_lib_sizes = _upperquartile_normalize(counts_df, round_counts=False)
     seq_uq_df, seq_uq_scales = _between_lane_normalize_upper(counts_df, round_counts=True)
     diagnostics = {
         'ruv_residual_method': 'glm_deviance',
@@ -688,42 +699,41 @@ def run_ruvseq_backend(
         'ruv_anova_failure_genes': 0,
     }
     pvalues, residuals_df = _compute_glm_pvalues_and_residuals(
-        counts_df=counts_plus_one,
+        counts_df=counts_df,
         design_df=design_df,
         effective_lib_sizes=effective_lib_sizes,
         diagnostics=diagnostics,
     )
     if (pvalues is None) or (residuals_df is None):
-        diagnostics['ruv_residual_method'] = 'least_squares'
-        diagnostics['ruv_pvalue_method'] = 'one_way_anova'
-        residuals_df = compute_design_residuals(seq_uq_df=seq_uq_df, design_df=design_df)
-        pvalues = _compute_group_pvalues(
-            seq_uq_df=seq_uq_df,
-            sample_groups=sample_groups,
-            diagnostics=diagnostics,
+        raise BatchModelError('ruvseq_glm_failed', 'GLM did not produce usable residuals and p-values.', diagnostics)
+    if control_mode == 'file':
+        if not control_gene_ids:
+            raise ValueError('RUV file mode requires control gene IDs.')
+        controls = counts_df.index.isin(control_gene_ids)
+    else:
+        controls = select_ruvseq_controls(
+            counts_df=counts_df, seq_uq_df=seq_uq_df, pvalues=pvalues,
+            design_df=design_df, mode=control_mode, top_n=top_n,
+            min_controls=min_controls, effective_lib_sizes=effective_lib_sizes,
         )
-    controls = select_ruvseq_controls(
-        counts_df=counts_plus_one,
-        seq_uq_df=seq_uq_df,
-        pvalues=pvalues,
-        design_df=design_df,
-        mode=control_mode,
-        top_n=top_n,
-        min_controls=min_controls,
-        effective_lib_sizes=effective_lib_sizes,
-    )
-    if int(controls.sum()) < 2:
-        controls = numpy.ones((seq_uq_df.shape[0],), dtype=bool)
+    if int(controls.sum()) < int(min_controls):
+        raise BatchModelError('ruvseq_insufficient_controls', 'Selected controls do not meet min_controls.',
+                              {'resolved_ruv_controls': int(controls.sum()), 'ruv_control_mode': control_mode})
     resolved = resolve_ruvseq_k_and_matrix(
         seq_uq_df=seq_uq_df,
         controls=controls,
         residuals_df=residuals_df,
         metadata_df=aligned_metadata,
         k_setting=k_setting,
-        k_max=k_max,
+        k_max=max_k,
         batch_column=batch_column,
         sample_group_column=sample_group_column,
+        design_matrix=design_df.to_numpy(dtype=float),
     )
+    postprocessing = list(resolved['matrix'].attrs.get('postprocessing', []))
+    if str(k_setting) != 'auto' and int(resolved['k']) < int(k_setting):
+        raise BatchModelError('ruvseq_degenerate_factors', 'Requested RUV dimensions could not be estimated.',
+                              {'requested_ruv_k': int(k_setting), 'resolved_ruv_k': int(resolved['k'])})
     corrected_df = counts_df.copy()
     corrected_run_ids = []
     uncorrected_run_ids = [str(run_id) for run_id in counts_df.columns]
@@ -739,8 +749,10 @@ def run_ruvseq_backend(
         normalized_corrected = resolved['matrix'].reindex(index=counts_df.index, columns=counts_df.columns)
         scale_values = seq_uq_scales.reindex(counts_df.columns).to_numpy(dtype=float)
         corrected_values = normalized_corrected.to_numpy(dtype=float) * scale_values[numpy.newaxis, :]
+        before_rounding = corrected_values.copy()
         corrected_values = numpy.round(corrected_values)
         corrected_values[corrected_values < 0] = 0
+        postprocessing.append(matrix_change(before_rounding, corrected_values, 'round_and_clip', 'original_counts'))
         corrected_df = pandas.DataFrame(
             corrected_values,
             index=counts_df.index,
@@ -758,6 +770,17 @@ def run_ruvseq_backend(
         'uncorrected_run_ids': uncorrected_run_ids,
         'resolved_ruv_k': int(resolved['k']),
         'resolved_ruv_controls': int(controls.sum()),
+        'ruv_control_mode': control_mode,
+        'ruv_control_gene_ids': counts_df.index[controls].tolist(),
+        'ruv_missing_control_gene_ids': [] if control_gene_ids is None else [
+            gene for gene in control_gene_ids if gene not in counts_df.index],
+        'ruv_glm_model': 'poisson_or_moment_nb',
+        'ruv_input_pseudocount': 0.0,
+        'ruv_log_pseudocount': 1.0,
+        'ruv_effective_library_sizes': effective_lib_sizes.to_dict(),
+        'ruv_between_lane_scales': seq_uq_scales.to_dict(),
+        'postprocessing': postprocessing,
+        'k_selection': k_selection,
         'ruv_baseline_score': resolved['baseline_score'],
         'ruv_selected_score': resolved['score'],
         'ruv_selected_penalized_score': resolved['penalized_score'],
@@ -769,16 +792,6 @@ def run_ruvseq_backend(
         'ruv_nb_fallback_genes': int(diagnostics['ruv_nb_fallback_genes']),
         'ruv_anova_failure_genes': int(diagnostics['ruv_anova_failure_genes']),
     }
-    if summary['ruv_fallback_used']:
-        warnings.warn(
-            'RUVSeq used a fallback estimation path ({}). Residual method: {}; p-value method: {}.'.format(
-                summary['ruv_fallback_reason'],
-                summary['ruv_residual_method'],
-                summary['ruv_pvalue_method'],
-            ),
-            UserWarning,
-            stacklevel=2,
-        )
     return corrected_df, resolved['w'], summary
 
 

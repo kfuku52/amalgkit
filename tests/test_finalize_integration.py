@@ -1,5 +1,6 @@
 import pandas
 import pytest
+import json
 
 from amalgkit.command_context import PerSpeciesTableContext
 from amalgkit.per_species_tables import generate_per_species_tables
@@ -8,6 +9,39 @@ from tests.support.per_species import build_per_species_args
 
 
 pytestmark = pytest.mark.integration
+
+
+def test_qc_and_saved_expression_use_same_postprocessed_matrix(tmp_path, monkeypatch):
+    import amalgkit.per_species_finalize_python as worker
+    fixture = _write_finalize_fixture(tmp_path, ['A', 'A', 'B', 'B'], ['P1', 'P2', 'P1', 'P2'])
+    counts_path = tmp_path / 'input' / fixture['species_tag'] / (fixture['species_tag'] + '_est_counts.tsv')
+    counts = pandas.read_csv(counts_path, sep='\t')
+    counts.loc[0, 'RUN01'] = 0
+    counts.to_csv(counts_path, sep='\t', index=False)
+    seen = []
+
+    def corrected(counts_df, metadata_df, **options):
+        return counts_df + 10, pandas.DataFrame(index=counts_df.columns), {
+            'corrected_run_ids': list(counts_df.columns), 'status': 'corrected', 'skip_reason': '',
+        }
+
+    def capture(**kwargs):
+        seen.append(kwargs['tc_after'].copy())
+
+    monkeypatch.setattr(worker, 'run_latent_glm_backend', corrected)
+    monkeypatch.setattr(worker, 'save_quick_state_comparison_plot', capture)
+    out = _run_finalize_python(tmp_path, fixture, batch_effect_alg='latent_loglinear',
+                               latent_k=1, norm='log2p1-none', maintain_zero=True)
+    saved = _read_corrected_tc(out, fixture['species_tag'], 'latent_loglinear')
+    assert len(seen) == 1
+    pandas.testing.assert_frame_equal(saved, seen[0], check_names=False)
+    assert saved.loc['G001', 'RUN01'] == 0
+    path = out / 'per_species' / fixture['species_tag'] / 'tables' / (
+        fixture['species_tag'] + '.latent_loglinear.batch_effect_diagnostics.json')
+    diagnostics = json.loads(path.read_text())
+    operation = next(op for op in diagnostics['postprocessing'] if op['operation'] == 'preserve_observed_zero')
+    assert operation['changed_cells'] == 1
+    assert diagnostics['qc_matrix_stage'] == 'final_saved_expression'
 
 
 def _write_finalize_fixture(tmp_path, sample_groups, bioprojects, species='Finalizus example', include_optional_columns=True):
@@ -157,7 +191,7 @@ def test_finalize_python_sva_accepts_explicit_nsv_zero(tmp_path):
     assert set(metadata_df['batch_corrected'].astype(str)) == {'no'}
 
 
-def test_finalize_python_sva_supports_positive_manual_nsv(tmp_path):
+def test_finalize_python_sva_marks_unestimable_manual_nsv_as_skipped(tmp_path):
     fixture = _write_finalize_fixture(
         tmp_path=tmp_path,
         sample_groups=['A', 'A', 'B', 'B'],
@@ -169,10 +203,11 @@ def test_finalize_python_sva_supports_positive_manual_nsv(tmp_path):
     summary_df = _read_batch_summary(out_dir, fixture['species_tag'])
     metadata_df = _read_species_metadata(out_dir, fixture['species_tag'])
     corrected_tc = _read_corrected_tc(out_dir, fixture['species_tag'])
-    assert int(summary_df.loc[0, 'resolved_sva_nsv']) == 1
-    assert int(summary_df.loc[0, 'resolved_sva_B']) == 5
-    assert int(summary_df.loc[0, 'corrected_run_count']) == 4
-    assert set(metadata_df['batch_corrected'].astype(str)) == {'yes'}
+    assert summary_df.loc[0, 'status'] == 'skipped'
+    assert summary_df.loc[0, 'skip_reason'] == 'sva_degenerate_factors'
+    assert int(summary_df.loc[0, 'corrected_run_count']) == 0
+    assert set(metadata_df['batch_corrected'].astype(str)) == {'no'}
+    assert set(metadata_df['batch_status']) == {'skipped'}
     assert corrected_tc.shape[1] == 4
 
 
@@ -225,6 +260,8 @@ def test_finalize_python_ruvseq_runs_end_to_end(tmp_path):
         fixture=fixture,
         batch_effect_alg='ruvseq',
         ruvseq_k='1',
+        ruvseq_control_genes='all',
+        ruvseq_min_controls=2,
     )
 
     summary_df = _read_batch_summary(out_dir, fixture['species_tag'], batch_effect_alg='ruvseq')
@@ -252,7 +289,7 @@ def test_finalize_python_ruvseq_single_group_design_failure(tmp_path):
 
     summary_df = _read_batch_summary(out_dir, fixture['species_tag'], batch_effect_alg='ruvseq')
     corrected_tc = _read_corrected_tc(out_dir, fixture['species_tag'], batch_effect_alg='ruvseq')
-    assert str(summary_df.loc[0, 'skip_reason']) == 'ruvseq_design_failed'
+    assert str(summary_df.loc[0, 'skip_reason']) == 'ruvseq_auto_not_calibrated'
     assert pandas.isna(summary_df.loc[0, 'resolved_ruv_k'])
     assert corrected_tc.shape[1] == 4
 

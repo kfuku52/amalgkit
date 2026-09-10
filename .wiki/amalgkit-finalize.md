@@ -47,7 +47,8 @@ amalgkit finalize \
 | `sva` | none beyond AMALGKIT Python dependencies |
 | `ruvseq` | none beyond AMALGKIT Python dependencies |
 | `combatseq` | optional `inmoose` |
-| `latent_glm` | none beyond AMALGKIT Python dependencies |
+| `latent_loglinear` | none beyond AMALGKIT Python dependencies; experimental |
+| `latent_glm` | historical alias for `latent_loglinear`, not a likelihood GLM |
 
 Examples:
 
@@ -62,10 +63,31 @@ amalgkit finalize \
 amalgkit finalize \
     --out_dir ./ \
     --metadata ./csfilter/metadata.tsv \
-    --batch_effect_alg latent_glm \
-    --latent_family nb \
-    --latent_k auto
+    --batch_effect_alg latent_loglinear \
+    --latent_weighting dispersion \
+    --latent_k 1
 ```
+
+The example fixes k for reproducibility; it does not establish that k=1 is
+appropriate for a particular dataset. Latent and RUV automatic k selection is
+uncalibrated and is skipped unless `--latent_k_selection legacy` or
+`--ruvseq_k_selection legacy` is explicitly supplied. Prefer a scientifically
+justified explicit k and compare against k=0.
+
+Model failures default to **skip the whole species' batch correction**. Requested
+expression normalization still runs. Metadata and summaries distinguish `skipped`
+from a normal `not_needed` result (e.g. k=0). Use `--batch_failure_policy error` to
+require successful fitting. Invalid inputs and missing dependencies always stop.
+The correction never retries without protected covariates or with another model.
+
+ComBat-seq requires integer raw counts from `merge`, not CSTMM-divided counts.
+Singleton batches and confounded designs are skipped as a whole. Its default
+protects `sample_group`; `--combatseq_group_model batch_only` explicitly omits
+that protection. Additional covariates may be specified using
+`--batch_categorical_covariates` and `--batch_continuous_covariates`.
+
+See [batch correction models and diagnostics](Batch-correction-models) for
+assumptions, failure reasons, method differences and migration details.
 
 ## Main Outputs
 
@@ -88,6 +110,10 @@ Per species:
 - `<Species>_tau_definition.json`: transformation, weighting and tissue panel identifier
 - `<Species>_correlation_statistics.tsv`
 - `<Species>_batch_effect_summary.tsv`
+- `<Species>_batch_effect_diagnostics.json` (complete settings, design and diagnostics)
+- `<Species>_batch_effect_design.tsv` (when a correction design was evaluated)
+- `<Species>_batch_effect_factors.tsv` (estimated SV/W; empty on skipped fits)
+- `<Species>_batch_effect_removal_basis.tsv` (actual design-orthogonal removal space)
 - `<Species>_curation_round_summary.tsv`
 - `<Species>_curation_final_summary.tsv`
 - `<Species>_before_after_<alg>.pdf` (when a batch-correction algorithm is selected)
@@ -100,6 +126,7 @@ Per species:
 | `--norm` | `log2p1-fpkm` | expression transformation before optional batch correction |
 | `--clip_negative` | `yes` | clip negative corrected values to zero |
 | `--maintain_zero` | `yes` | preserve input zero values after correction |
+| `--batch_failure_policy` | `skip` | skip the entire species' correction on model failure; `error` stops |
 | `--seed` | `0` | random seed for stochastic steps; `auto` requests an unseeded run |
 
 ## Backend-Specific Options
@@ -108,7 +135,10 @@ SVA:
 
 - `--sva_nsv`
 - `--sva_B`
+- `--sva_nsv_permutations` (alias of `--sva_B`; permutation count only)
 - `--sva_B_auto_max`
+- `--sva_irw_iterations` (5; independent of permutations)
+- `--sva_estimation_method` (`be`; `leek` or explicit `be_then_leek` also supported)
 
 RUVSeq:
 
@@ -117,14 +147,22 @@ RUVSeq:
 - `--ruvseq_k_max`
 - `--ruvseq_control_top_n`
 - `--ruvseq_min_controls`
+- `--ruvseq_control_file` (one unique gene ID per line, no header; control mode `file`)
+- `--ruvseq_k_selection` (`manual`; `legacy` explicitly enables the heuristic)
 
-latent_glm:
+latent_loglinear (historical alias: latent_glm):
 
-- `--latent_family poisson|nb`
+- `--latent_weighting uniform|dispersion` (historical `--latent_family poisson|nb` aliases)
 - `--latent_k INT|auto`
 - `--latent_k_max INT`
 - `--latent_max_iter INT`
 - `--latent_tol FLOAT`
+- `--latent_k_selection manual|legacy`
+
+The comparison plot's after panels use the final saved expression matrix,
+including clipping and input-zero restoration. Detailed diagnostics record each
+nonlinear postprocessing step and its scale. Factor-space protection does not
+guarantee preservation of arithmetic means after these operations.
 
 Backend selectors:
 
