@@ -243,7 +243,7 @@ def csfilter_main(args):
         cross_species_metadata_path = os.path.join(tmp_out_dir, 'cross_species', 'metadata.tsv')
         if not os.path.isfile(cross_species_metadata_path):
             raise FileNotFoundError('csfilter metadata.tsv was not generated: {}'.format(cross_species_metadata_path))
-        cross_species_metadata = read_identifier_tsv(cross_species_metadata_path, identifier_columns=('run',), low_memory=False)
+        cross_species_metadata = read_identifier_tsv(cross_species_metadata_path, identifier_columns=('run', 'biosample', 'donor', 'bioproject'), low_memory=False)
         merged_metadata = merge_metadata_by_run(metadata.df, cross_species_metadata)
         merged_metadata = _normalize_csfilter_metadata_columns(merged_metadata)
         with staged_output_dir(dir_cs, redo=args.redo, prefix='amalgkit_csfilter_stage_') as stage_dir:

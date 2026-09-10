@@ -85,6 +85,14 @@ def build_parser(command_handlers, command_names, version, prog=None):
     )
     subparsers = parser.add_subparsers()
 
+    pp_tau = argparse.ArgumentParser(add_help=False)
+    pp_tau.add_argument('--tau_unit', choices=['run', 'biosample', 'donor'], default='run',
+                        help='default=%(default)s: Equal-weight unit for linear-scale tau means. '
+                             'biosample/donor require complete curated IDs in metadata.')
+    pp_tau.add_argument('--tau_balance_projects', type=strtobool, default=False, metavar='yes|no',
+                        help='default=%(default)s: Average tau units within BioProject, then weight projects equally. '
+                             'Requires complete project IDs and no units shared across projects.')
+
     pp_meta = argparse.ArgumentParser(add_help=False)
     pp_meta.add_argument('--metadata', metavar='PATH', default='inferred', type=str, required=False, action='store',
                      help='default=%(default)s: "inferred" = out_dir/metadata/metadata.tsv. '
@@ -530,7 +538,7 @@ def build_parser(command_handlers, command_names, version, prog=None):
     pcs.set_defaults(handler=command_handlers['cstmm'])
 
     pws_help = 'Within-species outlier filtering. Outputs metadata.tsv + excluded.tsv + species PDFs (no plots/). See `amalgkit wsfilter -h`'
-    pws = subparsers.add_parser('wsfilter', help=pws_help, parents=[pp_out, pp_filter_meta, pp_species_batch, pp_threads, pp_internal_jobs, pp_cpu_budget, pp_sg, pp_sgc, pp_redo])
+    pws = subparsers.add_parser('wsfilter', help=pws_help, parents=[pp_tau, pp_out, pp_filter_meta, pp_species_batch, pp_threads, pp_internal_jobs, pp_cpu_budget, pp_sg, pp_sgc, pp_redo])
     pws.add_argument('--input_dir', metavar='PATH', default='inferred', type=str, required=False, action='store',
                      help='default=%(default)s: PATH to `amalgkit merge` or `amalgkit cstmm` output folder. '
                           '"inferred" = out_dir/cstmm if exist, else out_dir/merge.')
@@ -562,7 +570,7 @@ def build_parser(command_handlers, command_names, version, prog=None):
     pws.set_defaults(handler=command_handlers['wsfilter'])
 
     pcsf_help = 'Cross-species outlier filtering. Outputs metadata.tsv + excluded.tsv + PDFs (no plots/). See `amalgkit csfilter -h`'
-    pcsf = subparsers.add_parser('csfilter', help=pcsf_help, parents=[pp_out, pp_filter_meta, pp_species_batch, pp_threads, pp_internal_jobs, pp_cpu_budget, pp_sg, pp_sgc, pp_redo])
+    pcsf = subparsers.add_parser('csfilter', help=pcsf_help, parents=[pp_tau, pp_out, pp_filter_meta, pp_species_batch, pp_threads, pp_internal_jobs, pp_cpu_budget, pp_sg, pp_sgc, pp_redo])
     pcsf.add_argument('--input_dir', metavar='PATH', default='inferred', type=str, required=False, action='store',
                       help='default=%(default)s: PATH to `amalgkit merge` or `amalgkit cstmm` output folder. '
                            '"inferred" = out_dir/cstmm if exist, else out_dir/merge.')
@@ -595,7 +603,7 @@ def build_parser(command_handlers, command_names, version, prog=None):
     pcsf.set_defaults(handler=command_handlers['csfilter'])
 
     pfi_help = 'Final table export from filtered metadata. See `amalgkit finalize -h`'
-    pfi = subparsers.add_parser('finalize', help=pfi_help, parents=[pp_out, pp_filter_meta, pp_species_batch, pp_threads, pp_internal_jobs, pp_cpu_budget, pp_sg, pp_sgc, pp_redo])
+    pfi = subparsers.add_parser('finalize', help=pfi_help, parents=[pp_tau, pp_out, pp_filter_meta, pp_species_batch, pp_threads, pp_internal_jobs, pp_cpu_budget, pp_sg, pp_sgc, pp_redo])
     pfi.add_argument('--input_dir', metavar='PATH', default='inferred', type=str, required=False, action='store',
                      help='default=%(default)s: PATH to `amalgkit merge` or `amalgkit cstmm` output folder. '
                           '"inferred" = out_dir/cstmm if exist, else out_dir/merge.')

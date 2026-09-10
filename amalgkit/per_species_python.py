@@ -17,7 +17,8 @@ from amalgkit.per_species_common import (
     append_round_summary,
     initialize_round_summary,
     sample_group_mean,
-    sample_group_to_tau,
+    tau_options_from_args,
+    write_tau_outputs,
     write_curation_summaries,
 )
 from amalgkit.per_species_finalize_python import (
@@ -368,14 +369,10 @@ def _write_prepare_outputs(
         file_path=os.path.join(dir_tsv, '{}.{}.sample_group.mean.tsv'.format(species_tag, batch_effect_alg)),
         index_name='target_id',
     )
-    tau_df = sample_group_to_tau(
-        tc_sample_group_df=tc_sample_group_final,
-        transform_method=str(getattr(args, 'norm', 'log2p1-fpkm')),
-    )
-    write_table_with_index_name(
-        df=tau_df,
-        file_path=os.path.join(dir_tsv, '{}.{}.tau.tsv'.format(species_tag, batch_effect_alg)),
-        index_name='target_id',
+    tau_linear_mean = write_tau_outputs(
+        tc_final, sra_out, selected_sample_groups,
+        str(getattr(args, 'norm', 'log2p1-fpkm')), dir_tsv, species_tag, batch_effect_alg,
+        **tau_options_from_args(args),
     )
     correlation_statistics.to_csv(
         os.path.join(dir_tsv, '{}.{}.correlation_statistics.tsv'.format(species_tag, batch_effect_alg)),
@@ -401,7 +398,7 @@ def _write_prepare_outputs(
         selected_sample_groups=selected_sample_groups,
         out_pdf_path=os.path.join(dir_pdf, '{}.tau_histogram.no.pdf'.format(species_tag)),
         transform_method=str(getattr(args, 'norm', 'log2p1-fpkm')),
-        tc_sample_group_df=tc_sample_group_final,
+        linear_mean_df=tau_linear_mean,
     )
     _save_ws_scatter_plot(
         metadata_df=sra_out,
@@ -469,6 +466,7 @@ def _run_prepare_or_wsfilter_python_worker(args, metadata, species_tag, input_di
         dist_method=str(getattr(args, 'dist_method', 'pearson')),
         transform_method=str(getattr(args, 'norm', 'log2p1-fpkm')),
         font_size=8,
+        tau_options=tau_options_from_args(args),
     )
 
     tc, sra, mapping_excluded_runs = _filter_low_mapping_rate(
@@ -493,6 +491,7 @@ def _run_prepare_or_wsfilter_python_worker(args, metadata, species_tag, input_di
         dist_method=str(getattr(args, 'dist_method', 'pearson')),
         transform_method=str(getattr(args, 'norm', 'log2p1-fpkm')),
         font_size=8,
+        tau_options=tau_options_from_args(args),
     )
 
     round_summary = initialize_round_summary()
@@ -572,6 +571,7 @@ def _run_prepare_or_wsfilter_python_worker(args, metadata, species_tag, input_di
                 dist_method=str(getattr(args, 'dist_method', 'pearson')),
                 transform_method=str(getattr(args, 'norm', 'log2p1-fpkm')),
                 font_size=8,
+                tau_options=tau_options_from_args(args),
             )
         should_stop = _should_stop_within_group_filter(
             current_tc=current_tc,

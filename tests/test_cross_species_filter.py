@@ -30,6 +30,27 @@ from amalgkit.cross_species_filter import (
 from amalgkit.util import Metadata
 
 
+def test_metadata_roundtrip_preserves_tau_unit_ids(tmp_path):
+    from amalgkit.filter_utils import load_merged_per_species_metadata
+    from amalgkit.rerun import _load_existing_metadata_table
+
+    table_dir = tmp_path / 'Species' / 'tables'
+    table_dir.mkdir(parents=True)
+    metadata = pandas.DataFrame({
+        'run': ['r1', 'r2', 'r3'], 'scientific_name': ['Test species'] * 3,
+        'sample_group': ['leaf'] * 3, 'exclusion': ['no'] * 3,
+        'donor': ['001', '1', 'NA'], 'biosample': ['002', '2', 'null'],
+        'bioproject': ['p1'] * 3,
+    })
+    metadata.to_csv(table_dir / 'Species.metadata.tsv', sep='\t', index=False)
+    merged = load_merged_per_species_metadata(tmp_path)
+    cross = _prepare_metadata_table(table_dir, ['leaf'], ['Test_species'])
+    rerun = _load_existing_metadata_table(table_dir / 'Species.metadata.tsv')
+    for result in [merged, cross, rerun]:
+        assert result['donor'].tolist() == ['001', '1', 'NA']
+        assert result['biosample'].tolist() == ['002', '2', 'null']
+
+
 def test_normalize_cross_species_metadata_table_rejects_blank_exclusion():
     # Regression for #172: a blank/NA exclusion must not be silently converted
     # to "no" (retained). Samples with missing exclusion metadata previously

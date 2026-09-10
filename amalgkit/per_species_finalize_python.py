@@ -23,6 +23,9 @@ from amalgkit.per_species_common import (
     append_round_summary,
     initialize_round_summary,
     sample_group_mean,
+    linear_sample_group_summary,
+    tau_options_from_args,
+    write_tau_outputs,
     sample_group_to_tau,
     write_curation_summaries,
 )
@@ -855,6 +858,7 @@ def save_quick_state_comparison_plot(
     sv_info=None,
     font_size=8,
     random_seed=0,
+    tau_options=None,
 ):
     if (tc_before.shape[1] <= 1) or (tc_after.shape[1] <= 1):
         return None
@@ -887,14 +891,16 @@ def save_quick_state_comparison_plot(
     tsne_before = _compute_tsne_coordinates(before, random_seed=random_seed)
     tsne_after = _compute_tsne_coordinates(after, random_seed=random_seed)
     tau_before = sample_group_to_tau(
-        tc_sample_group_df=sample_group_mean(before, metadata, selected_sample_groups)['tc_ave'],
+        tc_sample_group_df=linear_sample_group_summary(
+            before, metadata, selected_sample_groups, transform_method, **(tau_options or {}),
+        )['linear_mean'],
         rich_annotation=False,
-        transform_method=transform_method,
     )
     tau_after = sample_group_to_tau(
-        tc_sample_group_df=sample_group_mean(after, metadata, selected_sample_groups)['tc_ave'],
+        tc_sample_group_df=linear_sample_group_summary(
+            after, metadata, selected_sample_groups, transform_method, **(tau_options or {}),
+        )['linear_mean'],
         rich_annotation=False,
-        transform_method=transform_method,
     )
     color_map = _sample_group_color_map(metadata.loc[:, 'sample_group'].astype(str).tolist())
     colors = [color_map[str(group)] for group in metadata.loc[:, 'sample_group'].astype(str)]
@@ -1035,7 +1041,6 @@ def run_finalize_python_worker(args, metadata, species_tag, input_dir):
     )
     sample_group_out = sample_group_mean(tc_tmp, sra, selected_sample_groups)
     tc_sample_group_uncorrected = sample_group_out['tc_ave']
-    selected_sample_groups = sample_group_out['selected_sample_groups']
     write_table_with_index_name(
         df=tc_sample_group_uncorrected,
         file_path=os.path.join(dir_tsv, '{}.uncorrected.sample_group.mean.tsv'.format(species_tag)),
@@ -1058,6 +1063,11 @@ def run_finalize_python_worker(args, metadata, species_tag, input_dir):
             df=tc_sample_group_uncorrected,
             file_path=os.path.join(dir_tsv, '{}.{}.sample_group.mean.tsv'.format(species_tag, args.batch_effect_alg)),
             index_name='target_id',
+        )
+        write_tau_outputs(
+            tc_tmp, sra, selected_sample_groups,
+            str(getattr(args, 'norm', 'log2p1-fpkm')), dir_tsv, species_tag, args.batch_effect_alg,
+            **tau_options_from_args(args),
         )
         round_summary = append_round_summary(
             round_summary=round_summary,
@@ -1109,6 +1119,7 @@ def run_finalize_python_worker(args, metadata, species_tag, input_dir):
             sv_info=out.get('sva'),
             font_size=8,
             random_seed=getattr(args, 'seed', 0),
+            tau_options=tau_options_from_args(args),
         )
     if bool(getattr(args, 'maintain_zero', True)):
         tc_batch_corrected = tc_batch_corrected.copy()
@@ -1137,6 +1148,11 @@ def run_finalize_python_worker(args, metadata, species_tag, input_dir):
         index_name='target_id',
     )
     _write_empty_correlation_statistics(os.path.join(dir_tsv, '{}.{}.correlation_statistics.tsv'.format(species_tag, args.batch_effect_alg)))
+    tau_linear_mean = write_tau_outputs(
+        tc_batch_corrected, sra, selected_sample_groups,
+        str(getattr(args, 'norm', 'log2p1-fpkm')), dir_tsv, species_tag, args.batch_effect_alg,
+        **tau_options_from_args(args),
+    )
     save_tau_histogram_pdf(
         counts_df=tc_batch_corrected,
         metadata_df=sra,
@@ -1144,17 +1160,7 @@ def run_finalize_python_worker(args, metadata, species_tag, input_dir):
         out_pdf_path=os.path.join(dir_pdf, '{}.tau_hist.{}.pdf'.format(species_tag, args.batch_effect_alg)),
         font_size=8,
         transform_method=str(getattr(args, 'norm', 'log2p1-fpkm')),
-        tc_sample_group_df=corrected_sample_group,
-    )
-    tc_tau = sample_group_to_tau(
-        tc_sample_group_df=corrected_sample_group,
-        rich_annotation=True,
-        transform_method=str(getattr(args, 'norm', 'log2p1-fpkm')),
-    )
-    write_table_with_index_name(
-        df=tc_tau,
-        file_path=os.path.join(dir_tsv, '{}.{}.tau.tsv'.format(species_tag, args.batch_effect_alg)),
-        index_name='target_id',
+        linear_mean_df=tau_linear_mean,
     )
     write_curation_summaries(
         round_summary=round_summary,

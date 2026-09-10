@@ -6,6 +6,8 @@
 
 ## Inputs
 
+Per-species tau summaries accept `--tau_unit` and `--tau_balance_projects` and use linear arithmetic means. Cross-species averaged correlation plots retain their transformed-scale run means. See [Tau and replicate aggregation](Tau-and-replicate-aggregation.md).
+
 `csfilter` expects:
 
 - filtered or unfiltered metadata

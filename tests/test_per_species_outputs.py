@@ -162,6 +162,18 @@ def test_save_tau_histogram_pdf_writes_pdf(tmp_path):
     assert result['num_no_expression'] == 1
 
 
+def test_tau_histogram_uses_linear_run_means(tmp_path):
+    counts = pandas.DataFrame([[0., 100., 10., 10.]], columns=['a1', 'a2', 'b1', 'b2'])
+    metadata = pandas.DataFrame({
+        'run': counts.columns, 'sample_group': ['A', 'A', 'B', 'B'], 'exclusion': ['no'] * 4,
+    })
+    result = save_tau_histogram_pdf(
+        numpy.log2(counts + 1), metadata, ['A', 'B'], str(tmp_path / 'tau.pdf'),
+        transform_method='log2p1-none',
+    )
+    numpy.testing.assert_allclose(result['tau_df']['tau'], [0.8])
+
+
 @pytest.mark.slow
 def test_save_state_overview_pdf_writes_pdf(tmp_path):
     counts_df = pandas.DataFrame(

@@ -6,6 +6,8 @@
 
 ## Inputs
 
+Tau panels use linear arithmetic means and accept `--tau_unit` and `--tau_balance_projects`. These settings affect tau summaries, not the correlation-based exclusion decision. See [Tau and replicate aggregation](Tau-and-replicate-aggregation.md).
+
 `wsfilter` expects:
 
 - metadata from the matching `merge`/`cstmm` output or a previous filter step

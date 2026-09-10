@@ -90,3 +90,5 @@ their published metadata and output directories are shared. Prefer internal
 parallelism with `--threads`, or separate output directories and explicit input
 paths for independent analyses. See
 [Parallel processing](https://github.com/kfuku52/amalgkit/wiki/Parallel-processing).
+
+Tau aggregation requires explicit replicate identities when using BioSample or donor weights. See [Tau and replicate aggregation](Tau-and-replicate-aggregation.md) for the `donor` metadata contract, project weighting, missing groups, and the distinction between linear tau inputs and transformed-scale mean tables.

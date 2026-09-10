@@ -11,7 +11,7 @@ import pandas
 from amalgkit.cross_species_computation import finite_correlation_block
 from amalgkit.cross_species_computation import resolve_tsne_perplexity as _resolve_tsne_perplexity
 
-from amalgkit.per_species_common import sample_group_mean, sample_group_to_tau
+from amalgkit.per_species_common import linear_sample_group_summary, sample_group_mean, sample_group_to_tau
 
 
 CORRELATION_STAT_COLUMNS = [
@@ -153,21 +153,15 @@ def save_tau_histogram_pdf(
     out_pdf_path,
     font_size=8,
     transform_method='log2p1-fpkm',
-    tc_sample_group_df=None,
+    linear_mean_df=None,
+    tau_options=None,
 ):
-    if tc_sample_group_df is None:
-        out = sample_group_mean(
-            counts_df=counts_df,
-            metadata_df=metadata_df,
-            selected_sample_groups=selected_sample_groups,
-            balance_bp=False,
-        )
-        tc_sample_group_df = out['tc_ave']
-    df_tau = sample_group_to_tau(
-        tc_sample_group_df=tc_sample_group_df,
-        rich_annotation=False,
-        transform_method=transform_method,
-    )
+    if linear_mean_df is None:
+        linear_mean_df = linear_sample_group_summary(
+            counts_df, metadata_df, selected_sample_groups, transform_method,
+            **(tau_options or {}),
+        )['linear_mean']
+    df_tau = sample_group_to_tau(linear_mean_df, rich_annotation=False)
     tau_values = pandas.to_numeric(df_tau.loc[:, 'tau'], errors='coerce')
     valid_values = tau_values.dropna().to_numpy(dtype=float)
     os.makedirs(os.path.dirname(os.path.realpath(out_pdf_path)), exist_ok=True)
@@ -189,7 +183,7 @@ def save_tau_histogram_pdf(
         edgecolor='black',
         linewidth=0.5,
     )
-    ax.set_xlabel('Tau (expression specificity)', fontsize=font_size)
+    ax.set_xlabel('Tau (linear arithmetic means)', fontsize=font_size)
     ax.set_ylabel('Gene count', fontsize=font_size)
     ax.tick_params(axis='both', labelsize=font_size)
     num_noexp = int(tau_values.isna().sum())
@@ -199,7 +193,7 @@ def save_tau_histogram_pdf(
     ax.text(
         0.01,
         y_pos,
-        'Excluded due to\nno expression:\n{}/{} genes'.format(num_noexp, num_all),
+        'Undefined tau:\n{}/{} genes'.format(num_noexp, num_all),
         ha='left',
         va='top',
         fontsize=font_size,
@@ -209,7 +203,8 @@ def save_tau_histogram_pdf(
     pyplot.close(fig)
     return {
         'tau_df': df_tau,
-        'num_no_expression': num_noexp,
+        'num_no_expression': int(linear_mean_df.eq(0).all(axis=1).sum()) if linear_mean_df.shape[1] else 0,
+        'num_undefined_tau': num_noexp,
         'num_total_genes': num_all,
     }
 
@@ -419,18 +414,12 @@ def _draw_expression_histogram_panel(ax, counts_df, metadata_df, selected_sample
     ax.tick_params(axis='both', labelsize=font_size)
 
 
-def _draw_tau_histogram_panel(ax, counts_df, metadata_df, selected_sample_groups, transform_method, font_size=8):
-    tc_sample_group = sample_group_mean(
-        counts_df=counts_df,
-        metadata_df=metadata_df,
-        selected_sample_groups=selected_sample_groups,
-        balance_bp=False,
-    )['tc_ave']
-    df_tau = sample_group_to_tau(
-        tc_sample_group_df=tc_sample_group,
-        rich_annotation=False,
-        transform_method=transform_method,
-    )
+def _draw_tau_histogram_panel(ax, counts_df, metadata_df, selected_sample_groups, transform_method, font_size=8, tau_options=None):
+    linear_mean = linear_sample_group_summary(
+        counts_df, metadata_df, selected_sample_groups, transform_method,
+        **(tau_options or {}),
+    )['linear_mean']
+    df_tau = sample_group_to_tau(linear_mean, rich_annotation=False)
     tau_values = pandas.to_numeric(df_tau.loc[:, 'tau'], errors='coerce').dropna().to_numpy(dtype=float)
     counts_hist, _bins, _patches = ax.hist(
         tau_values,
@@ -439,13 +428,13 @@ def _draw_tau_histogram_panel(ax, counts_df, metadata_df, selected_sample_groups
         edgecolor='black',
         linewidth=0.5,
     )
-    ax.set_xlabel('Tau', fontsize=font_size)
+    ax.set_xlabel('Tau (linear arithmetic means)', fontsize=font_size)
     ax.set_ylabel('Gene count', fontsize=font_size)
     ax.tick_params(axis='both', labelsize=font_size)
     num_noexp = int(df_tau.loc[:, 'tau'].isna().sum())
     num_all = int(df_tau.shape[0])
     ymax = float(numpy.nanmax(counts_hist)) if counts_hist.size > 0 else 1.0
-    ax.text(0.01, ymax * 0.85, 'Excluded due to\nno expression:\n{}/{} genes'.format(num_noexp, num_all), fontsize=font_size, va='top')
+    ax.text(0.01, ymax * 0.85, 'Undefined tau:\n{}/{} genes'.format(num_noexp, num_all), fontsize=font_size, va='top')
 
 
 def _draw_legend_panel(ax, metadata_df, font_size=8):
@@ -473,6 +462,7 @@ def save_state_overview_pdf(
     dist_method='pearson',
     transform_method='log2p1-fpkm',
     font_size=8,
+    tau_options=None,
 ):
     out = intersect_counts_and_metadata(counts_df=counts_df, metadata_df=metadata_df)
     counts = out['tc']
@@ -519,6 +509,7 @@ def save_state_overview_pdf(
         selected_sample_groups=selected_sample_groups,
         transform_method=transform_method,
         font_size=font_size,
+        tau_options=tau_options,
     )
     axes[3, 1].set_title('Tau histogram', fontsize=font_size)
     _draw_legend_panel(axes[4, 0], metadata, font_size=font_size)

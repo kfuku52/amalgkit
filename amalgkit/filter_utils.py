@@ -150,7 +150,7 @@ def load_merged_per_species_metadata(per_species_dir):
     if len(metadata_tables) == 0:
         raise FileNotFoundError('No per-species metadata table was found under: {}'.format(per_species_dir))
     frames = [
-        read_identifier_tsv(path, identifier_columns=('run',), low_memory=False)
+        read_identifier_tsv(path, identifier_columns=('run', 'biosample', 'donor', 'bioproject'), low_memory=False)
         for path in metadata_tables
     ]
     return pandas.concat(frames, axis=0, ignore_index=True, sort=False)

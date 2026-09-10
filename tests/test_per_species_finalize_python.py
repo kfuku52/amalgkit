@@ -118,6 +118,46 @@ def _write_species_input_fixture(tmp_path, species='Finalizus example', sample_g
 
 
 @pytest.mark.parametrize('worker', [_run_prepare_or_wsfilter_python_worker, run_finalize_python_worker])
+@pytest.mark.parametrize('skip_curation', [False, True])
+def test_workers_export_linear_tau_inputs(tmp_path, worker, skip_curation, stub_pdf_rendering):
+    fixture = _write_species_input_fixture(tmp_path)
+    tag = fixture['species_tag']
+    counts_path = tmp_path / 'input' / tag / (tag + '_est_counts.tsv')
+    counts = pandas.read_csv(counts_path, sep='\t', index_col='target_id')
+    counts.loc['G001'] = [0., 100., 10., 10.]
+    counts.to_csv(counts_path, sep='\t')
+    args = build_per_species_args(tmp_path, norm='log2p1-none', skip_curation=skip_curation,
+                                  disable_auto_outlier_filter=True)
+    result = worker(args, fixture['metadata'], tag, fixture['input_dir'])
+    assert result == 0
+    tables = tmp_path / 'out' / 'per_species' / tag / 'tables'
+    tau = pandas.read_csv(tables / (tag + '.no.tau.tsv'), sep='\t', index_col='target_id')
+    representatives = pandas.read_csv(tables / (tag + '.no.tau.linear_mean.tsv'), sep='\t', index_col='target_id')
+    assert tau.loc['G001', 'tau'] == pytest.approx(0.8)
+    assert tau.loc['G001', 'highest'] == 'A'
+    numpy.testing.assert_allclose(representatives.loc['G001'], [50, 10])
+    # Correlation means still use the transformed scale.
+    correlation_means = pandas.read_csv(tables / (tag + '.no.sample_group.mean.tsv'), sep='\t', index_col='target_id')
+    assert correlation_means.loc['G001', 'A'] == pytest.approx(numpy.log2(101) / 2)
+
+
+def test_finalize_donor_weights_and_export_names(tmp_path, stub_pdf_rendering):
+    from amalgkit.finalize import _copy_species_tables
+
+    fixture = _write_species_input_fixture(tmp_path)
+    tag = fixture['species_tag']
+    fixture['metadata'].df['donor'] = ['d1', 'd2', 'd1', 'd2']
+    args = build_per_species_args(tmp_path, norm='log2p1-none', skip_curation=True,
+                                  tau_unit='donor', tau_balance_projects=True)
+    run_finalize_python_worker(args, fixture['metadata'], tag, fixture['input_dir'])
+    destination = tmp_path / 'export'
+    destination.mkdir()
+    _copy_species_tables(tmp_path / 'out' / 'per_species', destination, 'no')
+    for suffix in ['tau.tsv', 'tau_linear_mean.tsv', 'tau_coverage.tsv', 'tau_weights.tsv', 'tau_definition.json']:
+        assert (destination / tag / (tag + '_' + suffix)).is_file()
+
+
+@pytest.mark.parametrize('worker', [_run_prepare_or_wsfilter_python_worker, run_finalize_python_worker])
 @pytest.mark.parametrize('problem', ['missing', 'invalid', 'tpm'])
 def test_workers_reject_cstmm_without_original_library_sizes(tmp_path, worker, problem):
     fixture = _write_species_input_fixture(tmp_path)

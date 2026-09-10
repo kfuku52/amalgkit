@@ -54,6 +54,8 @@ out_dir/select_rules.tsv
 | `dedup` | remove redundant records such as repeated BioSample entries |
 | `validate` | collect rule-validation hints |
 
+The default deduplication key is `(bioproject, biosample)`, retaining the run with the highest `total_spots`. This does not establish donor independence or remove cross-project duplicates. For downstream tau weighting, see [Tau and replicate aggregation](Tau-and-replicate-aggregation.md).
+
 Available bundled rule sets are `base`, `test`, `plantae`, and `vertebrate`.
 
 All four currently default to `sample_group=flower,leaf,root`. For liver or other

@@ -877,7 +877,7 @@ def _copy_existing_merge_species_dirs(
 def _load_existing_metadata_table(path):
     if not os.path.isfile(path):
         return None
-    return read_identifier_tsv(path, identifier_columns=('run',), low_memory=False)
+    return read_identifier_tsv(path, identifier_columns=('run', 'biosample', 'donor', 'bioproject'), low_memory=False)
 
 
 def _print_targets(label, targets):

@@ -222,7 +222,7 @@ def _prepare_metadata_table(dir_cross_species_input_table, selected_sample_group
             metadata_paths.append(path)
     if len(metadata_paths) == 0:
         raise FileNotFoundError('No metadata files found in the cross-species input table directory.')
-    frames = [read_identifier_tsv(path, identifier_columns=('run',), low_memory=False) for path in metadata_paths]
+    frames = [read_identifier_tsv(path, identifier_columns=('run', 'biosample', 'donor', 'bioproject'), low_memory=False) for path in metadata_paths]
     df_metadata = pandas.concat(frames, axis=0, ignore_index=True, sort=False)
     df_metadata = _normalize_cross_species_metadata_table(df_metadata)
     return df_metadata.loc[

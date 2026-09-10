@@ -2,6 +2,8 @@
 
 `amalgkit finalize` exports final per-species expression tables from metadata and merged abundance data.
 
+Tau uses linear arithmetic means computed after inverse-transforming each run. See [Tau and replicate aggregation](Tau-and-replicate-aggregation.md) for donor/project weights, fixed tissue panels, missing values and migration of earlier results.
+
 It is also the current location for optional batch-effect correction. All current backends are Python implementations.
 
 ## Inputs
@@ -80,6 +82,10 @@ Per species:
 - `<Species>_sample_group_mean.tsv`
 - `<Species>_sample_group_mean_uncorrected.tsv`
 - `<Species>_tau.tsv`
+- `<Species>_tau_linear_mean.tsv`: linear arithmetic means used by tau
+- `<Species>_tau_coverage.tsv`: required groups, available runs/units and missing-group reasons
+- `<Species>_tau_weights.tsv`: run contributions within each group
+- `<Species>_tau_definition.json`: transformation, weighting and tissue panel identifier
 - `<Species>_correlation_statistics.tsv`
 - `<Species>_batch_effect_summary.tsv`
 - `<Species>_curation_round_summary.tsv`
