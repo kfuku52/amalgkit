@@ -37,7 +37,14 @@ def _require_unique_nonempty_run_ids(run_series, context):
         )
 
 
-def merge_metadata_by_run(source_df, update_df):
+def merge_metadata_by_run(source_df, update_df, *, overwrite_columns=()):
+    """Merge metadata, allowing generated columns to intentionally clear old values.
+
+    Missing annotations retain their source values by default. For regenerated
+    scores, missing means unscoreable and must replace a previous finite score.
+    Only rows present in update_df are affected by overwrite_columns.
+    """
+    overwrite_columns = set(overwrite_columns)
     if 'run' not in source_df.columns:
         raise ValueError('Source metadata is missing required "run" column.')
     if 'run' not in update_df.columns:
@@ -61,7 +68,7 @@ def merge_metadata_by_run(source_df, update_df):
     for col in update.columns:
         if col not in source.columns:
             source[col] = pandas.NA
-        update_values = update[col].dropna()
+        update_values = update[col] if col in overwrite_columns else update[col].dropna()
         if update_values.shape[0] == 0:
             continue
 
@@ -99,7 +106,8 @@ def merge_metadata_by_run(source_df, update_df):
             continue
 
         if pandas.api.types.is_string_dtype(source_dtype) and not pandas.api.types.is_object_dtype(source_dtype):
-            for run_id, value in update_values.astype(str).items():
+            strings = update_values.astype(str).where(update_values.notna(), pandas.NA)
+            for run_id, value in strings.items():
                 source.loc[run_id, col] = value
             continue
 

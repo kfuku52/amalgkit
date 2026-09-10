@@ -67,6 +67,7 @@ def _build_prepare_per_species_args(args, input_dir, tmp_out_dir):
     data['worker_mode'] = 'prepare_tables'
     data['skip_curation'] = True
     data['disable_auto_outlier_filter'] = True
+    data['reference_exclusion'] = 'run'
     data['outlier_method'] = 'legacy'
     data.setdefault('dist_method', 'pearson')
     data.setdefault('mapping_rate', 0.0)
@@ -144,6 +145,14 @@ def _write_excluded_table(df_metadata, out_path):
         'cs_margin',
         'cs_robust_z',
         'cs_small_group',
+        'cs_within_common_genes',
+        'cs_min_nongroup_common_genes',
+        'cs_min_common_genes',
+        'cs_reference_exclusion',
+        'cs_small_group_policy',
+        'cs_margin_threshold',
+        'cs_robust_z_threshold',
+        'cs_robust_z_scope',
     ]
     cols = [col for col in preferred_cols if col in excluded.columns]
     if len(cols) == 0:
@@ -157,8 +166,7 @@ def _normalize_csfilter_metadata_columns(df_metadata):
     df = df_metadata.copy()
 
     def _coalesce_from_candidates(target_col, candidate_cols):
-        if target_col in df.columns:
-            return
+        # Fresh stage metrics supersede canonical columns from an earlier run.
         for candidate in candidate_cols:
             if candidate in df.columns:
                 df[target_col] = df[candidate]
@@ -181,12 +189,21 @@ def _normalize_csfilter_metadata_columns(df_metadata):
         nongroup = pandas.to_numeric(df['max_nongroup_cor'], errors='coerce')
         df['cs_margin'] = within - nongroup
 
+    for metric in ['within_common_genes', 'min_nongroup_common_genes']:
+        _coalesce_from_candidates(
+            target_col='cs_' + metric,
+            candidate_cols=[metric + '_corrected', metric + '_uncorrected'],
+        )
     for pc in ['PC1', 'PC2', 'PC3', 'PC4', 'PC5']:
         corrected_col = f'{pc}_corrected'
-        if (pc not in df.columns) and (corrected_col in df.columns):
+        if corrected_col in df.columns:
             df[pc] = df[corrected_col]
 
     drop_cols = [
+        'within_common_genes_uncorrected',
+        'within_common_genes_corrected',
+        'min_nongroup_common_genes_uncorrected',
+        'min_nongroup_common_genes_corrected',
         'within_group_cor_uncorrected',
         'within_group_cor_corrected',
         'max_nongroup_cor_uncorrected',
@@ -244,8 +261,14 @@ def csfilter_main(args):
         if not os.path.isfile(cross_species_metadata_path):
             raise FileNotFoundError('csfilter metadata.tsv was not generated: {}'.format(cross_species_metadata_path))
         cross_species_metadata = read_identifier_tsv(cross_species_metadata_path, identifier_columns=('run', 'biosample', 'donor', 'bioproject'), low_memory=False)
-        merged_metadata = merge_metadata_by_run(metadata.df, cross_species_metadata)
-        merged_metadata = _normalize_csfilter_metadata_columns(merged_metadata)
+        cross_species_metadata = _normalize_csfilter_metadata_columns(cross_species_metadata)
+        merged_metadata = merge_metadata_by_run(
+            _normalize_csfilter_metadata_columns(metadata.df), cross_species_metadata,
+            overwrite_columns=[
+                col for col in cross_species_metadata
+                if col.startswith('cs_') or col in {'within_group_cor', 'max_nongroup_cor', 'PC1', 'PC2', 'PC3', 'PC4', 'PC5'}
+            ],
+        )
         with staged_output_dir(dir_cs, redo=args.redo, prefix='amalgkit_csfilter_stage_') as stage_dir:
             merged_metadata.to_csv(os.path.join(stage_dir, 'metadata.tsv'), sep='\t', index=False)
             _write_excluded_table(

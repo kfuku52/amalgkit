@@ -1,3 +1,4 @@
+import json
 import os
 
 import matplotlib
@@ -410,23 +411,55 @@ def _assign_pca_to_metadata(df_metadata, pca_df, suffix):
 
 
 def _apply_csfilter_outlier_flags(df_metadata, outlier_method='none', margin_threshold=0.0, robust_z_threshold=-2.5,
-                                  small_group_policy='margin_fallback'):
+                                  small_group_policy='margin_fallback', robust_z_scope='sample_group'):
+    if robust_z_scope not in {'sample_group', 'species_group'}:
+        raise ValueError('robust_z_scope must be sample_group or species_group')
     out = df_metadata.copy()
-    out.loc[:, 'cs_margin_uncorrected'] = pandas.to_numeric(out.get('within_group_cor_uncorrected'), errors='coerce') - pandas.to_numeric(out.get('max_nongroup_cor_uncorrected'), errors='coerce')
-    out.loc[:, 'cs_margin_corrected'] = pandas.to_numeric(out.get('within_group_cor_corrected'), errors='coerce') - pandas.to_numeric(out.get('max_nongroup_cor_corrected'), errors='coerce')
-    out.loc[:, 'cs_robust_z'] = numpy.nan
-    out.loc[:, 'cs_outlier_candidate'] = False
-    out.loc[:, 'cs_small_group'] = False
-    out.loc[:, 'cs_outlier_reason'] = ''
+    active = out['exclusion'].eq('no')
+    for column, value in {'cs_robust_z_scope': robust_z_scope, 'cs_small_group_policy': small_group_policy}.items():
+        if column not in out:
+            out[column] = ''
+        out.loc[active, column] = value
+    for column, value in {'cs_margin_threshold': margin_threshold, 'cs_robust_z_threshold': robust_z_threshold}.items():
+        if column not in out:
+            out[column] = numpy.nan
+        out.loc[active, column] = value
+    for label in ('uncorrected', 'corrected'):
+        column = 'cs_margin_' + label
+        if column not in out:
+            out[column] = pandas.to_numeric(out.get('cs_margin'), errors='coerce')
+        values = (pandas.to_numeric(out.get('within_group_cor_' + label), errors='coerce')
+                  - pandas.to_numeric(out.get('max_nongroup_cor_' + label), errors='coerce'))
+        out[column] = pandas.to_numeric(out[column], errors='coerce')
+        # Scalars arise when both correlation columns are absent (no scored data).
+        out.loc[active, column] = values.loc[active] if isinstance(values, pandas.Series) else values
+    for column, default in {'cs_robust_z': numpy.nan, 'cs_outlier_candidate': False,
+                            'cs_small_group': False, 'cs_outlier_reason': ''}.items():
+        if column not in out:
+            out[column] = default
+        out.loc[active, column] = default
     if str(outlier_method) != 'robust_margin':
         return out
     idx = out.index[out['exclusion'].eq('no') & pandas.to_numeric(out['cs_margin_corrected'], errors='coerce').notna()]
     if len(idx) == 0:
         return out
+    score_frame = out.loc[idx, ['sample_group', 'cs_margin_corrected']].copy()
+    score_frame['sample_group'] = score_frame['sample_group'].fillna('').astype(str).str.strip()
+    if robust_z_scope == 'species_group':
+        species = out.loc[idx, 'species_tag'].fillna('').astype(str).str.strip()
+        if species.eq('').any():
+            raise ValueError('species_group scoring requires a species_tag for each scored run')
+        # JSON tuples remain readable in small-group warnings without label collisions.
+        score_frame['score_group'] = [
+            json.dumps([species_value, group_value], ensure_ascii=False) if group_value else ''
+            for species_value, group_value in zip(species, score_frame['sample_group'])
+        ]
+    else:
+        score_frame['score_group'] = score_frame['sample_group']
     flagged = flag_margin_outliers(
-        df=out.loc[idx, ['sample_group', 'cs_margin_corrected']].copy(),
+        df=score_frame,
         margin_col='cs_margin_corrected',
-        group_col='sample_group',
+        group_col='score_group',
         margin_threshold=float(margin_threshold),
         robust_z_threshold=float(robust_z_threshold),
         robust_z_col='cs_robust_z',
@@ -1374,8 +1407,16 @@ def run_cross_species_filter(args, context=None):
         del unaveraged_tcs
         embedding_cache = {}
         missing_strategy = str(getattr(args, 'missing_strategy', 'em_pca'))
-        df_metadata = _calculate_correlation_within_group(df_metadata, orthologs['uncorrected'], 'uncorrected')
-        df_metadata = _calculate_correlation_within_group(df_metadata, orthologs['corrected'], 'corrected')
+        df_metadata = _calculate_correlation_within_group(
+            df_metadata, orthologs['uncorrected'], 'uncorrected',
+            reference_exclusion=str(getattr(args, 'reference_exclusion', 'run')),
+            min_common_genes=int(getattr(args, 'min_common_genes', 0)),
+        )
+        df_metadata = _calculate_correlation_within_group(
+            df_metadata, orthologs['corrected'], 'corrected',
+            reference_exclusion=str(getattr(args, 'reference_exclusion', 'run')),
+            min_common_genes=int(getattr(args, 'min_common_genes', 0)),
+        )
         pca_corrected = _compute_pca_coordinates(
             orthologs['corrected'],
             missing_strategy=missing_strategy,
@@ -1414,6 +1455,7 @@ def run_cross_species_filter(args, context=None):
             margin_threshold=float(getattr(args, 'margin_threshold', 0.0)),
             robust_z_threshold=float(getattr(args, 'robust_z_threshold', -2.5)),
             small_group_policy=str(getattr(args, 'small_group_policy', 'margin_fallback')),
+            robust_z_scope=str(getattr(args, 'robust_z_scope', 'sample_group')),
         )
         df_metadata['single_copy_threshold'] = single_copy_threshold
         averaged_inputs = _build_averaged_cross_species_inputs(df_metadata, orthologs)

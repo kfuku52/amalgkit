@@ -53,6 +53,13 @@ def _write_excluded_table(df_metadata, out_path):
         'ws_margin',
         'ws_robust_z',
         'ws_small_group',
+        'ws_within_common_genes',
+        'ws_min_nongroup_common_genes',
+        'ws_min_common_genes',
+        'ws_reference_exclusion',
+        'ws_small_group_policy',
+        'ws_margin_threshold',
+        'ws_robust_z_threshold',
     ]
     cols = [col for col in preferred_cols if col in excluded.columns]
     if len(cols) == 0:
@@ -84,7 +91,10 @@ def wsfilter_main(args):
         merged_species_metadata = load_merged_per_species_metadata(
             per_species_dir=os.path.join(tmp_out_dir, 'per_species')
         )
-        merged_metadata = merge_metadata_by_run(metadata.df, merged_species_metadata)
+        merged_metadata = merge_metadata_by_run(
+            metadata.df, merged_species_metadata,
+            overwrite_columns=[col for col in merged_species_metadata if col.startswith('ws_')],
+        )
         with staged_output_dir(dir_ws, redo=args.redo, prefix='amalgkit_wsfilter_stage_') as stage_dir:
             out_metadata_path = os.path.join(stage_dir, 'metadata.tsv')
             merged_metadata.to_csv(out_metadata_path, sep='\t', index=False)

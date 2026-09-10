@@ -51,13 +51,38 @@ def calculate_correlation_within_group(
     df_metadata: pandas.DataFrame,
     ortholog_matrix: pandas.DataFrame,
     correction_label: str,
+    reference_exclusion: str = "run",
+    min_common_genes: int = 0,
 ) -> pandas.DataFrame:
     """Add within-group and best non-group correlation columns to metadata."""
+    if reference_exclusion not in {"run", "species"}:
+        raise ValueError("reference_exclusion must be run or species")
+    if min_common_genes < 0 or min_common_genes == 1:
+        raise ValueError("min_common_genes must be 0 (disabled) or at least 2")
     target_col = f"within_group_cor_{correction_label}"
     nongroup_col = f"max_nongroup_cor_{correction_label}"
     out = df_metadata.copy()
-    out.loc[:, target_col] = numpy.nan
-    out.loc[:, nongroup_col] = numpy.nan
+    active = out["exclusion"].eq("no")
+    within_count_col = f"within_common_genes_{correction_label}"
+    other_count_col = f"min_nongroup_common_genes_{correction_label}"
+    # Preserve historical removal evidence for rows not being rescored. Public
+    # csfilter tables carry canonical names; internal tables carry suffixes.
+    for column, canonical, default in (
+        (target_col, "within_group_cor", numpy.nan),
+        (nongroup_col, "max_nongroup_cor", numpy.nan),
+        (within_count_col, "cs_within_common_genes", 0),
+        (other_count_col, "cs_min_nongroup_common_genes", 0),
+    ):
+        if column not in out:
+            out[column] = out[canonical] if canonical in out else numpy.nan
+        out[column] = pandas.to_numeric(out[column], errors="coerce")
+        out.loc[active, column] = default
+    if "cs_reference_exclusion" not in out:
+        out["cs_reference_exclusion"] = ""
+    if "cs_min_common_genes" not in out:
+        out["cs_min_common_genes"] = numpy.nan
+    out.loc[active, "cs_reference_exclusion"] = reference_exclusion
+    out.loc[active, "cs_min_common_genes"] = min_common_genes
     if ortholog_matrix.shape[1] == 0:
         return out
     kept = out.loc[out["exclusion"].eq("no"), :].copy()
@@ -92,56 +117,64 @@ def calculate_correlation_within_group(
             continue
         species_profiles_by_group[sample_group] = species_profiles
         ortholog_med.loc[:, sample_group] = species_profiles.median(axis=1, skipna=True)
+    species_references = {}
     for row_idx, row in kept.iterrows():
         sample_id = str(row["sample_id"])
         sample_group = str(row["sample_group"])
         if sample_id not in ortholog_matrix.columns or sample_group not in ortholog_med.columns:
             continue
         sample_values = ortholog_matrix.loc[:, sample_id]
-        within_profiles = species_profiles_by_group.get(sample_group)
-        if within_profiles is None:
-            within_cor = numpy.nan
-        else:
-            within_profiles = within_profiles.copy()
-            species_tag = str(row["species_tag"])
-            other_sample_ids = (
-                kept.loc[
-                    kept["species_tag"].astype(str).eq(species_tag)
-                    & kept["sample_group"].astype(str).eq(sample_group)
-                    & ~kept["sample_id"].astype(str).eq(sample_id),
-                    "sample_id",
-                ]
-                .astype(str)
-                .tolist()
-            )
-            other_sample_ids = [
-                other_sample_id for other_sample_id in other_sample_ids if other_sample_id in ortholog_matrix.columns
-            ]
-            if len(other_sample_ids) == 0:
-                within_profiles = within_profiles.drop(columns=[species_tag], errors="ignore")
-            else:
-                within_profiles.loc[:, species_tag] = (
-                    ortholog_matrix.loc[:, other_sample_ids]
-                    .apply(
-                        pandas.to_numeric,
-                        errors="coerce",
+        species_tag = str(row["species_tag"])
+        correlations = {}
+        common_counts = {}
+        for reference_group in group_order:
+            profiles = species_profiles_by_group[reference_group]
+            if reference_exclusion == "species":
+                # Exclude the target species from BOTH within- and other-group references.
+                key = (species_tag, reference_group)
+                if key not in species_references:
+                    species_references[key] = profiles.drop(columns=[species_tag], errors="ignore").median(
+                        axis=1, skipna=True
                     )
-                    .mean(axis=1, skipna=True)
+                reference = species_references[key]
+            elif reference_group == sample_group:
+                profiles = profiles.copy()
+                other_ids = (
+                    kept.loc[
+                        kept["species_tag"].astype(str).eq(species_tag)
+                        & kept["sample_group"].astype(str).eq(sample_group)
+                        & ~kept["sample_id"].astype(str).eq(sample_id),
+                        "sample_id",
+                    ]
+                    .astype(str)
+                    .tolist()
                 )
-            if within_profiles.shape[1] == 0:
-                within_cor = numpy.nan
+                if other_ids:
+                    profiles.loc[:, species_tag] = (
+                        ortholog_matrix.loc[:, other_ids]
+                        .apply(pandas.to_numeric, errors="coerce")
+                        .mean(axis=1, skipna=True)
+                    )
+                else:
+                    profiles = profiles.drop(columns=[species_tag], errors="ignore")
+                reference = profiles.median(axis=1, skipna=True)
             else:
-                within_reference = within_profiles.median(axis=1, skipna=True)
-                within_cor = safe_correlation(sample_values, within_reference, method="pearson")
+                reference = ortholog_med.loc[:, reference_group]
+            valid = numpy.isfinite(pandas.to_numeric(sample_values, errors="coerce")) & numpy.isfinite(reference)
+            common_counts[reference_group] = int(valid.sum())
+            correlations[reference_group] = safe_correlation(sample_values, reference, method="pearson")
+        within_count = common_counts[sample_group]
         other_groups = [group for group in group_order if group != sample_group]
-        nongroup_values = [
-            safe_correlation(sample_values, ortholog_med.loc[:, other_group], method="pearson")
-            for other_group in other_groups
-        ]
-        nongroup_values = [value for value in nongroup_values if numpy.isfinite(value)]
-        max_nongroup = max(nongroup_values) if len(nongroup_values) > 0 else numpy.nan
+        other_count = min((common_counts[group] for group in other_groups), default=0)
+        within_cor = correlations[sample_group] if within_count >= min_common_genes else numpy.nan
+        other_values = [correlations[group] for group in other_groups if numpy.isfinite(correlations[group])]
+        # A poorly supported competitor must not disappear from the maximum and
+        # thereby make a sample look better. Keep pairwise gene sets independent.
+        max_nongroup = max(other_values) if other_values and other_count >= min_common_genes else numpy.nan
         out.loc[row_idx, target_col] = within_cor
         out.loc[row_idx, nongroup_col] = max_nongroup
+        out.loc[row_idx, within_count_col] = within_count
+        out.loc[row_idx, other_count_col] = other_count
     return out
 
 

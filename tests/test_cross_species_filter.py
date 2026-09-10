@@ -1025,3 +1025,32 @@ def test_sample_number_heatmap_renders_real_pdf(tmp_path):
 
     assert _save_sample_number_heatmap_pdf(metadata_df, str(output_path)) == str(output_path)
     assert output_path.read_bytes().startswith(b'%PDF')
+
+
+@pytest.mark.integration
+def test_csfilter_exclusions_are_independent_of_embedding_imputation(tmp_path, stub_pdf_rendering):
+    results = []
+    for strategy in ('row_mean', 'em_pca', 'strict'):
+        root = tmp_path / strategy
+        orthogroups = TestCrossSpeciesFilterMain._write_cross_species_fixture(root)
+        tables = root / 'per_species' / 'Species_A' / 'tables'
+        for suffix in ('uncorrected', 'no'):
+            path = tables / ('Species_A.' + suffix + '.tc.tsv')
+            counts = pandas.read_csv(path, sep='\t', index_col=0)
+            counts['A_leaf'] = [numpy.nan, 1., 10., 9.]
+            counts.to_csv(path, sep='\t', index_label='target_id')
+        args = TestCrossSpeciesFilterMain._base_args(root)
+        args.orthogroup_table = str(orthogroups)
+        args.sample_group = 'leaf,root'
+        args.outlier_method = 'robust_margin'
+        args.missing_strategy = strategy
+        args.reference_exclusion = 'species'
+        args.min_common_genes = 2
+        run_cross_species_filter(args)
+        out = pandas.read_csv(root / 'cross_species' / 'metadata.tsv', sep='\t').set_index('run').sort_index()
+        columns = ['exclusion', 'within_group_cor_corrected', 'max_nongroup_cor_corrected',
+                   'cs_margin_corrected', 'cs_outlier_candidate', 'within_common_genes_corrected']
+        results.append(out[columns])
+    assert results[0]['exclusion'].ne('no').any()
+    for result in results[1:]:
+        pandas.testing.assert_frame_equal(results[0], result)

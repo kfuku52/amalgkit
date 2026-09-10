@@ -529,3 +529,50 @@ def test_finalize_main_runs_without_rscript_for_supported_python_worker(tmp_path
     assert (out_root / '{}_expression.tsv'.format(species_tag)).is_file()
     assert (out_root / '{}_batch_effect_summary.tsv'.format(species_tag)).is_file()
     assert (out_root / '{}_before_after_sva.pdf'.format(species_tag)).is_file()
+
+
+@pytest.mark.parametrize('command', ['wsfilter', 'csfilter'])
+def test_filter_rerun_clears_unscoreable_values_in_final_metadata(tmp_path, monkeypatch, command):
+    args = _base_args(tmp_path)
+    metadata = _base_metadata()
+    prefix = 'ws' if command == 'wsfilter' else 'cs'
+    metadata.df[prefix + '_margin'] = [-.1, -.7]
+    metadata.df[prefix + '_robust_z'] = [-3., -4.]
+    metadata.df['annotation'] = ['keep', 'keep']
+    metadata.df.loc[metadata.df['run'].eq('R2'), 'exclusion'] = 'manual'
+    update = pandas.DataFrame({'run': ['R1'], 'exclusion': ['no'],
+                               prefix + '_margin': [float('nan')], prefix + '_robust_z': [float('nan')],
+                               'annotation': [None]})
+    module = wsfilter_module if command == 'wsfilter' else csfilter_module
+    monkeypatch.setattr(module, 'resolve_per_species_input', lambda args: (metadata, str(tmp_path)))
+    monkeypatch.setattr(module, 'generate_per_species_tables', lambda *a, **kw: None)
+    monkeypatch.setattr(module, 'save_exclusion_plot_pdf', lambda **kw: None)
+    if command == 'wsfilter':
+        monkeypatch.setattr(module, 'load_merged_per_species_metadata', lambda **kw: update)
+        monkeypatch.setattr(module, 'copy_per_species_pdfs', lambda **kw: None)
+    else:
+        # Fresh internal NaNs supersede previous public and internal metrics.
+        metadata.df['within_group_cor_corrected'] = [-.5, -.5]
+        metadata.df['PC1'] = [100., 200.]
+        update['within_group_cor_corrected'] = float('nan')
+        update['max_nongroup_cor_corrected'] = float('nan')
+        update['cs_margin_corrected'] = float('nan')
+        update['PC1_corrected'] = float('nan')
+
+        def cross_stage(args, context=None):
+            directory = os.path.join(args.out_dir, 'cross_species')
+            os.makedirs(directory)
+            update.to_csv(os.path.join(directory, 'metadata.tsv'), sep='\t', index=False)
+
+        monkeypatch.setattr(module, 'run_cross_species_filter', cross_stage)
+    getattr(module, command + '_main')(args)
+    result = pandas.read_csv(tmp_path / 'out' / command / 'metadata.tsv', sep='\t').set_index('run')
+    assert pandas.isna(result.loc['R1', prefix + '_margin'])
+    assert pandas.isna(result.loc['R1', prefix + '_robust_z'])
+    assert result.loc['R1', 'annotation'] == 'keep'
+    assert result.loc['R2', prefix + '_margin'] == -.7
+    assert result.loc['R2', 'exclusion'] == 'manual'
+    if command == 'csfilter':
+        assert pandas.isna(result.loc['R1', 'within_group_cor'])
+        assert pandas.isna(result.loc['R1', 'PC1'])
+        assert result.loc['R2', 'PC1'] == 200.

@@ -111,5 +111,6 @@ def test_within_group_filter_clears_stale_candidates_after_all_runs_removed():
 
     assert next_counts.shape[1] == 0
     assert next_excluded_runs == []
-    assert not next_metadata['ws_outlier_candidate'].fillna(False).any()
-    assert not next_metadata['ws_small_group'].fillna(False).any()
+    # No new removals, but the evidence from the removal round survives.
+    assert next_metadata['ws_outlier_candidate'].fillna(False).all()
+    assert next_metadata['ws_small_group'].fillna(False).all()

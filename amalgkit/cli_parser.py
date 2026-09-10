@@ -19,6 +19,13 @@ def positive_int(value):
     return int_value
 
 
+def common_gene_threshold(value):
+    parsed = int(value)
+    if parsed < 0 or parsed == 1:
+        raise argparse.ArgumentTypeError('must be 0 (disabled) or at least 2')
+    return parsed
+
+
 def single_copy_threshold(value):
     try:
         threshold = float(value)
@@ -628,6 +635,21 @@ def build_parser(command_handlers, command_names, version, prog=None):
                       help='default=%(default)s: How to screen sample_groups too small for a robust z-score. '
                            '"margin_fallback" applies --margin_threshold alone; '
                            '"retain" keeps them without margin-based screening.')
+    for filter_parser in (pws, pcsf):
+        filter_parser.add_argument('--min_common_genes', default=0, type=common_gene_threshold,
+                                   help='default=%(default)s: Minimum finite gene pairs for each group correlation; '
+                                        '0 disables the extra support cutoff. Insufficient support retains the sample.')
+    pws.add_argument('--reference_exclusion', choices=['run', 'bioproject'], default='run',
+                     help='default=%(default)s: Unit excluded from expression references; bioproject excludes '
+                          'the target project from all groups and requires complete project labels.')
+    pcsf.add_argument('--reference_exclusion', choices=['run', 'species'], default='run',
+                      help='default=%(default)s: Unit excluded from expression references; species excludes '
+                           'the target species from all groups.')
+    pcsf.add_argument('--robust_z_scope', choices=['sample_group', 'species_group'], default='sample_group',
+                      help='default=%(default)s: Pool margins by sample group or by species and sample group.')
+    pws.add_argument('--max_filter_iterations', default=None, type=positive_int,
+                     help='default=%(default)s: Maximum correlation-filter rounds; 1 performs a single pass. '
+                          'When omitted, repeat until no more samples are removed.')
     pcsf.add_argument('--single_copy_threshold', metavar='PERCENT', default=None, type=single_copy_threshold,
                       required=False, action='store',
                       help='default=inferred: Minimum percentage of species in which an orthogroup must be single-copy. '

@@ -14,6 +14,7 @@ from amalgkit.batch_effect_common import (
 )
 from amalgkit.outlier_utils import flag_margin_outliers
 from amalgkit.per_species_common import (
+    _is_non_excluded_flag,
     append_round_summary,
     initialize_round_summary,
     sample_group_mean,
@@ -77,15 +78,28 @@ def _filter_low_mapping_rate(tc, sra, mapping_rate_cutoff):
     mapping_rate = pandas.to_numeric(sra.loc[:, 'mapping_rate'], errors='coerce')
     is_mapping_good = mapping_rate >= float(mapping_rate_cutoff)
     is_mapping_good = is_mapping_good.fillna(False)
-    excluded_runs = sra.loc[~is_mapping_good, 'run'].astype(str).tolist()
+    is_active = _is_non_excluded_flag(sra['exclusion']) & sra['run'].astype(str).isin(tc.columns)
+    newly_excluded = is_active & ~is_mapping_good
+    excluded_runs = sra.loc[newly_excluded, 'run'].astype(str).tolist()
     out_sra = sra.copy()
     if len(excluded_runs) > 0:
-        out_sra.loc[~is_mapping_good, 'exclusion'] = 'low_mapping_rate'
-    keep_runs = [run_id for run_id in out_sra.loc[is_mapping_good, 'run'].astype(str).tolist() if run_id in tc.columns]
+        out_sra.loc[newly_excluded, 'exclusion'] = 'low_mapping_rate'
+    keep_runs = [run_id for run_id in out_sra.loc[is_active & is_mapping_good, 'run'].astype(str).tolist() if run_id in tc.columns]
     return tc.loc[:, keep_runs].copy(), out_sra, excluded_runs
 
 
-def _compute_sample_group_correlation_metrics(tc, sra, selected_sample_groups, dist_method):
+def _finite_pair_correlation(left, right, method):
+    valid = numpy.isfinite(left) & numpy.isfinite(right)
+    left, right = left.loc[valid], right.loc[valid]
+    if len(left) < 2 or left.nunique() <= 1 or right.nunique() <= 1:
+        return numpy.nan
+    # Preserve the established pandas arithmetic: even tiny rounding changes
+    # near a zero margin can change the strict absolute-threshold decision.
+    return left.corr(right, method=method)
+
+
+def _compute_sample_group_correlation_metrics(tc, sra, selected_sample_groups, dist_method,
+                                              min_common_genes=0, reference_exclusion='run'):
     dist_method = str(dist_method).strip().lower()
     if dist_method not in {'pearson', 'spearman', 'kendall'}:
         raise ValueError(
@@ -93,6 +107,19 @@ def _compute_sample_group_correlation_metrics(tc, sra, selected_sample_groups, d
                 dist_method
             )
         )
+    is_active = _is_non_excluded_flag(sra['exclusion'])
+    if min_common_genes < 0 or min_common_genes == 1:
+        raise ValueError('min_common_genes must be 0 (disabled) or at least 2')
+    if reference_exclusion not in {'run', 'bioproject'}:
+        raise ValueError('reference_exclusion must be run or bioproject')
+    if reference_exclusion == 'bioproject':
+        if 'bioproject' not in sra.columns:
+            raise ValueError('bioproject reference exclusion requires bioproject metadata')
+        active = sra.loc[is_active & sra['run'].astype(str).isin(tc.columns.astype(str)), 'bioproject']
+        if active.fillna('').astype(str).str.strip().isin(['', 'not_provided']).any():
+            raise ValueError('bioproject reference exclusion requires nonempty bioproject metadata')
+    active_ids = sra.loc[_is_non_excluded_flag(sra['exclusion']), 'run'].astype(str)
+    tc = tc.loc[:, tc.columns.astype(str).isin(active_ids)]
     required_sample_groups = [group for group in selected_sample_groups if group in set(sra.loc[:, 'sample_group'].astype(str))]
     out = sra.copy()
     for column in [
@@ -104,6 +131,8 @@ def _compute_sample_group_correlation_metrics(tc, sra, selected_sample_groups, d
         'ws_small_group',
     ]:
         out.loc[:, column] = False if column in {'ws_outlier_candidate', 'ws_small_group'} else numpy.nan
+    out['ws_within_common_genes'] = 0
+    out['ws_min_nongroup_common_genes'] = 0
     if (len(required_sample_groups) <= 1) or (tc.shape[1] == 0) or (out.shape[0] == 0):
         return out
     tc_ave = sample_group_mean(tc, out, required_sample_groups)['tc_ave']
@@ -117,6 +146,11 @@ def _compute_sample_group_correlation_metrics(tc, sra, selected_sample_groups, d
     )
     tc_numeric = tc.apply(pandas.to_numeric, errors='coerce').to_numpy(dtype=float)
     tc_ave_numeric = tc_ave.apply(pandas.to_numeric, errors='coerce').to_numpy(dtype=float)
+    common_by_group = pandas.DataFrame(
+        numpy.isfinite(tc_numeric).astype(numpy.int64).T
+        @ numpy.isfinite(tc_ave_numeric).astype(numpy.int64),
+        index=corr_by_group.index, columns=corr_by_group.columns,
+    )
     can_vectorize = (
         str(dist_method).lower() == 'pearson'
         and numpy.isfinite(tc_numeric).all()
@@ -140,8 +174,8 @@ def _compute_sample_group_correlation_metrics(tc, sra, selected_sample_groups, d
         for run_id in corr_by_group.index:
             sample_values = pandas.to_numeric(tc.loc[:, run_id], errors='coerce')
             for sample_group in corr_by_group.columns:
-                corr_value = sample_values.corr(
-                    pandas.to_numeric(tc_ave.loc[:, sample_group], errors='coerce'),
+                corr_value = _finite_pair_correlation(
+                    sample_values, pandas.to_numeric(tc_ave.loc[:, sample_group], errors='coerce'),
                     method=dist_method,
                 )
                 corr_by_group.loc[run_id, sample_group] = corr_value
@@ -165,41 +199,58 @@ def _compute_sample_group_correlation_metrics(tc, sra, selected_sample_groups, d
     sample_group_by_run = dict(
         zip(out.loc[:, 'run'].astype(str), out.loc[:, 'sample_group'].astype(str))
     )
+    project_by_run = (
+        dict(zip(out['run'].astype(str), out['bioproject'].fillna('').astype(str).str.strip()))
+        if reference_exclusion == 'bioproject' else {}
+    )
     for run_id in corr_by_group.index:
         sample_group = sample_group_by_run.get(str(run_id))
         if sample_group not in corr_by_group.columns:
             continue
-        other_runs = [
-            other_run
-            for other_run in group_members.get(sample_group, [])
-            if other_run != str(run_id)
-        ]
-        if len(other_runs) == 0:
-            corr_by_group.loc[run_id, sample_group] = numpy.nan
-            continue
-        within_reference = tc.loc[:, other_runs].apply(
-            pandas.to_numeric,
-            errors='coerce',
-        ).mean(axis=1, skipna=True)
-        corr_by_group.loc[run_id, sample_group] = pandas.to_numeric(
-            tc.loc[:, run_id],
-            errors='coerce',
-        ).corr(within_reference, method=dist_method)
+        reference_groups = list(corr_by_group.columns) if reference_exclusion == 'bioproject' else [sample_group]
+        for reference_group in reference_groups:
+            other_runs = [
+                other_run for other_run in group_members.get(reference_group, [])
+                if other_run != str(run_id)
+                and (reference_exclusion == 'run' or project_by_run[other_run] != project_by_run[str(run_id)])
+            ]
+            if not other_runs:
+                corr_by_group.loc[run_id, reference_group] = numpy.nan
+                common_by_group.loc[run_id, reference_group] = 0
+                continue
+            reference = tc.loc[:, other_runs].apply(pandas.to_numeric, errors='coerce').mean(axis=1, skipna=True)
+            sample = pandas.to_numeric(tc.loc[:, run_id], errors='coerce')
+            valid = numpy.isfinite(sample) & numpy.isfinite(reference)
+            common_by_group.loc[run_id, reference_group] = int(valid.sum())
+            corr_by_group.loc[run_id, reference_group] = _finite_pair_correlation(sample, reference, method=dist_method)
     run_values = out.loc[:, 'run'].astype(str).tolist()
     sample_group_values = out.loc[:, 'sample_group'].astype(str).tolist()
     within_values = []
     nongroup_values = []
     margin_values = []
+    within_counts = []
+    nongroup_counts = []
     for run_id, sample_group in zip(run_values, sample_group_values):
         if (run_id not in corr_by_group.index) or (sample_group not in corr_by_group.columns):
             within_values.append(numpy.nan)
             nongroup_values.append(numpy.nan)
             margin_values.append(numpy.nan)
+            within_counts.append(0)
+            nongroup_counts.append(0)
             continue
         corr_row = pandas.to_numeric(corr_by_group.loc[run_id, :], errors='coerce')
         within_cor = corr_row.get(sample_group, numpy.nan)
         nongroup = pandas.to_numeric(corr_row.loc[corr_row.index != sample_group], errors='coerce').dropna()
         max_nongroup = float(nongroup.max()) if nongroup.shape[0] > 0 else numpy.nan
+        within_count = int(common_by_group.loc[run_id, sample_group])
+        other_counts = common_by_group.loc[run_id, common_by_group.columns != sample_group]
+        other_count = int(other_counts.min()) if len(other_counts) else 0
+        within_counts.append(within_count)
+        nongroup_counts.append(other_count)
+        if within_count < min_common_genes:
+            within_cor = numpy.nan
+        if other_count < min_common_genes:
+            max_nongroup = numpy.nan
         margin_val = within_cor - max_nongroup if numpy.isfinite(within_cor) and numpy.isfinite(max_nongroup) else numpy.nan
         within_values.append(within_cor)
         nongroup_values.append(max_nongroup)
@@ -207,29 +258,45 @@ def _compute_sample_group_correlation_metrics(tc, sra, selected_sample_groups, d
     out.loc[:, 'ws_within_group_cor'] = within_values
     out.loc[:, 'ws_max_nongroup_cor'] = nongroup_values
     out.loc[:, 'ws_margin'] = margin_values
+    out['ws_within_common_genes'] = within_counts
+    out['ws_min_nongroup_common_genes'] = nongroup_counts
     return out
 
 
 def _reduce_outlier_candidates(candidate_df):
     if candidate_df.shape[0] == 0:
         return []
-    keep_runs = []
-    if 'bioproject' in candidate_df.columns:
-        first_bp = candidate_df.drop_duplicates(subset=['bioproject'], keep='first')
-        keep_runs.extend(first_bp.loc[:, 'run'].astype(str).tolist())
-    if 'sample_group' in candidate_df.columns:
-        first_group = candidate_df.drop_duplicates(subset=['sample_group'], keep='first')
-        keep_runs.extend(first_group.loc[:, 'run'].astype(str).tolist())
-    keep_runs = [run_id for run_id in keep_runs if run_id != '']
-    return list(dict.fromkeys(keep_runs))
+    candidates = candidate_df.copy()
+    candidates['run'] = candidates['run'].fillna('').astype(str)
+    sort_cols = ['ws_margin', 'run'] if 'ws_margin' in candidates else ['run']
+    candidates = candidates.sort_values(sort_cols, kind='stable', na_position='last')
+    selected = []
+    used = {column: set() for column in ('bioproject', 'sample_group') if column in candidates}
+    for _, row in candidates.iterrows():
+        if not row['run']:
+            continue
+        keys = {column: str(row[column]).strip() if pandas.notna(row[column]) else '' for column in used}
+        if keys.get('bioproject') == 'not_provided':
+            keys['bioproject'] = ''
+        if any(value and value in used[column] for column, value in keys.items()):
+            continue
+        selected.append(row['run'])
+        for column, value in keys.items():
+            if value:
+                used[column].add(value)
+    return selected
 
 
 def _apply_within_group_filter(tc, sra, args, selected_sample_groups, min_dif=0.0):
+    active_ids = sra.loc[_is_non_excluded_flag(sra['exclusion']), 'run'].astype(str)
+    tc = tc.loc[:, tc.columns.astype(str).isin(active_ids)]
     out = _compute_sample_group_correlation_metrics(
         tc=tc,
         sra=sra,
         selected_sample_groups=selected_sample_groups,
         dist_method=str(getattr(args, 'dist_method', 'pearson')),
+        min_common_genes=int(getattr(args, 'min_common_genes', 0)),
+        reference_exclusion=str(getattr(args, 'reference_exclusion', 'run')),
     )
     filtered = flag_margin_outliers(
         df=out,
@@ -257,12 +324,26 @@ def _apply_within_group_filter(tc, sra, args, selected_sample_groups, min_dif=0.
     if bool(getattr(args, 'one_outlier_per_iter', False)) and len(excluded_runs) > 0:
         candidate_df = filtered.loc[
             filtered['run'].astype(str).isin(excluded_runs),
-            [col for col in ['run', 'sample_group', 'bioproject'] if col in filtered.columns],
+            [col for col in ['run', 'sample_group', 'bioproject', 'ws_margin'] if col in filtered.columns],
         ].copy()
         excluded_runs = _reduce_outlier_candidates(candidate_df)
     out_sra = sra.copy()
+    active_rows = out_sra['run'].astype(str).isin(tc.columns.astype(str))
+    settings = {
+        'ws_min_common_genes': int(getattr(args, 'min_common_genes', 0)),
+        'ws_margin_threshold': float(getattr(args, 'margin_threshold', 0.0)) + float(min_dif),
+        'ws_robust_z_threshold': float(getattr(args, 'robust_z_threshold', -2.5)),
+        'ws_reference_exclusion': str(getattr(args, 'reference_exclusion', 'run')),
+        'ws_small_group_policy': str(getattr(args, 'small_group_policy', 'margin_fallback')),
+    }
+    for column, value in settings.items():
+        if column not in out_sra:
+            out_sra[column] = pandas.Series(pandas.NA, index=out_sra.index, dtype='object')
+        out_sra.loc[active_rows, column] = value
     boolean_metric_cols = {'ws_outlier_candidate', 'ws_small_group'}
     metric_cols = [
+        'ws_within_common_genes',
+        'ws_min_nongroup_common_genes',
         'ws_within_group_cor',
         'ws_max_nongroup_cor',
         'ws_margin',
@@ -274,7 +355,8 @@ def _apply_within_group_filter(tc, sra, args, selected_sample_groups, min_dif=0.
         if metric_col not in out_sra.columns:
             out_sra.loc[:, metric_col] = False if metric_col in boolean_metric_cols else numpy.nan
         run_map = filtered.set_index(filtered['run'].astype(str))[metric_col]
-        out_sra.loc[:, metric_col] = out_sra.loc[:, 'run'].astype(str).map(run_map)
+        # Preserve the scoring evidence from the removal round for inactive runs.
+        out_sra.loc[active_rows, metric_col] = out_sra.loc[active_rows, 'run'].astype(str).map(run_map)
         if metric_col in boolean_metric_cols:
             out_sra.loc[:, metric_col] = out_sra.loc[:, metric_col].fillna(False).astype(bool)
     if len(excluded_runs) > 0:
@@ -283,7 +365,12 @@ def _apply_within_group_filter(tc, sra, args, selected_sample_groups, min_dif=0.
     return out_tc, out_sra, excluded_runs
 
 
-def _should_stop_within_group_filter(current_tc, next_tc, excluded_runs):
+def _should_stop_within_group_filter(current_tc, next_tc, excluded_runs, completed_iterations=0, max_iterations=None):
+    if max_iterations is not None:
+        if max_iterations < 1:
+            raise ValueError('max_filter_iterations must be positive')
+        if completed_iterations >= max_iterations:
+            return True
     if len(excluded_runs) == 0:
         return True
     if next_tc.shape[1] == 0:
@@ -539,6 +626,9 @@ def _run_prepare_or_wsfilter_python_worker(args, metadata, species_tag, input_di
     current_tc = tc.copy()
     current_sra = sra.copy()
     round_index = 0
+    max_iterations = getattr(args, 'max_filter_iterations', None)
+    if max_iterations is not None and max_iterations < 1:
+        raise ValueError('max_filter_iterations must be positive')
     while True:
         next_tc, next_sra, excluded_runs = _apply_within_group_filter(
             tc=current_tc,
@@ -556,8 +646,9 @@ def _run_prepare_or_wsfilter_python_worker(args, metadata, species_tag, input_di
             runs_before=current_tc.columns,
             runs_after=next_tc.columns,
         )
+        limit_reached = max_iterations is not None and round_index + 1 >= max_iterations
         round_value = round_index + 2
-        if (len(excluded_runs) == 0) or bool(getattr(args, 'plot_intermediate', False)):
+        if limit_reached or (len(excluded_runs) == 0) or bool(getattr(args, 'plot_intermediate', False)):
             correlation_statistics = save_correlation_statistics(
                 counts_df=next_tc,
                 metadata_df=next_sra,
@@ -579,12 +670,27 @@ def _run_prepare_or_wsfilter_python_worker(args, metadata, species_tag, input_di
             current_tc=current_tc,
             next_tc=next_tc,
             excluded_runs=excluded_runs,
+            completed_iterations=round_index + 1,
+            max_iterations=max_iterations,
         )
         current_tc = next_tc
         current_sra = next_sra
         round_index += 1
         if should_stop:
+            if limit_reached and excluded_runs and next_tc.shape[1] > 0:
+                round_summary = append_round_summary(
+                    round_summary=round_summary, step='within_group_filter_stop',
+                    round_value=round_index, reason='iteration_limit_reached',
+                    runs_before=current_tc.columns, runs_after=current_tc.columns,
+                )
             break
+    current_sra['ws_filter_stop_reason'] = (
+        'no_outlier_detected' if not excluded_runs else
+        'all_samples_excluded' if current_tc.shape[1] == 0 else
+        'iteration_limit_reached' if limit_reached else 'no_progress'
+    )
+    current_sra['ws_filter_iterations'] = round_index
+    current_sra['ws_max_filter_iterations'] = max_iterations if max_iterations is not None else 'until_stable'
 
     batch_info = initialize_batch_info(run_ids=current_sra.loc[:, 'run'].astype(str).tolist(), batch_effect_alg='no')
     batch_info['skip_reason'] = 'batch_effect_alg_no'

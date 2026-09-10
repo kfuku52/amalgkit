@@ -7,6 +7,19 @@ than the Releases page for those changes.
 
 ### Unreleased
 
+- Added opt-in filter sensitivity controls for minimum finite gene support,
+  species/project reference exclusion, species-group robust z, and bounded
+  wsfilter iterations. Existing scientific defaults and automatic exclusion are
+  retained; synthetic quality/biological-shift evaluation documents tradeoffs.
+- Preserved wsfilter removal-round scores, refreshed csfilter metrics on reruns,
+  recorded reference/support/iteration settings, and enforced both group and
+  project limits for `--one_outlier_per_iter yes` with deterministic selection.
+- Handled undefined constant-pair correlations without numerical warnings.
+- Clear stale scores when a filter rerun becomes unscoreable, preserve prior
+  removal evidence and thresholds, and keep existing exclusion reasons through
+  mapping-rate filtering. Reject missing project placeholders for project
+  references and verify exclusion independence from PCA imputation.
+
 - Impute the CSTMM reference in library-size-adjusted CPM space, preserving
   observed counts and the single-copy threshold. Record convergence and
   orthology missingness; require explicit acceptance of unconverged estimates.

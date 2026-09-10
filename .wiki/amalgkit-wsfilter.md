@@ -95,3 +95,42 @@ amalgkit finalize \
     --metadata ./csfilter/metadata.tsv \
     --batch_effect_alg latent_glm
 ```
+
+## Reference and support sensitivity analysis
+
+Filtering remains automatic. The existing defaults are unchanged; alternative
+policies are opt-in because retention and detection can trade off.
+
+| Option | Default | Use |
+| --- | --- | --- |
+| `--small_group_policy` | `margin_fallback` | Use `retain` to keep groups with fewer than three finite margins; this is insufficient evidence, not a quality pass. |
+| `--min_common_genes` | `0` | Require this many finite gene pairs for every group comparison; `0` disables the additional cutoff. Values other than `0` must be at least `2`. |
+| `--reference_exclusion` | `run` | `bioproject` excludes the target project from both same-group and other-group references. Complete project labels are required (`not_provided` is missing). |
+| `--max_filter_iterations` | `None` | Set `1` for a single pass, or another positive integer for a bounded number of rounds. Omission repeats until stable. |
+
+Each comparison still uses its own observed gene pairs. If an enabled support
+cutoff fails for the within-group reference or any other-group reference, the
+margin is unavailable and that sample is retained by correlation filtering.
+Other filters, including mapping-rate filtering, still apply. Excluding a
+project can leave no reference and does not silently fall back to run exclusion.
+
+`metadata.tsv` and `excluded.tsv` include `ws_within_common_genes`,
+`ws_min_nongroup_common_genes`, `ws_min_common_genes`, and
+`ws_reference_exclusion`. Counts describe finite pairs with the aggregated
+reference, not the number of independent observations. Metadata also records
+`ws_small_group_policy`, `ws_filter_iterations`, `ws_max_filter_iterations`,
+and `ws_filter_stop_reason`. Removed samples retain their removal-round scores and scoring settings, including
+`ws_margin_threshold` and `ws_robust_z_threshold`. Previously excluded samples
+are not relabelled by the mapping-rate filter. On rescoring an active run, an
+unavailable score clears any earlier finite score in the final metadata.
+When `--one_outlier_per_iter yes` is used, candidates are considered by increasing
+margin (run ID breaks ties), enforcing at most one per group and per known
+project in the same round.
+
+For a comparison, start each run from the same explicit **pre-filter** metadata
+in separate output directories. Reusing inferred filtered metadata prevents
+previously removed samples from being reconsidered. Recompute downstream
+finalization and summaries when the retained sample set changes.
+
+See [filter validation](https://github.com/kfuku52/amalgkit/wiki/Filter-validation)
+for the evaluation design, limitations, and adoption decision.

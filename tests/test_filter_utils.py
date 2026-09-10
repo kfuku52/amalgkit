@@ -385,3 +385,17 @@ def test_merge_metadata_by_run_rejects_empty_update_run_ids():
 
     with pytest.raises(ValueError, match='Updated metadata contains empty run IDs'):
         merge_metadata_by_run(source_df, update_df)
+
+
+@pytest.mark.parametrize('dtype, values', [('float64', [1., 2.]), ('Int64', [1, 2]),
+                                          ('boolean', [True, False]), ('string', ['old', 'keep'])])
+def test_merge_explicit_missing_scores_replace_stale_values_only_for_updated_rows(dtype, values):
+    source = pandas.DataFrame({'run': ['R1', 'R2'], 'score': pandas.Series(values, dtype=dtype),
+                               'annotation': ['preserve', 'other']})
+    update = pandas.DataFrame({'run': ['R1'], 'score': [None], 'annotation': [None]})
+    result = merge_metadata_by_run(source, update, overwrite_columns=['score'])
+    assert pandas.isna(result.loc[0, 'score'])
+    assert result.loc[1, 'score'] == values[1]
+    assert result.loc[0, 'annotation'] == 'preserve'
+    # Backwards-compatible default for non-generated annotations.
+    assert merge_metadata_by_run(source, update).loc[0, 'score'] == values[0]

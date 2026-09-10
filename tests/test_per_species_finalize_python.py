@@ -736,3 +736,31 @@ def test_compute_corr_matrix_preserves_undefined_constant_sample():
     assert numpy.isfinite(pca[1]).all()
     assert numpy.isnan(pca[2]).all()
     assert numpy.isclose(corr.loc['A', 'B'], 1.0)
+
+
+@pytest.mark.parametrize('limit, expected_calls', [(1, 1), (2, 2), (None, 4)])
+def test_wsfilter_worker_applies_iteration_limit_and_records_stop(tmp_path, monkeypatch, stub_pdf_rendering,
+                                                                limit, expected_calls):
+    import amalgkit.per_species_python as worker_module
+    fixture = _write_species_input_fixture(tmp_path)
+    calls = []
+
+    def remove_one(tc, sra, args, selected_sample_groups, min_dif):
+        run = tc.columns[0]
+        calls.append(run)
+        out = sra.copy()
+        out.loc[out['run'].eq(run), 'exclusion'] = 'low_within_sample_group_correlation'
+        return tc.drop(columns=run), out, [run]
+
+    monkeypatch.setattr(worker_module, '_apply_within_group_filter', remove_one)
+    args = build_per_species_args(tmp_path, worker_mode='wsfilter', max_filter_iterations=limit)
+    assert worker_module._run_prepare_or_wsfilter_python_worker(
+        args, fixture['metadata'], fixture['species_tag'], fixture['input_dir'],
+    ) == 0
+    assert len(calls) == expected_calls
+    path = tmp_path / 'out' / 'per_species' / fixture['species_tag'] / 'tables' / (fixture['species_tag'] + '.metadata.tsv')
+    output = pandas.read_csv(path, sep='\t')
+    assert output['ws_filter_iterations'].eq(expected_calls).all()
+    expected_reason = 'all_samples_excluded' if limit is None else 'iteration_limit_reached'
+    assert output['ws_filter_stop_reason'].eq(expected_reason).all()
+    assert output['exclusion'].ne('no').sum() == expected_calls
