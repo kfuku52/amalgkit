@@ -5,7 +5,13 @@ Releases provide generated notes only for tagged releases. Patch-only updates
 remain on the default branch and are recorded below; consult this file rather
 than the Releases page for those changes.
 
-### Unreleased
+### 0.16.82 - 2026-09-10
+
+- Add reproducible opt-in random FASTQ spot sampling with candidate validation,
+  paired-read preservation, and auditable selection manifests. Avoid redundant
+  FASTQ staging and preserve single-end fragment models when reusing quant outputs.
+- Add repeatable runtime and peak-RSS comparisons for recent changes, documenting
+  increased CSTMM diagnostic and tau aggregation costs and output-equivalence checks.
 
 - Preserve true zero expression under log-only normalization when finalizing,
   including all-zero tau status and finite unchanged-cell diagnostics. Clear
