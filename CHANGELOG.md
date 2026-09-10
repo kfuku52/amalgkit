@@ -5,6 +5,14 @@ Releases provide generated notes only for tagged releases. Patch-only updates
 remain on the default branch and are recorded below; consult this file rather
 than the Releases page for those changes.
 
+### Unreleased
+
+- Calculate tau from linear arithmetic replicate means, with explicit donor,
+  BioSample and project weights, fixed tissue panels and auditable input tables.
+- Preserve escaped tissue names across per-species and cross-species processing,
+  reject ambiguous tau panels and prevent missing runs from being silently
+  dropped in tau plots. Stabilize tiny log2p1 values and large finite means.
+
 ### 0.16.81 - 2026-09-10
 
 - Validated shared download lock paths with one file-status observation to avoid

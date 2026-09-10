@@ -28,42 +28,16 @@ from amalgkit.orthology_utils import (
 )
 from amalgkit.outlier_utils import flag_margin_outliers
 from amalgkit.runtime_utils import build_species_token_map
-from amalgkit.text_utils import normalize_unique_text as _normalize_sample_groups
+from amalgkit.text_utils import (
+    normalize_unique_text as _normalize_sample_groups,
+    parse_sample_group_argument as _parse_sample_group_argument,
+    serialize_sample_groups,
+)
 
 
 CROSS_SPECIES_HEATMAP_MAX_INCHES = 20.0
 CROSS_SPECIES_HEATMAP_MAX_LABELS = 80
 CROSS_SPECIES_TSNE_MAX_FEATURES = 50
-
-
-def _parse_sample_group_argument(sample_group_arg):
-    tokens = []
-    token = []
-    value = str(sample_group_arg)
-    index = 0
-    while index < len(value):
-        char = value[index]
-        if char == '\\' and index + 1 < len(value) and value[index + 1] in {'\\', ',', '|'}:
-            token.append(value[index + 1])
-            index += 2
-            continue
-        if char in {',', '|'}:
-            tokens.append(''.join(token))
-            token = []
-        else:
-            token.append(char)
-        index += 1
-    tokens.append(''.join(token))
-    return _normalize_sample_groups(tokens)
-
-
-def serialize_sample_groups(values):
-    groups = _normalize_sample_groups(values)
-    escaped = [
-        value.replace('\\', '\\\\').replace(',', '\\,').replace('|', '\\|')
-        for value in groups
-    ]
-    return '|'.join(escaped)
 
 
 def _iter_visible_subdirs(path_dir):

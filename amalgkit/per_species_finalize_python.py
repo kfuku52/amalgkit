@@ -4,6 +4,7 @@ import warnings
 import numpy
 import pandas
 from amalgkit.table_io import read_identifier_tsv
+from amalgkit.text_utils import parse_sample_group_argument
 
 from amalgkit.batch_effect_common import (
     annotate_metadata_with_batch_info,
@@ -74,6 +75,8 @@ def _normalize_metadata_df(metadata_df):
     for column in out.columns:
         if out[column].dtype == object:
             out.loc[:, column] = out.loc[:, column].where(~out.loc[:, column].isna(), '')
+    if 'sample_group' in out.columns:
+        out['sample_group'] = out['sample_group'].fillna('').astype(str).str.strip()
     if 'run' in out.columns:
         out.loc[:, 'run'] = out.loc[:, 'run'].fillna('').astype(str)
     return out
@@ -116,7 +119,7 @@ def _resolve_selected_sample_groups(args, metadata_df):
             raise ValueError('The "sample_group" column was not found in metadata.')
         groups = metadata_df.loc[:, 'sample_group'].fillna('').astype(str).str.strip().tolist()
     else:
-        groups = str(sample_group_arg).replace(',', '|').split('|')
+        groups = parse_sample_group_argument(sample_group_arg)
     resolved = []
     seen = set()
     for value in groups:
@@ -892,13 +895,13 @@ def save_quick_state_comparison_plot(
     tsne_after = _compute_tsne_coordinates(after, random_seed=random_seed)
     tau_before = sample_group_to_tau(
         tc_sample_group_df=linear_sample_group_summary(
-            before, metadata, selected_sample_groups, transform_method, **(tau_options or {}),
+            tc_before, metadata_df, selected_sample_groups, transform_method, **(tau_options or {}),
         )['linear_mean'],
         rich_annotation=False,
     )
     tau_after = sample_group_to_tau(
         tc_sample_group_df=linear_sample_group_summary(
-            after, metadata, selected_sample_groups, transform_method, **(tau_options or {}),
+            tc_after, metadata_df, selected_sample_groups, transform_method, **(tau_options or {}),
         )['linear_mean'],
         rich_annotation=False,
     )

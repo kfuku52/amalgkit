@@ -175,6 +175,44 @@ def test_tau_histogram_uses_linear_run_means(tmp_path):
 
 
 @pytest.mark.slow
+@pytest.mark.parametrize('comparison', [False, True])
+def test_tau_plot_does_not_discard_missing_run_metadata(tmp_path, monkeypatch, comparison):
+    from amalgkit import per_species_outputs as overview
+    from amalgkit import per_species_finalize_python as finalize
+    from amalgkit.per_species_common import sample_group_to_tau
+
+    counts = pandas.DataFrame({
+        'a1': [0., 10., 2., 30.], 'a2': [100., 12., 3., 20.],
+        'b1': [10., 20., 4., 10.], 'b2': [10., 21., 5., 11.],
+    })
+    metadata = pandas.DataFrame({
+        'run': counts.columns, 'sample_group': ['A', 'A', 'B', 'B'],
+        'bioproject': ['p1', 'p1', 'p2', 'p2'], 'exclusion': ['no'] * 4,
+    })
+    captured = []
+
+    def capture(*args, **kwargs):
+        result = sample_group_to_tau(*args, **kwargs)
+        captured.append(result)
+        return result
+
+    incomplete = counts.drop(columns='a1')
+    if comparison:
+        monkeypatch.setattr(finalize, 'sample_group_to_tau', capture)
+        finalize.save_quick_state_comparison_plot(
+            counts, incomplete, metadata, 'pearson', str(tmp_path / 'comparison.pdf'),
+            ['A', 'B'], 'none-none', 'no',
+        )
+        assert captured[0]['tau'].iloc[0] == pytest.approx(0.8)
+    else:
+        monkeypatch.setattr(overview, 'sample_group_to_tau', capture)
+        overview.save_state_overview_pdf(
+            incomplete, metadata, ['A', 'B'], str(tmp_path / 'overview.pdf'), transform_method='none-none',
+        )
+    assert captured[-1]['tau'].isna().all()
+
+
+@pytest.mark.slow
 def test_save_state_overview_pdf_writes_pdf(tmp_path):
     counts_df = pandas.DataFrame(
         {

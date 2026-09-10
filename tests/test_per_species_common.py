@@ -41,6 +41,63 @@ def test_tau_inverse_transforms_runs_before_averaging(transform):
     assert tau.loc['g', 'tau_status'] == 'ok'
 
 
+def test_tau_keeps_tiny_log2p1_expression():
+    counts, metadata = _tau_fixture()
+    counts.loc['g'] = [1e-18, 1e-18, 0, 0]
+    result = linear_sample_group_summary(counts, metadata, transform_method='log2p1-none')['linear_mean']
+    assert result.loc['g', 'A'] == pytest.approx(numpy.log(2) * 1e-18, rel=1e-14, abs=0)
+    assert sample_group_to_tau(result).loc['g', 'tau'] == 1
+
+
+@pytest.mark.parametrize('balance', [False, True])
+def test_tau_mean_does_not_overflow_finite_runs(balance):
+    counts, metadata = _tau_fixture()
+    counts.loc['g'] = [1e308, 1e308, 0, 0]
+    result = linear_sample_group_summary(counts, metadata, transform_method='none-none', balance_projects=balance)
+    assert result['linear_mean'].loc['g', 'A'] == 1e308
+    assert sample_group_to_tau(result['linear_mean']).loc['g', 'tau'] == 1
+
+
+@pytest.mark.parametrize('columns', [['A', 'B', 'A'], ['A', ' A '], ['A', ''], ['A', None]])
+def test_tau_rejects_ambiguous_tissue_labels(columns):
+    with pytest.raises(ValueError, match='sample_group labels'):
+        sample_group_to_tau(pandas.DataFrame([[10.] * len(columns)], columns=columns))
+
+
+@pytest.mark.parametrize('transform', ['typo', 'log2p1-typo', 'none-fpkm-extra'])
+def test_tau_is_linear_only_and_rejects_unknown_input_transform(transform):
+    counts, metadata = _tau_fixture()
+    with pytest.raises(ValueError, match='Unsupported tau input transformation'):
+        linear_sample_group_summary(counts, metadata, transform_method=transform)
+    with pytest.raises(TypeError, match='transform_method'):
+        sample_group_to_tau(pandas.DataFrame([[10., 0.]]), transform_method='log2p1-none')
+
+
+def test_tau_annotation_lists_escape_group_delimiters():
+    from amalgkit.text_utils import parse_sample_group_argument
+
+    columns = ['brain|forebrain', 'liver,adult', r'root\tip']
+    tau = sample_group_to_tau(pandas.DataFrame([[10., 10., 1.]], columns=columns)).iloc[0]
+    assert parse_sample_group_argument(tau['order']) == columns
+    assert parse_sample_group_argument(tau['highest_ties']) == columns[:2]
+    assert tau['highest'] == columns[0]
+
+
+@pytest.mark.parametrize('unit', ['run', 'biosample', 'donor'])
+def test_tau_run_identity_and_unit_order_do_not_change_aggregation(unit):
+    counts, metadata = _tau_fixture()
+    # Run IDs are lexical keys even for nonstandard private data.
+    counts.columns = [' a1 ', 'a2', 'b1', 'b2']
+    metadata['run'] = counts.columns
+    metadata['sample_group'] = [' A ', 'A', 'B', 'B']
+    result = linear_sample_group_summary(counts, metadata, transform_method='none-none', unit=unit)
+    permuted = linear_sample_group_summary(
+        counts.iloc[:, ::-1], metadata.iloc[::-1], ['A', 'B'], 'none-none', unit=unit,
+    )
+    pandas.testing.assert_frame_equal(result['linear_mean'], permuted['linear_mean'])
+    numpy.testing.assert_allclose(result['linear_mean'].loc['g'], [50, 10])
+
+
 def test_tau_weights_match_explicit_unit_and_project_means():
     counts = pandas.DataFrame([[0., 0., 60., 100.]], columns=['r1', 'r2', 'r3', 'r4'])
     metadata = pandas.DataFrame({
@@ -183,7 +240,6 @@ def test_sample_group_mean_and_tau_for_two_groups():
     tau_df = sample_group_to_tau(
         tc_sample_group_df=observed['tc_ave'],
         rich_annotation=True,
-        transform_method='fpkm',
     )
     numpy.testing.assert_allclose(
         tau_df['tau'].to_numpy(dtype=float),
@@ -255,7 +311,6 @@ def test_sample_group_mean_balance_bp_drops_fully_excluded_group():
     tau_df = sample_group_to_tau(
         tc_sample_group_df=observed['tc_ave'],
         rich_annotation=True,
-        transform_method='fpkm',
     )
     assert tau_df['highest'].isna().all()
     assert tau_df['order'].isna().all()
@@ -265,7 +320,7 @@ def test_sample_group_mean_balance_bp_drops_fully_excluded_group():
 
 def test_sample_group_to_tau_handles_empty_input():
     empty_df = pandas.DataFrame(index=['G1', 'G2'])
-    observed = sample_group_to_tau(empty_df, rich_annotation=True, transform_method='log2p1-fpkm')
+    observed = sample_group_to_tau(empty_df, rich_annotation=True)
     assert {'tau', 'highest', 'order', 'tau_status'}.issubset(observed.columns)
     assert list(observed.index) == ['G1', 'G2']
     assert observed[['tau', 'highest', 'order']].isna().all().all()

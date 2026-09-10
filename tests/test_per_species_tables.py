@@ -20,6 +20,20 @@ from amalgkit.util import Metadata
 # ---------------------------------------------------------------------------
 
 class TestGetSampleGroup:
+    @pytest.mark.parametrize('from_metadata', [False, True])
+    def test_escaped_groups_match_cross_species_and_finalize(self, from_metadata):
+        from amalgkit.per_species_finalize_python import _resolve_selected_sample_groups
+        from amalgkit.cross_species_filter import get_sample_groups
+        from amalgkit.command_context import CrossSpeciesFilterContext
+        from amalgkit.text_utils import serialize_sample_groups
+
+        groups = ['brain,adult', 'liver|part', r'root\tip']
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({'run': ['r1', 'r2', 'r3'], 'sample_group': groups}))
+        args = SimpleNamespace(sample_group=None if from_metadata else serialize_sample_groups(groups), metadata='unused')
+        assert get_sample_group(args, metadata) == serialize_sample_groups(groups)
+        assert _resolve_selected_sample_groups(args, metadata.df) == groups
+        assert get_sample_groups(args, CrossSpeciesFilterContext(metadata=metadata)) == groups
+
     def test_from_args(self):
         """When --sample_group is specified, parse it."""
         class Args:

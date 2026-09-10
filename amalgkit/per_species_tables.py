@@ -1,5 +1,4 @@
 import os
-import re
 import shutil
 import sys
 from types import SimpleNamespace
@@ -13,7 +12,7 @@ from amalgkit.per_species_python import (
     run_per_species_python_worker,
     should_use_python_per_species_worker,
 )
-from amalgkit.text_utils import normalize_unique_text
+from amalgkit.text_utils import normalize_unique_text, parse_sample_group_argument, serialize_sample_groups
 
 
 def validate_per_species_metadata_columns(metadata, required_columns, context):
@@ -28,9 +27,6 @@ def validate_per_species_metadata_columns(metadata, required_columns, context):
 
 
 def get_sample_group(args, metadata):
-    def parse_sample_group_argument(sample_group_arg):
-        return normalize_unique_text(re.split(r'[,\|]+', str(sample_group_arg)))
-
     if args.sample_group is None:
         if 'sample_group' not in metadata.df.columns:
             txt = 'The "sample_group" column was not found in --metadata ({}). '
@@ -44,7 +40,7 @@ def get_sample_group(args, metadata):
         txt += 'Per-species table generation recognizes samples with the same string in this column to belong to the same group.'
         raise ValueError(txt.format(args.metadata))
     print('Tissues to be included: {}'.format(', '.join(sample_group)))
-    sample_group = '|'.join(sample_group)
+    sample_group = serialize_sample_groups(sample_group)
     return sample_group
 
 def get_completion_flag_path(per_species_dir, sp):

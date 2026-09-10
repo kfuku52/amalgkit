@@ -504,8 +504,8 @@ def save_state_overview_pdf(
     axes[3, 0].set_title('Expression histogram', fontsize=font_size)
     _draw_tau_histogram_panel(
         axes[3, 1],
-        counts,
-        metadata,
+        counts_df,
+        metadata_df,
         selected_sample_groups=selected_sample_groups,
         transform_method=transform_method,
         font_size=font_size,

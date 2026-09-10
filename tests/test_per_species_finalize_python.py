@@ -158,6 +158,23 @@ def test_finalize_donor_weights_and_export_names(tmp_path, stub_pdf_rendering):
 
 
 @pytest.mark.parametrize('worker', [_run_prepare_or_wsfilter_python_worker, run_finalize_python_worker])
+def test_workers_keep_escaped_tissue_panel(tmp_path, worker, stub_pdf_rendering):
+    import json
+    from amalgkit.text_utils import serialize_sample_groups
+
+    groups = ['brain,adult', 'liver|part']
+    fixture = _write_species_input_fixture(tmp_path, sample_groups=[groups[0]] * 2 + [groups[1]] * 2)
+    args = build_per_species_args(tmp_path, norm='log2p1-none', skip_curation=True,
+                                  sample_group=serialize_sample_groups(groups))
+    assert worker(args, fixture['metadata'], fixture['species_tag'], fixture['input_dir']) == 0
+    path = tmp_path / 'out' / 'per_species' / fixture['species_tag'] / 'tables'
+    definition = json.loads((path / (fixture['species_tag'] + '.no.tau.definition.json')).read_text())
+    assert definition['sample_groups'] == groups
+    tau = pandas.read_csv(path / (fixture['species_tag'] + '.no.tau.tsv'), sep='\t')
+    assert tau['tau_status'].eq('ok').all()
+
+
+@pytest.mark.parametrize('worker', [_run_prepare_or_wsfilter_python_worker, run_finalize_python_worker])
 @pytest.mark.parametrize('problem', ['missing', 'invalid', 'tpm'])
 def test_workers_reject_cstmm_without_original_library_sizes(tmp_path, worker, problem):
     fixture = _write_species_input_fixture(tmp_path)

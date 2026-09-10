@@ -5,6 +5,8 @@ import hashlib
 
 import numpy
 import pandas
+from amalgkit.text_utils import normalize_unique_text, serialize_sample_groups
+from amalgkit.cli_utils import EXPRESSION_NORMALIZATION_METHODS
 
 
 def _is_non_excluded_flag(exclusion_values):
@@ -129,6 +131,11 @@ def sample_group_mean(
 
 
 def _inverse_transform_for_tau(tc_sample_group_df, transform_method):
+    transform_method = str(transform_method)
+    if '-' not in transform_method:
+        transform_method += '-none'
+    if transform_method not in EXPRESSION_NORMALIZATION_METHODS:
+        raise ValueError('Unsupported tau input transformation: {}'.format(transform_method))
     mat = tc_sample_group_df.astype(float).copy()
     method = str(transform_method).split('-')[0]
     if method == 'logn':
@@ -138,18 +145,23 @@ def _inverse_transform_for_tau(tc_sample_group_df, transform_method):
     elif method == 'lognp1':
         mat.loc[:, :] = numpy.expm1(mat.to_numpy(dtype=float))
     elif method == 'log2p1':
-        mat.loc[:, :] = numpy.power(2.0, mat.to_numpy(dtype=float)) - 1.0
+        mat.loc[:, :] = numpy.expm1(mat.to_numpy(dtype=float) * numpy.log(2.0))
     return mat
 
 
-def sample_group_to_tau(tc_sample_group_df, rich_annotation=True, transform_method='none'):
+def sample_group_to_tau(tc_sample_group_df, rich_annotation=True):
     """Compute tau from complete, nonnegative tissue representatives.
 
-    Pipeline callers supply linear arithmetic means, with no further transform.
-    An explicit transform_method can decode an encoded representative table;
-    it cannot recover linear means from means taken in log space.
+    Supply linear arithmetic means, with no further transform. Inverse transforms
+    belong before replicate aggregation, in linear_sample_group_summary.
     """
-    transformed = _inverse_transform_for_tau(tc_sample_group_df=tc_sample_group_df, transform_method=transform_method)
+    transformed = tc_sample_group_df.astype(float)
+    columns = transformed.columns
+    if columns.isna().any() or any(str(label).strip() == '' for label in columns):
+        raise ValueError('Tau requires nonempty sample_group labels.')
+    columns = columns.map(lambda label: str(label).strip())
+    if columns.duplicated().any():
+        raise ValueError('Tau requires unique sample_group labels.')
     values = transformed.to_numpy(dtype=float)
     n_groups = transformed.shape[1]
     tau = numpy.full((transformed.shape[0],), numpy.nan, dtype=float)
@@ -167,7 +179,7 @@ def sample_group_to_tau(tc_sample_group_df, rich_annotation=True, transform_meth
     highest_values = []
     order_values = []
     highest_ties = []
-    column_names = [str(column) for column in transformed.columns]
+    column_names = list(columns)
     for row, is_valid in zip(values, valid):
         positive = row > 0
         if not is_valid:
@@ -180,8 +192,8 @@ def sample_group_to_tau(tc_sample_group_df, rich_annotation=True, transform_meth
         order_idx = numpy.argsort(-positive_values, kind='mergesort')
         ordered_groups = [positive_names[idx] for idx in order_idx]
         highest_values.append(ordered_groups[0])
-        order_values.append('|'.join(ordered_groups))
-        highest_ties.append('|'.join(sorted(str(column_names[i]) for i in numpy.flatnonzero(row == row.max()))))
+        order_values.append(serialize_sample_groups(ordered_groups))
+        highest_ties.append(serialize_sample_groups(sorted(column_names[i] for i in numpy.flatnonzero(row == row.max()))))
 
     df_tau.loc[:, 'highest'] = highest_values
     df_tau.loc[:, 'order'] = order_values
@@ -205,6 +217,19 @@ def tau_options_from_args(args):
     }
 
 
+def _linear_mean(values):
+    """Propagate invalid cells and avoid overflow while averaging finite values."""
+    data = values.to_numpy(dtype=float)
+    valid = numpy.isfinite(data).all(axis=1) & (data >= 0).all(axis=1)
+    result = numpy.full(len(values), numpy.nan)
+    if data.shape[1] and valid.any():
+        rows = data[valid]
+        scale = rows.max(axis=1)
+        scaled = numpy.divide(rows, scale[:, None], out=numpy.zeros_like(rows), where=scale[:, None] > 0)
+        result[valid] = scale * scaled.mean(axis=1)
+    return pandas.Series(result, index=values.index)
+
+
 def linear_sample_group_summary(
     counts_df, metadata_df, selected_sample_groups=None,
     transform_method='log2p1-fpkm', unit='run', balance_projects=False,
@@ -217,8 +242,6 @@ def linear_sample_group_summary(
     """
     if unit not in {'run', 'biosample', 'donor'}:
         raise ValueError('Unsupported tau unit: {}'.format(unit))
-    if str(transform_method).split('-')[0] not in {'none', 'logn', 'log2', 'lognp1', 'log2p1'}:
-        raise ValueError('Unsupported tau input transformation: {}'.format(transform_method))
     required = {'run', 'sample_group', 'exclusion', unit}
     if balance_projects:
         required.add('bioproject')
@@ -226,21 +249,28 @@ def linear_sample_group_summary(
     if missing:
         raise ValueError('Missing tau metadata columns: {}'.format(', '.join(sorted(missing))))
     metadata = metadata_df.copy()
+    if metadata['run'].isna().any() or counts_df.columns.isna().any():
+        raise ValueError('Tau aggregation requires nonmissing run IDs.')
     metadata['run'] = metadata['run'].astype(str)
+    metadata['sample_group'] = metadata['sample_group'].fillna('').astype(str).str.strip()
+    counts_df = counts_df.copy(deep=False)
+    counts_df.columns = counts_df.columns.map(str)
     if metadata['run'].duplicated().any() or counts_df.columns.duplicated().any():
         raise ValueError('Tau aggregation requires unique run IDs.')
     if 'scientific_name' in metadata and metadata['scientific_name'].nunique() > 1:
         raise ValueError('Tau aggregation requires one species at a time.')
-    groups = list(dict.fromkeys(
+    groups = normalize_unique_text(
         metadata['sample_group'].dropna().tolist()
         if selected_sample_groups is None else selected_sample_groups
-    ))
+    )
     retained = metadata.loc[_is_non_excluded_flag(metadata['exclusion'])].copy()
     retained = retained.loc[retained['sample_group'].isin(groups)]
     for column in {unit} | ({'bioproject'} if balance_projects else set()):
-        retained[column] = retained[column].fillna('').astype(str).str.strip()
-        if retained[column].isin({'', 'not_provided'}).any():
+        normalized_ids = retained[column].fillna('').astype(str).str.strip()
+        if normalized_ids.isin({'', 'not_provided'}).any():
             raise ValueError('Tau {} aggregation requires nonmissing {} IDs.'.format(unit, column))
+        if column != 'run':
+            retained[column] = normalized_ids
     if balance_projects and unit != 'run':
         projects_per_unit = retained.groupby(['sample_group', unit])['bioproject'].nunique()
         if projects_per_unit.gt(1).any():
@@ -276,9 +306,7 @@ def linear_sample_group_summary(
         unit_projects = []
         for _, members in available.groupby(keys, sort=False):
             values = linear.loc[:, members['run'].tolist()]
-            mean = values.mean(axis=1, skipna=False)
-            valid = numpy.isfinite(values).all(axis=1) & values.ge(0).all(axis=1)
-            unit_means.append(mean.where(valid))
+            unit_means.append(_linear_mean(values))
             if balance_projects:
                 unit_projects.append(members['bioproject'].iloc[0])
             denominator = available[unit].nunique()
@@ -298,11 +326,11 @@ def linear_sample_group_summary(
         unit_table = pandas.concat(unit_means, axis=1, ignore_index=True)
         if balance_projects:
             project_means = [
-                unit_table.loc[:, [i for i, value in enumerate(unit_projects) if value == project]].mean(axis=1, skipna=False)
+                _linear_mean(unit_table.loc[:, [i for i, value in enumerate(unit_projects) if value == project]])
                 for project in dict.fromkeys(unit_projects)
             ]
             unit_table = pandas.concat(project_means, axis=1, ignore_index=True)
-        representatives[group] = unit_table.mean(axis=1, skipna=False)
+        representatives[group] = _linear_mean(unit_table)
     return {
         'linear_mean': representatives,
         'coverage': pandas.DataFrame(coverage, columns=[
