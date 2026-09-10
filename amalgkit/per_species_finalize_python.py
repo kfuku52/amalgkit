@@ -1103,7 +1103,10 @@ def run_finalize_python_worker(args, metadata, species_tag, input_dir):
         before_zero_restore = tc_batch_corrected.to_numpy(dtype=float).copy()
         tc_batch_corrected = tc_batch_corrected.copy()
         aligned_zero = is_input_zero.reindex(index=tc_batch_corrected.index, columns=tc_batch_corrected.columns, fill_value=False)
-        tc_batch_corrected = tc_batch_corrected.mask(aligned_zero, 0.0)
+        # Restore zero on the exported scale: log(0) is -inf, while 0 in a
+        # log-only matrix denotes one unit of linear expression.
+        transformed_zero = -numpy.inf if str(args.norm).split('-')[0] in {'log2', 'logn'} else 0.0
+        tc_batch_corrected = tc_batch_corrected.mask(aligned_zero, transformed_zero)
 
         batch_info_current.setdefault('postprocessing', []).append(matrix_change(before_zero_restore, tc_batch_corrected, 'preserve_observed_zero', str(args.norm)))
     batch_info_current['final_matrix_scale'] = str(args.norm)

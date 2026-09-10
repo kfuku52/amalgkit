@@ -141,7 +141,10 @@ def finalize_main(args):
         )
         per_species_dir = os.path.join(tmp_out_dir, 'per_species')
         merged_species_metadata = load_merged_per_species_metadata(per_species_dir=per_species_dir)
-        merged_metadata = merge_metadata_by_run(metadata.df, merged_species_metadata)
+        merged_metadata = merge_metadata_by_run(
+            metadata.df, merged_species_metadata,
+            overwrite_columns=['batch_corrected', 'batch_alg_used', 'batch_status', 'batch_skip_reason'],
+        )
         with staged_output_dir(dir_finalize, redo=args.redo, prefix='amalgkit_finalize_stage_') as stage_dir:
             _copy_species_tables(
                 per_species_dir=per_species_dir,

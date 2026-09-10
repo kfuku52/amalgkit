@@ -49,7 +49,10 @@ def matrix_change(before, after, operation, scale):
     """Describe an actual postprocessing step, on its stated numeric scale."""
     before, after = numpy.asarray(before, dtype=float), numpy.asarray(after, dtype=float)
     changed = before != after
-    delta = numpy.abs(after - before)
+    # Equal log(0) cells are unchanged, not an undefined (-inf)-(-inf) delta.
+    delta = numpy.zeros_like(before)
+    numpy.subtract(after, before, out=delta, where=changed)
+    numpy.abs(delta, out=delta)
     return {
         'operation': operation, 'scale': scale,
         'changed_cells': int(changed.sum()),

@@ -1,6 +1,8 @@
 import pandas
 import pytest
 import json
+import numpy
+from pathlib import Path
 
 from amalgkit.command_context import PerSpeciesTableContext
 from amalgkit.per_species_tables import generate_per_species_tables
@@ -9,6 +11,56 @@ from tests.support.per_species import build_per_species_args
 
 
 pytestmark = pytest.mark.integration
+
+
+@pytest.mark.parametrize('norm', ['log2-none', 'logn-none', 'log2p1-none', 'lognp1-none', 'none-none'])
+@pytest.mark.parametrize('backend', ['no', 'latent_loglinear'])
+def test_zero_restoration_preserves_linear_expression_and_tau(tmp_path, norm, backend):
+    fixture = _write_finalize_fixture(tmp_path, ['A', 'A', 'B', 'B'], ['P1', 'P2', 'P1', 'P2'])
+    path = tmp_path / 'input' / fixture['species_tag'] / (fixture['species_tag'] + '_est_counts.tsv')
+    counts = pandas.read_csv(path, sep='\t')
+    counts.loc[0, ['RUN01', 'RUN02']] = 0
+    counts.loc[1, ['RUN01', 'RUN02', 'RUN03', 'RUN04']] = 0
+    counts.to_csv(path, sep='\t', index=False)
+    out = _run_finalize_python(tmp_path, fixture, batch_effect_alg=backend, latent_k=0, norm=norm)
+    tables = out / 'per_species' / fixture['species_tag'] / 'tables'
+    prefix = tables / (fixture['species_tag'] + '.' + backend)
+    linear = pandas.read_csv(str(prefix) + '.tau.linear_mean.tsv', sep='\t', index_col=0)
+    tau = pandas.read_csv(str(prefix) + '.tau.tsv', sep='\t', index_col=0)
+    assert linear.loc['G001', 'A'] == 0
+    assert linear.loc['G001', 'B'] == pytest.approx(5)
+    assert tau.loc['G001', 'tau'] == pytest.approx(1)
+    assert linear.loc['G002'].eq(0).all()
+    assert numpy.isnan(tau.loc['G002', 'tau'])
+    assert tau.loc['G002', 'tau_status'] == 'all_zero'
+    assert pandas.isna(tau.loc['G002', 'highest'])
+    diagnostics = json.loads(Path(str(prefix) + '.batch_effect_diagnostics.json').read_text())
+    restored = next(op for op in diagnostics['postprocessing'] if op['operation'] == 'preserve_observed_zero')
+    assert restored['changed_cells'] == 0
+    assert restored['absolute_change_sum'] == 0
+
+
+def test_finalize_success_clears_previous_skip_reason_in_merged_metadata(tmp_path):
+    from amalgkit.finalize import finalize_main
+    fixture = _write_finalize_fixture(tmp_path, ['A', 'A', 'B', 'B'], ['P1', 'P2', 'P1', 'P2'])
+    _inject_latent_batch_signal(tmp_path / 'input', fixture['species_tag'])
+    metadata = fixture['metadata'].df
+    metadata['batch_status'] = 'skipped'
+    metadata['batch_skip_reason'] = 'latent_auto_not_calibrated'
+    path = tmp_path / 'metadata.tsv'
+    metadata.to_csv(path, sep='\t', index=False)
+    args = _build_finalize_args(
+        tmp_path, metadata=str(path), input_dir=fixture['input_dir'],
+        batch_effect_alg='latent_loglinear', norm='log2p1-none', latent_k=1, latent_family='poisson',
+    )
+    finalize_main(args)
+    root = tmp_path / 'out' / 'finalize'
+    merged = pandas.read_csv(root / 'metadata.tsv', sep='\t')
+    species = pandas.read_csv(root / fixture['species_tag'] / (fixture['species_tag'] + '_metadata.tsv'), sep='\t')
+    columns = ['run', 'batch_corrected', 'batch_alg_used', 'batch_status', 'batch_skip_reason']
+    pandas.testing.assert_frame_equal(merged[columns], species[columns])
+    assert merged['batch_status'].eq('corrected').all()
+    assert merged['batch_skip_reason'].isna().all()
 
 
 def test_qc_and_saved_expression_use_same_postprocessed_matrix(tmp_path, monkeypatch):

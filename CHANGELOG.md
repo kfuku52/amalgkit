@@ -7,6 +7,10 @@ than the Releases page for those changes.
 
 ### Unreleased
 
+- Preserve true zero expression under log-only normalization when finalizing,
+  including all-zero tau status and finite unchanged-cell diagnostics. Clear
+  obsolete batch-skip reasons from merged metadata after successful reruns.
+
 - Added opt-in filter sensitivity controls for minimum finite gene support,
   species/project reference exclusion, species-group robust z, and bounded
   wsfilter iterations. Existing scientific defaults and automatic exclusion are
