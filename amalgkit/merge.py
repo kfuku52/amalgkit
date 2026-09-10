@@ -10,6 +10,7 @@ from amalgkit.arg_utils import clone_namespace
 from amalgkit.merge_plots import generate_merge_plots
 from amalgkit.metadata_utils import load_metadata, write_updated_metadata
 from amalgkit.output_contracts import read_quant_abundance
+from amalgkit.fragment_length import PROVENANCE_KEY, validate_fragment_provenance
 from amalgkit.parallel_utils import (
     is_auto_parallel_option,
     raise_task_failures,
@@ -387,6 +388,10 @@ def collect_quant_models(detected_sra_ids, quant_out_paths):
             with open(run_info_path, encoding='utf-8') as handle:
                 info = json.load(handle)
             if isinstance(info, dict):
+                if PROVENANCE_KEY in info:
+                    error = validate_fragment_provenance(info[PROVENANCE_KEY])
+                    if error:
+                        raise ValueError('Run {}: {}'.format(sra_id, error))
                 backend = str(info.get('quant_backend') or backend).strip().lower() or backend
                 length_model = str(info.get('length_model') or length_model).strip().lower() or length_model
         if length_model not in {'effective', 'none'}:

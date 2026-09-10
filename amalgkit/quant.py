@@ -15,6 +15,15 @@ import pandas
 from amalgkit.table_io import read_annotation_tsv
 from amalgkit.gsa_select import validate_selection_ready
 from amalgkit.fastq_cleanup import safely_remove_quant_fastq_files
+from amalgkit.fragment_length import (
+    PROVENANCE_KEY,
+    fragment_file_records,
+    has_explicit_fragment_input,
+    positive_fragment_value,
+    resolve_fragment_distribution,
+    validate_fragment_args,
+    validate_fragment_provenance,
+)
 
 from amalgkit.arg_utils import clone_namespace
 from amalgkit.command_context import PrefetchedDirEntries, QuantRuntimeContext
@@ -23,6 +32,7 @@ from amalgkit.filter_utils import staged_output_dir
 from amalgkit.getfastq_stats import read_getfastq_stats_row
 from amalgkit.metadata_utils import (
     Metadata,
+    apply_metadata_batch,
     get_metadata_row_index_by_run,
     get_newest_intermediate_file_extension,
     get_sra_stat,
@@ -494,24 +504,91 @@ def resolve_quant_backends_for_tasks(args, metadata, tasks):
 
 
 def resolve_nominal_length_for_kallisto(metadata, sra_id, sra_stat):
-    nominal_length = sra_stat.get('nominal_length', numpy.nan)
-    if numpy.isnan(pandas.to_numeric(nominal_length, errors='coerce')):
-        try:
-            idx = get_metadata_row_index_by_run(metadata, sra_id)
-            nominal_length = metadata.df.at[idx, 'nominal_length']
-        except AssertionError:
-            nominal_length = numpy.nan
-    nominal_length = pandas.to_numeric(nominal_length, errors='coerce')
-    if numpy.isnan(nominal_length) or nominal_length <= 0:
-        print("Could not find nominal length in metadata. Assuming fragment length.")
-        nominal_length = 200
-    elif nominal_length < 200:
-        print('Nominal length in metadata is unusually small ({}). Setting it to 200.'.format(nominal_length))
-        nominal_length = 200
-    print("Fragment length set to: {}".format(nominal_length))
-    fragment_sd = nominal_length / 10
-    print("Fragment length standard deviation set to: {}".format(fragment_sd))
-    return nominal_length, fragment_sd
+    """Compatibility facade; metadata raw values take precedence over coerced stats."""
+    row = metadata.df.loc[get_metadata_row_index_by_run(metadata, sra_id)].to_dict()
+    for field in ('nominal_length', 'nominal_sdev'):
+        if field not in row:
+            row[field] = sra_stat.get(field)
+    model = resolve_fragment_distribution(None, row, sra_id, {})
+    return model['mean']['value'], model['sd']['value']
+
+
+def resolve_run_fragment_model(args, metadata, sra_id, layout, backend='kallisto', emit_warning=True):
+    validate_fragment_args(args)
+    row = metadata.df.loc[get_metadata_row_index_by_run(metadata, sra_id)].to_dict()
+    records = fragment_file_records(args, set(metadata.df['run'].astype(str).str.strip()))
+    if backend == 'kallisto' and layout == 'single':
+        model = resolve_fragment_distribution(args, row, sra_id, records, emit_warning=emit_warning)
+        model['metadata_layout'] = _normalize_metadata_text(row.get('layout_amalgkit')) or _normalize_metadata_text(row.get('lib_layout'))
+        model['kallisto_options'] = parse_quant_option_args(getattr(args, 'kallisto_options', None), '--kallisto_options')
+        return model
+    if sra_id in records:
+        raise ValueError('Run {}: --fragment_length_file applies only to single-end kallisto inputs.'.format(sra_id))
+    if getattr(args, 'fragment_length_mean', None) is not None and emit_warning:
+        print('WARNING: Run {}: ignoring common fragment length options for {} {} input.'.format(
+            sra_id, backend, layout,
+        ), file=sys.stderr)
+    return {
+        'schema_version': 1, 'layout': 'paired', 'source': 'kallisto_paired_estimation',
+        'metadata_layout': _normalize_metadata_text(row.get('layout_amalgkit')) or _normalize_metadata_text(row.get('lib_layout')),
+        'kallisto_options': parse_quant_option_args(getattr(args, 'kallisto_options', None), '--kallisto_options'),
+    } if backend == 'kallisto' else None
+
+
+def _fragment_reuse_layout(args, row, sra_id, output_dir, stored, runtime_context):
+    """Use current inputs when present, or the recorded correction after cleanup."""
+    metadata_layout = _normalize_metadata_text(row.get('layout_amalgkit')) or _normalize_metadata_text(row.get('lib_layout'))
+    layout = metadata_layout.lower() or 'single'
+    root = getattr(args, 'out_dir', os.path.dirname(os.path.dirname(output_dir)))
+    input_dir = safe_join_existing_input_component(os.path.join(root, 'getfastq'), sra_id, label='run ID')
+    files = runtime_context.run_files_by_run.get(sra_id) if isinstance(runtime_context, QuantRuntimeContext) else None
+    if files is None:
+        files = list_getfastq_run_files(input_dir)
+    has_fastq = any('.fastq' in name for name in find_run_prefixed_entries(files, sra_id))
+    if has_fastq:
+        return check_layout_mismatch({'sra_id': sra_id, 'layout': layout}, input_dir, files=files)['layout']
+    if stored and stored.get('metadata_layout') == metadata_layout:
+        return stored['layout']
+    return layout
+
+
+def check_fragment_model_reuse(args, metadata, sra_id, output_dir, backend=None, runtime_context=None):
+    """Check settings before skipping a completed run, including retired FASTQs."""
+    validate_fragment_args(args)
+    sra_id = validate_safe_path_component(sra_id, label='run ID')
+    row = metadata.df.loc[get_metadata_row_index_by_run(metadata, sra_id)].to_dict()
+    records = fragment_file_records(args, set(metadata.df['run'].astype(str).str.strip()))
+    with open(os.path.join(output_dir, sra_id + '_run_info.json'), encoding='utf-8') as handle:
+        info = json.load(handle)
+    if not isinstance(info, dict):
+        raise ValueError('Run {}: invalid quant run-info JSON.'.format(sra_id))
+    if backend is None and isinstance(runtime_context, QuantRuntimeContext):
+        backend = runtime_context.quant_backend_by_run.get(sra_id)
+    if backend is None:
+        backend = resolve_quant_backend(args, metadata, sra_id)
+    if backend != info.get('quant_backend', 'kallisto'):
+        raise ValueError('Run {}: quant backend differs from existing output; use --redo yes.'.format(sra_id))
+    if backend == 'oarfish':
+        resolve_run_fragment_model(args, metadata, sra_id, 'single', backend='oarfish')
+        return
+    stored = info.get(PROVENANCE_KEY)
+    if stored is not None:
+        error = validate_fragment_provenance(stored)
+        if error:
+            raise ValueError('Run {}: {}'.format(sra_id, error))
+    layout = _fragment_reuse_layout(args, row, sra_id, output_dir, stored, runtime_context)
+    if stored is None:
+        if getattr(args, 'kallisto_options', None) or (layout == 'single' and (has_explicit_fragment_input(args, row, records, sra_id) or getattr(args, 'fragment_length_policy', 'assume') == 'error')):
+            raise ValueError('Run {}: existing output has unknown fragment length provenance; use --redo yes.'.format(sra_id))
+        resolve_run_fragment_model(args, metadata, sra_id, layout, emit_warning=False)
+        if info.get('quant_backend', 'kallisto') == 'kallisto':
+            print('WARNING: Run {}: existing output has unknown fragment length provenance; use --redo yes to apply current fragment settings.'.format(sra_id), file=sys.stderr)
+        return
+    current = resolve_run_fragment_model(args, metadata, sra_id, layout, emit_warning=False)
+    # Command/tool metadata is informational; compare the resolved distribution and its provenance.
+    previous = {key: stored.get(key) for key in current}
+    if current != previous:
+        raise ValueError('Run {}: fragment length settings differ from existing output; use --redo yes.'.format(sra_id))
 
 
 def parse_quant_option_args(option_string, option_name):
@@ -541,15 +618,22 @@ def parse_quant_option_args(option_string, option_name):
             for short_option in reserved_short_options
         )
         if option_token in reserved or is_attached_short_option:
-            raise ValueError(
-                '{} must not override amalgkit-managed option "{}".'.format(option_name, option_token)
-            )
+            message = '{} must not override amalgkit-managed option "{}".'.format(option_name, option_token)
+            if option_name == '--kallisto_options' and (
+                option_token in {'--fragment-length', '--sd'} or token.startswith(('-l', '-s'))
+            ):
+                message += ' Use --fragment_length_mean/--fragment_length_sd or --fragment_length_file.'
+            raise ValueError(message)
     return parsed
 
 
 def build_kallisto_quant_command(args, in_files, lib_layout, output_dir, index, nominal_length=None, fragment_sd=None):
     extra_option_args = parse_quant_option_args(getattr(args, 'kallisto_options', None), '--kallisto_options')
     if lib_layout == 'single':
+        mean = positive_fragment_value(nominal_length, 'kallisto fragment length mean')
+        sd = positive_fragment_value(fragment_sd, 'kallisto fragment length SD')
+        if mean is None or sd is None:
+            raise ValueError('Single-end kallisto requires a fragment length mean and SD.')
         if len(in_files) != 1:
             txt = "Library layout: {} and expected 1 input file. " \
                   "Received {} input file[s]. Please check your inputs and metadata."
@@ -739,17 +823,19 @@ def adapt_oarfish_outputs(output_dir, sra_id, sra_stat, output_prefix, seq_tech)
 def call_kallisto(args, in_files, metadata, sra_stat, output_dir, index):
     sra_id = sra_stat['sra_id']
     lib_layout = sra_stat['layout']
+    fragment_model = resolve_run_fragment_model(args, metadata, sra_id, lib_layout)
     if lib_layout == 'single':
         print('Single end reads detected. Proceeding in single mode')
-        nominal_length, fragment_sd = resolve_nominal_length_for_kallisto(metadata, sra_id, sra_stat)
+        nominal_length = fragment_model['mean']['value']
+        fragment_sd = fragment_model['sd']['value']
         kallisto_cmd = build_kallisto_quant_command(
             args=args,
             in_files=in_files,
             lib_layout=lib_layout,
             output_dir=output_dir,
             index=index,
-            nominal_length=nominal_length,
-            fragment_sd=fragment_sd,
+            nominal_length=format(nominal_length, '.17g'),
+            fragment_sd=format(fragment_sd, '.17g'),
         )
     else:
         if lib_layout == 'paired':
@@ -782,12 +868,23 @@ def call_kallisto(args, in_files, metadata, sra_stat, output_dir, index):
         )
 
     rename_kallisto_outputs(output_dir=output_dir, sra_id=sra_id)
+    info_path = os.path.join(output_dir, sra_id + '_run_info.json')
+    with open(info_path, encoding='utf-8') as handle:
+        run_info = json.load(handle)
+    fragment_model['command'] = kallisto_cmd
+    fragment_model['kallisto_version'] = run_info.get('kallisto_version', 'unknown')
+    if fragment_model.get('input_source', '').startswith('run_file:') and getattr(args, 'fragment_length_file', None):
+        fragment_model['source_file'] = os.path.realpath(args.fragment_length_file)
+    run_info[PROVENANCE_KEY] = fragment_model
+    with atomic_output_path(info_path) as temporary_path:
+        with open(temporary_path, 'w', encoding='utf-8') as handle:
+            json.dump(run_info, handle, indent=2, sort_keys=True, allow_nan=False)
     return kallisto_out
 
 
 def call_oarfish(args, in_files, metadata, sra_stat, output_dir, index, seq_tech):
-    _ = metadata
     sra_id = sra_stat['sra_id']
+    resolve_run_fragment_model(args, metadata, sra_id, sra_stat['layout'], backend='oarfish')
     if sra_stat['layout'] != 'single':
         raise ValueError(
             'oarfish backend currently supports single-end long-read runs only. '
@@ -1236,11 +1333,22 @@ def _run_quant_unlocked(
     output_dir = safe_join_component(quant_root, sra_id, label='run ID')
     if os.path.exists(output_dir) and (not os.path.isdir(output_dir)):
         raise NotADirectoryError('Quant run output path exists but is not a directory: {}'.format(output_dir))
+    if getattr(args, '_preserve_quant_settings', False) and os.path.isfile(os.path.join(output_dir, sra_id + '_run_info.json')):
+        # Run under the same run lock as output replacement, even if abundance
+        # is damaged. A generic repair must not discard prior fragment settings.
+        try:
+            check_fragment_model_reuse(args, metadata, sra_id, output_dir, backend=backend, runtime_context=runtime_context)
+        except ValueError as exc:
+            raise ValueError(
+                'Run {}: rerun cannot safely recover prior quant settings. Run amalgkit quant directly '
+                'with the intended fragment settings and --redo yes. {}'.format(sra_id, exc)
+            ) from exc
     is_quant_output_available = quant_output_exists(sra_id, output_dir)
     if is_quant_output_available:
         if args.redo:
             print('The output will be overwritten. Set "--redo no" to not overwrite results.')
         else:
+            check_fragment_model_reuse(args, metadata, sra_id, output_dir, backend=backend, runtime_context=runtime_context)
             print('Continued. The output will not be overwritten. If you want to overwrite the results, set "--redo yes".')
             return
     output_dir_getfastq = safe_join_existing_input_component(
@@ -2185,7 +2293,17 @@ def quant_main(args):
     if os.path.exists(quant_dir) and (not os.path.isdir(quant_dir)):
         raise NotADirectoryError('Quant path exists but is not a directory: {}'.format(quant_dir))
     runtime_args = clone_namespace(args, threads=threads, internal_jobs=jobs, out_dir=out_dir, _prefer_gsa_snapshot=True)
-    metadata = load_metadata(runtime_args)
+    # Validate a shared fragment TSV against the full input, before load_metadata's
+    # usual run-batch reduction. Reuse that same snapshot for batch selection.
+    has_fragment_file = bool(getattr(runtime_args, 'fragment_length_file', None))
+    load_args = clone_namespace(runtime_args, batch=None) if has_fragment_file else runtime_args
+    metadata = load_metadata(load_args)
+    validate_fragment_args(runtime_args)
+    runtime_args._fragment_length_by_run = fragment_file_records(
+        runtime_args, set(metadata.df['run'].astype(str).str.strip()),
+    )
+    if has_fragment_file:
+        metadata = apply_metadata_batch(metadata, runtime_args)
     tasks = build_quant_tasks(metadata)
     quant_metadata = _metadata_with_quant_input_sra_stats_for_tasks(
         runtime_args,

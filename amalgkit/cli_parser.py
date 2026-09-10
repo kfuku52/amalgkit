@@ -454,6 +454,17 @@ def build_parser(command_handlers, command_names, version, prog=None):
                      help='default=%(default)s: Override oarfish sequencing-technology preset. "auto" infers ONT/PacBio subtype from metadata where possible.')
     pqu.add_argument('--kallisto_options', metavar='STR', default=None, type=str, required=False, action='store',
                      help='default=%(default)s: Additional shell-style option string passed through to `kallisto quant`. Example: --kallisto_options "--bias --seed 42".')
+    pqu.add_argument('--fragment_length_file', metavar='PATH', default=None, type=str,
+                     help='default=%(default)s: Run-specific single-end kallisto TSV: run, fragment_length_mean, '
+                          'fragment_length_sd, source, source_detail. Overrides metadata and common CLI values.')
+    pqu.add_argument('--fragment_length_mean', metavar='FLOAT', default=None, type=float,
+                     help='default=%(default)s bp: Common single-end insert/fragment mean, not read length. '
+                          'Requires --fragment_length_sd; run-specific fragment metadata takes precedence.')
+    pqu.add_argument('--fragment_length_sd', metavar='FLOAT', default=None, type=float,
+                     help='default=%(default)s bp: Common single-end fragment SD. Requires --fragment_length_mean.')
+    pqu.add_argument('--fragment_length_policy', choices=['assume', 'error'], default='assume',
+                     help='default=%(default)s: Missing single-end fragment mean/SD: assume warns and fills only '
+                          'missing mean with 200 bp and SD with 20 bp; error stops. Invalid values always fail.')
     pqu.add_argument('--oarfish_options', metavar='STR', default=None, type=str, required=False, action='store',
                      help='default=%(default)s: Additional shell-style option string passed through to `oarfish`. Example: --oarfish_options "--filter-group no-filters --model-coverage".')
     pqu.add_argument('--index_dir', metavar='PATH', default=None, type=str, required=False, action='store',

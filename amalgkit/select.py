@@ -641,6 +641,11 @@ def apply_select_aggregate_rules(df, select_rules):
         for source_column in rule['columns']:
             if source_column not in out_df.columns:
                 continue
+            if target_column == 'nominal_length' and source_column == 'mean_insert_size':
+                # Old user rule files may still contain this aggregate. These are
+                # numeric candidates with distinct origins, not concatenable text.
+                # Keep both for quant's conflict check and source attribution.
+                continue
             source_series = out_df[source_column].fillna('').astype(str).str.strip()
             if not (source_series != '').any():
                 continue

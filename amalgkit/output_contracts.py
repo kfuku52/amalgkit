@@ -9,6 +9,7 @@ from collections.abc import Iterable, Sequence
 
 import numpy
 import pandas
+from amalgkit.fragment_length import PROVENANCE_KEY, validate_fragment_provenance
 
 from amalgkit.identifier_validation import TargetIdTracker
 from amalgkit.table_io import read_identifier_tsv
@@ -181,6 +182,8 @@ def validate_quant_run_info_json(path: str) -> str:
         return 'quant run info JSON has an invalid "p_pseudoaligned" value.'
     if not math.isfinite(value) or value < 0.0 or value > 100.0:
         return f'quant run info JSON has out-of-range "p_pseudoaligned": {value}'
+    if PROVENANCE_KEY in payload:
+        return validate_fragment_provenance(payload[PROVENANCE_KEY])
     return ""
 
 

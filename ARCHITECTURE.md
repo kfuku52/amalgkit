@@ -32,6 +32,7 @@ not low-level reusable algorithms.
 | Module | Responsibility |
 | --- | --- |
 | `output_contracts.py` | streaming validation and required schemas for quant/BUSCO files |
+| `fragment_length.py` | single-end fragment mean/SD resolution, run-specific inputs and provenance validation |
 | `table_io.py` | lexical identifier/annotation reads, separate from numeric missing values |
 | `identifier_validation.py` | exact duplicate detection with bounded RAM and a temporary SQLite inventory |
 | `fastq_cleanup.py` | reversible retirement of managed FASTQs and private-input links |

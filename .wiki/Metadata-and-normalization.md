@@ -40,6 +40,23 @@ its filtered descendants.
 
 ## Counts, lengths, and normalization
 
+Single-end kallisto fragment means/SDs and their sources are described in
+[quant](./amalgkit-quant#single-end-fragment-lengths). `nominal_length` and
+`nominal_sdev` originate from SRA experiment `LIBRARY_LAYOUT/PAIRED` attributes:
+submitted expected insert statistics, not FASTQ read lengths or verified run-level
+measurements. XML imports preserve their origin in `nominal_length_source` and
+`nominal_length_source_detail`. Selection retains `mean_insert_size` separately
+instead of concatenating different numeric values. Private/GSA read and spot
+statistics do not fill fragment parameters.
+Conflicting or similarly named SAMPLE fragment attributes are retained under
+`sample_attribute_*` during XML import, without changing the EXPERIMENT values.
+
+For measured or deliberately specified run-level values, use
+`fragment_length_mean`, `fragment_length_sd`, `fragment_length_source`, and
+`fragment_length_source_detail`. These columns survive metadata reordering and
+downstream handoffs. Quant records the resolved values and any 200/20 assumptions
+in each run-info JSON; changing input metadata does not rewrite historical results.
+
 | Quantification model | `abundance.tsv` / merged table meaning | Downstream normalization |
 | --- | --- | --- |
 | kallisto, `length_model=effective` | Estimated counts, effective lengths, length-normalized TPM | FPKM or TPM with raw `merge` counts; FPKM with CSTMM counts |

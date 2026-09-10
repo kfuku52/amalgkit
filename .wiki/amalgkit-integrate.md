@@ -2,6 +2,12 @@
 
 `amalgkit integrate` scans local FASTQ files and writes AMALGKIT-compatible metadata. Use it when a project includes private FASTQ files or non-SRA files that should enter the same downstream pipeline as public runs.
 
+FASTQ scans measure read/spot statistics, not the fragment length distribution.
+For single-end kallisto, add run-specific fragment mean/SD and source columns to
+the resulting metadata, or provide a [quant fragment TSV](./amalgkit-quant#single-end-fragment-lengths).
+Missing components otherwise use the warning-bearing `assume` policy (mean 200,
+SD 20); these are not measurements of the private library.
+
 ## Common Uses
 
 Create metadata from private FASTQ files only:

@@ -107,6 +107,9 @@ def test_whitespace_source_marker_keeps_supported_workflow(tmp_path, monkeypatch
 
 def test_snapshot_as_input_allows_parallel_array_publications(tmp_path):
     rows = [measured(manifest_row(run=run)) for run in ['CRR0001', 'CRR0002']]
+    for row, mean in zip(rows, [150, 350]):
+        row.update(fragment_length_mean=mean, fragment_length_sd=7,
+                   fragment_length_source='measured', fragment_length_source_detail='insert assay L1')
     write_metadata(tmp_path, rows)
     publish_gsa_snapshot(snapshot_args(tmp_path), Metadata.from_DataFrame(pandas.DataFrame(rows)))
     jobs = []
@@ -120,6 +123,9 @@ def test_snapshot_as_input_allows_parallel_array_publications(tmp_path):
         publish_gsa_snapshot(args, table)
     result = pandas.read_csv(tmp_path / 'getfastq/metadata.tsv', sep='\t')
     assert result['gsa_input_seconds'].tolist() == [1.0, 2.0]
+    assert result['fragment_length_mean'].tolist() == [150, 350]
+    assert result['fragment_length_sd'].tolist() == [7, 7]
+    assert result['fragment_length_source_detail'].tolist() == ['insert assay L1', 'insert assay L1']
 
 
 def test_full_select_keeps_gsa_manifest_usable_by_getfastq(tmp_path, monkeypatch):

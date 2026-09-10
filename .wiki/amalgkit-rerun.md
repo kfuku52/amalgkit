@@ -4,6 +4,14 @@
 
 It also writes a manifest so the rerun plan can be inspected or archived.
 
+For changes to single-end fragment parameters, invoke `quant --redo yes` with
+the intended settings explicitly, then rebuild affected downstream results.
+`rerun` does not reconstruct historical common CLI/file overrides from run-info
+JSON. It checks surviving quant run-info under the run lock and stops if a repair
+would lose or change those settings. This also protects runs whose abundance
+table is damaged; if run-info is missing, historical settings cannot be recovered.
+See [fragment provenance and re-quantification](./amalgkit-quant#fragment-provenance-and-re-quantification).
+
 ## Basic Flow
 
 Run `sanity` first:

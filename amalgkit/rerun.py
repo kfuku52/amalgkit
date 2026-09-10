@@ -1044,6 +1044,7 @@ def rerun_quant_check(args, metadata, target_runs, dry_run=False):
             metadata=temp_metadata,
             redo=redo,
             batch=None,
+            _preserve_quant_settings=True,
         )
         quant_main(runtime_args)
     finally:

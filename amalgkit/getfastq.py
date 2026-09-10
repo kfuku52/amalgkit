@@ -6508,7 +6508,9 @@ def initialize_columns(metadata, g):
         else:
             metadata.df[key] = pandas.Series([''] * len(metadata.df), index=metadata.df.index, dtype=object)
     metadata.df.loc[:, 'bp_until_target_size'] = g['num_bp_per_sra']
-    cols = ['total_spots','total_bases','size','nominal_length','nominal_sdev','spot_length']
+    # Fragment metadata is not a read/spot statistic. Preserve raw strings so
+    # quant can validate them and distinguish invalid values from missing cells.
+    cols = ['total_spots','total_bases','size','spot_length']
     for col in cols:
         if any([ dtype in str(metadata.df[col].dtype) for dtype in ['str','object'] ]):
             metadata.df[col] = metadata.df.loc[:,col].astype(str).str.replace('^$', 'nan', regex=True).astype(float)

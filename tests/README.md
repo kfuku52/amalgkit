@@ -33,6 +33,13 @@ Integration tests use lightweight PDF placeholders when they are checking plot
 orchestration and output naming. Dedicated `slow` tests retain real PDF
 rendering coverage.
 
+`test_quant_fragment_length.py` checks fragment sources, assumptions, validation,
+provenance and safe reuse with mocked runners. The separate
+`test_quant_fragment_length_integration.py` uses an installed kallisto (otherwise
+skips) to compare wrapper output exactly with direct invocation and to check
+mean/SD sensitivity on synthetic transcripts including short and shared sequences.
+It tests numerical behavior, not a universally accurate prior for real libraries.
+
 `test_documented_workflows.py` executes the Wiki's yeast metadata edit and
 selection, private FASTQ metadata handoffs, the generated species-wise guide,
 and the long-read CSTMM/filter/finalize chain. Network responses and taxonomy

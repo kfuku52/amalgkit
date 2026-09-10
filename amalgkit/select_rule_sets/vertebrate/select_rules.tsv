@@ -142,7 +142,6 @@ aggregate_protocol_indrops_version_125	yes	aggregate	224	indrops_version		append
 aggregate_protocol_minimum_counts_per_cell_threshold_used_to_remove_background_barcodes_126	yes	aggregate	225	minimum_counts_per_cell_threshold_used_to_remove_background_barcodes		append	protocol				yes			legacy aggregate minimum_counts_per_cell_threshold_used_to_remove_background_barcodes -> protocol
 aggregate_protocol_minimum_reads_per_cell_during_initial_processing_127	yes	aggregate	226	minimum_reads_per_cell_during_initial_processing		append	protocol				yes			legacy aggregate minimum_reads_per_cell_during_initial_processing -> protocol
 aggregate_protocol_spike_in_128	yes	aggregate	227	spike-in		append	protocol				yes			legacy aggregate spike-in -> protocol
-aggregate_nominal_length_mean_insert_size_129	yes	aggregate	228	mean_insert_size		append	nominal_length				yes			legacy aggregate mean_insert_size -> nominal_length
 aggregate_genotype_arrayexpress_genotype_130	yes	aggregate	229	arrayexpress-genotype		append	genotype				yes			legacy aggregate arrayexpress-genotype -> genotype
 aggregate_genotype_arrayexpress_phenotype_131	yes	aggregate	230	arrayexpress-phenotype		append	genotype				yes			legacy aggregate arrayexpress-phenotype -> genotype
 aggregate_genotype_arrayexpress_rnai_132	yes	aggregate	231	arrayexpress-rnai		append	genotype				yes			legacy aggregate arrayexpress-rnai -> genotype

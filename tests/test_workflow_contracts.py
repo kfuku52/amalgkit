@@ -41,6 +41,8 @@ def _metadata(layout='single', read_paths=()):
         'lib_layout': [layout], 'total_spots': [2],
         'total_bases': [200], 'spot_length': [100],
         'nominal_length': [200], 'nominal_sdev': [20],
+        'fragment_length_mean': [150], 'fragment_length_sd': [7],
+        'fragment_length_source': ['measured'], 'fragment_length_source_detail': ['insert assay L1'],
         'exclusion': ['no'], 'private_file': ['yes'],
         'read1_path': [str(read_paths[0]) if read_paths else ''],
         'read2_path': [str(read_paths[1]) if len(read_paths) > 1 else ''],
@@ -75,6 +77,9 @@ def test_private_fastq_producer_to_quant_default_cleanup(tmp_path, monkeypatch, 
 
     def kallisto(_args, in_files, metadata, sra_stat, output_dir, index):
         assert len(in_files) == len(sources)
+        assert metadata.df.loc[0, 'fragment_length_mean'] == 150
+        assert metadata.df.loc[0, 'fragment_length_sd'] == 7
+        assert metadata.df.loc[0, 'fragment_length_source_detail'] == 'insert assay L1'
         for path in in_files:
             with gzip.open(path, 'rt') as handle:
                 assert handle.read().startswith('@r0\n')

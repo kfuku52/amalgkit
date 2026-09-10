@@ -5,6 +5,10 @@ Archive (GSA) directly through `metadata` and `getfastq`. There is no local
 FASTQ prerequisite and no `integrate` step. NCBI remains the default metadata
 source.
 
+Measured read counts and spot lengths in GSA snapshots do not measure insert
+lengths. Run-specific fragment metadata is preserved in the snapshot. For
+single-end kallisto, see [fragment inputs and assumptions](./amalgkit-quant#single-end-fragment-lengths).
+
 ```mermaid
 flowchart LR
     GSA[GSA accession or species query] --> metadata

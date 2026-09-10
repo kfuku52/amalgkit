@@ -134,7 +134,8 @@ class Metadata:
                     'experiment', 'run', 'sra_primary', 'sra_sample', 'sra_study', 'study_title', 'exp_title', 'design',
                     'sample_title', 'sample_description', 'lib_name', 'lib_layout', 'lib_strategy', 'lib_source',
                     'lib_selection', 'platform', 'instrument', 'total_spots', 'total_bases', 'size', 'nominal_length',
-                    'nominal_sdev',
+                    'nominal_sdev', 'nominal_length_source', 'nominal_length_source_detail', 'mean_insert_size',
+                    'fragment_length_mean', 'fragment_length_sd', 'fragment_length_source', 'fragment_length_source_detail',
                     'spot_length', 'read_index', 'read_class', 'read_type', 'base_coord', 'center',
                     'submitter_id',
                     'pubmed_id', 'taxid', 'published_date', 'NCBI_Link', 'AWS_Link', 'GCP_Link',
@@ -308,7 +309,13 @@ class Metadata:
                 )
             row[target_column] = value
 
-        blocked_tags = set(metadata.removed_metadata_columns)
+        blocked_tags = set(metadata.removed_metadata_columns) | {
+            # SAMPLE attributes may describe a different library/experiment.
+            # Keep them for review without promoting them to run overrides or
+            # mixing their SD with an EXPERIMENT/PAIRED nominal mean.
+            'nominal_length', 'nominal_sdev', 'nominal_length_source', 'nominal_length_source_detail',
+            'fragment_length_mean', 'fragment_length_sd', 'fragment_length_source', 'fragment_length_source_detail',
+        }
         core_column_tags = set(metadata.column_names)
         row_batch = []
         row_frames = []
@@ -371,6 +378,11 @@ class Metadata:
                         "./EXPERIMENT/DESIGN/LIBRARY_DESCRIPTOR/LIBRARY_LAYOUT/PAIRED",
                         "NOMINAL_SDEV",
                     ),
+                    "nominal_length_source": "sra_experiment" if is_paired else "",
+                    "nominal_length_source_detail": (
+                        get_first_text(entry, './EXPERIMENT/IDENTIFIERS/PRIMARY_ID')
+                        + ': LIBRARY_LAYOUT/PAIRED NOMINAL_LENGTH/NOMINAL_SDEV; submitted expected insert size'
+                    ) if is_paired else "",
                     "spot_length": get_first_text(entry, './EXPERIMENT/DESIGN/SPOT_DESCRIPTOR/SPOT_DECODE_SPEC/SPOT_LENGTH'),
                     "read_index": get_first_text(entry, './EXPERIMENT/DESIGN/SPOT_DESCRIPTOR/SPOT_DECODE_SPEC/READ_SPEC/READ_INDEX'),
                     "read_class": get_first_text(entry, './EXPERIMENT/DESIGN/SPOT_DESCRIPTOR/SPOT_DECODE_SPEC/READ_SPEC/READ_CLASS'),
@@ -915,6 +927,14 @@ def load_metadata(args, dir_subcommand='metadata', batch_scope='run'):
     if source_bytes is not None and 'data_source' in metadata.df and metadata.df['data_source'].eq('gsa').any():
         from amalgkit.gsa_snapshot import capture_gsa_file_source
         capture_gsa_file_source(args, metadata, real_path, hashlib.sha256(source_bytes).hexdigest(), source_bytes=source_bytes)
+    return apply_metadata_batch(metadata, args, batch_scope, source_columns=df.columns)
+
+
+def apply_metadata_batch(metadata, args, batch_scope='run', source_columns=None):
+    """Apply the same batch selection to a table already loaded and validated."""
+    df = metadata.df
+    if source_columns is None:
+        source_columns = df.columns
     if 'batch' not in dir(args):
         return metadata
     if args.batch is None:
@@ -941,7 +961,7 @@ def load_metadata(args, dir_subcommand='metadata', batch_scope='run'):
     if normalized_scope != 'run':
         raise ValueError('Unknown batch_scope "{}". Expected "run" or "species".'.format(batch_scope))
     print('--batch is specified. Processing one SRA per job.', flush=True)
-    if 'is_sampled' not in df.columns:
+    if 'is_sampled' not in source_columns:
         raise ValueError('Column "is_sampled" is required when --batch is specified.')
     is_sampled = parse_bool_flags(
         df.loc[:, 'is_sampled'],
@@ -1048,7 +1068,9 @@ def get_sra_stat(sra_id, metadata, num_bp_per_sra=None):
         nominal_length_value = metadata.df.at[idx, 'nominal_length']
     else:
         nominal_length_value = numpy.nan
-    sra_stat['nominal_length'] = pandas.to_numeric(nominal_length_value, errors='coerce')
+    # Preserve invalid supplied values so quant can distinguish errors from missing data.
+    sra_stat['nominal_length'] = nominal_length_value
+    sra_stat['nominal_sdev'] = metadata.df.at[idx, 'nominal_sdev'] if 'nominal_sdev' in metadata.df.columns else numpy.nan
     if num_bp_per_sra is not None:
         sra_stat['num_read_per_sra'] = int(num_bp_per_sra / sra_stat['spot_length'])
     return sra_stat

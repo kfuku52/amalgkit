@@ -93,6 +93,115 @@ Shared index-build locks prevent concurrent batch jobs from building the same sp
 Extra backend options cannot override AMALGKIT-managed inputs, output paths,
 indices, thread counts, layouts, or sequencing-technology flags.
 
+## Single-end fragment lengths
+
+For single-end kallisto, supply the mean and standard deviation (SD) of the
+sequenced **insert/fragment**, in bp. Read length, `spot_length`, summed mate
+lengths and a fastp insert-size peak are not estimates of this mean/SD pair.
+Instrument measurements should describe the insert after accounting for adapters.
+The [kallisto manual](https://pachterlab.github.io/kallisto/manual) requires both
+parameters in single-end mode; its 200/20 example is not a universal measurement.
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `--fragment_length_file` | `None` | Run-specific TSV; highest priority |
+| `--fragment_length_mean` | `None` | Common mean in bp; requires common SD |
+| `--fragment_length_sd` | `None` | Common SD in bp; requires common mean |
+| `--fragment_length_policy` | `assume` | `assume` warns and fills missing components; `error` stops |
+
+Sources are selected as a pair in this order:
+
+1. A row in `--fragment_length_file`.
+2. Run-specific metadata `fragment_length_mean` / `fragment_length_sd`.
+3. The common CLI mean/SD pair.
+4. Metadata `nominal_length` / `nominal_sdev`, or a separate `mean_insert_size`
+   candidate when nominal length is absent.
+
+After selecting a source, `assume` fills only missing mean with **200 bp** and
+missing SD with **20 bp**. For example, mean 150 with missing SD becomes 150/20;
+mean 350 with missing SD becomes 350/20. Known values below 200 and independent
+SD values are preserved. Every supplemented run emits a warning naming the
+assumption. The SD is never silently calculated as 10% of the mean. Use `error`
+when assumptions are unacceptable. These defaults are assumptions, not measured
+values or a claim of accurate quantification; assess sensitivity when using them.
+
+Non-numeric values, infinities, zero/negative values, ranges and conflicting
+values are errors, not missing-data fallbacks. Blank metadata cells are missing.
+SRA nominal fields describe a submitted **expected paired-library insert size**
+and its SD, not a verified run-level measurement. `mean_insert_size` remains
+separate: disagreement with `nominal_length` requires an explicit override;
+its mean cannot borrow an unassociated `nominal_sdev`.
+During XML import, SAMPLE attributes named `nominal_length`, `nominal_sdev` or
+`fragment_length_*` are kept as `sample_attribute_*` fields for review. They do
+not overwrite EXPERIMENT library statistics or become run-specific overrides.
+`getfastq` preserves raw fragment fields so invalid text cannot turn into a
+missing-value assumption during read-statistic initialization.
+
+Common values for runs without explicit fragment metadata:
+
+```bash
+amalgkit quant --out_dir ./ --fragment_length_mean 150 --fragment_length_sd 7
+```
+
+For mixed libraries, create `fragments.tsv` with literal tab separators:
+
+```tsv
+run	fragment_length_mean	fragment_length_sd	source	source_detail
+SRR000001	150	7	measured	Library L1; insert assay after adapter subtraction
+SRR000002	250	35	user	Library L2; specified from protocol P2
+```
+
+```bash
+amalgkit quant --out_dir ./ --fragment_length_file fragments.tsv --fragment_length_policy error
+```
+
+File rows require both numeric values and nonempty `source` / `source_detail`.
+Run IDs must be unique and present in the input metadata; the file may cover a
+subset. Validation precedes batch selection so one full file can serve all array
+jobs. File values override metadata explicitly; common CLI values do not override
+run-specific fragment metadata. For metadata, use `fragment_length_source` and
+`fragment_length_source_detail`; an omitted source means `user`. Non-user sources
+such as `measured` require a detail explaining the measurement and library.
+AMALGKIT records these declarations but does not independently certify them.
+Components are not silently assembled from different source pairs.
+
+`--kallisto_options` still rejects `-l`/`-s` and their long forms; use the dedicated
+options above. Paired-end kallisto estimates its distribution from paired reads.
+Common options are ignored with a warning for paired-end/Oarfish inputs; a file
+row specifically targeting either is an error. The actual FASTQ layout governs
+this decision, including runs whose metadata says paired but whose input is single.
+
+## Fragment provenance and re-quantification
+
+Each new kallisto `*_run_info.json` contains `amalgkit_fragment_length` schema 1:
+actual and metadata layout, selected mean/SD with supplied values and sources,
+assumed components, policy, extra kallisto options, executed command and kallisto version. Paired-end
+entries identify kallisto estimation without inventing a measured mean/SD.
+The abundance TSV schema is unchanged. Keep the run-info files with merged and
+normalized results to retain this provenance.
+
+Completed outputs with this provenance are reused only when the backend, current
+input layout, resolved distribution, provenance and extra kallisto options match.
+For example, changing `--single-overhang` requires re-quantification. When input
+files are gone after cleanup, an unchanged metadata layout retains the recorded
+layout correction. Changes require `--redo yes`, including when
+FASTQs have already been cleaned up. Legacy outputs remain readable; default
+reuse warns that their fragment provenance is unknown. Explicit new parameters,
+run-specific fragment metadata or strict policy cannot certify a legacy single-end output
+and require re-quantification. Merely updating AMALGKIT does not recalculate it.
+
+To apply corrected parameters, retain or restore the same processed FASTQs, run
+`quant` with the chosen parameters and `--redo yes`, then rebuild affected merge
+and downstream normalization/filter/final outputs. Restore safely removed inputs
+with `getfastq` first if necessary; keep extraction/filter settings unchanged.
+Changed normalization inputs can affect other runs sharing normalization factors.
+An unchanged compatible reference index can be reused. A generic `rerun` does
+not recover historical common CLI or file overrides. Under the run lock, it
+checks surviving run-info against current settings and stops rather than silently
+replacing those settings with defaults, even when abundance output is damaged.
+Pass the chosen settings to `quant` explicitly when this check fails. If no
+run-info survived, historical parameters cannot be recovered automatically.
+
 ## Array Jobs
 
 `--batch` processes one run by one-based index after `is_sampled=yes` filtering,
