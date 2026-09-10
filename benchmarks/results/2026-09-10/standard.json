@@ -1,0 +1,1900 @@
+{
+  "baseline_revision": "7ac5250",
+  "current_revision": "93d5f52",
+  "summary": {
+    "quant_validation": {
+      "baseline": {
+        "median_seconds": 0.35677695798221976,
+        "min_seconds": 0.31005841703154147,
+        "max_seconds": 0.3851576250162907,
+        "median_peak_rss_mib": 162.36328125,
+        "max_peak_rss_mib": 171.7890625,
+        "workload": {
+          "transcripts": 100000
+        }
+      },
+      "current": {
+        "median_seconds": 0.3912641250062734,
+        "min_seconds": 0.3592130000470206,
+        "max_seconds": 0.510439958947245,
+        "median_peak_rss_mib": 175.58203125,
+        "max_peak_rss_mib": 176.8046875,
+        "workload": {
+          "transcripts": 100000
+        }
+      },
+      "equivalence": [
+        {
+          "numeric_allclose": true,
+          "max_absolute_difference": 0.0,
+          "count_files_identical": true
+        },
+        {
+          "numeric_allclose": true,
+          "max_absolute_difference": 0.0,
+          "count_files_identical": true
+        },
+        {
+          "numeric_allclose": true,
+          "max_absolute_difference": 0.0,
+          "count_files_identical": true
+        },
+        {
+          "numeric_allclose": true,
+          "max_absolute_difference": 0.0,
+          "count_files_identical": true
+        }
+      ],
+      "time_ratio": 1.0966631007201209,
+      "rss_ratio": 1.0814146517502707
+    },
+    "fastq_scan": {
+      "baseline": {
+        "median_seconds": 2.138295541051775,
+        "min_seconds": 2.1172008749563247,
+        "max_seconds": 2.162559709046036,
+        "median_peak_rss_mib": 98.2734375,
+        "max_peak_rss_mib": 98.56640625,
+        "workload": {
+          "reads": 1000000,
+          "read_length": 100
+        }
+      },
+      "current": {
+        "median_seconds": 2.083725582982879,
+        "min_seconds": 1.8433944999706,
+        "max_seconds": 2.1161366660380736,
+        "median_peak_rss_mib": 98.41796875,
+        "max_peak_rss_mib": 98.56640625,
+        "workload": {
+          "reads": 1000000,
+          "read_length": 100
+        }
+      },
+      "equivalence": [
+        {
+          "numeric_allclose": true,
+          "max_absolute_difference": 0.0,
+          "count_files_identical": true
+        },
+        {
+          "numeric_allclose": true,
+          "max_absolute_difference": 0.0,
+          "count_files_identical": true
+        },
+        {
+          "numeric_allclose": true,
+          "max_absolute_difference": 0.0,
+          "count_files_identical": true
+        },
+        {
+          "numeric_allclose": true,
+          "max_absolute_difference": 0.0,
+          "count_files_identical": true
+        }
+      ],
+      "time_ratio": 0.9744796932784817,
+      "rss_ratio": 1.0014707051434932
+    },
+    "wsfilter": {
+      "baseline": {
+        "median_seconds": 1.7293547500157729,
+        "min_seconds": 1.6926021249964833,
+        "max_seconds": 1.9430515409912914,
+        "median_peak_rss_mib": 380.91796875,
+        "max_peak_rss_mib": 383.41015625,
+        "workload": {
+          "genes": 20000,
+          "samples": 200,
+          "groups": 10,
+          "seed": 719
+        }
+      },
+      "current": {
+        "median_seconds": 2.4400772909866646,
+        "min_seconds": 2.4292376250377856,
+        "max_seconds": 2.4899587499676272,
+        "median_peak_rss_mib": 410.0390625,
+        "max_peak_rss_mib": 416.3515625,
+        "workload": {
+          "genes": 20000,
+          "samples": 200,
+          "groups": 10,
+          "seed": 719
+        }
+      },
+      "equivalence": [
+        {
+          "numeric_allclose": true,
+          "max_absolute_difference": 0.0,
+          "count_files_identical": true
+        },
+        {
+          "numeric_allclose": true,
+          "max_absolute_difference": 0.0,
+          "count_files_identical": true
+        },
+        {
+          "numeric_allclose": true,
+          "max_absolute_difference": 0.0,
+          "count_files_identical": true
+        },
+        {
+          "numeric_allclose": true,
+          "max_absolute_difference": 0.0,
+          "count_files_identical": true
+        }
+      ],
+      "time_ratio": 1.4109755623965583,
+      "rss_ratio": 1.076449776957391
+    },
+    "csfilter": {
+      "baseline": {
+        "median_seconds": 1.1751242089667358,
+        "min_seconds": 1.0976933750207536,
+        "max_seconds": 1.2329383750329725,
+        "median_peak_rss_mib": 96.37890625,
+        "max_peak_rss_mib": 97.01953125,
+        "workload": {
+          "genes": 2000,
+          "samples": 200,
+          "groups": 10,
+          "seed": 719,
+          "species": 10,
+          "missing": "every 11th row / 7th column"
+        }
+      },
+      "current": {
+        "median_seconds": 1.5822480409988202,
+        "min_seconds": 1.3225298330071382,
+        "max_seconds": 1.6408524999860674,
+        "median_peak_rss_mib": 97.1328125,
+        "max_peak_rss_mib": 97.15234375,
+        "workload": {
+          "genes": 2000,
+          "samples": 200,
+          "groups": 10,
+          "seed": 719,
+          "species": 10,
+          "missing": "every 11th row / 7th column"
+        }
+      },
+      "equivalence": [
+        {
+          "numeric_allclose": true,
+          "max_absolute_difference": 1.1102230246251565e-15,
+          "count_files_identical": true
+        },
+        {
+          "numeric_allclose": true,
+          "max_absolute_difference": 1.1102230246251565e-15,
+          "count_files_identical": true
+        },
+        {
+          "numeric_allclose": true,
+          "max_absolute_difference": 1.1102230246251565e-15,
+          "count_files_identical": true
+        },
+        {
+          "numeric_allclose": true,
+          "max_absolute_difference": 1.1102230246251565e-15,
+          "count_files_identical": true
+        }
+      ],
+      "time_ratio": 1.3464517443565056,
+      "rss_ratio": 1.0078223158918655
+    },
+    "tau": {
+      "baseline": {
+        "median_seconds": 0.31128570798318833,
+        "min_seconds": 0.2969947090023197,
+        "max_seconds": 0.40306366700679064,
+        "median_peak_rss_mib": 196.55859375,
+        "max_peak_rss_mib": 204.52734375,
+        "workload": {
+          "genes": 20000,
+          "samples": 200,
+          "groups": 10,
+          "seed": 719,
+          "within_group_replicates": "identical"
+        }
+      },
+      "current": {
+        "median_seconds": 1.031881125003565,
+        "min_seconds": 0.9368380829691887,
+        "max_seconds": 1.1019804999814369,
+        "median_peak_rss_mib": 274.8046875,
+        "max_peak_rss_mib": 281.07421875,
+        "workload": {
+          "genes": 20000,
+          "samples": 200,
+          "groups": 10,
+          "seed": 719,
+          "within_group_replicates": "identical"
+        }
+      },
+      "equivalence": [
+        {
+          "numeric_allclose": true,
+          "max_absolute_difference": 2.55351295663786e-15,
+          "count_files_identical": true
+        },
+        {
+          "numeric_allclose": true,
+          "max_absolute_difference": 2.55351295663786e-15,
+          "count_files_identical": true
+        },
+        {
+          "numeric_allclose": true,
+          "max_absolute_difference": 2.55351295663786e-15,
+          "count_files_identical": true
+        },
+        {
+          "numeric_allclose": true,
+          "max_absolute_difference": 2.55351295663786e-15,
+          "count_files_identical": true
+        }
+      ],
+      "time_ratio": 3.314900422795171,
+      "rss_ratio": 1.3980802480176475
+    },
+    "sva": {
+      "baseline": {
+        "median_seconds": 2.4858422920224257,
+        "min_seconds": 2.3540727499639615,
+        "max_seconds": 2.6019457910442725,
+        "median_peak_rss_mib": 227.6015625,
+        "max_peak_rss_mib": 229.76171875,
+        "workload": {
+          "genes": 5000,
+          "samples": 80,
+          "groups": 10,
+          "seed": 719,
+          "nsv": 3,
+          "irw_iterations": 5
+        }
+      },
+      "current": {
+        "median_seconds": 2.957778125011828,
+        "min_seconds": 2.5615968329948373,
+        "max_seconds": 3.1505135420011356,
+        "median_peak_rss_mib": 242.4921875,
+        "max_peak_rss_mib": 247.3828125,
+        "workload": {
+          "genes": 5000,
+          "samples": 80,
+          "groups": 10,
+          "seed": 719,
+          "nsv": 3,
+          "irw_iterations": 5
+        }
+      },
+      "equivalence": [
+        {
+          "numeric_allclose": true,
+          "max_absolute_difference": 3.161915174132446e-12,
+          "count_files_identical": true
+        },
+        {
+          "numeric_allclose": true,
+          "max_absolute_difference": 3.161915174132446e-12,
+          "count_files_identical": true
+        },
+        {
+          "numeric_allclose": true,
+          "max_absolute_difference": 3.161915174132446e-12,
+          "count_files_identical": true
+        },
+        {
+          "numeric_allclose": true,
+          "max_absolute_difference": 3.161915174132446e-12,
+          "count_files_identical": true
+        }
+      ],
+      "time_ratio": 1.1898494665184274,
+      "rss_ratio": 1.065424089520475
+    },
+    "cstmm": {
+      "baseline": {
+        "median_seconds": 6.871830957999919,
+        "min_seconds": 6.384119959024247,
+        "max_seconds": 7.254742124991026,
+        "median_peak_rss_mib": 335.89453125,
+        "max_peak_rss_mib": 342.875,
+        "workload": {
+          "genes": 20000,
+          "samples": 200,
+          "groups": 10,
+          "seed": 719,
+          "orthologs": 2000,
+          "species": 10,
+          "missing": "none",
+          "observed_pair_diagnostics": true
+        }
+      },
+      "current": {
+        "median_seconds": 32.68015508400276,
+        "min_seconds": 30.392080042045563,
+        "max_seconds": 35.94554895802867,
+        "median_peak_rss_mib": 355.5078125,
+        "max_peak_rss_mib": 363.4453125,
+        "workload": {
+          "genes": 20000,
+          "samples": 200,
+          "groups": 10,
+          "seed": 719,
+          "orthologs": 2000,
+          "species": 10,
+          "missing": "none",
+          "observed_pair_diagnostics": true
+        }
+      },
+      "equivalence": [
+        {
+          "numeric_allclose": true,
+          "max_absolute_difference": 0.0,
+          "count_files_identical": true
+        },
+        {
+          "numeric_allclose": true,
+          "max_absolute_difference": 0.0,
+          "count_files_identical": true
+        },
+        {
+          "numeric_allclose": true,
+          "max_absolute_difference": 0.0,
+          "count_files_identical": true
+        },
+        {
+          "numeric_allclose": true,
+          "max_absolute_difference": 0.0,
+          "count_files_identical": true
+        }
+      ],
+      "time_ratio": 4.75566923629834,
+      "rss_ratio": 1.058391189570759
+    }
+  },
+  "observations": {
+    "csfilter/baseline-0.json": {
+      "seconds": 0.9232267089537345,
+      "peak_rss_mib": 96.9765625,
+      "workload": {
+        "genes": 2000,
+        "samples": 200,
+        "groups": 10,
+        "seed": 719,
+        "species": 10,
+        "missing": "every 11th row / 7th column"
+      },
+      "corrected_count_sha256": {},
+      "environment": {
+        "python": "3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:58:53) [Clang 19.1.7 ]",
+        "numpy": "2.4.6",
+        "pandas": "2.3.3",
+        "scipy": "1.17.1",
+        "machine": "x86_64",
+        "platform": "macOS-26.6.2-x86_64-i386-64bit",
+        "threads": {
+          "OMP_NUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1"
+        }
+      }
+    },
+    "csfilter/baseline-1.json": {
+      "seconds": 1.1751242089667358,
+      "peak_rss_mib": 97.01953125,
+      "workload": {
+        "genes": 2000,
+        "samples": 200,
+        "groups": 10,
+        "seed": 719,
+        "species": 10,
+        "missing": "every 11th row / 7th column"
+      },
+      "corrected_count_sha256": {},
+      "environment": {
+        "python": "3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:58:53) [Clang 19.1.7 ]",
+        "numpy": "2.4.6",
+        "pandas": "2.3.3",
+        "scipy": "1.17.1",
+        "machine": "x86_64",
+        "platform": "macOS-26.6.2-x86_64-i386-64bit",
+        "threads": {
+          "OMP_NUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1"
+        }
+      }
+    },
+    "csfilter/baseline-2.json": {
+      "seconds": 1.0976933750207536,
+      "peak_rss_mib": 94.38671875,
+      "workload": {
+        "genes": 2000,
+        "samples": 200,
+        "groups": 10,
+        "seed": 719,
+        "species": 10,
+        "missing": "every 11th row / 7th column"
+      },
+      "corrected_count_sha256": {},
+      "environment": {
+        "python": "3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:58:53) [Clang 19.1.7 ]",
+        "numpy": "2.4.6",
+        "pandas": "2.3.3",
+        "scipy": "1.17.1",
+        "machine": "x86_64",
+        "platform": "macOS-26.6.2-x86_64-i386-64bit",
+        "threads": {
+          "OMP_NUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1"
+        }
+      }
+    },
+    "csfilter/baseline-3.json": {
+      "seconds": 1.2329383750329725,
+      "peak_rss_mib": 96.37890625,
+      "workload": {
+        "genes": 2000,
+        "samples": 200,
+        "groups": 10,
+        "seed": 719,
+        "species": 10,
+        "missing": "every 11th row / 7th column"
+      },
+      "corrected_count_sha256": {},
+      "environment": {
+        "python": "3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:58:53) [Clang 19.1.7 ]",
+        "numpy": "2.4.6",
+        "pandas": "2.3.3",
+        "scipy": "1.17.1",
+        "machine": "x86_64",
+        "platform": "macOS-26.6.2-x86_64-i386-64bit",
+        "threads": {
+          "OMP_NUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1"
+        }
+      }
+    },
+    "csfilter/current-0.json": {
+      "seconds": 1.5746347910026088,
+      "peak_rss_mib": 96.890625,
+      "workload": {
+        "genes": 2000,
+        "samples": 200,
+        "groups": 10,
+        "seed": 719,
+        "species": 10,
+        "missing": "every 11th row / 7th column"
+      },
+      "corrected_count_sha256": {},
+      "environment": {
+        "python": "3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:58:53) [Clang 19.1.7 ]",
+        "numpy": "2.4.6",
+        "pandas": "2.3.3",
+        "scipy": "1.17.1",
+        "machine": "x86_64",
+        "platform": "macOS-26.6.2-x86_64-i386-64bit",
+        "threads": {
+          "OMP_NUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1"
+        }
+      }
+    },
+    "csfilter/current-1.json": {
+      "seconds": 1.6408524999860674,
+      "peak_rss_mib": 97.1328125,
+      "workload": {
+        "genes": 2000,
+        "samples": 200,
+        "groups": 10,
+        "seed": 719,
+        "species": 10,
+        "missing": "every 11th row / 7th column"
+      },
+      "corrected_count_sha256": {},
+      "environment": {
+        "python": "3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:58:53) [Clang 19.1.7 ]",
+        "numpy": "2.4.6",
+        "pandas": "2.3.3",
+        "scipy": "1.17.1",
+        "machine": "x86_64",
+        "platform": "macOS-26.6.2-x86_64-i386-64bit",
+        "threads": {
+          "OMP_NUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1"
+        }
+      }
+    },
+    "csfilter/current-2.json": {
+      "seconds": 1.5822480409988202,
+      "peak_rss_mib": 97.15234375,
+      "workload": {
+        "genes": 2000,
+        "samples": 200,
+        "groups": 10,
+        "seed": 719,
+        "species": 10,
+        "missing": "every 11th row / 7th column"
+      },
+      "corrected_count_sha256": {},
+      "environment": {
+        "python": "3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:58:53) [Clang 19.1.7 ]",
+        "numpy": "2.4.6",
+        "pandas": "2.3.3",
+        "scipy": "1.17.1",
+        "machine": "x86_64",
+        "platform": "macOS-26.6.2-x86_64-i386-64bit",
+        "threads": {
+          "OMP_NUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1"
+        }
+      }
+    },
+    "csfilter/current-3.json": {
+      "seconds": 1.3225298330071382,
+      "peak_rss_mib": 96.16796875,
+      "workload": {
+        "genes": 2000,
+        "samples": 200,
+        "groups": 10,
+        "seed": 719,
+        "species": 10,
+        "missing": "every 11th row / 7th column"
+      },
+      "corrected_count_sha256": {},
+      "environment": {
+        "python": "3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:58:53) [Clang 19.1.7 ]",
+        "numpy": "2.4.6",
+        "pandas": "2.3.3",
+        "scipy": "1.17.1",
+        "machine": "x86_64",
+        "platform": "macOS-26.6.2-x86_64-i386-64bit",
+        "threads": {
+          "OMP_NUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1"
+        }
+      }
+    },
+    "cstmm/baseline-0.json": {
+      "seconds": 6.704456084000412,
+      "peak_rss_mib": 340.328125,
+      "workload": {
+        "genes": 20000,
+        "samples": 200,
+        "groups": 10,
+        "seed": 719,
+        "orthologs": 2000,
+        "species": 10,
+        "missing": "none",
+        "observed_pair_diagnostics": true
+      },
+      "corrected_count_sha256": {
+        "Species_0_cstmm_counts.tsv": "fa7f001ea26ecd264b174781329afb17f5b5536fef1f88c9ad04c0a7e5117880",
+        "Species_1_cstmm_counts.tsv": "5a84e81a3efff16850b3f8f5cf45decb568bd4cf5a48bd3b8e743b5f225e4676",
+        "Species_2_cstmm_counts.tsv": "c3917b1fc4e9528c91a29bc25ba50354b1e4f33e323dcd51ea86cf18412571d2",
+        "Species_3_cstmm_counts.tsv": "00865827c0ecfd577a86376c67e01b4dccc80a46589c5e02d8e060a809cd8fb4",
+        "Species_4_cstmm_counts.tsv": "bb39ffe7e6eb37f47de7a2c9678b2643f794db81422d330b59bf39bd7e8e7a4f",
+        "Species_5_cstmm_counts.tsv": "b9fe196c2eacfb62e3bbf2b7ec6d98a520ebb4f21b63020a0b7374a893636119",
+        "Species_6_cstmm_counts.tsv": "827295fdb3c878583d8387348cc54789cabad0b7fa5d7c936582dddef847b2bf",
+        "Species_7_cstmm_counts.tsv": "41276d8a5a814eda30d1536b72084b5e450bd9a47dc6174980be6e82fe4ac799",
+        "Species_8_cstmm_counts.tsv": "0490ea1108b795e8d39b606e2f76e1d26835754140878d441649961c8c38136b",
+        "Species_9_cstmm_counts.tsv": "261335b9770360ecc4a728b62f82c5f8b3ecfc88ef9df98059652c8ce62a8f4b"
+      },
+      "environment": {
+        "python": "3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:58:53) [Clang 19.1.7 ]",
+        "numpy": "2.4.6",
+        "pandas": "2.3.3",
+        "scipy": "1.17.1",
+        "machine": "x86_64",
+        "platform": "macOS-26.6.2-x86_64-i386-64bit",
+        "threads": {
+          "OMP_NUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1"
+        }
+      }
+    },
+    "cstmm/baseline-1.json": {
+      "seconds": 6.384119959024247,
+      "peak_rss_mib": 335.89453125,
+      "workload": {
+        "genes": 20000,
+        "samples": 200,
+        "groups": 10,
+        "seed": 719,
+        "orthologs": 2000,
+        "species": 10,
+        "missing": "none",
+        "observed_pair_diagnostics": true
+      },
+      "corrected_count_sha256": {
+        "Species_0_cstmm_counts.tsv": "fa7f001ea26ecd264b174781329afb17f5b5536fef1f88c9ad04c0a7e5117880",
+        "Species_1_cstmm_counts.tsv": "5a84e81a3efff16850b3f8f5cf45decb568bd4cf5a48bd3b8e743b5f225e4676",
+        "Species_2_cstmm_counts.tsv": "c3917b1fc4e9528c91a29bc25ba50354b1e4f33e323dcd51ea86cf18412571d2",
+        "Species_3_cstmm_counts.tsv": "00865827c0ecfd577a86376c67e01b4dccc80a46589c5e02d8e060a809cd8fb4",
+        "Species_4_cstmm_counts.tsv": "bb39ffe7e6eb37f47de7a2c9678b2643f794db81422d330b59bf39bd7e8e7a4f",
+        "Species_5_cstmm_counts.tsv": "b9fe196c2eacfb62e3bbf2b7ec6d98a520ebb4f21b63020a0b7374a893636119",
+        "Species_6_cstmm_counts.tsv": "827295fdb3c878583d8387348cc54789cabad0b7fa5d7c936582dddef847b2bf",
+        "Species_7_cstmm_counts.tsv": "41276d8a5a814eda30d1536b72084b5e450bd9a47dc6174980be6e82fe4ac799",
+        "Species_8_cstmm_counts.tsv": "0490ea1108b795e8d39b606e2f76e1d26835754140878d441649961c8c38136b",
+        "Species_9_cstmm_counts.tsv": "261335b9770360ecc4a728b62f82c5f8b3ecfc88ef9df98059652c8ce62a8f4b"
+      },
+      "environment": {
+        "python": "3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:58:53) [Clang 19.1.7 ]",
+        "numpy": "2.4.6",
+        "pandas": "2.3.3",
+        "scipy": "1.17.1",
+        "machine": "x86_64",
+        "platform": "macOS-26.6.2-x86_64-i386-64bit",
+        "threads": {
+          "OMP_NUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1"
+        }
+      }
+    },
+    "cstmm/baseline-2.json": {
+      "seconds": 6.871830957999919,
+      "peak_rss_mib": 332.9609375,
+      "workload": {
+        "genes": 20000,
+        "samples": 200,
+        "groups": 10,
+        "seed": 719,
+        "orthologs": 2000,
+        "species": 10,
+        "missing": "none",
+        "observed_pair_diagnostics": true
+      },
+      "corrected_count_sha256": {
+        "Species_0_cstmm_counts.tsv": "fa7f001ea26ecd264b174781329afb17f5b5536fef1f88c9ad04c0a7e5117880",
+        "Species_1_cstmm_counts.tsv": "5a84e81a3efff16850b3f8f5cf45decb568bd4cf5a48bd3b8e743b5f225e4676",
+        "Species_2_cstmm_counts.tsv": "c3917b1fc4e9528c91a29bc25ba50354b1e4f33e323dcd51ea86cf18412571d2",
+        "Species_3_cstmm_counts.tsv": "00865827c0ecfd577a86376c67e01b4dccc80a46589c5e02d8e060a809cd8fb4",
+        "Species_4_cstmm_counts.tsv": "bb39ffe7e6eb37f47de7a2c9678b2643f794db81422d330b59bf39bd7e8e7a4f",
+        "Species_5_cstmm_counts.tsv": "b9fe196c2eacfb62e3bbf2b7ec6d98a520ebb4f21b63020a0b7374a893636119",
+        "Species_6_cstmm_counts.tsv": "827295fdb3c878583d8387348cc54789cabad0b7fa5d7c936582dddef847b2bf",
+        "Species_7_cstmm_counts.tsv": "41276d8a5a814eda30d1536b72084b5e450bd9a47dc6174980be6e82fe4ac799",
+        "Species_8_cstmm_counts.tsv": "0490ea1108b795e8d39b606e2f76e1d26835754140878d441649961c8c38136b",
+        "Species_9_cstmm_counts.tsv": "261335b9770360ecc4a728b62f82c5f8b3ecfc88ef9df98059652c8ce62a8f4b"
+      },
+      "environment": {
+        "python": "3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:58:53) [Clang 19.1.7 ]",
+        "numpy": "2.4.6",
+        "pandas": "2.3.3",
+        "scipy": "1.17.1",
+        "machine": "x86_64",
+        "platform": "macOS-26.6.2-x86_64-i386-64bit",
+        "threads": {
+          "OMP_NUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1"
+        }
+      }
+    },
+    "cstmm/baseline-3.json": {
+      "seconds": 7.254742124991026,
+      "peak_rss_mib": 342.875,
+      "workload": {
+        "genes": 20000,
+        "samples": 200,
+        "groups": 10,
+        "seed": 719,
+        "orthologs": 2000,
+        "species": 10,
+        "missing": "none",
+        "observed_pair_diagnostics": true
+      },
+      "corrected_count_sha256": {
+        "Species_0_cstmm_counts.tsv": "fa7f001ea26ecd264b174781329afb17f5b5536fef1f88c9ad04c0a7e5117880",
+        "Species_1_cstmm_counts.tsv": "5a84e81a3efff16850b3f8f5cf45decb568bd4cf5a48bd3b8e743b5f225e4676",
+        "Species_2_cstmm_counts.tsv": "c3917b1fc4e9528c91a29bc25ba50354b1e4f33e323dcd51ea86cf18412571d2",
+        "Species_3_cstmm_counts.tsv": "00865827c0ecfd577a86376c67e01b4dccc80a46589c5e02d8e060a809cd8fb4",
+        "Species_4_cstmm_counts.tsv": "bb39ffe7e6eb37f47de7a2c9678b2643f794db81422d330b59bf39bd7e8e7a4f",
+        "Species_5_cstmm_counts.tsv": "b9fe196c2eacfb62e3bbf2b7ec6d98a520ebb4f21b63020a0b7374a893636119",
+        "Species_6_cstmm_counts.tsv": "827295fdb3c878583d8387348cc54789cabad0b7fa5d7c936582dddef847b2bf",
+        "Species_7_cstmm_counts.tsv": "41276d8a5a814eda30d1536b72084b5e450bd9a47dc6174980be6e82fe4ac799",
+        "Species_8_cstmm_counts.tsv": "0490ea1108b795e8d39b606e2f76e1d26835754140878d441649961c8c38136b",
+        "Species_9_cstmm_counts.tsv": "261335b9770360ecc4a728b62f82c5f8b3ecfc88ef9df98059652c8ce62a8f4b"
+      },
+      "environment": {
+        "python": "3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:58:53) [Clang 19.1.7 ]",
+        "numpy": "2.4.6",
+        "pandas": "2.3.3",
+        "scipy": "1.17.1",
+        "machine": "x86_64",
+        "platform": "macOS-26.6.2-x86_64-i386-64bit",
+        "threads": {
+          "OMP_NUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1"
+        }
+      }
+    },
+    "cstmm/current-0.json": {
+      "seconds": 31.440791791013908,
+      "peak_rss_mib": 349.60546875,
+      "workload": {
+        "genes": 20000,
+        "samples": 200,
+        "groups": 10,
+        "seed": 719,
+        "orthologs": 2000,
+        "species": 10,
+        "missing": "none",
+        "observed_pair_diagnostics": true
+      },
+      "corrected_count_sha256": {
+        "Species_0_cstmm_counts.tsv": "fa7f001ea26ecd264b174781329afb17f5b5536fef1f88c9ad04c0a7e5117880",
+        "Species_1_cstmm_counts.tsv": "5a84e81a3efff16850b3f8f5cf45decb568bd4cf5a48bd3b8e743b5f225e4676",
+        "Species_2_cstmm_counts.tsv": "c3917b1fc4e9528c91a29bc25ba50354b1e4f33e323dcd51ea86cf18412571d2",
+        "Species_3_cstmm_counts.tsv": "00865827c0ecfd577a86376c67e01b4dccc80a46589c5e02d8e060a809cd8fb4",
+        "Species_4_cstmm_counts.tsv": "bb39ffe7e6eb37f47de7a2c9678b2643f794db81422d330b59bf39bd7e8e7a4f",
+        "Species_5_cstmm_counts.tsv": "b9fe196c2eacfb62e3bbf2b7ec6d98a520ebb4f21b63020a0b7374a893636119",
+        "Species_6_cstmm_counts.tsv": "827295fdb3c878583d8387348cc54789cabad0b7fa5d7c936582dddef847b2bf",
+        "Species_7_cstmm_counts.tsv": "41276d8a5a814eda30d1536b72084b5e450bd9a47dc6174980be6e82fe4ac799",
+        "Species_8_cstmm_counts.tsv": "0490ea1108b795e8d39b606e2f76e1d26835754140878d441649961c8c38136b",
+        "Species_9_cstmm_counts.tsv": "261335b9770360ecc4a728b62f82c5f8b3ecfc88ef9df98059652c8ce62a8f4b"
+      },
+      "environment": {
+        "python": "3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:58:53) [Clang 19.1.7 ]",
+        "numpy": "2.4.6",
+        "pandas": "2.3.3",
+        "scipy": "1.17.1",
+        "machine": "x86_64",
+        "platform": "macOS-26.6.2-x86_64-i386-64bit",
+        "threads": {
+          "OMP_NUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1"
+        }
+      }
+    },
+    "cstmm/current-1.json": {
+      "seconds": 30.392080042045563,
+      "peak_rss_mib": 347.28125,
+      "workload": {
+        "genes": 20000,
+        "samples": 200,
+        "groups": 10,
+        "seed": 719,
+        "orthologs": 2000,
+        "species": 10,
+        "missing": "none",
+        "observed_pair_diagnostics": true
+      },
+      "corrected_count_sha256": {
+        "Species_0_cstmm_counts.tsv": "fa7f001ea26ecd264b174781329afb17f5b5536fef1f88c9ad04c0a7e5117880",
+        "Species_1_cstmm_counts.tsv": "5a84e81a3efff16850b3f8f5cf45decb568bd4cf5a48bd3b8e743b5f225e4676",
+        "Species_2_cstmm_counts.tsv": "c3917b1fc4e9528c91a29bc25ba50354b1e4f33e323dcd51ea86cf18412571d2",
+        "Species_3_cstmm_counts.tsv": "00865827c0ecfd577a86376c67e01b4dccc80a46589c5e02d8e060a809cd8fb4",
+        "Species_4_cstmm_counts.tsv": "bb39ffe7e6eb37f47de7a2c9678b2643f794db81422d330b59bf39bd7e8e7a4f",
+        "Species_5_cstmm_counts.tsv": "b9fe196c2eacfb62e3bbf2b7ec6d98a520ebb4f21b63020a0b7374a893636119",
+        "Species_6_cstmm_counts.tsv": "827295fdb3c878583d8387348cc54789cabad0b7fa5d7c936582dddef847b2bf",
+        "Species_7_cstmm_counts.tsv": "41276d8a5a814eda30d1536b72084b5e450bd9a47dc6174980be6e82fe4ac799",
+        "Species_8_cstmm_counts.tsv": "0490ea1108b795e8d39b606e2f76e1d26835754140878d441649961c8c38136b",
+        "Species_9_cstmm_counts.tsv": "261335b9770360ecc4a728b62f82c5f8b3ecfc88ef9df98059652c8ce62a8f4b"
+      },
+      "environment": {
+        "python": "3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:58:53) [Clang 19.1.7 ]",
+        "numpy": "2.4.6",
+        "pandas": "2.3.3",
+        "scipy": "1.17.1",
+        "machine": "x86_64",
+        "platform": "macOS-26.6.2-x86_64-i386-64bit",
+        "threads": {
+          "OMP_NUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1"
+        }
+      }
+    },
+    "cstmm/current-2.json": {
+      "seconds": 35.94554895802867,
+      "peak_rss_mib": 363.4453125,
+      "workload": {
+        "genes": 20000,
+        "samples": 200,
+        "groups": 10,
+        "seed": 719,
+        "orthologs": 2000,
+        "species": 10,
+        "missing": "none",
+        "observed_pair_diagnostics": true
+      },
+      "corrected_count_sha256": {
+        "Species_0_cstmm_counts.tsv": "fa7f001ea26ecd264b174781329afb17f5b5536fef1f88c9ad04c0a7e5117880",
+        "Species_1_cstmm_counts.tsv": "5a84e81a3efff16850b3f8f5cf45decb568bd4cf5a48bd3b8e743b5f225e4676",
+        "Species_2_cstmm_counts.tsv": "c3917b1fc4e9528c91a29bc25ba50354b1e4f33e323dcd51ea86cf18412571d2",
+        "Species_3_cstmm_counts.tsv": "00865827c0ecfd577a86376c67e01b4dccc80a46589c5e02d8e060a809cd8fb4",
+        "Species_4_cstmm_counts.tsv": "bb39ffe7e6eb37f47de7a2c9678b2643f794db81422d330b59bf39bd7e8e7a4f",
+        "Species_5_cstmm_counts.tsv": "b9fe196c2eacfb62e3bbf2b7ec6d98a520ebb4f21b63020a0b7374a893636119",
+        "Species_6_cstmm_counts.tsv": "827295fdb3c878583d8387348cc54789cabad0b7fa5d7c936582dddef847b2bf",
+        "Species_7_cstmm_counts.tsv": "41276d8a5a814eda30d1536b72084b5e450bd9a47dc6174980be6e82fe4ac799",
+        "Species_8_cstmm_counts.tsv": "0490ea1108b795e8d39b606e2f76e1d26835754140878d441649961c8c38136b",
+        "Species_9_cstmm_counts.tsv": "261335b9770360ecc4a728b62f82c5f8b3ecfc88ef9df98059652c8ce62a8f4b"
+      },
+      "environment": {
+        "python": "3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:58:53) [Clang 19.1.7 ]",
+        "numpy": "2.4.6",
+        "pandas": "2.3.3",
+        "scipy": "1.17.1",
+        "machine": "x86_64",
+        "platform": "macOS-26.6.2-x86_64-i386-64bit",
+        "threads": {
+          "OMP_NUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1"
+        }
+      }
+    },
+    "cstmm/current-3.json": {
+      "seconds": 32.68015508400276,
+      "peak_rss_mib": 355.5078125,
+      "workload": {
+        "genes": 20000,
+        "samples": 200,
+        "groups": 10,
+        "seed": 719,
+        "orthologs": 2000,
+        "species": 10,
+        "missing": "none",
+        "observed_pair_diagnostics": true
+      },
+      "corrected_count_sha256": {
+        "Species_0_cstmm_counts.tsv": "fa7f001ea26ecd264b174781329afb17f5b5536fef1f88c9ad04c0a7e5117880",
+        "Species_1_cstmm_counts.tsv": "5a84e81a3efff16850b3f8f5cf45decb568bd4cf5a48bd3b8e743b5f225e4676",
+        "Species_2_cstmm_counts.tsv": "c3917b1fc4e9528c91a29bc25ba50354b1e4f33e323dcd51ea86cf18412571d2",
+        "Species_3_cstmm_counts.tsv": "00865827c0ecfd577a86376c67e01b4dccc80a46589c5e02d8e060a809cd8fb4",
+        "Species_4_cstmm_counts.tsv": "bb39ffe7e6eb37f47de7a2c9678b2643f794db81422d330b59bf39bd7e8e7a4f",
+        "Species_5_cstmm_counts.tsv": "b9fe196c2eacfb62e3bbf2b7ec6d98a520ebb4f21b63020a0b7374a893636119",
+        "Species_6_cstmm_counts.tsv": "827295fdb3c878583d8387348cc54789cabad0b7fa5d7c936582dddef847b2bf",
+        "Species_7_cstmm_counts.tsv": "41276d8a5a814eda30d1536b72084b5e450bd9a47dc6174980be6e82fe4ac799",
+        "Species_8_cstmm_counts.tsv": "0490ea1108b795e8d39b606e2f76e1d26835754140878d441649961c8c38136b",
+        "Species_9_cstmm_counts.tsv": "261335b9770360ecc4a728b62f82c5f8b3ecfc88ef9df98059652c8ce62a8f4b"
+      },
+      "environment": {
+        "python": "3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:58:53) [Clang 19.1.7 ]",
+        "numpy": "2.4.6",
+        "pandas": "2.3.3",
+        "scipy": "1.17.1",
+        "machine": "x86_64",
+        "platform": "macOS-26.6.2-x86_64-i386-64bit",
+        "threads": {
+          "OMP_NUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1"
+        }
+      }
+    },
+    "fastq_scan/baseline-0.json": {
+      "seconds": 1.8835392920300364,
+      "peak_rss_mib": 98.8203125,
+      "workload": {
+        "reads": 1000000,
+        "read_length": 100
+      },
+      "corrected_count_sha256": {},
+      "environment": {
+        "python": "3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:58:53) [Clang 19.1.7 ]",
+        "numpy": "2.4.6",
+        "pandas": "2.3.3",
+        "scipy": "1.17.1",
+        "machine": "x86_64",
+        "platform": "macOS-26.6.2-x86_64-i386-64bit",
+        "threads": {
+          "OMP_NUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1"
+        }
+      }
+    },
+    "fastq_scan/baseline-1.json": {
+      "seconds": 2.162559709046036,
+      "peak_rss_mib": 98.2734375,
+      "workload": {
+        "reads": 1000000,
+        "read_length": 100
+      },
+      "corrected_count_sha256": {},
+      "environment": {
+        "python": "3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:58:53) [Clang 19.1.7 ]",
+        "numpy": "2.4.6",
+        "pandas": "2.3.3",
+        "scipy": "1.17.1",
+        "machine": "x86_64",
+        "platform": "macOS-26.6.2-x86_64-i386-64bit",
+        "threads": {
+          "OMP_NUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1"
+        }
+      }
+    },
+    "fastq_scan/baseline-2.json": {
+      "seconds": 2.1172008749563247,
+      "peak_rss_mib": 98.56640625,
+      "workload": {
+        "reads": 1000000,
+        "read_length": 100
+      },
+      "corrected_count_sha256": {},
+      "environment": {
+        "python": "3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:58:53) [Clang 19.1.7 ]",
+        "numpy": "2.4.6",
+        "pandas": "2.3.3",
+        "scipy": "1.17.1",
+        "machine": "x86_64",
+        "platform": "macOS-26.6.2-x86_64-i386-64bit",
+        "threads": {
+          "OMP_NUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1"
+        }
+      }
+    },
+    "fastq_scan/baseline-3.json": {
+      "seconds": 2.138295541051775,
+      "peak_rss_mib": 98.078125,
+      "workload": {
+        "reads": 1000000,
+        "read_length": 100
+      },
+      "corrected_count_sha256": {},
+      "environment": {
+        "python": "3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:58:53) [Clang 19.1.7 ]",
+        "numpy": "2.4.6",
+        "pandas": "2.3.3",
+        "scipy": "1.17.1",
+        "machine": "x86_64",
+        "platform": "macOS-26.6.2-x86_64-i386-64bit",
+        "threads": {
+          "OMP_NUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1"
+        }
+      }
+    },
+    "fastq_scan/current-0.json": {
+      "seconds": 2.1978729579714127,
+      "peak_rss_mib": 97.86328125,
+      "workload": {
+        "reads": 1000000,
+        "read_length": 100
+      },
+      "corrected_count_sha256": {},
+      "environment": {
+        "python": "3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:58:53) [Clang 19.1.7 ]",
+        "numpy": "2.4.6",
+        "pandas": "2.3.3",
+        "scipy": "1.17.1",
+        "machine": "x86_64",
+        "platform": "macOS-26.6.2-x86_64-i386-64bit",
+        "threads": {
+          "OMP_NUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1"
+        }
+      }
+    },
+    "fastq_scan/current-1.json": {
+      "seconds": 1.8433944999706,
+      "peak_rss_mib": 98.56640625,
+      "workload": {
+        "reads": 1000000,
+        "read_length": 100
+      },
+      "corrected_count_sha256": {},
+      "environment": {
+        "python": "3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:58:53) [Clang 19.1.7 ]",
+        "numpy": "2.4.6",
+        "pandas": "2.3.3",
+        "scipy": "1.17.1",
+        "machine": "x86_64",
+        "platform": "macOS-26.6.2-x86_64-i386-64bit",
+        "threads": {
+          "OMP_NUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1"
+        }
+      }
+    },
+    "fastq_scan/current-2.json": {
+      "seconds": 2.083725582982879,
+      "peak_rss_mib": 97.23828125,
+      "workload": {
+        "reads": 1000000,
+        "read_length": 100
+      },
+      "corrected_count_sha256": {},
+      "environment": {
+        "python": "3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:58:53) [Clang 19.1.7 ]",
+        "numpy": "2.4.6",
+        "pandas": "2.3.3",
+        "scipy": "1.17.1",
+        "machine": "x86_64",
+        "platform": "macOS-26.6.2-x86_64-i386-64bit",
+        "threads": {
+          "OMP_NUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1"
+        }
+      }
+    },
+    "fastq_scan/current-3.json": {
+      "seconds": 2.1161366660380736,
+      "peak_rss_mib": 98.41796875,
+      "workload": {
+        "reads": 1000000,
+        "read_length": 100
+      },
+      "corrected_count_sha256": {},
+      "environment": {
+        "python": "3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:58:53) [Clang 19.1.7 ]",
+        "numpy": "2.4.6",
+        "pandas": "2.3.3",
+        "scipy": "1.17.1",
+        "machine": "x86_64",
+        "platform": "macOS-26.6.2-x86_64-i386-64bit",
+        "threads": {
+          "OMP_NUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1"
+        }
+      }
+    },
+    "quant_validation/baseline-0.json": {
+      "seconds": 0.32910629198886454,
+      "peak_rss_mib": 163.38671875,
+      "workload": {
+        "transcripts": 100000
+      },
+      "corrected_count_sha256": {},
+      "environment": {
+        "python": "3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:58:53) [Clang 19.1.7 ]",
+        "numpy": "2.4.6",
+        "pandas": "2.3.3",
+        "scipy": "1.17.1",
+        "machine": "x86_64",
+        "platform": "macOS-26.6.2-x86_64-i386-64bit",
+        "threads": {
+          "OMP_NUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1"
+        }
+      }
+    },
+    "quant_validation/baseline-1.json": {
+      "seconds": 0.3851576250162907,
+      "peak_rss_mib": 162.1484375,
+      "workload": {
+        "transcripts": 100000
+      },
+      "corrected_count_sha256": {},
+      "environment": {
+        "python": "3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:58:53) [Clang 19.1.7 ]",
+        "numpy": "2.4.6",
+        "pandas": "2.3.3",
+        "scipy": "1.17.1",
+        "machine": "x86_64",
+        "platform": "macOS-26.6.2-x86_64-i386-64bit",
+        "threads": {
+          "OMP_NUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1"
+        }
+      }
+    },
+    "quant_validation/baseline-2.json": {
+      "seconds": 0.35677695798221976,
+      "peak_rss_mib": 162.36328125,
+      "workload": {
+        "transcripts": 100000
+      },
+      "corrected_count_sha256": {},
+      "environment": {
+        "python": "3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:58:53) [Clang 19.1.7 ]",
+        "numpy": "2.4.6",
+        "pandas": "2.3.3",
+        "scipy": "1.17.1",
+        "machine": "x86_64",
+        "platform": "macOS-26.6.2-x86_64-i386-64bit",
+        "threads": {
+          "OMP_NUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1"
+        }
+      }
+    },
+    "quant_validation/baseline-3.json": {
+      "seconds": 0.31005841703154147,
+      "peak_rss_mib": 171.7890625,
+      "workload": {
+        "transcripts": 100000
+      },
+      "corrected_count_sha256": {},
+      "environment": {
+        "python": "3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:58:53) [Clang 19.1.7 ]",
+        "numpy": "2.4.6",
+        "pandas": "2.3.3",
+        "scipy": "1.17.1",
+        "machine": "x86_64",
+        "platform": "macOS-26.6.2-x86_64-i386-64bit",
+        "threads": {
+          "OMP_NUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1"
+        }
+      }
+    },
+    "quant_validation/current-0.json": {
+      "seconds": 0.34124670905293897,
+      "peak_rss_mib": 157.65234375,
+      "workload": {
+        "transcripts": 100000
+      },
+      "corrected_count_sha256": {},
+      "environment": {
+        "python": "3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:58:53) [Clang 19.1.7 ]",
+        "numpy": "2.4.6",
+        "pandas": "2.3.3",
+        "scipy": "1.17.1",
+        "machine": "x86_64",
+        "platform": "macOS-26.6.2-x86_64-i386-64bit",
+        "threads": {
+          "OMP_NUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1"
+        }
+      }
+    },
+    "quant_validation/current-1.json": {
+      "seconds": 0.510439958947245,
+      "peak_rss_mib": 176.8046875,
+      "workload": {
+        "transcripts": 100000
+      },
+      "corrected_count_sha256": {},
+      "environment": {
+        "python": "3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:58:53) [Clang 19.1.7 ]",
+        "numpy": "2.4.6",
+        "pandas": "2.3.3",
+        "scipy": "1.17.1",
+        "machine": "x86_64",
+        "platform": "macOS-26.6.2-x86_64-i386-64bit",
+        "threads": {
+          "OMP_NUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1"
+        }
+      }
+    },
+    "quant_validation/current-2.json": {
+      "seconds": 0.3912641250062734,
+      "peak_rss_mib": 161.453125,
+      "workload": {
+        "transcripts": 100000
+      },
+      "corrected_count_sha256": {},
+      "environment": {
+        "python": "3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:58:53) [Clang 19.1.7 ]",
+        "numpy": "2.4.6",
+        "pandas": "2.3.3",
+        "scipy": "1.17.1",
+        "machine": "x86_64",
+        "platform": "macOS-26.6.2-x86_64-i386-64bit",
+        "threads": {
+          "OMP_NUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1"
+        }
+      }
+    },
+    "quant_validation/current-3.json": {
+      "seconds": 0.3592130000470206,
+      "peak_rss_mib": 175.58203125,
+      "workload": {
+        "transcripts": 100000
+      },
+      "corrected_count_sha256": {},
+      "environment": {
+        "python": "3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:58:53) [Clang 19.1.7 ]",
+        "numpy": "2.4.6",
+        "pandas": "2.3.3",
+        "scipy": "1.17.1",
+        "machine": "x86_64",
+        "platform": "macOS-26.6.2-x86_64-i386-64bit",
+        "threads": {
+          "OMP_NUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1"
+        }
+      }
+    },
+    "sva/baseline-0.json": {
+      "seconds": 2.1130689999554306,
+      "peak_rss_mib": 227.9453125,
+      "workload": {
+        "genes": 5000,
+        "samples": 80,
+        "groups": 10,
+        "seed": 719,
+        "nsv": 3,
+        "irw_iterations": 5
+      },
+      "corrected_count_sha256": {},
+      "environment": {
+        "python": "3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:58:53) [Clang 19.1.7 ]",
+        "numpy": "2.4.6",
+        "pandas": "2.3.3",
+        "scipy": "1.17.1",
+        "machine": "x86_64",
+        "platform": "macOS-26.6.2-x86_64-i386-64bit",
+        "threads": {
+          "OMP_NUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1"
+        }
+      }
+    },
+    "sva/baseline-1.json": {
+      "seconds": 2.3540727499639615,
+      "peak_rss_mib": 227.6015625,
+      "workload": {
+        "genes": 5000,
+        "samples": 80,
+        "groups": 10,
+        "seed": 719,
+        "nsv": 3,
+        "irw_iterations": 5
+      },
+      "corrected_count_sha256": {},
+      "environment": {
+        "python": "3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:58:53) [Clang 19.1.7 ]",
+        "numpy": "2.4.6",
+        "pandas": "2.3.3",
+        "scipy": "1.17.1",
+        "machine": "x86_64",
+        "platform": "macOS-26.6.2-x86_64-i386-64bit",
+        "threads": {
+          "OMP_NUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1"
+        }
+      }
+    },
+    "sva/baseline-2.json": {
+      "seconds": 2.4858422920224257,
+      "peak_rss_mib": 229.76171875,
+      "workload": {
+        "genes": 5000,
+        "samples": 80,
+        "groups": 10,
+        "seed": 719,
+        "nsv": 3,
+        "irw_iterations": 5
+      },
+      "corrected_count_sha256": {},
+      "environment": {
+        "python": "3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:58:53) [Clang 19.1.7 ]",
+        "numpy": "2.4.6",
+        "pandas": "2.3.3",
+        "scipy": "1.17.1",
+        "machine": "x86_64",
+        "platform": "macOS-26.6.2-x86_64-i386-64bit",
+        "threads": {
+          "OMP_NUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1"
+        }
+      }
+    },
+    "sva/baseline-3.json": {
+      "seconds": 2.6019457910442725,
+      "peak_rss_mib": 222.0,
+      "workload": {
+        "genes": 5000,
+        "samples": 80,
+        "groups": 10,
+        "seed": 719,
+        "nsv": 3,
+        "irw_iterations": 5
+      },
+      "corrected_count_sha256": {},
+      "environment": {
+        "python": "3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:58:53) [Clang 19.1.7 ]",
+        "numpy": "2.4.6",
+        "pandas": "2.3.3",
+        "scipy": "1.17.1",
+        "machine": "x86_64",
+        "platform": "macOS-26.6.2-x86_64-i386-64bit",
+        "threads": {
+          "OMP_NUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1"
+        }
+      }
+    },
+    "sva/current-0.json": {
+      "seconds": 2.3301141670090146,
+      "peak_rss_mib": 237.78515625,
+      "workload": {
+        "genes": 5000,
+        "samples": 80,
+        "groups": 10,
+        "seed": 719,
+        "nsv": 3,
+        "irw_iterations": 5
+      },
+      "corrected_count_sha256": {},
+      "environment": {
+        "python": "3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:58:53) [Clang 19.1.7 ]",
+        "numpy": "2.4.6",
+        "pandas": "2.3.3",
+        "scipy": "1.17.1",
+        "machine": "x86_64",
+        "platform": "macOS-26.6.2-x86_64-i386-64bit",
+        "threads": {
+          "OMP_NUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1"
+        }
+      }
+    },
+    "sva/current-1.json": {
+      "seconds": 2.5615968329948373,
+      "peak_rss_mib": 242.4921875,
+      "workload": {
+        "genes": 5000,
+        "samples": 80,
+        "groups": 10,
+        "seed": 719,
+        "nsv": 3,
+        "irw_iterations": 5
+      },
+      "corrected_count_sha256": {},
+      "environment": {
+        "python": "3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:58:53) [Clang 19.1.7 ]",
+        "numpy": "2.4.6",
+        "pandas": "2.3.3",
+        "scipy": "1.17.1",
+        "machine": "x86_64",
+        "platform": "macOS-26.6.2-x86_64-i386-64bit",
+        "threads": {
+          "OMP_NUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1"
+        }
+      }
+    },
+    "sva/current-2.json": {
+      "seconds": 3.1505135420011356,
+      "peak_rss_mib": 247.3828125,
+      "workload": {
+        "genes": 5000,
+        "samples": 80,
+        "groups": 10,
+        "seed": 719,
+        "nsv": 3,
+        "irw_iterations": 5
+      },
+      "corrected_count_sha256": {},
+      "environment": {
+        "python": "3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:58:53) [Clang 19.1.7 ]",
+        "numpy": "2.4.6",
+        "pandas": "2.3.3",
+        "scipy": "1.17.1",
+        "machine": "x86_64",
+        "platform": "macOS-26.6.2-x86_64-i386-64bit",
+        "threads": {
+          "OMP_NUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1"
+        }
+      }
+    },
+    "sva/current-3.json": {
+      "seconds": 2.957778125011828,
+      "peak_rss_mib": 232.6640625,
+      "workload": {
+        "genes": 5000,
+        "samples": 80,
+        "groups": 10,
+        "seed": 719,
+        "nsv": 3,
+        "irw_iterations": 5
+      },
+      "corrected_count_sha256": {},
+      "environment": {
+        "python": "3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:58:53) [Clang 19.1.7 ]",
+        "numpy": "2.4.6",
+        "pandas": "2.3.3",
+        "scipy": "1.17.1",
+        "machine": "x86_64",
+        "platform": "macOS-26.6.2-x86_64-i386-64bit",
+        "threads": {
+          "OMP_NUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1"
+        }
+      }
+    },
+    "tau/baseline-0.json": {
+      "seconds": 0.2976791669498198,
+      "peak_rss_mib": 196.5546875,
+      "workload": {
+        "genes": 20000,
+        "samples": 200,
+        "groups": 10,
+        "seed": 719,
+        "within_group_replicates": "identical"
+      },
+      "corrected_count_sha256": {},
+      "environment": {
+        "python": "3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:58:53) [Clang 19.1.7 ]",
+        "numpy": "2.4.6",
+        "pandas": "2.3.3",
+        "scipy": "1.17.1",
+        "machine": "x86_64",
+        "platform": "macOS-26.6.2-x86_64-i386-64bit",
+        "threads": {
+          "OMP_NUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1"
+        }
+      }
+    },
+    "tau/baseline-1.json": {
+      "seconds": 0.2969947090023197,
+      "peak_rss_mib": 196.046875,
+      "workload": {
+        "genes": 20000,
+        "samples": 200,
+        "groups": 10,
+        "seed": 719,
+        "within_group_replicates": "identical"
+      },
+      "corrected_count_sha256": {},
+      "environment": {
+        "python": "3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:58:53) [Clang 19.1.7 ]",
+        "numpy": "2.4.6",
+        "pandas": "2.3.3",
+        "scipy": "1.17.1",
+        "machine": "x86_64",
+        "platform": "macOS-26.6.2-x86_64-i386-64bit",
+        "threads": {
+          "OMP_NUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1"
+        }
+      }
+    },
+    "tau/baseline-2.json": {
+      "seconds": 0.31128570798318833,
+      "peak_rss_mib": 204.52734375,
+      "workload": {
+        "genes": 20000,
+        "samples": 200,
+        "groups": 10,
+        "seed": 719,
+        "within_group_replicates": "identical"
+      },
+      "corrected_count_sha256": {},
+      "environment": {
+        "python": "3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:58:53) [Clang 19.1.7 ]",
+        "numpy": "2.4.6",
+        "pandas": "2.3.3",
+        "scipy": "1.17.1",
+        "machine": "x86_64",
+        "platform": "macOS-26.6.2-x86_64-i386-64bit",
+        "threads": {
+          "OMP_NUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1"
+        }
+      }
+    },
+    "tau/baseline-3.json": {
+      "seconds": 0.40306366700679064,
+      "peak_rss_mib": 196.55859375,
+      "workload": {
+        "genes": 20000,
+        "samples": 200,
+        "groups": 10,
+        "seed": 719,
+        "within_group_replicates": "identical"
+      },
+      "corrected_count_sha256": {},
+      "environment": {
+        "python": "3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:58:53) [Clang 19.1.7 ]",
+        "numpy": "2.4.6",
+        "pandas": "2.3.3",
+        "scipy": "1.17.1",
+        "machine": "x86_64",
+        "platform": "macOS-26.6.2-x86_64-i386-64bit",
+        "threads": {
+          "OMP_NUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1"
+        }
+      }
+    },
+    "tau/current-0.json": {
+      "seconds": 0.9343596249818802,
+      "peak_rss_mib": 289.078125,
+      "workload": {
+        "genes": 20000,
+        "samples": 200,
+        "groups": 10,
+        "seed": 719,
+        "within_group_replicates": "identical"
+      },
+      "corrected_count_sha256": {},
+      "environment": {
+        "python": "3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:58:53) [Clang 19.1.7 ]",
+        "numpy": "2.4.6",
+        "pandas": "2.3.3",
+        "scipy": "1.17.1",
+        "machine": "x86_64",
+        "platform": "macOS-26.6.2-x86_64-i386-64bit",
+        "threads": {
+          "OMP_NUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1"
+        }
+      }
+    },
+    "tau/current-1.json": {
+      "seconds": 1.031881125003565,
+      "peak_rss_mib": 274.8046875,
+      "workload": {
+        "genes": 20000,
+        "samples": 200,
+        "groups": 10,
+        "seed": 719,
+        "within_group_replicates": "identical"
+      },
+      "corrected_count_sha256": {},
+      "environment": {
+        "python": "3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:58:53) [Clang 19.1.7 ]",
+        "numpy": "2.4.6",
+        "pandas": "2.3.3",
+        "scipy": "1.17.1",
+        "machine": "x86_64",
+        "platform": "macOS-26.6.2-x86_64-i386-64bit",
+        "threads": {
+          "OMP_NUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1"
+        }
+      }
+    },
+    "tau/current-2.json": {
+      "seconds": 0.9368380829691887,
+      "peak_rss_mib": 281.07421875,
+      "workload": {
+        "genes": 20000,
+        "samples": 200,
+        "groups": 10,
+        "seed": 719,
+        "within_group_replicates": "identical"
+      },
+      "corrected_count_sha256": {},
+      "environment": {
+        "python": "3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:58:53) [Clang 19.1.7 ]",
+        "numpy": "2.4.6",
+        "pandas": "2.3.3",
+        "scipy": "1.17.1",
+        "machine": "x86_64",
+        "platform": "macOS-26.6.2-x86_64-i386-64bit",
+        "threads": {
+          "OMP_NUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1"
+        }
+      }
+    },
+    "tau/current-3.json": {
+      "seconds": 1.1019804999814369,
+      "peak_rss_mib": 274.078125,
+      "workload": {
+        "genes": 20000,
+        "samples": 200,
+        "groups": 10,
+        "seed": 719,
+        "within_group_replicates": "identical"
+      },
+      "corrected_count_sha256": {},
+      "environment": {
+        "python": "3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:58:53) [Clang 19.1.7 ]",
+        "numpy": "2.4.6",
+        "pandas": "2.3.3",
+        "scipy": "1.17.1",
+        "machine": "x86_64",
+        "platform": "macOS-26.6.2-x86_64-i386-64bit",
+        "threads": {
+          "OMP_NUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1"
+        }
+      }
+    },
+    "wsfilter/baseline-0.json": {
+      "seconds": 1.4322952090296894,
+      "peak_rss_mib": 387.19140625,
+      "workload": {
+        "genes": 20000,
+        "samples": 200,
+        "groups": 10,
+        "seed": 719
+      },
+      "corrected_count_sha256": {},
+      "environment": {
+        "python": "3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:58:53) [Clang 19.1.7 ]",
+        "numpy": "2.4.6",
+        "pandas": "2.3.3",
+        "scipy": "1.17.1",
+        "machine": "x86_64",
+        "platform": "macOS-26.6.2-x86_64-i386-64bit",
+        "threads": {
+          "OMP_NUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1"
+        }
+      }
+    },
+    "wsfilter/baseline-1.json": {
+      "seconds": 1.9430515409912914,
+      "peak_rss_mib": 380.91796875,
+      "workload": {
+        "genes": 20000,
+        "samples": 200,
+        "groups": 10,
+        "seed": 719
+      },
+      "corrected_count_sha256": {},
+      "environment": {
+        "python": "3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:58:53) [Clang 19.1.7 ]",
+        "numpy": "2.4.6",
+        "pandas": "2.3.3",
+        "scipy": "1.17.1",
+        "machine": "x86_64",
+        "platform": "macOS-26.6.2-x86_64-i386-64bit",
+        "threads": {
+          "OMP_NUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1"
+        }
+      }
+    },
+    "wsfilter/baseline-2.json": {
+      "seconds": 1.6926021249964833,
+      "peak_rss_mib": 383.41015625,
+      "workload": {
+        "genes": 20000,
+        "samples": 200,
+        "groups": 10,
+        "seed": 719
+      },
+      "corrected_count_sha256": {},
+      "environment": {
+        "python": "3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:58:53) [Clang 19.1.7 ]",
+        "numpy": "2.4.6",
+        "pandas": "2.3.3",
+        "scipy": "1.17.1",
+        "machine": "x86_64",
+        "platform": "macOS-26.6.2-x86_64-i386-64bit",
+        "threads": {
+          "OMP_NUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1"
+        }
+      }
+    },
+    "wsfilter/baseline-3.json": {
+      "seconds": 1.7293547500157729,
+      "peak_rss_mib": 373.34765625,
+      "workload": {
+        "genes": 20000,
+        "samples": 200,
+        "groups": 10,
+        "seed": 719
+      },
+      "corrected_count_sha256": {},
+      "environment": {
+        "python": "3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:58:53) [Clang 19.1.7 ]",
+        "numpy": "2.4.6",
+        "pandas": "2.3.3",
+        "scipy": "1.17.1",
+        "machine": "x86_64",
+        "platform": "macOS-26.6.2-x86_64-i386-64bit",
+        "threads": {
+          "OMP_NUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1"
+        }
+      }
+    },
+    "wsfilter/current-0.json": {
+      "seconds": 2.5468919170089066,
+      "peak_rss_mib": 416.03515625,
+      "workload": {
+        "genes": 20000,
+        "samples": 200,
+        "groups": 10,
+        "seed": 719
+      },
+      "corrected_count_sha256": {},
+      "environment": {
+        "python": "3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:58:53) [Clang 19.1.7 ]",
+        "numpy": "2.4.6",
+        "pandas": "2.3.3",
+        "scipy": "1.17.1",
+        "machine": "x86_64",
+        "platform": "macOS-26.6.2-x86_64-i386-64bit",
+        "threads": {
+          "OMP_NUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1"
+        }
+      }
+    },
+    "wsfilter/current-1.json": {
+      "seconds": 2.4899587499676272,
+      "peak_rss_mib": 416.3515625,
+      "workload": {
+        "genes": 20000,
+        "samples": 200,
+        "groups": 10,
+        "seed": 719
+      },
+      "corrected_count_sha256": {},
+      "environment": {
+        "python": "3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:58:53) [Clang 19.1.7 ]",
+        "numpy": "2.4.6",
+        "pandas": "2.3.3",
+        "scipy": "1.17.1",
+        "machine": "x86_64",
+        "platform": "macOS-26.6.2-x86_64-i386-64bit",
+        "threads": {
+          "OMP_NUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1"
+        }
+      }
+    },
+    "wsfilter/current-2.json": {
+      "seconds": 2.4292376250377856,
+      "peak_rss_mib": 410.0390625,
+      "workload": {
+        "genes": 20000,
+        "samples": 200,
+        "groups": 10,
+        "seed": 719
+      },
+      "corrected_count_sha256": {},
+      "environment": {
+        "python": "3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:58:53) [Clang 19.1.7 ]",
+        "numpy": "2.4.6",
+        "pandas": "2.3.3",
+        "scipy": "1.17.1",
+        "machine": "x86_64",
+        "platform": "macOS-26.6.2-x86_64-i386-64bit",
+        "threads": {
+          "OMP_NUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1"
+        }
+      }
+    },
+    "wsfilter/current-3.json": {
+      "seconds": 2.4400772909866646,
+      "peak_rss_mib": 408.42578125,
+      "workload": {
+        "genes": 20000,
+        "samples": 200,
+        "groups": 10,
+        "seed": 719
+      },
+      "corrected_count_sha256": {},
+      "environment": {
+        "python": "3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:58:53) [Clang 19.1.7 ]",
+        "numpy": "2.4.6",
+        "pandas": "2.3.3",
+        "scipy": "1.17.1",
+        "machine": "x86_64",
+        "platform": "macOS-26.6.2-x86_64-i386-64bit",
+        "threads": {
+          "OMP_NUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1"
+        }
+      }
+    }
+  }
+}
