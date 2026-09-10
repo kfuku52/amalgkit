@@ -6,7 +6,7 @@ stream and partial Fisher-Yates permutation have a prefix independent of the
 requested sample size, so subsequent rounds cannot select a spot twice.
 """
 
-from contextlib import ExitStack
+from contextlib import ExitStack, closing
 import gzip
 import hashlib
 import itertools
@@ -114,11 +114,13 @@ def _records(handle, path):
         if (
             not quality
             or not header.startswith(b"@")
+            or len(header.split(None, 1)[0]) <= 1
+            or not sequence.rstrip(b"\r\n")
             or not plus.startswith(b"+")
             or len(sequence.rstrip(b"\r\n")) != len(quality.rstrip(b"\r\n"))
         ):
             raise ValueError("Malformed FASTQ during sampling: {}".format(path))
-        yield tuple(line.rstrip(b"\r\n") + b"\n" for line in (header, sequence, plus, quality))
+        yield header, sequence, plus, quality
 
 
 def iter_spots(paths):
@@ -155,6 +157,17 @@ def sample_fastqs(paths, output_paths, *, total, start, end, seed, run, min_leng
     """
     if len(paths) not in (1, 2) or len(paths) != len(output_paths):
         raise ValueError("Sampling requires one FASTQ or two aligned mates")
+    with closing(iter_spots(paths)) as spots:
+        return sample_spots(
+            spots, output_paths, total=total, start=start, end=end, seed=seed,
+            run=run, min_length=min_length, run_dir=run_dir, provenance=provenance,
+        )
+
+
+def sample_spots(spots, output_paths, *, total, start, end, seed, run, min_length, run_dir, provenance=None):
+    """Sample a validated spot stream; its caller owns and closes the input."""
+    if len(output_paths) not in (1, 2):
+        raise ValueError("Sampling requires one FASTQ or two aligned mates")
     if min_length < 0:
         raise ValueError("--min_read_length must be >= 0")
     selected = selected_indices(total, start, end, seed, run)
@@ -179,7 +192,10 @@ def sample_fastqs(paths, output_paths, *, total, start, end, seed, run, min_leng
         # Close the streams before atomic_output_path publishes either mate.
         with ExitStack() as writers:
             outputs = [writers.enter_context(gzip.open(path, "wb", compresslevel=1)) for path in temporary_paths]
-            for number, spot in enumerate(iter_spots(paths), 1):
+            for number, spot in enumerate(spots, 1):
+                if len(spot) != len(outputs):
+                    raise ValueError("Sampling input layout differs from output layout")
+                spot = [tuple(line.rstrip(b"\r\n") + b"\n" for line in record) for record in spot]
                 candidate_count += 1
                 lengths = [len(record[1].rstrip(b"\r\n")) for record in spot]
                 bases = sum(lengths)
@@ -214,7 +230,7 @@ def sample_fastqs(paths, output_paths, *, total, start, end, seed, run, min_leng
         "algorithm": ALGORITHM,
         "seed": seed,
         "run": run,
-        "unit": "pair" if len(paths) == 2 else "record",
+        "unit": "pair" if len(output_paths) == 2 else "record",
         "candidate_spots": candidate_count,
         "candidate_bp": candidate_bp,
         "input_sha256": input_digest.hexdigest(),

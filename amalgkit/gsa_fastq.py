@@ -1,7 +1,7 @@
 """Validated, reusable public GSA FASTQ inputs and paired spot-range extraction."""
 
 import bz2
-from contextlib import ExitStack
+from contextlib import ExitStack, closing, contextmanager
 import gzip
 import hashlib
 import itertools
@@ -305,6 +305,25 @@ def prepare_gsa_metadata(args, metadata, download):
     return metadata
 
 
+def _require_validated_cache(row, directory, files):
+    cached = _read_cached_stats(directory, files)
+    if cached is None:
+        raise ValueError("GSA input cache changed or has not been validated: {}".format(row["run"]))
+    if row.get("gsa_input_fingerprint") != cached["gsa_input_fingerprint"]:
+        raise ValueError("GSA input cache does not match the measured input fingerprint: {}".format(row["run"]))
+
+
+@contextmanager
+def open_validated_spots(args, row):
+    """Hold the input lock while streaming every group from the measured cache."""
+    directory = cache_directory(args, row)
+    with acquire_exclusive_lock(os.path.join(directory, "input.lock"), lock_label="GSA original FASTQ"):
+        files = read_manifest(row)
+        _require_validated_cache(row, directory, files)
+        with closing(iter_spots(directory, files)) as spots:
+            yield spots
+
+
 def extract_run(args, row, work_dir, start, end, return_stats=False):
     directory = cache_directory(args, row)
     with acquire_exclusive_lock(os.path.join(directory, "input.lock"), lock_label="GSA original FASTQ"):
@@ -314,11 +333,7 @@ def extract_run(args, row, work_dir, start, end, return_stats=False):
 def _extract_run_locked(args, row, work_dir, start, end, return_stats=False):
     files = read_manifest(row)
     directory = cache_directory(args, row)
-    cached = _read_cached_stats(directory, files)
-    if cached is None:
-        raise ValueError("GSA input cache changed or has not been validated: {}".format(row["run"]))
-    if row.get("gsa_input_fingerprint") != cached["gsa_input_fingerprint"]:
-        raise ValueError("GSA input cache does not match the measured input fingerprint: {}".format(row["run"]))
+    _require_validated_cache(row, directory, files)
     start, end = int(start), int(end)
     if start < 1 or end < start:
         raise ValueError("Invalid GSA spot range")

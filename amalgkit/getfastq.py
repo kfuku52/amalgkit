@@ -31,7 +31,7 @@ from amalgkit.download_utils import (
 from amalgkit.exceptions import AmalgkitExit
 from amalgkit.gsa import fetch_gsa_metadata, is_gsa_accession
 from amalgkit.gsa_snapshot import publish_gsa_snapshot, capture_gsa_accession_source
-from amalgkit.gsa_fastq import is_gsa_row, prepare_gsa_metadata, extract_run as extract_gsa_run
+from amalgkit.gsa_fastq import is_gsa_row, prepare_gsa_metadata, extract_run as extract_gsa_run, open_validated_spots as open_gsa_spots
 from amalgkit.fastq_download_integrity import (
     FastqDownloadIntegrityError,
     validate_download as validate_original_fastq_download,
@@ -3700,6 +3700,8 @@ def should_compress_fasterq_output_before_filters(args):
     # when no ordinary filters are enabled.
     if bool(getattr(args, 'treat_identical_paired_as_single', False)):
         return False
+    if sampling.random_sampling(args):
+        return False
     filter_order = get_filter_execution_order(args)
     return len(filter_order) == 0
 
@@ -3837,7 +3839,7 @@ def run_fasterq_dump(sra_stat, args, metadata, start, end, return_files=False, r
                 run_file_state = RunFileState(work_dir=sra_stat['getfastq_sra_dir'])
             set_current_intermediate_extension(sra_stat, '.fastq.gz')
         else:
-            print('Skipping seqkit compression after fasterq-dump because downstream filtering is enabled.')
+            print('Skipping seqkit compression after fasterq-dump until sampling or filtering completes.')
             set_current_intermediate_extension(sra_stat, '.fastq')
     if written_spots is None:
         written_spots = estimate_num_written_spots_from_fastq(sra_stat, file_state=run_file_state)
@@ -6522,7 +6524,7 @@ def get_target_obtained_bp(metadata, g):
 
 
 def extract_random_spots(args, sra_stat, metadata, g, start, end):
-    """Materialize unfiltered public input, then select intact spots once per round."""
+    """Select intact spots from unfiltered input once per round."""
     sampling.validate_options(args)
     ind = sra_stat.get('metadata_idx', get_metadata_row_index_by_run(metadata, sra_stat['sra_id']))
     row = metadata.df.loc[ind]
@@ -6540,8 +6542,7 @@ def extract_random_spots(args, sra_stat, metadata, g, start, end):
         if set(map(os.path.realpath, paths)) & set(map(os.path.realpath, outputs)):
             raise ValueError('Private sampling output must not replace a source FASTQ')
     elif is_gsa_row(row):
-        extract_gsa_run(raw_args, row, work_dir, 1, total, return_stats=True)
-        paths = outputs
+        paths = []  # Stream the locked, validated cache without a full intermediate.
     else:
         # A single complete dump per round, never one dump per selected position.
         guard_fasterq_full_dump_disk_space(sra_stat=sra_stat, size_check=normalize_fasterq_size_check(
@@ -6552,14 +6553,20 @@ def extract_random_spots(args, sra_stat, metadata, g, start, end):
             raise ValueError('Random sampling requires the declared input layout to match the dumped FASTQ')
         ext = get_or_detect_intermediate_extension(sra_stat, work_dir=work_dir)
         paths = [os.path.join(work_dir, run + suffix + ext) for suffix in suffixes]
-    counts, manifest = sampling.sample_fastqs(
-        paths, outputs, total=total, start=int(start), end=int(end),
-        seed=getattr(args, 'sampling_seed', 0), run=run,
-        min_length=int(args.min_read_length), run_dir=work_dir,
-        provenance={'target_bp_per_run': g['num_bp_per_sra'], 'max_bp': g['max_bp'],
-                    'budget_runs': g.get('sampling_run_ids'),
-                    'source': 'private' if str(row.get('private_file', '')).lower() == 'yes'
-                    else 'gsa' if is_gsa_row(row) else 'sra-or-original-fastq'})
+    with ExitStack() as sources:
+        if is_gsa_row(row) and str(row.get('private_file', '')).lower() != 'yes':
+            spots = sources.enter_context(open_gsa_spots(args, row))
+        else:
+            spots = sampling.iter_spots(paths)
+            sources.callback(spots.close)
+        counts, manifest = sampling.sample_spots(
+            spots, outputs, total=total, start=int(start), end=int(end),
+            seed=getattr(args, 'sampling_seed', 0), run=run,
+            min_length=int(args.min_read_length), run_dir=work_dir,
+            provenance={'target_bp_per_run': g['num_bp_per_sra'], 'max_bp': g['max_bp'],
+                        'budget_runs': g.get('sampling_run_ids'),
+                        'source': 'private' if str(row.get('private_file', '')).lower() == 'yes'
+                        else 'gsa' if is_gsa_row(row) else 'sra-or-original-fastq'})
     for col, value in counts.items():
         metadata.df.at[ind, col] = previous_counts[col] + value
     for key, value in [('getfastq_sampling_candidate_spots', manifest['candidate_spots']),

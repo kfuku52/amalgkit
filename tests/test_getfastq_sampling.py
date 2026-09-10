@@ -451,3 +451,129 @@ def test_private_content_change_invalidates_fingerprint(tmp_path):
     before = getfastq.build_getfastq_run_fingerprint(args, stat, params, table)
     source.write_bytes(source.read_bytes().replace(b"AAA", b"CCC"))
     assert getfastq.build_getfastq_run_fingerprint(args, stat, params, table) != before
+
+
+@pytest.mark.parametrize("record", [b"@\nA\n+\nI\n", b"@empty\n\n+\n\n"])
+@pytest.mark.parametrize("paired", [False, True])
+def test_unselected_empty_id_or_sequence_blocks_publication(tmp_path, record, paired):
+    # Spot 2 is outside this fixed selection, but must still be validated.
+    seed = next(seed for seed in range(100) if sampling.selected_indices(2, 1, 1, seed, "x") == {1})
+    paths = [tmp_path / "r1.fq", tmp_path / "r2.fq"][:2 if paired else 1]
+    outputs = [tmp_path / f"out{i}.gz" for i in range(len(paths))]
+    for mate, (path, output) in enumerate(zip(paths, outputs), 1):
+        write_fastq(path, [10], mate if paired else None)
+        path.write_bytes(path.read_bytes() + record)
+        output.write_bytes(b"previous")
+    with pytest.raises(ValueError, match="Malformed FASTQ"):
+        sampling.sample_fastqs(paths, outputs, total=2, start=1, end=1, seed=seed,
+                               run="x", min_length=0, run_dir=tmp_path)
+    assert all(path.read_bytes() == b"previous" for path in outputs)
+    assert not (tmp_path / sampling.MANIFEST).exists()
+
+
+@pytest.mark.parametrize("paired", [False, True])
+def test_gsa_stream_matches_staged_sampling_with_multiple_groups(tmp_path, monkeypatch, paired):
+    from amalgkit import gsa_fastq
+    from tests.support.gsa import payloads_for_row
+
+    row = manifest_row(paired, groups=2)
+    # Exercise canonical hashing across CRLF records and missing final newlines.
+    payloads = {name: gzip.compress(gzip.decompress(data).replace(b"\n", b"\r\n").rstrip(b"\r\n"))
+                for name, data in payloads_for_row(row).items()}
+    write_metadata(tmp_path, [row])
+    install_native_inputs(monkeypatch, row, payloads)
+    args = native_args(tmp_path, "--sampling_method", "random", "--max_bp", "40", "--sampling_seed", "9")
+    row.update(gsa_fastq.prepare_run(args, row, getfastq.download_file_from_candidate_sources))
+    staged = tmp_path / "staged"
+    staged.mkdir()
+    raw_args = SimpleNamespace(**vars(args))
+    raw_args.min_read_length = 0
+    gsa_fastq.extract_run(raw_args, row, str(staged), 1, 8)
+    paths = [staged / f"CRR0001{suffix}.fastq.gz" for suffix in (["_1", "_2"] if paired else [""])]
+    _, expected_manifest = sampling.sample_fastqs(
+        paths, paths, total=8, start=1, end=2 if paired else 4, seed=9,
+        run="CRR0001", min_length=args.min_read_length, run_dir=staged,
+    )
+    monkeypatch.setattr(getfastq, "extract_gsa_run", lambda *a, **k: pytest.fail("Full GSA staging is unnecessary"))
+    getfastq.getfastq_main(args)
+    directory = tmp_path / "getfastq/CRR0001"
+    actual = json.loads((directory / sampling.MANIFEST).read_text())
+    for key in ["input_sha256", "rounds", "candidate_spots", "candidate_bp", "unit"]:
+        assert actual[key] == expected_manifest[key]
+    for path in paths:
+        output = directory / path.name.replace(".fastq.gz", ".amalgkit.fastq.gz")
+        assert gzip.decompress(output.read_bytes()) == gzip.decompress(path.read_bytes())
+    # A changed cache must not be streamed under its old measured fingerprint.
+    cache = gsa_fastq.cache_directory(args, row)
+    from pathlib import Path
+    first = Path(cache) / json.loads(row["gsa_fastq_files"])[0]["filename"]
+    first.write_bytes(first.read_bytes() + b"changed")
+    with pytest.raises(ValueError, match="cache changed"):
+        with gsa_fastq.open_validated_spots(args, row):
+            pytest.fail("Invalid cache must be rejected before yielding")
+
+
+def test_random_sra_defers_compression_to_sampling(tmp_path):
+    args = native_args(tmp_path, "--sampling_method", "random", "--fastp", "no")
+    assert not getfastq.should_compress_fasterq_output_before_filters(args)
+    args.sampling_method = "contiguous"
+    assert getfastq.should_compress_fasterq_output_before_filters(args)
+
+
+@pytest.mark.parametrize("paired", [False, True])
+def test_sra_orchestration_samples_raw_dump_without_full_compression(tmp_path, monkeypatch, paired):
+    import subprocess
+
+    row = dict(run="SRR1", lib_layout="paired" if paired else "single", total_spots=6,
+               total_bases=60 * (2 if paired else 1), spot_length=10 * (2 if paired else 1))
+    table = Metadata.from_DataFrame(pd.DataFrame([row]))
+    params = dict(num_bp_per_sra=30, max_bp=30)
+    getfastq.initialize_columns(table, params)
+    stat = dict(sra_id="SRR1", layout=row["lib_layout"], total_spot=6,
+                spot_length=row["spot_length"], getfastq_sra_dir=str(tmp_path), metadata_idx=0)
+    args = native_args(tmp_path, "--sampling_method", "random", "--fastp", "no", "--min_read_length", "5")
+    monkeypatch.setattr(getfastq, "resolve_fasterq_spot_range_support", lambda args: False)
+
+    def dump(**kwargs):
+        for suffix in ["_1", "_2"] if paired else [""]:
+            write_fastq(tmp_path / ("SRR1" + suffix + ".fastq"), [10, 2, 10, 2, 10, 10],
+                        int(suffix[-1]) if paired else None)
+        return subprocess.CompletedProcess([], 0, stdout=b"", stderr=b"spots written : 6\n")
+
+    monkeypatch.setattr(getfastq, "run_fasterq_dump_with_retry", dump)
+    monkeypatch.setattr(getfastq, "compress_fasterq_output_files",
+                        lambda *a, **k: pytest.fail("Full raw input must not be compressed before random sampling"))
+    getfastq.extract_random_spots(args, stat, table, params, 1, 3)
+    chosen = sampling.selected_indices(6, 1, 3, 0, "SRR1")
+    expected = [f"@r{i}" for i in sorted(chosen) if i not in (2, 4)]
+    outputs = [tmp_path / ("SRR1" + suffix + ".fastq.gz") for suffix in (["_1", "_2"] if paired else [""])]
+    assert all(ids(path) == expected for path in outputs)
+    assert table.df.loc[0, "num_dumped"] == 3
+    assert table.df.loc[0, "bp_written"] == len(expected) * 10 * len(outputs)
+    assert not list(tmp_path.glob("*.fastq"))
+
+
+def test_resume_revalidates_older_random_input_validation(tmp_path, monkeypatch):
+    from amalgkit import getfastq_resume
+
+    row = manifest_row(False)
+    write_metadata(tmp_path, [row])
+    install_native_inputs(monkeypatch, row)
+    args = native_args(tmp_path, "--sampling_method", "random", "--max_bp", "20")
+    original_dumps = json.dumps
+
+    def legacy_dumps(payload, *a, **kw):
+        if isinstance(payload, dict) and "sampling" in payload:
+            payload = dict(payload, sampling=dict(payload["sampling"], schema_version=1))
+        return original_dumps(payload, *a, **kw)
+
+    # Generate a genuinely matching version-1 state for the same input/options.
+    with monkeypatch.context() as patch:
+        patch.setattr(getfastq_resume.json, "dumps", legacy_dumps)
+        getfastq.getfastq_main(args)
+    output = tmp_path / "getfastq/CRR0001/CRR0001.amalgkit.fastq.gz"
+    previous_content = gzip.decompress(output.read_bytes())
+    previous_stamp = output.stat().st_mtime_ns
+    getfastq.getfastq_main(args)
+    assert output.stat().st_mtime_ns != previous_stamp
+    assert gzip.decompress(output.read_bytes()) == previous_content

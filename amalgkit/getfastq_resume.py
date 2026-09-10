@@ -98,7 +98,8 @@ def build_getfastq_run_fingerprint(
     }
     if sampling.random_sampling(args):
         payload["sampling"] = {
-            "schema_version": 1,
+            # Version 2 requires nonempty IDs and sequences in every candidate.
+            "schema_version": 2,
             "algorithm": sampling.ALGORITHM,
             "method": "random",
             "seed": getattr(args, "sampling_seed", 0),

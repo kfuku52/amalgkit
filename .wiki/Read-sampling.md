@@ -64,12 +64,13 @@ or order mismatch, and unsupported SRA layouts that do not yield one record or
 pair per declared spot fail validation instead of silently changing the sampling
 population. Update incorrect private metadata through `integrate` first.
 
-This initial implementation prioritizes verifiable selection, not reduced I/O:
+Random sampling validates the full population while avoiding redundant intermediates:
 
 - Every extraction round scans the complete input, including unselected reads.
-- SRA is fully expanded, or original FASTQ is downloaded and validated; GSA is
-  staged from its validated cache. These public paths may need a full temporary
-  FASTQ in addition to sampled output. The second round repeats this work.
+- SRA is fully expanded, or original FASTQ is downloaded and validated. SRA
+  expansion is sampled before compression; only selected output is compressed.
+  GSA streams directly from its validated cache while holding the input lock,
+  without generating a full temporary FASTQ. Each second round scans again.
 - Ordinary gzip does not provide general indexed random access. A small sample
   can still require nearly complete decompression.
 - Selection state uses memory proportional to the number of permutation ranks
@@ -78,8 +79,9 @@ This initial implementation prioritizes verifiable selection, not reduced I/O:
 - Random private-input resume fingerprints hash the source files, so skipping
   extraction still involves reading them.
 
-No speed improvement is claimed. The default remains contiguous pending
-representative biological and resource evaluation.
+A small random sample can still cost substantially more than contiguous
+extraction because all candidates are read and checked. The default remains
+contiguous pending representative biological and resource evaluation.
 
 ## Provenance and resume
 
@@ -103,7 +105,10 @@ counters retain their existing meanings. `bp_specified_for_extraction` and
 
 The existing resume schema remains compatible for contiguous results. Random
 sampling adds a versioned fingerprint component and protects the sampling
-manifest with SHA-256. It cannot adopt unmarked legacy output. A changed seed,
+manifest with SHA-256. Sampling fingerprint version 2 also rejects results
+created before whole-input validation required nonempty IDs and sequences.
+Those random runs are recomputed once; contiguous resume is unchanged.
+It cannot adopt unmarked legacy output. A changed seed,
 algorithm, budget, participating run set, private source contents, or manifest
 invalidates affected processing. An interrupted second round restarts the run
 under the existing state machine. A zero-yield second round retains the first
@@ -137,6 +142,6 @@ read/written/downloaded, and peak temporary storage, including compensation.
 Compare implementations on identical selected sets and equivalent decompressed
 outputs. Stratified/block access may reduce seeks on supported sources, but
 periodic structure can defeat simple evenly spaced sampling; do not enable it
-based on I/O measurements alone. These biological comparisons and performance
-measurements remain follow-up work; no optimization or benchmark result is
-implied by the implementation.
+based on I/O measurements alone. Broader biological comparisons and cold-cache,
+network-inclusive measurements remain prerequisites to any default change. Local synthetic timing
+measurements alone do not establish biological equivalence.
