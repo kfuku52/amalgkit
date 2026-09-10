@@ -4,6 +4,7 @@ import numpy
 import json
 import os
 import warnings
+from amalgkit import getfastq_sampling as sampling
 from amalgkit.filter_utils import staged_output_dir
 from amalgkit.arg_utils import clone_namespace
 from amalgkit.merge_plots import generate_merge_plots
@@ -55,7 +56,7 @@ GETFASTQ_STAGE_COLUMNS = [
     'sec_contam_filter',
     'sec_ete_taxonomy',
 ]
-GETFASTQ_MERGE_COLUMNS = FASTP_STATS_COLUMNS + GETFASTQ_PERCENT_COLUMNS + GETFASTQ_STAGE_COLUMNS
+GETFASTQ_MERGE_COLUMNS = FASTP_STATS_COLUMNS + GETFASTQ_PERCENT_COLUMNS + GETFASTQ_STAGE_COLUMNS + sampling.STATS_COLUMNS
 MERGE_QUANT_READ_MAX_WORKERS = 4
 
 
@@ -192,7 +193,8 @@ def merge_fastp_stats_into_metadata(metadata, out_dir, max_workers='auto'):
     )
     for col in GETFASTQ_MERGE_COLUMNS:
         if col not in metadata.df.columns:
-            metadata.df.loc[:, col] = numpy.nan
+            metadata.df[col] = pandas.Series(numpy.nan, index=metadata.df.index,
+                                             dtype=object if col in sampling.STATS_COLUMNS else float)
     getfastq_dir = os.path.realpath(os.path.join(out_dir, 'getfastq'))
     if os.path.exists(getfastq_dir) and (not os.path.isdir(getfastq_dir)):
         raise NotADirectoryError('getfastq path exists but is not a directory: {}'.format(getfastq_dir))

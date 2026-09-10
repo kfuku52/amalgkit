@@ -46,6 +46,7 @@ from amalgkit.fastq_utils import (
     validate_fastq_structure as shared_validate_fastq_structure,
 )
 from amalgkit.getfastq_stats import read_getfastq_stats_row
+from amalgkit import getfastq_sampling as sampling
 from amalgkit.getfastq_resume import (
     GETFASTQ_RUN_STATE_FILENAME as GETFASTQ_RUN_STATE_FILENAME,
     GETFASTQ_COMPLETION_FILENAME as GETFASTQ_COMPLETION_FILENAME,
@@ -3655,7 +3656,7 @@ def estimate_fasterq_full_dump_disk_bytes(sra_stat):
     return int(total_spots * spot_length * 6)
 
 
-def guard_fasterq_full_dump_disk_space(sra_stat, size_check='on'):
+def guard_fasterq_full_dump_disk_space(sra_stat, size_check='on', reason=None):
     estimated_bytes = estimate_fasterq_full_dump_disk_bytes(sra_stat)
     if estimated_bytes is None:
         if normalize_fasterq_size_check(size_check) == 'off':
@@ -3673,8 +3674,8 @@ def guard_fasterq_full_dump_disk_space(sra_stat, size_check='on'):
     work_dir = sra_stat['getfastq_sra_dir']
     free_bytes = int(shutil.disk_usage(work_dir).free)
     print(
-        'WARNING: This fasterq-dump lacks spot-range support, so the complete run must be expanded '
-        'before trimming. Estimated full-run disk requirement: {}; available: {}.'.format(
+        (reason or 'WARNING: This fasterq-dump lacks spot-range support, so the complete run must be expanded before trimming.')
+        + ' Estimated full-run disk requirement: {}; available: {}.'.format(
             format_byte_estimate(estimated_bytes),
             format_byte_estimate(free_bytes),
         ),
@@ -4284,7 +4285,7 @@ def write_fastp_stats(sra_stat, metadata, output_dir):
 def write_getfastq_stats(sra_stat, metadata, output_dir):
     ind_sra = sra_stat.get('metadata_idx', get_metadata_row_index_by_run(metadata, sra_stat['sra_id']))
     row = {'run': sra_stat['sra_id']}
-    for col in GETFASTQ_STATS_COLUMNS + GETFASTQ_RESUME_STATS_COLUMNS:
+    for col in GETFASTQ_STATS_COLUMNS + GETFASTQ_RESUME_STATS_COLUMNS + sampling.STATS_COLUMNS:
         if col in metadata.df.columns:
             row[col] = metadata.df.at[ind_sra, col]
         else:
@@ -5817,6 +5818,9 @@ def rename_fastq(sra_stat, output_dir, inext, outext, validate_fastq=False):
 
 def calc_2nd_ranges(metadata):
     df = metadata.df
+    if df.get('getfastq_sampling_method', pandas.Series('', index=df.index)).eq('random').any():
+        df = df.sort_values('run')
+        metadata.df = df
     sra_target_bp = pandas.to_numeric(df.loc[:, 'bp_until_target_size'], errors='coerce').to_numpy(dtype=float)
     rate_obtained = pandas.to_numeric(df.loc[:, 'rate_obtained'], errors='coerce').to_numpy(dtype=float)
     if 'spot_length_amalgkit' in df.columns:
@@ -5827,7 +5831,11 @@ def calc_2nd_ranges(metadata):
         spot_length_series = pandas.Series(numpy.nan, index=df.index)
     spot_lengths = pandas.to_numeric(spot_length_series, errors='coerce').to_numpy(dtype=float)
     total_spots = pandas.to_numeric(df.loc[:, 'total_spots'], errors='coerce').to_numpy(dtype=float)
-    start_2nds = pandas.to_numeric(df.loc[:, 'spot_end_1st'], errors='coerce').to_numpy(dtype=float) + 1.0
+    first_ends = df.loc[:, 'spot_end_1st'].copy()
+    random_rows = df.get('getfastq_sampling_method', pandas.Series('', index=df.index)).eq('random')
+    if random_rows.any():
+        first_ends.loc[random_rows] = df.loc[random_rows, 'getfastq_sampling_end_1st']
+    start_2nds = pandas.to_numeric(first_ends, errors='coerce').to_numpy(dtype=float) + 1.0
 
     sra_target_bp = numpy.where(numpy.isfinite(sra_target_bp) & (sra_target_bp > 0), sra_target_bp, 0.0)
     start_2nds = numpy.where(numpy.isfinite(start_2nds) & (start_2nds > 0), start_2nds, 1.0)
@@ -5893,6 +5901,10 @@ def calc_2nd_ranges(metadata):
     end_2nds = start_2nds + allocated_reads - 1.0
     metadata.df.loc[:, 'spot_start_2nd'] = start_2nds.astype(int)
     metadata.df.loc[:, 'spot_end_2nd'] = end_2nds.astype(int)
+    if random_rows.any():
+        for destination, values in [('getfastq_sampling_start_2nd', start_2nds), ('getfastq_sampling_end_2nd', end_2nds)]:
+            metadata.df.loc[random_rows, destination] = values[random_rows.to_numpy()].astype(int)
+        metadata.df.loc[random_rows, ['spot_start_2nd', 'spot_end_2nd']] = 0
     return metadata
 
 def has_remaining_spots_after_first_round(metadata):
@@ -5900,7 +5912,11 @@ def has_remaining_spots_after_first_round(metadata):
     if ('total_spots' not in df.columns) or ('spot_end_1st' not in df.columns):
         return True
     total_spots = pandas.to_numeric(df.loc[:, 'total_spots'], errors='coerce').to_numpy(dtype=float)
-    spot_end_1st = pandas.to_numeric(df.loc[:, 'spot_end_1st'], errors='coerce').to_numpy(dtype=float)
+    first_ends = df.loc[:, 'spot_end_1st'].copy()
+    random_rows = df.get('getfastq_sampling_method', pandas.Series('', index=df.index)).eq('random')
+    if random_rows.any():
+        first_ends.loc[random_rows] = df.loc[random_rows, 'getfastq_sampling_end_1st']
+    spot_end_1st = pandas.to_numeric(first_ends, errors='coerce').to_numpy(dtype=float)
     valid_mask = numpy.isfinite(total_spots) & numpy.isfinite(spot_end_1st)
     if not valid_mask.any():
         return True
@@ -6140,7 +6156,7 @@ def _get_getfastq_resume_stats_row(sra_stat):
 def _snapshot_getfastq_stats_row(stats_row):
     return {
         column_name: _normalize_getfastq_resume_value(stats_row[column_name])
-        for column_name in GETFASTQ_STATS_COLUMNS + GETFASTQ_RESUME_STATS_COLUMNS
+        for column_name in GETFASTQ_STATS_COLUMNS + GETFASTQ_RESUME_STATS_COLUMNS + sampling.STATS_COLUMNS
         if column_name in stats_row.index
     }
 
@@ -6175,6 +6191,9 @@ def validate_getfastq_resume_output(sra_stat, state=None, is_private=False, full
             raise FileNotFoundError('Expected getfastq output is missing: {}'.format(output_path))
         output_names.append(output_name if output_exists else sentinel_name)
 
+    if state is not None and 'sampling_manifest_sha256' in state:
+        if state['sampling_manifest_sha256'] != sampling.manifest_digest(run_dir):
+            raise ValueError('sampling manifest changed or is missing')
     current_snapshots = _snapshot_getfastq_outputs(run_dir, output_names)
     if (state is not None) and (state.get('outputs') != current_snapshots):
         raise ValueError(
@@ -6219,7 +6238,7 @@ def restore_getfastq_stats(metadata, sra_stat, stats_row):
     ind_sra = sra_stat.get('metadata_idx')
     if ind_sra is None:
         ind_sra = get_metadata_row_index_by_run(metadata, sra_stat['sra_id'])
-    for column_name in GETFASTQ_STATS_COLUMNS + GETFASTQ_RESUME_STATS_COLUMNS:
+    for column_name in GETFASTQ_STATS_COLUMNS + GETFASTQ_RESUME_STATS_COLUMNS + sampling.STATS_COLUMNS:
         if (column_name in metadata.df.columns) and (column_name in stats_row.index):
             metadata.df.at[ind_sra, column_name] = stats_row[column_name]
     return metadata
@@ -6261,6 +6280,8 @@ def write_getfastq_run_state(args, sra_stat, g, run_metadata, phase, full_valida
         'outputs': outputs,
         'stats': _snapshot_getfastq_stats_row(stats_row),
     }
+    if sampling.random_sampling(args, run_metadata.df.loc[ind_sra]):
+        payload['sampling_manifest_sha256'] = sampling.manifest_digest(sra_stat['getfastq_sra_dir'])
     _atomic_write_json(payload, get_getfastq_run_state_path(sra_stat['getfastq_sra_dir']))
     return payload
 
@@ -6276,7 +6297,7 @@ def discard_getfastq_run_resume_data(sra_stat, reason):
             shutil.rmtree(entry_path)
         elif os.path.lexists(entry_path):
             os.remove(entry_path)
-    for entry_name in ['getfastq_stats.tsv', GETFASTQ_RUN_STATE_FILENAME, 'mmseqs_rrna_work', 'mmseqs_contam_work']:
+    for entry_name in ['getfastq_stats.tsv', GETFASTQ_RUN_STATE_FILENAME, sampling.MANIFEST, 'mmseqs_rrna_work', 'mmseqs_contam_work']:
         entry_path = os.path.join(run_dir, entry_name)
         if os.path.isdir(entry_path) and (not os.path.islink(entry_path)):
             shutil.rmtree(entry_path)
@@ -6310,7 +6331,12 @@ def inspect_getfastq_resume_output(args, sra_stat, g, run_metadata):
                 raise ValueError('the previous 2nd round did not complete')
             if phase not in [GETFASTQ_PHASE_FIRST_ROUND, GETFASTQ_PHASE_COMPLETE]:
                 raise ValueError('unknown resume phase: {}'.format(phase))
+            if sampling.random_sampling(args, run_metadata.df.iloc[0]):
+                if state.get('sampling_manifest_sha256') != sampling.manifest_digest(run_dir):
+                    raise ValueError('sampling manifest changed or is missing')
         else:
+            if sampling.random_sampling(args, run_metadata.df.iloc[0]):
+                raise ValueError('legacy output has no random-sampling provenance')
             if bool(getattr(args, 'treat_identical_paired_as_single', False)):
                 raise ValueError('legacy output has no record of the mate-conversion option')
             phase = GETFASTQ_PHASE_FIRST_ROUND
@@ -6474,6 +6500,11 @@ def initialize_columns(metadata, g):
             metadata.df.loc[:, key] = 0.0
         else:
             metadata.df.loc[:,key] = 0
+    for key in sampling.STATS_COLUMNS:
+        if key in sampling.RANGE_COLUMNS + ['getfastq_sampling_candidate_spots', 'getfastq_sampling_candidate_bp']:
+            metadata.df[key] = 0
+        else:
+            metadata.df[key] = pandas.Series([''] * len(metadata.df), index=metadata.df.index, dtype=object)
     metadata.df.loc[:, 'bp_until_target_size'] = g['num_bp_per_sra']
     cols = ['total_spots','total_bases','size','nominal_length','nominal_sdev','spot_length']
     for col in cols:
@@ -6483,6 +6514,90 @@ def initialize_columns(metadata, g):
         metadata.df[col] = metadata.df[col].astype(float)
     return metadata
 
+def get_target_obtained_bp(metadata, g):
+    rows = metadata.df
+    if 'sampling_run_ids' in g:
+        rows = rows.loc[rows['run'].astype(str).isin(g['sampling_run_ids'])]
+    return rows['bp_amalgkit'].sum()
+
+
+def extract_random_spots(args, sra_stat, metadata, g, start, end):
+    """Materialize unfiltered public input, then select intact spots once per round."""
+    sampling.validate_options(args)
+    ind = sra_stat.get('metadata_idx', get_metadata_row_index_by_run(metadata, sra_stat['sra_id']))
+    row = metadata.df.loc[ind]
+    work_dir, run = sra_stat['getfastq_sra_dir'], sra_stat['sra_id']
+    total = int(sra_stat['total_spot'])
+    original_layout = sra_stat['layout']
+    suffixes = ['_1', '_2'] if original_layout == 'paired' else ['']
+    outputs = [os.path.join(work_dir, run + suffix + '.fastq.gz') for suffix in suffixes]
+    raw_args = clone_namespace(args, min_read_length=0)
+    previous_counts = {col: metadata.df.at[ind, col] for col in sampling.COUNT_COLUMNS}
+    if str(row.get('private_file', '')).lower() == 'yes':
+        paths = [str(row['read1_path'])]
+        if original_layout == 'paired':
+            paths.append(str(row['read2_path']))
+        if set(map(os.path.realpath, paths)) & set(map(os.path.realpath, outputs)):
+            raise ValueError('Private sampling output must not replace a source FASTQ')
+    elif is_gsa_row(row):
+        extract_gsa_run(raw_args, row, work_dir, 1, total, return_stats=True)
+        paths = outputs
+    else:
+        # A single complete dump per round, never one dump per selected position.
+        guard_fasterq_full_dump_disk_space(sra_stat=sra_stat, size_check=normalize_fasterq_size_check(
+            getattr(args, 'fasterq_size_check', True)), reason='Random sampling scans the complete run.')
+        metadata, sra_stat, _ = run_fasterq_dump(
+            sra_stat, raw_args, metadata, 1, total, return_file_state=True)
+        if sra_stat['layout'] != original_layout:
+            raise ValueError('Random sampling requires the declared input layout to match the dumped FASTQ')
+        ext = get_or_detect_intermediate_extension(sra_stat, work_dir=work_dir)
+        paths = [os.path.join(work_dir, run + suffix + ext) for suffix in suffixes]
+    counts, manifest = sampling.sample_fastqs(
+        paths, outputs, total=total, start=int(start), end=int(end),
+        seed=getattr(args, 'sampling_seed', 0), run=run,
+        min_length=int(args.min_read_length), run_dir=work_dir,
+        provenance={'target_bp_per_run': g['num_bp_per_sra'], 'max_bp': g['max_bp'],
+                    'budget_runs': g.get('sampling_run_ids'),
+                    'source': 'private' if str(row.get('private_file', '')).lower() == 'yes'
+                    else 'gsa' if is_gsa_row(row) else 'sra-or-original-fastq'})
+    for col, value in counts.items():
+        metadata.df.at[ind, col] = previous_counts[col] + value
+    for key, value in [('getfastq_sampling_candidate_spots', manifest['candidate_spots']),
+                       ('getfastq_sampling_candidate_bp', manifest['candidate_bp']), ('getfastq_sampling_method', 'random'), ('getfastq_sampling_seed', str(manifest['seed'])),
+                       ('getfastq_sampling_algorithm', sampling.ALGORITHM),
+                       ('getfastq_sampling_input_sha256', manifest['input_sha256'])]:
+        metadata.df.at[ind, key] = value
+    if str(row.get('private_file', '')).lower() != 'yes':
+        for path in paths:
+            if path not in outputs and os.path.isfile(path):
+                os.remove(path)
+    set_current_intermediate_extension(sra_stat, '.fastq.gz')
+    return metadata, sra_stat, RunFileState(work_dir=work_dir)
+
+
+def finish_random_extraction(args, sra_stat, metadata, g, start, empty=False):
+    """Account for selected/remaining bases even when a round yields no reads."""
+    ind = sra_stat.get('metadata_idx', get_metadata_row_index_by_run(metadata, sra_stat['sra_id']))
+    metadata.df.at[ind, 'bp_still_available'] = (
+        metadata.df.at[ind, 'getfastq_sampling_candidate_bp'] - metadata.df.at[ind, 'bp_dumped'])
+    metadata.df.at[ind, 'bp_specified_for_extraction'] = metadata.df.at[ind, 'bp_dumped']
+    bp_source = resolve_bp_amalgkit_source_column(args)
+    metadata.df.at[ind, 'bp_amalgkit'] = metadata.df.at[ind, bp_source]
+    metadata.df.at[ind, 'rate_obtained'] = metadata.df.at[ind, 'bp_amalgkit'] / g['num_bp_per_sra']
+    metadata.df.at[ind, 'bp_until_target_size'] = g['num_bp_per_sra'] - metadata.df.at[ind, 'bp_amalgkit']
+    if empty and int(start) > 1:
+        # A valid empty addition keeps the nonempty first round intact. The
+        # merged output is still subjected to ordinary full FASTQ validation.
+        suffixes = ['_1', '_2'] if sra_stat['layout'] == 'paired' else ['']
+        for suffix in suffixes:
+            path = os.path.join(sra_stat['getfastq_sra_dir'], sra_stat['sra_id'] + suffix + '.amalgkit.fastq.gz')
+            with atomic_output_path(path) as tmp:
+                with gzip.open(tmp, 'wb'):
+                    pass
+    write_getfastq_stats(sra_stat=sra_stat, metadata=metadata, output_dir=sra_stat['getfastq_sra_dir'])
+    return metadata
+
+
 def sequence_extraction(args, sra_stat, metadata, g, start, end, runtime_context=None):
     runtime_context = ensure_getfastq_runtime_context(runtime_context)
     sra_id = sra_stat['sra_id']
@@ -6490,7 +6605,9 @@ def sequence_extraction(args, sra_stat, metadata, g, start, end, runtime_context
     prev_num_written = metadata.df.at[ind_sra, 'num_written']
     prev_bp_dumped = metadata.df.at[ind_sra, 'bp_dumped']
     prev_bp_written = metadata.df.at[ind_sra, 'bp_written']
-    if is_gsa_row(metadata.df.loc[ind_sra]):
+    if sampling.random_sampling(args, metadata.df.loc[ind_sra]):
+        metadata, sra_stat, run_file_state = extract_random_spots(args, sra_stat, metadata, g, start, end)
+    elif is_gsa_row(metadata.df.loc[ind_sra]):
         counts = extract_gsa_run(args, metadata.df.loc[ind_sra], sra_stat['getfastq_sra_dir'], start, end, return_stats=True)
         for column, value in counts.items():
             metadata.df.at[ind_sra, column] += value
@@ -6538,8 +6655,11 @@ def sequence_extraction(args, sra_stat, metadata, g, start, end, runtime_context
     latest_stage_source = 'fasterq'
     metadata.df.at[ind_sra, 'bp_discarded'] += max(0, delta_bp_dumped - delta_bp_written)
     metadata.df.at[ind_sra,'layout_amalgkit'] = sra_stat['layout']
-    no_read_written = (metadata.df.at[ind_sra, 'num_written'] == 0)
+    use_random = sampling.random_sampling(args, metadata.df.loc[ind_sra])
+    no_read_written = (delta_num_written == 0) if use_random else (metadata.df.at[ind_sra, 'num_written'] == 0)
     if no_read_written:
+        if use_random:
+            return finish_random_extraction(args, sra_stat, metadata, g, start, empty=True)
         write_getfastq_stats(sra_stat=sra_stat, metadata=metadata, output_dir=sra_stat['getfastq_sra_dir'])
         return metadata
     for filter_name in filter_order:
@@ -6568,6 +6688,8 @@ def sequence_extraction(args, sra_stat, metadata, g, start, end, runtime_context
             }
             latest_stage_source = 'fastp'
             if _stage_counts_indicate_no_reads(latest_stage_counts):
+                if use_random:
+                    return finish_random_extraction(args, sra_stat, metadata, g, start, empty=True)
                 return _stop_after_zero_output_stage(metadata, sra_stat, 'fastp')
             continue
         if filter_name == 'rrna':
@@ -6594,6 +6716,8 @@ def sequence_extraction(args, sra_stat, metadata, g, start, end, runtime_context
             }
             latest_stage_source = 'rrna'
             if _stage_counts_indicate_no_reads(latest_stage_counts):
+                if use_random:
+                    return finish_random_extraction(args, sra_stat, metadata, g, start, empty=True)
                 return _stop_after_zero_output_stage(metadata, sra_stat, 'rrna')
             continue
         if filter_name == 'contam':
@@ -6619,6 +6743,8 @@ def sequence_extraction(args, sra_stat, metadata, g, start, end, runtime_context
             }
             latest_stage_source = 'contam'
             if _stage_counts_indicate_no_reads(latest_stage_counts):
+                if use_random:
+                    return finish_random_extraction(args, sra_stat, metadata, g, start, empty=True)
                 return _stop_after_zero_output_stage(metadata, sra_stat, 'contam')
             continue
         raise ValueError('Unsupported filter name in execution order: {}'.format(filter_name))
@@ -6633,6 +6759,8 @@ def sequence_extraction(args, sra_stat, metadata, g, start, end, runtime_context
     inext = get_or_detect_intermediate_extension(sra_stat, work_dir=sra_stat['getfastq_sra_dir'])
     outext = '.amalgkit.fastq.gz'
     rename_fastq(sra_stat, sra_stat['getfastq_sra_dir'], inext, outext, validate_fastq=True)
+    if use_random:
+        return finish_random_extraction(args, sra_stat, metadata, g, start)
     metadata.df.at[ind_sra,'bp_still_available'] = sra_stat['spot_length'] * (sra_stat['total_spot'] - end)
     bp_specified_for_extraction = sra_stat['spot_length'] * calculate_requested_spots(start, end)
     metadata.df.at[ind_sra, 'bp_specified_for_extraction'] += bp_specified_for_extraction
@@ -6648,10 +6776,15 @@ def sequence_extraction_1st_round(args, sra_stat, metadata, g, runtime_context=N
     offset = 10000
     ind_sra = sra_stat.get('metadata_idx', get_metadata_row_index_by_run(metadata, sra_stat['sra_id']))
     metadata.df.at[ind_sra, 'time_start_1st'] = time.time()
-    start, end = get_range(sra_stat, offset, g['total_sra_bp'], g['max_bp'])
+    use_random = sampling.random_sampling(args, metadata.df.loc[ind_sra])
+    start, end = get_range(sra_stat, 1 if use_random else offset, g['total_sra_bp'], g['max_bp'])
+    if use_random:
+        end = min(int(sra_stat['total_spot']), int(end - start + 1))
+        start = 1
     metadata.df.at[ind_sra, 'spot_length_amalgkit'] = sra_stat['spot_length']
-    metadata.df.at[ind_sra,'spot_start_1st'] = start
-    metadata.df.at[ind_sra,'spot_end_1st'] = end
+    prefix = 'getfastq_sampling' if use_random else 'spot'
+    metadata.df.at[ind_sra, prefix + '_start_1st'] = start
+    metadata.df.at[ind_sra, prefix + '_end_1st'] = end
     metadata = sequence_extraction(args, sra_stat, metadata, g, start, end, runtime_context=runtime_context)
     txt = 'Time elapsed for 1st-round sequence extraction: {}, {:,.1f} sec'
     print(txt.format(sra_stat['sra_id'], int(time.time() - g['start_time'])))
@@ -6678,8 +6811,9 @@ def sequence_extraction_2nd_round(args, sra_stat, metadata, g, runtime_context=N
     print('')
     sra_id = sra_stat['sra_id']
     layout = sra_stat['layout']
-    start = metadata.df.at[ind_sra,'spot_start_2nd']
-    end = metadata.df.at[ind_sra,'spot_end_2nd']
+    prefix = 'getfastq_sampling' if sampling.random_sampling(args, metadata.df.loc[ind_sra]) else 'spot'
+    start = metadata.df.at[ind_sra, prefix + '_start_2nd']
+    end = metadata.df.at[ind_sra, prefix + '_end_2nd']
     if (start > end):
         txt = '{}: All spots have been extracted in the 1st trial. Cancelling the 2nd trial. start={:,}, end={:,}'
         print(txt.format(sra_id, start, end))
@@ -6992,7 +7126,12 @@ def initialize_global_params(args, metadata):
     g['num_sra'] = metadata.df.shape[0]
     if g['num_sra'] <= 0:
         raise ValueError('No SRA entries were found in metadata.')
-    g['num_bp_per_sra'] = int(g['max_bp'] / g['num_sra'])
+    target_metadata = metadata.df
+    if sampling.random_sampling(args):
+        target_metadata = metadata.df.loc[metadata.df.apply(lambda row: sampling.random_sampling(args, row), axis=1)]
+        g['sampling_run_ids'] = sorted(target_metadata['run'].astype(str).tolist())
+    target_runs = len(target_metadata)
+    g['num_bp_per_sra'] = g['max_bp'] // max(1, target_runs)
     if g['num_bp_per_sra'] <= 0:
         raise ValueError(
             '--max_bp ({}) is too small for {:,} SRA runs. '
@@ -7002,7 +7141,7 @@ def initialize_global_params(args, metadata):
                 g['num_sra'],
             )
         )
-    g['total_sra_bp'] = metadata.df.loc[:,'total_bases'].sum()
+    g['total_sra_bp'] = target_metadata.loc[:, 'total_bases'].sum()
     print('Number of SRAs to be processed: {:,}'.format(g['num_sra']))
     print('Total target size (--max_bp): {:,} bp'.format(g['max_bp']))
     print('The sum of SRA sizes: {:,} bp'.format(g['total_sra_bp']))
@@ -7069,6 +7208,7 @@ def _process_getfastq_run_locked(
     run_metadata = Metadata.from_DataFrame(run_row_df)
     sra_stat = get_sra_stat(sra_id, run_metadata, g['num_bp_per_sra'])
     sra_stat['getfastq_sra_dir'] = get_getfastq_run_dir(args, sra_id)
+    sampling.validate_private_sources(args, run_metadata.df.iloc[0], sra_stat['getfastq_sra_dir'])
     run_dir_files = list_run_dir_files(sra_stat['getfastq_sra_dir'])
     if args.redo:
         has_resume_artifacts = bool(run_dir_files) or any(
@@ -7104,11 +7244,14 @@ def _process_getfastq_run_locked(
     print('Total bases:', "{:,}".format(int(run_metadata.df.at[0, 'total_bases'])), 'bp')
     flag_private_file = False
     if 'private_file' in run_metadata.df.columns:
-        if run_metadata.df.at[0, 'private_file'] == 'yes':
+        if run_metadata.df.at[0, 'private_file'] == 'yes' and not sampling.random_sampling(args, run_metadata.df.iloc[0]):
             print('Processing {} as private data. --max_bp is disabled.'.format(sra_id), flush=True)
             flag_private_file = True
             sequence_extraction_private(run_metadata, sra_stat, args, runtime_context=runtime_context)
-    if not flag_private_file and is_gsa_row(run_metadata.df.iloc[0]):
+    if (not flag_private_file and sampling.random_sampling(args, run_metadata.df.iloc[0])
+            and str(run_metadata.df.iloc[0].get('private_file', '')).lower() == 'yes'):
+        run_metadata = sequence_extraction_1st_round(args, sra_stat, run_metadata, g, runtime_context=runtime_context)
+    elif not flag_private_file and is_gsa_row(run_metadata.df.iloc[0]):
         print('Processing {} as publicly available GSA FASTQ.'.format(sra_id), flush=True)
         run_metadata = sequence_extraction_1st_round(args, sra_stat, run_metadata, g, runtime_context=runtime_context)
     elif not flag_private_file:
@@ -7308,7 +7451,9 @@ def _allocate_second_round_ranges_for_pending_runs(metadata, pending_run_ids):
         metadata.df.loc[pending_mask, :].copy()
     )
     pending_metadata = calc_2nd_ranges(pending_metadata)
-    range_columns = ['spot_start_2nd', 'spot_end_2nd']
+    range_columns = ['spot_start_2nd', 'spot_end_2nd'] + [
+        col for col in sampling.RANGE_COLUMNS[2:] if col in metadata.df.columns
+    ]
     for sra_id in pending_run_ids:
         source_rows = pending_metadata.df.loc[
             pending_metadata.df['run'].astype(str) == sra_id,
@@ -7339,7 +7484,9 @@ def _process_getfastq_second_round_run(
 ):
     run_metadata = Metadata.from_DataFrame(run_row_df)
     local_row_index = run_metadata.df.index[0]
-    range_columns = ['spot_start_2nd', 'spot_end_2nd']
+    range_columns = ['spot_start_2nd', 'spot_end_2nd'] + [
+        col for col in sampling.RANGE_COLUMNS[2:] if col in run_metadata.df.columns
+    ]
     planned_range = run_metadata.df.loc[local_row_index, range_columns].copy()
     lock_path = resolve_getfastq_run_lock_path(args=args, sra_id=sra_id)
     with acquire_exclusive_lock(
@@ -7465,10 +7612,10 @@ def maybe_run_getfastq_second_round(
     if len(pending_run_ids) == 0:
         print('All getfastq runs have validated complete outputs. Skipping the 2nd round.', flush=True)
         return metadata
-    g['rate_obtained_1st'] = metadata.df.loc[:, 'bp_amalgkit'].sum() / g['max_bp']
+    g['rate_obtained_1st'] = get_target_obtained_bp(metadata, g) / g['max_bp']
     if is_2nd_round_needed(g['rate_obtained_1st'], args.tol):
         txt = 'Only {:,.2f}% ({:,}/{:,}) of the target size (--max_bp) was obtained in the 1st round. Proceeding to the 2nd round read extraction.'
-        print(txt.format(g['rate_obtained_1st'] * 100, metadata.df.loc[:, 'bp_amalgkit'].sum(), g['max_bp']), flush=True)
+        print(txt.format(g['rate_obtained_1st'] * 100, get_target_obtained_bp(metadata, g), g['max_bp']), flush=True)
         pending_metadata = Metadata.from_DataFrame(
             metadata.df.loc[
                 metadata.df['run'].astype(str).isin(pending_run_ids),
@@ -7546,7 +7693,9 @@ def maybe_run_getfastq_second_round(
                     )
             else:
                 for _, sra_id in ordered_pending_rows:
-                    range_columns = ['spot_start_2nd', 'spot_end_2nd']
+                    range_columns = ['spot_start_2nd', 'spot_end_2nd'] + [
+                        col for col in sampling.RANGE_COLUMNS[2:] if col in metadata.df.columns
+                    ]
                     planned_range = metadata.df.loc[row_index_by_run[sra_id], range_columns].copy()
                     lock_path = resolve_getfastq_run_lock_path(args=args, sra_id=sra_id)
                     with acquire_exclusive_lock(
@@ -7647,7 +7796,7 @@ def maybe_run_getfastq_second_round(
                 full_validation=False,
             )
             completion_phase_by_run[sra_id] = GETFASTQ_PHASE_COMPLETE
-    g['rate_obtained_2nd'] = metadata.df.loc[:, 'bp_amalgkit'].sum() / g['max_bp']
+    g['rate_obtained_2nd'] = get_target_obtained_bp(metadata, g) / g['max_bp']
     txt = '2nd round read extraction improved % bp from {:,.2f}% to {:,.2f}%'
     print(txt.format(g['rate_obtained_1st'] * 100, g['rate_obtained_2nd'] * 100), flush=True)
     return metadata
@@ -7784,6 +7933,7 @@ def run_getfastq_postprocessing(args, metadata, last_getfastq_sra_dir, flag_any_
 
 
 def getfastq_main(args):
+    sampling.validate_options(args)
     if not is_auto_parallel_option(getattr(args, 'threads', 'auto')):
         validate_positive_int_option(getattr(args, 'threads', 'auto'), 'threads')
     if not is_auto_parallel_option(getattr(args, 'internal_jobs', 'auto')):

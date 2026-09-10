@@ -88,7 +88,10 @@ Common options:
 | --- | --- | --- |
 | `--layout single/paired/auto` | `auto` | choose library layout |
 | `--treat_identical_paired_as_single yes/no` | `no` | sample up to 2,000 pairs across the FASTQ and remove read2 when at least 99% of the sample is identical |
-| `--max_bp` | very large | target number of bases to extract |
+| `--max_bp` | very large | approximate total target bases across runs; not a strict output cap |
+| `--sampling_method` | `contiguous` | limited extraction by contiguous interval or opt-in `random` spot sampling |
+| `--sampling_seed` | `0` | nonnegative random spot-sampling seed |
+| `--sampling_private yes/no` | `no` | include private FASTQs in the random-sampling budget |
 | `--min_read_length` | `25` | minimum read length forwarded through processing |
 | `--fastp yes/no` | `yes` | run `fastp` |
 | `--remove_sra yes/no` | `yes` | remove downloaded SRA files after extraction |
@@ -99,12 +102,14 @@ samples 16 distributed windows without scanning every record. Gzip inputs use de
 sampling across the compressed stream. A sampled identity rate of at least 99% triggers conversion;
 there is no subsequent full-file identity check.
 
-When `--max_bp` is set, AMALGKIT can run a compensatory two-step extraction for public SRA-derived data:
+When input exceeds `--max_bp`, AMALGKIT can run a compensatory two-step extraction for public SRA/GSA data:
 
 1. first-round extraction targets the requested size
 2. a second round compensates for reads lost during extraction or filtering
 
-This compensation is for public SRA-derived runs, not private FASTQ files.
+Private inputs use this compensation only with `--sampling_method random --sampling_private yes`.
+See [Read sampling and target sequence size](Read-sampling) for statistical interpretation,
+paired-end behavior, I/O costs, provenance, and validation limits.
 
 ## Restarting an Interrupted Run
 

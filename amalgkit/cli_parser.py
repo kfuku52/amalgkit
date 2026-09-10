@@ -247,8 +247,17 @@ def build_parser(command_handlers, command_names, version, prog=None):
                      help='default=%(default)s: Explicitly allow distributed sampling of up to 2,000 read pairs and '
                           'conversion to single-end when at least 99%% of sampled pairs are identical. Enabling this '
                           'removes read2 after sampling; the default preserves both mates.')
+    pge.add_argument('--sampling_method', choices=['contiguous', 'random'], default='contiguous',
+                     help='default=%(default)s: Limited extraction method. random selects intact spots without '
+                          'replacement before filtering and scans the complete input each round.')
+    pge.add_argument('--sampling_seed', type=int, default=0,
+                     help='default=%(default)s: Nonnegative seed for reproducible random spot selection.')
+    pge.add_argument('--sampling_private', type=strtobool, default=False, metavar='yes|no',
+                     help='default=%(default)s: Apply random sampling and the target budget to private FASTQs. '
+                          'Requires --sampling_method random; otherwise private inputs remain complete.')
     pge.add_argument('--max_bp', metavar='INT', default='999,999,999,999,999', type=str, required=False, action='store',
-                     help='default=%(default)s: Target sequence size (bp) to be dumped.')
+                     help='default=%(default)s: Approximate total target bp shared across runs, not a strict output cap '
+                          'or equal fragment count. Private inputs are exempt unless --sampling_private yes.')
     pge.add_argument('--min_read_length', metavar='INT', default=25, type=int, required=False, action='store',
                      help='default=%(default)s: Minimum read length.')
     pge.add_argument('--pfd', dest='obsolete_pfd', metavar='yes|no', default=None, type=strtobool,

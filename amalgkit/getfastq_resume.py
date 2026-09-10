@@ -16,6 +16,7 @@ from typing import Any
 import numpy
 import pandas
 
+from amalgkit import getfastq_sampling as sampling
 from amalgkit.metadata_utils import get_metadata_row_index_by_run
 from amalgkit.output_utils import atomic_output_path
 
@@ -95,6 +96,28 @@ def build_getfastq_run_fingerprint(
             if name in run_metadata.df.columns
         },
     }
+    if sampling.random_sampling(args):
+        payload["sampling"] = {
+            "schema_version": 1,
+            "algorithm": sampling.ALGORITHM,
+            "method": "random",
+            "seed": getattr(args, "sampling_seed", 0),
+            "private": bool(getattr(args, "sampling_private", False)),
+            "budget_runs": g.get("sampling_run_ids"),
+            "input_total_bp": _normalize_getfastq_resume_value(g.get("total_sra_bp")),
+        }
+        if (
+            sampling.random_sampling(args, run_metadata.df.loc[ind_sra])
+            and str(run_metadata.df.loc[ind_sra].get("private_file", "")).lower() == "yes"
+        ):
+            source_digests = []
+            for column in ["read1_path", "read2_path"][: 2 if sra_stat["layout"] == "paired" else 1]:
+                digest = hashlib.sha256()
+                with open(str(run_metadata.df.at[ind_sra, column]), "rb") as source:
+                    for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                        digest.update(chunk)
+                source_digests.append(digest.hexdigest())
+            payload["sampling"]["private_source_sha256"] = source_digests
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
