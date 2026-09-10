@@ -246,6 +246,11 @@ def test_small_group_policy_rejects_unknown_value():
         ('wsfilter', ['--correlation_threshold', '2'], 'between -1 and 1'),
         ('wsfilter', ['--margin_threshold', '-3'], 'between -2 and 2'),
         ('wsfilter', ['--robust_z_threshold', 'nan'], 'finite number'),
+        ('cstmm', ['--tmm_imputation_scale', 'complete_case'], 'invalid choice'),
+        ('cstmm', ['--tmm_imputation_rank', '0'], 'must be > 0'),
+        ('cstmm', ['--tmm_imputation_max_iter', '0'], 'must be > 0'),
+        ('cstmm', ['--tmm_imputation_tol', 'nan'], 'finite number'),
+        ('cstmm', ['--tmm_imputation_tol', '-1'], 'must be > 0'),
     ],
 )
 def test_filter_cli_rejects_invalid_scientific_options(command, options, expected):

@@ -37,7 +37,7 @@ from amalgkit.per_species_finalize_python import (
     _standardize_metadata_all,
     run_finalize_python_worker,
     should_use_python_finalize_worker,
-    validate_cstmm_transform_metadata,
+    record_expression_library_sizes,
 )
 from amalgkit.per_species_outputs import (
     initialize_correlation_statistics,
@@ -421,18 +421,20 @@ def _write_prepare_outputs(
 def _run_prepare_or_wsfilter_python_worker(args, metadata, species_tag, input_dir):
     input_dir_abs = os.path.abspath(input_dir)
     count_path, eff_length_path = _resolve_species_input_paths(input_dir_abs=input_dir_abs, species_tag=species_tag)
-    if not os.path.isfile(count_path) or not os.path.isfile(eff_length_path):
+    needs_lengths = str(args.norm).split('-')[-1] in {'fpkm', 'tpm'}
+    if not os.path.isfile(count_path) or (needs_lengths and not os.path.isfile(eff_length_path)):
         return 1
 
     counts_df = _normalize_dataframe_columns(_read_expression_tsv(count_path))
-    eff_length_df = _normalize_dataframe_columns(_read_expression_tsv(eff_length_path))
+    eff_length_df = (_normalize_dataframe_columns(_read_expression_tsv(eff_length_path))
+                     if needs_lengths else pandas.DataFrame())
     metadata_all = _standardize_metadata_all(_normalize_metadata_df(metadata.df))
     scientific_name = _resolve_scientific_name(metadata_all, species_tag)
     selected_sample_groups = _resolve_selected_sample_groups(args, metadata_all)
     num_total_runs_species = int(metadata_all.loc[:, 'scientific_name'].astype(str).eq(scientific_name).sum())
     sra = _get_species_metadata(metadata_all, scientific_name, selected_sample_groups, counts_df.columns)
     num_runs_after_sample_group_filter = int(sra.shape[0])
-    validate_cstmm_transform_metadata(count_path, sra, args.norm)
+    sra = record_expression_library_sizes(count_path, counts_df, sra, args.norm)
 
     out_dir = os.path.realpath(args.out_dir)
     dir_per_species = os.path.join(out_dir, 'per_species')

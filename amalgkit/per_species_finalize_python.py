@@ -251,17 +251,22 @@ def _sort_tc_and_metadata(counts_df, metadata_df, sort_columns=('sample_group', 
 
 def validate_cstmm_transform_metadata(count_path, metadata_df, transform_method):
     """Prevent re-normalizing corrected counts with their own column sums."""
-    if not str(count_path).endswith('_cstmm_counts.tsv'):
-        return
     metadata_df = metadata_df.loc[
         metadata_df['exclusion'].fillna('').astype(str).str.strip().str.lower().eq('no')]
     if metadata_df.empty:
         return
+    if not str(count_path).endswith('_cstmm_counts.tsv'):
+        if 'tmm_library_size' in metadata_df.columns and metadata_df['tmm_library_size'].notna().any():
+            raise ValueError('CSTMM metadata cannot be applied to raw merge counts. Use matching merge metadata.')
+        return
+    if 'cstmm_count_unit' in metadata_df.columns:
+        if not metadata_df['cstmm_count_unit'].eq('counts_divided_by_tmm_factor').all():
+            raise ValueError('CSTMM count unit does not match counts divided by the TMM factor.')
     abundance_method = str(transform_method).strip().lower().split('-')[-1]
     if abundance_method == 'tpm':
         raise ValueError('TPM and TMM are incompatible. Use FPKM for effective-length runs, '
-                         'or a *-none normalization for length_model=none.')
-    if abundance_method == 'fpkm':
+                         'or a *-cpm normalization for length_model=none.')
+    if abundance_method in {'fpkm', 'cpm'}:
         message = ('CSTMM counts require finite positive tmm_library_size values from the original '
                    'count libraries. Use cstmm/metadata.tsv or its filtered descendant, not '
                    'metadata/metadata.tsv; recomputing library sizes from corrected counts cancels TMM.')
@@ -270,6 +275,53 @@ def validate_cstmm_transform_metadata(count_path, metadata_df, transform_method)
         sizes = pandas.to_numeric(metadata_df['tmm_library_size'], errors='coerce').to_numpy(dtype=float)
         if ((~numpy.isfinite(sizes)) | (sizes <= 0)).any():
             raise ValueError(message)
+
+
+def record_expression_library_sizes(count_path, counts_df, metadata_df, transform_method):
+    """Capture denominators before gene filtering or batch correction."""
+    validate_cstmm_transform_metadata(count_path, metadata_df, transform_method)
+    out = metadata_df.copy()
+    retained = out.loc[out['exclusion'].fillna('').astype(str).str.strip().str.lower().eq('no')]
+    if str(count_path).endswith('_cstmm_counts.tsv') and 'cstmm_count_unit' in out.columns and not retained.empty:
+        required = ['tmm_library_size', 'tmm_normalization_factor', 'tmm_effective_library_size']
+        if any(column not in out.columns for column in required):
+            raise ValueError('CSTMM count-unit metadata requires all three TMM statistics.')
+        statistics = retained.set_index('run')[required].apply(pandas.to_numeric, errors='coerce')
+        if statistics.index.has_duplicates or not numpy.isfinite(statistics.to_numpy()).all() or (statistics <= 0).any().any():
+            raise ValueError('CSTMM statistics require unique runs and finite positive values.')
+        if not numpy.allclose(statistics.tmm_effective_library_size,
+                              statistics.tmm_library_size * statistics.tmm_normalization_factor, rtol=1e-8, atol=0):
+            raise ValueError('CSTMM effective library sizes disagree with library sizes and factors.')
+        expected_sums = statistics.tmm_library_size / statistics.tmm_normalization_factor
+        actual_sums = counts_df.sum(axis=0).reindex(expected_sums.index)
+        if not numpy.allclose(actual_sums, expected_sums, rtol=1e-8, atol=0):
+            raise ValueError('CSTMM counts and metadata do not match. Use the matching full-target count tables.')
+    out['expression_normalization'] = str(transform_method)
+    if str(transform_method).split('-')[-1] != 'cpm':
+        return out
+    if str(count_path).endswith('_cstmm_counts.tsv'):
+        out['expression_library_size'] = out['tmm_library_size']
+        out['expression_count_unit'] = 'counts_divided_by_tmm_factor'
+    else:
+        out['expression_library_size'] = out['run'].map(counts_df.sum(axis=0))
+        out['expression_count_unit'] = 'uncorrected_counts'
+    return out
+
+
+def _transform_raw_to_cpm(counts_df, metadata_df):
+    # CSTMM counts have already been divided by f: divide by L, never by L*f
+    # or by the corrected column sum. Workers capture L before any filtering.
+    column = ('expression_library_size' if 'expression_library_size' in metadata_df.columns
+              else 'tmm_library_size')
+    if column not in metadata_df.columns:
+        raise ValueError('CPM requires original expression_library_size or tmm_library_size metadata.')
+    if metadata_df['run'].duplicated().any():
+        raise ValueError('CPM metadata contains duplicate run identifiers.')
+    libraries = pandas.to_numeric(
+        metadata_df.set_index('run')[column].reindex(counts_df.columns), errors='coerce')
+    if not numpy.isfinite(libraries).all() or (libraries <= 0).any():
+        raise ValueError('CPM requires finite positive original library sizes for every count column.')
+    return counts_df.div(libraries, axis=1) * 1e6
 
 
 def _transform_raw_to_fpkm(counts_df, eff_length_df, metadata_df):
@@ -366,7 +418,7 @@ def reject_undefined_length_transforms(run_ids, length_models, abundance_method)
     if undefined:
         raise ValueError(
             'FPKM is undefined for runs whose quantification backend has no effective-length '
-            'model: {}. Use a TPM or untransformed abundance method.'.format(', '.join(undefined))
+            'model: {}. Use a CPM abundance method.'.format(', '.join(undefined))
         )
 
 
@@ -403,6 +455,8 @@ def _apply_transformation_logic(
             transformed = _transform_raw_to_fpkm(transformed, eff_length_df, metadata_df)
         elif abundance_method == 'tpm':
             transformed = _transform_raw_to_tpm(transformed, eff_length_df)
+        elif abundance_method == 'cpm':
+            transformed = _transform_raw_to_cpm(transformed, metadata_df)
     if bool_log:
         values = transformed.to_numpy(dtype=float)
         with numpy.errstate(divide='ignore', invalid='ignore'):
@@ -934,11 +988,13 @@ def run_finalize_python_worker(args, metadata, species_tag, input_dir):
             and not getattr(args, 'skip_curation', False)):
         raise ValueError('ComBat-seq requires raw counts, not CSTMM-divided counts. Select merge input or another backend.')
     eff_length_path = os.path.join(species_dir, species_tag + '_eff_length.tsv')
-    if not os.path.isfile(count_path) or not os.path.isfile(eff_length_path):
+    needs_lengths = str(args.norm).split('-')[-1] in {'fpkm', 'tpm'}
+    if not os.path.isfile(count_path) or (needs_lengths and not os.path.isfile(eff_length_path)):
         return 1
 
     counts_df = _normalize_dataframe_columns(_read_expression_tsv(count_path))
-    eff_length_df = _normalize_dataframe_columns(_read_expression_tsv(eff_length_path))
+    eff_length_df = (_normalize_dataframe_columns(_read_expression_tsv(eff_length_path))
+                     if needs_lengths else pandas.DataFrame())
     quant_model_df = load_quant_model_table(os.path.join(species_dir, species_tag + '_quant_model.tsv'))
     length_models = resolve_length_models(
         [str(run_id) for run_id in counts_df.columns],
@@ -950,7 +1006,7 @@ def run_finalize_python_worker(args, metadata, species_tag, input_dir):
     num_total_runs_species = int(metadata_all.loc[:, 'scientific_name'].astype(str).eq(scientific_name).sum())
     sra = _get_species_metadata(metadata_all, scientific_name, selected_sample_groups, counts_df.columns)
     num_runs_after_sample_group_filter = int(sra.shape[0])
-    validate_cstmm_transform_metadata(count_path, sra, args.norm)
+    sra = record_expression_library_sizes(count_path, counts_df, sra, args.norm)
 
     out_dir = os.path.realpath(args.out_dir)
     dir_per_species = os.path.join(out_dir, 'per_species')

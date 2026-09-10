@@ -2,6 +2,12 @@
 
 `amalgkit cstmm` applies cross-species TMM normalization using single-copy genes. It is optional and Python-only.
 
+The single-copy threshold remains 50%. Universally single-copy genes are **not**
+required, including for comparisons of 100 or more species. Missing reference
+entries are imputed for factor estimation; corrected output contains only the
+original per-species targets. See [imputation and validation](https://github.com/kfuku52/amalgkit/wiki/CSTMM-imputation-and-validation)
+for scaling, convergence, sensitivity comparisons and observed-only diagnostics.
+
 ## Numerical conventions (0.16.74 and later)
 
 TMM uses inverse-variance weights, 30% M-value trimming and 5% A-value trimming,
@@ -96,11 +102,16 @@ amalgkit cstmm --out_dir ./
 - `cstmm/cstmm_normalization_factor_histogram.scientific_name.pdf`
 - `cstmm/cstmm_mean_expression_boxplot.pdf`
 - `cstmm/metadata.tsv`
+- `cstmm/cstmm_normalization.json` (imputation settings, convergence and units)
+- `cstmm/cstmm_missingness.tsv` (observed/missing reference entries per sample)
+- `cstmm/cstmm_orthology_status.tsv` (multi-species candidate orthogroups)
+- `cstmm/cstmm_observed_pair_diagnostics.tsv` (enabled by default; disable with `--tmm_reference_diagnostics no`)
+- `cstmm/cstmm_observed_pair_comparison.pdf` (enabled by default; fixed-reference and all-pairs factor ratios)
 - `cstmm/<Species>/<Species>_cstmm_counts.tsv`
 - `cstmm/<Species>/<Species>_eff_length.tsv`
 - `cstmm/<Species>/<Species>_quant_model.tsv` (when present in merge input)
 
-For Oarfish input, use `--norm log2p1-none` in all downstream filters and
+For Oarfish input, use `--norm log2p1-cpm` in all downstream filters and
 finalization. FPKM is undefined for its length model, and TPM would cancel TMM.
 See the [long-read workflow](https://github.com/kfuku52/amalgkit/wiki/Metadata-and-normalization#counts-lengths-and-normalization).
 
@@ -126,6 +137,21 @@ TMM normalization factor. They are used together with the original
 `tmm_library_size` by the normal amalgkit `wsfilter -> csfilter -> finalize`
 workflow. Do not apply `tmm_normalization_factor` to those corrected counts a
 second time.
+
+For length-free abundance, use `--norm log2p1-cpm` consistently downstream.
+Linear TMM-CPM is `cstmm_count / tmm_library_size * 1e6`; neither corrected
+column sums nor `tmm_effective_library_size` are the denominator for these
+already factor-divided counts. `*-none` retains its historical meaning and
+does not remove sequencing-depth differences. The worker records
+`expression_normalization`, and for CPM also `expression_library_size` and
+`expression_count_unit`, in its per-species metadata. Library sizes are captured
+before gene filtering or batch correction. CPM does not require effective lengths.
+New CSTMM metadata carries `cstmm_count_unit`; downstream workers check all
+three TMM statistics and verify that the full corrected column sums agree with
+`tmm_library_size / tmm_normalization_factor`. Keep the full target tables and
+matching metadata together. Raw merge counts must use merge metadata, not
+CSTMM metadata. Older CSTMM metadata without the unit field remains supported
+when its original library sizes are valid, but cannot provide that consistency check.
 
 ## Using CSTMM Normalization in edgeR
 

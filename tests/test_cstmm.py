@@ -197,7 +197,12 @@ def test_cstmm_reference_uses_iterative_pca_for_structured_missing_values():
         columns=['RUN1', 'RUN2', 'RUN3', 'RUN4'],
     )
 
-    imputed = _get_df_nonzero(counts)
+    with pytest.raises(ValueError, match='did not converge'):
+        _get_df_nonzero(counts)
+    with pytest.warns(UserWarning, match='did not converge'):
+        imputed, diagnostics = _get_df_nonzero(counts, allow_unconverged=True, return_diagnostics=True)
+    assert not diagnostics['converged']
+    assert diagnostics['iterations'] == 50
 
     assert not imputed.isna().any().any()
     assert not numpy.isclose(imputed.loc[0, 'RUN4'], 2.0)

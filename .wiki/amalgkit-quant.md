@@ -240,7 +240,7 @@ and `tpm` represents abundance per million without length correction (a supplied
 backend `tpm` column is preserved; otherwise it is computed from counts).
 Run-info records `length_model=none`, which `merge` propagates to a per-species
 quant-model sidecar. Do not apply FPKM to these runs. For CSTMM plus Oarfish,
-use `--norm log2p1-none` in `wsfilter`, `csfilter`, and `finalize`; TPM is also
+use `--norm log2p1-cpm` in `wsfilter`, `csfilter`, and `finalize`; TPM is also
 incompatible with CSTMM. See [metadata and normalization](https://github.com/kfuku52/amalgkit/wiki/Metadata-and-normalization).
 
 When selection columns are populated, only rows with `exclusion == no` and

@@ -7,6 +7,15 @@ than the Releases page for those changes.
 
 ### Unreleased
 
+- Impute the CSTMM reference in library-size-adjusted CPM space, preserving
+  observed counts and the single-copy threshold. Record convergence and
+  orthology missingness; require explicit acceptance of unconverged estimates.
+- Export observed-only pairwise versus global TMM factor comparisons by default,
+  including shared-gene support and a two-panel PDF, without changing the applied
+  factors. Reject malformed counts and empty or duplicate target IDs.
+- Add CPM expression normalization using original all-target library sizes so
+  CSTMM composition corrections remain effective for length-free quantification.
+  Validate matching CSTMM count/metadata inputs before downstream transforms.
 - Default batch-model failures to a whole-species skip, with an explicit strict
   policy and shared biological-design diagnostics; remove ComBat group-dropping
   retries and RUV model/control substitutions.

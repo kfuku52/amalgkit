@@ -39,6 +39,13 @@ def finite_float(value):
     return parsed
 
 
+def positive_float(value):
+    parsed = finite_float(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError('must be > 0')
+    return parsed
+
+
 def mapping_rate_threshold(value):
     parsed = finite_float(value)
     if parsed < 0.0 or parsed > 100.0:
@@ -108,7 +115,7 @@ def build_parser(command_handlers, command_names, version, prog=None):
                                help='default=%(default)s: Use the last successful filter recorded in filter_metadata_state.json; '
                                     'legacy workspaces prefer csfilter over wsfilter with a warning. Otherwise use '
                                     'input_dir/metadata.tsv (inferred input prefers cstmm over merge). '
-                                    'CSTMM-derived metadata is required for FPKM from CSTMM counts.')
+                                    'CSTMM-derived metadata is required for FPKM or CPM from CSTMM counts.')
     pp_out = argparse.ArgumentParser(add_help=False)
     pp_out.add_argument('--out_dir', metavar='PATH', default='./', type=str, required=False, action='store',
                      help='default=%(default)s: PATH to the directory where intermediate and output files are generated.')
@@ -546,6 +553,20 @@ def build_parser(command_handlers, command_names, version, prog=None):
     pcs.add_argument('--single_copy_threshold', metavar='PERCENT', default=50.0, type=single_copy_threshold,
                      required=False, action='store',
                      help='default=%(default)s: Minimum percentage of species in which an orthogroup must be single-copy.')
+    pcs.add_argument('--tmm_imputation_scale', choices=['library_size', 'raw'], default='library_size',
+                     help='default=%(default)s: EM-PCA in CPM space followed by restoration to counts, '
+                          'or raw counts for legacy sensitivity comparisons. Observed counts are preserved.')
+    pcs.add_argument('--tmm_imputation_rank', type=positive_int, default=4,
+                     help='default=%(default)s: Maximum EM-PCA rank for the CSTMM reference matrix.')
+    pcs.add_argument('--tmm_imputation_max_iter', type=positive_int, default=50,
+                     help='default=%(default)s: Maximum number of CSTMM EM-PCA iterations.')
+    pcs.add_argument('--tmm_imputation_tol', type=positive_float, default=1e-6,
+                     help='default=%(default)s: Positive absolute convergence tolerance in the chosen imputation scale.')
+    pcs.add_argument('--tmm_allow_unconverged', type=strtobool, default=False,
+                     help='default=%(default)s: Explicitly accept unconverged/fallback imputation with a warning and diagnostics.')
+    pcs.add_argument('--tmm_reference_diagnostics', type=strtobool, default=True,
+                     help='default=%(default)s: Write observed-only TMM comparisons and a factor-ratio comparison PDF for all sample pairs '
+                          '(quadratic in sample count). Reference only; never changes applied factors.')
     pcs.set_defaults(handler=command_handlers['cstmm'])
 
     pws_help = 'Within-species outlier filtering. Outputs metadata.tsv + excluded.tsv + species PDFs (no plots/). See `amalgkit wsfilter -h`'
@@ -564,7 +585,7 @@ def build_parser(command_handlers, command_names, version, prog=None):
                      help='default=%(default)s: If yes, writes intermediate plots during filtering.')
     pws.add_argument('--one_outlier_per_iter', metavar='yes|no', default='no', type=strtobool, required=False, action='store',
                      help='default=%(default)s: If yes, removes at most one outlier per sample_group/BioProject per iteration.')
-    pws.add_argument('--norm', metavar='(logn|log2|lognp1|log2p1|none)-(fpkm|tpm|none)',
+    pws.add_argument('--norm', metavar='(logn|log2|lognp1|log2p1|none)-(fpkm|tpm|cpm|none)',
                      default='log2p1-fpkm', choices=EXPRESSION_NORMALIZATION_METHODS,
                      type=str, required=False, action='store',
                      help='default=%(default)s: Expression transformation before filtering.')
@@ -585,7 +606,7 @@ def build_parser(command_handlers, command_names, version, prog=None):
     pcsf.add_argument('--input_dir', metavar='PATH', default='inferred', type=str, required=False, action='store',
                       help='default=%(default)s: PATH to `amalgkit merge` or `amalgkit cstmm` output folder. '
                            '"inferred" = out_dir/cstmm if exist, else out_dir/merge.')
-    pcsf.add_argument('--norm', metavar='(logn|log2|lognp1|log2p1|none)-(fpkm|tpm|none)',
+    pcsf.add_argument('--norm', metavar='(logn|log2|lognp1|log2p1|none)-(fpkm|tpm|cpm|none)',
                       default='log2p1-fpkm', choices=EXPRESSION_NORMALIZATION_METHODS,
                       type=str, required=False, action='store',
                       help='default=%(default)s: Expression transformation used during temporary table generation.')
@@ -618,7 +639,7 @@ def build_parser(command_handlers, command_names, version, prog=None):
     pfi.add_argument('--input_dir', metavar='PATH', default='inferred', type=str, required=False, action='store',
                      help='default=%(default)s: PATH to `amalgkit merge` or `amalgkit cstmm` output folder. '
                           '"inferred" = out_dir/cstmm if exist, else out_dir/merge.')
-    pfi.add_argument('--norm', metavar='(logn|log2|lognp1|log2p1|none)-(fpkm|tpm|none)',
+    pfi.add_argument('--norm', metavar='(logn|log2|lognp1|log2p1|none)-(fpkm|tpm|cpm|none)',
                      default='log2p1-fpkm', choices=EXPRESSION_NORMALIZATION_METHODS,
                      type=str, required=False, action='store',
                      help='default=%(default)s: Expression transformation before optional batch correction.')

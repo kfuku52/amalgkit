@@ -15,7 +15,7 @@ from amalgkit.redaction import redact_url_for_logging
 EXPRESSION_NORMALIZATION_METHODS = tuple(
     '{}-{}'.format(log_method, abundance_method)
     for log_method in ('logn', 'log2', 'lognp1', 'log2p1', 'none')
-    for abundance_method in ('fpkm', 'tpm', 'none')
+    for abundance_method in ('fpkm', 'tpm', 'cpm', 'none')
 )
 
 DEPENDENCY_SPECS = [

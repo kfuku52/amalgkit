@@ -59,8 +59,8 @@ in each run-info JSON; changing input metadata does not rewrite historical resul
 
 | Quantification model | `abundance.tsv` / merged table meaning | Downstream normalization |
 | --- | --- | --- |
-| kallisto, `length_model=effective` | Estimated counts, effective lengths, length-normalized TPM | FPKM or TPM with raw `merge` counts; FPKM with CSTMM counts |
-| oarfish, `length_model=none` | Estimated counts; `length` is the reference annotation length, `eff_length` is a unit placeholder; `tpm` is count abundance per million, without length correction | Use `--norm log2p1-none` with CSTMM counts; raw `merge` counts also support CPM-like `*-tpm` |
+| kallisto, `length_model=effective` | Estimated counts, effective lengths, length-normalized TPM | FPKM or TPM with raw `merge` counts; FPKM or CPM with CSTMM counts |
+| oarfish, `length_model=none` | Estimated counts; `length` is the reference annotation length, `eff_length` is a unit placeholder; `tpm` is count abundance per million, without length correction | Use `--norm log2p1-cpm` with CSTMM counts; use `*-cpm` for raw `merge` counts as well |
 
 Oarfish's unit effective length does **not** make FPKM biologically defined.
 AMALGKIT rejects FPKM for this model. The adapter preserves a supplied `tpm`
@@ -77,17 +77,20 @@ For a long-read workflow after `merge`, explicitly use:
 
 ```bash
 amalgkit cstmm --out_dir ./ --dir_busco ./busco
-amalgkit wsfilter --out_dir ./ --metadata ./cstmm/metadata.tsv --norm log2p1-none
-amalgkit csfilter --out_dir ./ --metadata ./wsfilter/metadata.tsv --dir_busco ./busco --norm log2p1-none
-amalgkit finalize --out_dir ./ --metadata ./csfilter/metadata.tsv --batch_effect_alg no --norm log2p1-none
+amalgkit wsfilter --out_dir ./ --metadata ./cstmm/metadata.tsv --norm log2p1-cpm
+amalgkit csfilter --out_dir ./ --metadata ./wsfilter/metadata.tsv --dir_busco ./busco --norm log2p1-cpm
+amalgkit finalize --out_dir ./ --metadata ./csfilter/metadata.tsv --batch_effect_alg no --norm log2p1-cpm
 ```
 
 `*-none` uses estimated counts (already divided by TMM factors after CSTMM),
-with only the requested log transformation. This defines the input scale; it
-does not guarantee that samples from different library protocols are comparable.
+with only the requested log transformation. It does not remove sequencing-depth
+differences. `*-cpm` divides by the original library size and multiplies by one
+million. For CSTMM counts this is TMM-CPM: `1e6 * raw_count / (L * factor)`.
+`log2p1-cpm` means `log2(CPM + 1)`, not edgeR logCPM with its library-scaled
+prior count. Neither transformation guarantees comparability across protocols.
 
 CSTMM and TPM cannot be combined: dividing by each corrected library's column
-sum would cancel the TMM factor. For the same reason, FPKM from CSTMM counts
+sum would cancel the TMM factor. For the same reason, FPKM or CPM from CSTMM counts
 requires the **original** `tmm_library_size` in `cstmm/metadata.tsv` or a filtered
 descendant. AMALGKIT rejects missing or invalid library sizes instead of
 recomputing them from corrected counts. See

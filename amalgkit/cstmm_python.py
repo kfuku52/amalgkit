@@ -1,6 +1,8 @@
 import os
 import re
 import shutil
+import json
+import warnings
 
 import matplotlib
 matplotlib.use('Agg')
@@ -10,6 +12,8 @@ import pandas
 from amalgkit.table_io import read_annotation_tsv, read_identifier_tsv
 
 from amalgkit.imputation import impute_expression
+from amalgkit import __version__
+from amalgkit.cstmm_diagnostics import write_observed_pair_diagnostics, plot_observed_pair_diagnostics
 from amalgkit.normalization_tmm import run_tmm_rounds_for_cstmm
 from amalgkit.orthology_utils import (
     DEFAULT_SINGLE_COPY_THRESHOLD,
@@ -42,6 +46,11 @@ def _read_est_counts(dir_count, species_name):
     dat = read_identifier_tsv(infile_path, index_col=0)
     if 'length' in dat.columns:
         dat = dat.drop(columns=['length'])
+    if (dat.index.astype(str).str.strip() == '').any():
+        raise ValueError('CSTMM input requires nonempty target IDs: {}'.format(infile_path))
+    dat = dat.apply(pandas.to_numeric, errors='raise')
+    if dat.index.has_duplicates or not numpy.isfinite(dat.to_numpy(dtype=float)).all() or (dat < 0).any().any():
+        raise ValueError('CSTMM input requires unique target IDs and finite nonnegative counts: {}'.format(infile_path))
     dat.columns = ['{}_{}'.format(species_name, col) for col in dat.columns]
     return dat
 
@@ -163,14 +172,49 @@ def _copy_quant_model_file(dir_count, dir_cstmm, species_name):
     return dst
 
 
-def _get_df_nonzero(df_counts):
+def _get_df_nonzero(df_counts, library_sizes=None, *, scale='raw', num_pc=4,
+                    max_iter=50, tol=1e-6, allow_unconverged=False, return_diagnostics=False):
+    if scale not in {'raw', 'library_size'}:
+        raise ValueError('CSTMM imputation scale must be raw or library_size.')
     is_zero_col = (df_counts.sum(axis=0, skipna=True) == 0)
     df_nonzero = df_counts.loc[:, ~is_zero_col].copy()
-    return impute_expression(
-        df_nonzero,
-        strategy='em_pca',
-        minimum_imputed_value=0.0,
-    )
+    # Rows absent from every retained sample provide no reference information.
+    df_nonzero = df_nonzero.loc[df_nonzero.notna().any(axis=1)].copy()
+    multipliers = pandas.Series(1.0, index=df_nonzero.columns)
+    if scale == 'library_size':
+        if library_sizes is None:
+            raise ValueError('Library-size imputation requires original library sizes.')
+        libraries = library_sizes.reindex(df_nonzero.columns).astype(float)
+        if not numpy.isfinite(libraries).all() or (libraries <= 0).any():
+            raise ValueError('CSTMM imputation requires finite positive original library sizes.')
+        # A fixed CPM scale makes tolerance independent of sequencing depth.
+        multipliers = libraries / 1e6
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter('always', UserWarning)
+        imputed, diagnostics = impute_expression(
+            df_nonzero.div(multipliers, axis=1), strategy='em_pca',
+            num_pc=num_pc, max_iter=max_iter, tol=tol,
+            minimum_imputed_value=0.0, return_diagnostics=True,
+        )
+    if not diagnostics['converged'] or diagnostics['fallback']:
+        message = ('CSTMM imputation did not converge or used a fallback '
+                   '(iterations={iterations}, rank={resolved_rank}, final_change={final_delta}, '
+                   'tolerance={tolerance}, fallback={fallback}). '
+                   'Increase --tmm_imputation_max_iter or explicitly use --tmm_allow_unconverged yes '
+                   'to accept these estimates; observed-only diagnostics are never substituted.').format(**diagnostics)
+        if not allow_unconverged:
+            raise ValueError(message)
+        warnings.warn(message)
+    for warning in caught:
+        warnings.warn(str(warning.message), warning.category)
+    result = imputed.mul(multipliers, axis=1)
+    # Restore observed counts exactly, including zeros; imputation is internal only.
+    result = result.where(df_nonzero.isna(), df_nonzero)
+    diagnostics.update(scale=scale, reference_rows=int(result.shape[0]),
+                       complete_rows=int(df_nonzero.notna().all(axis=1).sum()),
+                       dropped_all_missing_rows=int(df_counts.shape[0] - result.shape[0]),
+                       allow_unconverged=bool(allow_unconverged))
+    return (result, diagnostics) if return_diagnostics else result
 
 
 def _get_singlecopy_bool_index(df_gc, spp_filled, percent_singlecopy_threshold=50.0):
@@ -197,21 +241,27 @@ def _get_df_exp_single_copy_ortholog(
         percent_singlecopy_threshold=single_copy_threshold,
     )
     df_singleog = df_og.loc[is_singlecopy, spp_filled].copy()
-    df_sog = df_singleog.copy()
+    frames = []
+    audit = []
     for species_name in spp_filled:
-        if species_name not in uncorrected_by_species:
-            continue
-        df_sog = df_sog.merge(
-            uncorrected_by_species[species_name],
-            left_on=species_name,
-            right_index=True,
-            how='left',
-            sort=False,
-        )
-    if len(spp_filled) > 0:
-        df_sog = df_sog.iloc[:, len(spp_filled):].copy()
-    df_sog.index = df_singleog.index
-    df_sog = df_sog.apply(pandas.to_numeric, errors='coerce')
+        counts = uncorrected_by_species[species_name]
+        copies = pandas.to_numeric(df_gc.loc[df_singleog.index, species_name], errors='raise')
+        targets = df_singleog[species_name].fillna('').astype(str).str.strip()
+        single = copies.eq(1)
+        found = targets.isin(counts.index)
+        mapped = counts.reindex(targets.to_list()).copy()
+        mapped.index = df_singleog.index
+        mapped.loc[~single, :] = numpy.nan
+        frames.append(mapped)
+        for orthogroup, copy_count, target, is_single, is_found in zip(
+            df_singleog.index, copies, targets, single, found,
+        ):
+            reason = ('observed' if is_found else 'target_not_found') if is_single else (
+                'zero_copy' if copy_count == 0 else 'multiple_copy')
+            audit.append(dict(orthogroup_id=orthogroup, species=species_name,
+                              copy_count=copy_count, target_id=target, status=reason))
+    df_sog = pandas.concat(frames, axis=1)
+    df_sog.attrs['orthology_audit'] = audit
     return df_sog
 
 
@@ -424,17 +474,58 @@ def _run_cstmm_python(
     dir_cstmm,
     metadata_df,
     single_copy_threshold=None,
+    imputation_options=None,
+    reference_diagnostics=True,
 ):
-    df_nonzero = _get_df_nonzero(df_sog)
-    library_sizes = _get_library_sizes(df_nonzero=df_nonzero, uncorrected_by_species=uncorrected_by_species)
+    options = dict(scale='library_size')
+    options.update(imputation_options or {})
+    library_sizes = _get_library_sizes(df_nonzero=df_sog, uncorrected_by_species=uncorrected_by_species)
+    df_nonzero, imputation_diagnostics = _get_df_nonzero(
+        df_sog, library_sizes, **options, return_diagnostics=True)
     roundtrip = run_tmm_rounds_for_cstmm(counts=df_nonzero, lib_size=library_sizes.reindex(df_nonzero.columns))
     df_metadata = append_tmm_stats_to_metadata_python(metadata_df=metadata_df, roundtrip=roundtrip)
+    df_metadata['cstmm_count_unit'] = 'counts_divided_by_tmm_factor'
+    df_metadata['cstmm_imputation_scale'] = imputation_diagnostics['scale']
+    df_metadata['cstmm_imputation_converged'] = imputation_diagnostics['converged']
     if single_copy_threshold is not None:
         df_metadata['single_copy_threshold'] = validate_single_copy_threshold(single_copy_threshold)
     else:
         df_metadata = df_metadata.drop(columns='single_copy_threshold', errors='ignore')
     df_metadata = df_metadata.loc[:, ~pandas.Index(df_metadata.columns).astype(str).str.startswith('Unnamed')]
     os.makedirs(dir_cstmm, exist_ok=True)
+    imputation_diagnostics.update(
+        schema_version=1, count_unit='counts_divided_by_tmm_factor',
+        amalgkit_version=__version__, input_count_directory=os.path.realpath(dir_count),
+        library_size_source='sum_of_all_uncorrected_merge_targets',
+        factor_source='imputed_reference',
+        reference_diagnostics=bool(reference_diagnostics),
+        single_copy_threshold=single_copy_threshold,
+        samples=list(df_nonzero.columns),
+        round1_reference=str(df_nonzero.columns[roundtrip.round1_reference_column]),
+        round2_reference=str(df_nonzero.columns[roundtrip.median_reference_columns[0]]),
+    )
+    with open(os.path.join(dir_cstmm, 'cstmm_normalization.json'), 'w', encoding='utf-8') as handle:
+        json.dump(imputation_diagnostics, handle, indent=2, allow_nan=False)
+        handle.write('\n')
+    missingness = pandas.DataFrame(dict(
+        sample_id=df_sog.columns,
+        missing_orthogroups=df_sog.isna().sum(axis=0).to_numpy(),
+        missing_fraction=df_sog.isna().mean(axis=0).to_numpy(),
+        observed_orthogroups=df_sog.notna().sum(axis=0).to_numpy(),
+        used_for_factor=df_sog.columns.isin(df_nonzero.columns),
+    ))
+    missingness.to_csv(os.path.join(dir_cstmm, 'cstmm_missingness.tsv'), sep='\t', index=False)
+    if 'orthology_audit' in df_sog.attrs:
+        pandas.DataFrame(df_sog.attrs['orthology_audit']).to_csv(
+            os.path.join(dir_cstmm, 'cstmm_orthology_status.tsv'), sep='\t', index=False)
+    if reference_diagnostics:
+        diagnostic_path = os.path.join(dir_cstmm, 'cstmm_observed_pair_diagnostics.tsv')
+        global_reference = df_nonzero.columns[roundtrip.median_reference_columns[0]]
+        write_observed_pair_diagnostics(
+            df_sog, library_sizes, roundtrip.round2_factors,
+            diagnostic_path, global_reference=global_reference)
+        plot_observed_pair_diagnostics(
+            diagnostic_path, os.path.join(dir_cstmm, 'cstmm_observed_pair_comparison.pdf'), global_reference)
     df_metadata.to_csv(os.path.join(dir_cstmm, 'metadata.tsv'), sep='\t', index=False)
     corrected = save_corrected_output_files_python(
         uncorrected_by_species=uncorrected_by_species,
@@ -455,7 +546,8 @@ def _run_cstmm_python(
     return roundtrip
 
 
-def run_cstmm_python_single_species(dir_count, dir_cstmm, species_name, metadata_path=None):
+def run_cstmm_python_single_species(dir_count, dir_cstmm, species_name, metadata_path=None,
+                                    imputation_options=None, reference_diagnostics=True):
     uncorrected = {species_name: _read_est_counts(dir_count=dir_count, species_name=species_name)}
     uncorrected, metadata = _select_cstmm_inputs(
         uncorrected, metadata_path if metadata_path is not None else os.path.join(dir_count, 'metadata.tsv'))
@@ -465,6 +557,8 @@ def run_cstmm_python_single_species(dir_count, dir_cstmm, species_name, metadata
         dir_count=dir_count,
         dir_cstmm=dir_cstmm,
         metadata_df=metadata,
+        imputation_options=imputation_options,
+        reference_diagnostics=reference_diagnostics,
     )
 
 
@@ -475,6 +569,8 @@ def run_cstmm_python_multi_species(
     file_orthogroup_table,
     single_copy_threshold=DEFAULT_SINGLE_COPY_THRESHOLD,
     metadata_path=None,
+    imputation_options=None,
+    reference_diagnostics=True,
 ):
     single_copy_threshold = validate_single_copy_threshold(single_copy_threshold)
     df_gc = _read_genecount_table(file_genecount=file_genecount)
@@ -501,4 +597,6 @@ def run_cstmm_python_multi_species(
         dir_cstmm=dir_cstmm,
         metadata_df=metadata,
         single_copy_threshold=single_copy_threshold,
+        imputation_options=imputation_options,
+        reference_diagnostics=reference_diagnostics,
     )

@@ -62,7 +62,7 @@ For each species:
 `merge/metadata.tsv` is the metadata handoff to CSTMM or downstream filters.
 Oarfish uses `length_model=none`: its effective-length entries are unit
 placeholders, and its `tpm` values have no length correction. Preserve the
-quant-model sidecar and use `--norm log2p1-none` for Oarfish in downstream
+quant-model sidecar and use `--norm log2p1-cpm` for Oarfish in downstream
 filters/finalization. See [metadata and normalization](https://github.com/kfuku52/amalgkit/wiki/Metadata-and-normalization)
 for backend-specific scales and CSTMM compatibility. The examples below use
 short-read, effective-length inputs.

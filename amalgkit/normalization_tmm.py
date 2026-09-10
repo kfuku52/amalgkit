@@ -112,7 +112,10 @@ def calc_factor_tmm(
     sum_trim=0.05,
     do_weighting=True,
     acutoff=-1e10,
+    diagnostics=None,
 ):
+    if diagnostics is not None:
+        diagnostics.update(positive_pairs=0, retained_pairs=0, status='no_positive_pairs')
     obs_array = numpy.asarray(obs, dtype=float)
     ref_array = numpy.asarray(ref, dtype=float)
     if obs_array.ndim > 2 or ref_array.ndim > 2:
@@ -147,6 +150,8 @@ def calc_factor_tmm(
     ref_counts = _recycle(ref_vector, target_size)
     ref_libs = _recycle(n_ref_values, target_size)
     positive = (obs_counts > 0) & (ref_counts > 0)
+    if diagnostics is not None:
+        diagnostics['positive_pairs'] = int(positive.sum())
     obs_counts, ref_counts, ref_libs = obs_counts[positive], ref_counts[positive], ref_libs[positive]
     log_obs = numpy.log2(obs_counts) - math.log2(n_obs)
     log_ref = numpy.log2(ref_counts) - numpy.log2(ref_libs)
@@ -161,6 +166,8 @@ def calc_factor_tmm(
     if log_r.size == 0:
         return 1.0
     if float(numpy.max(numpy.abs(log_r))) < 1e-6:
+        if diagnostics is not None:
+            diagnostics.update(retained_pairs=int(log_r.size), status='near_identical_rates')
         return 1.0
     n = log_r.size
     lo_l = int(math.floor(n * logratio_trim) + 1)
@@ -174,7 +181,11 @@ def calc_factor_tmm(
         (rank_abs_e >= lo_s) & (rank_abs_e <= hi_s)
     )
     if not keep.any():
+        if diagnostics is not None:
+            diagnostics['status'] = 'no_pairs_after_trimming'
         return 1.0
+    if diagnostics is not None:
+        diagnostics.update(retained_pairs=int(keep.sum()), status='estimated')
     with numpy.errstate(divide='ignore', invalid='ignore'):
         if do_weighting:
             numerator = numpy.nansum(log_r[keep] / variances[keep])
@@ -183,6 +194,8 @@ def calc_factor_tmm(
         else:
             factor_log = float(numpy.mean(log_r[keep]))
     if numpy.isnan(factor_log):
+        if diagnostics is not None:
+            diagnostics['status'] = 'undefined_weighted_mean'
         factor_log = 0.0
     return float(2.0 ** factor_log)
 

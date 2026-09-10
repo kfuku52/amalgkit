@@ -24,8 +24,8 @@ in `filter_metadata_state.json`, then the selected input directory's metadata.
 Legacy workspaces prefer `csfilter` over `wsfilter` with a warning, not by file
 modification time. See [metadata and normalization](https://github.com/kfuku52/amalgkit/wiki/Metadata-and-normalization).
 
-FPKM from CSTMM counts requires `cstmm/metadata.tsv` or a filtered descendant
-with valid `tmm_library_size`. For Oarfish runs, add `--norm log2p1-none`;
+FPKM or CPM from CSTMM counts requires `cstmm/metadata.tsv` or a filtered descendant
+with valid `tmm_library_size`. For Oarfish runs, add `--norm log2p1-cpm`;
 the default FPKM transformation is undefined for their length model.
 
 For reproducible runs, pass the metadata path explicitly:

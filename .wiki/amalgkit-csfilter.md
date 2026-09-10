@@ -49,7 +49,7 @@ amalgkit csfilter \
 If CSTMM was skipped, use `--input_dir ./merge --metadata ./merge/metadata.tsv`.
 Metadata inference follows the last successful filter state, then the selected
 input directory; it does not use file modification times. For Oarfish runs,
-add `--norm log2p1-none`. See [metadata and normalization](https://github.com/kfuku52/amalgkit/wiki/Metadata-and-normalization).
+add `--norm log2p1-cpm`. See [metadata and normalization](https://github.com/kfuku52/amalgkit/wiki/Metadata-and-normalization).
 
 Using an orthogroup table:
 

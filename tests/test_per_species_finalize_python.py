@@ -19,6 +19,8 @@ from amalgkit.per_species_finalize_python import (
     _run_batch_effect_step,
     _transform_raw_to_fpkm,
     _transform_raw_to_tpm,
+    _transform_raw_to_cpm,
+    record_expression_library_sizes,
     load_quant_model_table,
     resolve_length_models,
     run_finalize_python_worker,
@@ -191,7 +193,8 @@ def test_workers_reject_cstmm_without_original_library_sizes(tmp_path, worker, p
 
 
 @pytest.mark.parametrize('worker', [_run_prepare_or_wsfilter_python_worker, run_finalize_python_worker])
-def test_workers_preserve_tmm_scaling_with_excluded_metadata_rows(tmp_path, worker, stub_pdf_rendering):
+@pytest.mark.parametrize('new_metadata', [False, True])
+def test_workers_preserve_tmm_scaling_with_excluded_metadata_rows(tmp_path, worker, new_metadata, stub_pdf_rendering):
     fixture = _write_species_input_fixture(tmp_path)
     species_tag = fixture['species_tag']
     species_dir = tmp_path / 'input' / species_tag
@@ -203,12 +206,94 @@ def test_workers_preserve_tmm_scaling_with_excluded_metadata_rows(tmp_path, work
     library_sizes = counts.sum() * [2.0, 0.5, 1.0, 1.0]
     metadata.df['tmm_library_size'] = metadata.df['run'].map(library_sizes)
     metadata.df.loc[metadata.df['run'].eq('RUN04'), ['exclusion', 'tmm_library_size']] = ['manual', numpy.nan]
+    if new_metadata:
+        metadata.df['cstmm_count_unit'] = 'counts_divided_by_tmm_factor'
+        metadata.df['tmm_normalization_factor'] = metadata.df.run.map(library_sizes / counts.sum())
+        metadata.df['tmm_effective_library_size'] = metadata.df.tmm_library_size * metadata.df.tmm_normalization_factor
     args = build_per_species_args(tmp_path, skip_curation=True, norm='log2p1-fpkm')
     assert worker(args, metadata, species_tag, fixture['input_dir']) == 0
     output = pandas.read_csv(tmp_path / 'out' / 'per_species' / species_tag / 'tables' /
                              (species_tag + '.uncorrected.tc.tsv'), sep='\t', index_col=0)
     expected = numpy.log2(counts.loc[:, ['RUN01', 'RUN02', 'RUN03']].div(library_sizes, axis=1).drop(columns='RUN04') * 1e6 + 1)
     numpy.testing.assert_allclose(output, expected)
+
+
+@pytest.mark.parametrize('worker', [_run_prepare_or_wsfilter_python_worker, run_finalize_python_worker])
+@pytest.mark.parametrize('cstmm', [False, True])
+def test_workers_cpm_preserves_depth_and_composition_without_lengths(tmp_path, worker, cstmm, stub_pdf_rendering):
+    fixture = _write_species_input_fixture(tmp_path)
+    tag = fixture['species_tag']
+    directory = tmp_path / 'input' / tag
+    path = directory / (tag + '_est_counts.tsv')
+    counts = pandas.read_csv(path, sep='\t', index_col=0).astype(float)
+    counts['RUN02'] = counts.RUN01 * 10
+    libraries = counts.sum()
+    factors = pandas.Series([2., 2., .5, .5], index=counts.columns)
+    if cstmm:
+        path.unlink()
+        path = directory / (tag + '_cstmm_counts.tsv')
+        counts = counts.div(factors, axis=1)
+        fixture['metadata'].df['tmm_library_size'] = fixture['metadata'].df.run.map(libraries)
+    counts.to_csv(path, sep='\t')
+    (directory / (tag + '_eff_length.tsv')).unlink()
+    pd = pandas.DataFrame({'run': counts.columns, 'backend': 'oarfish', 'length_model': 'none'})
+    pd.to_csv(directory / (tag + '_quant_model.tsv'), sep='\t', index=False)
+    args = build_per_species_args(tmp_path, skip_curation=True, norm='log2p1-cpm')
+    assert worker(args, fixture['metadata'], tag, fixture['input_dir']) == 0
+    output = pandas.read_csv(tmp_path / 'out' / 'per_species' / tag / 'tables' /
+                             (tag + '.uncorrected.tc.tsv'), sep='\t', index_col=0)
+    expected = numpy.log2(counts.div(libraries, axis=1) * 1e6 + 1)
+    numpy.testing.assert_allclose(output, expected)
+    numpy.testing.assert_allclose(output.RUN01, output.RUN02)
+
+
+def test_cpm_denominator_survives_gene_removal_and_metadata_reordering():
+    counts = pandas.DataFrame({'A': [10., 90.], 'B': [100., 900.]}, index=['keep', 'drop'])
+    metadata = pandas.DataFrame({'run': ['B', 'A'], 'exclusion': 'no'})
+    captured = record_expression_library_sizes('Species_est_counts.tsv', counts, metadata, 'none-cpm')
+    observed = _transform_raw_to_cpm(counts.loc[['keep']], captured)
+    numpy.testing.assert_allclose(observed, [[100000., 100000.]])
+    with pytest.raises(ValueError, match='original'):
+        _transform_raw_to_cpm(counts, captured.assign(expression_library_size=0))
+
+
+@pytest.mark.parametrize('algorithm', ['no', 'sva', 'ruvseq', 'combatseq', 'latent_glm'])
+def test_cpm_transformation_occurs_at_exactly_one_batch_stage(algorithm):
+    counts = pandas.DataFrame({'A': [10., 20.], 'B': [100., 200.]})
+    metadata = pandas.DataFrame({'run': ['A', 'B'], 'tmm_library_size': [100., 1000.]})
+    before = _apply_transformation_logic(counts, None, 'log2p1-cpm', algorithm, 'before_batch', metadata)
+    plotted = _apply_transformation_logic(before, None, 'log2p1-cpm', algorithm, 'before_batch_plot', metadata)
+    after = _apply_transformation_logic(before, None, 'log2p1-cpm', algorithm, 'after_batch', metadata)
+    expected = numpy.log2(counts.div([100., 1000.], axis=1) * 1e6 + 1)
+    numpy.testing.assert_allclose(after, expected)
+    numpy.testing.assert_allclose(plotted, expected)
+    if algorithm in {'ruvseq', 'combatseq', 'latent_glm'}:
+        pandas.testing.assert_frame_equal(before, counts)
+
+
+def test_cpm_rejects_tmm_metadata_on_raw_counts():
+    counts = pandas.DataFrame({'A': [10., 20.]})
+    metadata = pandas.DataFrame({'run': ['A'], 'exclusion': 'no', 'tmm_library_size': [30.]})
+    with pytest.raises(ValueError, match='raw merge counts'):
+        record_expression_library_sizes('Species_est_counts.tsv', counts, metadata, 'none-cpm')
+
+
+@pytest.mark.parametrize('mismatch', ['counts', 'effective_size', 'factor'])
+def test_new_cstmm_metadata_must_match_full_count_table(mismatch):
+    counts = pandas.DataFrame({'A': [10., 20.]})
+    metadata = pandas.DataFrame({'run': ['A'], 'exclusion': 'no', 'tmm_library_size': [60.],
+                                 'tmm_normalization_factor': [2.], 'tmm_effective_library_size': [120.],
+                                 'cstmm_count_unit': ['counts_divided_by_tmm_factor']})
+    valid = record_expression_library_sizes('Species_cstmm_counts.tsv', counts, metadata, 'none-cpm')
+    numpy.testing.assert_allclose(_transform_raw_to_cpm(counts, valid), counts / 60 * 1e6)
+    if mismatch == 'counts':
+        counts *= 2
+    elif mismatch == 'effective_size':
+        metadata.tmm_effective_library_size *= 2
+    else:
+        metadata.tmm_normalization_factor = 0
+    with pytest.raises(ValueError, match='CSTMM'):
+        record_expression_library_sizes('Species_cstmm_counts.tsv', counts, metadata, 'none-cpm')
 
 
 def _inject_latent_batch_signal(input_dir, species_tag):

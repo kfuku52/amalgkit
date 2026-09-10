@@ -71,6 +71,14 @@ def cstmm_main(args):
     if metadata_path == 'inferred':
         metadata_path = os.path.join(dir_count, 'metadata.tsv')
     count_files = get_count_files(dir_count)
+    imputation_options = dict(
+        scale=getattr(args, 'tmm_imputation_scale', 'library_size'),
+        num_pc=getattr(args, 'tmm_imputation_rank', 4),
+        max_iter=getattr(args, 'tmm_imputation_max_iter', 50),
+        tol=getattr(args, 'tmm_imputation_tol', 1e-6),
+        allow_unconverged=bool(getattr(args, 'tmm_allow_unconverged', False)),
+    )
+    reference_diagnostics = bool(getattr(args, 'tmm_reference_diagnostics', True))
     with staged_output_dir(
         dir_cstmm,
         redo=bool(getattr(args, 'redo', False)),
@@ -114,6 +122,8 @@ def cstmm_main(args):
                 dir_cstmm=stage_dir,
                 species_name=species_name,
                 metadata_path=metadata_path,
+                imputation_options=imputation_options,
+                reference_diagnostics=reference_diagnostics,
             )
         else:
             run_cstmm_python_multi_species(
@@ -123,4 +133,6 @@ def cstmm_main(args):
                 file_orthogroup_table=file_orthogroup_table,
                 single_copy_threshold=getattr(args, 'single_copy_threshold', DEFAULT_SINGLE_COPY_THRESHOLD),
                 metadata_path=metadata_path,
+                imputation_options=imputation_options,
+                reference_diagnostics=reference_diagnostics,
             )

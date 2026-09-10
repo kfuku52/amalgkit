@@ -163,9 +163,12 @@ def test_documented_long_read_chain_keeps_length_model_and_tmm_scale(tmp_path, m
     for command in ('cstmm', 'wsfilter', 'csfilter', 'finalize'):
         _run(_commands('Metadata-and-normalization.md', command)[-1])
     for species in ('Species_A', 'Species_B'):
-        original = pandas.read_csv(tmp_path / 'cstmm' / species / f'{species}_cstmm_counts.tsv', sep='\t', index_col=0)
+        original = pandas.read_csv(tmp_path / 'merge' / species / f'{species}_est_counts.tsv', sep='\t', index_col=0)
+        normalization = pandas.read_csv(tmp_path / 'cstmm' / 'metadata.tsv', sep='\t').set_index('run')
         final = pandas.read_csv(tmp_path / 'finalize' / species / f'{species}_expression.tsv', sep='\t', index_col=0)
         assert len(final.columns) > 0
-        numpy.testing.assert_allclose(final, numpy.log2(original.loc[final.index, final.columns] + 1))
+        effective_sizes = normalization.loc[final.columns, 'tmm_effective_library_size']
+        expected = numpy.log2(original.loc[final.index, final.columns].div(effective_sizes, axis=1) * 1e6 + 1)
+        numpy.testing.assert_allclose(final, expected)
         model = _read(tmp_path / 'cstmm' / species / f'{species}_quant_model.tsv')
         assert model['length_model'].eq('none').all()

@@ -126,5 +126,5 @@ amalgkit finalize --out_dir ./ --input_dir ./merge --metadata ./merge/metadata.t
 ```
 
 This finalization example is for short reads. For Oarfish/long-read data, use
-`--norm log2p1-none`; see
+`--norm log2p1-cpm`; see
 [metadata and normalization](https://github.com/kfuku52/amalgkit/wiki/Metadata-and-normalization).

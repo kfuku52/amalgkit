@@ -34,7 +34,7 @@ amalgkit wsfilter --out_dir ./ --input_dir ./cstmm --metadata ./cstmm/metadata.t
 If CSTMM was skipped, use `--input_dir ./merge --metadata ./merge/metadata.tsv`.
 Do not use the original pre-CSTMM metadata with CSTMM counts: it lacks the
 original library sizes needed to preserve TMM during FPKM calculation.
-For Oarfish runs, add `--norm log2p1-none` to every downstream command.
+For Oarfish runs, add `--norm log2p1-cpm` to every downstream command.
 
 ## Basic Use
 
