@@ -111,6 +111,45 @@ class TestBoundedDownload:
         assert not output_path.exists()
 
 
+@pytest.mark.parametrize('present', [False, True])
+def test_regular_file_validation_allows_absent_or_regular_file(tmp_path, present):
+    path = tmp_path / 'download.lock'
+    if present:
+        path.write_text('lock')
+    download_utils._assert_regular_file_or_absent(path)
+
+
+def test_regular_file_validation_allows_concurrent_removal(tmp_path, monkeypatch):
+    path = tmp_path / 'download.lock'
+    path.write_text('lock')
+    original_lstat = os.lstat
+
+    def remove_after_observation(candidate, *args, **kwargs):
+        result = original_lstat(candidate, *args, **kwargs)
+        if candidate == path:
+            path.unlink()
+        return result
+
+    with monkeypatch.context() as patch:
+        patch.setattr(download_utils.os, 'lstat', remove_after_observation)
+        download_utils._assert_regular_file_or_absent(path)
+    assert not path.exists()
+
+
+@pytest.mark.parametrize('kind', ['directory', 'symlink', 'dangling_symlink'])
+def test_regular_file_validation_rejects_nonregular_paths(tmp_path, kind):
+    path = tmp_path / 'download.lock'
+    if kind == 'directory':
+        path.mkdir()
+    else:
+        target = tmp_path / 'target'
+        if kind == 'symlink':
+            target.write_text('data')
+        path.symlink_to(target)
+    with pytest.raises(IsADirectoryError, match='not a file'):
+        download_utils._assert_regular_file_or_absent(path)
+
+
 class TestDownloadLockRecovery:
     def test_download_lock_path_honors_custom_lock_directory(self, tmp_path):
         args = SimpleNamespace(

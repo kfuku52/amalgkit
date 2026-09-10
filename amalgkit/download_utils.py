@@ -176,9 +176,12 @@ def resolve_default_ncbi_taxonomy_data_dir():
 
 
 def _assert_regular_file_or_absent(path, label='Path'):
-    if not os.path.lexists(path):
+    try:
+        # A concurrent owner may remove a lock between separate path checks.
+        path_stat = os.lstat(path)
+    except FileNotFoundError:
         return
-    if os.path.islink(path) or (not os.path.isfile(path)):
+    if not stat.S_ISREG(path_stat.st_mode):
         raise IsADirectoryError('{} exists but is not a file: {}'.format(label, path))
 
 

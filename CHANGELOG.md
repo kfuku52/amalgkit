@@ -5,6 +5,12 @@ Releases provide generated notes only for tagged releases. Patch-only updates
 remain on the default branch and are recorded below; consult this file rather
 than the Releases page for those changes.
 
+### 0.16.81 - 2026-09-10
+
+- Validated shared download lock paths with one file-status observation to avoid
+  false non-file errors when another worker releases a lock, while retaining
+  rejection of directories and symbolic links.
+
 ### 0.16.80 - 2026-09-09
 
 - Automatically resumed interrupted original FASTQ transfers with bounded
