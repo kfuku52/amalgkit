@@ -30,6 +30,21 @@ the same local install path, `uv venv --python 3.14` followed by
 `uv pip install -e ".[test,quality]"` is an alternative to pip. This is a tooling
 choice, not a new runtime dependency or a dependency lock.
 
+CI intentionally resolves the newest compatible Python dependencies from
+`pyproject.toml` rather than using a committed lockfile. This detects upstream
+compatibility changes; the separate minimum-dependency job verifies the declared
+floors. Do not replace these lanes with one frozen environment. A lock or frozen
+package listing for a reproducible experiment should be kept separately from
+library dependency metadata and these compatibility checks.
+
+The shared Python action keys its download/wheel cache on `pyproject.toml`,
+`requirements/*.txt`, and the action definition, with separate suffixes for the
+latest, minimum, and Combat-seq policies. Caches accelerate installation; they
+do not lock resolved versions. External GitHub Actions are pinned to full commit
+SHAs, with version comments for review. When updating an action, resolve its
+upstream tag to the commit (dereferencing annotated tags), review the change,
+and update both the SHA and its comment.
+
 When running several test processes, set `OMP_NUM_THREADS=1`,
 `OPENBLAS_NUM_THREADS=1` and `MKL_NUM_THREADS=1` to avoid nested native thread
 pools. CI uses these settings. Test the optional Combat-seq extra separately
