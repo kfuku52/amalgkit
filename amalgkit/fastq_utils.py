@@ -6,6 +6,11 @@ import os
 DEFAULT_FASTQ_CHUNK_SIZE = 16 * 1024 * 1024
 
 
+def is_private_file_value(value):
+    """Interpret the private-input metadata flag consistently across workflows."""
+    return str(value).strip().lower() == 'yes'
+
+
 def round_half_up(value):
     return int(math.floor(float(value) + 0.5))
 

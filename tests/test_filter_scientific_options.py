@@ -186,7 +186,8 @@ def test_rerun_metrics_override_stale_canonical_columns():
     assert output.loc[0, 'cs_within_common_genes'] == 200
 
 
-def test_default_ws_margin_preserves_pandas_rounding_at_zero_boundary():
+@pytest.mark.parametrize("rounding_direction", [None, -1, 0, 1])
+def test_default_ws_margin_preserves_pandas_rounding_at_zero_boundary(monkeypatch, rounding_direction):
     counts = pd.DataFrame(dict(
         a1=[5.12588318783472, 15.364690481856902, np.nan],
         a2=[5.561957608630067, 14.981829500375296, 8.706798092670898],
@@ -194,9 +195,22 @@ def test_default_ws_margin_preserves_pandas_rounding_at_zero_boundary():
         b2=[7.144597967048354, 12.607317411772504, 9.709964987151759],
     ))
     metadata = pd.DataFrame(dict(run=counts.columns, sample_group=['A', 'A', 'B', 'B'], exclusion='no'))
+    if rounding_direction is not None:
+        # Exercise each boundary deterministically; BLAS/platform rounding of
+        # the real two-point fixture need not produce a negative difference.
+        original_corr = pd.Series.corr
+        within = np.nextafter(0.5, np.inf if rounding_direction > 0 else -np.inf) if rounding_direction else 0.5
+
+        def controlled_corr(left, right, *args, **kwargs):
+            if left.name == 'a1':
+                return within if np.array_equal(right.iloc[:2], counts.a2.iloc[:2]) else 0.5
+            return original_corr(left, right, *args, **kwargs)
+
+        monkeypatch.setattr(pd.Series, 'corr', controlled_corr)
     expected = counts.a1.corr(counts.a2) - counts.a1.corr(counts[['b1', 'b2']].mean(axis=1))
     result = _compute_sample_group_correlation_metrics(counts, metadata, ['A', 'B'], 'pearson')
-    assert expected < 0
+    if rounding_direction is not None:
+        assert np.sign(expected) == rounding_direction
     assert result.loc[0, 'ws_margin'] == expected
 
 

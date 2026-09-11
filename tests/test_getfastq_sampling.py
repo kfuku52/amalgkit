@@ -154,14 +154,15 @@ def test_gsa_random_end_to_end_resume_and_manifest_tamper(tmp_path, monkeypatch,
     assert json.loads(manifest_path.read_text())["algorithm"] == sampling.ALGORITHM
 
 
-def test_private_random_two_rounds_and_restart(tmp_path, monkeypatch):
+@pytest.mark.parametrize("private_flag", ["yes", "YES", " Yes "])
+def test_private_random_two_rounds_and_restart(tmp_path, monkeypatch, private_flag):
     source = tmp_path / "private.fq"
     write_fastq(source, [10, 10, 2, 2, 10, 10, 2, 2] * 5)
     row = dict(
         run="private1",
         scientific_name="Arabidopsis thaliana",
         lib_layout="single",
-        private_file="yes",
+        private_file=private_flag,
         read1_path=str(source),
         total_spots=40,
         total_bases=240,
@@ -211,9 +212,10 @@ def test_private_random_two_rounds_and_restart(tmp_path, monkeypatch):
     assert gzip.decompress(output.read_bytes()) == result
 
 
-def test_budget_excludes_unrequested_private_and_is_order_independent():
+@pytest.mark.parametrize("private_flag", ["yes", "YES", " Yes "])
+def test_budget_excludes_unrequested_private_and_is_order_independent(private_flag):
     rows = [
-        dict(run="private", private_file="yes", total_bases=9999),
+        dict(run="private", private_file=private_flag, total_bases=9999),
         dict(run="b", private_file="no", total_bases=1000),
         dict(run="a", private_file="no", total_bases=1000),
     ]
@@ -414,7 +416,8 @@ def test_parallel_and_metadata_reordering_keep_selection(tmp_path, monkeypatch):
     assert metadata.df["sampling_seed"].tolist() == [1234, 1234]
 
 
-def test_private_source_in_managed_directory_rejected_before_redo(tmp_path, monkeypatch):
+@pytest.mark.parametrize("private_flag", ["yes", "YES", " Yes "])
+def test_private_source_in_managed_directory_rejected_before_redo(tmp_path, monkeypatch, private_flag):
     directory = tmp_path / "getfastq/private1"
     directory.mkdir(parents=True)
     source = directory / "private1.fastq.gz"
@@ -426,7 +429,7 @@ def test_private_source_in_managed_directory_rejected_before_redo(tmp_path, monk
                 run="private1",
                 scientific_name="Arabidopsis thaliana",
                 lib_layout="single",
-                private_file="yes",
+                private_file=private_flag,
                 read1_path=str(source),
                 total_spots=4,
                 total_bases=40,
@@ -442,10 +445,11 @@ def test_private_source_in_managed_directory_rejected_before_redo(tmp_path, monk
     assert gzip.decompress(source.read_bytes()) == content
 
 
-def test_private_content_change_invalidates_fingerprint(tmp_path):
+@pytest.mark.parametrize("private_flag", ["yes", "YES", " Yes "])
+def test_private_content_change_invalidates_fingerprint(tmp_path, private_flag):
     source = tmp_path / "source.fq"
     write_fastq(source, [10] * 4)
-    table = Metadata.from_DataFrame(pd.DataFrame([dict(run="x", private_file="yes", read1_path=str(source))]))
+    table = Metadata.from_DataFrame(pd.DataFrame([dict(run="x", private_file=private_flag, read1_path=str(source))]))
     args = SimpleNamespace(sampling_method="random", sampling_private=True, sampling_seed=0)
     stat, params = dict(sra_id="x", layout="single", metadata_idx=0), dict(num_bp_per_sra=20)
     before = getfastq.build_getfastq_run_fingerprint(args, stat, params, table)
@@ -577,3 +581,33 @@ def test_resume_revalidates_older_random_input_validation(tmp_path, monkeypatch)
     getfastq.getfastq_main(args)
     assert output.stat().st_mtime_ns != previous_stamp
     assert gzip.decompress(output.read_bytes()) == previous_content
+
+
+@pytest.mark.parametrize("private_flag", ["yes", "YES", " Yes "])
+@pytest.mark.parametrize("method", ["contiguous", "random"])
+def test_private_dispatch_without_sampling_opt_in(tmp_path, monkeypatch, private_flag, method):
+    source = tmp_path / "source.fq"
+    content = write_fastq(source, [10] * 4)
+    write_metadata(
+        tmp_path,
+        [
+            dict(
+                run="private1",
+                scientific_name="Arabidopsis thaliana",
+                lib_layout="single",
+                private_file=private_flag,
+                read1_path=str(source),
+                total_spots=4,
+                total_bases=40,
+                spot_length=10,
+                exclusion="no",
+            )
+        ],
+    )
+    monkeypatch.setattr(getfastq, "check_getfastq_dependency", lambda args: None)
+    monkeypatch.setattr(getfastq, "download_sra", lambda *a, **k: pytest.fail("Private input dispatched to SRA"))
+    args = native_args(tmp_path, "--sampling_method", method, "--max_bp", "20")
+    getfastq.getfastq_main(args)
+    output = tmp_path / "getfastq/private1/private1.amalgkit.fastq.gz"
+    assert gzip.decompress(output.read_bytes()) == content
+    assert source.read_bytes() == content

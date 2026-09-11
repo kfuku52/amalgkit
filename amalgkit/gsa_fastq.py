@@ -15,6 +15,7 @@ import zlib
 
 import pandas
 
+from amalgkit.fastq_utils import is_private_file_value
 from amalgkit.download_utils import acquire_exclusive_lock, calculate_file_md5, resolve_download_dir
 from amalgkit.fastq_download_integrity import validate_integrity_metadata
 from amalgkit.output_utils import atomic_output_path
@@ -37,7 +38,7 @@ def read_manifest(row):
     run = str(row["run"])
     if not re.fullmatch(r"CRR\d+", run):
         raise ValueError("GSA metadata requires a CRR Run accession: {}".format(run))
-    if str(row.get("private_file", "")).strip().lower() == "yes":
+    if is_private_file_value(row.get("private_file", "")):
         raise ValueError("GSA public metadata cannot be marked private: {}".format(run))
     if str(row.get("lib_layout", "")).lower() not in {"single", "paired"}:
         raise ValueError("Unsupported GSA library layout for {}".format(run))
