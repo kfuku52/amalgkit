@@ -5,6 +5,12 @@ Releases provide generated notes only for tagged releases. Patch-only updates
 remain on the default branch and are recorded below; consult this file rather
 than the Releases page for those changes.
 
+### 0.16.85 - 2026-09-11
+
+- Add direct parser regression coverage for numeric CLI options, including valid
+  boundaries, nonfinite values, malformed inputs, and argparse exit status 2.
+  Runtime validation behavior is unchanged.
+
 ### 0.16.84 - 2026-09-11
 
 - Resolve private FASTQ sources to absolute paths and validate required inputs
