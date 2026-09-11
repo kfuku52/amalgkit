@@ -455,7 +455,8 @@ def test_embedding_cache_releases_large_intermediates_but_keeps_coordinates():
 
     _resolve_correlation_matrix(matrix, missing_strategy='em_pca', cache=cache)
     coordinates_key = ('tsne', id(matrix), 'em_pca')
-    cache[coordinates_key] = pandas.DataFrame(index=matrix.columns)
+    from amalgkit.cross_species_computation import cache_matrix
+    cache_matrix(cache, coordinates_key, matrix, pandas.DataFrame(index=matrix.columns))
 
     _evict_embedding_intermediates(
         cache,

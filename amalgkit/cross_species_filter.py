@@ -11,6 +11,8 @@ from amalgkit.table_io import read_annotation_tsv, read_identifier_tsv
 
 from amalgkit.command_context import CrossSpeciesFilterContext
 from amalgkit.cross_species_computation import (
+    cache_matrix as _cache_matrix,
+    get_cached_matrix as _get_cached_matrix,
     calculate_correlation_within_group as _calculate_correlation_within_group,
     resolve_correlation_matrix as _resolve_correlation_matrix,
     resolve_finite_correlation_matrix as _resolve_finite_correlation_matrix,
@@ -792,8 +794,9 @@ def _reduce_tsne_features(samples_by_features):
 
 def _compute_tsne_coordinates(matrix_df, missing_strategy, cache=None):
     cache_key = ('tsne', id(matrix_df), str(missing_strategy).lower())
-    if cache is not None and cache_key in cache:
-        return cache[cache_key]
+    cached = _get_cached_matrix(cache, cache_key, matrix_df)
+    if cached is not None:
+        return cached
     out = pandas.DataFrame(index=matrix_df.columns, columns=['TSNE1', 'TSNE2'], dtype=float)
     if matrix_df.shape[1] < 4:
         return out
@@ -821,8 +824,7 @@ def _compute_tsne_coordinates(matrix_df, missing_strategy, cache=None):
         return out
     out.loc[filled.columns, 'TSNE1'] = coords[:, 0]
     out.loc[filled.columns, 'TSNE2'] = coords[:, 1]
-    if cache is not None:
-        cache[cache_key] = out
+    _cache_matrix(cache, cache_key, matrix_df, out)
     return out
 
 

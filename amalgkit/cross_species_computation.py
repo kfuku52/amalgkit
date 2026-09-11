@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import weakref
+
 import numpy
 import pandas
 
@@ -178,6 +180,36 @@ def calculate_correlation_within_group(
     return out
 
 
+def get_cached_matrix(cache: dict | None, key: tuple, source: pandas.DataFrame) -> pandas.DataFrame | None:
+    """Reuse results only for the original, still-live input DataFrame.
+
+    Inputs must remain unchanged while cached. Clear their entries before any
+    in-place changes to values, index, or columns.
+    """
+    if cache is None or key not in cache:
+        return None
+    source_ref, result = cache[key]
+    if source_ref() is source:
+        return result
+    cache.pop(key, None)
+    return None
+
+
+def cache_matrix(cache: dict | None, key: tuple, source: pandas.DataFrame, result: pandas.DataFrame) -> None:
+    """Store a result without keeping its input alive; evict on input deletion."""
+    if cache is None:
+        return
+
+    def evict(source_ref):
+        entry = cache.get(key)
+        # A reused ID may already belong to a replacement input. An old
+        # callback must not remove the replacement's result.
+        if entry is not None and entry[0] is source_ref:
+            cache.pop(key, None)
+
+    cache[key] = (weakref.ref(source, evict), result)
+
+
 def resolve_matrix_for_embedding(
     matrix_df: pandas.DataFrame,
     missing_strategy: str,
@@ -185,14 +217,14 @@ def resolve_matrix_for_embedding(
 ) -> pandas.DataFrame:
     """Apply one missing-value strategy, optionally caching the result."""
     cache_key = ("filled", id(matrix_df), str(missing_strategy).lower())
-    if cache is not None and cache_key in cache:
-        return cache[cache_key]
+    cached = get_cached_matrix(cache, cache_key, matrix_df)
+    if cached is not None:
+        return cached
     if str(missing_strategy).lower() == "strict":
         out = matrix_df.dropna(axis=0, how="any").copy()
     else:
         out = impute_expression(matrix_df=matrix_df, strategy=missing_strategy)
-    if cache is not None:
-        cache[cache_key] = out
+    cache_matrix(cache, cache_key, matrix_df, out)
     return out
 
 
@@ -204,18 +236,18 @@ def resolve_correlation_matrix(
     """Return a correlation matrix sharing the embedding imputation cache."""
     strategy_key = str(missing_strategy).lower()
     cache_key = ("correlation", id(matrix_df), strategy_key)
-    if cache is not None and cache_key in cache:
-        return cache[cache_key]
+    cached = get_cached_matrix(cache, cache_key, matrix_df)
+    if cached is not None:
+        return cached
     filled = resolve_matrix_for_embedding(
         matrix_df,
         missing_strategy=missing_strategy,
         cache=cache,
     )
     corr = filled.corr(method="pearson")
-    if cache is not None:
-        cache[cache_key] = corr
-        if strategy_key == "row_mean":
-            cache.pop(("filled", id(matrix_df), strategy_key), None)
+    cache_matrix(cache, cache_key, matrix_df, corr)
+    if cache is not None and strategy_key == "row_mean":
+        cache.pop(("filled", id(matrix_df), strategy_key), None)
     return corr
 
 
@@ -247,8 +279,9 @@ def resolve_finite_correlation_matrix(
     """Return the fully defined sample subset required by eigendecompositions."""
     strategy_key = str(missing_strategy).lower()
     cache_key = ("finite_correlation", id(matrix_df), strategy_key)
-    if cache is not None and cache_key in cache:
-        return cache[cache_key]
+    cached = get_cached_matrix(cache, cache_key, matrix_df)
+    if cached is not None:
+        return cached
     corr = resolve_correlation_matrix(
         matrix_df,
         missing_strategy=missing_strategy,
@@ -257,8 +290,7 @@ def resolve_finite_correlation_matrix(
     finite_corr = finite_correlation_block(corr)
     if finite_corr.size > 0 and not numpy.isfinite(finite_corr.to_numpy(dtype=float)).all():
         raise ValueError("Non-degenerate sample correlations must be finite after imputation.")
-    if cache is not None:
-        cache[cache_key] = finite_corr
+    cache_matrix(cache, cache_key, matrix_df, finite_corr)
     return finite_corr
 
 

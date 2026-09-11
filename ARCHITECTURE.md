@@ -102,3 +102,9 @@ state serialization and fingerprint changes can be reviewed in isolation.
 Performance-sensitive changes should update or run `benchmarks/benchmark_core.py`.
 The scheduled end-to-end workflow retains benchmark JSON and exercises real
 `sra-tools`, `seqkit`, and `kallisto` binaries.
+
+Cross-species numerical and t-SNE caches validate the original input through a
+weak reference and discard entries when that DataFrame is collected. Inputs
+must remain unchanged while cached; clear entries before changing values or
+axis labels in place. The filtering pipeline retains its inputs during reuse
+and explicitly evicts large intermediates when they are no longer needed.
