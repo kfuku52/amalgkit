@@ -5,12 +5,15 @@ Releases provide generated notes only for tagged releases. Patch-only updates
 remain on the default branch and are recorded below; consult this file rather
 than the Releases page for those changes.
 
-### 0.16.83 - 2026-09-11
+### 0.16.84 - 2026-09-11
 
 - Resolve private FASTQ sources to absolute paths and validate required inputs
   before staging. Ignore unused single-end read2 paths to preserve read1.
 - Apply the same case- and whitespace-insensitive private flag interpretation to
   extraction, random sampling, resume fingerprints, and GSA dispatch.
+
+- Make the zero-margin correlation regression portable across platforms while
+  retaining exact pandas agreement and explicit signed-rounding coverage.
 
 ### 0.16.82 - 2026-09-10
 
