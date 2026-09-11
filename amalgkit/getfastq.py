@@ -41,6 +41,7 @@ from amalgkit.fastq_utils import (
     count_fastq_records_and_bases as shared_count_fastq_records_and_bases,
     count_fastq_records as shared_count_fastq_records,
     is_gzip_fastq_path,
+    is_private_file_value,
     map_seqkit_stats_rows,
     parse_seqkit_stats_row_records_and_bases as _parse_seqkit_stats_row_records_and_bases,
     validate_fastq_structure as shared_validate_fastq_structure,
@@ -6254,7 +6255,7 @@ def write_getfastq_run_state(args, sra_stat, g, run_metadata, phase, full_valida
     if ind_sra is None:
         ind_sra = get_metadata_row_index_by_run(run_metadata, sra_stat['sra_id'])
     if 'private_file' in run_metadata.df.columns:
-        is_private = str(run_metadata.df.at[ind_sra, 'private_file']).strip().lower() == 'yes'
+        is_private = is_private_file_value(run_metadata.df.at[ind_sra, 'private_file'])
     if phase == GETFASTQ_PHASE_SECOND_ROUND_IN_PROGRESS:
         output_names = []
         for output_name, sentinel_name in _get_getfastq_output_candidates(sra_stat):
@@ -6347,7 +6348,7 @@ def inspect_getfastq_resume_output(args, sra_stat, g, run_metadata):
             ind_sra = get_metadata_row_index_by_run(run_metadata, sra_stat['sra_id'])
         is_private = (
             ('private_file' in run_metadata.df.columns)
-            and (str(run_metadata.df.at[ind_sra, 'private_file']).strip().lower() == 'yes')
+            and (is_private_file_value(run_metadata.df.at[ind_sra, 'private_file']))
         )
         validated = validate_getfastq_resume_output(sra_stat, state=state, is_private=is_private)
         if (
@@ -6537,7 +6538,7 @@ def extract_random_spots(args, sra_stat, metadata, g, start, end):
     outputs = [os.path.join(work_dir, run + suffix + '.fastq.gz') for suffix in suffixes]
     raw_args = clone_namespace(args, min_read_length=0)
     previous_counts = {col: metadata.df.at[ind, col] for col in sampling.COUNT_COLUMNS}
-    if str(row.get('private_file', '')).lower() == 'yes':
+    if is_private_file_value(row.get('private_file', '')):
         paths = [str(row['read1_path'])]
         if original_layout == 'paired':
             paths.append(str(row['read2_path']))
@@ -6556,7 +6557,7 @@ def extract_random_spots(args, sra_stat, metadata, g, start, end):
         ext = get_or_detect_intermediate_extension(sra_stat, work_dir=work_dir)
         paths = [os.path.join(work_dir, run + suffix + ext) for suffix in suffixes]
     with ExitStack() as sources:
-        if is_gsa_row(row) and str(row.get('private_file', '')).lower() != 'yes':
+        if is_gsa_row(row) and not is_private_file_value(row.get('private_file', '')):
             spots = sources.enter_context(open_gsa_spots(args, row))
         else:
             spots = sampling.iter_spots(paths)
@@ -6567,7 +6568,7 @@ def extract_random_spots(args, sra_stat, metadata, g, start, end):
             min_length=int(args.min_read_length), run_dir=work_dir,
             provenance={'target_bp_per_run': g['num_bp_per_sra'], 'max_bp': g['max_bp'],
                         'budget_runs': g.get('sampling_run_ids'),
-                        'source': 'private' if str(row.get('private_file', '')).lower() == 'yes'
+                        'source': 'private' if is_private_file_value(row.get('private_file', ''))
                         else 'gsa' if is_gsa_row(row) else 'sra-or-original-fastq'})
     for col, value in counts.items():
         metadata.df.at[ind, col] = previous_counts[col] + value
@@ -6576,7 +6577,7 @@ def extract_random_spots(args, sra_stat, metadata, g, start, end):
                        ('getfastq_sampling_algorithm', sampling.ALGORITHM),
                        ('getfastq_sampling_input_sha256', manifest['input_sha256'])]:
         metadata.df.at[ind, key] = value
-    if str(row.get('private_file', '')).lower() != 'yes':
+    if not is_private_file_value(row.get('private_file', '')):
         for path in paths:
             if path not in outputs and os.path.isfile(path):
                 os.remove(path)
@@ -6976,36 +6977,47 @@ def record_private_fastq_input_stats(metadata, sra_stat, args):
 def sequence_extraction_private(metadata, sra_stat, args, runtime_context=None):
     runtime_context = ensure_getfastq_runtime_context(runtime_context)
     ind_sra = sra_stat.get('metadata_idx', get_metadata_row_index_by_run(metadata, sra_stat['sra_id']))
-    for col in ['read1_path','read2_path']:
-        path_from_raw = metadata.df.at[ind_sra, col]
+    required_columns = ['read1_path']
+    if str(sra_stat.get('layout', '')).strip().lower() == 'paired':
+        required_columns.append('read2_path')
+    staged = []
+    errors = []
+    for col in required_columns:
+        path_from_raw = metadata.df.at[ind_sra, col] if col in metadata.df.columns else None
         if pandas.isna(path_from_raw):
-            sys.stderr.write('Private fastq file path is missing in metadata column "{}".\n'.format(col))
-            continue
-        path_from = str(path_from_raw).strip()
+            path_from = ''
+        else:
+            path_from = str(path_from_raw).strip()
         if path_from == '' or path_from.lower() == 'nan':
-            sys.stderr.write('Private fastq file path is missing in metadata column "{}".\n'.format(col))
+            errors.append('Private fastq file path is missing in metadata column "{}".'.format(col))
             continue
         suffix = ''
         if sra_stat['layout'] == 'paired':
             suffix = '_1' if col == 'read1_path' else '_2'
         path_to = os.path.join(sra_stat['getfastq_sra_dir'], sra_stat['sra_id'] + suffix + '.fastq.gz')
-        if os.path.isfile(path_from):
-            if os.path.lexists(path_to):
-                if os.path.isdir(path_to) and (not os.path.islink(path_to)):
-                    raise IsADirectoryError(
-                        'Private output path exists but is not a file/symlink: {}'.format(path_to)
-                    )
-                os.remove(path_to)
-            if is_gzip_fastq_path(path_from):
-                os.symlink(src=path_from, dst=path_to)
+        source = os.path.realpath(path_from)
+        if not os.path.isfile(source):
+            if os.path.exists(path_from) or os.path.exists(source):
+                errors.append('Private fastq path exists but is not a file: {}'.format(path_from))
             else:
-                with atomic_output_path(path_to, suffix='.fastq.gz') as tmp_path:
-                    with open(path_from, 'rb') as source, gzip.open(tmp_path, 'wb') as destination:
-                        shutil.copyfileobj(source, destination)
-        elif os.path.exists(path_from):
-            sys.stderr.write('Private fastq path exists but is not a file: {}\n'.format(path_from))
+                errors.append('Private fastq file not found: {}'.format(path_from))
+            continue
+        staged.append((source, path_to, path_from))
+    if errors:
+        raise FileNotFoundError(' '.join(errors))
+    for source, path_to, path_from in staged:
+        if os.path.lexists(path_to):
+            if os.path.isdir(path_to) and (not os.path.islink(path_to)):
+                raise IsADirectoryError(
+                    'Private output path exists but is not a file/symlink: {}'.format(path_to)
+                )
+            os.remove(path_to)
+        if is_gzip_fastq_path(path_from) or is_gzip_fastq_path(source):
+            os.symlink(src=source, dst=path_to)
         else:
-            sys.stderr.write('Private fastq file not found: {}\n'.format(path_from))
+            with atomic_output_path(path_to, suffix='.fastq.gz') as tmp_path:
+                with open(source, 'rb') as handle, gzip.open(tmp_path, 'wb') as destination:
+                    shutil.copyfileobj(handle, destination)
     metadata = record_private_fastq_input_stats(metadata=metadata, sra_stat=sra_stat, args=args)
     set_current_intermediate_extension(sra_stat, '.fastq.gz')
     latest_stage_counts = None
@@ -7236,7 +7248,7 @@ def _process_getfastq_run_locked(
         print(txt.format(sra_id, resume_result['phase']), flush=True)
         flag_private_file = False
         if 'private_file' in run_metadata.df.columns:
-            flag_private_file = str(run_metadata.df.at[0, 'private_file']).strip().lower() == 'yes'
+            flag_private_file = is_private_file_value(run_metadata.df.at[0, 'private_file'])
         return {
             'row_index': row_index,
             'sra_id': sra_id,
@@ -7253,12 +7265,12 @@ def _process_getfastq_run_locked(
     print('Total bases:', "{:,}".format(int(run_metadata.df.at[0, 'total_bases'])), 'bp')
     flag_private_file = False
     if 'private_file' in run_metadata.df.columns:
-        if run_metadata.df.at[0, 'private_file'] == 'yes' and not sampling.random_sampling(args, run_metadata.df.iloc[0]):
+        if is_private_file_value(run_metadata.df.at[0, 'private_file']) and not sampling.random_sampling(args, run_metadata.df.iloc[0]):
             print('Processing {} as private data. --max_bp is disabled.'.format(sra_id), flush=True)
             flag_private_file = True
             sequence_extraction_private(run_metadata, sra_stat, args, runtime_context=runtime_context)
     if (not flag_private_file and sampling.random_sampling(args, run_metadata.df.iloc[0])
-            and str(run_metadata.df.iloc[0].get('private_file', '')).lower() == 'yes'):
+            and is_private_file_value(run_metadata.df.iloc[0].get('private_file', ''))):
         run_metadata = sequence_extraction_1st_round(args, sra_stat, run_metadata, g, runtime_context=runtime_context)
     elif not flag_private_file and is_gsa_row(run_metadata.df.iloc[0]):
         print('Processing {} as publicly available GSA FASTQ.'.format(sra_id), flush=True)
@@ -7854,7 +7866,7 @@ def _write_getfastq_completion_manifest_locked(args, metadata, run_rows, g):
             ind_sra = get_metadata_row_index_by_run(metadata, sra_id)
         is_private = (
             ('private_file' in metadata.df.columns)
-            and (str(metadata.df.at[ind_sra, 'private_file']).strip().lower() == 'yes')
+            and (is_private_file_value(metadata.df.at[ind_sra, 'private_file']))
         )
         validated = validate_getfastq_resume_output(
             sra_stat=sra_stat,

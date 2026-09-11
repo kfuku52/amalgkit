@@ -17,6 +17,7 @@ import numpy
 import pandas
 
 from amalgkit import getfastq_sampling as sampling
+from amalgkit.fastq_utils import is_private_file_value
 from amalgkit.metadata_utils import get_metadata_row_index_by_run
 from amalgkit.output_utils import atomic_output_path
 
@@ -107,9 +108,8 @@ def build_getfastq_run_fingerprint(
             "budget_runs": g.get("sampling_run_ids"),
             "input_total_bp": _normalize_getfastq_resume_value(g.get("total_sra_bp")),
         }
-        if (
-            sampling.random_sampling(args, run_metadata.df.loc[ind_sra])
-            and str(run_metadata.df.loc[ind_sra].get("private_file", "")).lower() == "yes"
+        if sampling.random_sampling(args, run_metadata.df.loc[ind_sra]) and is_private_file_value(
+            run_metadata.df.loc[ind_sra].get("private_file", "")
         ):
             source_digests = []
             for column in ["read1_path", "read2_path"][: 2 if sra_stat["layout"] == "paired" else 1]:

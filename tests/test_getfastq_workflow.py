@@ -15,6 +15,7 @@ from amalgkit.command_context import GetfastqRuntimeContext
 from amalgkit.getfastq import (
     rename_reads,
     sequence_extraction_private,
+    is_private_file_value,
     compress_fasterq_output_files,
     getfastq_main,
     check_getfastq_dependency,
@@ -139,7 +140,7 @@ class TestSequenceExtractionPrivate:
 
         assert (sra_dir / 'SRR001.fastq.gz').exists()
 
-    def test_rejects_private_path_that_is_directory(self, tmp_path, monkeypatch, capsys):
+    def test_rejects_when_private_path_is_directory(self, tmp_path, monkeypatch, capsys):
         read1_dir = tmp_path / 'read1_dir'
         read1_dir.mkdir()
         metadata = Metadata.from_DataFrame(pandas.DataFrame({
@@ -166,11 +167,8 @@ class TestSequenceExtractionPrivate:
         monkeypatch.setattr('amalgkit.getfastq.get_or_detect_intermediate_extension', lambda *_args, **_kwargs: '.fastq.gz')
         monkeypatch.setattr('amalgkit.getfastq.rename_fastq', lambda *_args, **_kwargs: None)
 
-        with pytest.raises(FileNotFoundError, match='Private FASTQ input was not staged'):
+        with pytest.raises(FileNotFoundError, match='exists but is not a file'):
             sequence_extraction_private(metadata=metadata, sra_stat=sra_stat, args=args)
-        err = capsys.readouterr().err
-
-        assert 'exists but is not a file' in err
 
     def test_raises_when_private_output_path_is_directory(self, tmp_path, monkeypatch):
         read1_path = tmp_path / 'input_R1.fastq.gz'
@@ -1478,3 +1476,99 @@ class TestRenameReadsSeqkitCompression:
         assert first_header1 == '@r0/1'
         assert first_header2 == '@r0/2'
         assert sorted(observed_threads) == ['1', '1']
+
+
+def test_is_private_file_value_normalizes_case_and_padding():
+    assert is_private_file_value('yes') is True
+    assert is_private_file_value('YES') is True
+    assert is_private_file_value(' Yes ') is True
+    assert is_private_file_value('no') is False
+
+
+def test_sequence_extraction_private_resolves_relative_gzip_symlink(tmp_path, monkeypatch):
+    source = tmp_path / 'input.fastq.gz'
+    with gzip.open(source, 'wt') as handle:
+        handle.write('@r1\nACGT\n+\nIIII\n')
+    work = tmp_path / 'work'
+    work.mkdir()
+    metadata = Metadata.from_DataFrame(pandas.DataFrame({
+        'run': ['SRR001'],
+        'read1_path': ['input.fastq.gz'],
+        'read2_path': [numpy.nan],
+        'lib_layout': ['single'],
+        'total_spots': [1],
+        'total_bases': [4],
+        'spot_length': [4],
+        'scientific_name': ['sp'],
+        'exclusion': ['no'],
+    }))
+    sra_stat = {
+        'sra_id': 'SRR001',
+        'layout': 'single',
+        'getfastq_sra_dir': str(work),
+    }
+    args = SimpleNamespace(fastp=False)
+    monkeypatch.setattr('amalgkit.getfastq.set_current_intermediate_extension', lambda *_a, **_k: None)
+    monkeypatch.setattr('amalgkit.getfastq.get_or_detect_intermediate_extension', lambda *_a, **_k: '.fastq.gz')
+    monkeypatch.setattr('amalgkit.getfastq.rename_fastq', lambda *_a, **_k: None)
+    monkeypatch.setattr('amalgkit.getfastq.write_getfastq_stats', lambda **_k: None)
+    monkeypatch.chdir(tmp_path)
+
+    sequence_extraction_private(metadata=metadata, sra_stat=sra_stat, args=args)
+
+    dest = work / 'SRR001.fastq.gz'
+    assert dest.is_symlink()
+    assert os.path.realpath(dest) == os.path.realpath(source)
+
+
+def test_sequence_extraction_private_rejects_missing_paired_mate(tmp_path):
+    read1 = tmp_path / 'input_R1.fastq.gz'
+    read1.write_text('dummy')
+    metadata = Metadata.from_DataFrame(pandas.DataFrame({
+        'run': ['SRR001'],
+        'read1_path': [str(read1)],
+        'read2_path': [numpy.nan],
+        'lib_layout': ['paired'],
+        'total_spots': [1],
+        'total_bases': [4],
+        'spot_length': [4],
+        'scientific_name': ['sp'],
+        'exclusion': ['no'],
+    }))
+    sra_stat = {
+        'sra_id': 'SRR001',
+        'layout': 'paired',
+        'getfastq_sra_dir': str(tmp_path / 'work'),
+    }
+    (tmp_path / 'work').mkdir()
+    previous = tmp_path / 'work' / 'SRR001_1.fastq.gz'
+    previous.write_bytes(b'previous output')
+    with pytest.raises(FileNotFoundError, match='read2_path'):
+        sequence_extraction_private(metadata=metadata, sra_stat=sra_stat, args=SimpleNamespace(fastp=False))
+    assert previous.read_bytes() == b'previous output'
+
+
+@pytest.mark.parametrize('read2_kind', ['valid', 'missing', 'absent_column'])
+def test_single_private_input_ignores_unused_read2(tmp_path, monkeypatch, read2_kind):
+    read1 = tmp_path / 'read1.fastq.gz'
+    read2 = tmp_path / 'read2.fastq.gz'
+    for path, sequence in [(read1, 'AAAA'), (read2, 'CCCC')]:
+        with gzip.open(path, 'wt') as handle:
+            handle.write('@r1\n' + sequence + '\n+\nIIII\n')
+    row = dict(run='RUN', read1_path=str(read1), lib_layout='single',
+               total_spots=1, total_bases=4, spot_length=4,
+               scientific_name='sp', exclusion='no')
+    if read2_kind != 'absent_column':
+        row['read2_path'] = str(read2 if read2_kind == 'valid' else tmp_path / 'missing')
+    metadata = Metadata.from_DataFrame(pandas.DataFrame([row]))
+    if read2_kind == 'absent_column':
+        metadata.df.drop(columns=['read2_path'], errors='ignore', inplace=True)
+    work = tmp_path / 'work'
+    work.mkdir()
+    stat = dict(sra_id='RUN', layout='single', getfastq_sra_dir=str(work))
+    monkeypatch.setattr('amalgkit.getfastq.rename_fastq', lambda *a, **k: None)
+    sequence_extraction_private(metadata, stat, SimpleNamespace(fastp=False))
+    with gzip.open(work / 'RUN.fastq.gz', 'rt') as handle:
+        assert handle.read().splitlines()[1] == 'AAAA'
+    assert metadata.df.loc[0, 'bp_written'] == 4
+    assert read1.exists() and read2.exists()

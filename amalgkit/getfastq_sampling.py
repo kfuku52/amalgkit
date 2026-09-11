@@ -14,7 +14,7 @@ import json
 import os
 import re
 
-from amalgkit.fastq_utils import open_fastq_binary
+from amalgkit.fastq_utils import is_private_file_value, open_fastq_binary
 from amalgkit.output_utils import atomic_output_path
 
 ALGORITHM = "sha256-fisher-yates-v1"
@@ -41,7 +41,7 @@ def random_sampling(args, row=None):
         return False
     return (
         row is None
-        or str(row.get("private_file", "")).lower() != "yes"
+        or not is_private_file_value(row.get("private_file", ""))
         or bool(getattr(args, "sampling_private", False))
     )
 
@@ -60,7 +60,7 @@ def validate_options(args):
 
 
 def validate_private_sources(args, row, run_dir):
-    if not random_sampling(args, row) or str(row.get("private_file", "")).lower() != "yes":
+    if not random_sampling(args, row) or not is_private_file_value(row.get("private_file", "")):
         return
     # Run cleanup precedes extraction; never let it remove a declared source.
     for column in ["read1_path", "read2_path"][: 2 if str(row.get("lib_layout", "")).lower() == "paired" else 1]:

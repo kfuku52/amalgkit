@@ -2,6 +2,13 @@
 
 `amalgkit getfastq` turns selected metadata rows into processed FASTQ files. For SRA data, it downloads SRA objects and extracts FASTQ with `fasterq-dump`. For public GSA, it downloads FASTQ directly. For private data prepared by `integrate`, it stages local FASTQ files into the same workflow.
 
+Private metadata flags are case-insensitive and ignore surrounding whitespace
+(`yes`, `YES`, and ` Yes ` are equivalent). Relative private FASTQ paths are
+resolved against the current working directory. Single-end input uses only
+`read1_path`; `read2_path` is ignored. Paired-end input requires both paths.
+Missing or non-file required inputs are rejected before staging any mate.
+
+
 Startup checks require SeqKit. SRA and private-input runs also require
 `fasterq-dump` from `sra-tools >= 3`; GSA-only runs do not. Fastp is required unless `--fastp no` is used. See
 [installation and dependencies](https://github.com/kfuku52/amalgkit/wiki/Installation-and-dependencies).
