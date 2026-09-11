@@ -990,7 +990,7 @@ def _save_averaged_heatmap_pdf(averaged_inputs, out_pdf_path, cache=None):
     label_df = averaged_inputs['labels']
     labels = _averaged_plot_labels(label_df)
     os.makedirs(os.path.dirname(os.path.realpath(out_pdf_path)), exist_ok=True)
-    fig, axes = plt.subplots(1, 2, figsize=(10.8, 4.8))
+    fig, axes = plt.subplots(1, 2, figsize=(10.8, 4.8), constrained_layout=True)
     image = _plot_corr_heatmap(
         axes[0],
         averaged_inputs['uncorrected'],
@@ -1007,7 +1007,6 @@ def _save_averaged_heatmap_pdf(averaged_inputs, out_pdf_path, cache=None):
     )
     if image is not None:
         fig.colorbar(image, ax=axes, fraction=0.025, pad=0.04)
-    fig.tight_layout()
     fig.savefig(out_pdf_path)
     plt.close(fig)
     return out_pdf_path

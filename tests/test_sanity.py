@@ -1558,3 +1558,59 @@ def test_index_sanity_honors_explicit_species_token_and_ready_marker(tmp_path):
 
     assert not [issue for issue in issues if issue['severity'] == 'error']
     assert not [issue for issue in issues if issue['issue_type'] == 'orphan_output']
+
+
+@pytest.mark.parametrize('layout,contents,expected', [
+    ('single', ['@read\nACGT\n+\nIIII\n'], []),
+    ('paired', ['@read\nACGT\n+\nIIII\n', '@read\nTGCA\n+\nIIII\n'], []),
+    ('paired', ['@read\nACGT\n+\nIIII\n', None], ['missing_output']),
+    ('single', ['@read\nACGT\n+\nI\n'], ['invalid_content']),
+])
+def test_getfastq_content_validates_real_fastq_components(tmp_path, monkeypatch, layout, contents, expected):
+    from amalgkit import sanity
+    run_dir = tmp_path / 'RUN1'
+    run_dir.mkdir()
+    monkeypatch.setattr(sanity, 'get_sra_stat', lambda *a: {'layout': layout})
+    monkeypatch.setattr(sanity, 'get_newest_intermediate_file_extension', lambda *a, **kw: '.fastq')
+    metadata_path = tmp_path / 'metadata.tsv'
+    metadata_path.write_text('metadata')
+    os.utime(metadata_path, (1, 1))
+    for index, content in enumerate(contents, 1):
+        if content is not None:
+            name = 'RUN1' + ('_' + str(index) if layout == 'paired' else '') + '.fastq'
+            (run_dir / name).write_text(content)
+    issues = sanity._validate_getfastq_content(None, 'RUN1', str(tmp_path), str(metadata_path), {})
+    assert [issue['issue_type'] for issue in issues] == expected
+    assert all(issue['severity'] == 'error' and issue['target_id'] == 'RUN1' for issue in issues)
+    if not expected:
+        os.utime(metadata_path, (2_000_000_000, 2_000_000_000))
+        stale = sanity._validate_getfastq_content(None, 'RUN1', str(tmp_path), str(metadata_path), {})
+        assert len(stale) == len(contents)
+        assert all(issue['issue_type'] == 'stale_output' and issue['severity'] == 'warning' for issue in stale)
+
+
+@pytest.mark.parametrize('stage,expected', [('metadata', 'metadata_inconsistency'), ('extension', 'invalid_content')])
+def test_getfastq_content_reports_resolution_failures(tmp_path, monkeypatch, stage, expected):
+    from amalgkit import sanity
+    def fail(*args, **kwargs):
+        raise ValueError('broken input')
+    monkeypatch.setattr(sanity, 'get_sra_stat', fail if stage == 'metadata' else lambda *a: {'layout': 'single'})
+    monkeypatch.setattr(sanity, 'get_newest_intermediate_file_extension', fail)
+    issues = sanity._validate_getfastq_content(None, 'RUN1', str(tmp_path), '', {})
+    assert len(issues) == 1
+    assert issues[0]['issue_type'] == expected
+    assert 'broken input' in issues[0]['message']
+
+
+@pytest.mark.parametrize('sentinel', [False, True])
+def test_getfastq_content_requires_removal_sentinel(tmp_path, monkeypatch, sentinel):
+    from amalgkit import sanity
+    monkeypatch.setattr(sanity, 'get_sra_stat', lambda *a: {'layout': 'single'})
+    monkeypatch.setattr(sanity, 'get_newest_intermediate_file_extension', lambda *a, **kw: '.safely_removed')
+    files = {'RUN1': {'RUN1.fastq.safely_removed'} if sentinel else set()}
+    issues = sanity._validate_getfastq_content(None, 'RUN1', str(tmp_path), '', files)
+    if sentinel:
+        assert issues == []
+    else:
+        assert len(issues) == 1
+        assert issues[0]['issue_type'] == 'invalid_content'

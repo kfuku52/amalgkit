@@ -1,3 +1,7 @@
+import pytest
+from types import SimpleNamespace
+from unittest.mock import Mock
+
 import amalgkit.cli_utils as cli_utils
 
 
@@ -122,3 +126,64 @@ def test_runtime_banner_reports_explicit_executable_path(tmp_path, monkeypatch, 
     monkeypatch.setenv('PATH', '')
     cli_utils.print_runtime_banner(['amalgkit', 'getfastq'], args=SimpleNamespace(seqkit_exe=str(executable)))
     assert 'AMALGKIT tool seqkit: FOUND ({})'.format(executable) in capsys.readouterr().out
+
+
+@pytest.mark.parametrize('converter', [cli_utils.int_or_auto, cli_utils.nonnegative_int_or_auto, cli_utils.positive_float_or_auto])
+def test_auto_converters_normalize_and_accept_positive_values(converter):
+    assert converter(' AuTo ') == 'auto'
+    assert converter('2') == 2
+    with pytest.raises(ValueError):
+        converter('-1')
+    with pytest.raises(ValueError):
+        converter('invalid')
+
+
+@pytest.mark.parametrize('value', ['0', '-0.1', 'nan', 'inf', '-inf'])
+def test_positive_float_or_auto_rejects_nonpositive_and_nonfinite(value):
+    with pytest.raises(ValueError):
+        cli_utils.positive_float_or_auto(value)
+
+
+def test_integer_auto_zero_boundary():
+    assert cli_utils.nonnegative_int_or_auto('0') == 0
+    with pytest.raises(ValueError):
+        cli_utils.int_or_auto('0')
+
+
+@pytest.mark.parametrize('fails', [False, True])
+def test_timed_handler_imports_lazily_and_logs_outcome(monkeypatch, capsys, fails):
+    failure = RuntimeError('command failure')
+    entry = Mock(side_effect=failure if fails else None)
+    importer = Mock(return_value=SimpleNamespace(main=entry))
+    logger = Mock()
+    monkeypatch.setattr(cli_utils.importlib, 'import_module', importer)
+    monkeypatch.setattr(cli_utils, 'get_logger', lambda _: logger)
+    handler = cli_utils.build_timed_command_handler('quant', 'amalgkit.quant', 'main')
+    importer.assert_not_called()
+    args = SimpleNamespace()
+    if fails:
+        with pytest.raises(RuntimeError) as caught:
+            handler(args)
+        assert caught.value is failure
+        assert args._amalgkit_failure_logged is True
+        assert logger.exception.call_args.kwargs['extra']['event'] == 'command_failed'
+        assert 'amalgkit quant: end' not in capsys.readouterr().out
+    else:
+        handler(args)
+        logger.exception.assert_not_called()
+        assert logger.info.call_args.kwargs['extra']['event'] == 'command_end'
+        assert 'amalgkit quant: end' in capsys.readouterr().out
+    importer.assert_called_once_with('amalgkit.quant')
+    entry.assert_called_once_with(args)
+
+
+@pytest.mark.parametrize('topic', [None, 'quant'])
+def test_help_handler_routes_topic(topic):
+    parser = Mock()
+    cli_utils.build_help_command_handler(parser)(SimpleNamespace(topic=topic))
+    if topic is None:
+        parser.print_help.assert_called_once_with()
+        parser.parse_args.assert_not_called()
+    else:
+        parser.parse_args.assert_called_once_with(['quant', '--help'])
+        parser.print_help.assert_not_called()

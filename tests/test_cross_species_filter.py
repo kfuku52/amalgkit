@@ -976,6 +976,7 @@ class TestCrossSpeciesFilterMain:
 
         assert (existing_dir / 'old.txt').read_text() == 'old'
 
+    @pytest.mark.slow
     @pytest.mark.integration
     def test_run_cross_species_filter_writes_restored_plot_outputs(self, tmp_path, monkeypatch):
         out_dir = tmp_path / 'out'
@@ -1010,6 +1011,11 @@ class TestCrossSpeciesFilterMain:
         assert (cross_species_dir / 'cross_species_group_mean_correlation_boxplot.pdf').is_file()
         assert (cross_species_dir / 'cross_species_group_mean_tsne.pdf').is_file()
         assert (cross_species_dir / 'cross_species_delta_pcc_boxplot.pdf').is_file()
+        for pdf in cross_species_dir.glob('*.pdf'):
+            content = pdf.read_bytes()
+            assert content.startswith(b'%PDF'), pdf.name
+            assert content.rstrip().endswith(b'%%EOF'), pdf.name
+            assert len(content) > 1000, pdf.name
 
 
 @pytest.mark.slow

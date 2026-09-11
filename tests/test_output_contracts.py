@@ -79,3 +79,17 @@ def test_identifier_reader_preserves_na_ids_without_changing_numeric_na(tmp_path
     frame = read_identifier_tsv(path, index_col=0)
     assert frame.index.tolist() == ['0001', 'NA']
     assert pandas.isna(frame.loc['NA', 'R1'])
+
+
+@pytest.mark.parametrize('payload,error', [('[]', 'must contain an object'), ('{', 'Failed to read'), ('{}', 'missing'), ('{"p_pseudoaligned": null}', 'invalid'), ('{"p_pseudoaligned": -1}', 'out-of-range')])
+def test_run_info_reports_invalid_content(tmp_path, payload, error):
+    path = tmp_path / 'run_info.json'
+    path.write_text(payload)
+    assert error in output_contracts.validate_quant_run_info_json(str(path))
+
+
+def test_run_info_reports_unreadable_file(tmp_path, monkeypatch):
+    def denied(*args, **kwargs):
+        raise PermissionError('read denied')
+    monkeypatch.setattr('builtins.open', denied)
+    assert 'Failed to read quant run info JSON: read denied' == output_contracts.validate_quant_run_info_json(str(tmp_path / 'info.json'))
