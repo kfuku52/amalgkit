@@ -238,8 +238,6 @@ class TestCpuBudgetHelpers:
         )
         assert workers == 3
         assert budget == 3
-        with pytest.raises(ValueError, match='--internal_jobs must be > 0'):
-            validate_positive_int_option(-1, 'internal_jobs')
 
 class TestFindPrefixedEntries:
     def test_sorted_list_entries(self):

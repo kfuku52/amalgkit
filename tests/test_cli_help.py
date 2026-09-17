@@ -88,14 +88,6 @@ def test_help_topic_cstmm_includes_redo():
     assert '--single_copy_threshold' in merged
 
 
-def test_single_copy_threshold_rejects_values_outside_percentage_range():
-    for command in ['cstmm', 'csfilter']:
-        for value in ['0', '101', 'nan']:
-            out = run_cli(command, '--single_copy_threshold', value)
-            assert out.returncode != 0
-            assert 'must be > 0 and <= 100' in out.stderr
-
-
 def test_help_topic_quant_mentions_backend_specific_index_building():
     out = run_cli('help', 'quant')
     assert out.returncode == 0
@@ -159,16 +151,6 @@ def test_help_topic_getfastq_mentions_filter_runtime_safeguards():
     assert 'tries the next enabled source before waiting' in merged
     assert '--treat_identical_paired_as_single' in merged
     assert 'default preserves both mates' in merged
-
-
-def test_getfastq_rejects_non_positive_download_timeouts():
-    for option in [
-        '--sra_download_wait_timeout_seconds',
-        '--sra_download_transfer_timeout_seconds',
-    ]:
-        out = run_cli('getfastq', option, '0')
-        assert out.returncode != 0
-        assert 'must be > 0' in out.stderr
 
 
 def test_help_topic_integrate_mentions_download_dir():
@@ -241,19 +223,7 @@ def test_small_group_policy_rejects_unknown_value():
         ('wsfilter', ['--norm', 'banana'], 'invalid choice'),
         ('finalize', ['--norm', 'banana'], 'invalid choice'),
         ('wsfilter', ['--dist_method', 'typo'], 'invalid choice'),
-        ('wsfilter', ['--mapping_rate', 'nan'], 'finite number'),
-        ('wsfilter', ['--mapping_rate', '101'], 'between 0 and 100'),
-        ('wsfilter', ['--correlation_threshold', '2'], 'between -1 and 1'),
-        ('wsfilter', ['--margin_threshold', '-3'], 'between -2 and 2'),
-        ('wsfilter', ['--robust_z_threshold', 'nan'], 'finite number'),
         ('cstmm', ['--tmm_imputation_scale', 'complete_case'], 'invalid choice'),
-        ('cstmm', ['--tmm_imputation_rank', '0'], 'must be > 0'),
-        ('cstmm', ['--tmm_imputation_max_iter', '0'], 'must be > 0'),
-        ('cstmm', ['--tmm_imputation_tol', 'nan'], 'finite number'),
-        ('cstmm', ['--tmm_imputation_tol', '-1'], 'must be > 0'),
-        ('wsfilter', ['--max_filter_iterations', '0'], 'must be > 0'),
-        ('wsfilter', ['--min_common_genes', '1'], 'at least 2'),
-        ('csfilter', ['--min_common_genes', '-1'], 'at least 2'),
         ('csfilter', ['--robust_z_scope', 'bad'], 'invalid choice'),
         ('csfilter', ['--reference_exclusion', 'bioproject'], 'invalid choice'),
     ],

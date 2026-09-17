@@ -13,10 +13,6 @@ def test_strips_and_drops_blank_values():
     assert normalize_unique_text(['  x ', '', '  ', 'y']) == ['x', 'y']
 
 
-def test_returns_empty_list_for_empty_input():
-    assert normalize_unique_text([]) == []
-
-
 def test_drops_none_and_nan():
     assert normalize_unique_text(['a', None, 'b', pandas.NA]) == ['a', 'b']
 

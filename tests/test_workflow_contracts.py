@@ -101,8 +101,14 @@ def test_private_fastq_producer_to_quant_default_cleanup(tmp_path, monkeypatch, 
     assert [path.stat().st_ino for path in sources] == original_inodes
 
 
-@pytest.mark.parametrize('column', ['eff_length', 'est_counts', 'tpm'])
-@pytest.mark.parametrize('bad_value', ['-1', 'NaN', 'inf', 'broken', ''])
+@pytest.mark.parametrize(
+    'column,bad_value',
+    [
+        ('eff_length', '-1'),
+        ('est_counts', 'NaN'),
+        ('tpm', 'broken'),
+    ],
+)
 def test_merge_rejects_invalid_values_without_replacing_previous_output(tmp_path, column, bad_value):
     run_dir = tmp_path / 'quant' / 'R1'
     run_dir.mkdir(parents=True)

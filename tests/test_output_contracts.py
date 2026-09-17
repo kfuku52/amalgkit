@@ -9,7 +9,7 @@ from amalgkit.identifier_validation import TargetIdTracker
 from amalgkit.table_io import read_identifier_tsv
 
 
-def test_quant_validator_streams_rows_and_detects_cross_chunk_duplicate(tmp_path, monkeypatch):
+def test_quant_validator_detects_cross_chunk_duplicate(tmp_path):
     run_id = "SRR001"
     target_ids = ["tx{}".format(index) for index in range(10_001)]
     target_ids[-1] = target_ids[0]
@@ -26,29 +26,10 @@ def test_quant_validator_streams_rows_and_detects_cross_chunk_duplicate(tmp_path
         json.dumps({"p_pseudoaligned": 50}),
         encoding="utf-8",
     )
-    real_read_csv = output_contracts.pandas.read_csv
-    calls = []
-
-    def recording_read_csv(*args, **kwargs):
-        calls.append(kwargs.copy())
-        return real_read_csv(*args, **kwargs)
-
-    monkeypatch.setattr(output_contracts.pandas, "read_csv", recording_read_csv)
-
     valid, error = output_contracts.validate_quant_output_files(run_id, str(tmp_path))
 
     assert not valid
     assert "duplicate target_id" in error
-    assert any(call.get("nrows") == 5 for call in calls)
-    assert any(call.get("chunksize") == 10_000 for call in calls)
-    assert all("nrows" in call or "chunksize" in call for call in calls)
-
-
-def test_quant_run_info_rejects_nonstandard_nonfinite_number(tmp_path):
-    run_info = tmp_path / "run_info.json"
-    run_info.write_text('{"p_pseudoaligned": NaN}', encoding="utf-8")
-
-    assert "out-of-range" in output_contracts.validate_quant_run_info_json(str(run_info))
 
 
 @pytest.mark.parametrize('last_id,valid', [('0001', False), ('001', True), ('NA', True)])
@@ -81,7 +62,17 @@ def test_identifier_reader_preserves_na_ids_without_changing_numeric_na(tmp_path
     assert pandas.isna(frame.loc['NA', 'R1'])
 
 
-@pytest.mark.parametrize('payload,error', [('[]', 'must contain an object'), ('{', 'Failed to read'), ('{}', 'missing'), ('{"p_pseudoaligned": null}', 'invalid'), ('{"p_pseudoaligned": -1}', 'out-of-range')])
+@pytest.mark.parametrize(
+    'payload,error',
+    [
+        ('[]', 'must contain an object'),
+        ('{', 'Failed to read'),
+        ('{}', 'missing'),
+        ('{"p_pseudoaligned": null}', 'invalid'),
+        ('{"p_pseudoaligned": -1}', 'out-of-range'),
+        ('{"p_pseudoaligned": NaN}', 'out-of-range'),
+    ],
+)
 def test_run_info_reports_invalid_content(tmp_path, payload, error):
     path = tmp_path / 'run_info.json'
     path.write_text(payload)

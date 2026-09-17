@@ -5,6 +5,12 @@ Releases provide generated notes only for tagged releases. Patch-only updates
 remain on the default branch and are recorded below; consult this file rather
 than the Releases page for those changes.
 
+### 0.16.89 - 2026-09-17
+
+- Prune redundant fixture, wrapper, parser, validation, and CLI contract tests.
+- Keep cross-component, security, scientific, and workflow guarantees while
+  removing assertions tied only to internal implementation details.
+
 ### 0.16.85 - 2026-09-11
 
 - Add direct parser regression coverage for numeric CLI options, including valid

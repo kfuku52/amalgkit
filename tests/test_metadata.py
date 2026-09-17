@@ -100,7 +100,17 @@ class TestFetchSraXml:
         assert root.tag == 'EXPERIMENT_PACKAGE'
         assert efetch_calls['n'] == 2
 
-    def test_retries_chunk_parse_once_on_incomplete_read(self, monkeypatch):
+    @pytest.mark.parametrize(
+        'parse_error',
+        [
+            pytest.param(
+                IncompleteRead(b'partial-xml', len(b'partial-xml') + 10),
+                id='incomplete-read',
+            ),
+            pytest.param(ET.ParseError('truncated xml'), id='parse-error'),
+        ],
+    )
+    def test_retries_chunk_parse_once_on_transient_error(self, monkeypatch, parse_error):
         monkeypatch.setattr('amalgkit.metadata.Entrez.esearch', lambda **kwargs: object())
         monkeypatch.setattr('amalgkit.metadata.Entrez.read', lambda handle: {'IdList': ['ID1']})
         monkeypatch.setattr('amalgkit.metadata.Entrez.efetch', lambda **kwargs: object())
@@ -109,7 +119,7 @@ class TestFetchSraXml:
         def flaky_parse(_handle):
             parse_calls['n'] += 1
             if parse_calls['n'] == 1:
-                raise IncompleteRead(b'partial-xml', len(b'partial-xml') + 10)
+                raise parse_error
             return self._DummyTree(ET.Element('EXPERIMENT_PACKAGE'))
 
         monkeypatch.setattr('amalgkit.sra.parse_untrusted_xml', flaky_parse)

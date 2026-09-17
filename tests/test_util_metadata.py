@@ -27,13 +27,11 @@ class TestMetadataInit:
         m = Metadata()
         assert isinstance(m.df, pandas.DataFrame)
         assert m.df.shape[0] == 0
-        assert 'scientific_name' in m.df.columns
-        assert 'run' in m.df.columns
-
-    def test_column_names_present(self):
-        m = Metadata()
-        for col in ['tissue', 'sample_group', 'bioproject', 'biosample',
-                     'lib_layout', 'total_spots', 'exclusion', 'ENA_SRA_Link', 'DDBJ_SRA_Link']:
+        for col in [
+            'scientific_name', 'run', 'tissue', 'sample_group', 'bioproject',
+            'biosample', 'lib_layout', 'total_spots', 'exclusion',
+            'ENA_SRA_Link', 'DDBJ_SRA_Link',
+        ]:
             assert col in m.df.columns
 
     def test_schema_definitions_are_immutable_and_custom_columns_are_copied(self):
@@ -47,11 +45,6 @@ class TestMetadataInit:
 
 
 class TestMetadataReorder:
-    def test_reorder_empty(self):
-        m = Metadata()
-        result = m.reorder()
-        assert result is None  # returns None for empty df
-
     def test_reorder_empty_normalizes_schema_and_drops_removed_columns(self):
         m = Metadata()
         m.df = pandas.DataFrame(columns=['lab', 'batch', 'misc'])
@@ -99,15 +92,10 @@ class TestMetadataFromDataFrame:
         for col in Metadata.removed_metadata_columns:
             assert col not in m.df.columns
 
-    def test_exclusion_filled(self, sample_metadata_df):
+    @pytest.mark.parametrize('empty_value', ['', numpy.nan], ids=['blank', 'nan'])
+    def test_exclusion_empty_values_are_filled(self, sample_metadata_df, empty_value):
         df = sample_metadata_df.copy()
-        df['exclusion'] = ''
-        m = Metadata.from_DataFrame(df)
-        assert (m.df['exclusion'] == 'no').all()
-
-    def test_exclusion_nan_filled(self, sample_metadata_df):
-        df = sample_metadata_df.copy()
-        df['exclusion'] = [numpy.nan] * len(df)
+        df['exclusion'] = [empty_value] * len(df)
         m = Metadata.from_DataFrame(df)
         assert (m.df['exclusion'] == 'no').all()
 

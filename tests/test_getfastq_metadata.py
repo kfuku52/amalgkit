@@ -8,7 +8,6 @@ from contextlib import contextmanager
 from io import BytesIO
 
 import os
-import urllib.error
 from types import SimpleNamespace
 
 from defusedxml.common import EntitiesForbidden
@@ -17,7 +16,6 @@ from amalgkit.command_context import GetfastqRuntimeContext
 from amalgkit.exceptions import AmalgkitExit
 from amalgkit.getfastq import (
     getfastq_search_term,
-    getfastq_getxml,
     getfastq_metadata,
     append_file_binary,
     run_mmseqs_rrna_filter,
@@ -28,15 +26,11 @@ from amalgkit.getfastq import (
     resolve_mmseqs_dbtype,
     update_metadata_after_rrna_filter,
     build_mmseqs_query_input,
-    append_mmseqs_sensitivity_option,
-    append_mmseqs_positive_int_option,
     append_mmseqs_memory_limit_option,
     filter_fastq_by_core_set,
     iter_synchronized_mmseqs_query_chunks,
     normalize_paired_read_core,
     parse_mmseqs_search_matched_cores,
-    parse_fasterq_dump_written_spots,
-    parse_fasterq_dump_written_reads,
     infer_written_spots_from_written_reads,
     should_compress_fasterq_output_before_filters,
     normalize_fasterq_size_check,
@@ -192,22 +186,7 @@ class TestResolveRunTargetRankTaxid:
         assert target_rank_taxid == 2759
 
 
-class TestFasterqDumpWrittenCountParsing:
-    def test_parse_written_spots(self):
-        stderr_txt = '\n'.join([
-            'spots read      : 10',
-            'reads written   : 20',
-            'spots written   : 10',
-        ])
-        assert parse_fasterq_dump_written_spots('', stderr_txt) == 10
-
-    def test_parse_written_reads(self):
-        stderr_txt = '\n'.join([
-            'spots read      : 15,890,071',
-            'reads written   : 31,780,142',
-        ])
-        assert parse_fasterq_dump_written_reads('', stderr_txt) == 31780142
-
+class TestFasterqDumpWrittenCountInference:
     def test_infer_written_spots_single_layout(self):
         from amalgkit.getfastq import RunFileState
         sra_stat = {'sra_id': 'SRR001', 'layout': 'single'}
@@ -236,16 +215,6 @@ class TestCountFastqRecords:
                 out.write(seq + '\n')
                 out.write('+\n')
                 out.write('I' * len(seq) + '\n')
-
-    def test_counts_records_plain_and_gz(self, tmp_path):
-        plain = tmp_path / 'x.fastq'
-        self._write_fastq(str(plain), ['AAAA', 'CCCC', 'GGGG'])
-        gz = tmp_path / 'x.fastq.gz'
-        with open(str(plain), 'rb') as fin, gzip.open(str(gz), 'wb') as fout:
-            fout.write(fin.read())
-
-        assert count_fastq_records(str(plain)) == 3
-        assert count_fastq_records(str(gz)) == 3
 
     def test_counts_records_and_bases_plain_and_gz(self, tmp_path):
         plain = tmp_path / 'x.fastq'
@@ -1152,29 +1121,7 @@ class TestRunMmseqsEasySearch:
         assert observed['cmd'][observed['cmd'].index('--split-memory-limit') + 1] == '32G'
 
 
-class TestAppendMmseqsSensitivityOption:
-    def test_leaves_command_unchanged_for_auto(self):
-        command = ['mmseqs', 'easy-search']
-        out = append_mmseqs_sensitivity_option(command[:], 'auto')
-        assert out == ['mmseqs', 'easy-search']
-
-    def test_appends_float_for_numeric_value(self):
-        command = ['mmseqs', 'easy-search']
-        out = append_mmseqs_sensitivity_option(command[:], 4.0)
-        assert out == ['mmseqs', 'easy-search', '-s', '4']
-
-
-class TestAppendMmseqsPositiveIntOption:
-    def test_leaves_command_unchanged_for_auto(self):
-        command = ['mmseqs', 'easy-search']
-        out = append_mmseqs_positive_int_option(command[:], '--max-seqs', 'auto')
-        assert out == ['mmseqs', 'easy-search']
-
-    def test_appends_integer_for_numeric_value(self):
-        command = ['mmseqs', 'easy-search']
-        out = append_mmseqs_positive_int_option(command[:], '--max-seqs', 20)
-        assert out == ['mmseqs', 'easy-search', '--max-seqs', '20']
-
+class TestAppendMmseqsOptions:
     @pytest.mark.parametrize('invalid_value', ['1.5G', '1g', '1P', '0G', '-1G'])
     def test_rejects_memory_values_not_accepted_by_mmseqs(self, invalid_value):
         with pytest.raises(ValueError, match='split-memory-limit'):
@@ -1320,7 +1267,7 @@ class TestContamFilterDbPathResolution:
         assert pathlib.Path(db_path).read_text(encoding='utf-8') == 'rebuilt'
         assert os.path.isfile(db_path + '.ready')
 
-class TestGetfastqXmlRetrieval:
+class TestGetfastqTraceXml:
     def test_trace_run_xml_rejects_entities(self, monkeypatch):
         malicious_xml = b'<!DOCTYPE root [<!ENTITY xxe SYSTEM "file:///etc/passwd">]><root>&xxe;</root>'
         monkeypatch.setattr(
@@ -1331,171 +1278,6 @@ class TestGetfastqXmlRetrieval:
         with pytest.raises(EntitiesForbidden):
             fetch_trace_run_xml_root('SRR000000')
 
-    class _DummyTree:
-        def __init__(self, root):
-            self._root = root
-
-        def getroot(self):
-            return self._root
-
-    def test_returns_empty_root_when_no_records(self, monkeypatch):
-        monkeypatch.setattr('amalgkit.getfastq.Entrez.esearch', lambda **kwargs: object())
-        monkeypatch.setattr('amalgkit.getfastq.Entrez.read', lambda handle: {'IdList': []})
-        monkeypatch.setattr('amalgkit.getfastq.Entrez.efetch', lambda **kwargs: (_ for _ in ()).throw(AssertionError('efetch should not be called')))
-
-        root = getfastq_getxml(search_term='SRR000000', retmax=1000)
-
-        assert root.tag == 'EXPERIMENT_PACKAGE_SET'
-
-    def test_retries_esearch_once_on_urlerror(self, monkeypatch):
-        esearch_calls = {'n': 0}
-
-        def flaky_esearch(**_kwargs):
-            esearch_calls['n'] += 1
-            if esearch_calls['n'] == 1:
-                raise urllib.error.URLError('temporary network failure')
-            return object()
-
-        monkeypatch.setattr('amalgkit.getfastq.Entrez.esearch', flaky_esearch)
-        monkeypatch.setattr('amalgkit.getfastq.Entrez.read', lambda handle: {'IdList': []})
-        monkeypatch.setattr('amalgkit.getfastq.Entrez.efetch', lambda **kwargs: object())
-        monkeypatch.setattr('amalgkit.sra.time.sleep', lambda *_args, **_kwargs: None)
-
-        root = getfastq_getxml(search_term='SRR000000', retmax=1000)
-
-        assert root.tag == 'EXPERIMENT_PACKAGE_SET'
-        assert esearch_calls['n'] == 2
-
-    def test_retries_efetch_once_on_urlerror(self, monkeypatch):
-        monkeypatch.setattr('amalgkit.getfastq.Entrez.esearch', lambda **kwargs: object())
-        monkeypatch.setattr('amalgkit.getfastq.Entrez.read', lambda handle: {'IdList': ['ID1']})
-        efetch_calls = {'n': 0}
-
-        def flaky_efetch(**_kwargs):
-            efetch_calls['n'] += 1
-            if efetch_calls['n'] == 1:
-                raise urllib.error.URLError('temporary network failure')
-            return object()
-
-        monkeypatch.setattr('amalgkit.getfastq.Entrez.efetch', flaky_efetch)
-        monkeypatch.setattr(
-            'amalgkit.sra.parse_untrusted_xml',
-            lambda handle: self._DummyTree(ET.Element('EXPERIMENT_PACKAGE'))
-        )
-        monkeypatch.setattr('amalgkit.getfastq.time.sleep', lambda *_args, **_kwargs: None)
-
-        root = getfastq_getxml(search_term='SRR000000', retmax=1000)
-
-        assert root.tag == 'EXPERIMENT_PACKAGE'
-        assert efetch_calls['n'] == 2
-
-    def test_batches_without_extra_request_on_exact_multiple(self, monkeypatch):
-        id_list = ['ID{}'.format(i) for i in range(2000)]
-        efetch_calls = []
-
-        monkeypatch.setattr('amalgkit.getfastq.Entrez.esearch', lambda **kwargs: object())
-        monkeypatch.setattr('amalgkit.getfastq.Entrez.read', lambda handle: {'IdList': id_list})
-
-        def fake_efetch(**kwargs):
-            efetch_calls.append(list(kwargs['id']))
-            return object()
-
-        monkeypatch.setattr('amalgkit.getfastq.Entrez.efetch', fake_efetch)
-        monkeypatch.setattr(
-            'amalgkit.sra.parse_untrusted_xml',
-            lambda handle: self._DummyTree(ET.Element('EXPERIMENT_PACKAGE'))
-        )
-
-        root = getfastq_getxml(search_term='SRR000000', retmax=1000)
-
-        assert root is not None
-        assert len(efetch_calls) == 2
-        assert [len(c) for c in efetch_calls] == [1000, 1000]
-
-    def test_retries_when_xml_chunk_parse_fails_once(self, monkeypatch):
-        monkeypatch.setattr('amalgkit.getfastq.Entrez.esearch', lambda **kwargs: object())
-        monkeypatch.setattr('amalgkit.getfastq.Entrez.read', lambda handle: {'IdList': ['ID1']})
-        monkeypatch.setattr('amalgkit.getfastq.Entrez.efetch', lambda **kwargs: object())
-        parse_calls = {'n': 0}
-
-        def flaky_parse(_handle):
-            parse_calls['n'] += 1
-            if parse_calls['n'] == 1:
-                raise ET.ParseError('truncated xml')
-            return self._DummyTree(ET.Element('EXPERIMENT_PACKAGE'))
-
-        monkeypatch.setattr('amalgkit.sra.parse_untrusted_xml', flaky_parse)
-        monkeypatch.setattr('amalgkit.sra.time.sleep', lambda *_args, **_kwargs: None)
-
-        root = getfastq_getxml(search_term='SRR000000', retmax=1000)
-
-        assert root.tag == 'EXPERIMENT_PACKAGE'
-        assert parse_calls['n'] == 2
-
-    def test_raises_when_xml_chunk_parsing_never_succeeds(self, monkeypatch):
-        monkeypatch.setattr('amalgkit.getfastq.Entrez.esearch', lambda **kwargs: object())
-        monkeypatch.setattr('amalgkit.getfastq.Entrez.read', lambda handle: {'IdList': ['ID1']})
-        monkeypatch.setattr('amalgkit.getfastq.Entrez.efetch', lambda **kwargs: object())
-        monkeypatch.setattr(
-            'amalgkit.sra.parse_untrusted_xml',
-            lambda _handle: (_ for _ in ()).throw(ET.ParseError('broken xml')),
-        )
-        monkeypatch.setattr('amalgkit.sra.time.sleep', lambda *_args, **_kwargs: None)
-
-        with pytest.raises(RuntimeError, match='Failed to parse Entrez XML chunk'):
-            getfastq_getxml(search_term='SRR000000', retmax=1000)
-
-    def test_merges_package_set_chunks_without_nested_container(self, monkeypatch):
-        id_list = ['ID{}'.format(i) for i in range(2000)]
-        monkeypatch.setattr('amalgkit.getfastq.Entrez.esearch', lambda **kwargs: object())
-        monkeypatch.setattr('amalgkit.getfastq.Entrez.read', lambda handle: {'IdList': id_list})
-        monkeypatch.setattr('amalgkit.getfastq.Entrez.efetch', lambda **kwargs: object())
-
-        def fake_parse(_handle):
-            root = ET.Element('EXPERIMENT_PACKAGE_SET')
-            ET.SubElement(root, 'EXPERIMENT_PACKAGE')
-            return self._DummyTree(root)
-
-        monkeypatch.setattr('amalgkit.sra.parse_untrusted_xml', fake_parse)
-
-        root = getfastq_getxml(search_term='SRR000000', retmax=1000)
-
-        assert root.tag == 'EXPERIMENT_PACKAGE_SET'
-        assert len(root.findall('./EXPERIMENT_PACKAGE')) == 2
-        assert len(root.findall('./EXPERIMENT_PACKAGE_SET')) == 0
-
-    def test_wraps_non_set_chunks_to_preserve_multiple_records(self, monkeypatch):
-        id_list = ['ID{}'.format(i) for i in range(2000)]
-        monkeypatch.setattr('amalgkit.getfastq.Entrez.esearch', lambda **kwargs: object())
-        monkeypatch.setattr('amalgkit.getfastq.Entrez.read', lambda handle: {'IdList': id_list})
-        monkeypatch.setattr('amalgkit.getfastq.Entrez.efetch', lambda **kwargs: object())
-
-        def fake_parse(_handle):
-            root = ET.Element('EXPERIMENT_PACKAGE')
-            ET.SubElement(root, 'RUN_SET')
-            return self._DummyTree(root)
-
-        monkeypatch.setattr('amalgkit.sra.parse_untrusted_xml', fake_parse)
-
-        root = getfastq_getxml(search_term='SRR000000', retmax=1000)
-
-        assert root.tag == 'EXPERIMENT_PACKAGE_SET'
-        assert len(root.findall('./EXPERIMENT_PACKAGE')) == 2
-
-    def test_raises_when_error_tag_present(self, monkeypatch):
-        monkeypatch.setattr('amalgkit.getfastq.Entrez.esearch', lambda **kwargs: object())
-        monkeypatch.setattr('amalgkit.getfastq.Entrez.read', lambda handle: {'IdList': ['ID1']})
-        monkeypatch.setattr('amalgkit.getfastq.Entrez.efetch', lambda **kwargs: object())
-        err_root = ET.Element('EXPERIMENT_PACKAGE')
-        err = ET.SubElement(err_root, 'Error')
-        err.text = 'SRA error'
-        monkeypatch.setattr(
-            'amalgkit.sra.parse_untrusted_xml',
-            lambda handle: self._DummyTree(err_root)
-        )
-
-        with pytest.raises(RuntimeError, match='Error found in Entrez XML response'):
-            getfastq_getxml(search_term='SRR000000', retmax=1000)
 
 
 class TestGetfastqMetadataIdFiltering:

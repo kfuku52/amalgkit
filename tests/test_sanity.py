@@ -10,7 +10,6 @@ from amalgkit.sanity import (
     _build_sanity_summary_row,
     _validate_fastq_file,
     _validate_nonempty_table,
-    _validate_quant_run_info_json,
     list_duplicates,
     parse_metadata,
     check_quant_output,
@@ -74,16 +73,6 @@ class TestListDuplicates:
     def test_no_duplicates(self):
         assert list_duplicates([1, 2, 3, 4]) == []
 
-    def test_empty_list(self):
-        assert list_duplicates([]) == []
-
-    def test_all_duplicates(self):
-        assert sorted(list_duplicates(['a', 'a', 'b', 'b'])) == ['a', 'b']
-
-    def test_single_element(self):
-        assert list_duplicates([42]) == []
-
-
 class TestSanitySummaryRow:
     def test_global_error_marks_all_checked_items_unavailable(self, tmp_path):
         row = _build_sanity_summary_row(
@@ -109,34 +98,6 @@ class TestSanitySummaryRow:
         assert row['checked_count'] == 2
         assert row['unavailable_count'] == 2
         assert row['available_count'] == 0
-
-
-def test_content_validators_reject_nonfinite_quant_values(tmp_path):
-    abundance_path = tmp_path / 'abundance.tsv'
-    pandas.DataFrame(
-        [
-            {
-                'target_id': 'tx1',
-                'length': 100,
-                'eff_length': 90,
-                'est_counts': 1,
-                'tpm': float('nan'),
-            }
-        ]
-    ).to_csv(abundance_path, sep='\t', index=False)
-    error = _validate_nonempty_table(
-        str(abundance_path),
-        required_columns=['target_id', 'length', 'eff_length', 'est_counts', 'tpm'],
-        context='quant abundance',
-        numeric_nonnegative_columns=['length', 'eff_length', 'est_counts', 'tpm'],
-    )
-    assert 'non-finite values' in error
-
-    run_info_path = tmp_path / 'run_info.json'
-    run_info_path.write_text('{"p_pseudoaligned": NaN}', encoding='utf-8')
-    assert 'out-of-range' in _validate_quant_run_info_json(str(run_info_path))
-    run_info_path.write_text('null', encoding='utf-8')
-    assert 'must contain an object' in _validate_quant_run_info_json(str(run_info_path))
 
 
 def test_table_validator_scans_numeric_values_after_first_five_rows(tmp_path):

@@ -240,16 +240,6 @@ class TestGetNewestIntermediateFileExtension:
 # ---------------------------------------------------------------------------
 
 class TestGetMappingRate:
-    def test_extracts_mapping_rate(self, tmp_path, sample_metadata):
-        """Reads p_pseudoaligned from run_info.json into mapping_rate column."""
-        quant_dir = tmp_path / 'quant'
-        sra_dir = quant_dir / 'SRR001'
-        sra_dir.mkdir(parents=True)
-        run_info = {'p_pseudoaligned': 85.5}
-        (sra_dir / 'SRR001_run_info.json').write_text(json.dumps(run_info))
-        m = get_mapping_rate(sample_metadata, str(quant_dir))
-        assert m.df.loc[m.df['run'] == 'SRR001', 'mapping_rate'].values[0] == 85.5
-
     def test_reads_run_info_as_utf8_under_non_utf8_locale(self, tmp_path, sample_metadata, monkeypatch):
         quant_dir = tmp_path / 'quant'
         sra_dir = quant_dir / 'SRR001'

@@ -24,8 +24,25 @@ from amalgkit.subprocess_utils import DEPENDENCY_PROBE_TIMEOUT_SECONDS
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
-TIMEOUT_COMMANDS = ('quant', 'busco', 'getfastq', 'integrate')
-PROBE_COMMANDS = ('quant', 'getfastq')
+HELP_TIMEOUT_CONTRACTS = (
+    ('metadata', ('--ncbi_metadata_timeout_seconds',), None),
+    (
+        'quant',
+        ('--tool_timeout_seconds', '--dependency_probe_timeout_seconds'),
+        QUANT_TOOL_TIMEOUT_SECONDS,
+    ),
+    ('busco', ('--tool_timeout_seconds',), BUSCO_TOOL_TIMEOUT_SECONDS),
+    (
+        'getfastq',
+        (
+            '--tool_timeout_seconds',
+            '--dependency_probe_timeout_seconds',
+            '--ncbi_metadata_timeout_seconds',
+        ),
+        GETFASTQ_TOOL_TIMEOUT_SECONDS,
+    ),
+    ('integrate', ('--tool_timeout_seconds',), INTEGRATE_SEQKIT_TIMEOUT_SECONDS),
+)
 
 RESOLVERS = (
     (resolve_quant_tool_timeout_seconds, QUANT_TOOL_TIMEOUT_SECONDS),
@@ -42,38 +59,15 @@ def run_cli(*args):
     )
 
 
-@pytest.mark.parametrize('command', TIMEOUT_COMMANDS)
-def test_tool_timeout_option_is_exposed(command):
+@pytest.mark.parametrize('command, options, default_seconds', HELP_TIMEOUT_CONTRACTS)
+def test_timeout_help_contract(command, options, default_seconds):
     out = run_cli(command, '--help')
     assert out.returncode == 0, out.stderr
-    assert '--tool_timeout_seconds' in (out.stdout + out.stderr), command
-
-
-@pytest.mark.parametrize('command', PROBE_COMMANDS)
-def test_dependency_probe_timeout_option_is_exposed(command):
-    out = run_cli(command, '--help')
-    assert out.returncode == 0, out.stderr
-    assert '--dependency_probe_timeout_seconds' in (out.stdout + out.stderr), command
-
-
-@pytest.mark.parametrize('command', ('metadata', 'getfastq'))
-def test_ncbi_metadata_timeout_option_is_exposed(command):
-    out = run_cli(command, '--help')
-    assert out.returncode == 0, out.stderr
-    assert '--ncbi_metadata_timeout_seconds' in (out.stdout + out.stderr), command
-
-
-@pytest.mark.parametrize('command', TIMEOUT_COMMANDS)
-def test_documented_default_matches_the_constant(command):
-    # The help text must not drift from the constant it documents.
-    defaults = {
-        'quant': QUANT_TOOL_TIMEOUT_SECONDS,
-        'busco': BUSCO_TOOL_TIMEOUT_SECONDS,
-        'getfastq': GETFASTQ_TOOL_TIMEOUT_SECONDS,
-        'integrate': INTEGRATE_SEQKIT_TIMEOUT_SECONDS,
-    }
-    out = run_cli(command, '--help')
-    assert 'default={}'.format(defaults[command]) in (out.stdout + out.stderr), command
+    help_text = out.stdout + out.stderr
+    for option in options:
+        assert option in help_text, (command, option)
+    if default_seconds is not None:
+        assert 'default={}'.format(default_seconds) in help_text, command
 
 
 @pytest.mark.parametrize('resolver,default_seconds', RESOLVERS)
