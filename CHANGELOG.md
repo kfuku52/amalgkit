@@ -5,6 +5,11 @@ Releases provide generated notes only for tagged releases. Patch-only updates
 remain on the default branch and are recorded below; consult this file rather
 than the Releases page for those changes.
 
+### 0.16.95 - 2026-09-22
+
+- Share rerun report issue filtering between target collection and global checks,
+  preserving selection order, warning handling, and early termination.
+
 ### 0.16.94 - 2026-09-22
 
 - Exclude unselected runs from merged matrices even when old quant results remain;

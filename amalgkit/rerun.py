@@ -218,9 +218,8 @@ def _resolve_requested_checks(args, report_payload):
     return list(RERUN_CHECK_NAMES)
 
 
-def _collect_issue_targets(report_payload, check_name, target_type, include_warnings=False):
-    targets = []
-    seen = set()
+def _iter_matching_issues(report_payload, check_name, target_type, include_warnings):
+    """Select report issues lazily so global checks can stop at the first match."""
     severities = {'error', 'warning'} if include_warnings else {'error'}
     for issue in report_payload.get('issues', []):
         if str(issue.get('check', '')).strip().lower() != check_name:
@@ -229,6 +228,13 @@ def _collect_issue_targets(report_payload, check_name, target_type, include_warn
             continue
         if str(issue.get('target_type', '')).strip().lower() != target_type:
             continue
+        yield issue
+
+
+def _collect_issue_targets(report_payload, check_name, target_type, include_warnings=False):
+    targets = []
+    seen = set()
+    for issue in _iter_matching_issues(report_payload, check_name, target_type, include_warnings):
         target_id = str(issue.get('target_id', '')).strip()
         if (target_id == '') or (target_id in seen):
             continue
@@ -238,14 +244,8 @@ def _collect_issue_targets(report_payload, check_name, target_type, include_warn
 
 
 def _has_global_issue(report_payload, check_name, include_warnings=False):
-    severities = {'error', 'warning'} if include_warnings else {'error'}
-    for issue in report_payload.get('issues', []):
-        if str(issue.get('check', '')).strip().lower() != check_name:
-            continue
-        if str(issue.get('severity', '')).strip().lower() not in severities:
-            continue
-        if str(issue.get('target_type', '')).strip().lower() == 'global':
-            return True
+    for _issue in _iter_matching_issues(report_payload, check_name, 'global', include_warnings):
+        return True
     return False
 
 

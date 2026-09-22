@@ -7,7 +7,49 @@ import pandas
 import pytest
 
 from amalgkit.exceptions import AmalgkitExit
-from amalgkit.rerun import _commit_staged_paths, rerun_main
+from amalgkit.rerun import (
+    _collect_issue_targets,
+    _commit_staged_paths,
+    _has_global_issue,
+    rerun_main,
+)
+
+
+@pytest.mark.parametrize(
+    'include_warnings, expected_targets, expected_global',
+    [(False, ['0001', 'NA'], False), (True, ['0001', 'NA', 'SRR002'], True)],
+)
+def test_report_issue_selection_preserves_normalization_and_order(
+    include_warnings, expected_targets, expected_global,
+):
+    report = {'issues': [
+        {},
+        {'check': 'merge', 'severity': 'error', 'target_type': 'run', 'target_id': 'other'},
+        {'check': 'quant', 'target_type': 'run', 'target_id': 'missing-severity'},
+        {'check': 'quant', 'severity': 'info', 'target_type': 'run', 'target_id': 'info'},
+        {'check': ' QUANT ', 'severity': ' ERROR ', 'target_type': ' RUN ', 'target_id': ' 0001 '},
+        {'check': 'quant', 'severity': 'error', 'target_type': 'run', 'target_id': 'NA'},
+        {'check': 'quant', 'severity': 'error', 'target_type': 'run', 'target_id': '0001'},
+        {'check': 'quant', 'severity': 'error', 'target_type': 'run', 'target_id': ' '},
+        {'check': 'quant', 'severity': 'error', 'target_type': 'run'},
+        {'check': 'quant', 'severity': 'warning', 'target_type': 'run', 'target_id': 'SRR002'},
+        {'check': 'quant', 'severity': ' WARNING ', 'target_type': ' GLOBAL '},
+        {'check': 'merge', 'severity': 'error', 'target_type': 'global'},
+    ]}
+
+    assert _collect_issue_targets(report, 'quant', 'run', include_warnings) == expected_targets
+    assert _has_global_issue(report, 'quant', include_warnings) is expected_global
+    assert _collect_issue_targets({}, 'quant', 'run', include_warnings) == []
+    assert _has_global_issue({}, 'quant', include_warnings) is False
+
+
+def test_global_issue_selection_stops_after_first_match():
+    report = {'issues': [
+        {'check': 'quant', 'severity': 'error', 'target_type': 'global'},
+        None,
+    ]}
+
+    assert _has_global_issue(report, 'quant') is True
 
 
 def _write_required_species_outputs(root, token, suffixes):
