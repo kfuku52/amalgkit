@@ -40,17 +40,12 @@ class TestStrtobool:
 
 class TestParseBoolFlags:
     def test_fills_missing_values_with_default(self):
-        result = parse_bool_flags(['yes', None, ''], column_name='is_sampled', default='no')
+        result = parse_bool_flags((v for v in ['yes', None, '']), column_name='is_sampled', default='no')
         assert result.tolist() == [True, False, False]
 
     def test_raises_for_invalid_values(self):
         with pytest.raises(ValueError, match='invalid boolean flag'):
             parse_bool_flags(['yes', 'maybe'], column_name='is_sampled', default='no')
-
-    def test_accepts_generator_input(self):
-        values = (v for v in ['yes', 'no', None])
-        result = parse_bool_flags(values, column_name='is_sampled', default='no')
-        assert result.tolist() == [True, False, False]
 
 class TestRunTasksWithOptionalThreads:
     def test_empty_tasks(self):
@@ -240,11 +235,6 @@ class TestCpuBudgetHelpers:
         assert budget == 3
 
 class TestFindPrefixedEntries:
-    def test_sorted_list_entries(self):
-        entries = ['Homo_sapiens.fa', 'Homo_sapiens.idx', 'Mus_musculus.fa']
-        out = find_prefixed_entries(entries, 'Homo_sapiens')
-        assert out == ['Homo_sapiens.fa', 'Homo_sapiens.idx']
-
     def test_set_entries_returns_sorted_output(self):
         entries = {'Homo_sapiens_b.idx', 'Mus_musculus.idx', 'Homo_sapiens_a.idx'}
         out = find_prefixed_entries(entries, 'Homo_sapiens')
@@ -255,12 +245,6 @@ class TestFindPrefixedEntries:
         out = find_prefixed_entries(entries, 'Homo_sapiens')
         assert out == []
 
-    def test_unsorted_list_entries(self):
-        entries = ['Aardvark.fa', 'Homo_sapiens.fa', 'Mus_musculus.fa', 'Homo_sapiens.idx']
-        out = find_prefixed_entries(entries, 'Homo_sapiens')
-        assert out == ['Homo_sapiens.fa', 'Homo_sapiens.idx']
-
-
 class TestFindSpeciesPrefixedEntries:
     def test_rejects_similar_species_prefix(self):
         entries = ['Homo_sapiens.fa', 'Homo_sapiens2.fa', 'Homo_sapiens_k31.idx']
@@ -270,15 +254,9 @@ class TestFindSpeciesPrefixedEntries:
 
 class TestFindRunPrefixedEntries:
     def test_rejects_similar_run_prefix(self):
-        entries = ['SRR001.fastq.gz', 'SRR0010.fastq.gz', 'SRR001_1.fastq.gz']
+        entries = ['SRR001.fastq.gz', 'SRR0010.fastq.gz', 'SRR001-legacy.fastq.gz', 'SRR001_1.fastq.gz']
         out = find_run_prefixed_entries(entries, 'SRR001')
         assert out == ['SRR001.fastq.gz', 'SRR001_1.fastq.gz']
-
-    def test_rejects_hyphen_suffix_variants(self):
-        entries = ['SRR001.fastq.gz', 'SRR001-legacy.fastq.gz', 'SRR001_1.fastq.gz']
-        out = find_run_prefixed_entries(entries, 'SRR001')
-        assert out == ['SRR001.fastq.gz', 'SRR001_1.fastq.gz']
-
 
 # ---------------------------------------------------------------------------
 # Metadata class

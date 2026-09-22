@@ -299,45 +299,17 @@ class TestSelectHelpers:
         args = SimpleNamespace(out_dir='/tmp/out', select_rules_tsv='/tmp/custom.tsv')
         assert resolve_select_rules_tsv(args) == os.path.realpath('/tmp/custom.tsv')
 
-    def test_filter_metadata_by_sample_group(self):
-        metadata = Metadata.from_DataFrame(pandas.DataFrame({
-            'run': ['SRR001', 'SRR002', 'SRR003'],
-            'sample_group': ['brain', 'liver', 'brain'],
-            'scientific_name': ['sp1', 'sp1', 'sp2'],
-            'exclusion': ['no', 'no', 'no'],
-        }))
-        out = filter_metadata_by_sample_group(metadata, 'brain')
-        assert set(out.df['run']) == {'SRR001', 'SRR003'}
-
-    def test_filter_metadata_by_sample_group_strips_tokens(self):
+    @pytest.mark.parametrize('groups', [' brain, heart ', ' brain | heart '])
+    def test_filter_metadata_by_sample_group_normalizes_tokens_and_values(self, groups):
         metadata = Metadata.from_DataFrame(pandas.DataFrame({
             'run': ['SRR001', 'SRR002', 'SRR003'],
             'sample_group': ['brain', 'liver', 'heart'],
             'scientific_name': ['sp1', 'sp1', 'sp2'],
             'exclusion': ['no', 'no', 'no'],
         }))
-        out = filter_metadata_by_sample_group(metadata, 'brain, liver')
-        assert set(out.df['run']) == {'SRR001', 'SRR002'}
-
-    def test_filter_metadata_by_sample_group_supports_pipe_separator(self):
-        metadata = Metadata.from_DataFrame(pandas.DataFrame({
-            'run': ['SRR001', 'SRR002', 'SRR003'],
-            'sample_group': ['brain', 'liver', 'heart'],
-            'scientific_name': ['sp1', 'sp1', 'sp2'],
-            'exclusion': ['no', 'no', 'no'],
-        }))
-        out = filter_metadata_by_sample_group(metadata, 'brain|heart')
+        metadata.df.loc[0, 'sample_group'] = ' brain '
+        out = filter_metadata_by_sample_group(metadata, groups)
         assert set(out.df['run']) == {'SRR001', 'SRR003'}
-
-    def test_filter_metadata_by_sample_group_strips_metadata_values(self):
-        metadata = Metadata.from_DataFrame(pandas.DataFrame({
-            'run': ['SRR001', 'SRR002'],
-            'sample_group': [' brain ', 'liver'],
-            'scientific_name': ['sp1', 'sp1'],
-            'exclusion': ['no', 'no'],
-        }))
-        out = filter_metadata_by_sample_group(metadata, 'brain')
-        assert set(out.df['run']) == {'SRR001'}
 
     def test_filter_metadata_by_sample_group_none_keeps_all(self):
         metadata = Metadata.from_DataFrame(pandas.DataFrame({

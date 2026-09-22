@@ -1539,6 +1539,8 @@ class TestSraRecovery:
         args = self._args_for_fasterq_dump()
 
         def fake_run(cmd, stdout=None, stderr=None):
+            assert cmd[cmd.index('-N') + 1] == '2'
+            assert cmd[cmd.index('-X') + 1] == '8'
             return subprocess.CompletedProcess(
                 cmd,
                 0,
@@ -1547,8 +1549,9 @@ class TestSraRecovery:
             )
 
         def fail_estimate(*_args, **_kwargs):
-            raise AssertionError('estimate_num_written_spots_from_fastq should not be called when spots written is reported.')
+            raise AssertionError('Reported range counts must not require a second FASTQ pass.')
 
+        monkeypatch.setattr('amalgkit.getfastq.trim_fasterq_output_files', fail_estimate)
         monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
         monkeypatch.setattr('amalgkit.getfastq.compress_fasterq_output_files', lambda *args, **kwargs: None)
         monkeypatch.setattr('amalgkit.getfastq.estimate_num_written_spots_from_fastq', fail_estimate)
@@ -1738,72 +1741,6 @@ class TestSraRecovery:
         assert sra_stat_out['current_ext'] == '.fastq'
         assert metadata.df.loc[0, 'num_written'] == 10
 
-    def test_run_fasterq_dump_skips_trim_for_full_range(self, tmp_path, monkeypatch):
-        sra_id = 'SRR001'
-        metadata = self._metadata_for_extraction(sra_id)
-        sra_stat = {
-            'sra_id': sra_id,
-            'getfastq_sra_dir': str(tmp_path),
-            'spot_length': 100,
-            'layout': 'paired',
-            'total_spot': 10,
-        }
-        args = self._args_for_fasterq_dump()
-
-        def fake_run(cmd, stdout=None, stderr=None):
-            return subprocess.CompletedProcess(cmd, 0, stdout=b'', stderr=b'')
-
-        def fail_trim(*_args, **_kwargs):
-            raise AssertionError('trim_fasterq_output_files should be skipped for full-range extraction.')
-
-        monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
-        monkeypatch.setattr('amalgkit.getfastq.trim_fasterq_output_files', fail_trim)
-        monkeypatch.setattr('amalgkit.getfastq.compress_fasterq_output_files', lambda *args, **kwargs: None)
-        monkeypatch.setattr('amalgkit.getfastq.estimate_num_written_spots_from_fastq', lambda *args, **kwargs: 10)
-        monkeypatch.setattr('amalgkit.getfastq.detect_layout_from_file', lambda *args, **kwargs: args[0])
-        monkeypatch.setattr('amalgkit.getfastq.remove_unpaired_files', lambda *args, **kwargs: None)
-
-        metadata, _ = run_fasterq_dump(sra_stat, args, metadata, start=1, end=10)
-
-        assert metadata.df.loc[0, 'num_written'] == 10
-
-    def test_run_fasterq_dump_skips_trim_for_partial_range(self, tmp_path, monkeypatch):
-        sra_id = 'SRR001'
-        metadata = self._metadata_for_extraction(sra_id)
-        sra_stat = {
-            'sra_id': sra_id,
-            'getfastq_sra_dir': str(tmp_path),
-            'spot_length': 100,
-            'layout': 'paired',
-            'total_spot': 20,
-        }
-        args = self._args_for_fasterq_dump()
-
-        def fake_run(cmd, stdout=None, stderr=None):
-            return subprocess.CompletedProcess(
-                cmd,
-                0,
-                stdout=b'spots written      : 7\n',
-                stderr=b'',
-            )
-
-        def fail_trim(*_args, **_kwargs):
-            raise AssertionError('trim_fasterq_output_files should not be called when fasterq-dump is spot-range limited.')
-
-        def fail_estimate(*_args, **_kwargs):
-            raise AssertionError('estimate_num_written_spots_from_fastq should not be called when spots written is reported.')
-
-        monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
-        monkeypatch.setattr('amalgkit.getfastq.trim_fasterq_output_files', fail_trim)
-        monkeypatch.setattr('amalgkit.getfastq.compress_fasterq_output_files', lambda *args, **kwargs: None)
-        monkeypatch.setattr('amalgkit.getfastq.estimate_num_written_spots_from_fastq', fail_estimate)
-        monkeypatch.setattr('amalgkit.getfastq.detect_layout_from_file', lambda *args, **kwargs: args[0])
-        monkeypatch.setattr('amalgkit.getfastq.remove_unpaired_files', lambda *args, **kwargs: None)
-
-        metadata, _ = run_fasterq_dump(sra_stat, args, metadata, start=2, end=8)
-
-        assert metadata.df.loc[0, 'num_written'] == 7
-
     def test_run_fasterq_dump_trims_when_spot_range_flags_are_not_supported(self, tmp_path, monkeypatch):
         sra_id = 'SRR001'
         metadata = self._metadata_for_extraction(sra_id)
@@ -1859,6 +1796,8 @@ class TestSraRecovery:
         args = self._args_for_fasterq_dump()
 
         def fake_run(cmd, stdout=None, stderr=None):
+            assert '-N' not in cmd
+            assert '-X' not in cmd
             return subprocess.CompletedProcess(
                 cmd,
                 0,
@@ -1924,65 +1863,6 @@ class TestSraRecovery:
         assert cmd[cmd.index('-N') + 1] == '1'
         assert '-X' in cmd
         assert cmd[cmd.index('-X') + 1] == '1'
-
-    def test_run_fasterq_dump_passes_requested_spot_range(self, tmp_path, monkeypatch):
-        sra_id = 'SRR001'
-        metadata = self._metadata_for_extraction(sra_id)
-        sra_stat = {
-            'sra_id': sra_id,
-            'getfastq_sra_dir': str(tmp_path),
-            'spot_length': 100,
-            'layout': 'single',
-        }
-        args = self._args_for_fasterq_dump()
-        observed = {'cmd': None}
-
-        def fake_run(cmd, stdout=None, stderr=None):
-            observed['cmd'] = cmd
-            return subprocess.CompletedProcess(cmd, 0, stdout=b'', stderr=b'')
-
-        monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
-        monkeypatch.setattr('amalgkit.getfastq.compress_fasterq_output_files', lambda *args, **kwargs: None)
-        monkeypatch.setattr('amalgkit.getfastq.estimate_num_written_spots_from_fastq', lambda *args, **kwargs: 8)
-        monkeypatch.setattr('amalgkit.getfastq.detect_layout_from_file', lambda *args, **kwargs: args[0])
-        monkeypatch.setattr('amalgkit.getfastq.remove_unpaired_files', lambda *args, **kwargs: None)
-
-        run_fasterq_dump(sra_stat, args, metadata, start=5, end=12)
-
-        cmd = observed['cmd']
-        assert '-N' in cmd
-        assert cmd[cmd.index('-N') + 1] == '5'
-        assert '-X' in cmd
-        assert cmd[cmd.index('-X') + 1] == '12'
-
-    def test_run_fasterq_dump_skips_spot_range_flags_for_full_range(self, tmp_path, monkeypatch):
-        sra_id = 'SRR001'
-        metadata = self._metadata_for_extraction(sra_id)
-        sra_stat = {
-            'sra_id': sra_id,
-            'getfastq_sra_dir': str(tmp_path),
-            'spot_length': 100,
-            'layout': 'single',
-            'total_spot': 10,
-        }
-        args = self._args_for_fasterq_dump()
-        observed = {'cmd': None}
-
-        def fake_run(cmd, stdout=None, stderr=None):
-            observed['cmd'] = cmd
-            return subprocess.CompletedProcess(cmd, 0, stdout=b'', stderr=b'spots written : 10')
-
-        monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
-        monkeypatch.setattr('amalgkit.getfastq.compress_fasterq_output_files', lambda *args, **kwargs: None)
-        monkeypatch.setattr('amalgkit.getfastq.estimate_num_written_spots_from_fastq', lambda *args, **kwargs: 10)
-        monkeypatch.setattr('amalgkit.getfastq.detect_layout_from_file', lambda *args, **kwargs: args[0])
-        monkeypatch.setattr('amalgkit.getfastq.remove_unpaired_files', lambda *args, **kwargs: None)
-
-        run_fasterq_dump(sra_stat, args, metadata, start=1, end=10)
-
-        cmd = observed['cmd']
-        assert '-N' not in cmd
-        assert '-X' not in cmd
 
     def test_sequence_extraction_reuses_run_files_without_rescan_when_fastp_disabled(self, tmp_path, monkeypatch):
         sra_id = 'SRR001'

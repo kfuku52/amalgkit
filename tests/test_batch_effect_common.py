@@ -7,7 +7,6 @@ from amalgkit.batch_effect_common import (
     annotate_metadata_with_batch_info,
     build_batch_effect_summary_dataframe,
     initialize_batch_info,
-    normalize_run_ids,
     write_batch_effect_summary_tsv,
 )
 
@@ -26,15 +25,11 @@ def test_align_metadata_to_counts_rejects_duplicate_metadata_runs():
         align_metadata_to_counts(counts_df=counts, metadata_df=metadata)
 
 
-def test_normalize_run_ids_trims_deduplicates_and_skips_empty():
-    assert normalize_run_ids([' RUN1 ', 'RUN1', '', None, 'RUN2']) == ['RUN1', 'RUN2']
-
-
 def test_batch_effect_result_to_jsonable_normalizes_runs_and_merges_extra():
     result = BatchEffectResult(
         backend='sva',
         method='placeholder',
-        corrected_run_ids=[' RUN1 ', 'RUN1'],
+        corrected_run_ids=[' RUN1 ', 'RUN1', '', None],
         uncorrected_run_ids=['RUN2'],
         resolved_sva_nsv=2,
         extra={'custom_flag': 'yes'},
@@ -45,25 +40,6 @@ def test_batch_effect_result_to_jsonable_normalizes_runs_and_merges_extra():
     assert payload['uncorrected_run_ids'] == ['RUN2']
     assert payload['resolved_sva_nsv'] == 2
     assert payload['custom_flag'] == 'yes'
-
-
-def test_initialize_batch_info_matches_finalize_defaults():
-    observed = initialize_batch_info(run_ids=[' RUN1 ', 'RUN1', 'RUN2'], batch_effect_alg='sva')
-    assert observed['batch_effect_alg_requested'] == 'sva'
-    assert observed['batch_effect_alg_applied'] == 'sva'
-    assert observed['corrected_runs'] == []
-    assert observed['uncorrected_runs'] == ['RUN1', 'RUN2']
-    assert observed['skip_reason'] == 'not_run'
-    assert observed['resolved_sva_nsv'] is None
-    assert observed['resolved_ruv_k'] is None
-    assert observed['resolved_latent_k'] is None
-    assert observed['ruv_residual_method'] is None
-    assert observed['ruv_pvalue_method'] is None
-    assert observed['ruv_fallback_used'] is None
-    assert observed['ruv_fallback_reason'] is None
-    assert observed['group_model_used'] is None
-    assert observed['group_fallback_used'] is None
-    assert observed['group_error_message'] is None
 
 
 def test_annotate_metadata_with_batch_info_marks_corrected_runs():

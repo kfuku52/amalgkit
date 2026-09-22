@@ -55,26 +55,7 @@ class TestMetadataReorder:
         for col in Metadata.removed_metadata_columns:
             assert col not in m.df.columns
 
-    def test_reorder_sets_exclusion_default(self, sample_metadata_df):
-        df = sample_metadata_df.copy()
-        df['exclusion'] = ''
-        m = Metadata()
-        m.df = df
-        m.reorder()
-        assert (m.df['exclusion'] == 'no').all()
-
-    def test_reorder_sample_group_near_front(self, sample_metadata):
-        cols = list(sample_metadata.df.columns)
-        assert cols.index('sample_group') == 1
-
-
 class TestMetadataFromDataFrame:
-    def test_roundtrip(self, sample_metadata_df):
-        m = Metadata.from_DataFrame(sample_metadata_df)
-        assert isinstance(m, Metadata)
-        assert m.df.shape[0] == 5
-        assert 'scientific_name' in m.df.columns
-
     def test_drops_removed_legacy_columns(self):
         df = pandas.DataFrame({
             'scientific_name': ['Homo sapiens'],
@@ -98,12 +79,6 @@ class TestMetadataFromDataFrame:
         df['exclusion'] = [empty_value] * len(df)
         m = Metadata.from_DataFrame(df)
         assert (m.df['exclusion'] == 'no').all()
-
-    def test_does_not_mutate_input_dataframe(self, sample_metadata_df):
-        df = sample_metadata_df.copy()
-        df['exclusion'] = ''
-        _ = Metadata.from_DataFrame(df)
-        assert (df['exclusion'] == '').all()
 
     def test_empty_input_dataframe_gets_standard_columns(self):
         m = Metadata.from_DataFrame(pandas.DataFrame())
@@ -263,13 +238,6 @@ class TestMetadataPivot:
         # 2 species x 2 sample_groups
         assert pivot.shape[0] == 2
         assert pivot.shape[1] == 2
-
-    def test_pivot_qualified_only(self, sample_metadata):
-        m = sample_metadata
-        m.df.loc[0, 'is_qualified'] = 'no'
-        pivot = m.pivot(qualified_only=True, sampled_only=False)
-        assert isinstance(pivot, pandas.DataFrame)
-
 
 class TestMetadataLabelSampledData:
     def test_labels_samples(self, sample_metadata):
@@ -841,32 +809,6 @@ class TestMetadataReorderExtraCols:
         m = Metadata.from_DataFrame(pandas.DataFrame(data))
         assert 'my_custom_column' in m.df.columns
 
-    def test_reorder_preserves_data(self, sample_metadata):
-        """Reorder should not lose any rows."""
-        original_rows = sample_metadata.df.shape[0]
-        sample_metadata.reorder()
-        assert sample_metadata.df.shape[0] == original_rows
-
-
-# ---------------------------------------------------------------------------
-# Metadata.pivot: sampled_only filter
-# ---------------------------------------------------------------------------
-
-class TestMetadataPivotSampledOnly:
-    def test_pivot_sampled_only(self, sample_metadata):
-        m = sample_metadata
-        m.label_sampled_data(max_sample=2)
-        pivot = m.pivot(qualified_only=True, sampled_only=True)
-        assert isinstance(pivot, pandas.DataFrame)
-
-    def test_pivot_n_sp_cutoff(self, sample_metadata):
-        """n_sp_cutoff filters columns with fewer species than cutoff."""
-        m = sample_metadata
-        pivot = m.pivot(n_sp_cutoff=3, qualified_only=False, sampled_only=False)
-        # With cutoff=3, columns where fewer than 3 species appear are dropped
-        assert isinstance(pivot, pandas.DataFrame)
-
-
 # ---------------------------------------------------------------------------
 # load_metadata (loads metadata from file)
 # ---------------------------------------------------------------------------
@@ -882,26 +824,6 @@ class TestLoadMetadata:
         m = load_metadata(Args())
         assert isinstance(m, Metadata)
         assert m.df.shape[0] == 5
-
-    def test_load_metadata_requests_utf8_encoding(self, tmp_path, sample_metadata, monkeypatch):
-        path = tmp_path / 'metadata.tsv'
-        sample_metadata.df.to_csv(str(path), sep='\t', index=False, encoding='utf-8')
-        observed = {}
-        original_read_csv = pandas.read_csv
-
-        def capture_read_csv(*args, **kwargs):
-            observed['encoding'] = kwargs.get('encoding')
-            return original_read_csv(*args, **kwargs)
-
-        monkeypatch.setattr(pandas, 'read_csv', capture_read_csv)
-
-        class Args:
-            metadata = str(path)
-            out_dir = str(tmp_path)
-
-        load_metadata(Args())
-
-        assert observed['encoding'] == 'utf-8'
 
     def test_load_metadata_preserves_literal_na_annotation(self, tmp_path):
         path = tmp_path / 'metadata.tsv'

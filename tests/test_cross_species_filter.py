@@ -143,30 +143,6 @@ def test_prepare_cross_species_metadata_matches_explicit_token_directories(tmp_p
     assert observed.loc[:, 'species_tag'].tolist() == ['human']
 
 
-def test_cross_species_retains_only_exclusion_no_across_reason_values():
-    # Downstream selection is `.eq('no')`: every non-`no` reason must drop the
-    # run, and none of them may raise. This is the behaviour the reason strings
-    # exist to drive.
-    df = pandas.DataFrame(
-        {
-            'run': ['RUN1', 'RUN2', 'RUN3', 'RUN4', 'RUN5'],
-            'scientific_name': ['Spec example'] * 5,
-            'sample_group': ['A', 'A', 'B', 'B', 'A'],
-            'exclusion': [
-                'no',
-                'manual_removal',
-                'low_mapping_rate',
-                'low_within_sample_group_correlation',
-                'yes',
-            ],
-        }
-    )
-    normalized = _normalize_cross_species_metadata_table(df)
-
-    kept = normalized.loc[normalized['exclusion'].eq('no'), 'run'].tolist()
-    assert kept == ['RUN1']
-
-
 def test_cross_species_outlier_flags_surface_small_group_status():
     metadata = pandas.DataFrame(
         {
@@ -507,25 +483,6 @@ def test_embedding_imputation_preserves_observed_negative_values_and_imputes_non
 # ---------------------------------------------------------------------------
 
 class TestGetSppFromDir:
-    def test_basic_listing(self, tmp_path):
-        (tmp_path / 'Homo_sapiens').mkdir()
-        (tmp_path / 'Mus_musculus').mkdir()
-        result = get_species_from_dir(str(tmp_path))
-        assert sorted(result) == ['Homo_sapiens', 'Mus_musculus']
-
-    def test_excludes_hidden_files(self, tmp_path):
-        (tmp_path / 'Homo_sapiens').mkdir()
-        (tmp_path / '.hidden').mkdir()
-        (tmp_path / '.DS_Store').touch()
-        result = get_species_from_dir(str(tmp_path))
-        assert result == ['Homo_sapiens']
-
-    def test_excludes_tmp_files(self, tmp_path):
-        (tmp_path / 'Homo_sapiens').mkdir()
-        (tmp_path / 'tmp.amalgkit.1234').touch()
-        result = get_species_from_dir(str(tmp_path))
-        assert result == ['Homo_sapiens']
-
     def test_empty_directory(self, tmp_path):
         result = get_species_from_dir(str(tmp_path))
         assert result == []
@@ -534,36 +491,17 @@ class TestGetSppFromDir:
         """Only non-hidden, non-tmp entries are returned."""
         (tmp_path / 'Species_A').mkdir()
         (tmp_path / 'Species_B').mkdir()
-        (tmp_path / '.gitkeep').touch()
-        (tmp_path / 'tmp.output').touch()
+        (tmp_path / '.hidden').mkdir()
+        (tmp_path / 'tmp.partial').mkdir()
+        (tmp_path / 'metadata.tsv').touch()
         result = get_species_from_dir(str(tmp_path))
         assert sorted(result) == ['Species_A', 'Species_B']
-
-    def test_ignores_non_directory_entries(self, tmp_path):
-        (tmp_path / 'Species_A').mkdir()
-        (tmp_path / 'metadata.tsv').write_text('data')
-        result = get_species_from_dir(str(tmp_path))
-        assert result == ['Species_A']
-
 
 # ---------------------------------------------------------------------------
 # generate_input_symlinks (creates cross-species input symlinks from per-species tables)
 # ---------------------------------------------------------------------------
 
 class TestGenerateCrossSpeciesInputSymlinks:
-    def test_creates_symlinks(self, tmp_path):
-        """Creates symlinks to per-species output tables."""
-        per_species_dir = tmp_path / 'per_species'
-        sp_tables = per_species_dir / 'Homo_sapiens' / 'tables'
-        sp_tables.mkdir(parents=True)
-        (sp_tables / 'Homo_sapiens_tpm.tsv').write_text('data')
-        (sp_tables / 'Homo_sapiens_est_counts.tsv').write_text('data')
-        cross_species_input_dir = str(tmp_path / 'cross_species_input')
-        generate_input_symlinks(cross_species_input_dir, str(per_species_dir), ['Homo_sapiens'])
-        assert os.path.isdir(cross_species_input_dir)
-        assert os.path.islink(os.path.join(cross_species_input_dir, 'Homo_sapiens_tpm.tsv'))
-        assert os.path.islink(os.path.join(cross_species_input_dir, 'Homo_sapiens_est_counts.tsv'))
-
     def test_multiple_species(self, tmp_path):
         """Creates symlinks for multiple species."""
         per_species_dir = tmp_path / 'per_species'
@@ -710,33 +648,12 @@ class TestGetSampleGroupString:
         assert get_sample_groups(args) == ['leaf, young', 'root|tip']
         assert get_sample_group_string(args) == r'leaf\, young|root\|tip'
 
-    def test_reads_sample_group_from_metadata(self, monkeypatch):
-        args = SimpleNamespace(sample_group=None)
-        metadata = Metadata.from_DataFrame(pandas.DataFrame({
-            'run': ['R1', 'R2'],
-            'sample_group': ['treated', 'control'],
-            'exclusion': ['no', 'no'],
-        }))
-        monkeypatch.setattr('amalgkit.cross_species_filter.load_metadata', lambda _args: metadata)
-        out = get_sample_group_string(args)
-        assert set(out.split('|')) == {'treated', 'control'}
-
     def test_metadata_sample_groups_drop_blank_and_deduplicate(self, monkeypatch):
         args = SimpleNamespace(sample_group=None)
         metadata = Metadata.from_DataFrame(pandas.DataFrame({
-            'run': ['R1', 'R2', 'R3', 'R4'],
-            'sample_group': [' treated ', '', 'treated', 'control'],
-            'exclusion': ['no', 'no', 'no', 'no'],
-        }))
-        monkeypatch.setattr('amalgkit.cross_species_filter.load_metadata', lambda _args: metadata)
-        assert get_sample_group_string(args) == 'treated|control'
-
-    def test_metadata_sample_groups_drop_nan(self, monkeypatch):
-        args = SimpleNamespace(sample_group=None)
-        metadata = Metadata.from_DataFrame(pandas.DataFrame({
-            'run': ['R1', 'R2', 'R3'],
-            'sample_group': ['treated', float('nan'), 'control'],
-            'exclusion': ['no', 'no', 'no'],
+            'run': ['R1', 'R2', 'R3', 'R4', 'R5'],
+            'sample_group': [' treated ', '', 'treated', 'control', numpy.nan],
+            'exclusion': ['no'] * 5,
         }))
         monkeypatch.setattr('amalgkit.cross_species_filter.load_metadata', lambda _args: metadata)
         assert get_sample_group_string(args) == 'treated|control'

@@ -5,6 +5,15 @@ Releases provide generated notes only for tagged releases. Patch-only updates
 remain on the default branch and are recorded below; consult this file rather
 than the Releases page for those changes.
 
+### 0.16.91 - 2026-09-22
+
+- Remove redundant test scaffolding, implementation-mirroring assertions, and
+  weak type/shape smoke tests; consolidate normalization and command-option cases.
+- Test numeric CLI boundaries once per validator and retain wiring checks for
+  every consumer; move choice/timeout checks out of repeated subprocess launches.
+- Retain independent scientific references, data-integrity regressions, and
+  workflow recovery tests. See `tests/AUDIT.md` for the pruning rationale.
+
 ### 0.16.90 - 2026-09-22
 
 - Reject symbolic-link merge outputs before resolving paths, preserving files

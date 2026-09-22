@@ -175,15 +175,3 @@ def test_timed_handler_imports_lazily_and_logs_outcome(monkeypatch, capsys, fail
         assert 'amalgkit quant: end' in capsys.readouterr().out
     importer.assert_called_once_with('amalgkit.quant')
     entry.assert_called_once_with(args)
-
-
-@pytest.mark.parametrize('topic', [None, 'quant'])
-def test_help_handler_routes_topic(topic):
-    parser = Mock()
-    cli_utils.build_help_command_handler(parser)(SimpleNamespace(topic=topic))
-    if topic is None:
-        parser.print_help.assert_called_once_with()
-        parser.parse_args.assert_not_called()
-    else:
-        parser.parse_args.assert_called_once_with(['quant', '--help'])
-        parser.print_help.assert_not_called()

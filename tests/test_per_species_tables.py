@@ -34,18 +34,6 @@ class TestGetSampleGroup:
         assert _resolve_selected_sample_groups(args, metadata.df) == groups
         assert get_sample_groups(args, CrossSpeciesFilterContext(metadata=metadata)) == groups
 
-    def test_from_args(self):
-        """When --sample_group is specified, parse it."""
-        class Args:
-            sample_group = 'brain,liver,heart'
-            metadata = 'metadata.tsv'
-        m = Metadata.from_DataFrame(pandas.DataFrame({
-            'run': ['R1'], 'exclusion': ['no'],
-            'sample_group': ['brain'],
-        }))
-        result = get_sample_group(Args(), m)
-        assert result == 'brain|liver|heart'
-
     def test_from_args_keeps_hyphen_and_trims(self):
         class Args:
             sample_group = 'non-treated, treated '
@@ -56,22 +44,6 @@ class TestGetSampleGroup:
         }))
         result = get_sample_group(Args(), m)
         assert result == 'non-treated|treated'
-
-    def test_from_metadata(self):
-        """When --sample_group is None, extract from metadata."""
-        class Args:
-            sample_group = None
-            metadata = 'metadata.tsv'
-        m = Metadata.from_DataFrame(pandas.DataFrame({
-            'run': ['R1', 'R2', 'R3'],
-            'exclusion': ['no', 'no', 'no'],
-            'sample_group': ['brain', 'liver', 'brain'],
-        }))
-        result = get_sample_group(Args(), m)
-        # Should contain brain and liver separated by pipe
-        groups = result.split('|')
-        assert 'brain' in groups
-        assert 'liver' in groups
 
     def test_from_metadata_trims_and_deduplicates(self):
         class Args:

@@ -270,11 +270,6 @@ class TestFilepath2spp:
         result = filepath2spp(paths)
         assert result == ['Homo_sapiens', 'Mus_musculus']
 
-    def test_single_species(self):
-        paths = ['/merge/Arabidopsis_thaliana/Arabidopsis_thaliana_est_counts.tsv']
-        result = filepath2spp(paths)
-        assert result == ['Arabidopsis_thaliana']
-
     def test_basename_only(self):
         paths = ['Drosophila_melanogaster_est_counts.tsv']
         result = filepath2spp(paths)
@@ -286,16 +281,6 @@ class TestFilepath2spp:
 # ---------------------------------------------------------------------------
 
 class TestGetCountFiles:
-    def test_finds_count_files(self, tmp_path):
-        """Finds est_counts.tsv files in species subdirectories."""
-        sp_dir = tmp_path / 'Homo_sapiens'
-        sp_dir.mkdir()
-        count_file = sp_dir / 'Homo_sapiens_est_counts.tsv'
-        count_file.write_text('target_id\tSRR001\n')
-        result = get_count_files(str(tmp_path))
-        assert len(result) == 1
-        assert result[0].endswith('Homo_sapiens_est_counts.tsv')
-
     def test_multiple_species(self, tmp_path):
         """Finds count files across multiple species directories."""
         for sp in ['Homo_sapiens', 'Mus_musculus']:
@@ -322,20 +307,11 @@ class TestGetCountFiles:
         with pytest.raises(ValueError, match='Multiple est_counts.tsv'):
             get_count_files(str(tmp_path))
 
-    def test_ignores_non_directory_entries(self, tmp_path):
-        """Non-directory entries in the count dir should be skipped."""
-        sp_dir = tmp_path / 'Homo_sapiens'
-        sp_dir.mkdir()
-        (sp_dir / 'Homo_sapiens_est_counts.tsv').write_text('data')
-        # A regular file at the top level (not a directory)
-        (tmp_path / 'metadata.tsv').write_text('data')
-        result = get_count_files(str(tmp_path))
-        assert len(result) == 1
-
     def test_ignores_hidden_and_tmp_directories(self, tmp_path):
         sp_dir = tmp_path / 'Homo_sapiens'
         sp_dir.mkdir()
         (sp_dir / 'Homo_sapiens_est_counts.tsv').write_text('data')
+        (tmp_path / 'metadata.tsv').write_text('ignore')
         hidden_dir = tmp_path / '.cache'
         hidden_dir.mkdir()
         (hidden_dir / 'Hidden_est_counts.tsv').write_text('data')

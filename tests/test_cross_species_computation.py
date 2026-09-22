@@ -17,15 +17,9 @@ def test_safe_correlation_returns_nan_for_constant_vectors():
     assert numpy.isnan(safe_correlation([1.0, 2.0, 3.0], [4.0, 4.0, 4.0], 'spearman'))
 
 
-def test_safe_correlation_uses_only_finite_pairs():
-    observed = safe_correlation([1.0, numpy.nan, 3.0, 4.0], [2.0, 9.0, 6.0, 8.0], 'pearson')
-    expected = pandas.Series([1.0, 3.0, 4.0]).corr(pandas.Series([2.0, 6.0, 8.0]))
-    assert numpy.isclose(observed, expected)
-
-
 @pytest.mark.parametrize('method', ['pearson', 'spearman', 'kendall'])
-def test_safe_correlation_excludes_infinite_pairs(method):
-    observed = safe_correlation([1, numpy.inf, 3, 4], [1, 0, 3, 4], method)
+def test_safe_correlation_excludes_nonfinite_pairs(method):
+    observed = safe_correlation([1, numpy.inf, 3, 4, numpy.nan], [1, 0, 3, 4, 9], method)
     assert observed == pytest.approx(1.0)
 
 
@@ -85,22 +79,6 @@ def test_resolve_tsne_perplexity_is_valid_for_sample_count():
     assert resolve_tsne_perplexity(4) == 1
     assert resolve_tsne_perplexity(10) == 3
     assert resolve_tsne_perplexity(100) == 30
-
-
-def test_finite_correlation_block_drops_constant_sample():
-    corr = pandas.DataFrame(
-        {
-            'sample_a': [1.0, 1.0, numpy.nan],
-            'sample_b': [1.0, 1.0, numpy.nan],
-            'constant_sample': [numpy.nan, numpy.nan, numpy.nan],
-        },
-        index=['sample_a', 'sample_b', 'constant_sample'],
-    )
-
-    block = finite_correlation_block(corr)
-
-    assert block.index.tolist() == ['sample_a', 'sample_b']
-    assert numpy.isfinite(block.to_numpy()).all()
 
 
 def test_finite_correlation_block_rejects_partial_undefined_correlations():

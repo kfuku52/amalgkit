@@ -36,16 +36,9 @@ def _valid_pdf_bytes():
     return b'\n'.join(lines) + b'\n'
 
 
-def _assert_parseable_pdf(data):
-    assert isinstance(data, bytes), 'placeholder PDF must be bytes'
-    assert data.startswith(b'%PDF-'), 'placeholder PDF must start with the %PDF- magic'
-    assert b'%%EOF' in data, 'placeholder PDF must contain a %%EOF trailer'
-
-
 def _write_valid_pdf(target):
     """Write a structurally parseable minimal PDF to a path or file object."""
     data = _valid_pdf_bytes()
-    _assert_parseable_pdf(data)
     if hasattr(target, 'write'):
         target.write(data)
         return None

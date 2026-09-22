@@ -549,34 +549,11 @@ class TestFilterGetfastqEligibleMetadata:
 # ---------------------------------------------------------------------------
 
 class TestRemoveExperimentWithoutRun:
-    def test_removes_empty_run(self):
-        """Experiments without run IDs should be filtered out."""
-        data = {
-            'run': ['SRR001', '', 'SRR003'],
-            'scientific_name': ['Sp1', 'Sp1', 'Sp1'],
-            'exclusion': ['no', 'no', 'no'],
-        }
-        m = Metadata.from_DataFrame(pandas.DataFrame(data))
-        m = remove_experiment_without_run(m)
-        assert m.df.shape[0] == 2
-        assert '' not in m.df['run'].values
-
-    def test_no_removal_needed(self):
-        """All experiments have runs, nothing removed."""
-        data = {
-            'run': ['SRR001', 'SRR002'],
-            'scientific_name': ['Sp1', 'Sp1'],
-            'exclusion': ['no', 'no'],
-        }
-        m = Metadata.from_DataFrame(pandas.DataFrame(data))
-        m = remove_experiment_without_run(m)
-        assert m.df.shape[0] == 2
-
     def test_removes_nan_and_whitespace_runs(self):
         data = {
-            'run': ['SRR001', numpy.nan, None, '   ', 'SRR002  '],
-            'scientific_name': ['Sp1', 'Sp1', 'Sp1', 'Sp1', 'Sp1'],
-            'exclusion': ['no', 'no', 'no', 'no', 'no'],
+            'run': ['SRR001', numpy.nan, None, '   ', 'SRR002  ', ''],
+            'scientific_name': ['Sp1'] * 6,
+            'exclusion': ['no'] * 6,
         }
         m = Metadata.from_DataFrame(pandas.DataFrame(data))
         m = remove_experiment_without_run(m)

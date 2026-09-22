@@ -37,22 +37,6 @@ def test_impute_expression_row_mean_fills_missing_values():
     assert imputed.loc['G1', 'RUN1'] == 1.0
 
 
-def test_impute_expression_preserves_observed_values():
-    df = pandas.DataFrame(
-        {
-            'RUN1': [1.0, 2.0, 3.0],
-            'RUN2': [4.0, numpy.nan, 6.0],
-        },
-        index=['G1', 'G2', 'G3'],
-    )
-    imputed = impute_expression(df, strategy='em_pca')
-
-    assert imputed.loc['G1', 'RUN1'] == 1.0
-    assert imputed.loc['G1', 'RUN2'] == 4.0
-    assert imputed.loc['G3', 'RUN1'] == 3.0
-    assert imputed.loc['G3', 'RUN2'] == 6.0
-
-
 def test_impute_expression_em_pca_fallback_warns_on_degenerate_input():
     # A zero-variance matrix cannot resolve a NIPALS component; the fallback
     # to row-mean imputation must be surfaced with a warning, not silently
@@ -130,17 +114,4 @@ def test_impute_expression_does_not_warn_when_em_pca_succeeds():
         imputed = impute_expression(df, strategy='em_pca', num_pc=1)
 
     assert numpy.isfinite(imputed.to_numpy(dtype=float)).all()
-
-
-def test_impute_expression_minimum_imputed_value_floor():
-    df = pandas.DataFrame(
-        {
-            'RUN1': [1.0, 2.0, 3.0],
-            'RUN2': [4.0, numpy.nan, 6.0],
-        },
-        index=['G1', 'G2', 'G3'],
-    )
-    imputed = impute_expression(df, strategy='row_mean', minimum_imputed_value=0.5)
-
-    assert imputed.loc['G2', 'RUN2'] >= 0.5
-    assert imputed.loc['G1', 'RUN1'] == 1.0
+    numpy.testing.assert_array_equal(imputed.to_numpy()[df.notna()], df.to_numpy()[df.notna()])

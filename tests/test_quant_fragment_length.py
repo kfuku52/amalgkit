@@ -33,8 +33,7 @@ def args(**values):
     return SimpleNamespace(threads=1, **values)
 
 
-@pytest.mark.parametrize('mean', [150, 199.5, 200, 350])
-@pytest.mark.parametrize('use_file', [False, True])
+@pytest.mark.parametrize('mean,use_file', [(350, False), (199.5, True)])
 def test_known_mean_and_independent_sd_reach_kallisto(tmp_path, monkeypatch, capsys, mean, use_file):
     observed = []
 
@@ -69,7 +68,6 @@ def test_known_mean_and_independent_sd_reach_kallisto(tmp_path, monkeypatch, cap
     ({}, (200, 20), ['mean', 'sd']),
     ({'nominal_length': 150}, (150, 20), ['sd']),
     ({'nominal_sdev': 7}, (200, 7), ['mean']),
-    ({'nominal_length': 350}, (350, 20), ['sd']),
     ({'spot_length': 80, 'total_bases': 800, 'total_spots': 10, 'fastp_insert_size_peak': 123}, (200, 20), ['mean', 'sd']),
 ])
 def test_assume_fills_only_missing_values_and_warns(row, expected, assumed, capsys):

@@ -718,66 +718,6 @@ class TestGetfastqDependencyChecks:
         assert called['cmds'][2] == ['seqkit', '--help']
         assert called['cmds'][3] == ['fastp', '--help']
 
-    def test_uses_fasterq_dump_dependency(self, monkeypatch):
-        class Args:
-            fasterq_dump_exe = 'fasterq-dump'
-            fastp = False
-            fastp_exe = 'fastp'
-            read_name = 'default'
-
-        called = {'cmds': []}
-
-        def fake_run(cmd, stdout=None, stderr=None):
-            called['cmds'].append(cmd)
-            if cmd == ['fasterq-dump', '--version']:
-                return subprocess.CompletedProcess(cmd, 0, stdout=b'3.0.10\n', stderr=b'')
-            return subprocess.CompletedProcess(cmd, 0, stdout=b'', stderr=b'')
-
-        monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
-        check_getfastq_dependency(Args())
-        assert called['cmds'][0][0] == 'fasterq-dump'
-
-    def test_obsolete_flags_are_ignored_and_still_uses_fasterq_dump(self, monkeypatch):
-        class Args:
-            obsolete_pfd = True
-            obsolete_pfd_exe = '/tmp/legacy_pfd_exe'
-            obsolete_fastq_dump_exe = '/tmp/legacy_fastq_dump_exe'
-            fasterq_dump_exe = 'fasterq-dump'
-            fastp = False
-            fastp_exe = 'fastp'
-            read_name = 'default'
-
-        called = {'cmds': []}
-
-        def fake_run(cmd, stdout=None, stderr=None):
-            called['cmds'].append(cmd)
-            if cmd == ['fasterq-dump', '--version']:
-                return subprocess.CompletedProcess(cmd, 0, stdout=b'3.0.10\n', stderr=b'')
-            return subprocess.CompletedProcess(cmd, 0, stdout=b'', stderr=b'')
-
-        monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
-        check_getfastq_dependency(Args())
-        assert called['cmds'][0][0] == 'fasterq-dump'
-
-    def test_trinity_mode_uses_same_dependencies(self, monkeypatch):
-        class Args:
-            fasterq_dump_exe = 'fasterq-dump'
-            fastp = False
-            fastp_exe = 'fastp'
-            read_name = 'trinity'
-
-        called = {'cmds': []}
-
-        def fake_run(cmd, stdout=None, stderr=None):
-            called['cmds'].append(cmd)
-            if cmd == ['fasterq-dump', '--version']:
-                return subprocess.CompletedProcess(cmd, 0, stdout=b'3.0.10\n', stderr=b'')
-            return subprocess.CompletedProcess(cmd, 0, stdout=b'', stderr=b'')
-
-        monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
-        check_getfastq_dependency(Args())
-        assert called['cmds'][0][0] == 'fasterq-dump'
-
     def test_raises_clear_error_when_fasterq_dump_missing(self, monkeypatch):
         class Args:
             fasterq_dump_exe = 'missing-fasterq-dump'

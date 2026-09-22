@@ -35,21 +35,6 @@ def write_busco_table(path, rows):
             f.write("\t".join(row) + "\n")
 
 
-def test_normalize_busco_table(tmp_path):
-    src = tmp_path / "full_table.tsv"
-    rows = [
-        ["BUSCO1", "Complete", "seq1", "100", "200", "url1", "desc1"],
-        ["BUSCO2", "Missing", "-", "0", "0", "url2", "desc2"],
-    ]
-    write_busco_table(src, rows)
-    dest = tmp_path / "normalized.tsv"
-    normalize_busco_table(str(src), str(dest))
-    content = dest.read_text()
-    assert content.startswith("# Busco id\tStatus\tSequence\tScore\tLength\tOrthoDB url\tDescription")
-    assert "BUSCO1" in content
-    assert "BUSCO2" in content
-
-
 def test_normalize_busco_table_ignores_non_header_busco_comment_rows(tmp_path):
     src = tmp_path / "full_table.tsv"
     src.write_text(
@@ -57,6 +42,7 @@ def test_normalize_busco_table_ignores_non_header_busco_comment_rows(tmp_path):
         "# Busco id\tStatus\tSequence\tScore\tLength\tOrthoDB url\tDescription\n"
         "# BUSCO was run in mode: transcriptome\n"
         "BUSCO1\tComplete\tseq1\t100\t200\turl1\tdesc1\n"
+        "BUSCO2\tMissing\t-\t0\t0\turl2\tdesc2\n"
     )
     dest = tmp_path / "normalized.tsv"
 
@@ -64,6 +50,7 @@ def test_normalize_busco_table_ignores_non_header_busco_comment_rows(tmp_path):
 
     content = dest.read_text()
     assert "BUSCO1" in content
+    assert "BUSCO2" in content
     assert content.startswith("# Busco id\tStatus\tSequence\tScore\tLength\tOrthoDB url\tDescription")
 
 
@@ -105,17 +92,7 @@ def test_find_full_table_nested_gz(tmp_path):
     out_dir = tmp_path / "busco_out"
     nested = out_dir / "run_busco" / "busco_output"
     nested.mkdir(parents=True)
-    table = nested / "full_table.specific.busco.tsv.gz"
-    with gzip.open(str(table), 'wt') as f:
-        f.write("Busco id\tStatus\tSequence\tScore\tLength\tOrthoDB url\tDescription\n")
-    found = find_full_table(str(out_dir))
-    assert os.path.realpath(found) == os.path.realpath(str(table))
-
-
-def test_find_full_table_accepts_uppercase_gzip_extension(tmp_path):
-    out_dir = tmp_path / "busco_out"
-    out_dir.mkdir()
-    table = out_dir / "full_table.TSV.GZ"
+    table = nested / "full_table.specific.busco.TSV.GZ"
     with gzip.open(str(table), 'wt') as f:
         f.write("Busco id\tStatus\tSequence\tScore\tLength\tOrthoDB url\tDescription\n")
     found = find_full_table(str(out_dir))
@@ -233,8 +210,9 @@ def test_ensure_clean_dir_rejects_broken_symlink_without_redo(tmp_path):
         ensure_clean_dir(str(link_path), redo=False)
 
 
-def test_normalize_busco_table_from_gzip(tmp_path):
-    src = tmp_path / "full_table.tsv.gz"
+@pytest.mark.parametrize("suffix", ["tsv.gz", "TSV.GZ"])
+def test_normalize_busco_table_from_gzip(tmp_path, suffix):
+    src = tmp_path / f"full_table.{suffix}"
     with gzip.open(str(src), 'wt') as f:
         f.write("# Busco id\tStatus\tSequence\tScore\tLength\tOrthoDB url\tDescription\n")
         f.write("BUSCO1\tComplete\tseq1\t100\t200\turl1\tdesc1\n")
@@ -272,20 +250,6 @@ def test_normalize_busco_table_uses_utf8_for_text_io(tmp_path, monkeypatch):
 
     assert '葉の遺伝子' in dest.read_text(encoding='utf-8')
     assert all(encoding == 'utf-8' for _path, encoding in observed)
-
-
-def test_normalize_busco_table_from_uppercase_gzip_extension(tmp_path):
-    src = tmp_path / "full_table.TSV.GZ"
-    with gzip.open(str(src), 'wt') as f:
-        f.write("# Busco id\tStatus\tSequence\tScore\tLength\tOrthoDB url\tDescription\n")
-        f.write("BUSCO1\tComplete\tseq1\t100\t200\turl1\tdesc1\n")
-    dest = tmp_path / "normalized.tsv"
-
-    normalize_busco_table(str(src), str(dest))
-
-    content = dest.read_text()
-    assert content.startswith("# Busco id\tStatus\tSequence\tScore\tLength\tOrthoDB url\tDescription")
-    assert "BUSCO1" in content
 
 
 def test_resolve_species_fasta(tmp_path):

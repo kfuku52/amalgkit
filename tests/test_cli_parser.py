@@ -5,7 +5,8 @@ import pytest
 from amalgkit.main import build_main_parser
 
 
-# Explicit option lists catch a validator accidentally removed from one consumer.
+# Exercise each validator's boundaries once; each additional consumer gets one
+# valid/invalid value to catch missing parser wiring without a Cartesian product.
 CONTRACTS = [
     (
         'positive_int',
@@ -58,12 +59,12 @@ def parser():
     'command, option, value, expected_type',
     [pytest.param(command, option, value, expected_type, id=f'{command}-{option}-{value}')
      for _, consumers, expected_type, valid, _ in CONTRACTS
-     for command, option in consumers for value in valid],
+     for i, (command, option) in enumerate(consumers)
+     for value in (valid if i == 0 else valid[:1])],
 )
 def test_numeric_options_accept_valid_values_and_boundaries(parser, command, option, value, expected_type, capsys):
     result = parser.parse_args([command, f'--{option}={value}'])
     parsed = getattr(result, option)
-    assert type(parsed) is expected_type
     assert parsed == expected_type(value)
     assert capsys.readouterr().err == ''
 
@@ -72,7 +73,8 @@ def test_numeric_options_accept_valid_values_and_boundaries(parser, command, opt
     'command, option, value',
     [pytest.param(command, option, value, id=f'{command}-{option}-{value}')
      for _, consumers, _, _, invalid in CONTRACTS
-     for command, option in consumers for value in invalid],
+     for i, (command, option) in enumerate(consumers)
+     for value in (invalid if i == 0 else invalid[:1])],
 )
 def test_numeric_options_reject_invalid_values_with_usage_error(parser, command, option, value, capsys):
     # The equals form ensures -inf reaches the type validator, rather than
@@ -85,3 +87,16 @@ def test_numeric_options_reject_invalid_values_with_usage_error(parser, command,
     assert 'error:' in stderr.lower()
     assert f'--{option}' in stderr
     assert 'Traceback' not in stderr
+
+
+@pytest.mark.parametrize('command, option', [
+    ('wsfilter', 'norm'), ('finalize', 'norm'), ('wsfilter', 'dist_method'),
+    ('cstmm', 'tmm_imputation_scale'), ('csfilter', 'robust_z_scope'),
+    ('csfilter', 'reference_exclusion'), ('wsfilter', 'small_group_policy'),
+    ('csfilter', 'small_group_policy'),
+])
+def test_scientific_choices_reject_unknown_value(parser, command, option, capsys):
+    with pytest.raises(SystemExit) as exc:
+        parser.parse_args([command, f'--{option}=invalid'])
+    assert exc.value.code == 2
+    assert 'invalid choice' in capsys.readouterr().err

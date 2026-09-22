@@ -1,17 +1,7 @@
-from amalgkit.arg_utils import clone_namespace, namespace_to_dict
+from amalgkit.arg_utils import clone_namespace
 
 
 class TestArgUtils:
-    def test_namespace_to_dict_includes_class_attributes(self):
-        class Args:
-            out_dir = '/tmp/out'
-            threads = 4
-
-        data = namespace_to_dict(Args())
-
-        assert data['out_dir'] == '/tmp/out'
-        assert data['threads'] == 4
-
     def test_clone_namespace_overrides_copied_attributes(self):
         class Args:
             out_dir = '/tmp/out'

@@ -1,6 +1,4 @@
 import subprocess
-import sys
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -19,10 +17,11 @@ from amalgkit.quant import (
     resolve_dependency_probe_timeout_seconds,
     resolve_quant_tool_timeout_seconds,
 )
+from amalgkit.main import build_main_parser
 from amalgkit.subprocess_utils import DEPENDENCY_PROBE_TIMEOUT_SECONDS
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+
 
 HELP_TIMEOUT_CONTRACTS = (
     ('metadata', ('--ncbi_metadata_timeout_seconds',), None),
@@ -52,18 +51,13 @@ RESOLVERS = (
 )
 
 
-def run_cli(*args):
-    return subprocess.run(
-        [sys.executable, '-m', 'amalgkit'] + list(args),
-        cwd=REPO_ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-    )
-
 
 @pytest.mark.parametrize('command, options, default_seconds', HELP_TIMEOUT_CONTRACTS)
-def test_timeout_help_contract(command, options, default_seconds):
-    out = run_cli(command, '--help')
-    assert out.returncode == 0, out.stderr
-    help_text = out.stdout + out.stderr
+def test_timeout_help_contract(command, options, default_seconds, capsys):
+    with pytest.raises(SystemExit) as exc:
+        build_main_parser().parse_args([command, '--help'])
+    assert exc.value.code == 0
+    help_text = capsys.readouterr().out
     for option in options:
         assert option in help_text, (command, option)
     if default_seconds is not None:
@@ -71,15 +65,9 @@ def test_timeout_help_contract(command, options, default_seconds):
 
 
 @pytest.mark.parametrize('resolver,default_seconds', RESOLVERS)
-def test_defaults_are_preserved_without_an_override(resolver, default_seconds):
+def test_tool_resolvers_preserve_default_and_honor_override(resolver, default_seconds):
     assert resolver(SimpleNamespace()) == float(default_seconds)
-
-
-@pytest.mark.parametrize('resolver,default_seconds', RESOLVERS)
-def test_explicit_override_replaces_the_default(resolver, default_seconds):
-    resolved = resolver(SimpleNamespace(tool_timeout_seconds=123))
-    assert resolved == 123.0
-    assert resolved != float(default_seconds)
+    assert resolver(SimpleNamespace(tool_timeout_seconds=123)) == 123.0
 
 
 def test_probe_resolvers_default_and_override():

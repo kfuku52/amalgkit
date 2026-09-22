@@ -9,7 +9,6 @@ from amalgkit.batch_effect_sva import (
     f_pvalue,
     irwsva_build,
     estimate_num_sv_be,
-    estimate_num_sv_leek,
     estimate_num_sv_at_B,
     run_sva_backend,
 )
@@ -23,21 +22,6 @@ def test_build_sample_group_design_matrix_matches_expected_treatment_coding():
         [1.0, 0.0],
         [1.0, 1.0],
     ]
-
-
-def test_build_intercept_only_design_matrix_returns_expected_shape():
-    matrix, names = build_intercept_only_design_matrix(3)
-    assert names == ['(Intercept)']
-    assert matrix.shape == (3, 1)
-    assert numpy.all(matrix == 1.0)
-
-
-def test_clean_y_matrix_is_noop_when_sv_matrix_is_empty():
-    y = numpy.array([[1.0, 2.0], [3.0, 4.0]])
-    mod = numpy.array([[1.0], [1.0]])
-    sv = numpy.zeros((2, 0))
-    adjusted = clean_y_matrix(y, mod, sv)
-    numpy.testing.assert_allclose(adjusted, y)
 
 
 def test_top_right_singular_vectors_preserve_svd_basis_for_zero_rank_matrix():
@@ -73,24 +57,6 @@ def test_run_sva_backend_returns_noop_for_explicit_nsv_zero():
     assert sv_df.shape == (2, 0)
     assert summary['resolved_sva_nsv'] == 0
     assert summary['skip_reason'] == 'sva_nsv_zero'
-
-
-def test_estimate_num_sv_be_returns_unresolved_for_constant_residual_matrix():
-    data = numpy.array([
-        [10.0, 10.0, 10.0, 10.0],
-        [5.0, 5.0, 5.0, 5.0],
-        [0.0, 0.0, 0.0, 0.0],
-    ])
-    mod, _ = build_sample_group_design_matrix(['A', 'A', 'B', 'B'])
-    estimate = estimate_num_sv_be(
-        data_matrix=data,
-        mod_matrix=mod,
-        B_value=5,
-        max_nsv=1,
-        random_seed=7,
-    )
-    assert estimate.method == 'be'
-    assert estimate.nsv is None
 
 
 def test_estimate_num_sv_be_default_seed_is_reproducible_and_auto_is_opt_in(monkeypatch):
@@ -165,29 +131,6 @@ def test_run_sva_backend_distinguishes_unresolved_nsv_from_zero():
     assert summary['skip_reason'] == 'sva_nsv_estimation_failed'
 
 
-def test_estimate_num_sv_leek_returns_bounded_integer_estimate():
-    data = numpy.array([
-        [10.0, 12.0, 40.0, 42.0],
-        [11.0, 13.0, 41.0, 43.0],
-        [12.0, 14.0, 42.0, 44.0],
-        [13.0, 15.0, 43.0, 45.0],
-        [50.0, 48.0, 20.0, 18.0],
-        [51.0, 49.0, 19.0, 17.0],
-        [52.0, 50.0, 18.0, 16.0],
-        [53.0, 51.0, 17.0, 15.0],
-        [25.0, 26.0, 30.0, 31.0],
-        [26.0, 27.0, 31.0, 32.0],
-    ])
-    mod, _ = build_sample_group_design_matrix(['A', 'A', 'B', 'B'])
-    estimate = estimate_num_sv_leek(
-        data_matrix=data,
-        mod_matrix=mod,
-        max_nsv=1,
-    )
-    assert estimate.method == 'leek'
-    assert estimate.nsv in (0, 1)
-
-
 def test_estimate_num_sv_at_B_falls_back_to_leek_when_be_fails(monkeypatch):
     data = numpy.array([
         [10.0, 12.0, 40.0, 42.0],
@@ -215,18 +158,6 @@ def test_estimate_num_sv_at_B_falls_back_to_leek_when_be_fails(monkeypatch):
         random_seed=7,
     )
     assert estimate.method == 'leek'
-
-
-def test_f_pvalue_returns_valid_probabilities():
-    data = numpy.array([
-        [10.0, 11.0, 20.0, 21.0],
-        [1.0, 2.0, 1.0, 2.0],
-    ])
-    mod, _ = build_sample_group_design_matrix(['A', 'A', 'B', 'B'])
-    mod0, _ = build_intercept_only_design_matrix(4)
-    p_values = f_pvalue(data, mod, mod0)
-    assert p_values.shape == (2,)
-    assert numpy.all((p_values >= 0.0) & (p_values <= 1.0))
 
 
 def test_f_pvalue_maps_perfect_full_model_fit_to_zero_probability():
