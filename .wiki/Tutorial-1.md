@@ -130,7 +130,9 @@ amalgkit getfastq \
     --threads 2
 ```
 
-Main outputs are written under `getfastq/`, with run-level statistics summarized in `getfastq_stats.tsv`.
+Main outputs are written under `getfastq/<RUN>/`, including one
+`getfastq_stats.tsv` per run. See [output statistics](amalgkit-getfastq#output-statistics)
+for count units and filtering percentages.
 
 ## 7. Quantify Expression
 

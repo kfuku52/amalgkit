@@ -36,11 +36,14 @@ CSTMM and the filters are optional; filters may be used in either order.
 AMALGKIT requires Python 3.11 or later on Linux or macOS; CI covers Python 3.11–3.14.
 
 ```bash
-# Latest default-branch version (includes patch updates)
-pip install --upgrade git+https://github.com/kfuku52/amalgkit
+# Latest default-branch version in an isolated environment
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade git+https://github.com/kfuku52/amalgkit
 
-# Or the packaged Bioconda version
-mamba install -c conda-forge -c bioconda --strict-channel-priority amalgkit
+# Or, in a separate shell, the packaged Bioconda version
+mamba create -n amalgkit -c conda-forge -c bioconda --strict-channel-priority amalgkit
+mamba activate amalgkit
 
 amalgkit --version
 amalgkit help metadata

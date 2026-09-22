@@ -8,6 +8,7 @@ include CHANGELOG.md
 include README.md
 include LICENSE
 include CONTRIBUTING.md
+include DOCUMENTATION_AUDIT.md
 include SECURITY.md
 include pyproject.toml
 prune build

@@ -171,13 +171,19 @@ contaminant read IDs and avoiding a full-size combined paired FASTQ.
 
 ## Output Statistics
 
-`getfastq_stats.tsv` contains count and base metrics. For paired-end libraries, count columns can use different units depending on stage:
+`out_dir/getfastq/<RUN>/getfastq_stats.tsv` contains one row per run, keyed
+by `run`; it is not a single workspace-level summary. `merge` imports these
+statistics into `merge/metadata.tsv`. The table contains count and base metrics. For paired-end libraries, count columns can use different units depending on stage:
 
 - `num_dumped`, `num_written`, `num_rrna_in/out`, and `num_contam_in/out`: spot counts
 - `num_fastp_in/out`: read counts reported by `fastp`
 - `bp_*`: total bases
 
 For stage-by-stage removal fractions, compare `bp_*` columns.
+`percent_fastp_filtered`, `percent_rrna_filtered`, and `percent_contam_filtered`
+are `100 * max(0, input_bp - output_bp) / input_bp` for that stage, not
+percentages of original reads. They are missing when input bases are zero or
+unavailable. `sec_*` values are elapsed seconds.
 
 ## Array Jobs
 

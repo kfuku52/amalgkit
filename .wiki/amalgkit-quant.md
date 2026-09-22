@@ -202,6 +202,12 @@ replacing those settings with defaults, even when abundance output is damaged.
 Pass the chosen settings to `quant` explicitly when this check fails. If no
 run-info survived, historical parameters cannot be recovered automatically.
 
+Oarfish reuse separately checks the resolved sequencing-technology preset and
+extra options recorded in run-info. Changed settings or legacy outputs missing
+option provenance require `--redo yes`, even after FASTQ cleanup. Restore
+processed inputs with `getfastq` first when necessary; see the re-quantification
+procedure above.
+
 ## Array Jobs
 
 `--batch` processes one run by one-based index after `is_sampled=yes` filtering,
@@ -226,13 +232,15 @@ amalgkit quant \
 
 ## Main Outputs
 
-Typical per-run outputs include:
+Per-run outputs are written under `out_dir/quant/<RUN>/` and include:
 
 - `<RUN>_abundance.tsv`
 - `<RUN>_run_info.json`
 - backend-specific auxiliary files
 
-`<RUN>_abundance.tsv` contains target ID, length, effective length, estimated counts, and TPM.
+`<RUN>_abundance.tsv` is tab-separated, with columns `target_id`, `length`,
+`eff_length`, `est_counts`, and `tpm`. Lengths are in bases; estimated counts
+can be fractional. IDs are lexical tokens, including `0001` and `NA`.
 
 For kallisto these are effective-length-normalized TPM values. For Oarfish,
 `length` is the annotated transcript length, `eff_length=1` is a placeholder,

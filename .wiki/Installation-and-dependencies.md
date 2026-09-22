@@ -5,17 +5,21 @@ with additional macOS smoke tests. These pages describe the current default
 branch, which can be newer than GitHub Releases or Bioconda packages.
 
 ```bash
-mamba install -c conda-forge -c bioconda --strict-channel-priority amalgkit
+mamba create -n amalgkit -c conda-forge -c bioconda --strict-channel-priority amalgkit
+mamba activate amalgkit
 amalgkit -h
 ```
 
 Channel order and strict priority follow the
 [Bioconda installation guide](https://bioconda.github.io/index.html#with-conda).
 
-For the latest GitHub revision:
+Alternatively, for the latest GitHub revision, create an isolated Python
+environment (use a supported `python3` interpreter):
 
 ```bash
-pip install --upgrade git+https://github.com/kfuku52/amalgkit
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade git+https://github.com/kfuku52/amalgkit
 amalgkit help metadata
 ```
 
@@ -28,6 +32,13 @@ Python package dependencies are installed with AMALGKIT. Important runtime libra
 AMALGKIT handles NCBI taxonomy lookups with its built-in SQLite backend. The NCBI taxonomy dump is downloaded automatically when a local taxonomy database is not available.
 
 Existing taxonomy caches created by ETE4 are supported without installing ETE4. AMALGKIT reads the ETE4 `taxa.sqlite` schema directly and reuses a colocated `taxdump.tar.gz` without modifying either file. For commands with `--download_dir`, the cache location remains `<download_dir>/ete_taxonomy`; for the default cache, AMALGKIT also detects ETE4's `~/.local/share/ete` directory. The optional ETE4 `taxa.sqlite.traverse.pkl` file is not needed by AMALGKIT.
+
+The default taxonomy cache (when no command context is supplied) is
+`$XDG_DATA_HOME/amalgkit/ncbi_taxonomy`, with `XDG_DATA_HOME` falling back to
+`~/.local/share`. A compatible native cache takes precedence over the legacy
+`ete` cache in that same data directory. CLI workflows with a download
+directory use `<download_dir>/ete_taxonomy` instead; `--download_dir` overrides
+`out_dir/downloads`.
 
 ## Core External Tools
 

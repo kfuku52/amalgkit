@@ -38,7 +38,10 @@ amalgkit merge \
 - selected metadata
 - completed `quant` outputs for selected runs
 
-Rows with `exclusion != no` are ignored.
+Rows with `exclusion != no` are ignored. A known selection discrepancy affects
+existing outputs for `is_sampled=no` rows; see the
+[selection warning](amalgkit-select#main-outputs) before reusing quant results
+after reselection.
 
 Each abundance table must contain data rows, unique nonempty `target_id` values,
 and finite nonnegative effective lengths, counts and TPM. Invalid inputs stop
@@ -58,6 +61,12 @@ For each species:
 - `merge/<Species>/<Species>_eff_length.tsv`
 - `merge/<Species>/<Species>_tpm.tsv`
 - `merge/<Species>/<Species>_quant_model.tsv` (run, backend, and length model)
+
+Each abundance matrix has a first column named `target_id` and one column per
+run with available quantification output. Counts can be fractional; effective
+lengths are in bases for kallisto. Missing quant files are reported and omitted,
+so a successful merge alone does not prove that every intended run is present.
+Compare matrix columns with the intended run list and run `amalgkit sanity`.
 
 `merge/metadata.tsv` is the metadata handoff to CSTMM or downstream filters.
 Oarfish uses `length_model=none`: its effective-length entries are unit

@@ -5,6 +5,13 @@ Releases provide generated notes only for tagged releases. Patch-only updates
 remain on the default branch and are recorded below; consult this file rather
 than the Releases page for those changes.
 
+### 0.16.93 - 2026-09-22
+
+- Clarify isolated installation, taxonomy cache precedence, per-run output paths,
+  output units and scales, incomplete merge inputs, and Oarfish reuse requirements.
+- Record documentation audit evidence and unresolved selection/merge discrepancies
+  without changing pipeline behavior.
+
 ### 0.16.92 - 2026-09-22
 
 - Add repository-specific agent entry points, change-based test selection and

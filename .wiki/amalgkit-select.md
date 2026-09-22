@@ -39,6 +39,13 @@ If `--select_rules_tsv inferred` is used, AMALGKIT reads:
 out_dir/select_rules.tsv
 ```
 
+Selection thresholds and `sampling_strategy` are configured by `parameter`
+rows in the TSV, not by similarly named CLI flags. The CLI exposes
+`--random_seed`; use it explicitly for a nonzero seed. A rule-file
+`random_seed` currently loses to the CLI default even when the option is omitted
+(see the [audit findings](https://github.com/kfuku52/amalgkit/blob/master/DOCUMENTATION_AUDIT.md#unresolved-implementation-findings-b)).
+No environment variable overrides these selection parameters.
+
 ## Rule Stages
 
 `select_rules.tsv` uses stage rows to describe selection behavior:
@@ -122,7 +129,11 @@ For batch mode:
 - summary, queue, and manifest TSVs under `--out_dir`
 - species-specific selected metadata in batch workspaces
 
-Rows with `exclusion != no` or `is_sampled != yes` are skipped by downstream commands.
+Rows with `exclusion != no` or `is_sampled != yes` are intended to be skipped
+by downstream commands. Known discrepancy: `merge` currently admits existing
+quant outputs for `exclusion=no, is_sampled=no` rows. Before reusing a workspace
+after reselection, check merged run columns against the intended selection;
+see the [audit findings](https://github.com/kfuku52/amalgkit/blob/master/DOCUMENTATION_AUDIT.md#unresolved-implementation-findings-b).
 
 In regular inferred-metadata mode, the first run creates
 `metadata/metadata_original.tsv`; later runs preserve and reload that baseline.

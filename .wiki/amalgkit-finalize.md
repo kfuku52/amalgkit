@@ -96,7 +96,7 @@ Top level:
 - `finalize/metadata.tsv`
 - `finalize/finalize_exclusion.pdf`
 
-Per species:
+Per species, under `finalize/<Species>/`:
 
 - `<Species>_metadata.tsv`
 - `<Species>_expression.tsv`
@@ -118,6 +118,13 @@ Per species:
 - `<Species>_curation_final_summary.tsv`
 - `<Species>_before_after_<alg>.pdf` (when a batch-correction algorithm is selected)
 - `<Species>_tau_hist_<alg>.pdf`
+
+Expression tables have target IDs as rows and runs as columns, on the scale
+selected by `--norm` (by default, log2(FPKM + 1)), after any requested batch
+correction and postprocessing. They are not raw read-count tables.
+`sample_group_mean` tables average runs on that expression scale. They differ
+from `tau_linear_mean`, whose inverse transformation and weighting are defined
+in [Tau and replicate aggregation](Tau-and-replicate-aggregation.md).
 
 ## General Options
 
