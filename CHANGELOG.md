@@ -5,6 +5,24 @@ Releases provide generated notes only for tagged releases. Patch-only updates
 remain on the default branch and are recorded below; consult this file rather
 than the Releases page for those changes.
 
+### 0.16.90 - 2026-09-22
+
+- Reject symbolic-link merge outputs before resolving paths, preserving files
+  outside the workspace. Reject the reserved run ID `target_id` at metadata,
+  private-input discovery and merge boundaries instead of overwriting gene IDs.
+- Preserve metadata-backed samples named `length` during CSTMM while retaining
+  compatibility with legacy length annotations.
+- Verify private FASTQ source content for every sampling mode before resuming.
+  Previous private resume states without this provenance are regenerated; public
+  resume fingerprints remain compatible.
+- Compute Oarfish mapping rates from the actual input FASTQ read count after
+  sampling/filtering, and compare resolved sequencing presets and extra options
+  before reusing results. Existing outputs without option provenance require
+  `quant --redo yes`; restore retired FASTQs with getfastq first when necessary.
+- Add regression coverage for all six integrity failures and require real
+  fastp, Oarfish and kallisto integration checks in nightly CI, preserving the
+  existing private-input and normalization workflow.
+
 ### 0.16.89 - 2026-09-17
 
 - Prune redundant fixture, wrapper, parser, validation, and CLI contract tests.

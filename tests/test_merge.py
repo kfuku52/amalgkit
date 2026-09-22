@@ -965,3 +965,32 @@ def test_merge_species_quant_tables_propagates_oarfish_length_model(tmp_path):
     assert list(model['length_model']) == ['none']
     assert numpy.allclose(tpm['SRR001'], [5.0e5, 5.0e5])
     assert numpy.allclose(eff['SRR001'], [1.0, 1.0])
+
+
+@pytest.mark.parametrize('dangling', [False, True])
+def test_merge_refuses_symlink_output_without_touching_external_files(tmp_path, dangling):
+    work = tmp_path / 'work'
+    work.mkdir()
+    external = tmp_path / 'external'
+    if not dangling:
+        external.mkdir()
+        (external / 'keep.txt').write_text('unrelated data')
+    (work / 'merge').symlink_to(external, target_is_directory=True)
+    with pytest.raises(ValueError, match='symbolic-link'):
+        merge_main(SimpleNamespace(out_dir=str(work), internal_jobs=1, metadata='inferred'))
+    assert (work / 'merge').is_symlink()
+    if not dangling:
+        assert (external / 'keep.txt').read_text() == 'unrelated data'
+        assert list(external.iterdir()) == [external / 'keep.txt']
+    else:
+        assert not external.exists()
+
+
+def test_merge_reserved_run_fails_before_overwriting_gene_ids(tmp_path):
+    from amalgkit.merge import write_species_merged_quant_tables
+    previous = tmp_path / 'Species_A_est_counts.tsv'
+    previous.write_text('previous result')
+    with pytest.raises(ValueError, match='target_id.*reserved'):
+        write_species_merged_quant_tables(str(tmp_path), 'Species_A', ['target_id'], ['geneA', 'geneB'],
+                                         {'est_counts': [[3, 7]]}, ['est_counts'])
+    assert previous.read_text() == 'previous result'

@@ -257,7 +257,7 @@ def test_index_ready_marker_invalidates_when_reference_changes(tmp_path):
         ('tx1\t100\tNaN\n', 10, 'non-finite'),
         ('tx1\t100\t-1\n', 10, 'negative'),
         ('tx1\t100\t6\ntx1\t100\t1\n', 10, 'duplicate target_id'),
-        ('tx1\t100\t11\n', 10, 'exceeds total_spot'),
+        ('tx1\t100\t11\n', 10, 'exceeds input_read_count'),
     ],
 )
 def test_adapt_oarfish_outputs_rejects_invalid_raw_values(
@@ -277,7 +277,8 @@ def test_adapt_oarfish_outputs_rejects_invalid_raw_values(
         adapt_oarfish_outputs(
             output_dir=str(tmp_path),
             sra_id='SRR001',
-            sra_stat={'total_spot': total_spot},
+            sra_stat={'total_spot': total_spot * 100},
+            input_read_count=total_spot,
             output_prefix=str(output_prefix),
             seq_tech='ont-cdna',
         )
@@ -311,7 +312,8 @@ def test_adapt_oarfish_outputs_uses_utf8_for_json_io(tmp_path, monkeypatch):
     adapt_oarfish_outputs(
         output_dir=str(tmp_path),
         sra_id='SRR001',
-        sra_stat={'total_spot': 2},
+        sra_stat={'total_spot': 200},
+        input_read_count=2,
         output_prefix=str(output_prefix),
         seq_tech='ont-cdna',
     )
@@ -331,7 +333,8 @@ def test_adapt_oarfish_outputs_uses_unlength_normalized_tpm(tmp_path):
     adapt_oarfish_outputs(
         output_dir=str(tmp_path),
         sra_id='SRR001',
-        sra_stat={'total_spot': 20},
+        sra_stat={'total_spot': 2000},
+        input_read_count=20,
         output_prefix=str(output_prefix),
         seq_tech='ont-cdna',
     )
@@ -344,3 +347,13 @@ def test_adapt_oarfish_outputs_uses_unlength_normalized_tpm(tmp_path):
     assert numpy.allclose(abundance['tpm'], [5.0e5, 5.0e5])
     assert run_info['quant_backend'] == 'oarfish'
     assert run_info['length_model'] == 'none'
+
+
+@pytest.mark.parametrize('input_count', [None, 0, -1, 1.5, float('inf')])
+def test_oarfish_requires_measured_integral_input_count(tmp_path, input_count):
+    prefix = tmp_path / 'R1'
+    prefix.with_suffix('.quant').write_text('tname\tlen\tnum_reads\nt1\t100\t1\n')
+    prefix.with_suffix('.meta_info.json').write_text('{}')
+    with pytest.raises(ValueError, match='input_read_count'):
+        adapt_oarfish_outputs(str(tmp_path), 'R1', {'total_spot': 1000}, str(prefix), 'ont-cdna',
+                             input_read_count=input_count)

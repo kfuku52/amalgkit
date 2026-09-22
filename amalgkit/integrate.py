@@ -20,6 +20,7 @@ from amalgkit.fastq_utils import (
 )
 from amalgkit.metadata_utils import Metadata, load_metadata
 from amalgkit.output_utils import atomic_write_dataframe
+from amalgkit.runtime_utils import validate_run_id
 from amalgkit.parallel_utils import (
     is_auto_parallel_option,
     raise_task_failures,
@@ -125,7 +126,7 @@ def assign_unique_run_ids(logical_run_records):
             while chosen in used:
                 chosen = '{}_{}'.format(base_candidate, suffix)
                 suffix += 1
-        assigned[logical_key] = chosen
+        assigned[logical_key] = validate_run_id(chosen)
         used.add(chosen)
     return assigned
 

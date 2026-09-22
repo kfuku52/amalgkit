@@ -1457,6 +1457,7 @@ class TestGetfastqResume:
         metadata.df['private_file'] = 'yes'
         source_path = tmp_path / 'private-source.fastq.gz'
         output_path = run_dir / 'SRR001.amalgkit.fastq.gz'
+        metadata.df['read1_path'] = str(source_path)
         self._write_fastq(source_path)
         output_path.symlink_to(source_path)
         write_getfastq_stats(sra_stat, metadata, str(run_dir))
@@ -1473,6 +1474,31 @@ class TestGetfastqResume:
         assert resume['phase'] == GETFASTQ_PHASE_COMPLETE
         assert state['outputs'][0]['inode'] == os.lstat(output_path).st_ino
         assert state['outputs'][0]['target_inode'] == os.stat(source_path).st_ino
+
+    @pytest.mark.parametrize('layout,changed_mate', [('single', 1), ('paired', 1), ('paired', 2)])
+    @pytest.mark.parametrize('legacy', [False, True])
+    def test_private_processed_resume_requires_unchanged_sources(self, tmp_path, layout, changed_mate, legacy):
+        args, metadata, g, sra_stat, run_dir = self._make_case(tmp_path, layout=layout)
+        metadata.df['private_file'] = 'yes'
+        sources = []
+        for mate in range(1, 3 if layout == 'paired' else 2):
+            source = tmp_path / f'source{mate}.fq'
+            source.write_text('@r1\nACGT\n+\nIIII\n')
+            metadata.df[f'read{mate}_path'] = str(source)
+            sources.append(source)
+            suffix = f'_{mate}' if layout == 'paired' else ''
+            self._write_fastq(run_dir / f'SRR001{suffix}.amalgkit.fastq.gz')
+        write_getfastq_stats(sra_stat, metadata, str(run_dir))
+        if not legacy:
+            write_getfastq_run_state(args, sra_stat, g, metadata, GETFASTQ_PHASE_COMPLETE)
+            assert inspect_getfastq_resume_output(args, sra_stat, g, metadata)['phase'] == GETFASTQ_PHASE_COMPLETE
+        changed = sources[changed_mate - 1]
+        original = changed.stat()
+        changed.write_text('@r1\nTGCA\n+\nIIII\n')
+        os.utime(changed, ns=(original.st_atime_ns, original.st_mtime_ns))
+        assert inspect_getfastq_resume_output(args, sra_stat, g, metadata) is None
+        assert 'TGCA' in changed.read_text()
+        assert not list(run_dir.glob('*.amalgkit.fastq.gz'))
 
     def test_writes_global_manifest_only_for_complete_runs(self, tmp_path):
         args, metadata, g, sra_stat, run_dir = self._make_case(tmp_path)

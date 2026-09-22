@@ -44,8 +44,6 @@ def _read_est_counts(dir_count, species_name):
         raise FileNotFoundError('No *est_counts.tsv files found: {}'.format(species_name))
     infile_path = os.path.join(species_dir, infile[0])
     dat = read_identifier_tsv(infile_path, index_col=0)
-    if 'length' in dat.columns:
-        dat = dat.drop(columns=['length'])
     if (dat.index.astype(str).str.strip() == '').any():
         raise ValueError('CSTMM input requires nonempty target IDs: {}'.format(infile_path))
     dat = dat.apply(pandas.to_numeric, errors='raise')
@@ -120,6 +118,15 @@ def _index_cstmm_metadata(metadata_df):
 
 def _select_cstmm_inputs(uncorrected_by_species, metadata_path):
     metadata = _index_cstmm_metadata(read_annotation_tsv(metadata_path))
+    metadata_ids = set(metadata['sample_id'])
+    # Legacy count tables may include a length annotation. A metadata-backed
+    # run named length is a sample and must remain in the normalization input.
+    uncorrected_by_species = {
+        species: counts.drop(columns=[species + '_length'])
+        if species + '_length' in counts.columns and species + '_length' not in metadata_ids
+        else counts
+        for species, counts in uncorrected_by_species.items()
+    }
     count_ids = {column for counts in uncorrected_by_species.values() for column in counts.columns}
     unknown = sorted(count_ids.difference(metadata['sample_id']))
     if unknown:

@@ -64,6 +64,14 @@ def normalize_species_token(scientific_name, label='scientific_name-derived toke
     return validate_safe_path_component(token, label=label)
 
 
+def validate_run_id(value):
+    """Keep sample columns distinct from the expression-table identifier column."""
+    run_id = validate_safe_path_component(value, label='run ID')
+    if run_id == 'target_id':
+        raise ValueError('Run ID "target_id" is reserved for gene identifiers in expression tables; rename this run.')
+    return run_id
+
+
 def resolve_species_token(scientific_name, explicit_token=None, label='species_token'):
     if explicit_token is not None and str(explicit_token).strip() != '':
         token = validate_safe_path_component(explicit_token, label=label)

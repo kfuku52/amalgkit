@@ -82,7 +82,9 @@ audit and distribution checks; the remaining supported Python versions have
 fast lanes. A separate minimum-dependency job still runs the full suite. macOS
 filesystem/CLI coverage runs for relevant paths, weekly and on manual dispatch.
 Nightly real-tool coverage includes plain/gzip and single/paired private FASTQs,
-default cleanup, merge, TMM and finalize. The wheel smoke test runs outside the
+default cleanup, merge, TMM and finalize. Additional real-tool tests exercise
+default fastp processing and resume across all four private-input formats,
+Oarfish post-filter read counts and safe reuse, and kallisto fragment models. The wheel smoke test runs outside the
 checkout with isolated Python, extracts bundled FASTA data, and runs yeast
 selection on synthetic metadata. Network-free documentation tests execute the
 tutorial's metadata edit and selection, private FASTQ metadata handoffs, and the

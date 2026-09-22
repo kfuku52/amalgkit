@@ -1012,3 +1012,10 @@ class TestIntegrateMain:
 
         with pytest.raises(FileNotFoundError, match='Metadata file not found'):
             integrate_main(args)
+
+
+def test_private_fastq_discovery_rejects_reserved_run_name(tmp_path):
+    from amalgkit.integrate import scan_fastq_directory
+    (tmp_path / 'target_id.fastq').write_text('@r\nACGT\n+\nIIII\n')
+    with pytest.raises(ValueError, match='target_id.*reserved'):
+        scan_fastq_directory(str(tmp_path))

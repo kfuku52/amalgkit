@@ -6320,6 +6320,9 @@ def inspect_getfastq_resume_output(args, sra_stat, g, run_metadata):
     if not has_resume_candidate:
         return None
     try:
+        ind_sra = sra_stat.get('metadata_idx')
+        if ind_sra is None:
+            ind_sra = get_metadata_row_index_by_run(run_metadata, sra_stat['sra_id'])
         state = read_getfastq_run_state(run_dir)
         expected_fingerprint = build_getfastq_run_fingerprint(args, sra_stat, g, run_metadata)
         if state is not None:
@@ -6334,18 +6337,17 @@ def inspect_getfastq_resume_output(args, sra_stat, g, run_metadata):
                 raise ValueError('the previous 2nd round did not complete')
             if phase not in [GETFASTQ_PHASE_FIRST_ROUND, GETFASTQ_PHASE_COMPLETE]:
                 raise ValueError('unknown resume phase: {}'.format(phase))
-            if sampling.random_sampling(args, run_metadata.df.iloc[0]):
+            if sampling.random_sampling(args, run_metadata.df.loc[ind_sra]):
                 if state.get('sampling_manifest_sha256') != sampling.manifest_digest(run_dir):
                     raise ValueError('sampling manifest changed or is missing')
         else:
-            if sampling.random_sampling(args, run_metadata.df.iloc[0]):
+            if is_private_file_value(run_metadata.df.loc[ind_sra].get('private_file', '')):
+                raise ValueError('legacy private output has no source-content provenance')
+            if sampling.random_sampling(args, run_metadata.df.loc[ind_sra]):
                 raise ValueError('legacy output has no random-sampling provenance')
             if bool(getattr(args, 'treat_identical_paired_as_single', False)):
                 raise ValueError('legacy output has no record of the mate-conversion option')
             phase = GETFASTQ_PHASE_FIRST_ROUND
-        ind_sra = sra_stat.get('metadata_idx')
-        if ind_sra is None:
-            ind_sra = get_metadata_row_index_by_run(run_metadata, sra_stat['sra_id'])
         is_private = (
             ('private_file' in run_metadata.df.columns)
             and (is_private_file_value(run_metadata.df.at[ind_sra, 'private_file']))

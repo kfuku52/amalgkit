@@ -15,6 +15,7 @@ import pandas
 from amalgkit.table_io import read_annotation_tsv
 from amalgkit.gsa_select import validate_selection_ready
 from amalgkit.fastq_cleanup import safely_remove_quant_fastq_files
+from amalgkit.fastq_utils import validate_fastq_structure
 from amalgkit.fragment_length import (
     PROVENANCE_KEY,
     fragment_file_records,
@@ -570,6 +571,15 @@ def check_fragment_model_reuse(args, metadata, sra_id, output_dir, backend=None,
         raise ValueError('Run {}: quant backend differs from existing output; use --redo yes.'.format(sra_id))
     if backend == 'oarfish':
         resolve_run_fragment_model(args, metadata, sra_id, 'single', backend='oarfish')
+        seq_tech = resolve_oarfish_seq_tech(args, metadata, sra_id)
+        options = parse_quant_option_args(getattr(args, 'oarfish_options', None), '--oarfish_options')
+        if info.get('oarfish_seq_tech') != seq_tech:
+            raise ValueError('Run {}: oarfish seq-tech differs from existing output; use --redo yes.'.format(sra_id))
+        stored_options = info.get('oarfish_options')
+        if stored_options is None:
+            raise ValueError('Run {}: existing output has unknown oarfish option provenance; use --redo yes.'.format(sra_id))
+        if stored_options != options:
+            raise ValueError('Run {}: oarfish options differ from existing output; use --redo yes.'.format(sra_id))
         return
     stored = info.get(PROVENANCE_KEY)
     if stored is not None:
@@ -719,7 +729,7 @@ def _normalize_oarfish_quant_columns(quant_df):
     return quant_df.rename(columns=rename_map)
 
 
-def adapt_oarfish_outputs(output_dir, sra_id, sra_stat, output_prefix, seq_tech):
+def adapt_oarfish_outputs(output_dir, sra_id, sra_stat, output_prefix, seq_tech, input_read_count=None):
     quant_path = output_prefix + '.quant'
     meta_info_path = output_prefix + '.meta_info.json'
     if not os.path.exists(quant_path):
@@ -795,14 +805,16 @@ def adapt_oarfish_outputs(output_dir, sra_id, sra_stat, output_prefix, seq_tech)
         meta_info = {'oarfish_meta_info': meta_info}
     mapped_reads = float(est_counts.sum())
     try:
-        total_reads = float(sra_stat['total_spot'])
+        # Original library size is not the number of reads passed to quant
+        # after sampling/filtering. Callers must supply the measured input size.
+        total_reads = float(input_read_count)
     except (KeyError, TypeError, ValueError) as exc:
-        raise ValueError('Invalid total_spot for oarfish output adaptation.') from exc
-    if (not math.isfinite(total_reads)) or total_reads <= 0:
-        raise ValueError('Invalid total_spot for oarfish output adaptation.')
+        raise ValueError('Measured input_read_count is required for oarfish output adaptation.') from exc
+    if (not math.isfinite(total_reads)) or total_reads <= 0 or not total_reads.is_integer():
+        raise ValueError('Invalid input_read_count for oarfish output adaptation.')
     if mapped_reads > total_reads:
         raise ValueError(
-            'oarfish mapped-read count exceeds total_spot: {} > {}.'.format(
+            'oarfish mapped-read count exceeds input_read_count: {} > {}.'.format(
                 mapped_reads,
                 total_reads,
             )
@@ -898,6 +910,9 @@ def call_oarfish(args, in_files, metadata, sra_stat, output_dir, index, seq_tech
         index=index,
         seq_tech=seq_tech,
     )
+    input_read_count = validate_fastq_structure(in_files[0])
+    if input_read_count <= 0:
+        raise ValueError('oarfish input FASTQ contains no reads: {}'.format(in_files[0]))
     oarfish_out, _stdout_txt, _stderr_txt = run_logged_command(
         command=oarfish_cmd,
         runner=subprocess.run,
@@ -917,7 +932,15 @@ def call_oarfish(args, in_files, metadata, sra_stat, output_dir, index, seq_tech
         sra_stat=sra_stat,
         output_prefix=output_prefix,
         seq_tech=seq_tech,
+        input_read_count=input_read_count,
     )
+    info_path = os.path.join(output_dir, sra_id + '_run_info.json')
+    with open(info_path, encoding='utf-8') as handle:
+        run_info = json.load(handle)
+    run_info['oarfish_options'] = parse_quant_option_args(getattr(args, 'oarfish_options', None), '--oarfish_options')
+    with atomic_output_path(info_path) as temporary_path:
+        with open(temporary_path, 'w', encoding='utf-8') as handle:
+            json.dump(run_info, handle, indent=2, sort_keys=True, allow_nan=False)
     return oarfish_out
 
 

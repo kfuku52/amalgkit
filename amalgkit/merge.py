@@ -23,6 +23,7 @@ from amalgkit.runtime_utils import (
     resolve_species_token,
     safe_join_component,
     validate_safe_path_component,
+    validate_run_id,
     validate_unique_species_tokens,
 )
 
@@ -125,7 +126,7 @@ def collect_valid_run_ids(run_values):
         run_id = str(run_id).strip()
         if run_id == '':
             continue
-        run_id = validate_safe_path_component(run_id, label='run ID')
+        run_id = validate_run_id(run_id)
         if run_id in seen:
             continue
         seen.add(run_id)
@@ -411,6 +412,8 @@ def write_species_quant_model(merge_species_dir, sp_filled, detected_sra_ids, qu
 
 
 def write_species_merged_quant_tables(merge_species_dir, sp_filled, detected_sra_ids, target_ids, table_values, value_columns):
+    for run_id in detected_sra_ids:
+        validate_run_id(run_id)
     for col in value_columns:
         merged_columns = {'target_id': target_ids}
         merged_columns.update({
@@ -560,7 +563,7 @@ def merge_main(args):
     if os.path.exists(out_dir) and (not os.path.isdir(out_dir)):
         raise NotADirectoryError('Output path exists but is not a directory: {}'.format(out_dir))
     quant_dir = os.path.realpath(os.path.join(out_dir, 'quant'))
-    merge_dir = os.path.realpath(os.path.join(out_dir, 'merge'))
+    merge_dir = safe_join_component(out_dir, 'merge', label='merge output directory')
     if os.path.exists(merge_dir) and (not os.path.isdir(merge_dir)):
         raise NotADirectoryError('Merge path exists but is not a directory: {}'.format(merge_dir))
     metadata = load_metadata(clone_namespace(args, _prefer_gsa_snapshot=True))

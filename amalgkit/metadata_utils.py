@@ -17,6 +17,7 @@ from amalgkit.cli_utils import strtobool
 from amalgkit.download_utils import get_ncbi_taxonomy
 from amalgkit.exceptions import AmalgkitExit
 from amalgkit.output_utils import atomic_write_dataframe
+from amalgkit.runtime_utils import validate_run_id
 from amalgkit.parallel_utils import (
     is_auto_parallel_option,
     run_tasks_with_optional_threads,
@@ -910,6 +911,8 @@ def load_metadata(args, dir_subcommand='metadata', batch_scope='run'):
     )
     if 'run' in df.columns:
         normalized_runs = df.loc[:, 'run'].fillna('').astype(str).str.strip()
+        for run_id in normalized_runs[normalized_runs.ne('')]:
+            validate_run_id(run_id)
         duplicate_runs = (
             normalized_runs.loc[(normalized_runs != '') & normalized_runs.duplicated(keep=False)]
             .drop_duplicates()

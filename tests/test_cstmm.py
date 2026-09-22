@@ -779,3 +779,20 @@ class TestCstmmMain:
             'exclusion',
         ]
         assert excluded.tolist() == ['no_cstmm_output']
+
+
+@pytest.mark.parametrize('sample_named_length', [True, False])
+def test_cstmm_distinguishes_length_sample_from_legacy_annotation(tmp_path, stub_pdf_rendering, sample_named_length):
+    species = tmp_path / 'merge' / 'Species_A'
+    species.mkdir(parents=True)
+    counts = pandas.DataFrame({'length': [100, 200, 300, 400, 500], 'R2': [90, 220, 310, 390, 480]},
+                              index=['g1', 'g2', 'g3', 'g4', 'g5'])
+    counts.rename_axis('target_id').to_csv(species / 'Species_A_est_counts.tsv', sep='\t')
+    runs = ['length', 'R2'] if sample_named_length else ['R2']
+    pandas.DataFrame({'run': runs, 'scientific_name': 'Species A', 'exclusion': 'no'}).to_csv(
+        tmp_path / 'merge' / 'metadata.tsv', sep='\t', index=False)
+    cstmm_main(SimpleNamespace(out_dir=str(tmp_path), dir_count='inferred', metadata='inferred', redo=False))
+    result = pandas.read_csv(tmp_path / 'cstmm' / 'Species_A' / 'Species_A_cstmm_counts.tsv', sep='\t', index_col=0)
+    expected_counts = counts[runs].astype(float)
+    expected = run_tmm_rounds_for_cstmm(expected_counts)
+    pandas.testing.assert_frame_equal(result, expected_counts.div(expected.round2_factors).rename_axis('target_id'))

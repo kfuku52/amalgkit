@@ -944,7 +944,7 @@ class TestQuantEdgeCases:
         sra_stat = {
             'sra_id': 'SRR001',
             'layout': 'single',
-            'total_spot': 10,
+            'total_spot': 1000,
         }
 
         def fake_run(cmd, stdout, stderr):
@@ -959,9 +959,11 @@ class TestQuantEdgeCases:
 
         monkeypatch.setattr(subprocess, 'run', fake_run)
 
+        reads = tmp_path / 'filtered.fastq'
+        reads.write_text(''.join('@r{}\nACGT\n+\nIIII\n'.format(i) for i in range(5)))
         observed = call_oarfish(
             args=args,
-            in_files=['reads.fastq.gz'],
+            in_files=[str(reads)],
             metadata=metadata,
             sra_stat=sra_stat,
             output_dir=str(tmp_path),
@@ -977,7 +979,9 @@ class TestQuantEdgeCases:
             run_info = json.load(handle)
         assert run_info['quant_backend'] == 'oarfish'
         assert run_info['oarfish_seq_tech'] == 'ont-cdna'
-        assert run_info['p_pseudoaligned'] == 50.0
+        assert run_info['p_pseudoaligned'] == 100.0
+        assert run_info['num_processed'] == 5
+        assert run_info['oarfish_options'] == []
 
     def test_run_quant_auto_uses_oarfish_for_long_reads(self, tmp_path, monkeypatch):
         out_dir = tmp_path / 'out'
@@ -1533,3 +1537,31 @@ def test_versioned_reference_filename_error_explains_required_name(tmp_path):
     assert 'Saccharomyces_cerevisiae.fa.gz' in message
     assert str(tmp_path) in message
     assert 'Remove assembly/version suffixes' in message
+
+
+@pytest.mark.parametrize('change', ['none', 'preset', 'options', 'legacy_options'])
+def test_oarfish_reuse_checks_resolved_settings_after_fastq_cleanup(tmp_path, change):
+    from amalgkit.main import build_main_parser
+    args = build_main_parser().parse_args(['quant', '--out_dir', str(tmp_path), '--quant_backend', 'oarfish',
+                                          '--oarfish_seq_tech', 'ont-cdna'])
+    run_dir = tmp_path / 'quant' / 'R1'
+    run_dir.mkdir(parents=True)
+    write_valid_quant_outputs(str(run_dir), 'R1')
+    info_path = run_dir / 'R1_run_info.json'
+    info = {'quant_backend': 'oarfish', 'length_model': 'none', 'p_pseudoaligned': 100,
+            'oarfish_seq_tech': 'ont-cdna', 'oarfish_options': []}
+    if change == 'preset':
+        args.oarfish_seq_tech = 'pac-bio-hifi'
+    elif change == 'options':
+        args.oarfish_options = '--best-n 25'
+    elif change == 'legacy_options':
+        info.pop('oarfish_options')
+    info_path.write_text(json.dumps(info))
+    before = info_path.read_bytes()
+    metadata = Metadata.from_DataFrame(pandas.DataFrame({'run': ['R1'], 'lib_layout': ['single']}))
+    if change == 'none':
+        run_quant(args, metadata, 'R1', 'unused.mmi', backend='oarfish')
+    else:
+        with pytest.raises(ValueError, match='redo yes'):
+            run_quant(args, metadata, 'R1', 'unused.mmi', backend='oarfish')
+    assert info_path.read_bytes() == before

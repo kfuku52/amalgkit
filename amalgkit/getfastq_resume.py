@@ -108,17 +108,27 @@ def build_getfastq_run_fingerprint(
             "budget_runs": g.get("sampling_run_ids"),
             "input_total_bp": _normalize_getfastq_resume_value(g.get("total_sra_bp")),
         }
-        if sampling.random_sampling(args, run_metadata.df.loc[ind_sra]) and is_private_file_value(
-            run_metadata.df.loc[ind_sra].get("private_file", "")
-        ):
-            source_digests = []
-            for column in ["read1_path", "read2_path"][: 2 if sra_stat["layout"] == "paired" else 1]:
-                digest = hashlib.sha256()
-                with open(str(run_metadata.df.at[ind_sra, column]), "rb") as source:
-                    for chunk in iter(lambda: source.read(1024 * 1024), b""):
-                        digest.update(chunk)
-                source_digests.append(digest.hexdigest())
-            payload["sampling"]["private_source_sha256"] = source_digests
+    row = run_metadata.df.loc[ind_sra]
+    if is_private_file_value(row.get("private_file", "")):
+        # Processed outputs can be independent copies, so output snapshots do
+        # not prove that the original private reads are unchanged. Keep this
+        # outside the sampling branch; old private fingerprints are invalidated
+        # without forcing unrelated public runs to restart.
+        source_layout = str(row.get("lib_layout", "")).strip().lower()
+        if source_layout not in {"single", "paired"}:
+            source_layout = sra_stat["layout"]
+        paired = source_layout == "paired"
+        source_digests = []
+        for column in ["read1_path", "read2_path"][: 2 if paired else 1]:
+            source_path = str(row.get(column, "")).strip()
+            if not source_path:
+                raise ValueError(f"Private input requires {column} for resume: {sra_stat['sra_id']}")
+            digest = hashlib.sha256()
+            with open(source_path, "rb") as source:
+                for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            source_digests.append(digest.hexdigest())
+        payload["private_inputs"] = {"schema_version": 1, "sha256": source_digests}
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 

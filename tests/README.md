@@ -47,3 +47,9 @@ lookups use small fixtures; Oarfish count/model tables are fixtures rather than
 an invocation of the external quantifier. `test_doc_tools.py` exercises drift
 detection and safe Wiki staging. Required documentation and scripts are included
 in the source distribution so these tests also run from an unpacked sdist.
+
+`test_real_tools_integration.py` runs actual fastp/SeqKit/fasterq-dump probes and
+Oarfish on small local fixtures. It checks private source preservation and
+resume for plain/gzip single/paired FASTQs, the post-filter mapping-rate
+denominator, cleanup and Oarfish setting changes. These tests skip when tools
+are absent locally; nightly CI requires the tools before running them.
