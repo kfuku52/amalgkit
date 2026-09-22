@@ -119,7 +119,7 @@ def _save_species_boxplot_pdf(df, value_col, out_path, y_label, font_size=8, y_l
         print('{} column not found. Skipping plot generation.'.format(value_col), flush=True)
         return
     df_plot = df.loc[_is_non_excluded(df), ['scientific_name', value_col]].copy()
-    df_plot.loc[:, 'scientific_name'] = df_plot.loc[:, 'scientific_name'].fillna('').astype(str).str.strip()
+    df_plot['scientific_name'] = df_plot.loc[:, 'scientific_name'].fillna('').astype(str).str.strip()
     df_plot.loc[:, value_col] = pandas.to_numeric(df_plot.loc[:, value_col], errors='coerce')
     df_plot = df_plot.loc[
         (df_plot.loc[:, 'scientific_name'] != '') &
@@ -225,7 +225,7 @@ def _save_species_histogram_pdf(
         print('{} column not found. Skipping plot generation.'.format(value_col), flush=True)
         return
     df_plot = df.loc[_is_non_excluded(df), ['scientific_name', value_col]].copy()
-    df_plot.loc[:, 'scientific_name'] = df_plot.loc[:, 'scientific_name'].fillna('').astype(str).str.strip()
+    df_plot['scientific_name'] = df_plot.loc[:, 'scientific_name'].fillna('').astype(str).str.strip()
     df_plot.loc[:, value_col] = pandas.to_numeric(df_plot.loc[:, value_col], errors='coerce')
     df_plot = df_plot.loc[
         (df_plot.loc[:, 'scientific_name'] != '') &
@@ -427,7 +427,7 @@ def _save_mean_expression_boxplot(metadata_df, merge_dir, out_path, font_size=8)
 def generate_merge_plots(merge_dir, metadata_path, font_size=8):
     metadata_df = read_identifier_tsv(metadata_path, identifier_columns=('run',), low_memory=False)
     if 'scientific_name' in metadata_df.columns:
-        metadata_df.loc[:, 'scientific_name'] = metadata_df.loc[:, 'scientific_name'].fillna('').astype(str).str.strip()
+        metadata_df['scientific_name'] = metadata_df.loc[:, 'scientific_name'].fillna('').astype(str).str.strip()
     _save_species_boxplot_pdf(
         df=metadata_df,
         value_col='mapping_rate',
@@ -453,8 +453,8 @@ def generate_merge_plots(merge_dir, metadata_path, font_size=8):
 
     layout_df = metadata_df.loc[_is_non_excluded(metadata_df), :].copy()
     if {'scientific_name', 'lib_layout'}.issubset(layout_df.columns):
-        layout_df.loc[:, 'scientific_name'] = layout_df.loc[:, 'scientific_name'].fillna('').astype(str).str.strip()
-        layout_df.loc[:, 'lib_layout'] = layout_df.loc[:, 'lib_layout'].fillna('').astype(str).str.strip()
+        layout_df['scientific_name'] = layout_df.loc[:, 'scientific_name'].fillna('').astype(str).str.strip()
+        layout_df['lib_layout'] = layout_df.loc[:, 'lib_layout'].fillna('').astype(str).str.strip()
         layout_df = layout_df.loc[(layout_df.loc[:, 'scientific_name'] != '') & (layout_df.loc[:, 'lib_layout'] != ''), :]
         if not layout_df.empty:
             summary_df = (

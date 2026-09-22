@@ -41,9 +41,12 @@ out_dir/select_rules.tsv
 
 Selection thresholds and `sampling_strategy` are configured by `parameter`
 rows in the TSV, not by similarly named CLI flags. The CLI exposes
-`--random_seed`; use it explicitly for a nonzero seed. A rule-file
-`random_seed` currently loses to the CLI default even when the option is omitted
-(see the [audit findings](https://github.com/kfuku52/amalgkit/blob/master/DOCUMENTATION_AUDIT.md#unresolved-implementation-findings-b)).
+`--random_seed`, which takes precedence over the `random_seed` parameter in
+`select_rules.tsv`. When neither is supplied, the effective seed is 0; an
+explicit `--random_seed 0` overrides a nonzero rule-file seed.
+Before 0.16.94, the CLI default shadowed rule-file seeds; a nonzero rule-file
+seed now takes effect on rerun. Check the saved `sampling_seed` when comparing
+selections across versions.
 No environment variable overrides these selection parameters.
 
 ## Rule Stages
@@ -129,11 +132,12 @@ For batch mode:
 - summary, queue, and manifest TSVs under `--out_dir`
 - species-specific selected metadata in batch workspaces
 
-Rows with `exclusion != no` or `is_sampled != yes` are intended to be skipped
-by downstream commands. Known discrepancy: `merge` currently admits existing
-quant outputs for `exclusion=no, is_sampled=no` rows. Before reusing a workspace
-after reselection, check merged run columns against the intended selection;
-see the [audit findings](https://github.com/kfuku52/amalgkit/blob/master/DOCUMENTATION_AUDIT.md#unresolved-implementation-findings-b).
+Downstream processing honors populated selection columns: rows with
+`exclusion != no` or `is_sampled != yes` are skipped. As in `quant`, `merge`
+retains compatibility with metadata whose `is_sampled` column is absent or
+entirely blank. If any sampling flag is populated, only `yes` rows enter the
+merged matrices; flags ignore case and surrounding whitespace, and invalid
+nonempty values are rejected.
 
 In regular inferred-metadata mode, the first run creates
 `metadata/metadata_original.tsv`; later runs preserve and reload that baseline.

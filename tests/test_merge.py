@@ -550,7 +550,14 @@ def test_merge_species_quant_tables_handles_whitespace_species_and_exclusion(tmp
     assert list(eff.columns) == ['target_id', 'SRR001']
 
 
-def test_merge_species_quant_tables_excludes_runs_marked_as_exclusion_yes(tmp_path):
+@pytest.mark.parametrize('exclusion,sampled,expected', [
+    (['no', 'yes'], None, ['SRR001']),
+    (['no', 'no'], [' Yes ', ' NO '], ['SRR001']),
+    (['no', 'no'], ['yes', ''], ['SRR001']),
+    (['no', 'no'], ['', ''], ['SRR001', 'SRR002']),
+    (['no', 'no'], ['yes', 'typo'], None),
+])
+def test_merge_species_quant_tables_respects_selection(tmp_path, exclusion, sampled, expected):
     quant_dir = tmp_path / 'quant'
     merge_dir = tmp_path / 'merge'
     for run_id, base in [('SRR001', 1.0), ('SRR002', 10.0)]:
@@ -566,14 +573,22 @@ def test_merge_species_quant_tables_excludes_runs_marked_as_exclusion_yes(tmp_pa
     metadata = Metadata.from_DataFrame(pandas.DataFrame({
         'run': ['SRR001', 'SRR002'],
         'scientific_name': ['Species A', 'Species A'],
-        'exclusion': ['no', 'yes'],
+        'exclusion': exclusion,
     }))
+
+    if sampled is not None:
+        metadata.df['is_sampled'] = sampled
+    if expected is None:
+        with pytest.raises(ValueError, match='is_sampled.*typo'):
+            merge_species_quant_tables('Species A', metadata, str(quant_dir), str(merge_dir))
+        assert not merge_dir.exists()
+        return
 
     n = merge_species_quant_tables('Species A', metadata, str(quant_dir), str(merge_dir))
 
-    assert n == 1
+    assert n == len(expected)
     eff = pandas.read_csv(merge_dir / 'Species_A' / 'Species_A_eff_length.tsv', sep='\t')
-    assert list(eff.columns) == ['target_id', 'SRR001']
+    assert list(eff.columns) == ['target_id', *expected]
 
 
 def test_scan_quant_abundance_paths_filters_target_runs(tmp_path):

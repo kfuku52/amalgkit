@@ -172,3 +172,66 @@ def test_documented_long_read_chain_keeps_length_model_and_tmm_scale(tmp_path, m
         numpy.testing.assert_allclose(final, expected)
         model = _read(tmp_path / 'cstmm' / species / f'{species}_quant_model.tsv')
         assert model['length_model'].eq('none').all()
+
+
+@pytest.mark.parametrize('rule_seed,cli_seed,expected', [(None, None, 0), (17, None, 17), (17, 0, 0), (17, 23, 23)])
+@pytest.mark.parametrize('specieswise', [False, True])
+def test_select_seed_precedence_reaches_saved_metadata(tmp_path, monkeypatch, rule_seed, cli_seed, expected, specieswise):
+    monkeypatch.chdir(tmp_path)
+    _run(['dataset', '--name', 'yeast', '--out_dir', '.'])
+    rules_path = tmp_path / 'select_rules.tsv'
+    rules = _read(rules_path)
+    if rule_seed is not None:
+        row = dict.fromkeys(rules.columns, '')
+        row.update(rule_id='seed', enabled='yes', stage='parameter', priority='1',
+                   parameter_name='random_seed', parameter_value=str(rule_seed))
+        pandas.concat([rules, pandas.DataFrame([row])], ignore_index=True).to_csv(rules_path, sep='\t', index=False)
+    metadata = pandas.DataFrame([dict(run='0001', scientific_name='Saccharomyces cerevisiae',
+                                     taxid='4932', taxid_species='4932', sample_group='wt',
+                                     total_spots=2000000, bioproject='P1', biosample='B1', exclusion='no')])
+    arguments = ['select', '--out_dir', '.', '--select_rules_tsv', str(rules_path)]
+    selected_path = tmp_path / 'metadata/metadata.tsv'
+    if specieswise:
+        species = 'Saccharomyces_cerevisiae'
+        source = tmp_path / 'metadata_specieswise' / species / f'{species}.metadata.tsv'
+        source.parent.mkdir(parents=True)
+        metadata.to_csv(source, sep='\t', index=False)
+        (tmp_path / 'species.tsv').write_text('scientific_name\nSaccharomyces cerevisiae\n')
+        arguments += ['--species_tsv', 'species.tsv', '--metadata_specieswise_dir', 'metadata_specieswise']
+        selected_path = tmp_path / species / 'metadata/metadata.tsv'
+    else:
+        metadata.to_csv(selected_path, sep='\t', index=False)
+    if cli_seed is not None:
+        arguments += ['--random_seed', str(cli_seed)]
+    _run(arguments)
+    selected = _read(selected_path)
+    assert selected['sampling_seed'].tolist() == [str(expected)]
+    assert selected['is_sampled'].tolist() == ['yes']
+
+
+@pytest.mark.slow
+def test_merge_cli_reselection_with_missing_plot_metadata(tmp_path):
+    metadata_dir = tmp_path / 'metadata'
+    metadata_dir.mkdir()
+    (metadata_dir / 'metadata.tsv').write_text(
+        'run\tscientific_name\texclusion\tis_sampled\n'
+        '0001\tSpecies A\tno\t YES \n'
+        'old\tSpecies A\tno\tno\n')
+    for run in ('0001', 'old'):
+        quant = tmp_path / 'quant' / run
+        quant.mkdir(parents=True)
+        (quant / f'{run}_abundance.tsv').write_text(
+            'target_id\tlength\teff_length\test_counts\ttpm\n'
+            '0001\t100\t80\t2\t600000\nNA\t200\t180\t3\t400000\n')
+        (quant / f'{run}_run_info.json').write_text(json.dumps(
+            dict(n_processed=5, n_pseudoaligned=5, p_pseudoaligned=100)))
+    result = subprocess.run([sys.executable, '-m', 'amalgkit', 'merge', '--out_dir', str(tmp_path)],
+                            cwd=ROOT, text=True, capture_output=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    table = _read(tmp_path / 'merge/Species_A/Species_A_est_counts.tsv')
+    assert table.columns.tolist() == ['target_id', '0001']
+    assert table['target_id'].tolist() == ['0001', 'NA']
+    assert table['0001'].astype(float).tolist() == [2, 3]
+    assert (tmp_path / 'merge/metadata.tsv').is_file()
+    assert not (tmp_path / 'merge/merge_library_layout.pdf').exists()
+    assert (tmp_path / 'merge/merge_mapping_rate.pdf').read_bytes().startswith(b'%PDF')

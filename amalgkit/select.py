@@ -162,6 +162,7 @@ SELECT_PARAMETER_DEFINITIONS = {
         'required': False,
     },
     'random_seed': {
+        'default': 0,
         'kind': 'int',
         'minimum': 0,
         'required': False,
@@ -583,6 +584,8 @@ def apply_select_config_parameters(runtime_args, select_parameters):
                         parameter_name
                     )
                 )
+            if 'default' in definition:
+                setattr(runtime_args, parameter_name, definition['default'])
             continue
         setattr(runtime_args, parameter_name, select_parameters[parameter_name])
     return runtime_args

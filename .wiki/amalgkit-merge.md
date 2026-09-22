@@ -38,10 +38,13 @@ amalgkit merge \
 - selected metadata
 - completed `quant` outputs for selected runs
 
-Rows with `exclusion != no` are ignored. A known selection discrepancy affects
-existing outputs for `is_sampled=no` rows; see the
-[selection warning](amalgkit-select#main-outputs) before reusing quant results
-after reselection.
+Rows with `exclusion != no` are ignored. Populated `is_sampled` flags also
+restrict merged matrices to `yes` rows, including when old quant outputs remain
+after reselection. See [selection flags](amalgkit-select#main-outputs) for
+legacy metadata with absent or blank sampling flags.
+This selection check was fixed in 0.16.94. If an earlier merge included
+unselected runs, rerun `merge` and the affected downstream stages; upgrading
+does not rewrite existing results.
 
 Each abundance table must contain data rows, unique nonempty `target_id` values,
 and finite nonnegative effective lengths, counts and TPM. Invalid inputs stop

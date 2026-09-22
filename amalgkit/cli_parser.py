@@ -241,8 +241,9 @@ def build_parser(command_handlers, command_names, version, prog=None):
                           '"inferred" = basename(out_dir).')
     pse.add_argument('--select_rules_tsv', metavar='PATH|inferred', default='inferred', type=str, required=False, action='store',
                      help='default=%(default)s: PATH to select_rules.tsv. "inferred" = out_dir/select_rules.tsv')
-    pse.add_argument('--random_seed', metavar='INT', default=0, type=int, required=False, action='store',
-                     help='default=%(default)s: Non-negative random seed used for deterministic sample selection.')
+    pse.add_argument('--random_seed', metavar='INT', default=None, type=int, required=False, action='store',
+                     help='Non-negative random seed used for deterministic sample selection. '
+                          'Overrides the select_rules.tsv random_seed parameter; defaults to 0 when neither is supplied.')
     pse.set_defaults(handler=command_handlers['select'])
 
     pge_help = 'Retrieving fastq files. See `amalgkit getfastq -h`'

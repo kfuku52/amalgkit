@@ -5,8 +5,8 @@
 Audited `master` at `bd7e041d078d863a313d3f070eff17b5c7a7ad81`
 (version 0.16.92), initially clean and equal to fetched `origin/master`.
 Followed `AGENTS.md`, CONTRIBUTING, architecture and the CLI-documentation and
-push skills. This delivery increments the patch to 0.16.93 as required for a
-push; pipeline behavior and dependencies are unchanged. Historical release notes
+push skills. The original documentation-only delivery incremented the patch to
+0.16.93 as required for a push, without changing pipeline behavior or dependencies. Historical release notes
 and previous changelog entries are preserved.
 
 Prioritized installation, README quick starts, canonical `.wiki/` command guides,
@@ -27,7 +27,16 @@ well as CLI definitions; the static checker alone was not treated as execution.
 | Merge: matrix axes and incomplete-run behavior omitted | Describe target/run axes, fractional counts, and missing-file omission; separately flag selection discrepancy | `collect_species_quant_outputs`, `write_species_merged_quant_tables`; merge tests and synthetic CLI run below |
 | Finalize: species parent directory and expression/group-mean scale unspecified | Name `finalize/<Species>/`, selected expression scale, and link to existing linear tau definition | `_copy_species_tables`, `per_species_finalize_python.py`, `sample_group_mean`; documented long-read normalization workflow |
 
-## Unresolved implementation findings (B)
+## Implementation findings (B), resolved in 0.16.94
+
+The following reproductions describe the original audit, before the fixes.
+Version 0.16.94 resolves all three: merge honors populated sampling flags;
+explicit CLI seeds override rule-file seeds, with zero only as the final fallback;
+and missing layout data skips the plot without a dtype assignment error.
+`tests/test_documented_workflows.py` now checks saved seeds in regular and
+species-wise selection and invokes the real merge CLI with stale unselected
+quant output and sparse metadata. `tests/test_merge.py` covers legacy/blank,
+case-insensitive and invalid flags. Original audit evidence is retained below.
 
 ### B1: Reselected-out runs can enter merge
 
@@ -139,3 +148,14 @@ directory and ran its `check_docs.py`: 40 files, zero errors.
 
 The audit report is included in the source distribution so the command guides'
 links remain valid in source-distribution documentation checks.
+
+## Fix verification — 0.16.94
+
+The follow-up fixes used the same isolated Python 3.14.7 environment and native
+thread limits as the audit. Focused CLI/help/documentation/merge/selection checks
+passed (198 tests). The complete delivery command
+`python -m pytest -q -n 2 --cov=amalgkit --cov-branch --cov-fail-under=75 -rs`
+passed with 2241 tests, 11 skips and 82.83% coverage. The skip reasons remain the
+missing optional inmoose and external tools listed above. The real merge CLI
+regression requires neither external tools nor remote data: it verifies the
+published counts, lexical IDs, metadata and PDF output on synthetic inputs.

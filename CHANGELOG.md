@@ -5,6 +5,15 @@ Releases provide generated notes only for tagged releases. Patch-only updates
 remain on the default branch and are recorded below; consult this file rather
 than the Releases page for those changes.
 
+### 0.16.94 - 2026-09-22
+
+- Exclude unselected runs from merged matrices even when old quant results remain;
+  preserve absent/blank selection-column compatibility and reject invalid flags.
+- Resolve selection seeds as explicit CLI, then rule-file parameter, then zero,
+  in both regular and species-wise selection.
+- Skip library-layout plots with no layout data without a pandas dtype error.
+- Add saved-output and real CLI regressions for all three documentation-audit findings.
+
 ### 0.16.93 - 2026-09-22
 
 - Clarify isolated installation, taxonomy cache precedence, per-run output paths,

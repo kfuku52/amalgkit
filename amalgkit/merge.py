@@ -292,8 +292,15 @@ def collect_species_runs(metadata, sp):
     species_series = metadata.df.loc[:, 'scientific_name'].fillna('').astype(str).str.strip()
     is_sp = (species_series == sp)
     exclusion_series = metadata.df.loc[:, 'exclusion'].fillna('').astype(str).str.strip().str.lower()
-    is_sampled = (exclusion_series == 'no')
-    is_target = (is_sp & is_sampled)
+    is_target = is_sp & exclusion_series.eq('no')
+    # Legacy/private metadata may have no populated selection column, as in quant.
+    if 'is_sampled' in metadata.df.columns:
+        sampled = metadata.df['is_sampled'].fillna('').astype(str).str.strip().str.lower()
+        if sampled.ne('').any():
+            invalid = sorted(set(sampled.loc[(sampled != '') & (~sampled.isin({'yes', 'no'}))]))
+            if invalid:
+                raise ValueError('Column "is_sampled" contains invalid flag(s): {}'.format(', '.join(invalid)))
+            is_target &= sampled.eq('yes')
     sra_ids = collect_valid_run_ids(metadata.df.loc[is_target, 'run'].values)
     sampled_sra_ids = set(sra_ids)
     return sra_ids, sampled_sra_ids
