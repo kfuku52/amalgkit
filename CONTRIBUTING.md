@@ -1,21 +1,28 @@
 # Contributing
 
-AMALGKIT supports Python 3.11 through 3.14. Create an isolated environment and
-install the package with its test and quality extras:
+Run the commands below from the repository root. AMALGKIT supports Python 3.11
+through 3.14; `python` must select one of these interpreters. Create an isolated
+environment and install the package with its test and quality extras:
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip "setuptools>=83"
 python -m pip install -e ".[test,quality]"
+python -m pip check
+export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
 ```
 
-Before opening a pull request, run the same checks used by CI:
+Before pushing or opening a pull request, run these delivery checks from the
+activated environment. Success means zero exit status for each command, no
+test failures, and branch coverage at least 75%; inspect skips separately.
+Build artifacts go to the ignored `dist/` directory.
 
 ```bash
 python .github/scripts/check_quality.py
 python -m pytest -q -n 2 --cov=amalgkit --cov-branch --cov-fail-under=75
 python -m build
+python -m twine check dist/*
 ```
 
 For the shortest development feedback loop, skip integration tests, deliberate
@@ -25,10 +32,16 @@ wall-clock waits, real PDF rendering, and optional-dependency coverage:
 python -m pytest -q -n 2 -m "not integration and not slow and not optional_dependency"
 ```
 
+For a smaller change-specific selection or a fixture-based workflow smoke test,
+see [the test guide](tests/README.md#choose-checks-for-a-change). Integration
+does not imply external network access; the guide separates local fixtures
+from real tools. The pytest lanes above do not download research datasets.
+
 CI installs into isolated environments with cached `uv` downloads/wheels. For
 the same local install path, `uv venv --python 3.14` followed by
-`uv pip install -e ".[test,quality]"` is an alternative to pip. This is a tooling
-choice, not a new runtime dependency or a dependency lock.
+`uv pip install --python .venv/bin/python -e ".[test,quality]"` is an alternative
+to pip. Activate it with `source .venv/bin/activate` before the checks above.
+This is a tooling choice, not a new runtime dependency or a dependency lock.
 
 CI intentionally resolves the newest compatible Python dependencies from
 `pyproject.toml` rather than using a committed lockfile. This detects upstream

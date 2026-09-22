@@ -5,6 +5,13 @@ Releases provide generated notes only for tagged releases. Patch-only updates
 remain on the default branch and are recorded below; consult this file rather
 than the Releases page for those changes.
 
+### 0.16.92 - 2026-09-22
+
+- Add repository-specific agent entry points, change-based test selection and
+  a reusable CLI/documentation verification skill using the existing checks.
+- Clarify isolated developer setup and delivery checks; ignore the documented
+  local virtual environment.
+
 ### 0.16.91 - 2026-09-22
 
 - Remove redundant test scaffolding, implementation-mirroring assertions, and

@@ -13,6 +13,7 @@ benchmark-results.json
 test_out/
 
 # local build/package artifacts
+.venv/
 amalgkit.egg-info/
 build/
 dist/
