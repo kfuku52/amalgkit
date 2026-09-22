@@ -770,12 +770,17 @@ def _commit_staged_paths_locked(target_root, staged_root, relative_paths):
         _fsync_directory(parent_dir)
         transaction['state'] = 'committed'
         _write_transaction_manifest(backup_root, transaction)
-    except Exception:
-        if os.path.isfile(_transaction_manifest_path(backup_root)):
-            _recover_interrupted_transaction(backup_root, target_root)
-        else:
-            shutil.rmtree(backup_root, ignore_errors=True)
-            _fsync_directory(parent_dir)
+    except Exception as exc:
+        try:
+            if os.path.isfile(_transaction_manifest_path(backup_root)):
+                _recover_interrupted_transaction(backup_root, target_root)
+            else:
+                shutil.rmtree(backup_root, ignore_errors=True)
+                _fsync_directory(parent_dir)
+        except BaseException as rollback_exc:
+            exc.add_note('Rerun rollback failed: {}'.format(rollback_exc))
+            if os.path.lexists(backup_root):
+                exc.add_note('Rerun transaction preserved for recovery at: {}'.format(backup_root))
         raise
     _retire_transaction_dir(backup_root)
 

@@ -5,6 +5,17 @@ Releases provide generated notes only for tagged releases. Patch-only updates
 remain on the default branch and are recorded below; consult this file rather
 than the Releases page for those changes.
 
+### 0.16.96 - 2026-09-22
+
+- Preserve compression suffixes when atomically writing tables so compressed
+  outputs can be read back, including compound extensions such as `.tar.gz`.
+- Remove temporary output files when permission-mode preparation fails, while
+  preserving previously published data.
+- Preserve the original rerun installation error when rollback also fails;
+  attach the rollback failure and retained transaction path for recovery.
+- Add regressions for compressed identifier round trips, preparation cleanup,
+  and recovery after a failed rollback.
+
 ### 0.16.95 - 2026-09-22
 
 - Share rerun report issue filtering between target collection and global checks,

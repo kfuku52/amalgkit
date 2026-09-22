@@ -3,6 +3,7 @@ import re
 import tempfile
 import uuid
 from contextlib import contextmanager
+from pathlib import Path
 
 _DELIMITED_TEXT_UNSAFE_PATTERN = re.compile(r'[\r\n\t]+')
 
@@ -45,11 +46,11 @@ def atomic_output_path(outpath, prefix='amalgkit_atomic_', suffix=None):
         tmp_suffix = os.path.splitext(real_outpath)[1]
     fd, tmp_path = tempfile.mkstemp(prefix=prefix, suffix=tmp_suffix, dir=parent_dir)
     os.close(fd)
-    output_mode = get_default_creation_mode(parent_dir, is_directory=False)
-    if os.path.isfile(real_outpath):
-        output_mode = os.stat(real_outpath, follow_symlinks=False).st_mode & 0o777
     committed = False
     try:
+        output_mode = get_default_creation_mode(parent_dir, is_directory=False)
+        if os.path.isfile(real_outpath):
+            output_mode = os.stat(real_outpath, follow_symlinks=False).st_mode & 0o777
         yield tmp_path
         os.chmod(tmp_path, output_mode)
         os.replace(tmp_path, real_outpath)
@@ -64,7 +65,8 @@ def atomic_write_dataframe(df, outpath, **to_csv_kwargs):
     df_to_write = df
     if sep == '\t':
         df_to_write = sanitize_dataframe_for_tsv(df)
-    with atomic_output_path(outpath=outpath, suffix='.tsv') as tmp_path:
+    # pandas infers compression from the path it writes, including .tar.gz.
+    with atomic_output_path(outpath=outpath, suffix=''.join(Path(outpath).suffixes)) as tmp_path:
         df_to_write.to_csv(tmp_path, **to_csv_kwargs)
 
 

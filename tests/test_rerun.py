@@ -773,6 +773,41 @@ class _SimulatedCrash(BaseException):
     pass
 
 
+def test_failed_rerun_rollback_preserves_original_error_and_recoverable_backup(tmp_path, monkeypatch):
+    import amalgkit.rerun as rerun_module
+
+    target = tmp_path / 'target'
+    stage = tmp_path / 'stage'
+    target.mkdir()
+    stage.mkdir()
+    (target / 'summary.pdf').write_text('old')
+    (stage / 'summary.pdf').write_text('new')
+    real_rename = rerun_module._durable_rename
+    install_error = OSError('installation failed')
+
+    def fail_install_and_rollback(source, destination):
+        if pathlib.Path(source).parent == stage:
+            raise install_error
+        if pathlib.Path(source).parent.name.startswith(rerun_module.BACKUP_TEMP_PREFIX):
+            raise PermissionError('rollback denied')
+        return real_rename(source, destination)
+
+    monkeypatch.setattr(rerun_module, '_durable_rename', fail_install_and_rollback)
+    with pytest.raises(OSError, match='installation failed') as error:
+        _commit_staged_paths(str(target), str(stage), ['summary.pdf'])
+    assert error.value is install_error
+    backup, = tmp_path.glob(rerun_module.BACKUP_TEMP_PREFIX + '*')
+    assert (backup / 'summary.pdf').read_text() == 'old'
+    notes = '\n'.join(error.value.__notes__)
+    assert 'rollback denied' in notes
+    assert str(backup) in notes
+
+    monkeypatch.setattr(rerun_module, '_durable_rename', real_rename)
+    rerun_module._recover_target_transactions(str(target))
+    assert (target / 'summary.pdf').read_text() == 'old'
+    assert not backup.exists()
+
+
 def _install_rename_crash(monkeypatch, rename_number):
     import amalgkit.rerun as rerun_module
 
