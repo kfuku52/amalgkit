@@ -9,8 +9,7 @@ from amalgkit.filter_utils import staged_output_dir
 from amalgkit.arg_utils import clone_namespace
 from amalgkit.merge_plots import generate_merge_plots
 from amalgkit.metadata_utils import load_metadata, write_updated_metadata
-from amalgkit.output_contracts import read_quant_abundance
-from amalgkit.fragment_length import PROVENANCE_KEY, validate_fragment_provenance
+from amalgkit.output_contracts import read_quant_abundance, validate_quant_run_info_json
 from amalgkit.parallel_utils import (
     is_auto_parallel_option,
     raise_task_failures,
@@ -328,7 +327,7 @@ def load_quant_tables_once(detected_sra_ids, quant_out_paths, value_columns):
     def read_frame(file_idx):
         return read_quant_abundance(
             quant_out_paths[file_idx],
-            value_columns,
+            ['length', *value_columns],
             'quant output table for run {} ({})'.format(detected_sra_ids[file_idx], quant_out_paths[file_idx]),
         )
 
@@ -386,32 +385,41 @@ def load_quant_tables_once(detected_sra_ids, quant_out_paths, value_columns):
     return target_ids, table_values
 
 
-def collect_quant_models(detected_sra_ids, quant_out_paths):
+def collect_quant_models(detected_sra_ids, quant_out_paths, allow_legacy_kallisto=False):
     rows = []
     for sra_id, quant_out_path in zip(detected_sra_ids, quant_out_paths):
         backend = 'kallisto'
         length_model = 'effective'
         run_info_path = os.path.join(os.path.dirname(quant_out_path), sra_id + '_run_info.json')
-        if os.path.isfile(run_info_path):
+        if not os.path.isfile(run_info_path):
+            if os.path.lexists(run_info_path):
+                raise ValueError('Run {} has a quant run-info path that is not a file: {}'.format(
+                    sra_id, run_info_path))
+            if not allow_legacy_kallisto:
+                raise ValueError('Run {} is missing quant run-info JSON: {}. '
+                                 'Use --legacy_kallisto_run_info only for confirmed legacy kallisto output.'.format(
+                                     sra_id, run_info_path))
+            warnings.warn('Run {} has no run-info JSON; assuming legacy kallisto effective lengths.'.format(sra_id))
+        else:
+            error = validate_quant_run_info_json(run_info_path)
+            if error:
+                raise ValueError('Run {} ({}): {}'.format(sra_id, run_info_path, error))
             with open(run_info_path, encoding='utf-8') as handle:
                 info = json.load(handle)
-            if isinstance(info, dict):
-                if PROVENANCE_KEY in info:
-                    error = validate_fragment_provenance(info[PROVENANCE_KEY])
-                    if error:
-                        raise ValueError('Run {}: {}'.format(sra_id, error))
-                backend = str(info.get('quant_backend') or backend).strip().lower() or backend
-                length_model = str(info.get('length_model') or length_model).strip().lower() or length_model
-        if length_model not in {'effective', 'none'}:
+            backend = str(info.get('quant_backend') or backend).strip().lower() or backend
+            length_model = str(info.get('length_model') or length_model).strip().lower() or length_model
+        if (backend, length_model) not in {('kallisto', 'effective'), ('oarfish', 'none')}:
             raise ValueError(
-                'Unsupported length_model for run {} ({}): {}'.format(sra_id, run_info_path, length_model)
+                'Unsupported quant backend/length_model for run {} ({}): {}/{}'.format(
+                    sra_id, run_info_path, backend, length_model)
             )
         rows.append({'run': sra_id, 'backend': backend, 'length_model': length_model})
     return pandas.DataFrame(rows, columns=['run', 'backend', 'length_model'])
 
 
-def write_species_quant_model(merge_species_dir, sp_filled, detected_sra_ids, quant_out_paths):
-    model = collect_quant_models(detected_sra_ids, quant_out_paths)
+def write_species_quant_model(merge_species_dir, sp_filled, detected_sra_ids, quant_out_paths, allow_legacy_kallisto=False, model=None):
+    if model is None:
+        model = collect_quant_models(detected_sra_ids, quant_out_paths, allow_legacy_kallisto=allow_legacy_kallisto)
     outfile = os.path.join(merge_species_dir, sp_filled + '_quant_model.tsv')
     print('Writing output file:', outfile)
     model.to_csv(outfile, sep='\t', index=False)
@@ -434,7 +442,7 @@ def write_species_merged_quant_tables(merge_species_dir, sp_filled, detected_sra
         merged.to_csv(outfile, sep='\t', index=False)
 
 
-def merge_species_quant_tables(sp, metadata, quant_dir, merge_dir, run_abundance_paths=None):
+def merge_species_quant_tables(sp, metadata, quant_dir, merge_dir, run_abundance_paths=None, allow_legacy_kallisto=False):
     print('processing: {}'.format(sp), flush=True)
     sp_filled = build_merge_species_token_map(metadata).get(str(sp).strip())
     if sp_filled is None:
@@ -471,6 +479,7 @@ def merge_species_quant_tables(sp, metadata, quant_dir, merge_dir, run_abundance
         quant_out_paths=quant_out_paths,
         value_columns=value_columns,
     )
+    model = collect_quant_models(detected_sra_ids, quant_out_paths, allow_legacy_kallisto=allow_legacy_kallisto)
     write_species_merged_quant_tables(
         merge_species_dir=merge_species_dir,
         sp_filled=sp_filled,
@@ -484,11 +493,13 @@ def merge_species_quant_tables(sp, metadata, quant_dir, merge_dir, run_abundance
         sp_filled=sp_filled,
         detected_sra_ids=detected_sra_ids,
         quant_out_paths=quant_out_paths,
+        allow_legacy_kallisto=allow_legacy_kallisto,
+        model=model,
     )
     return len(quant_out_paths)
 
 
-def run_merge_species_jobs(metadata, quant_dir, merge_dir, run_abundance_paths, species_jobs):
+def run_merge_species_jobs(metadata, quant_dir, merge_dir, run_abundance_paths, species_jobs, allow_legacy_kallisto=False):
     spp = (
         metadata.df.loc[:, 'scientific_name']
         .fillna('')
@@ -508,6 +519,7 @@ def run_merge_species_jobs(metadata, quant_dir, merge_dir, run_abundance_paths, 
                 quant_dir=quant_dir,
                 merge_dir=merge_dir,
                 run_abundance_paths=run_abundance_paths,
+                allow_legacy_kallisto=allow_legacy_kallisto,
             )
             total_detected += int(num_detected)
         if total_detected == 0:
@@ -524,6 +536,7 @@ def run_merge_species_jobs(metadata, quant_dir, merge_dir, run_abundance_paths, 
             quant_dir,
             merge_dir,
             run_abundance_paths,
+            allow_legacy_kallisto=allow_legacy_kallisto,
         ),
         max_workers=max_workers,
     )
@@ -592,6 +605,7 @@ def merge_main(args):
             merge_dir=stage_dir,
             run_abundance_paths=run_abundance_paths,
             species_jobs=species_jobs,
+            allow_legacy_kallisto=getattr(args, 'legacy_kallisto_run_info', False),
         )
         print('Getting mapping rate from quant output and write new metadata file into merge directory.', flush=True)
         metadata = merge_fastp_stats_into_metadata(metadata, out_dir, max_workers=postprocess_workers)

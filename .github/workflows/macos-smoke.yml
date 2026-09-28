@@ -15,6 +15,21 @@ on:
       - 'amalgkit/subprocess_utils.py'
       - 'amalgkit/cli*.py'
       - 'amalgkit/main.py'
+      - 'amalgkit/integrate.py'
+      - 'amalgkit/merge.py'
+      - 'amalgkit/metadata_utils.py'
+      - 'amalgkit/orthology_utils.py'
+      - 'amalgkit/rerun.py'
+      - 'amalgkit/sanity.py'
+      - 'amalgkit/ncbi_taxonomy.py'
+      - 'tests/test_integrate.py'
+      - 'tests/test_merge.py'
+      - 'tests/test_orthology_utils.py'
+      - 'tests/test_rerun.py'
+      - 'tests/test_sanity.py'
+      - 'tests/test_ncbi_taxonomy.py'
+      - 'tests/test_util_files.py'
+      - 'tests/test_cli_parser.py'
       - 'tests/test_*files.py'
       - 'tests/test_filter_utils.py'
       - 'tests/test_workflow_contracts.py'
@@ -35,6 +50,21 @@ on:
       - 'amalgkit/subprocess_utils.py'
       - 'amalgkit/cli*.py'
       - 'amalgkit/main.py'
+      - 'amalgkit/integrate.py'
+      - 'amalgkit/merge.py'
+      - 'amalgkit/metadata_utils.py'
+      - 'amalgkit/orthology_utils.py'
+      - 'amalgkit/rerun.py'
+      - 'amalgkit/sanity.py'
+      - 'amalgkit/ncbi_taxonomy.py'
+      - 'tests/test_integrate.py'
+      - 'tests/test_merge.py'
+      - 'tests/test_orthology_utils.py'
+      - 'tests/test_rerun.py'
+      - 'tests/test_sanity.py'
+      - 'tests/test_ncbi_taxonomy.py'
+      - 'tests/test_util_files.py'
+      - 'tests/test_cli_parser.py'
       - 'tests/test_*files.py'
       - 'tests/test_filter_utils.py'
       - 'tests/test_workflow_contracts.py'
@@ -78,3 +108,11 @@ jobs:
           tests/test_workflow_contracts.py
           tests/test_cli_utils.py
           tests/test_cli_help.py
+          tests/test_integrate.py
+          tests/test_merge.py
+          tests/test_orthology_utils.py
+          tests/test_rerun.py
+          tests/test_sanity.py
+          tests/test_ncbi_taxonomy.py
+          tests/test_util_files.py
+          tests/test_cli_parser.py

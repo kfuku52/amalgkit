@@ -47,10 +47,17 @@ unselected runs, rerun `merge` and the affected downstream stages; upgrading
 does not rewrite existing results.
 
 Each abundance table must contain data rows, unique nonempty `target_id` values,
-and finite nonnegative effective lengths, counts and TPM. Invalid inputs stop
+and finite nonnegative reference lengths, effective lengths, counts and TPM.
+Each selected run also needs valid quant run-info JSON, including a mapping
+percentage from 0 to 100. Invalid inputs stop
 the merge with the run, path and offending column in the error; previously
 published merge outputs remain intact. Validation shares the quant/sanity
 contract and does not reread abundance tables.
+
+For confirmed older **kallisto** outputs that have no run-info JSON, pass
+`--legacy_kallisto_run_info`. This records `backend=kallisto` and
+`length_model=effective` for those runs. The option does not accept malformed
+JSON or relax validation for existing run-info files. Do not use it for Oarfish.
 
 Target identifiers remain text throughout quant, merge, orthology joins and
 normalization: `0001`, `1` and `NA` are distinct IDs. Empty cells are missing

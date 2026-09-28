@@ -1142,7 +1142,11 @@ def integrate_main(args):
         metadata = load_metadata(args)
         if 'run' not in metadata.df.columns:
             raise ValueError('Column "run" is required in metadata.')
-        metadata.df.loc[:,'private_file'] = 'no'
+        if 'private_file' not in metadata.df.columns:
+            metadata.df['private_file'] = 'no'
+        else:
+            private_flags = metadata.df['private_file'].fillna('').astype(str).str.strip()
+            metadata.df['private_file'] = private_flags.mask(private_flags == '', 'no')
         normalized_runs = metadata.df.loc[:, 'run'].fillna('').astype(str).str.strip()
         metadata.df['run'] = normalized_runs
         if (normalized_runs == '').any():

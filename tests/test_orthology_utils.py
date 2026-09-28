@@ -5,6 +5,7 @@ import pytest
 from amalgkit.orthology_utils import (
     DEFAULT_SINGLE_COPY_THRESHOLD,
     generate_multisp_busco_table,
+    orthogroup2genecount,
     get_single_copy_orthogroup_mask,
     validate_single_copy_threshold,
 )
@@ -24,6 +25,26 @@ def test_busco_merge_preserves_quoted_annotation(tmp_path):
     result = pandas.read_csv(output, sep='\t')
     assert result.loc[0, 'description'] == description
     assert result.loc[0, 'Species_A'] == 'gene1'
+
+
+def test_busco_merge_preserves_full_species_tokens_for_genecount(tmp_path):
+    busco_dir = tmp_path / 'busco'
+    busco_dir.mkdir()
+    row = 'OG1\tComplete\tgene1\t100\t200\thttp://odb\tgene desc\n'
+    (busco_dir / 'Homo_sapiens_busco.tsv').write_text(row)
+    (busco_dir / 'Homo_sapiens_subsp_busco.tsv').write_text(row)
+    orthogroup_path = tmp_path / 'orthogroups.tsv'
+    genecount_path = tmp_path / 'genecount.tsv'
+
+    generate_multisp_busco_table(str(busco_dir), str(orthogroup_path))
+    merged = pandas.read_csv(orthogroup_path, sep='\t')
+    assert {'Homo_sapiens', 'Homo_sapiens_subsp'} <= set(merged.columns)
+    orthogroup2genecount(
+        str(orthogroup_path), str(genecount_path), ['Homo_sapiens', 'Homo_sapiens_subsp'],
+    )
+    counts = pandas.read_csv(genecount_path, sep='\t')
+    assert counts['Homo_sapiens'].tolist() == [1]
+    assert counts['Homo_sapiens_subsp'].tolist() == [1]
 
 
 def test_single_copy_orthogroup_mask_uses_percentage_of_species():

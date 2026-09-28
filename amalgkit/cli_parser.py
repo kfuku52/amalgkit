@@ -519,6 +519,8 @@ def build_parser(command_handlers, command_names, version, prog=None):
     pmg_help = 'Generating transcript abundance tables. See `amalgkit merge -h`'
     pmg = subparsers.add_parser('merge', help=pmg_help, parents=[pp_out, pp_meta, pp_threads, pp_internal_jobs, pp_cpu_budget])
     pmg.set_defaults(handler=command_handlers['merge'])
+    pmg.add_argument('--legacy_kallisto_run_info', action='store_true',
+                     help='Allow selected legacy kallisto runs without run-info JSON; record their length model as effective.')
 
     pbu_help = 'Generating BUSCO tables for amalgkit cstmm/csfilter. See `amalgkit busco -h`'
     pbu = subparsers.add_parser('busco', help=pbu_help, parents=[pp_out, pp_meta, pp_threads, pp_internal_jobs, pp_cpu_budget, pp_redo, pp_download])

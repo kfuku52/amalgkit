@@ -377,6 +377,17 @@ class TestGetMappingRate:
 
         assert m.df.loc[m.df['run'] == 'SRR001', 'mapping_rate'].values[0] == 12.5
 
+    @pytest.mark.parametrize('value', [-0.1, 100.1, 200])
+    def test_out_of_range_pseudoaligned_value_is_skipped(self, tmp_path, sample_metadata, value):
+        quant_dir = tmp_path / 'quant'
+        sra_dir = quant_dir / 'SRR001'
+        sra_dir.mkdir(parents=True)
+        (sra_dir / 'SRR001_run_info.json').write_text(json.dumps({'p_pseudoaligned': value}))
+
+        result = get_mapping_rate(sample_metadata, str(quant_dir))
+
+        assert numpy.isnan(result.df.loc[result.df['run'] == 'SRR001', 'mapping_rate'].iloc[0])
+
     def test_respects_max_workers_override(self, tmp_path, sample_metadata, monkeypatch):
         quant_dir = tmp_path / 'quant'
         for sra_id, value in [('SRR001', 12.5), ('SRR002', 33.3)]:
@@ -541,8 +552,8 @@ class TestGenerateMultispBuscoTable:
             '# comment line\n'
             'OG0001\tComplete\tgene1\t100\t200\thttp://odb\tgene desc\n'
         )
-        (busco_dir / 'Homo_sapiens_strain1.tsv').write_text(content)
-        (busco_dir / 'Homo_sapiens_strain2.tsv').write_text(content)
+        (busco_dir / 'Homo_sapiens.tsv').write_text(content)
+        (busco_dir / 'Homo_sapiens_busco.tsv').write_text(content)
         outfile = tmp_path / 'merged.tsv'
 
         with pytest.raises(ValueError, match='Duplicate species label was detected across BUSCO tables'):

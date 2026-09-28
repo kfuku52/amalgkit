@@ -117,6 +117,7 @@ def test_merge_rejects_invalid_values_without_replacing_previous_output(tmp_path
     (run_dir / 'R1_abundance.tsv').write_text(
         '\t'.join(values) + '\n' + '\t'.join(values.values()) + '\n', encoding='utf-8',
     )
+    (run_dir / 'R1_run_info.json').write_text('{"p_pseudoaligned": 85}', encoding='utf-8')
     prior = tmp_path / 'merge' / 'valuable.tsv'
     prior.parent.mkdir()
     prior.write_text('prior result', encoding='utf-8')
@@ -134,9 +135,37 @@ def test_merge_rejects_invalid_values_without_replacing_previous_output(tmp_path
 def test_merge_rejects_header_only_input(tmp_path):
     run_dir = tmp_path / 'quant' / 'R1'
     run_dir.mkdir(parents=True)
-    (run_dir / 'R1_abundance.tsv').write_text('target_id\teff_length\test_counts\ttpm\n', encoding='utf-8')
+    (run_dir / 'R1_abundance.tsv').write_text('target_id\tlength\teff_length\test_counts\ttpm\n', encoding='utf-8')
+    (run_dir / 'R1_run_info.json').write_text('{"p_pseudoaligned": 85}', encoding='utf-8')
     with pytest.raises(ValueError, match='did not contain any data rows'):
         merge_species_quant_tables('Species alpha', _metadata(), str(run_dir.parent), str(tmp_path / 'merge'))
+
+
+def test_merge_cli_legacy_kallisto_option_preserves_existing_output_until_opted_in(tmp_path, monkeypatch):
+    run_dir = tmp_path / 'quant' / 'R1'
+    run_dir.mkdir(parents=True)
+    (run_dir / 'R1_abundance.tsv').write_text(
+        'target_id\tlength\teff_length\test_counts\ttpm\n'
+        '0001\t100\t90\t2\t1000000\n',
+        encoding='utf-8',
+    )
+    metadata_path = tmp_path / 'metadata.tsv'
+    _metadata().df.to_csv(metadata_path, sep='\t', index=False)
+    prior = tmp_path / 'merge' / 'prior.tsv'
+    prior.parent.mkdir()
+    prior.write_text('previous output', encoding='utf-8')
+    parser = build_main_parser()
+    base_args = ['merge', '--out_dir', str(tmp_path), '--metadata', str(metadata_path)]
+    monkeypatch.setattr('amalgkit.merge.generate_merge_plot_pdfs', lambda **_kwargs: None)
+
+    with pytest.raises(ValueError, match='missing quant run-info JSON'):
+        merge_main(parser.parse_args(base_args))
+    assert prior.read_text(encoding='utf-8') == 'previous output'
+
+    with pytest.warns(UserWarning, match='assuming legacy kallisto'):
+        merge_main(parser.parse_args([*base_args, '--legacy_kallisto_run_info']))
+    model = pandas.read_csv(tmp_path / 'merge' / 'Species_alpha' / 'Species_alpha_quant_model.tsv', sep='\t')
+    assert model[['backend', 'length_model']].iloc[0].tolist() == ['kallisto', 'effective']
 
 
 def test_lexical_gene_ids_survive_merge_orthology_and_downstream_reads(tmp_path):
@@ -144,8 +173,9 @@ def test_lexical_gene_ids_survive_merge_orthology_and_downstream_reads(tmp_path)
     run_dir.mkdir(parents=True)
     ids = ['0001', '1', 'NA']
     pandas.DataFrame({
-        'target_id': ids, 'eff_length': [90] * 3, 'est_counts': [2, 3, 4], 'tpm': [100, 200, 300],
+        'target_id': ids, 'length': [100] * 3, 'eff_length': [90] * 3, 'est_counts': [2, 3, 4], 'tpm': [100, 200, 300],
     }).to_csv(run_dir / 'R1_abundance.tsv', sep='\t', index=False)
+    (run_dir / 'R1_run_info.json').write_text('{"p_pseudoaligned": 85}', encoding='utf-8')
     count_dir = tmp_path / 'merge'
     merge_species_quant_tables('Species alpha', _metadata(), str(run_dir.parent), str(count_dir))
     counts = _read_est_counts(str(count_dir), 'Species_alpha')

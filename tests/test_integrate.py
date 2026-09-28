@@ -739,6 +739,37 @@ class TestIntegrateGetFastqStats:
 
 
 class TestIntegrateMain:
+    def test_preserves_existing_private_fastq_flags_when_appending(self, tmp_path, monkeypatch):
+        metadata_dir = tmp_path / 'metadata'
+        metadata_dir.mkdir()
+        (metadata_dir / 'metadata.tsv').write_text('dummy\n')
+        args = SimpleNamespace(
+            metadata='inferred', out_dir=str(tmp_path), fastq_dir=str(tmp_path / 'fq'),
+            accurate_size=True, output_metadata=None,
+        )
+        metadata = Metadata.from_DataFrame(pandas.DataFrame({
+            'run': ['private_old', 'public_old', 'blank_old'],
+            'scientific_name': ['Sp1'] * 3,
+            'exclusion': ['no'] * 3,
+            'private_file': ['yes', 'no', ''],
+            'read1_path': ['/existing/source.fastq', '', ''],
+        }))
+        monkeypatch.setattr('amalgkit.integrate.load_metadata', lambda _args: metadata)
+        monkeypatch.setattr('amalgkit.integrate.check_getfastq_outputs', lambda *_args: ([], []))
+        monkeypatch.setattr('amalgkit.integrate.get_fastq_stats', lambda _args, existing_df=None: pandas.DataFrame({
+            'run': ['private_new'], 'scientific_name': ['Sp1'], 'exclusion': ['no'],
+            'private_file': ['yes'], 'read1_path': ['/new/source.fastq'],
+        }))
+
+        integrate_main(args)
+
+        result = pandas.read_csv(metadata_dir / 'metadata_updated_for_private_fastq.tsv', sep='\t').set_index('run')
+        assert result.loc['private_old', 'private_file'] == 'yes'
+        assert result.loc['private_old', 'read1_path'] == '/existing/source.fastq'
+        assert result.loc['private_new', 'private_file'] == 'yes'
+        assert result.loc['public_old', 'private_file'] == 'no'
+        assert result.loc['blank_old', 'private_file'] == 'no'
+
     def test_resolves_taxid_for_existing_and_private_rows(self, tmp_path, monkeypatch):
         metadata_dir = tmp_path / 'metadata'
         metadata_dir.mkdir()

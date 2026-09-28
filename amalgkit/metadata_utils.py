@@ -1239,7 +1239,8 @@ def get_mapping_rate(
             if 'p_pseudoaligned' not in run_info:
                 return sra_id, None, 'p_pseudoaligned missing in run_info.json for {}.'.format(sra_id)
             mapping_rate = pandas.to_numeric(run_info['p_pseudoaligned'], errors='coerce')
-            if pandas.isna(mapping_rate) or (not numpy.isfinite(float(mapping_rate))):
+            if (pandas.isna(mapping_rate) or (not numpy.isfinite(float(mapping_rate)))
+                    or float(mapping_rate) < 0 or float(mapping_rate) > 100):
                 return sra_id, None, 'Invalid p_pseudoaligned value in run_info.json for {}: {}'.format(
                     sra_id,
                     run_info['p_pseudoaligned'],

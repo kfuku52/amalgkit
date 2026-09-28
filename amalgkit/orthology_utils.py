@@ -89,15 +89,11 @@ BUSCO_TABLE_COLUMNS = ['busco_id', 'status', 'sequence', 'score', 'length', 'ort
 BUSCO_TABLE_USE_COLUMNS = ['busco_id', 'sequence', 'orthodb_url', 'description']
 BUSCO_SPECIES_SUFFIX_PATTERN = re.compile(r'\.tsv(?:\.gz)?$', re.IGNORECASE)
 BUSCO_SPECIES_CLEANUP_PATTERN = re.compile(r'(_busco|_full_table.*)$', re.IGNORECASE)
-BUSCO_SPECIES_MATCH_PATTERN = re.compile(r'^([^_]+_[^_]+)')
 
 
 def parse_busco_species_name(species_infile):
     species_colname = BUSCO_SPECIES_SUFFIX_PATTERN.sub('', species_infile)
     species_colname = BUSCO_SPECIES_CLEANUP_PATTERN.sub('', species_colname)
-    matched = BUSCO_SPECIES_MATCH_PATTERN.match(species_colname)
-    if matched is not None:
-        species_colname = matched.group(1)
     return species_colname
 
 

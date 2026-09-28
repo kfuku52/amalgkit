@@ -17,6 +17,15 @@ from amalgkit.merge import (
 from amalgkit.util import Metadata
 
 
+def write_run_info_for_quant_tables(quant_dir):
+    for abundance_path in quant_dir.rglob('*_abundance.tsv'):
+        run_id = abundance_path.name.removesuffix('_abundance.tsv')
+        (abundance_path.parent / f'{run_id}_run_info.json').write_text(
+            json.dumps({'p_pseudoaligned': 85.0, 'quant_backend': 'kallisto', 'length_model': 'effective'}),
+            encoding='utf-8',
+        )
+
+
 class TestMergeFastpStatsIntoMetadata:
     def test_collect_valid_run_ids_filters_missing_entries(self):
         run_ids = collect_valid_run_ids([numpy.nan, 'SRR001', ' SRR001 ', '', 'SRR002'])
@@ -339,11 +348,13 @@ def test_merge_species_quant_tables_single_pass_reads(tmp_path, monkeypatch):
     for run, base in [('SRR001', 1.0), ('SRR002', 10.0)]:
         pandas.DataFrame({
             'target_id': ['tx1', 'tx2'],
+            'length': 100.0,
             'eff_length': [base + 0.1, base + 0.2],
             'est_counts': [base + 0.3, base + 0.4],
             'tpm': [base + 0.5, base + 0.6],
         }).to_csv(quant_dir / run / f'{run}_abundance.tsv', sep='\t', index=False)
 
+    write_run_info_for_quant_tables(quant_dir)
     metadata = Metadata.from_DataFrame(pandas.DataFrame({
         'run': ['SRR001', 'SRR002'],
         'scientific_name': ['Species A', 'Species A'],
@@ -364,8 +375,8 @@ def test_merge_species_quant_tables_single_pass_reads(tmp_path, monkeypatch):
     n = merge_species_quant_tables('Species A', metadata, str(quant_dir), str(merge_dir))
     assert n == 2
     assert read_calls['n'] == 2
-    assert usecols_calls[0] == ('target_id', 'eff_length', 'est_counts', 'tpm')
-    assert usecols_calls[1] == ('target_id', 'eff_length', 'est_counts', 'tpm')
+    assert usecols_calls[0] == ('target_id', 'length', 'eff_length', 'est_counts', 'tpm')
+    assert usecols_calls[1] == ('target_id', 'length', 'eff_length', 'est_counts', 'tpm')
     assert (merge_dir / 'Species_A' / 'Species_A_eff_length.tsv').exists()
     assert (merge_dir / 'Species_A' / 'Species_A_est_counts.tsv').exists()
     assert (merge_dir / 'Species_A' / 'Species_A_tpm.tsv').exists()
@@ -380,10 +391,12 @@ def test_merge_species_quant_tables_honors_explicit_species_token(tmp_path, spec
     run_dir.mkdir(parents=True)
     pandas.DataFrame({
         'target_id': ['tx1'],
+        'length': 100.0,
         'eff_length': [100.0],
         'est_counts': [3.0],
         'tpm': [1e6],
     }).to_csv(run_dir / 'SRR001_abundance.tsv', sep='\t', index=False)
+    write_run_info_for_quant_tables(quant_dir)
     metadata = Metadata.from_DataFrame(pandas.DataFrame({
         'run': ['SRR001'],
         'scientific_name': [species_name],
@@ -422,11 +435,13 @@ def test_merge_species_quant_tables_parallel_reads(tmp_path, monkeypatch):
     for run, base in [('SRR001', 1.0), ('SRR002', 10.0)]:
         pandas.DataFrame({
             'target_id': ['tx1', 'tx2'],
+            'length': 100.0,
             'eff_length': [base + 0.1, base + 0.2],
             'est_counts': [base + 0.3, base + 0.4],
             'tpm': [base + 0.5, base + 0.6],
         }).to_csv(quant_dir / run / f'{run}_abundance.tsv', sep='\t', index=False)
 
+    write_run_info_for_quant_tables(quant_dir)
     metadata = Metadata.from_DataFrame(pandas.DataFrame({
         'run': ['SRR001', 'SRR002'],
         'scientific_name': ['Species A', 'Species A'],
@@ -460,17 +475,20 @@ def test_merge_species_quant_tables_rejects_mismatched_target_ids(tmp_path):
     (quant_dir / 'SRR002').mkdir(parents=True)
     pandas.DataFrame({
         'target_id': ['tx1', 'tx2'],
+        'length': 100.0,
         'eff_length': [1.1, 1.2],
         'est_counts': [1.3, 1.4],
         'tpm': [1.5, 1.6],
     }).to_csv(quant_dir / 'SRR001' / 'SRR001_abundance.tsv', sep='\t', index=False)
     pandas.DataFrame({
         'target_id': ['tx2', 'tx1'],
+        'length': 100.0,
         'eff_length': [10.1, 10.2],
         'est_counts': [10.3, 10.4],
         'tpm': [10.5, 10.6],
     }).to_csv(quant_dir / 'SRR002' / 'SRR002_abundance.tsv', sep='\t', index=False)
 
+    write_run_info_for_quant_tables(quant_dir)
     metadata = Metadata.from_DataFrame(pandas.DataFrame({
         'run': ['SRR001', 'SRR002'],
         'scientific_name': ['Species A', 'Species A'],
@@ -487,11 +505,13 @@ def test_merge_species_quant_tables_reports_run_when_required_column_missing(tmp
     (quant_dir / 'SRR001').mkdir(parents=True)
     pandas.DataFrame({
         'target_id': ['tx1', 'tx2'],
+        'length': 100.0,
         'eff_length': [1.1, 1.2],
         'est_counts': [1.3, 1.4],
         # tpm column intentionally missing
     }).to_csv(quant_dir / 'SRR001' / 'SRR001_abundance.tsv', sep='\t', index=False)
 
+    write_run_info_for_quant_tables(quant_dir)
     metadata = Metadata.from_DataFrame(pandas.DataFrame({
         'run': ['SRR001'],
         'scientific_name': ['Species A'],
@@ -508,11 +528,13 @@ def test_merge_species_quant_tables_ignores_missing_run_ids(tmp_path):
     (quant_dir / 'SRR001').mkdir(parents=True)
     pandas.DataFrame({
         'target_id': ['tx1', 'tx2'],
+        'length': 100.0,
         'eff_length': [1.1, 1.2],
         'est_counts': [1.3, 1.4],
         'tpm': [1.5, 1.6],
     }).to_csv(quant_dir / 'SRR001' / 'SRR001_abundance.tsv', sep='\t', index=False)
 
+    write_run_info_for_quant_tables(quant_dir)
     metadata = Metadata.from_DataFrame(pandas.DataFrame({
         'run': ['SRR001', numpy.nan, ''],
         'scientific_name': ['Species A', 'Species A', 'Species A'],
@@ -532,11 +554,13 @@ def test_merge_species_quant_tables_handles_whitespace_species_and_exclusion(tmp
     (quant_dir / 'SRR001').mkdir(parents=True)
     pandas.DataFrame({
         'target_id': ['tx1', 'tx2'],
+        'length': 100.0,
         'eff_length': [1.1, 1.2],
         'est_counts': [1.3, 1.4],
         'tpm': [1.5, 1.6],
     }).to_csv(quant_dir / 'SRR001' / 'SRR001_abundance.tsv', sep='\t', index=False)
 
+    write_run_info_for_quant_tables(quant_dir)
     metadata = Metadata.from_DataFrame(pandas.DataFrame({
         'run': ['SRR001'],
         'scientific_name': [' Species A '],
@@ -565,11 +589,13 @@ def test_merge_species_quant_tables_respects_selection(tmp_path, exclusion, samp
         run_dir.mkdir(parents=True)
         pandas.DataFrame({
             'target_id': ['tx1', 'tx2'],
+            'length': 100.0,
             'eff_length': [base + 0.1, base + 0.2],
             'est_counts': [base + 0.3, base + 0.4],
             'tpm': [base + 0.5, base + 0.6],
         }).to_csv(run_dir / f'{run_id}_abundance.tsv', sep='\t', index=False)
 
+    write_run_info_for_quant_tables(quant_dir)
     metadata = Metadata.from_DataFrame(pandas.DataFrame({
         'run': ['SRR001', 'SRR002'],
         'scientific_name': ['Species A', 'Species A'],
@@ -713,7 +739,7 @@ def test_merge_main_parallel_species_jobs(tmp_path, monkeypatch):
     args = SimpleNamespace(out_dir=str(out_dir), internal_jobs=2, metadata='inferred')
     processed = []
 
-    def fake_merge_species(sp, metadata=None, quant_dir=None, merge_dir=None, run_abundance_paths=None):
+    def fake_merge_species(sp, metadata=None, quant_dir=None, merge_dir=None, run_abundance_paths=None, allow_legacy_kallisto=False):
         processed.append(sp)
         return 1
 
@@ -739,7 +765,7 @@ def test_merge_main_cpu_budget_caps_species_jobs_to_serial(tmp_path, monkeypatch
     args = SimpleNamespace(out_dir=str(out_dir), internal_jobs=4, internal_cpu_budget=1, metadata='inferred')
     processed = []
 
-    def fake_merge_species(sp, metadata=None, quant_dir=None, merge_dir=None, run_abundance_paths=None):
+    def fake_merge_species(sp, metadata=None, quant_dir=None, merge_dir=None, run_abundance_paths=None, allow_legacy_kallisto=False):
         processed.append(sp)
         return 1
 
@@ -789,7 +815,7 @@ def test_merge_main_prunes_stale_species_outputs(tmp_path, monkeypatch):
     }))
     args = SimpleNamespace(out_dir=str(out_dir), internal_jobs=1, metadata='inferred')
 
-    def fake_merge_species(sp, metadata=None, quant_dir=None, merge_dir=None, run_abundance_paths=None):
+    def fake_merge_species(sp, metadata=None, quant_dir=None, merge_dir=None, run_abundance_paths=None, allow_legacy_kallisto=False):
         _ = (metadata, quant_dir, run_abundance_paths)
         species_dir = os.path.join(merge_dir, sp.replace(' ', '_'))
         os.makedirs(species_dir, exist_ok=True)
@@ -876,11 +902,13 @@ def test_merge_species_quant_tables_rejects_duplicate_target_ids_within_run(tmp_
     (quant_dir / 'SRR001').mkdir(parents=True)
     pandas.DataFrame({
         'target_id': ['g1', 'g1', 'g2'],
+        'length': 100.0,
         'eff_length': [1.1, 1.2, 1.3],
         'est_counts': [2.1, 2.2, 2.3],
         'tpm': [3.1, 3.2, 3.3],
     }).to_csv(quant_dir / 'SRR001' / 'SRR001_abundance.tsv', sep='\t', index=False)
 
+    write_run_info_for_quant_tables(quant_dir)
     metadata = Metadata.from_DataFrame(pandas.DataFrame({
         'run': ['SRR001'],
         'scientific_name': ['Species A'],
@@ -899,11 +927,13 @@ def test_merge_species_quant_tables_rejects_missing_target_id_within_run(tmp_pat
     (quant_dir / 'SRR001').mkdir(parents=True)
     pandas.DataFrame({
         'target_id': ['g1', '', 'g2'],
+        'length': 100.0,
         'eff_length': [1.1, 1.2, 1.3],
         'est_counts': [2.1, 2.2, 2.3],
         'tpm': [3.1, 3.2, 3.3],
     }).to_csv(quant_dir / 'SRR001' / 'SRR001_abundance.tsv', sep='\t', index=False)
 
+    write_run_info_for_quant_tables(quant_dir)
     metadata = Metadata.from_DataFrame(pandas.DataFrame({
         'run': ['SRR001'],
         'scientific_name': ['Species A'],
@@ -924,11 +954,13 @@ def test_merge_species_quant_tables_normalizes_target_ids_before_comparison_and_
         run_dir.mkdir(parents=True)
         pandas.DataFrame({
             'target_id': target_ids,
+            'length': 100.0,
             'eff_length': [1.1, 1.2],
             'est_counts': [2.1, 2.2],
             'tpm': [3.1, 3.2],
         }).to_csv(run_dir / (run_id + '_abundance.tsv'), sep='\t', index=False)
 
+    write_run_info_for_quant_tables(quant_dir)
     metadata = Metadata.from_DataFrame(pandas.DataFrame({
         'run': ['SRR001', 'SRR002'],
         'scientific_name': ['Species A', 'Species A'],
@@ -960,7 +992,7 @@ def test_merge_species_quant_tables_propagates_oarfish_length_model(tmp_path):
         'tpm': [5.0e5, 5.0e5],
     }).to_csv(run_dir / 'SRR001_abundance.tsv', sep='\t', index=False)
     (run_dir / 'SRR001_run_info.json').write_text(
-        json.dumps({'quant_backend': 'oarfish', 'length_model': 'none'}),
+        json.dumps({'p_pseudoaligned': 95.0, 'quant_backend': 'oarfish', 'length_model': 'none'}),
         encoding='utf-8',
     )
     metadata = Metadata.from_DataFrame(pandas.DataFrame({
@@ -980,6 +1012,93 @@ def test_merge_species_quant_tables_propagates_oarfish_length_model(tmp_path):
     assert list(model['length_model']) == ['none']
     assert numpy.allclose(tpm['SRR001'], [5.0e5, 5.0e5])
     assert numpy.allclose(eff['SRR001'], [1.0, 1.0])
+
+
+@pytest.mark.parametrize('run_info,error', [
+    (None, 'missing quant run-info JSON'),
+    ('[]', 'must contain an object'),
+    ('{"p_pseudoaligned": 200}', 'out-of-range'),
+    ('{"p_pseudoaligned": 85, "quant_backend": "oarfish"}', 'backend/length_model'),
+])
+def test_merge_rejects_missing_or_invalid_selected_run_info(tmp_path, run_info, error):
+    quant_dir = tmp_path / 'quant'
+    run_dir = quant_dir / 'R1'
+    run_dir.mkdir(parents=True)
+    pandas.DataFrame({
+        'target_id': ['g1'], 'length': [100], 'eff_length': [90],
+        'est_counts': [2], 'tpm': [1e6],
+    }).to_csv(run_dir / 'R1_abundance.tsv', sep='\t', index=False)
+    if run_info is not None:
+        (run_dir / 'R1_run_info.json').write_text(run_info, encoding='utf-8')
+    metadata = Metadata.from_DataFrame(pandas.DataFrame({
+        'run': ['R1'], 'scientific_name': ['Species A'], 'exclusion': ['no'],
+    }))
+    merge_dir = tmp_path / 'merge'
+
+    with pytest.raises(ValueError, match=error):
+        merge_species_quant_tables('Species A', metadata, str(quant_dir), str(merge_dir))
+
+    assert not list(merge_dir.rglob('*.tsv'))
+
+
+def test_merge_explicit_legacy_kallisto_run_info_option(tmp_path):
+    quant_dir = tmp_path / 'quant'
+    run_dir = quant_dir / 'R1'
+    run_dir.mkdir(parents=True)
+    pandas.DataFrame({
+        'target_id': ['g1'], 'length': [100], 'eff_length': [90],
+        'est_counts': [2], 'tpm': [1e6],
+    }).to_csv(run_dir / 'R1_abundance.tsv', sep='\t', index=False)
+    metadata = Metadata.from_DataFrame(pandas.DataFrame({
+        'run': ['R1'], 'scientific_name': ['Species A'], 'exclusion': ['no'],
+    }))
+    merge_dir = tmp_path / 'merge'
+
+    with pytest.warns(UserWarning, match='assuming legacy kallisto'):
+        assert merge_species_quant_tables(
+            'Species A', metadata, str(quant_dir), str(merge_dir), allow_legacy_kallisto=True,
+        ) == 1
+
+    model = pandas.read_csv(merge_dir / 'Species_A' / 'Species_A_quant_model.tsv', sep='\t')
+    assert model[['backend', 'length_model']].iloc[0].tolist() == ['kallisto', 'effective']
+
+
+def test_merge_legacy_option_rejects_existing_non_file_run_info(tmp_path):
+    quant_dir = tmp_path / 'quant'
+    run_dir = quant_dir / 'R1'
+    run_dir.mkdir(parents=True)
+    pandas.DataFrame({
+        'target_id': ['g1'], 'length': [100], 'eff_length': [90],
+        'est_counts': [2], 'tpm': [1e6],
+    }).to_csv(run_dir / 'R1_abundance.tsv', sep='\t', index=False)
+    (run_dir / 'R1_run_info.json').mkdir()
+    metadata = Metadata.from_DataFrame(pandas.DataFrame({
+        'run': ['R1'], 'scientific_name': ['Species A'], 'exclusion': ['no'],
+    }))
+
+    with pytest.raises(ValueError, match='not a file'):
+        merge_species_quant_tables(
+            'Species A', metadata, str(quant_dir), str(tmp_path / 'merge'), allow_legacy_kallisto=True,
+        )
+
+
+@pytest.mark.parametrize('length,error', [(None, 'length'), (-1, 'negative values in "length"'),
+                                         ('NaN', 'non-finite values in "length"')])
+def test_merge_validates_reference_length_column(tmp_path, length, error):
+    quant_dir = tmp_path / 'quant'
+    run_dir = quant_dir / 'R1'
+    run_dir.mkdir(parents=True)
+    row = {'target_id': ['g1'], 'eff_length': [90], 'est_counts': [2], 'tpm': [1e6]}
+    if length is not None:
+        row['length'] = [length]
+    pandas.DataFrame(row).to_csv(run_dir / 'R1_abundance.tsv', sep='\t', index=False)
+    (run_dir / 'R1_run_info.json').write_text('{"p_pseudoaligned": 85}', encoding='utf-8')
+    metadata = Metadata.from_DataFrame(pandas.DataFrame({
+        'run': ['R1'], 'scientific_name': ['Species A'], 'exclusion': ['no'],
+    }))
+
+    with pytest.raises(ValueError, match=error):
+        merge_species_quant_tables('Species A', metadata, str(quant_dir), str(tmp_path / 'merge'))
 
 
 @pytest.mark.parametrize('dangling', [False, True])

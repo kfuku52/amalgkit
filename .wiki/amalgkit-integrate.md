@@ -29,7 +29,9 @@ amalgkit integrate \
 Use the first example in a new workspace without `metadata/metadata.tsv`.
 If that file already exists, inferred input uses merge mode; the second example
 makes the input explicit. Both examples write a separate output for review and
-preserve the original public metadata.
+preserve the original public metadata. When appending to metadata that already
+contains private runs, `integrate` preserves their `private_file=yes` flags.
+Only missing or blank flags on existing rows are filled with `no`.
 
 ## Output Paths
 

@@ -70,6 +70,9 @@ cache.
 - `busco/busco_completeness.pdf`
 - summary files used by `cstmm` and `csfilter`
 
+The full species token in `<Species>_busco.tsv` becomes the orthogroup table
+column name, including any tokens after the second underscore.
+
 ## Existing BUSCO Tables
 
 If you already have compatible per-species BUSCO full tables, you can skip this command and pass the table directory directly:

@@ -69,6 +69,11 @@ def test_numeric_options_accept_valid_values_and_boundaries(parser, command, opt
     assert capsys.readouterr().err == ''
 
 
+def test_merge_legacy_kallisto_run_info_requires_explicit_option(parser):
+    assert parser.parse_args(['merge']).legacy_kallisto_run_info is False
+    assert parser.parse_args(['merge', '--legacy_kallisto_run_info']).legacy_kallisto_run_info is True
+
+
 @pytest.mark.parametrize(
     'command, option, value',
     [pytest.param(command, option, value, id=f'{command}-{option}-{value}')
