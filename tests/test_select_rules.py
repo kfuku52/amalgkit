@@ -1,4 +1,5 @@
 import pandas
+import pytest
 
 from types import SimpleNamespace
 from pathlib import Path
@@ -1105,3 +1106,20 @@ class TestSelectRuleApplication:
         assert out.df.loc[0, 'sample_group'] == 'review'
         assert out.df.loc[0, 'sample_group_normalization_status'] == 'review'
         assert out.df.loc[0, 'sample_group_normalization_rule_id'] == 'review_structure'
+
+
+@pytest.mark.parametrize('taxid', ['', '  ', None, float('nan')])
+def test_rank_filter_marks_empty_taxonomy_after_metadata_roundtrip(tmp_path, taxid):
+    from amalgkit.metadata_utils import load_metadata
+    path = tmp_path / 'metadata.tsv'
+    pandas.DataFrame({'run': ['R1'], 'scientific_name': ['Species A'], 'sample_group': ['leaf'],
+                      'taxid_species': [taxid], 'total_spots': [100], 'exclusion': ['no']}).to_csv(
+        path, sep='\t', index=False)
+    data = load_metadata(SimpleNamespace(metadata=str(path)))
+    rules_path = tmp_path / 'select_rules.tsv'
+    write_select_rules(rules_path, build_test_filter_dedup_rows())
+    rules = read_select_rules(str(rules_path))
+    runtime = SimpleNamespace(min_nspots=0, mark_missing_rank='species',
+                              mark_redundant_biosamples=False, max_sample=10)
+    out = apply_select_filters(prepare_select_metadata(data, rules), runtime, rules)
+    assert out.df.loc[0, 'exclusion'] == 'missing_taxid'

@@ -31,7 +31,8 @@ not low-level reusable algorithms.
 
 | Module | Responsibility |
 | --- | --- |
-| `output_contracts.py` | streaming validation and required schemas for quant/BUSCO files |
+| `output_contracts.py` | streaming/frame validation and required schemas for quant/BUSCO files and count matrices |
+| `quant_provenance.py` | content identities for quant inputs/reference indices and reuse provenance |
 | `fragment_length.py` | single-end fragment mean/SD resolution, run-specific inputs and provenance validation |
 | `table_io.py` | lexical identifier/annotation reads, separate from numeric missing values |
 | `identifier_validation.py` | exact duplicate detection with bounded RAM and a temporary SQLite inventory |
@@ -67,6 +68,15 @@ tokens before type inference: `0001`, `1`, and `NA` are different identifiers.
 Only empty annotation cells represent missing IDs. Numeric columns retain their
 own NA/finite/nonnegative checks. Merge retains one canonical target-ID vector
 and at most the worker count of transient input vectors.
+
+Run IDs remain lexical, but case/Unicode-normalization collisions are rejected
+before creating run paths so metadata behaves consistently across filesystems.
+Per-species workers validate complete raw/CSTMM count matrices (unique nonempty
+target IDs and finite nonnegative counts) before selecting samples or normalizing.
+New quant run-info files carry content identities for the Run ID, FASTQs and
+reference index. Reuse requires matching identities or explicit safe-removal
+markers for recorded FASTQs; legacy quant results remain readable downstream but
+must be re-quantified to establish input provenance.
 
 The streaming validator retains at most 50,000 prior IDs in Python. Larger
 inventories spill to a private SQLite file with a 2 MiB page cache, preserving

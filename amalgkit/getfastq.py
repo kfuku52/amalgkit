@@ -97,6 +97,7 @@ from amalgkit.runtime_utils import (
     get_getfastq_run_dir,
     safe_join_component,
     validate_safe_path_component,
+    validate_unique_run_ids,
 )
 from amalgkit.sra_sources import (
     DDBJ_SRA_LINK_COLUMN,
@@ -807,7 +808,9 @@ def remove_sra_files(metadata, amalgkit_out_dir):
         validate_safe_path_component(sra_id, label='Run ID')
         run_dirs.append((
             sra_id,
-            safe_join_component(getfastq_root, sra_id, label='Run ID'),
+            # Cleanup below selects only exact lexical artifact names. Keep
+            # that per-run scan instead of inventorying the entire run root.
+            safe_join_component(getfastq_root, sra_id, label='Run ID', check_alias=False),
         ))
     for sra_id, sra_dir in run_dirs:
         sra_pattern = os.path.join(sra_dir, sra_id + '.sra*')
@@ -6483,6 +6486,7 @@ def collect_valid_run_ids(run_values, unique=False):
             continue
         seen.add(run_id)
         run_ids.append(run_id)
+    validate_unique_run_ids(run_ids, context='getfastq inputs')
     return run_ids
 
 def initialize_columns(metadata, g):
@@ -7107,6 +7111,7 @@ def check_metadata_validity(metadata):
             )
         )
     duplicate_mask = run_ids.duplicated(keep=False)
+    validate_unique_run_ids(run_ids, context='getfastq metadata')
     if duplicate_mask.any():
         duplicated_runs = run_ids.loc[duplicate_mask].drop_duplicates().tolist()
         raise ValueError('Duplicate Run ID(s) were detected in metadata: {}'.format(', '.join(duplicated_runs)))

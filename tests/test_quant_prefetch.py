@@ -60,6 +60,11 @@ def make_single_run_quant_metadata():
 
 
 class TestGetfastqPrefetch:
+    @pytest.fixture(autouse=True)
+    def index_fixture(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / 'dummy.idx').write_bytes(b'test index')
+
     def test_prefetch_getfastq_run_files_scans_only_targets(self, tmp_path):
         out_dir = tmp_path / 'out'
         getfastq_root = out_dir / 'getfastq'
@@ -175,6 +180,9 @@ class TestGetfastqPrefetch:
         monkeypatch.setattr('amalgkit.quant.list_getfastq_run_files', fail_if_listdir_used)
         monkeypatch.setattr('amalgkit.quant.call_kallisto', fake_call_kallisto)
 
+        input_dir = out_dir / 'getfastq' / 'SRR001'
+        input_dir.mkdir(parents=True)
+        (input_dir / 'SRR001.fastq.gz').write_bytes(b'reads')
         run_quant(args, metadata, 'SRR001', 'dummy.idx', runtime_context=runtime_context)
 
         assert called['kallisto'] == 1
@@ -244,6 +252,10 @@ class TestGetfastqPrefetch:
 
         monkeypatch.setattr('amalgkit.quant.call_kallisto', fake_call_kallisto)
 
+        input_dir = out_dir / 'getfastq' / 'SRR001'
+        input_dir.mkdir(parents=True, exist_ok=True)
+        for filename in runtime_context.run_files_by_run['SRR001']:
+            (input_dir / filename).write_bytes(b'reads')
         run_quant(args, metadata, 'SRR001', 'dummy.idx', runtime_context=runtime_context)
 
         assert observed['in_files'] == [
@@ -299,6 +311,10 @@ class TestGetfastqPrefetch:
 
         monkeypatch.setattr('amalgkit.quant.call_kallisto', fake_call_kallisto)
 
+        input_dir = out_dir / 'getfastq' / 'SRR001'
+        input_dir.mkdir(parents=True, exist_ok=True)
+        for filename in runtime_context.run_files_by_run['SRR001']:
+            (input_dir / filename).write_bytes(b'reads')
         run_quant(args, metadata, 'SRR001', 'dummy.idx', runtime_context=runtime_context)
 
         assert observed == {'spot_length': 100.0, 'total_spot': 10}
@@ -437,6 +453,10 @@ class TestGetfastqPrefetch:
 
         monkeypatch.setattr('amalgkit.quant.call_kallisto', fake_call_kallisto)
 
+        input_dir = out_dir / 'getfastq' / 'SRR001'
+        input_dir.mkdir(parents=True, exist_ok=True)
+        for filename in runtime_context.run_files_by_run['SRR001']:
+            (input_dir / filename).write_bytes(b'reads')
         run_quant(args, metadata, 'SRR001', 'dummy.idx', runtime_context=runtime_context)
 
         assert observed['sra_stat']['total_spot'] == 100
@@ -480,6 +500,10 @@ class TestGetfastqPrefetch:
 
         monkeypatch.setattr('amalgkit.quant.call_kallisto', fake_call_kallisto)
 
+        input_dir = out_dir / 'getfastq' / 'SRR001'
+        input_dir.mkdir(parents=True, exist_ok=True)
+        for filename in runtime_context.run_files_by_run['SRR001']:
+            (input_dir / filename).write_bytes(b'reads')
         run_quant(args, metadata, 'SRR001', 'dummy.idx', runtime_context=runtime_context)
 
         assert observed['sra_stat']['total_spot'] == 100
@@ -554,6 +578,10 @@ class TestGetfastqPrefetch:
 
         monkeypatch.setattr('amalgkit.quant.call_kallisto', fake_call_kallisto)
 
+        input_dir = out_dir / 'getfastq' / 'SRR001'
+        input_dir.mkdir(parents=True, exist_ok=True)
+        for filename in runtime_context.run_files_by_run['SRR001']:
+            (input_dir / filename).write_bytes(b'reads')
         with pytest.raises(RuntimeError, match='simulated backend failure'):
             run_quant(args, metadata, 'SRR001', 'dummy.idx', runtime_context=runtime_context)
         assert (quant_run_dir / 'SRR001_abundance.tsv').read_text() == old_abundance
@@ -655,12 +683,14 @@ class TestGetfastqPrefetch:
         runtime_context = QuantRuntimeContext(
             run_files_by_run={'SRR001': {marker.name}},
         )
-        monkeypatch.setattr(
-            'amalgkit.quant.get_newest_intermediate_file_extension',
-            lambda *_args, **_kwargs: (_ for _ in ()).throw(
-                AssertionError('FASTQ marker should not be inspected when valid output is reused')
-            ),
-        )
+        from amalgkit.quant_provenance import PROVENANCE_KEY, build_quant_provenance
+        reads = marker.with_name(marker.name.removesuffix('.safely_removed'))
+        reads.write_bytes(b'reads')
+        info_path = out_dir / 'quant' / 'SRR001' / 'SRR001_run_info.json'
+        info = json.loads(info_path.read_text())
+        info[PROVENANCE_KEY] = build_quant_provenance('SRR001', 'dummy.idx', [str(reads)], {})
+        info_path.write_text(json.dumps(info))
+        reads.unlink()
 
         run_quant(
             args,
@@ -711,6 +741,10 @@ class TestGetfastqPrefetch:
 
         monkeypatch.setattr('amalgkit.quant.call_kallisto', fake_call_kallisto)
 
+        input_dir = out_dir / 'getfastq' / 'SRR001'
+        input_dir.mkdir(parents=True, exist_ok=True)
+        for filename in runtime_context.run_files_by_run['SRR001']:
+            (input_dir / filename).write_bytes(b'reads')
         run_quant(
             args,
             metadata,

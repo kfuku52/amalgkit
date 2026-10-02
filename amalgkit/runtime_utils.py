@@ -72,6 +72,27 @@ def validate_run_id(value):
     return run_id
 
 
+def validate_unique_run_ids(run_ids, context='metadata'):
+    """Reject lexical IDs that would share paths on common filesystems."""
+    seen = {}
+    for value in run_ids:
+        run_id = validate_run_id(value)
+        key = unicodedata.normalize('NFC', run_id).casefold()
+        previous = seen.get(key)
+        if previous is not None and previous != run_id:
+            raise ValueError('Colliding run IDs in {}: "{}" and "{}".'.format(context, previous, run_id))
+        seen[key] = run_id
+
+
+def _reject_component_alias(root, component, label):
+    if not os.path.isdir(root):
+        return
+    key = unicodedata.normalize('NFC', component).casefold()
+    for name in os.listdir(root):
+        if name != component and unicodedata.normalize('NFC', name).casefold() == key:
+            raise ValueError('Colliding {} paths: "{}" and "{}".'.format(label, name, component))
+
+
 def resolve_species_token(scientific_name, explicit_token=None, label='species_token'):
     if explicit_token is not None and str(explicit_token).strip() != '':
         token = validate_safe_path_component(explicit_token, label=label)
@@ -166,12 +187,14 @@ def ensure_path_within_root(root, path, label='Path'):
     return _assert_path_is_within_root(path=path, root=root, label=label)
 
 
-def safe_join_component(root, component, label='Path component'):
+def safe_join_component(root, component, label='Path component', *, check_alias=True):
     component = validate_safe_path_component(component, label=label)
     absolute_root = os.path.abspath(root)
     if os.path.lexists(absolute_root) and os.path.islink(absolute_root):
         raise ValueError('Refusing symbolic-link output root: {}'.format(absolute_root))
     candidate = os.path.join(absolute_root, component)
+    if check_alias:
+        _reject_component_alias(absolute_root, component, label)
     if os.path.lexists(candidate) and os.path.islink(candidate):
         raise ValueError('Refusing symbolic-link {}: {}'.format(label, candidate))
     return ensure_path_within_root(
@@ -192,6 +215,7 @@ def safe_join_existing_input_component(root, component, label='Path component'):
             'Input root does not resolve to an existing directory: {}'.format(absolute_root)
         )
     candidate = os.path.join(resolved_root, component)
+    _reject_component_alias(resolved_root, component, label)
     if os.path.lexists(candidate) and os.path.islink(candidate):
         raise ValueError('Refusing symbolic-link {}: {}'.format(label, candidate))
     return ensure_path_within_root(
@@ -216,6 +240,7 @@ def get_getfastq_run_dir(args, sra_id):
         raise NotADirectoryError('getfastq path exists but is not a directory: {}'.format(getfastq_dir))
     os.makedirs(getfastq_dir, exist_ok=True)
     run_path = os.path.join(getfastq_dir, sra_id)
+    _reject_component_alias(getfastq_dir, sra_id, 'run ID')
     if os.path.lexists(run_path) and os.path.islink(run_path):
         raise NotADirectoryError(
             'Run path exists but is not a regular directory: {}'.format(run_path)

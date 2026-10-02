@@ -5,6 +5,21 @@ Releases provide generated notes only for tagged releases. Patch-only updates
 remain on the default branch and are recorded below; consult this file rather
 than the Releases page for those changes.
 
+### 0.16.98 - 2026-10-02
+
+- Reject symbolic-link metadata destinations in `integrate`, preserving their targets.
+- Record and verify FASTQ/reference-index SHA-256 identities before reusing quant
+  outputs. Detect input changes during quantification before publishing results.
+  Legacy outputs remain readable by downstream commands, but quant reuse requires
+  re-quantification with `--redo yes`; restore cleaned FASTQs with `getfastq` first.
+- Reject run IDs that collide by case or Unicode normalization, including aliases
+  of existing run directories, before mixing inputs or replacing outputs.
+- Exclude blank or whitespace-only selected-rank taxonomy values during selection.
+- Preserve lexical annotations such as sample groups `0001` and `NA` through
+  cross-species filtering and metadata merges.
+- Validate all raw/CSTMM count matrices before per-species filtering or finalization,
+  including normalization methods that do not use effective lengths.
+
 ### 0.16.96 - 2026-09-22
 
 - Preserve compression suffixes when atomically writing tables so compressed

@@ -140,6 +140,7 @@ files = [
   "amalgkit/logging_utils.py",
   "amalgkit/output_contracts.py",
   "amalgkit/fragment_length.py",
+  "amalgkit/quant_provenance.py",
   "amalgkit/parallel_utils.py",
   "amalgkit/subprocess_utils.py",
   "amalgkit/text_utils.py",

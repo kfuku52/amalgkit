@@ -92,7 +92,9 @@ def test_private_fastq_producer_to_quant_default_cleanup(tmp_path, monkeypatch, 
     monkeypatch.setattr(quant, 'call_kallisto', kallisto)
     quant_args = parser.parse_args(['quant', '--out_dir', str(tmp_path)])
     assert quant_args.clean_fastq
-    quant.run_quant(quant_args, metadata, 'R1', 'unused.idx', backend='kallisto')
+    index = tmp_path / 'index.idx'
+    index.write_bytes(b'index')
+    quant.run_quant(quant_args, metadata, 'R1', str(index), backend='kallisto')
 
     assert quant.validate_quant_outputs('R1', str(tmp_path / 'quant' / 'R1'))[0]
     assert all(not os.path.lexists(path) for path in managed)

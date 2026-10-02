@@ -180,15 +180,25 @@ entries identify kallisto estimation without inventing a measured mean/SD.
 The abundance TSV schema is unchanged. Keep the run-info files with merged and
 normalized results to retain this provenance.
 
-Completed outputs with this provenance are reused only when the backend, current
-input layout, resolved distribution, provenance and extra kallisto options match.
+Each newly published quant result also contains `amalgkit_quant_inputs` schema 1
+with the lexical Run ID, input FASTQ filenames, file sizes and SHA-256 content
+digests for the FASTQs and reference index. This applies to both quant backends.
+Completed outputs are reused only when these identities, the backend, current
+input layout, resolved distribution, fragment provenance and extra options match.
 For example, changing `--single-overhang` requires re-quantification. When input
 files are gone after cleanup, an unchanged metadata layout retains the recorded
 layout correction. Changes require `--redo yes`, including when
-FASTQs have already been cleaned up. Legacy outputs remain readable; default
-reuse warns that their fragment provenance is unknown. Explicit new parameters,
-run-specific fragment metadata or strict policy cannot certify a legacy single-end output
-and require re-quantification. Merely updating AMALGKIT does not recalculate it.
+FASTQs have already been cleaned up. After cleanup, reuse requires safe-removal
+markers for every recorded input and an unchanged reference index. Missing inputs
+without these markers cannot certify reuse. Input/reference changes during quant
+abort publication and preserve previous results.
+
+Legacy outputs remain readable by downstream commands. Quant cannot certify
+input/reference identity for results without `amalgkit_quant_inputs`; re-run with
+`--redo yes` to record it. Restore cleaned inputs with `getfastq` first. Explicit
+new fragment parameters, run-specific fragment metadata or strict policy also
+cannot certify a legacy single-end fragment model. Updating AMALGKIT does not
+recalculate existing results automatically.
 
 To apply corrected parameters, retain or restore the same processed FASTQs, run
 `quant` with the chosen parameters and `--redo yes`, then rebuild affected merge

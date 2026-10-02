@@ -764,3 +764,21 @@ def test_wsfilter_worker_applies_iteration_limit_and_records_stop(tmp_path, monk
     expected_reason = 'all_samples_excluded' if limit is None else 'iteration_limit_reached'
     assert output['ws_filter_stop_reason'].eq(expected_reason).all()
     assert output['exclusion'].ne('no').sum() == expected_calls
+
+
+@pytest.mark.parametrize('worker', [_run_prepare_or_wsfilter_python_worker, run_finalize_python_worker])
+@pytest.mark.parametrize('norm', ['none-none', 'log2p1-none', 'log2p1-cpm'])
+@pytest.mark.parametrize('value,reason', [('-2', 'negative'), ('NaN', 'non-finite'), ('inf', 'non-finite')])
+def test_workers_validate_raw_counts_before_any_transformation(tmp_path, worker, norm, value, reason):
+    fixture = _write_species_input_fixture(tmp_path)
+    tag = fixture['species_tag']
+    path = tmp_path / 'input' / tag / (tag + '_est_counts.tsv')
+    lines = path.read_text().splitlines()
+    row = lines[1].split('\t')
+    row[1] = value
+    lines[1] = '\t'.join(row)
+    path.write_text('\n'.join(lines) + '\n')
+    args = build_per_species_args(tmp_path, norm=norm, batch_effect_alg='no')
+    with pytest.raises(ValueError, match=reason):
+        worker(args, fixture['metadata'], tag, fixture['input_dir'])
+    assert not (tmp_path / 'out' / 'per_species' / tag).exists()

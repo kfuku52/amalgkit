@@ -1257,7 +1257,7 @@ class TestSraRecovery:
         sra_path = sra_dir / 'SRR001.sra'
         sra_path.write_text('keep')
 
-        with pytest.raises(ValueError, match='Run ID'):
+        with pytest.raises(ValueError, match='[Rr]un ID'):
             remove_sra_files(metadata, str(tmp_path))
 
         assert sra_path.exists()

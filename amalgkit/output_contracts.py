@@ -10,6 +10,7 @@ from collections.abc import Iterable, Sequence
 import numpy
 import pandas
 from amalgkit.fragment_length import PROVENANCE_KEY, validate_fragment_provenance
+from amalgkit.quant_provenance import PROVENANCE_KEY as INPUT_PROVENANCE_KEY, validate_quant_provenance
 
 from amalgkit.identifier_validation import TargetIdTracker
 from amalgkit.table_io import read_identifier_tsv
@@ -75,6 +76,22 @@ def read_quant_abundance(path: str, value_columns: Sequence[str], context: str) 
         raise ValueError(error)
     frame["target_id"] = frame["target_id"].str.strip()
     return frame
+
+
+def read_count_matrix(path: str) -> pandas.DataFrame:
+    """Validate raw/CSTMM counts before any selection or transformation."""
+    frame = read_identifier_tsv(path, identifier_columns=("target_id",), low_memory=False)
+    context = f"Count matrix {path}"
+    columns = [str(column) for column in frame.columns if column != "target_id"]
+    error = validate_table_frame(frame, ["target_id"], context, numeric_nonnegative_columns=columns)
+    if error:
+        raise ValueError(error)
+    if not columns:
+        raise ValueError(f"{context} did not contain any sample columns.")
+    frame["target_id"] = frame["target_id"].str.strip()
+    for column in columns:
+        frame[column] = pandas.to_numeric(frame[column], errors="raise")
+    return frame.set_index("target_id")
 
 
 def validate_nonempty_table(
@@ -183,7 +200,11 @@ def validate_quant_run_info_json(path: str) -> str:
     if not math.isfinite(value) or value < 0.0 or value > 100.0:
         return f'quant run info JSON has out-of-range "p_pseudoaligned": {value}'
     if PROVENANCE_KEY in payload:
-        return validate_fragment_provenance(payload[PROVENANCE_KEY])
+        error = validate_fragment_provenance(payload[PROVENANCE_KEY])
+        if error:
+            return error
+    if INPUT_PROVENANCE_KEY in payload:
+        return validate_quant_provenance(payload[INPUT_PROVENANCE_KEY])
     return ""
 
 

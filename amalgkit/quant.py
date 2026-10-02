@@ -13,6 +13,12 @@ import tempfile
 import numpy
 import pandas
 from amalgkit.table_io import read_annotation_tsv
+from amalgkit.quant_provenance import (
+    PROVENANCE_KEY as INPUT_PROVENANCE_KEY,
+    build_quant_provenance,
+    file_identity,
+    validate_quant_provenance,
+)
 from amalgkit.gsa_select import validate_selection_ready
 from amalgkit.fastq_cleanup import safely_remove_quant_fastq_files
 from amalgkit.fastq_utils import validate_fastq_structure
@@ -56,6 +62,7 @@ from amalgkit.runtime_utils import (
     safe_join_component,
     validate_safe_path_component,
     validate_unique_species_tokens,
+    validate_unique_run_ids,
 )
 from amalgkit.prefix_utils import find_run_prefixed_entries, find_species_prefixed_entries
 from amalgkit.subprocess_utils import (
@@ -1339,6 +1346,47 @@ def _safely_remove_quant_fastq_files(in_files):
     return safely_remove_quant_fastq_files(in_files, atomic_writer=atomic_output_path)
 
 
+def _quant_identity_cache(args):
+    cache = getattr(args, '_quant_identity_cache', None)
+    if cache is None:
+        cache = {}
+        args._quant_identity_cache = cache
+    return cache
+
+
+def check_quant_input_reuse(args, metadata, sra_id, output_dir, index):
+    with open(os.path.join(output_dir, sra_id + '_run_info.json'), encoding='utf-8') as handle:
+        info = json.load(handle)
+    stored = info.get(INPUT_PROVENANCE_KEY)
+    error = validate_quant_provenance(stored)
+    if error:
+        raise ValueError('Run {}: existing output has unknown or invalid input/reference provenance; use --redo yes. {}'.format(sra_id, error))
+    if stored['run'] != sra_id:
+        raise ValueError('Run {}: existing quant output belongs to run {}; use --redo yes.'.format(sra_id, stored['run']))
+    cache = _quant_identity_cache(args)
+    if file_identity(index, cache) != stored['index']:
+        raise ValueError('Run {}: reference index differs from existing output; use --redo yes.'.format(sra_id))
+    input_dir = safe_join_existing_input_component(os.path.join(args.out_dir, 'getfastq'), sra_id, label='run ID')
+    files = list_getfastq_run_files(input_dir)
+    row = metadata.df.loc[get_metadata_row_index_by_run(metadata, sra_id)].to_dict()
+    layout = _fragment_reuse_layout(args, row, sra_id, output_dir, info.get(PROVENANCE_KEY), None)
+    sra_stat = {'sra_id': sra_id, 'layout': layout}
+    ext = get_newest_intermediate_file_extension(sra_stat, work_dir=input_dir, files=files)
+    if ext == '.safely_removed':
+        # Only explicit retirement of the recorded managed entries permits
+        # reuse without their content. Arbitrary missing inputs cannot certify it.
+        markers = [os.path.join(input_dir, entry['name'] + '.safely_removed') for entry in stored['inputs']]
+        if all(os.path.isfile(path) and not os.path.islink(path) for path in markers):
+            return
+        raise ValueError('Run {}: retired FASTQ markers differ from existing output; restore inputs and use --redo yes.'.format(sra_id))
+    inputs = resolve_input_fastq_files(sra_stat, input_dir, ext, files=files)
+    if not inputs:
+        raise ValueError('Run {}: FASTQ input provenance cannot be verified; restore inputs and use --redo yes.'.format(sra_id))
+    current = build_quant_provenance(sra_id, index, inputs, cache)
+    if current != stored:
+        raise ValueError('Run {}: FASTQ inputs differ from existing output; use --redo yes.'.format(sra_id))
+
+
 def _run_quant_unlocked(
     args,
     metadata,
@@ -1372,6 +1420,7 @@ def _run_quant_unlocked(
             print('The output will be overwritten. Set "--redo no" to not overwrite results.')
         else:
             check_fragment_model_reuse(args, metadata, sra_id, output_dir, backend=backend, runtime_context=runtime_context)
+            check_quant_input_reuse(args, metadata, sra_id, output_dir, index)
             print('Continued. The output will not be overwritten. If you want to overwrite the results, set "--redo yes".')
             return
     output_dir_getfastq = safe_join_existing_input_component(
@@ -1430,6 +1479,8 @@ def _run_quant_unlocked(
         raise FileNotFoundError('{}: Fastq file not found. Check {}'.format(sra_id, output_dir_getfastq))
     print('Input fastq detected:', ', '.join(in_files))
     print('Quant backend selected for {}: {}'.format(sra_id, backend))
+    identity_cache = _quant_identity_cache(args)
+    input_provenance = build_quant_provenance(sra_id, index, in_files, identity_cache)
     with staged_output_dir(output_dir, redo=True, prefix='amalgkit_quant_stage_') as stage_output_dir:
         if backend == 'kallisto':
             call_kallisto(args, in_files, quant_metadata, sra_stat, stage_output_dir, index)
@@ -1438,6 +1489,16 @@ def _run_quant_unlocked(
             call_oarfish(args, in_files, quant_metadata, sra_stat, stage_output_dir, index, oarfish_seq_tech)
         else:
             raise ValueError('Unsupported quant backend: {}'.format(backend))
+        if build_quant_provenance(sra_id, index, in_files, identity_cache) != input_provenance:
+            raise ValueError('Run {}: FASTQ inputs or reference index changed during quantification.'.format(sra_id))
+        info_path = os.path.join(stage_output_dir, sra_id + '_run_info.json')
+        with open(info_path, encoding='utf-8') as handle:
+            run_info = json.load(handle)
+        run_info[INPUT_PROVENANCE_KEY] = input_provenance
+        with atomic_output_path(info_path, suffix='.json') as temporary_info:
+            with open(temporary_info, 'w', encoding='utf-8') as handle:
+                json.dump(run_info, handle, indent=2, sort_keys=True)
+                handle.write('\n')
         is_valid, validation_error = validate_quant_outputs(sra_id=sra_id, output_dir=stage_output_dir)
         if not is_valid:
             raise RuntimeError(
@@ -2255,6 +2316,7 @@ def build_quant_tasks(metadata):
     if metadata.df.shape[0] == 0:
         raise ValueError('No eligible quant rows remained after exclusion/is_sampled filtering.')
     runs = metadata.df['run'].fillna('').astype(str).str.strip()
+    validate_unique_run_ids(runs[runs.ne('')], context='quant metadata')
     species = metadata.df['scientific_name'].fillna('').astype(str).str.strip()
     metadata.df['run'] = runs
     metadata.df['scientific_name'] = species

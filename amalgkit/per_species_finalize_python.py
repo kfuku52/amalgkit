@@ -4,6 +4,7 @@ import warnings
 import numpy
 import pandas
 from amalgkit.table_io import read_identifier_tsv
+from amalgkit.output_contracts import read_count_matrix
 from amalgkit.text_utils import parse_sample_group_argument
 
 from amalgkit.batch_effect_common import (
@@ -992,7 +993,7 @@ def run_finalize_python_worker(args, metadata, species_tag, input_dir):
     if not os.path.isfile(count_path) or (needs_lengths and not os.path.isfile(eff_length_path)):
         return 1
 
-    counts_df = _normalize_dataframe_columns(_read_expression_tsv(count_path))
+    counts_df = _normalize_dataframe_columns(read_count_matrix(count_path))
     eff_length_df = (_normalize_dataframe_columns(_read_expression_tsv(eff_length_path))
                      if needs_lengths else pandas.DataFrame())
     quant_model_df = load_quant_model_table(os.path.join(species_dir, species_tag + '_quant_model.tsv'))

@@ -218,12 +218,25 @@ def test_reuse_checks_distribution_and_provenance_without_fastqs(tmp_path):
     data = metadata(nominal_length=150, nominal_sdev=7)
     model = resolve_run_fragment_model(args(), data, 'R1', 'single')
     directory = write_completed(tmp_path, model)
+    from amalgkit.quant_provenance import PROVENANCE_KEY as INPUT_KEY, build_quant_provenance
+    index = tmp_path / 'index.idx'
+    index.write_bytes(b'index')
+    input_dir = tmp_path / 'getfastq' / 'R1'
+    input_dir.mkdir(parents=True)
+    reads = input_dir / 'R1.amalgkit.fastq.gz'
+    reads.write_bytes(b'reads')
+    info_path = directory / 'R1_run_info.json'
+    info = json.loads(info_path.read_text())
+    info[INPUT_KEY] = build_quant_provenance('R1', str(index), [str(reads)], {})
+    info_path.write_text(json.dumps(info))
+    reads.unlink()
+    reads.with_name(reads.name + '.safely_removed').write_text('retired')
     runtime = args(out_dir=str(tmp_path), redo=False, clean_fastq=True)
-    run_quant(runtime, data, 'R1', 'unused.idx')
+    run_quant(runtime, data, 'R1', str(index))
     original = (directory / 'R1_run_info.json').read_bytes()
     data.df['nominal_sdev'] = 9
     with pytest.raises(ValueError, match='settings differ.*--redo yes'):
-        run_quant(runtime, data, 'R1', 'unused.idx')
+        run_quant(runtime, data, 'R1', str(index))
     assert (directory / 'R1_run_info.json').read_bytes() == original
 
 

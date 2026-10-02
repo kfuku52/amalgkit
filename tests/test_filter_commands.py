@@ -576,3 +576,29 @@ def test_filter_rerun_clears_unscoreable_values_in_final_metadata(tmp_path, monk
         assert pandas.isna(result.loc['R1', 'within_group_cor'])
         assert pandas.isna(result.loc['R1', 'PC1'])
         assert result.loc['R2', 'PC1'] == 200.
+
+
+@pytest.mark.parametrize('norm', ['none-none', 'log2p1-none', 'log2p1-cpm'])
+@pytest.mark.parametrize('value,reason', [('-2', 'negative'), ('NaN', 'non-finite')])
+def test_finalize_rejects_invalid_counts_without_replacing_published_results(tmp_path, norm, value, reason):
+    from amalgkit.main import build_main_parser
+    merge_dir = tmp_path / 'merge'
+    species_dir = merge_dir / 'Species_A'
+    species_dir.mkdir(parents=True)
+    metadata_path = merge_dir / 'metadata.tsv'
+    metadata_path.write_text('run\tscientific_name\tsample_group\texclusion\tbioproject\n'
+                             'R1\tSpecies A\tleaf\tno\tP1\nR2\tSpecies A\troot\tno\tP2\n')
+    (species_dir / 'Species_A_est_counts.tsv').write_text(
+        'target_id\tR1\tR2\ng1\t' + value + '\t5\ng2\t10\t20\ng3\t4\t6\n')
+    published = tmp_path / 'finalize' / 'Species_A'
+    published.mkdir(parents=True)
+    old = published / 'Species_A_expression.tsv'
+    old.write_bytes(b'previous validated output\n')
+    args = build_main_parser().parse_args([
+        'finalize', '--out_dir', str(tmp_path), '--metadata', str(metadata_path),
+        '--input_dir', str(merge_dir), '--norm', norm, '--batch_effect_alg', 'no',
+        '--threads', '1', '--redo', 'yes',
+    ])
+    with pytest.raises((ValueError, RuntimeError), match=reason):
+        finalize_module.finalize_main(args)
+    assert old.read_bytes() == b'previous validated output\n'

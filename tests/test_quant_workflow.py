@@ -1023,7 +1023,12 @@ class TestQuantEdgeCases:
 
         monkeypatch.setattr('amalgkit.quant.call_oarfish', fake_call_oarfish)
 
-        run_quant(args, metadata, 'SRR001', 'dummy.mmi', runtime_context=runtime_context)
+        index = tmp_path / 'dummy.mmi'
+        index.write_bytes(b'index')
+        input_dir = out_dir / 'getfastq' / 'SRR001'
+        input_dir.mkdir(parents=True)
+        (input_dir / 'SRR001.fastq.gz').write_bytes(b'reads')
+        run_quant(args, metadata, 'SRR001', str(index), runtime_context=runtime_context)
 
         assert observed == {'kallisto': 0, 'oarfish': 1}
 
@@ -1550,6 +1555,16 @@ def test_oarfish_reuse_checks_resolved_settings_after_fastq_cleanup(tmp_path, ch
     info_path = run_dir / 'R1_run_info.json'
     info = {'quant_backend': 'oarfish', 'length_model': 'none', 'p_pseudoaligned': 100,
             'oarfish_seq_tech': 'ont-cdna', 'oarfish_options': []}
+    from amalgkit.quant_provenance import PROVENANCE_KEY, build_quant_provenance
+    index = tmp_path / 'index.mmi'
+    index.write_bytes(b'index')
+    input_dir = tmp_path / 'getfastq' / 'R1'
+    input_dir.mkdir(parents=True)
+    reads = input_dir / 'R1.amalgkit.fastq.gz'
+    reads.write_bytes(b'reads')
+    info[PROVENANCE_KEY] = build_quant_provenance('R1', str(index), [str(reads)], {})
+    reads.unlink()
+    reads.with_name(reads.name + '.safely_removed').write_text('retired')
     if change == 'preset':
         args.oarfish_seq_tech = 'pac-bio-hifi'
     elif change == 'options':
@@ -1560,8 +1575,8 @@ def test_oarfish_reuse_checks_resolved_settings_after_fastq_cleanup(tmp_path, ch
     before = info_path.read_bytes()
     metadata = Metadata.from_DataFrame(pandas.DataFrame({'run': ['R1'], 'lib_layout': ['single']}))
     if change == 'none':
-        run_quant(args, metadata, 'R1', 'unused.mmi', backend='oarfish')
+        run_quant(args, metadata, 'R1', str(index), backend='oarfish')
     else:
         with pytest.raises(ValueError, match='redo yes'):
-            run_quant(args, metadata, 'R1', 'unused.mmi', backend='oarfish')
+            run_quant(args, metadata, 'R1', str(index), backend='oarfish')
     assert info_path.read_bytes() == before

@@ -978,3 +978,46 @@ def test_csfilter_exclusions_are_independent_of_embedding_imputation(tmp_path, s
     assert results[0]['exclusion'].ne('no').any()
     for result in results[1:]:
         pandas.testing.assert_frame_equal(results[0], result)
+
+
+@pytest.mark.parametrize('groups', [['0001', '0002'], ['NA', 'leaf']])
+def test_metadata_handoffs_preserve_lexical_sample_groups(tmp_path, groups):
+    from amalgkit.filter_utils import load_merged_per_species_metadata, merge_metadata_by_run
+    frame = pandas.DataFrame({'run': ['0001', 'NA'], 'scientific_name': ['Species A'] * 2,
+                              'sample_group': groups, 'exclusion': ['no'] * 2,
+                              'custom_annotation': ['0007', 'NA'], 'mapping_rate': [75.0, 90.0]})
+    frame.to_csv(tmp_path / 'Species_A.metadata.tsv', sep='\t', index=False)
+    observed = _prepare_metadata_table(str(tmp_path), groups, ['Species_A'])
+    assert observed['run'].tolist() == ['0001', 'NA']
+    assert observed['sample_group'].tolist() == groups
+    assert observed['custom_annotation'].tolist() == ['0007', 'NA']
+    tables = tmp_path / 'per_species' / 'Species_A' / 'tables'
+    tables.mkdir(parents=True)
+    frame.to_csv(tables / 'Species_A.metadata.tsv', sep='\t', index=False)
+    merged = merge_metadata_by_run(frame, load_merged_per_species_metadata(str(tmp_path / 'per_species')))
+    assert merged['sample_group'].tolist() == groups
+    assert merged['custom_annotation'].tolist() == ['0007', 'NA']
+    assert merged['mapping_rate'].tolist() == [75.0, 90.0]
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize('groups', [['0001', '0002'], ['NA', 'leaf']])
+def test_cross_species_workflow_scores_all_lexical_groups(tmp_path, groups, stub_pdf_rendering):
+    from amalgkit.table_io import read_annotation_tsv
+    from amalgkit.text_utils import serialize_sample_groups
+    root = tmp_path / 'out'
+    orthogroups = TestCrossSpeciesFilterMain._write_cross_species_fixture(root)
+    for path in (root / 'per_species').glob('*/tables/*.metadata.tsv'):
+        frame = read_annotation_tsv(path)
+        frame['sample_group'] = groups
+        frame.to_csv(path, sep='\t', index=False)
+    args = TestCrossSpeciesFilterMain._base_args(root)
+    args.sample_group = serialize_sample_groups(groups)
+    args.orthogroup_table = str(orthogroups)
+    args.missing_strategy = 'row_mean'
+    run_cross_species_filter(args)
+    output = read_annotation_tsv(root / 'cross_species' / 'metadata.tsv')
+    assert set(output['sample_group']) == set(groups)
+    assert len(output) == 4
+    correlations = pandas.to_numeric(output['within_group_cor_corrected'], errors='coerce')
+    assert correlations.notna().all()

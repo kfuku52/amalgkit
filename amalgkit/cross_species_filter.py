@@ -171,9 +171,9 @@ def _normalize_cross_species_metadata_table(df_metadata):
     for column in out.columns:
         if out[column].dtype == object:
             out.loc[:, column] = out.loc[:, column].fillna('').astype(str).str.strip()
-    out.loc[:, 'run'] = out.loc[:, 'run'].astype(str).str.strip()
-    out.loc[:, 'scientific_name'] = out.loc[:, 'scientific_name'].astype(str).str.strip()
-    out.loc[:, 'sample_group'] = out.loc[:, 'sample_group'].astype(str).str.strip()
+    out['run'] = out['run'].fillna('').astype(str).str.strip()
+    out['scientific_name'] = out['scientific_name'].fillna('').astype(str).str.strip()
+    out['sample_group'] = out['sample_group'].fillna('').astype(str).str.strip()
     out.loc[:, 'exclusion'] = _normalize_exclusion(out.loc[:, 'exclusion'])
     explicit_tokens = (
         out.loc[:, 'species_token'].fillna('').astype(str).str.strip().tolist()
@@ -199,7 +199,7 @@ def _prepare_metadata_table(dir_cross_species_input_table, selected_sample_group
             metadata_paths.append(path)
     if len(metadata_paths) == 0:
         raise FileNotFoundError('No metadata files found in the cross-species input table directory.')
-    frames = [read_identifier_tsv(path, identifier_columns=('run', 'biosample', 'donor', 'bioproject'), low_memory=False) for path in metadata_paths]
+    frames = [read_annotation_tsv(path, low_memory=False) for path in metadata_paths]
     df_metadata = pandas.concat(frames, axis=0, ignore_index=True, sort=False)
     df_metadata = _normalize_cross_species_metadata_table(df_metadata)
     return df_metadata.loc[

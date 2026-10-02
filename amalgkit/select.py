@@ -1419,7 +1419,7 @@ def apply_select_filter_rules(metadata, args, select_rules):
                             rule['rule_id'],
                         )
                     )
-                marked_mask = metadata.df[column].isna()
+                marked_mask = metadata.df[column].fillna('').astype(str).str.strip().eq('')
         elif rule['action'] == 'exclude_if_empty':
             empty_masks = []
             for column in rule['columns']:

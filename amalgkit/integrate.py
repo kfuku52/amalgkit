@@ -20,7 +20,7 @@ from amalgkit.fastq_utils import (
 )
 from amalgkit.metadata_utils import Metadata, load_metadata
 from amalgkit.output_utils import atomic_write_dataframe
-from amalgkit.runtime_utils import validate_run_id
+from amalgkit.runtime_utils import validate_run_id, validate_unique_run_ids
 from amalgkit.parallel_utils import (
     is_auto_parallel_option,
     raise_task_failures,
@@ -128,6 +128,7 @@ def assign_unique_run_ids(logical_run_records):
                 suffix += 1
         assigned[logical_key] = validate_run_id(chosen)
         used.add(chosen)
+    validate_unique_run_ids(assigned.values(), context='private FASTQ inputs')
     return assigned
 
 def scan_fastq_directory(fastq_dir):
@@ -1121,7 +1122,8 @@ def resolve_integrate_output_metadata_path(args, merge_with_existing_metadata):
     if output_metadata is not None:
         output_metadata = str(output_metadata).strip()
         if output_metadata != '':
-            return os.path.realpath(output_metadata)
+            # Keep the leaf intact so the atomic writer can reject symlinks.
+            return os.path.abspath(output_metadata)
     out_dir = os.path.realpath(args.out_dir)
     if merge_with_existing_metadata:
         return os.path.join(out_dir, 'metadata', 'metadata_updated_for_private_fastq.tsv')
@@ -1163,6 +1165,7 @@ def integrate_main(args):
         tmp_metadata = get_fastq_stats(args, existing_df=metadata.df)
         df = pd.concat([metadata.df, tmp_metadata], ignore_index=True, sort=False)
         merged_runs = df.loc[:, 'run'].fillna('').astype(str).str.strip()
+        validate_unique_run_ids(merged_runs, context='merged metadata')
         duplicate_mask = merged_runs.duplicated(keep=False)
         if duplicate_mask.any():
             duplicated_runs = merged_runs.loc[duplicate_mask].drop_duplicates().tolist()

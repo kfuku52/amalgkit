@@ -13,6 +13,7 @@ from amalgkit.batch_effect_common import (
     write_batch_effect_summary_tsv,
 )
 from amalgkit.outlier_utils import flag_margin_outliers
+from amalgkit.output_contracts import read_count_matrix
 from amalgkit.per_species_common import (
     _is_non_excluded_flag,
     append_round_summary,
@@ -512,7 +513,7 @@ def _run_prepare_or_wsfilter_python_worker(args, metadata, species_tag, input_di
     if not os.path.isfile(count_path) or (needs_lengths and not os.path.isfile(eff_length_path)):
         return 1
 
-    counts_df = _normalize_dataframe_columns(_read_expression_tsv(count_path))
+    counts_df = _normalize_dataframe_columns(read_count_matrix(count_path))
     eff_length_df = (_normalize_dataframe_columns(_read_expression_tsv(eff_length_path))
                      if needs_lengths else pandas.DataFrame())
     metadata_all = _standardize_metadata_all(_normalize_metadata_df(metadata.df))

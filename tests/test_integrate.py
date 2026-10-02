@@ -18,6 +18,30 @@ from amalgkit.integrate import (
 from amalgkit.util import Metadata
 
 
+@pytest.mark.parametrize('dangling', [False, True])
+def test_integrate_rejects_symlink_output_metadata(tmp_path, dangling):
+    from amalgkit.main import build_main_parser
+    fastq_dir = tmp_path / 'reads'
+    fastq_dir.mkdir()
+    _write_fastq(fastq_dir / 'R1.fastq', ['AAAA'])
+    target = tmp_path / 'original.tsv'
+    if not dangling:
+        target.write_bytes(b'original metadata\n')
+    output = tmp_path / 'output.tsv'
+    output.symlink_to(target)
+    args = build_main_parser().parse_args([
+        'integrate', '--out_dir', str(tmp_path / 'work'), '--fastq_dir', str(fastq_dir),
+        '--output_metadata', str(output), '--threads', '1',
+    ])
+    with pytest.raises(ValueError, match='symbolic-link'):
+        integrate_main(args)
+    assert output.is_symlink()
+    if dangling:
+        assert not target.exists()
+    else:
+        assert target.read_bytes() == b'original metadata\n'
+
+
 def _write_fastq(path, reads):
     with open(path, 'wt') as fh:
         for i, seq in enumerate(reads):

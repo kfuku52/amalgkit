@@ -7,7 +7,7 @@ import warnings
 from contextlib import contextmanager
 
 import pandas
-from amalgkit.table_io import read_identifier_tsv
+from amalgkit.table_io import read_annotation_tsv
 
 from amalgkit.download_utils import acquire_exclusive_lock
 from amalgkit.output_utils import atomic_output_path, get_default_creation_mode
@@ -158,7 +158,7 @@ def load_merged_per_species_metadata(per_species_dir):
     if len(metadata_tables) == 0:
         raise FileNotFoundError('No per-species metadata table was found under: {}'.format(per_species_dir))
     frames = [
-        read_identifier_tsv(path, identifier_columns=('run', 'biosample', 'donor', 'bioproject'), low_memory=False)
+        read_annotation_tsv(path, low_memory=False)
         for path in metadata_tables
     ]
     return pandas.concat(frames, axis=0, ignore_index=True, sort=False)

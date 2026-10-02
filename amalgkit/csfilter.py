@@ -5,7 +5,7 @@ import tempfile
 from types import SimpleNamespace
 
 import pandas
-from amalgkit.table_io import read_identifier_tsv
+from amalgkit.table_io import read_annotation_tsv
 
 from amalgkit.command_context import CrossSpeciesFilterContext, PerSpeciesTableContext
 from amalgkit.cross_species_filter import run_cross_species_filter, serialize_sample_groups
@@ -260,7 +260,7 @@ def csfilter_main(args):
         cross_species_metadata_path = os.path.join(tmp_out_dir, 'cross_species', 'metadata.tsv')
         if not os.path.isfile(cross_species_metadata_path):
             raise FileNotFoundError('csfilter metadata.tsv was not generated: {}'.format(cross_species_metadata_path))
-        cross_species_metadata = read_identifier_tsv(cross_species_metadata_path, identifier_columns=('run', 'biosample', 'donor', 'bioproject'), low_memory=False)
+        cross_species_metadata = read_annotation_tsv(cross_species_metadata_path, low_memory=False)
         cross_species_metadata = _normalize_csfilter_metadata_columns(cross_species_metadata)
         merged_metadata = merge_metadata_by_run(
             _normalize_csfilter_metadata_columns(metadata.df), cross_species_metadata,
