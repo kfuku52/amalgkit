@@ -348,7 +348,7 @@ def test_mds_coordinates_leave_dropped_constant_sample_unassigned():
     assert coordinates.loc[['sample_a', 'sample_b']].notna().all().all()
 
 
-def test_averaged_plots_handle_constant_sample_without_losing_label_alignment(tmp_path):
+def test_averaged_plots_handle_constant_sample_without_losing_label_alignment(tmp_path, stub_pdf_encoding):
     matrix = pandas.DataFrame(
         {
             'sample_a': [1.0, 2.0, 3.0, 4.0],

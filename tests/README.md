@@ -58,7 +58,16 @@ it locally or document a narrowly matched allow-list entry.
 
 Integration tests use lightweight PDF placeholders when they are checking plot
 orchestration and output naming. Dedicated `slow` tests retain real PDF
-rendering coverage.
+rendering coverage. Plot-data regressions can use `stub_pdf_encoding` to execute
+the real plotting helpers while replacing only PDF encoding; use
+`stub_pdf_rendering` when the workflow checks orchestration instead.
+
+Keep production polling/backoff waits out of tests that check locking or retry
+decisions: shorten polling with real competing writers, or record requested
+retry delays without sleeping. Real heartbeat and subprocess-timeout tests keep
+their short waits and `slow` markers. Inspect bottlenecks with
+`python -m pytest -q -n 2 --durations=20`; compare the same selection, worker count,
+coverage options and environment before claiming a speedup.
 
 `test_quant_fragment_length.py` checks fragment sources, assumptions, validation,
 provenance and safe reuse with mocked runners. The separate

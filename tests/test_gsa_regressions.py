@@ -1,11 +1,13 @@
 import gzip
 from pathlib import Path
 import json
+import time
+from types import SimpleNamespace
 
 import pandas
 import pytest
 
-from amalgkit import gsa, gsa_fastq, getfastq, merge
+from amalgkit import download_utils, gsa, gsa_fastq, getfastq, merge
 from amalgkit.gsa_snapshot import publish_gsa_snapshot, preferred_gsa_snapshot, capture_gsa_accession_source
 from amalgkit.metadata_utils import Metadata
 from tests.support.gsa import manifest_row, payloads_for_row
@@ -114,9 +116,21 @@ def test_extraction_rejects_different_validated_content(tmp_path):
         gsa_fastq.extract_run(args, old_row, str(output), 1, 4)
 
 
-def test_parallel_snapshot_publications_preserve_all_measurements(tmp_path):
+def test_parallel_snapshot_publications_preserve_all_measurements(tmp_path, monkeypatch):
     from concurrent.futures import ThreadPoolExecutor
     import threading
+
+    # Keep real file locks and competing writers; only shorten the production
+    # polling delay, which otherwise serializes six writers in five-second steps.
+    poll_delays = []
+
+    def short_poll(seconds):
+        poll_delays.append(seconds)
+        time.sleep(0.01)
+
+    monkeypatch.setattr(download_utils, 'time', SimpleNamespace(
+        time=time.time, monotonic=time.monotonic, sleep=short_poll,
+    ))
     rows = [dict(manifest_row(run=f'CRR{i:04d}'), biosample=f'SAMC{i:04d}') for i in range(1, 7)]
     source = deferred_table(rows, minimum=3)
     write_metadata(tmp_path, source.df.to_dict('records'))
@@ -124,13 +138,15 @@ def test_parallel_snapshot_publications_preserve_all_measurements(tmp_path):
     barrier = threading.Barrier(len(rows))
     def publish(index):
         table = Metadata.from_DataFrame(pandas.DataFrame([measured(source.df.iloc[index].to_dict(), index + 4)]))
-        barrier.wait()
+        barrier.wait(timeout=5)
         return publish_gsa_snapshot(args, table)
     with ThreadPoolExecutor(max_workers=len(rows)) as executor:
         list(executor.map(publish, range(len(rows))))
     table = preferred_gsa_snapshot(native_args(tmp_path), str(tmp_path / 'metadata/metadata.tsv'), read_table=True)
     assert table['total_spots'].astype(float).tolist() == list(range(4, 10))
     assert table['gsa_selection_status'].eq('resolved').all()
+    assert poll_delays and set(poll_delays) == {download_utils.DOWNLOAD_LOCK_POLL_SECONDS}
+    assert not (tmp_path / 'getfastq/gsa_metadata.lock').exists()
 
 
 def test_multiple_direct_id_jobs_preserve_snapshot_union(tmp_path):

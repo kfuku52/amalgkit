@@ -1363,8 +1363,10 @@ class TestSraRecovery:
         out = capsys.readouterr().out
         assert 'Time elapsed for SRA re-download (SRR001):' in out
 
-    @pytest.mark.slow
-    def test_run_fasterq_dump_exits_when_retry_fails(self, tmp_path, monkeypatch, capsys):
+    @pytest.mark.parametrize('fallback_problem', ['empty_listing', 'lookup_error'])
+    def test_run_fasterq_dump_raises_when_retry_and_public_fallback_fail(
+        self, tmp_path, monkeypatch, capsys, fallback_problem,
+    ):
         sra_id = 'SRR001'
         sra_path = tmp_path / '{}.sra'.format(sra_id)
         sra_path.write_text('broken')
@@ -1391,16 +1393,30 @@ class TestSraRecovery:
 
         monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
         monkeypatch.setattr('amalgkit.getfastq.download_sra', fake_download_sra)
+        fallback_calls = []
+
+        def unavailable_trace(sra_id):
+            fallback_calls.append(sra_id)
+            if fallback_problem == 'lookup_error':
+                raise OSError('fixture Trace XML lookup failed')
+            return ET.fromstring('<RUN/>')
+
+        monkeypatch.setattr('amalgkit.getfastq.fetch_trace_run_xml_root', unavailable_trace)
 
         with pytest.raises(RuntimeError, match='fasterq-dump did not finish safely after re-download'):
             run_fasterq_dump(sra_stat, args, metadata, start=1, end=10)
         assert run_calls['count'] == 2
         assert redownload_calls == [True]
+        assert fallback_calls == [sra_id]
         captured = capsys.readouterr()
         assert 'Command failed with exit code 1:' in captured.err
         assert 'Retry command failed with exit code 1:' in captured.err
         assert 'fasterq-dump stderr:' in captured.err
         assert 'fasterq-dump failed' in captured.err
+        if fallback_problem == 'lookup_error':
+            assert 'Failed to retrieve Trace XML for SRR001: fixture Trace XML lookup failed' in captured.err
+        else:
+            assert 'No public original FASTQ files were listed' in captured.err
 
     def test_run_fasterq_dump_falls_back_to_public_original_fastq_when_retry_fails(self, tmp_path, monkeypatch):
         sra_id = 'SRR001'
@@ -1465,27 +1481,6 @@ class TestSraRecovery:
         assert metadata.df.loc[0, 'bp_written'] == 1000
         assert metadata.df.loc[0, 'layout_amalgkit'] == 'paired'
         assert sra_stat_out['layout'] == 'paired'
-
-    def test_run_fasterq_dump_raises_when_public_original_fastq_fallback_is_unavailable(self, tmp_path, monkeypatch):
-        sra_id = 'SRR001'
-        metadata = self._metadata_for_extraction(sra_id)
-        sra_stat = {
-            'sra_id': sra_id,
-            'getfastq_sra_dir': str(tmp_path),
-            'spot_length': 100,
-            'layout': 'paired',
-            'total_spot': 10,
-        }
-        args = self._args_for_fasterq_dump()
-
-        def fail_retry(**_kwargs):
-            raise RuntimeError('fasterq-dump did not finish safely after re-download.')
-
-        monkeypatch.setattr('amalgkit.getfastq.run_fasterq_dump_with_retry', fail_retry)
-        monkeypatch.setattr('amalgkit.getfastq.fetch_public_original_fastq_sources', lambda _sra_id: [])
-
-        with pytest.raises(RuntimeError, match='fasterq-dump did not finish safely after re-download'):
-            run_fasterq_dump(sra_stat, args, metadata, start=1, end=10)
 
     def test_run_fasterq_dump_no_redownload_when_first_attempt_succeeds(self, tmp_path, monkeypatch, capsys):
         sra_id = 'SRR001'

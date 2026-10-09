@@ -1440,6 +1440,8 @@ def test_download_with_curl_restarts_when_server_ignores_range(tmp_path, monkeyp
 
 def test_download_with_curl_retains_partial_after_transfer_failure(tmp_path, monkeypatch):
     monkeypatch.setattr('amalgkit.getfastq.shutil.which', lambda name: '/usr/bin/curl')
+    retry_delays = []
+    monkeypatch.setattr('amalgkit.getfastq.time.sleep', retry_delays.append)
     output_path = tmp_path / 'SRR001.fastq.gz'
     output_path.write_bytes(b'ab')
 
@@ -1466,6 +1468,7 @@ def test_download_with_curl_retains_partial_after_transfer_failure(tmp_path, mon
         resume_existing=True,
     )
     assert output_path.read_bytes() == b'abc'
+    assert retry_delays == [1]
 
 
 def test_original_fastq_resume_directory_survives_interruption(tmp_path):

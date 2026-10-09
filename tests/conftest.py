@@ -116,9 +116,20 @@ def sample_metadata(sample_metadata_df):
 
 
 @pytest.fixture
-def stub_pdf_rendering(monkeypatch):
-    """Keep integration tests focused on plot orchestration, not PDF encoding."""
+def stub_pdf_encoding(monkeypatch):
+    """Keep real plot preparation but replace PDF encoding with a valid placeholder."""
     from matplotlib.figure import Figure
+
+    def write_pdf_placeholder(_figure, output_path, *args, **kwargs):
+        _ = (args, kwargs)
+        _write_valid_pdf(output_path)
+
+    monkeypatch.setattr(Figure, 'savefig', write_pdf_placeholder)
+
+
+@pytest.fixture
+def stub_pdf_rendering(monkeypatch, stub_pdf_encoding):
+    """Keep integration tests focused on plot orchestration, not PDF encoding."""
     from amalgkit import cross_species_filter
     from amalgkit import per_species_finalize_python
     from amalgkit import per_species_python
@@ -136,11 +147,6 @@ def stub_pdf_rendering(monkeypatch):
         output_path = find_output_path(args, kwargs)
         return _write_valid_pdf(output_path)
 
-    def write_pdf_placeholder(_figure, output_path, *args, **kwargs):
-        _ = (args, kwargs)
-        _write_valid_pdf(output_path)
-
-    monkeypatch.setattr(Figure, 'savefig', write_pdf_placeholder)
     for module, helper_names in (
         (
             cross_species_filter,

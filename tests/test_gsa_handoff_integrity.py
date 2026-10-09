@@ -61,6 +61,9 @@ def test_partial_content_range_cannot_become_complete_gsa_input(tmp_path, monkey
     import subprocess
     row = manifest_row(False)
     payload = next(iter(payloads_for_row(row).values()))
+    retry_delays = []
+    monkeypatch.setattr(getfastq.shutil, 'which', lambda _name: '/usr/bin/curl')
+    monkeypatch.setattr(getfastq.time, 'sleep', retry_delays.append)
     def run(command, **kwargs):
         Path(command[command.index('--dump-header') + 1]).write_bytes(
             f'HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-{len(payload)-1}/{len(payload)*2}\r\n\r\n'.encode())
@@ -71,6 +74,7 @@ def test_partial_content_range_cannot_become_complete_gsa_input(tmp_path, monkey
     assert not getfastq.download_with_curl(
         source_url=json.loads(row['gsa_fastq_files'])[0]['sources'][0]['url'], output_path=str(output),
         args=native_args(tmp_path), sra_source_name='GSA', artifact_label='GSA original FASTQ', resume_existing=True)
+    assert retry_delays == [1, 2]
 
 
 def test_explicit_snapshot_blocks_pending_selection_like_inferred(tmp_path):

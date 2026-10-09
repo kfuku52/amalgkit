@@ -5,6 +5,15 @@ Releases provide generated notes only for tagged releases. Patch-only updates
 remain on the default branch and are recorded below; consult this file rather
 than the Releases page for those changes.
 
+### 0.16.99 - 2026-10-09
+
+- Shorten test-only lock polling and replace retry backoff waits with delay
+  assertions while retaining real concurrent snapshot publication.
+- Consolidate duplicate extraction-failure coverage and use fixture Trace XML
+  responses for missing-input and lookup-error paths instead of network access.
+- Replace repeated PDF encoding in plot-data regressions with valid placeholders;
+  retain dedicated real-rendering tests and the existing integration coverage.
+
 ### 0.16.98 - 2026-10-02
 
 - Reject symbolic-link metadata destinations in `integrate`, preserving their targets.

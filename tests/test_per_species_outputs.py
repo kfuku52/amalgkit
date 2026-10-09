@@ -162,7 +162,7 @@ def test_save_tau_histogram_pdf_writes_pdf(tmp_path):
     assert result['num_no_expression'] == 1
 
 
-def test_tau_histogram_uses_linear_run_means(tmp_path):
+def test_tau_histogram_uses_linear_run_means(tmp_path, stub_pdf_encoding):
     counts = pandas.DataFrame([[0., 100., 10., 10.]], columns=['a1', 'a2', 'b1', 'b2'])
     metadata = pandas.DataFrame({
         'run': counts.columns, 'sample_group': ['A', 'A', 'B', 'B'], 'exclusion': ['no'] * 4,
@@ -174,9 +174,8 @@ def test_tau_histogram_uses_linear_run_means(tmp_path):
     numpy.testing.assert_allclose(result['tau_df']['tau'], [0.8])
 
 
-@pytest.mark.slow
 @pytest.mark.parametrize('comparison', [False, True])
-def test_tau_plot_does_not_discard_missing_run_metadata(tmp_path, monkeypatch, comparison):
+def test_tau_plot_does_not_discard_missing_run_metadata(tmp_path, monkeypatch, comparison, stub_pdf_encoding):
     from amalgkit import per_species_outputs as overview
     from amalgkit import per_species_finalize_python as finalize
     from amalgkit.per_species_common import sample_group_to_tau
