@@ -1,3 +1,4 @@
+import csv
 import math
 import os
 import warnings
@@ -289,17 +290,40 @@ def _save_species_histogram_pdf(
 
 def _read_est_count_summary(file_path):
     try:
-        dat = pandas.read_csv(file_path, sep='\t', low_memory=False)
+        header = pandas.read_csv(file_path, sep='\t', nrows=0)
     except Exception as exc:
         warnings.warn('Failed to read est_counts file. Skipping {}: {}'.format(file_path, exc))
         return None
-    sample_cols = [column for column in dat.columns if column != 'target_id']
+    sample_cols = [column for column in header.columns if column != 'target_id']
     if len(sample_cols) == 0:
         warnings.warn('No sample columns found in est_counts file. Skipping {}'.format(file_path))
         return None
-    dat_numeric = dat.loc[:, sample_cols].apply(pandas.to_numeric, errors='coerce')
-    mean_before = dat_numeric.mean(axis=0, skipna=True)
-    lib_size = dat_numeric.sum(axis=0, skipna=True)
+    try:
+        totals = pandas.Series(0.0, index=sample_cols)
+        observed = pandas.Series(0, index=sample_cols)
+        # The C parser can silently truncate extra fields at chunk boundaries.
+        # Until that is fixed, guard canonical uncompressed TSV rows in a
+        # bounded pass; other formats retain the strict Python parser.
+        engine = 'python'
+        if os.fspath(file_path).endswith('.tsv'):
+            with open(file_path, newline='', encoding='utf-8') as handle:
+                rows = csv.reader(handle, delimiter='\t')
+                width = len(next(rows))
+                for row in rows:
+                    if len(row) > width:
+                        raise pandas.errors.ParserError('Extra fields on line {}'.format(rows.line_num))
+            engine = 'c'
+        with pandas.read_csv(file_path, sep='\t', chunksize=5000, engine=engine) as chunks:
+            for chunk in chunks:
+                numeric = chunk.loc[:, sample_cols].apply(pandas.to_numeric, errors='coerce')
+                with numpy.errstate(invalid='ignore', over='ignore'):
+                    totals += numeric.sum(axis=0, skipna=True)
+                observed += numeric.count(axis=0)
+    except Exception as exc:
+        warnings.warn('Failed to read est_counts file. Skipping {}: {}'.format(file_path, exc))
+        return None
+    mean_before = totals / observed.replace(0, numpy.nan)
+    lib_size = totals
     species_tag = os.path.basename(os.path.dirname(file_path))
     species_name = species_tag.replace('_', ' ')
     return pandas.DataFrame(

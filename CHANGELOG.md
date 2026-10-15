@@ -5,6 +5,19 @@ Releases provide generated notes only for tagged releases. Patch-only updates
 remain on the default branch and are recorded below; consult this file rather
 than the Releases page for those changes.
 
+### 0.16.101 - 2026-10-15
+
+- Stream merge QC summaries in bounded chunks and store random FASTQ sampling
+  positions compactly, preserving permutation ranks, FASTQ digests and resume
+  manifests. Fractional QC totals may differ at floating-point rounding precision.
+- Reuse each filtering state's correlation matrix for statistics and overview
+  plots; avoid singleton unit construction for the default run-level tau mean.
+- Use smaller decompositions for separated SVA subspaces and large MDS plots,
+  retaining direct solvers for rank-deficient or tied boundaries.
+- Avoid repeated column conversion in GSA snapshots, vectorize retrieval source
+  flags, and hoist repeated membership inventories from plotting/filtering loops.
+- Add reproducible revision benchmarks and numerical/sampling contract checks.
+
 ### 0.16.100 - 2026-10-15
 
 - Reuse numeric expression columns across wsfilter references and avoid the

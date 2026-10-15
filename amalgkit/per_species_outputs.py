@@ -1,3 +1,4 @@
+from amalgkit.linalg_utils import classical_mds_coordinates
 import os
 import warnings
 
@@ -115,7 +116,8 @@ def save_correlation_statistics(
     metadata = out['sra']
     if precomputed_tc_dist_matrix is not None:
         if isinstance(precomputed_tc_dist_matrix, pandas.DataFrame):
-            run_order = [str(run_id) for run_id in precomputed_tc_dist_matrix.columns if str(run_id) in set(metadata.loc[:, run_column].astype(str))]
+            metadata_runs = set(metadata.loc[:, run_column].astype(str))
+            run_order = [str(run_id) for run_id in precomputed_tc_dist_matrix.columns if str(run_id) in metadata_runs]
             tc_dist_matrix = precomputed_tc_dist_matrix.loc[run_order, run_order].to_numpy(dtype=float)
         else:
             tc_dist_matrix = numpy.asarray(precomputed_tc_dist_matrix, dtype=float)
@@ -249,20 +251,7 @@ def _spectral_coords(corr_block):
 
 
 def _classic_mds_coords(dist):
-    n = dist.shape[0]
-    coords = numpy.zeros((n, 2), dtype=float)
-    if n <= 1:
-        return coords
-    centering = numpy.eye(n) - (numpy.ones((n, n), dtype=float) / float(n))
-    gram = -0.5 * centering.dot(dist ** 2).dot(centering)
-    eigvals, eigvecs = numpy.linalg.eigh(gram)
-    order = numpy.argsort(eigvals)[::-1]
-    eigvals = eigvals[order]
-    eigvecs = eigvecs[:, order]
-    for idx in range(min(2, eigvecs.shape[1])):
-        value = max(float(eigvals[idx]), 0.0)
-        coords[:, idx] = eigvecs[:, idx] * numpy.sqrt(value)
-    return coords
+    return classical_mds_coordinates(dist)
 
 
 def _compute_pca_coords(corr_df):
@@ -463,6 +452,7 @@ def save_state_overview_pdf(
     transform_method='log2p1-fpkm',
     font_size=8,
     tau_options=None,
+    precomputed_tc_dist_matrix=None,
 ):
     out = intersect_counts_and_metadata(counts_df=counts_df, metadata_df=metadata_df)
     counts = out['tc']
@@ -472,7 +462,11 @@ def save_state_overview_pdf(
     run_order = [run_id for run_id in metadata.loc[:, 'run'].astype(str).tolist() if run_id in counts.columns]
     counts = counts.loc[:, run_order].copy()
     metadata = metadata.set_index('run', drop=False).loc[run_order, :].reset_index(drop=True)
-    corr_df = _compute_corr_matrix(counts, dist_method=dist_method)
+    corr_df = (
+        _compute_corr_matrix(counts, dist_method=dist_method)
+        if precomputed_tc_dist_matrix is None
+        else precomputed_tc_dist_matrix.loc[run_order, run_order]
+    )
     pca_coords = _compute_pca_coords(corr_df)
     mds_coords = _compute_mds_coords(corr_df)
     tsne_coords = _compute_tsne_coords(counts)

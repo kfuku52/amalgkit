@@ -1,3 +1,4 @@
+from amalgkit.linalg_utils import classical_mds_coordinates
 import json
 import os
 
@@ -382,17 +383,7 @@ def _compute_mds_coordinates(matrix_df, missing_strategy, cache=None):
     dist = 1.0 - corr
     dist = (dist + dist.T) / 2.0
     numpy.fill_diagonal(dist, 0.0)
-    n = dist.shape[0]
-    centering = numpy.eye(n) - (numpy.ones((n, n), dtype=float) / float(n))
-    gram = -0.5 * centering.dot(dist ** 2).dot(centering)
-    eigvals, eigvecs = numpy.linalg.eigh(gram)
-    order = numpy.argsort(eigvals)[::-1]
-    eigvals = eigvals[order]
-    eigvecs = eigvecs[:, order]
-    coords = numpy.zeros((n, 2), dtype=float)
-    for idx in range(min(2, eigvecs.shape[1])):
-        value = max(float(eigvals[idx]), 0.0)
-        coords[:, idx] = eigvecs[:, idx] * numpy.sqrt(value)
+    coords = classical_mds_coordinates(dist)
     # Assign positionally against the correlation matrix's own index (which may
     # be a strict subset after constant-variance samples are dropped upstream),
     # not against `filled.columns`. coords rows align 1:1 with corr_df.index.

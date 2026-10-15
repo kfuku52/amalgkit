@@ -369,7 +369,8 @@ def _apply_within_group_filter(tc, sra, args, selected_sample_groups, min_dif=0.
             out_sra.loc[:, metric_col] = out_sra.loc[:, metric_col].fillna(False).astype(bool)
     if len(excluded_runs) > 0:
         out_sra.loc[out_sra['run'].astype(str).isin(excluded_runs), 'exclusion'] = 'low_within_sample_group_correlation'
-    out_tc = tc.loc[:, [run_id for run_id in tc.columns if run_id not in set(excluded_runs)]].copy()
+    excluded_run_set = set(excluded_runs)
+    out_tc = tc.loc[:, [run_id for run_id in tc.columns if run_id not in excluded_run_set]].copy()
     return out_tc, out_sra, excluded_runs
 
 
@@ -548,12 +549,14 @@ def _run_prepare_or_wsfilter_python_worker(args, metadata, species_tag, input_di
         load_quant_model_table(os.path.join(os.path.dirname(count_path), species_tag + '_quant_model.tsv')),
     )
     tc_original = _apply_transformation_logic(tc, eff_length_species, args.norm, 'no', 'before_batch', sra, length_models)
+    state_correlation = tc_original.corr(method=str(getattr(args, 'dist_method', 'pearson')))
     correlation_statistics = save_correlation_statistics(
         counts_df=tc_original,
         metadata_df=sra,
         dist_method=str(getattr(args, 'dist_method', 'pearson')),
         round_value=0,
         correlation_statistics=initialize_correlation_statistics(),
+        precomputed_tc_dist_matrix=state_correlation,
     )
     save_state_overview_pdf(
         counts_df=tc_original,
@@ -564,7 +567,9 @@ def _run_prepare_or_wsfilter_python_worker(args, metadata, species_tag, input_di
         transform_method=str(getattr(args, 'norm', 'log2p1-fpkm')),
         font_size=8,
         tau_options=tau_options_from_args(args),
+        precomputed_tc_dist_matrix=state_correlation,
     )
+    del state_correlation
 
     tc, sra, mapping_excluded_runs = _filter_low_mapping_rate(
         tc=tc,
@@ -573,12 +578,14 @@ def _run_prepare_or_wsfilter_python_worker(args, metadata, species_tag, input_di
     )
     tc = _apply_transformation_logic(tc, eff_length_species, args.norm, 'no', 'before_batch', sra, length_models)
     tc_before_filter = tc.copy()
+    state_correlation = tc_before_filter.corr(method=str(getattr(args, 'dist_method', 'pearson')))
     correlation_statistics = save_correlation_statistics(
         counts_df=tc_before_filter,
         metadata_df=sra,
         dist_method=str(getattr(args, 'dist_method', 'pearson')),
         round_value=1,
         correlation_statistics=correlation_statistics,
+        precomputed_tc_dist_matrix=state_correlation,
     )
     save_state_overview_pdf(
         counts_df=tc_before_filter,
@@ -589,7 +596,9 @@ def _run_prepare_or_wsfilter_python_worker(args, metadata, species_tag, input_di
         transform_method=str(getattr(args, 'norm', 'log2p1-fpkm')),
         font_size=8,
         tau_options=tau_options_from_args(args),
+        precomputed_tc_dist_matrix=state_correlation,
     )
+    del state_correlation
 
     round_summary = initialize_round_summary()
     if len(mapping_excluded_runs) > 0:
@@ -657,12 +666,14 @@ def _run_prepare_or_wsfilter_python_worker(args, metadata, species_tag, input_di
         limit_reached = max_iterations is not None and round_index + 1 >= max_iterations
         round_value = round_index + 2
         if limit_reached or (len(excluded_runs) == 0) or bool(getattr(args, 'plot_intermediate', False)):
+            state_correlation = next_tc.corr(method=str(getattr(args, 'dist_method', 'pearson')))
             correlation_statistics = save_correlation_statistics(
                 counts_df=next_tc,
                 metadata_df=next_sra,
                 dist_method=str(getattr(args, 'dist_method', 'pearson')),
                 round_value=round_value,
                 correlation_statistics=correlation_statistics,
+                precomputed_tc_dist_matrix=state_correlation,
             )
             save_state_overview_pdf(
                 counts_df=next_tc,
@@ -673,7 +684,9 @@ def _run_prepare_or_wsfilter_python_worker(args, metadata, species_tag, input_di
                 transform_method=str(getattr(args, 'norm', 'log2p1-fpkm')),
                 font_size=8,
                 tau_options=tau_options_from_args(args),
+                precomputed_tc_dist_matrix=state_correlation,
             )
+            del state_correlation
         should_stop = _should_stop_within_group_filter(
             current_tc=current_tc,
             next_tc=next_tc,

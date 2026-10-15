@@ -346,7 +346,7 @@ def save_corrected_output_files_python(uncorrected_by_species, roundtrip, dir_co
 
 def _category_colors(values):
     unique_values = [str(v) for v in pandas.Series(values).fillna('').astype(str).tolist()]
-    unique_values = [v for idx, v in enumerate(unique_values) if v != '' and v not in unique_values[:idx]]
+    unique_values = list(dict.fromkeys(v for v in unique_values if v != ''))
     cmap = plt.get_cmap('tab20')
     return {value: cmap(idx % 20) for idx, value in enumerate(unique_values)}
 

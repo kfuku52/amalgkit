@@ -31,6 +31,7 @@ from amalgkit.download_utils import (
 from amalgkit.exceptions import AmalgkitExit
 from amalgkit.gsa import fetch_gsa_metadata, is_gsa_accession
 from amalgkit.gsa_snapshot import publish_gsa_snapshot, capture_gsa_accession_source
+from amalgkit.gsa_fastq import has_gsa_rows, all_gsa_rows
 from amalgkit.gsa_fastq import is_gsa_row, prepare_gsa_metadata, extract_run as extract_gsa_run, open_validated_spots as open_gsa_spots
 from amalgkit.fastq_download_integrity import (
     FastqDownloadIntegrityError,
@@ -6137,7 +6138,7 @@ def getfastq_metadata(args):
     if (args.id is None)&(args.id_list is None):
         metadata = load_metadata(args)
     else:
-        if any(is_gsa_row(row) for _, row in metadata.df.iterrows()):
+        if has_gsa_rows(metadata.df):
             capture_gsa_accession_source(args, metadata, sra_id_list if args.id_list is not None else [args.id])
         metadata = _apply_batch_to_entrez_metadata(metadata, args)
     metadata.df['total_bases'] = pandas.to_numeric(metadata.df['total_bases'], errors='coerce')
@@ -7156,7 +7157,7 @@ def initialize_global_params(args, metadata):
         raise ValueError('No SRA entries were found in metadata.')
     target_metadata = metadata.df
     if sampling.random_sampling(args):
-        target_metadata = metadata.df.loc[metadata.df.apply(lambda row: sampling.random_sampling(args, row), axis=1)]
+        target_metadata = metadata.df.loc[sampling.random_sampling_mask(args, metadata.df)]
         g['sampling_run_ids'] = sorted(target_metadata['run'].astype(str).tolist())
     target_runs = len(target_metadata)
     g['num_bp_per_sra'] = g['max_bp'] // max(1, target_runs)
@@ -7996,10 +7997,10 @@ def getfastq_main(args):
         task_count=len(run_rows),
     )
     runtime_args = clone_namespace(metadata_args, threads=threads, internal_jobs=jobs, rrna_filter_jobs=jobs)
-    runtime_args._requires_sra_toolkit = any(not is_gsa_row(row) for _, row in metadata.df.iterrows())
+    runtime_args._requires_sra_toolkit = not all_gsa_rows(metadata.df)
     check_getfastq_dependency(runtime_args)
     metadata = prepare_gsa_metadata(runtime_args, metadata, download_file_from_candidate_sources)
-    if any(is_gsa_row(row) for _, row in metadata.df.iterrows()):
+    if has_gsa_rows(metadata.df):
         metadata = publish_gsa_snapshot(runtime_args, metadata)
         metadata = filter_getfastq_eligible_metadata(metadata)
         run_rows = list(zip(metadata.df.index.tolist(), metadata.df['run'].tolist()))

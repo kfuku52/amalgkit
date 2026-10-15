@@ -287,6 +287,26 @@ def _stabilize_surrogate_matrix(sv_matrix, design_matrix, tol=1e-10):
 
 
 def _supported_right_vectors(data, nsv, reference_scale=0.0):
+    # A well-separated leading subspace of a tall matrix can be recovered
+    # without allocating the unused gene-sized left singular vectors. Rank
+    # boundaries and tied components retain the original direct SVD decision.
+    if data.ndim == 2 and data.shape[0] >= 4 * data.shape[1] and 0 < nsv <= min(data.shape):
+        with numpy.errstate(over='ignore', invalid='ignore'):
+            gram = data.T @ data
+        if numpy.isfinite(gram).all():
+            try:
+                eigenvalues, vectors = numpy.linalg.eigh(gram)
+            except numpy.linalg.LinAlgError:
+                pass  # Retain the direct SVD's result or authoritative error.
+            else:
+                order = numpy.argsort(eigenvalues)[::-1]
+                descending = eigenvalues[order]
+                threshold = numpy.finfo(float).eps * max(data.shape) * max(1.0, numpy.linalg.norm(data), reference_scale)
+                if (
+                    not _gram_components_require_svd_fallback(descending, nsv, data.shape)
+                    and numpy.sqrt(max(0.0, float(descending[nsv - 1]))) > threshold
+                ):
+                    return vectors[:, order[:nsv]]
     _left, singular, right = numpy.linalg.svd(data, full_matrices=False)
     threshold = numpy.finfo(float).eps * max(data.shape) * max(1.0, numpy.linalg.norm(data), reference_scale)
     rank = min(nsv, int(numpy.sum(singular > threshold)))

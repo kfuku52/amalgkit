@@ -199,6 +199,7 @@ def publish_gsa_snapshot(args, metadata):
 
 def _overlay_measurements(combined, measured):
     """Reapply original annotations/rules; only measured inputs survive jobs."""
+    prepared_columns = set()
     for _, row in measured.iterrows():
         if row["run"] not in combined.index:
             raise ValueError("GSA snapshot source does not contain {}".format(row["run"]))
@@ -212,7 +213,9 @@ def _overlay_measurements(combined, measured):
                 continue
             if column not in combined:
                 combined[column] = ""
-            combined[column] = combined[column].astype(object)
+            if column not in prepared_columns:
+                combined[column] = combined[column].astype(object)
+                prepared_columns.add(column)
             combined.at[row["run"], column] = row[column]
 
 

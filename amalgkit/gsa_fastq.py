@@ -34,6 +34,20 @@ def is_gsa_row(row):
     return str(row.get("data_source", "")).strip().lower() == "gsa"
 
 
+def _gsa_mask(frame):
+    if "data_source" not in frame:
+        return pandas.Series(False, index=frame.index)
+    return frame["data_source"].fillna("").astype(str).str.strip().str.lower().eq("gsa")
+
+
+def has_gsa_rows(frame):
+    return bool(_gsa_mask(frame).any())
+
+
+def all_gsa_rows(frame):
+    return bool(_gsa_mask(frame).all())
+
+
 def read_manifest(row):
     run = str(row["run"])
     if not re.fullmatch(r"CRR\d+", run):

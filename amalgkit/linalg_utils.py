@@ -7,6 +7,40 @@ from collections.abc import Sequence
 import numpy
 
 
+def classical_mds_coordinates(dist):
+    """Return the leading two classical MDS coordinates with bounded copies.
+
+    Large, separated spectra use analytic double centering and a partial
+    eigensolve. A tied/undefined boundary retains the established full solver.
+    """
+    n = dist.shape[0]
+    coords = numpy.zeros((n, 2), dtype=float)
+    if n <= 1:
+        return coords
+    squared = dist**2
+    if n >= 64 and numpy.isfinite(squared).all():
+        from scipy.linalg import eigh
+
+        gram = -0.5 * (squared - squared.mean(axis=1)[:, None] - squared.mean(axis=0)[None, :] + squared.mean())
+        # EVX retains repeated eigenvalues on backends where EVR can return
+        # an empty subset at an exactly tied spectral boundary.
+        try:
+            eigvals, eigvecs = eigh(gram, subset_by_index=(n - 3, n - 1), driver="evx")
+        except numpy.linalg.LinAlgError:
+            pass  # The full solver below retains its original result/error.
+        else:
+            scale = max(1.0, float(numpy.max(numpy.abs(eigvals))))
+            tolerance = numpy.finfo(float).eps * n * scale
+            if eigvals[1] > tolerance and eigvals[1] - eigvals[0] > tolerance:
+                return eigvecs[:, ::-1][:, :2] * numpy.sqrt(numpy.maximum(eigvals[::-1][:2], 0.0))
+    centering = numpy.eye(n) - numpy.ones((n, n), dtype=float) / float(n)
+    gram = -0.5 * centering.dot(squared).dot(centering)
+    eigvals, eigvecs = numpy.linalg.eigh(gram)
+    order = numpy.argsort(eigvals)[::-1][:2]
+    coords[:, : len(order)] = eigvecs[:, order] * numpy.sqrt(numpy.maximum(eigvals[order], 0.0))
+    return coords
+
+
 def gram_components_require_svd_fallback(
     eigenvalues_descending,
     num_components: int,

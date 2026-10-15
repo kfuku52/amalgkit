@@ -113,6 +113,19 @@ Performance-sensitive changes should update or run `benchmarks/benchmark_core.py
 The scheduled end-to-end workflow retains benchmark JSON and exercises real
 `sra-tools`, `seqkit`, and `kallisto` binaries.
 
+`linalg_utils.py` shares classical MDS coordinates across filtering/finalization
+plots. Separated spectra use partial decomposition; tied or unsupported
+boundaries retain the full solver. SVA similarly retains direct SVD at unstable
+rank boundaries. Filtering-state correlations are shared by statistics and
+overview plots only while that expression state remains unchanged.
+
+Random FASTQ sampling retains the SHA-256 permutation and manifest contracts.
+Its private sorted position inventory uses compact integers and a bounded dense
+swap table for dense requests, with sparse storage for large populations. The
+public `selected_indices` return types remain compatible. Merge QC summaries
+stream numeric columns; fractional sums may change at rounding precision without
+changing the count tables or normalization calculations.
+
 Cross-species numerical and t-SNE caches validate the original input through a
 weak reference and discard entries when that DataFrame is collected. Inputs
 must remain unchanged while cached; clear entries before changing values or

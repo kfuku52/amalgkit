@@ -1,3 +1,4 @@
+from amalgkit.linalg_utils import classical_mds_coordinates
 import os
 import warnings
 
@@ -614,20 +615,7 @@ def _map_block_coordinates(corr_df, block_df, block_coords):
 
 
 def _classic_mds_coordinates(dist):
-    n = dist.shape[0]
-    if n <= 1:
-        return numpy.zeros((n, 2), dtype=float)
-    centering = numpy.eye(n) - (numpy.ones((n, n), dtype=float) / float(n))
-    gram = -0.5 * centering.dot(dist ** 2).dot(centering)
-    eigvals, eigvecs = numpy.linalg.eigh(gram)
-    order = numpy.argsort(eigvals)[::-1]
-    eigvals = eigvals[order]
-    eigvecs = eigvecs[:, order]
-    coords = numpy.zeros((n, 2), dtype=float)
-    for idx in range(min(2, n)):
-        value = max(0.0, float(eigvals[idx]))
-        coords[:, idx] = eigvecs[:, idx] * numpy.sqrt(value)
-    return coords
+    return classical_mds_coordinates(dist)
 
 
 def _spectral_coordinates(corr_block):
@@ -743,7 +731,8 @@ def _draw_dendrogram_panel(ax, corr_df, labels, font_size, title):
             ax.text(0.5, 0.5, 'No dendrogram data', ha='center', va='center', fontsize=font_size)
             ax.set_axis_off()
             return
-        block_labels = [labels[list(corr_df.index).index(name)] for name in block.index]
+        positions = {name: idx for idx, name in enumerate(corr_df.index)}
+        block_labels = [labels[positions[name]] for name in block.index]
         dist = _compute_distance_matrix(block)
         condensed = squareform(dist, checks=False)
         linkage_matrix = linkage(condensed, method='average')
@@ -851,8 +840,9 @@ def save_quick_state_comparison_plot(
 ):
     if (tc_before.shape[1] <= 1) or (tc_after.shape[1] <= 1):
         return None
-    common_runs = [run_id for run_id in tc_before.columns if run_id in set(tc_after.columns)]
-    common_runs = [run_id for run_id in common_runs if run_id in set(metadata_df.loc[:, 'run'].astype(str))]
+    after_runs = set(tc_after.columns)
+    metadata_runs = set(metadata_df.loc[:, 'run'].astype(str))
+    common_runs = [run_id for run_id in tc_before.columns if run_id in after_runs and run_id in metadata_runs]
     if len(common_runs) <= 1:
         return None
     before = tc_before.loc[:, common_runs].copy()

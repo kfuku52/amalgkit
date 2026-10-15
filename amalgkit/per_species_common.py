@@ -54,9 +54,10 @@ def sample_group_mean(
             .tolist()
         )
     else:
+        available_groups = set(sample_group_values.tolist())
         resolved_groups = [
             group for group in list(selected_sample_groups)
-            if group in set(sample_group_values.tolist())
+            if group in available_groups
         ]
 
     tc_ave = pandas.DataFrame(
@@ -301,20 +302,31 @@ def linear_sample_group_summary(
         })
         if status != 'ok':
             continue
+        if unit == 'run' and not balance_projects:
+            # Run IDs are unique, so singleton unit means are the original
+            # values. Keep metadata order and the same scaled mean arithmetic.
+            run_ids = available['run'].tolist()
+            representatives[group] = _linear_mean(linear.loc[:, run_ids])
+            weights.extend({
+                'sample_group': group, 'run': run_id, 'unit_id': run_id,
+                'weight': 1.0 / len(run_ids),
+            } for run_id in run_ids)
+            continue
         keys = ['bioproject', unit] if balance_projects else [unit]
         unit_means = []
         unit_projects = []
+        unit_count = available[unit].nunique()
+        project_count = available['bioproject'].nunique() if balance_projects else 0
+        units_per_project = available.groupby('bioproject')[unit].nunique() if balance_projects else None
         for _, members in available.groupby(keys, sort=False):
             values = linear.loc[:, members['run'].tolist()]
             unit_means.append(_linear_mean(values))
             if balance_projects:
                 unit_projects.append(members['bioproject'].iloc[0])
-            denominator = available[unit].nunique()
+            denominator = unit_count
             if balance_projects:
                 project = members['bioproject'].iloc[0]
-                denominator = available['bioproject'].nunique() * available.loc[
-                    available['bioproject'].eq(project), unit,
-                ].nunique()
+                denominator = project_count * units_per_project[project]
             for run_id in members['run']:
                 weights.append({
                     'sample_group': group, 'run': run_id,

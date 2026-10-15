@@ -7,12 +7,16 @@ requested sample size, so subsequent rounds cannot select a spot twice.
 """
 
 from contextlib import ExitStack, closing
+from array import array
 import gzip
 import hashlib
 import itertools
 import json
 import os
 import re
+
+import pandas
+import numpy
 
 from amalgkit.fastq_utils import is_private_file_value, open_fastq_binary
 from amalgkit.output_utils import atomic_output_path
@@ -44,6 +48,14 @@ def random_sampling(args, row=None):
         or not is_private_file_value(row.get("private_file", ""))
         or bool(getattr(args, "sampling_private", False))
     )
+
+
+def random_sampling_mask(args, frame):
+    if not random_sampling(args):
+        return pandas.Series(False, index=frame.index)
+    if getattr(args, "sampling_private", False) or "private_file" not in frame:
+        return pandas.Series(True, index=frame.index)
+    return ~frame["private_file"].astype(str).str.strip().str.lower().eq("yes")
 
 
 def validate_options(args):
@@ -92,17 +104,41 @@ def selected_indices(total, start, end, seed, run):
         raise ValueError("Invalid sampling rank range or input count")
     if start == 1 and end == total:
         return range(1, total + 1)
+    return set(_iter_selected_indices(total, start, end, seed, run))
+
+
+def _iter_selected_indices(total, start, end, seed, run, compact=False):
     rng = _RandomStream(seed, run)
-    swaps = {}
-    selected = set()
+    # A bounded dense inventory beats Python integer dictionaries for dense
+    # requests. Zero encodes an untouched position; saved values are offset by
+    # one. Sparse/very large populations retain the original sparse inventory.
+    dense = compact and total <= 16_000_000 and end * 16 >= total
+    swaps = array('I', [0]) * total if dense else {}
     for rank in range(end):
         position = rank + rng.below(total - rank)
-        value = swaps.get(position, position)
-        swaps[position] = swaps.get(rank, rank)
-        swaps.pop(rank, None)
+        if dense:
+            value = swaps[position] - 1 if swaps[position] else position
+            swaps[position] = swaps[rank] if swaps[rank] else rank + 1
+            swaps[rank] = 0
+        else:
+            value = swaps.get(position, position)
+            swaps[position] = swaps.get(rank, rank)
+            swaps.pop(rank, None)
         if rank >= start - 1:
-            selected.add(value + 1)
-    return selected
+            yield value + 1
+
+
+def _sorted_selected_indices(total, start, end, seed, run):
+    if not 1 <= start <= end <= total or total >= (1 << 256):
+        raise ValueError("Invalid sampling rank range or input count")
+    if start == 1 and end == total:
+        return range(1, total + 1)
+    positions = _iter_selected_indices(total, start, end, seed, run, compact=True)
+    if total >= (1 << 64):
+        return sorted(positions)
+    chosen = array('Q', positions)
+    numpy.frombuffer(chosen, dtype=numpy.uint64).sort()
+    return chosen
 
 
 def _records(handle, path):
@@ -170,7 +206,8 @@ def sample_spots(spots, output_paths, *, total, start, end, seed, run, min_lengt
         raise ValueError("Sampling requires one FASTQ or two aligned mates")
     if min_length < 0:
         raise ValueError("--min_read_length must be >= 0")
-    selected = selected_indices(total, start, end, seed, run)
+    selected = iter(_sorted_selected_indices(total, start, end, seed, run))
+    next_selected = next(selected, None)
     counts = dict.fromkeys(COUNT_COLUMNS, 0)
     input_digest, selection_digest = hashlib.sha256(), hashlib.sha256()
     candidate_count = candidate_bp = 0
@@ -203,8 +240,9 @@ def sample_spots(spots, output_paths, *, total, start, end, seed, run, min_lengt
                 for record in spot:
                     for line in record:
                         input_digest.update(line)
-                if number not in selected:
+                if number != next_selected:
                     continue
+                next_selected = next(selected, None)
                 counts["num_dumped"] += 1
                 counts["bp_dumped"] += bases
                 selection_digest.update(str(number).encode() + b"\n")

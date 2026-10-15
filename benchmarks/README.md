@@ -85,3 +85,42 @@ contracts remain intact. Scientific algorithms/defaults and CI coverage were
 retained. Network transfer, external-tool throughput, optional Combat-seq and
 platform/dependency CI lanes require their own environments; static inspection
 does not establish their performance. Keep generated measurements outside Git.
+
+## Additional efficiency kernels
+
+`benchmark_efficiency.py` compares bounded-memory QC summaries, default tau
+aggregation, measured GSA overlays, shared correlation preparation, random
+sampling positions, SVA right vectors, classical MDS, all-pair CSTMM diagnostics,
+and a planted-factor SVA correction. Use an archived source tree as the baseline:
+
+```bash
+mkdir -p /tmp/amalgkit-efficiency-baseline
+git archive 6539068259cfd3cb9bbb915fe06a28e88da1d581 | tar -x -C /tmp/amalgkit-efficiency-baseline
+python benchmarks/benchmark_efficiency.py \
+  --baseline /tmp/amalgkit-efficiency-baseline \
+  --output /tmp/amalgkit-efficiency-comparison
+```
+
+Each case uses seed 719, one warmup and three repeats in separate processes
+with native thread counts fixed to one. JSON records workload sizes, wall/CPU
+medians, a separate Python allocation scan, whole-process RSS and load averages.
+Input setup/imports are outside timing; RSS includes setup and repeats. Run
+without concurrent test/benchmark jobs. System load can still distort wall time;
+report that limitation rather than inferring throughput from CPU time alone.
+
+Outputs are compared exactly for selection positions, integer QC summaries,
+tau summaries, GSA overlays, correlation statistics and diagnostic TSVs. SVA
+subspaces and MDS geometry are compared through their projection/Gram matrices;
+the SVA pipeline compares corrected expression with relative tolerance `1e-8`
+and absolute tolerance `1e-10`. Contract tests additionally cover deficient
+ranks, tiny/large scales, tied MDS spectra, lexical IDs and fractional QC counts.
+The latter can differ at rounding precision after chunked summation. Sampling
+benchmarks time position preparation, not FASTQ I/O; correlation benchmarks
+exclude PDF rendering. All-pair diagnostics still scale quadratically in the
+sample count; preserve their full output when comparing alternatives.
+
+QC streaming bounds memory rather than promising faster parsing. Canonical TSV
+inputs need a bounded row-width pass before the C parser, which can otherwise
+ignore extra fields at chunk boundaries. Other formats use the strict Python
+parser. Report that CPU/I/O cost alongside memory savings; remove the extra
+pass only after malformed-boundary regressions pass with the underlying parser.
