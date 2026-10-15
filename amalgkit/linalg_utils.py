@@ -22,17 +22,23 @@ def classical_mds_coordinates(dist):
         from scipy.linalg import eigh
 
         gram = -0.5 * (squared - squared.mean(axis=1)[:, None] - squared.mean(axis=0)[None, :] + squared.mean())
-        # EVX retains repeated eigenvalues on backends where EVR can return
-        # an empty subset at an exactly tied spectral boundary.
+        # Accept only the requested complete subspace. Some backends return
+        # fewer eigenpairs at an exactly tied spectral boundary.
         try:
             eigvals, eigvecs = eigh(gram, subset_by_index=(n - 3, n - 1), driver="evx")
         except numpy.linalg.LinAlgError:
             pass  # The full solver below retains its original result/error.
         else:
-            scale = max(1.0, float(numpy.max(numpy.abs(eigvals))))
-            tolerance = numpy.finfo(float).eps * n * scale
-            if eigvals[1] > tolerance and eigvals[1] - eigvals[0] > tolerance:
-                return eigvecs[:, ::-1][:, :2] * numpy.sqrt(numpy.maximum(eigvals[::-1][:2], 0.0))
+            if (
+                eigvals.shape == (3,)
+                and eigvecs.shape == (n, 3)
+                and numpy.isfinite(eigvals).all()
+                and numpy.isfinite(eigvecs).all()
+            ):
+                scale = max(1.0, float(numpy.max(numpy.abs(eigvals))))
+                tolerance = numpy.finfo(float).eps * n * scale
+                if eigvals[1] > tolerance and eigvals[1] - eigvals[0] > tolerance:
+                    return eigvecs[:, ::-1][:, :2] * numpy.sqrt(numpy.maximum(eigvals[::-1][:2], 0.0))
     centering = numpy.eye(n) - numpy.ones((n, n), dtype=float) / float(n)
     gram = -0.5 * centering.dot(squared).dot(centering)
     eigvals, eigvecs = numpy.linalg.eigh(gram)

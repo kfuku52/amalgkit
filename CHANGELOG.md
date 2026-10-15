@@ -5,6 +5,12 @@ Releases provide generated notes only for tagged releases. Patch-only updates
 remain on the default branch and are recorded below; consult this file rather
 than the Releases page for those changes.
 
+### 0.16.102 - 2026-10-15
+
+- Retain the full MDS solver when a numerical backend returns an incomplete
+  partial eigensystem at tied spectra; cover empty and truncated results so
+  Linux and macOS preserve the established embedding.
+
 ### 0.16.101 - 2026-10-15
 
 - Stream merge QC summaries in bounded chunks and store random FASTQ sampling

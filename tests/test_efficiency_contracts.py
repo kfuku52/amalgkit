@@ -123,6 +123,18 @@ def test_mds_partial_solver_failure_retains_full_solver(monkeypatch):
     np.testing.assert_allclose(observed, distances, atol=1e-11)
 
 
+@pytest.mark.parametrize('returned', [0, 1, 2])
+def test_mds_incomplete_partial_result_retains_legacy_solver(monkeypatch, returned):
+    import scipy.linalg
+    distances = np.ones((80, 80)) - np.eye(80)
+    center = np.eye(80) - np.ones((80, 80)) / 80
+    values, vectors = np.linalg.eigh(-.5 * center.dot(distances**2).dot(center))
+    order = np.argsort(values)[::-1][:2]
+    expected = vectors[:, order] * np.sqrt(np.maximum(values[order], 0))
+    monkeypatch.setattr(scipy.linalg, 'eigh', lambda *args, **kwargs: (values[:returned], vectors[:, :returned]))
+    np.testing.assert_array_equal(classical_mds_coordinates(distances), expected)
+
+
 def test_overview_reuses_correlation_in_metadata_order(tmp_path, monkeypatch, stub_pdf_encoding):
     from amalgkit import per_species_outputs as outputs
     counts = pd.DataFrame({'0001': [1., 2., 4.], 'NA': [4., 3., 1.], 'later': [2., 4., 3.]})
