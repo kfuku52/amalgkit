@@ -109,9 +109,12 @@ def resolve_deferred_selection(metadata):
     df = metadata.df
     if DEFERRED_COLUMN not in df:
         return metadata
-    remaining = {index: _recipes(row.get(DEFERRED_COLUMN)) for index, row in df.iterrows()}
+    remaining = {index: _recipes(value) for index, value in df[DEFERRED_COLUMN].items()}
+    pending_indices = [index for index, recipes in remaining.items() if recipes]
+    if not pending_indices:
+        return metadata
     dedups = []
-    for index, row in df.iterrows():
+    for index, row in df.loc[pending_indices].iterrows():
         for recipe in list(remaining[index]):
             if recipe.get("kind") == "min_spots":
                 if not is_gsa_row(row):
@@ -152,7 +155,8 @@ def resolve_deferred_selection(metadata):
                 remaining[index].remove(recipe)
         for index in df.index[matching & ~eligible]:
             remaining[index].remove(recipe)
-    for index, recipes in remaining.items():
+    for index in pending_indices:
+        recipes = remaining[index]
         if _recipes(df.at[index, DEFERRED_COLUMN]):
             df.at[index, DEFERRED_COLUMN] = json.dumps(recipes, sort_keys=True)
             df.at[index, "gsa_selection_status"] = "pending_input_counts" if recipes else "resolved"

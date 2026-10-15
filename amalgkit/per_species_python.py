@@ -121,7 +121,8 @@ def _compute_sample_group_correlation_metrics(tc, sra, selected_sample_groups, d
             raise ValueError('bioproject reference exclusion requires nonempty bioproject metadata')
     active_ids = sra.loc[_is_non_excluded_flag(sra['exclusion']), 'run'].astype(str)
     tc = tc.loc[:, tc.columns.astype(str).isin(active_ids)]
-    required_sample_groups = [group for group in selected_sample_groups if group in set(sra.loc[:, 'sample_group'].astype(str))]
+    available_sample_groups = set(sra.loc[:, 'sample_group'].astype(str))
+    required_sample_groups = [group for group in selected_sample_groups if group in available_sample_groups]
     out = sra.copy()
     for column in [
         'ws_within_group_cor',
@@ -145,17 +146,23 @@ def _compute_sample_group_correlation_metrics(tc, sra, selected_sample_groups, d
         columns=tc_ave.columns.astype(str),
         dtype=float,
     )
-    tc_numeric = tc.apply(pandas.to_numeric, errors='coerce').to_numpy(dtype=float)
-    tc_ave_numeric = tc_ave.apply(pandas.to_numeric, errors='coerce').to_numpy(dtype=float)
+    # Reuse the same numeric columns in every leave-one-out reference. Keep
+    # pandas' mean/correlation arithmetic so strict margin decisions are stable.
+    tc = tc.apply(pandas.to_numeric, errors='coerce')
+    tc_ave = tc_ave.apply(pandas.to_numeric, errors='coerce')
+    tc_numeric = tc.to_numpy(dtype=float)
+    tc_ave_numeric = tc_ave.to_numpy(dtype=float)
+    finite_tc = numpy.isfinite(tc_numeric)
+    finite_ave = numpy.isfinite(tc_ave_numeric)
+    all_finite = finite_tc.all() and finite_ave.all()
     common_by_group = pandas.DataFrame(
-        numpy.isfinite(tc_numeric).astype(numpy.int64).T
-        @ numpy.isfinite(tc_ave_numeric).astype(numpy.int64),
+        numpy.full((tc.shape[1], tc_ave.shape[1]), tc.shape[0], dtype=numpy.int64)
+        if all_finite else finite_tc.astype(numpy.int64).T @ finite_ave.astype(numpy.int64),
         index=corr_by_group.index, columns=corr_by_group.columns,
     )
     can_vectorize = (
         str(dist_method).lower() == 'pearson'
-        and numpy.isfinite(tc_numeric).all()
-        and numpy.isfinite(tc_ave_numeric).all()
+        and all_finite
     )
     if can_vectorize:
         tc_centered = tc_numeric - numpy.mean(tc_numeric, axis=0, keepdims=True)
@@ -173,10 +180,10 @@ def _compute_sample_group_correlation_metrics(tc, sra, selected_sample_groups, d
         )
     else:
         for run_id in corr_by_group.index:
-            sample_values = pandas.to_numeric(tc.loc[:, run_id], errors='coerce')
+            sample_values = tc.loc[:, run_id]
             for sample_group in corr_by_group.columns:
                 corr_value = _finite_pair_correlation(
-                    sample_values, pandas.to_numeric(tc_ave.loc[:, sample_group], errors='coerce'),
+                    sample_values, tc_ave.loc[:, sample_group],
                     method=dist_method,
                 )
                 corr_by_group.loc[run_id, sample_group] = corr_value
@@ -219,8 +226,8 @@ def _compute_sample_group_correlation_metrics(tc, sra, selected_sample_groups, d
                 corr_by_group.loc[run_id, reference_group] = numpy.nan
                 common_by_group.loc[run_id, reference_group] = 0
                 continue
-            reference = tc.loc[:, other_runs].apply(pandas.to_numeric, errors='coerce').mean(axis=1, skipna=True)
-            sample = pandas.to_numeric(tc.loc[:, run_id], errors='coerce')
+            reference = tc.loc[:, other_runs].mean(axis=1, skipna=True)
+            sample = tc.loc[:, run_id]
             valid = numpy.isfinite(sample) & numpy.isfinite(reference)
             common_by_group.loc[run_id, reference_group] = int(valid.sum())
             corr_by_group.loc[run_id, reference_group] = _finite_pair_correlation(sample, reference, method=dist_method)

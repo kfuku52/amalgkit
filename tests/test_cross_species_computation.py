@@ -3,6 +3,7 @@ import pandas
 import pytest
 
 from amalgkit.cross_species_computation import (
+    calculate_correlation_within_group,
     finite_correlation_block,
     resolve_correlation_matrix,
     resolve_finite_correlation_matrix,
@@ -10,6 +11,38 @@ from amalgkit.cross_species_computation import (
     resolve_tsne_perplexity,
     safe_correlation,
 )
+
+
+@pytest.mark.parametrize('reference_exclusion', ['run', 'species'])
+def test_cross_group_lookup_preserves_lexical_groups_and_pairwise_support(reference_exclusion):
+    matrix = pandas.DataFrame({
+        'S_0001': [1., 2., numpy.nan, 4., 8.],
+        'S_2': [2., 3., 6., 7., 9.],
+        'T_1': [1., 3., 5., numpy.nan, 9.],
+        'U_1': [3., 2., 8., 6., 7.],
+        'S_3': [9., 7., 6., 4., 1.],
+        'T_2': [8., 6., numpy.nan, 3., 2.],
+        'U_2': [7., 8., 5., 2., 1.],
+    }, index=['0001', 'NA', 'g3', 'g4', 'g5'])
+    metadata = pandas.DataFrame({
+        'species_tag': ['S', 'T', 'S', 'U', 'S', 'T', 'U', 'Z'],
+        'run': ['0001', '1', '2', '1', '3', '2', '2', 'absent'],
+        'sample_group': ['NA'] * 4 + ['0001'] * 4,
+        'exclusion': 'no',
+    }, index=[9, 1, 8, 2, 7, 3, 6, 4])
+    original = metadata.copy(deep=True)
+    within_columns = ['S_2', 'T_1', 'U_1'] if reference_exclusion == 'run' else ['T_1', 'U_1']
+    other_columns = ['S_3', 'T_2', 'U_2'] if reference_exclusion == 'run' else ['T_2', 'U_2']
+    within = matrix[within_columns].median(axis=1)
+    other = matrix[other_columns].median(axis=1)
+    result = calculate_correlation_within_group(metadata, matrix, 'corrected', reference_exclusion, 3)
+    assert result.index.tolist() == metadata.index.tolist()
+    assert result.at[9, 'within_group_cor_corrected'] == pytest.approx(matrix.S_0001.corr(within))
+    assert result.at[9, 'max_nongroup_cor_corrected'] == pytest.approx(matrix.S_0001.corr(other))
+    assert result.at[9, 'within_common_genes_corrected'] == 4
+    assert result.at[9, 'min_nongroup_common_genes_corrected'] == 4
+    assert numpy.isnan(result.at[4, 'within_group_cor_corrected'])
+    pandas.testing.assert_frame_equal(metadata, original)
 
 
 def test_safe_correlation_returns_nan_for_constant_vectors():

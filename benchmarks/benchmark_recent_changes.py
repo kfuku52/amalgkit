@@ -26,7 +26,7 @@ import time
 from pathlib import Path
 
 CASES = ('quant_validation', 'fastq_scan', 'wsfilter', 'csfilter', 'tau', 'sva', 'cstmm')
-EXTRA_CASES = ('random_sampling', 'imputation')
+EXTRA_CASES = ('random_sampling', 'imputation', 'select_normalization', 'gsa_selection')
 
 
 def digest_file(path):
@@ -38,6 +38,45 @@ def prepare_case(args, root):
     import numpy as np
     import pandas as pd
 
+    if args.case == 'select_normalization':
+        from amalgkit.select import normalize_select_metadata_frame, read_select_rules
+        rules = read_select_rules(args.repo / 'amalgkit/select_rule_sets/plantae/select_rules.tsv')
+        tissues = ['leaf', 'root', 'flower', 'leaf and root', 'leaf; treated',
+                   'mature leaf', 'root tip', 'young flower', 'unknown', '0001', 'NA']
+        frame = pd.DataFrame({
+            'sample_group': '',
+            'sample_attribute_tissue': [tissues[i % len(tissues)] for i in range(args.genes)],
+            'source_name': ['leaf covering inflorescence' if i % 5 == 0 else '' for i in range(args.genes)],
+            'sample_title': [f'treatment {i % 20}' for i in range(args.genes)],
+        })
+
+        def run():
+            result = normalize_select_metadata_frame(frame, rules)
+            return result.fillna('').to_numpy(dtype=str)
+
+        return run, dict(rows=args.genes, distinct_tissues=len(tissues), rule_set='plantae')
+    if args.case == 'gsa_selection':
+        from types import SimpleNamespace
+        from amalgkit.gsa_select import DEFERRED_COLUMN, resolve_deferred_selection
+        recipe = json.dumps([dict(kind='min_spots', threshold=20, target='exclusion', outcome='low_spots'),
+                             dict(kind='dedup', columns=['biosample'], outcome='redundant')], sort_keys=True)
+        frame = pd.DataFrame({
+            'run': [f'CRR{i:08d}' for i in range(args.genes)],
+            'data_source': ['gsa' if i % 2 == 0 else 'sra' for i in range(args.genes)],
+            'biosample': [f'B{i // 20}' for i in range(args.genes)],
+            'total_spots': [np.nan if i % 40 == 0 else i % 101 for i in range(args.genes)],
+            'read_count_status': ['unknown' if i % 40 == 0 else 'measured' for i in range(args.genes)],
+            'exclusion': 'no', 'is_sampled': 'yes',
+            DEFERRED_COLUMN: [recipe if i % 10 == 0 else '' for i in range(args.genes)],
+            'gsa_selection_status': ['pending_input_counts' if i % 10 == 0 else '' for i in range(args.genes)],
+            **{f'annotation_{i}': '' for i in range(40)},
+        })
+
+        def run():
+            result = resolve_deferred_selection(SimpleNamespace(df=frame.copy())).df
+            return result[['exclusion', DEFERRED_COLUMN, 'gsa_selection_status']].to_numpy(dtype=str)
+
+        return run, dict(rows=args.genes, deferred_fraction=.1, missing_count_fraction=.025)
     if args.case == 'quant_validation':
         from amalgkit.output_contracts import validate_quant_output_files
         rows = args.genes * 5
@@ -119,7 +158,8 @@ def prepare_case(args, root):
 
         def run():
             result = _compute_sample_group_correlation_metrics(counts, metadata, groups, 'pearson')
-            return result[['ws_within_group_cor', 'ws_max_nongroup_cor', 'ws_margin']].to_numpy()
+            return result[['ws_within_group_cor', 'ws_max_nongroup_cor', 'ws_margin',
+                           'ws_within_common_genes', 'ws_min_nongroup_common_genes']].to_numpy()
 
         return run, workload
     if args.case == 'csfilter':
@@ -129,7 +169,8 @@ def prepare_case(args, root):
 
         def run():
             result = calculate_correlation_within_group(metadata, counts, 'corrected')
-            return result[['within_group_cor_corrected', 'max_nongroup_cor_corrected']].to_numpy()
+            return result[['within_group_cor_corrected', 'max_nongroup_cor_corrected',
+                           'within_common_genes_corrected', 'min_nongroup_common_genes_corrected']].to_numpy()
 
         return run, dict(workload, species=10, missing='every 11th row / 7th column')
     if args.case == 'tau':
@@ -187,19 +228,22 @@ def worker(args):
         root = Path(directory)
         function, workload = prepare_case(args, root)
         gc.collect()
+        load_average = os.getloadavg() if hasattr(os, 'getloadavg') else None
         with (args.output.with_suffix('.log')).open('w') as log, contextlib.redirect_stdout(log):
+            cpu_start = time.process_time()
             start = time.perf_counter()
             result = function()
             elapsed = time.perf_counter() - start
+            cpu_elapsed = time.process_time() - cpu_start
         peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
         peak_mib = peak / (1024 ** 2 if sys.platform == 'darwin' else 1024)
         np.save(args.output.with_suffix('.npy'), result, allow_pickle=False)
         hashes = {path.name: digest_file(path) for path in sorted(root.glob('output/*/*_cstmm_counts.tsv'))}
     args.output.write_text(json.dumps(dict(
-        seconds=elapsed, peak_rss_mib=peak_mib, workload=workload, corrected_count_sha256=hashes,
+        seconds=elapsed, cpu_seconds=cpu_elapsed, peak_rss_mib=peak_mib, workload=workload, corrected_count_sha256=hashes,
         environment=dict(python=sys.version, numpy=np.__version__, pandas=pd.__version__, scipy=scipy.__version__,
                          machine=platform.machine(), platform=platform.platform(),
-                         threads={name: os.environ.get(name) for name in THREAD_VARS}),
+                         threads={name: os.environ.get(name) for name in THREAD_VARS}, load_average=load_average),
     ), indent=2) + '\n', encoding='utf-8')
 
 
@@ -230,23 +274,35 @@ def compare(args):
                 results[label] = (path, result)
                 if repeat:
                     measurements[label].append(result)
-                print(f'{case} {label} {repeat}: {result["seconds"]:.3f}s, {result["peak_rss_mib"]:.1f} MiB', flush=True)
+                print(f'{case} {label} {repeat}: {result["seconds"]:.3f}s wall, '
+                      f'{result["cpu_seconds"]:.3f}s CPU, {result["peak_rss_mib"]:.1f} MiB', flush=True)
             left, right = (np.load(results[label][0].with_suffix('.npy'), allow_pickle=False)
                            for label in ('baseline', 'current'))
-            same = bool(np.allclose(left, right, rtol=1e-8, atol=1e-10, equal_nan=True))
-            finite = np.isfinite(left) & np.isfinite(right)
-            difference = float(np.max(np.abs(left[finite] - right[finite]))) if finite.any() else 0.
+            numeric = left.dtype.kind in 'biufc' and right.dtype.kind in 'biufc'
+            if numeric:
+                same = bool(np.allclose(left, right, rtol=1e-8, atol=1e-10, equal_nan=True))
+                finite = np.isfinite(left) & np.isfinite(right)
+                difference = float(np.max(np.abs(left[finite] - right[finite]))) if finite.any() else 0.
+                identical = bool(np.array_equal(left, right, equal_nan=True))
+            else:
+                same, difference = None, None
+                identical = bool(np.array_equal(left, right))
             hashes_match = results['baseline'][1]['corrected_count_sha256'] == results['current'][1]['corrected_count_sha256']
-            equivalence.append(dict(numeric_allclose=same, max_absolute_difference=difference, count_files_identical=hashes_match))
+            equivalence.append(dict(outputs_identical=identical, numeric_allclose=same,
+                                    max_absolute_difference=difference, count_files_identical=hashes_match))
         summary[case] = {
             label: dict(median_seconds=statistics.median(row['seconds'] for row in rows),
                         min_seconds=min(row['seconds'] for row in rows), max_seconds=max(row['seconds'] for row in rows),
+                        median_cpu_seconds=statistics.median(row['cpu_seconds'] for row in rows),
+                        min_cpu_seconds=min(row['cpu_seconds'] for row in rows),
+                        max_cpu_seconds=max(row['cpu_seconds'] for row in rows),
                         median_peak_rss_mib=statistics.median(row['peak_rss_mib'] for row in rows),
                         max_peak_rss_mib=max(row['peak_rss_mib'] for row in rows), workload=rows[0]['workload'])
             for label, rows in measurements.items()
         }
         summary[case]['equivalence'] = equivalence
         summary[case]['time_ratio'] = summary[case]['current']['median_seconds'] / summary[case]['baseline']['median_seconds']
+        summary[case]['cpu_ratio'] = summary[case]['current']['median_cpu_seconds'] / summary[case]['baseline']['median_cpu_seconds']
         summary[case]['rss_ratio'] = summary[case]['current']['median_peak_rss_mib'] / summary[case]['baseline']['median_peak_rss_mib']
         (args.output / 'summary.json').write_text(json.dumps(summary, indent=2) + '\n', encoding='utf-8')
 

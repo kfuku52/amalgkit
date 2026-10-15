@@ -92,22 +92,20 @@ def calculate_correlation_within_group(
     kept = kept.loc[kept["sample_id"].isin(ortholog_matrix.columns), :].copy()
     if kept.shape[0] == 0:
         return out
-    group_order = list(dict.fromkeys(kept["sample_group"].astype(str).tolist()))
+    groups = kept["sample_group"].astype(str).tolist()
+    species = kept["species_tag"].astype(str).tolist()
+    samples = kept["sample_id"].astype(str).tolist()
+    group_order = list(dict.fromkeys(groups))
+    species_order = list(dict.fromkeys(species))
+    group_members: dict[tuple[str, str], list[str]] = {}
+    for species_tag, sample_group, sample_id in zip(species, groups, samples):
+        group_members.setdefault((species_tag, sample_group), []).append(sample_id)
     ortholog_med = pandas.DataFrame(index=ortholog_matrix.index, columns=group_order, dtype=float)
     species_profiles_by_group = {}
-    species_order = list(dict.fromkeys(kept["species_tag"].astype(str).tolist()))
     for sample_group in group_order:
         species_profiles = pandas.DataFrame(index=ortholog_matrix.index, dtype=float)
         for species_tag in species_order:
-            sample_ids = (
-                kept.loc[
-                    kept["species_tag"].astype(str).eq(species_tag) & kept["sample_group"].astype(str).eq(sample_group),
-                    "sample_id",
-                ]
-                .astype(str)
-                .tolist()
-            )
-            sample_ids = [sample_id for sample_id in sample_ids if sample_id in ortholog_matrix.columns]
+            sample_ids = group_members.get((species_tag, sample_group), [])
             if len(sample_ids) == 0:
                 continue
             tc_species_group = ortholog_matrix.loc[:, sample_ids].apply(
@@ -120,13 +118,10 @@ def calculate_correlation_within_group(
         species_profiles_by_group[sample_group] = species_profiles
         ortholog_med.loc[:, sample_group] = species_profiles.median(axis=1, skipna=True)
     species_references = {}
-    for row_idx, row in kept.iterrows():
-        sample_id = str(row["sample_id"])
-        sample_group = str(row["sample_group"])
-        if sample_id not in ortholog_matrix.columns or sample_group not in ortholog_med.columns:
-            continue
+    group_references = {group: ortholog_med[group].to_numpy(dtype=float) for group in group_order}
+    for row_idx, species_tag, sample_group, sample_id in zip(kept.index, species, groups, samples):
         sample_values = ortholog_matrix.loc[:, sample_id]
-        species_tag = str(row["species_tag"])
+        sample_finite = numpy.isfinite(pandas.to_numeric(sample_values, errors="coerce").to_numpy(dtype=float))
         correlations = {}
         common_counts = {}
         for reference_group in group_order:
@@ -135,22 +130,15 @@ def calculate_correlation_within_group(
                 # Exclude the target species from BOTH within- and other-group references.
                 key = (species_tag, reference_group)
                 if key not in species_references:
-                    species_references[key] = profiles.drop(columns=[species_tag], errors="ignore").median(
-                        axis=1, skipna=True
+                    species_references[key] = (
+                        profiles.drop(columns=[species_tag], errors="ignore")
+                        .median(axis=1, skipna=True)
+                        .to_numpy(dtype=float)
                     )
                 reference = species_references[key]
             elif reference_group == sample_group:
                 profiles = profiles.copy()
-                other_ids = (
-                    kept.loc[
-                        kept["species_tag"].astype(str).eq(species_tag)
-                        & kept["sample_group"].astype(str).eq(sample_group)
-                        & ~kept["sample_id"].astype(str).eq(sample_id),
-                        "sample_id",
-                    ]
-                    .astype(str)
-                    .tolist()
-                )
+                other_ids = [other for other in group_members[(species_tag, sample_group)] if other != sample_id]
                 if other_ids:
                     profiles.loc[:, species_tag] = (
                         ortholog_matrix.loc[:, other_ids]
@@ -159,10 +147,10 @@ def calculate_correlation_within_group(
                     )
                 else:
                     profiles = profiles.drop(columns=[species_tag], errors="ignore")
-                reference = profiles.median(axis=1, skipna=True)
+                reference = profiles.median(axis=1, skipna=True).to_numpy(dtype=float)
             else:
-                reference = ortholog_med.loc[:, reference_group]
-            valid = numpy.isfinite(pandas.to_numeric(sample_values, errors="coerce")) & numpy.isfinite(reference)
+                reference = group_references[reference_group]
+            valid = sample_finite & numpy.isfinite(reference)
             common_counts[reference_group] = int(valid.sum())
             correlations[reference_group] = safe_correlation(sample_values, reference, method="pearson")
         within_count = common_counts[sample_group]

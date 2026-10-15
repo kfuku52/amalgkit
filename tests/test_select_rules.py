@@ -1,5 +1,6 @@
 import pandas
 import pytest
+import re
 
 from types import SimpleNamespace
 from pathlib import Path
@@ -8,6 +9,7 @@ from amalgkit.select import (
     apply_select_control_rules,
     apply_select_filters,
     classify_select_text,
+    normalize_select_metadata_frame,
     prepare_select_metadata,
     read_select_config,
     read_select_rules,
@@ -31,6 +33,24 @@ SELECT_RULE_COLUMNS = [
     'parameter_value',
     'note',
 ]
+
+
+def test_normalization_cache_uses_current_rules_and_preserves_repeated_rows():
+    normalize = dict(stage='normalize', rule_id='leaf', columns=['sample_group', 'tissue'],
+                     regex=re.compile('leaf'), outcome='leaf', stop_on_match=True)
+    validation = dict(stage='validate', rule_id='treatment', regex=re.compile('treated'),
+                      action='hint_review', outcome='review')
+    frame = pandas.DataFrame(dict(sample_group=['leaf and treated', '', 'leaf and treated'],
+                                  tissue=['', 'leaf and treated', '']), index=[5, 2, 9])
+    original = frame.copy(deep=True)
+    review = normalize_select_metadata_frame(frame, [normalize, validation])
+    assert review.sample_group.tolist() == ['review'] * 3
+    validation['action'] = 'ignore_segment'
+    accepted = normalize_select_metadata_frame(frame, [normalize, validation])
+    assert accepted.sample_group.tolist() == ['leaf'] * 3
+    assert accepted.sample_group_normalization_source.tolist() == ['sample_group', 'tissue', 'sample_group']
+    assert accepted.index.tolist() == [5, 2, 9]
+    pandas.testing.assert_frame_equal(frame, original)
 
 
 def write_select_rules(path, rows):

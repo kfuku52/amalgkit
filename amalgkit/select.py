@@ -3,6 +3,7 @@ import os
 import re
 import shlex
 import shutil
+from functools import lru_cache
 
 import numpy
 import pandas
@@ -913,6 +914,13 @@ def normalize_select_metadata_frame(df, select_rules):
     validate_rules = [rule for rule in select_rules if rule['stage'] == 'validate']
     normalize_rules = [rule for rule in select_rules if rule['stage'] == 'normalize']
     normalization_columns = build_select_normalization_columns(normalize_rules)
+
+    @lru_cache(maxsize=4096)
+    def validate_text(text, organ):
+        # Metadata repeats tissue annotations across many runs and columns.
+        # Bound the cache and keep it local to this set of rules.
+        return validate_select_organ_text(text, organ, normalize_rules, validate_rules)
+
     out_df = df.copy(deep=True)
     if 'sample_group' not in out_df.columns:
         out_df['sample_group'] = ''
@@ -948,20 +956,19 @@ def normalize_select_metadata_frame(df, select_rules):
             if fallback_mask.any():
                 fallback_sources.loc[fallback_mask] = column
                 fallback_texts.loc[fallback_mask] = text_series.loc[fallback_mask]
-            matched_mask = text_series.str.contains(compiled_pattern, regex=True).fillna(False)
-            candidate_mask = nonempty_mask & matched_mask & (~resolved)
+            candidate_mask = nonempty_mask & (~resolved)
+            if not candidate_mask.any():
+                continue
+            candidate_mask.loc[candidate_mask] = (
+                text_series.loc[candidate_mask].str.contains(compiled_pattern, regex=True).fillna(False)
+            )
             if not candidate_mask.any():
                 continue
             if rule['outcome'] in SELECT_NORMALIZE_ORGANS:
                 if not rule.get('skip_validation', False):
                     rule_outcome = rule['outcome']
                     validation_series = text_series.loc[candidate_mask].apply(
-                        lambda text, organ=rule_outcome: validate_select_organ_text(
-                            text=text,
-                            organ=organ,
-                            normalize_rules=normalize_rules,
-                            validate_rules=validate_rules,
-                        )
+                        lambda text, organ=rule_outcome: validate_text(text, organ)
                     )
                     validation_mask = validation_series.notna()
                     if validation_mask.any():
@@ -1112,20 +1119,22 @@ def build_select_cross_field_tissue_conflict_records(
             organ_mask = text_series.str.contains(pattern, regex=True).fillna(False)
             current_mask = eligible_mask & nonempty_mask & organ_mask & (assigned_groups != organ)
             current_mask = current_mask & (~safe_source_mask)
+            if not current_mask.any():
+                continue
             if skip_safe_context:
                 safe_context_mask = pandas.Series(False, index=out_df.index)
                 for assigned_group in SELECT_NORMALIZE_ORGANS:
-                    assigned_mask = assigned_groups == assigned_group
+                    assigned_mask = current_mask & (assigned_groups == assigned_group)
                     if not assigned_mask.any():
                         continue
-                    current_safe_mask = text_series.apply(
+                    current_safe_mask = text_series.loc[assigned_mask].apply(
                         lambda text, assigned_group=assigned_group, organ=organ: is_select_cross_field_safe_context(
                             text=text,
                             assigned_group=assigned_group,
                             conflict_organ=organ,
                         )
                     )
-                    safe_context_mask = safe_context_mask | (assigned_mask & current_safe_mask)
+                    safe_context_mask.loc[assigned_mask] = current_safe_mask
                 current_mask = current_mask & (~safe_context_mask)
             new_mask = current_mask & (~conflict_mask)
             if not new_mask.any():

@@ -5,6 +5,20 @@ Releases provide generated notes only for tagged releases. Patch-only updates
 remain on the default branch and are recorded below; consult this file rather
 than the Releases page for those changes.
 
+### 0.16.100 - 2026-10-15
+
+- Reuse numeric expression columns across wsfilter references and avoid the
+  gene-by-group integer product when all input values are finite, retaining
+  pandas' established mean/correlation arithmetic and strict margin decisions.
+- Index cross-species reference membership once and reuse sample finite masks
+  and reference arrays instead of repeatedly scanning metadata and columns.
+- Restrict selection regex matching and safe-context checks to eligible rows;
+  cache repeated organ-text validation within each ruleset with a bounded cache.
+- Materialize rows and publish statuses only for pending GSA selection recipes,
+  preserving incomplete-group handling and array-job identifiers.
+- Extend isolated revision comparisons with selection workloads, process CPU
+  time, load information, and exact output comparisons; add data-contract tests.
+
 ### 0.16.99 - 2026-10-09
 
 - Shorten test-only lock polling and replace retry backoff waits with delay

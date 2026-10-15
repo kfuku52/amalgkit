@@ -28,14 +28,15 @@ why these simulations alone do not justify changing scientific defaults.
 ## Comparing recent revisions
 
 `benchmark_recent_changes.py` runs the same deterministic workloads in isolated
-processes against two source trees. It records wall time, whole-process peak RSS
-(including native allocations), repeated measurements, and numerical output
-equivalence. CSTMM also checks hashes of the exported corrected count tables.
+processes against two source trees. It records wall time, process CPU time,
+whole-process peak RSS (including native allocations), repeated measurements,
+exact output equality and numerical equivalence. CSTMM also checks hashes of
+the exported corrected count tables.
 Input generation and imports are outside the timed interval but included in RSS.
 
 ```bash
 mkdir -p /tmp/amalgkit-baseline
-git archive 7ac5250 | tar -x -C /tmp/amalgkit-baseline
+git archive 1cdbd7322a32ecdbe68e07ce803082bc8991b2bb | tar -x -C /tmp/amalgkit-baseline
 python benchmarks/benchmark_recent_changes.py \
   --baseline /tmp/amalgkit-baseline --output /tmp/amalgkit-comparison
 ```
@@ -46,5 +47,41 @@ alternates revision order, excludes the first pair as warmup, and measures three
 pairs by default. Inspect `summary.json` equivalence fields before interpreting
 timings; scientific definition changes need carefully matched fixtures.
 
+Additional cases include `select_normalization` (repeated plant annotations)
+and `gsa_selection` (sparse pending rules in a wide metadata table). String
+outputs are compared exactly; numeric outputs also report the maximum absolute
+difference. CPU time and recorded load averages help identify scheduling noise,
+but throughput claims still require comparable, otherwise idle runs.
+
 The [September 2026 comparison](results/2026-09-10/README.md) documents workload
 limits, reproduction commands, results, and the sources of observed increases.
+
+## October 2026 efficiency audit
+
+The audit inspected CLI startup, metadata/taxonomy, selection, FASTQ retrieval
+and sampling, quantification/reuse, merge/validation, normalization, batch models,
+filters/plots, and test/CI delivery. Profiles identified repeated work in four
+kernels; the comparison above uses their pre-change revision as its baseline.
+
+| Kernel | Work removed | Compatibility checks |
+| --- | --- | --- |
+| wsfilter | repeated numeric column conversion; integer products for all-finite support counts | pairwise correlations/counts, all methods, project exclusion, zero-margin rounding |
+| csfilter | repeated metadata scans and sample finite masks | exact correlations/counts, run/species exclusion, lexical groups, missing samples |
+| selection normalization | regex scans of resolved rows; repeated organ-text validation | exact annotations, mixed tissues, changed rules, row order |
+| deferred GSA selection | row construction/status scans for records without recipes | exact statuses/exclusions, incomplete groups, malformed recipes, array identifiers |
+
+```bash
+python benchmarks/benchmark_recent_changes.py \
+  --baseline /tmp/amalgkit-baseline \
+  --cases wsfilter csfilter select_normalization gsa_selection \
+  --genes 20000 --samples 200 --orthologs 2000 --repeats 5 \
+  --output /tmp/amalgkit-efficiency
+```
+
+Run the core/table benchmarks from CONTRIBUTING.md as additional checks.
+Streaming validation and single-pass quant reads already bound table memory;
+FASTQ integrity scans and cached content fingerprints protect reuse. These
+contracts remain intact. Scientific algorithms/defaults and CI coverage were
+retained. Network transfer, external-tool throughput, optional Combat-seq and
+platform/dependency CI lanes require their own environments; static inspection
+does not establish their performance. Keep generated measurements outside Git.

@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 
+import numpy
 import pandas
 import pytest
 
@@ -54,6 +55,49 @@ def test_within_group_correlation_rejects_unknown_method():
             selected_sample_groups=['A', 'B'],
             dist_method='typo',
         )
+
+
+@pytest.mark.parametrize('method', ['pearson', 'spearman', 'kendall'])
+@pytest.mark.parametrize('reference_exclusion', ['run', 'bioproject'])
+@pytest.mark.parametrize('missing', [False, True])
+def test_correlation_metrics_match_direct_pairwise_references(method, reference_exclusion, missing):
+    rng = numpy.random.default_rng(719)
+    counts = pandas.DataFrame(rng.normal(size=(521, 6)), columns=['a1', 'a2', 'a3', 'b1', 'b2', 'b3'])
+    counts['b3'] = 1.0
+    if missing:
+        counts.loc[::7, 'a1'] = numpy.nan
+        counts.loc[::11, 'b1'] = numpy.inf
+    metadata = pandas.DataFrame(dict(
+        run=counts.columns, sample_group=['A'] * 3 + ['B'] * 3,
+        bioproject=['P1', 'P1', 'P2', 'P3', 'P3', 'P4'], exclusion='no',
+    ))
+    original = counts.copy(deep=True)
+    result = _compute_sample_group_correlation_metrics(
+        counts, metadata, ['A', 'B'], method, reference_exclusion=reference_exclusion,
+    ).set_index('run')
+    for row in metadata.itertuples(index=False):
+        correlations, common = {}, {}
+        for group in ['A', 'B']:
+            members = metadata.loc[metadata.sample_group.eq(group)]
+            if reference_exclusion == 'bioproject':
+                members = members.loc[members.bioproject.ne(row.bioproject)]
+            else:
+                members = members.loc[members.run.ne(row.run)]
+            reference = counts[members.run].mean(axis=1)
+            valid = numpy.isfinite(counts[row.run]) & numpy.isfinite(reference)
+            common[group] = int(valid.sum())
+            left, right = counts.loc[valid, row.run], reference.loc[valid]
+            correlations[group] = (
+                left.corr(right, method=method) if left.nunique() > 1 and right.nunique() > 1 else numpy.nan
+            )
+        other = 'B' if row.sample_group == 'A' else 'A'
+        numpy.testing.assert_allclose(
+            result.loc[row.run, ['ws_within_group_cor', 'ws_max_nongroup_cor']].to_numpy(dtype=float),
+            [correlations[row.sample_group], correlations[other]], rtol=1e-14, atol=1e-14,
+        )
+        assert result.loc[row.run, 'ws_within_common_genes'] == common[row.sample_group]
+        assert result.loc[row.run, 'ws_min_nongroup_common_genes'] == common[other]
+    pandas.testing.assert_frame_equal(counts, original)
 
 
 def test_within_group_filter_stops_when_an_iteration_makes_no_progress():
