@@ -63,5 +63,11 @@ class TargetIdTracker:
             query = f"SELECT value FROM ids WHERE value IN ({placeholders})"  # noqa: S608 - placeholders only
             duplicates.update(row[0] for row in self._db.execute(query, batch))
         if not duplicates:
-            self._db.executemany("INSERT INTO ids VALUES (?)", ((value,) for value in values))
+            # Keep the same 500-binding bound as the lookup. A multi-row
+            # statement avoids one Python-to-SQLite step per identifier.
+            for start in range(0, len(values), 500):
+                batch = values[start : start + 500]
+                placeholders = ",".join("(?)" for _ in batch)
+                query = f"INSERT INTO ids VALUES {placeholders}"  # noqa: S608 - placeholders only
+                self._db.execute(query, batch)
         return duplicates
