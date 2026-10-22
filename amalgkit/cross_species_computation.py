@@ -10,6 +10,25 @@ import pandas
 from amalgkit.imputation import impute_expression
 
 
+def _pearson_correlation_on_pairs(left: numpy.ndarray, right: numpy.ndarray) -> float:
+    """Calculate scale-safe Pearson correlation for already paired finite values."""
+    if left.size <= 1:
+        return numpy.nan
+    # Scale before centering so finite extremes cannot overflow or underflow the norm.
+    left_scale = float(numpy.max(numpy.abs(left)))
+    right_scale = float(numpy.max(numpy.abs(right)))
+    if left_scale == 0.0 or right_scale == 0.0:
+        return numpy.nan
+    left = left / left_scale
+    right = right / right_scale
+    left = left - numpy.mean(left)
+    right = right - numpy.mean(right)
+    denominator = float(numpy.sqrt(numpy.dot(left, left) * numpy.dot(right, right)))
+    if denominator <= 0.0:
+        return numpy.nan
+    return float(numpy.clip(numpy.dot(left, right) / denominator, -1.0, 1.0))
+
+
 def safe_correlation(left_values, right_values, method: str) -> float:
     """Calculate a finite-aware correlation, returning NaN when undefined."""
     if str(method).lower() == "pearson":
@@ -20,24 +39,7 @@ def safe_correlation(left_values, right_values, method: str) -> float:
             left = pandas.to_numeric(pandas.Series(left_values), errors="coerce").to_numpy(dtype=float)
             right = pandas.to_numeric(pandas.Series(right_values), errors="coerce").to_numpy(dtype=float)
         valid = numpy.isfinite(left) & numpy.isfinite(right)
-        if int(numpy.sum(valid)) <= 1:
-            return numpy.nan
-        left = left[valid]
-        right = right[valid]
-        # Correlation is scale invariant. Bound values before centering and
-        # squaring so finite inputs cannot overflow or underflow the norm.
-        left_scale = float(numpy.max(numpy.abs(left)))
-        right_scale = float(numpy.max(numpy.abs(right)))
-        if left_scale == 0.0 or right_scale == 0.0:
-            return numpy.nan
-        left = left / left_scale
-        right = right / right_scale
-        left = left - numpy.mean(left)
-        right = right - numpy.mean(right)
-        denominator = float(numpy.sqrt(numpy.dot(left, left) * numpy.dot(right, right)))
-        if denominator <= 0.0:
-            return numpy.nan
-        return float(numpy.clip(numpy.dot(left, right) / denominator, -1.0, 1.0))
+        return _pearson_correlation_on_pairs(left[valid], right[valid])
     left = pandas.to_numeric(pandas.Series(left_values), errors="coerce")
     right = pandas.to_numeric(pandas.Series(right_values), errors="coerce")
     valid = numpy.isfinite(left) & numpy.isfinite(right)
@@ -119,9 +121,12 @@ def calculate_correlation_within_group(
         ortholog_med.loc[:, sample_group] = species_profiles.median(axis=1, skipna=True)
     species_references = {}
     group_references = {group: ortholog_med[group].to_numpy(dtype=float) for group in group_order}
+    result_rows = []
     for row_idx, species_tag, sample_group, sample_id in zip(kept.index, species, groups, samples):
         sample_values = ortholog_matrix.loc[:, sample_id]
-        sample_finite = numpy.isfinite(pandas.to_numeric(sample_values, errors="coerce").to_numpy(dtype=float))
+        numeric_sample = pandas.to_numeric(sample_values, errors="coerce").to_numpy(dtype=float)
+        sample_finite = numpy.isfinite(numeric_sample)
+        numeric_dtype = pandas.api.types.is_numeric_dtype(sample_values.dtype)
         correlations = {}
         common_counts = {}
         for reference_group in group_order:
@@ -152,7 +157,10 @@ def calculate_correlation_within_group(
                 reference = group_references[reference_group]
             valid = sample_finite & numpy.isfinite(reference)
             common_counts[reference_group] = int(valid.sum())
-            correlations[reference_group] = safe_correlation(sample_values, reference, method="pearson")
+            if numeric_dtype:
+                correlations[reference_group] = _pearson_correlation_on_pairs(numeric_sample[valid], reference[valid])
+            else:
+                correlations[reference_group] = safe_correlation(sample_values, reference, method="pearson")
         within_count = common_counts[sample_group]
         other_groups = [group for group in group_order if group != sample_group]
         other_count = min((common_counts[group] for group in other_groups), default=0)
@@ -161,10 +169,16 @@ def calculate_correlation_within_group(
         # A poorly supported competitor must not disappear from the maximum and
         # thereby make a sample look better. Keep pairwise gene sets independent.
         max_nongroup = max(other_values) if other_values and other_count >= min_common_genes else numpy.nan
-        out.loc[row_idx, target_col] = within_cor
-        out.loc[row_idx, nongroup_col] = max_nongroup
-        out.loc[row_idx, within_count_col] = within_count
-        out.loc[row_idx, other_count_col] = other_count
+        result_rows.append((within_cor, max_nongroup, within_count, other_count))
+    result_columns = [target_col, nongroup_col, within_count_col, other_count_col]
+    if out.index.is_unique:
+        for column_idx, column in enumerate(result_columns):
+            out.loc[kept.index, column] = [row[column_idx] for row in result_rows]
+    else:
+        # Repeated labels historically received the last scored row's result.
+        for row_idx, values in zip(kept.index, result_rows):
+            for column, value in zip(result_columns, values):
+                out.loc[row_idx, column] = value
     return out
 
 
