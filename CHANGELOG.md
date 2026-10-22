@@ -5,6 +5,26 @@ Releases provide generated notes only for tagged releases. Patch-only updates
 remain on the default branch and are recorded below; consult this file rather
 than the Releases page for those changes.
 
+### 0.16.103 - 2026-10-22
+
+- Select exact TMM trim boundaries without sorting every count ratio/product;
+  preserve average ties, reference choices and independent numerical oracles.
+- Build cross-species plot averages in one table and reuse group membership,
+  reducing repeated metadata scans and full expression-matrix copies.
+- Match repeated selection annotations once per unique string, with bounded
+  cardinality probes and invocation-local compressed codes.
+- Reuse finite Pearson pairs and batch score writes while retaining lexical
+  conversion behavior, duplicate metadata labels and reference exclusions.
+- Batch scratch SQLite ID inserts and reuse SHA-256 hashing buffers, preserving
+  exact duplicate detection, bounded inventories and input-change checks.
+- Extend isolated revision benchmarks, fail comparisons when outputs differ,
+  and preserve timed outputs during separate allocation scans.
+- Remove scalar recycling and repeated reference-quantile work exposed by the
+  faster TMM path, without changing factors or reference choices.
+- Preserve exact profile spans during PCA imputation, avoiding null-space
+  reconstruction noise that split identical inputs and raw-scale TMM trim ties
+  differently across numerical backends.
+
 ### 0.16.102 - 2026-10-15
 
 - Retain the full MDS solver when a numerical backend returns an incomplete
