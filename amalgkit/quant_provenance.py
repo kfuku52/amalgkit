@@ -22,10 +22,8 @@ def file_identity(path: str, cache: MutableMapping[Any, Any]) -> dict[str, Any]:
     before = signature()
     key = (os.path.realpath(path), before)
     if key not in cache:
-        digest = hashlib.sha256()
         with open(path, "rb") as handle:
-            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                digest.update(chunk)
+            digest = hashlib.file_digest(handle, "sha256")
         if signature() != before:
             raise ValueError(f"Quant input changed while fingerprinting: {path}")
         cache[key] = {"size": before[2], "sha256": digest.hexdigest()}
