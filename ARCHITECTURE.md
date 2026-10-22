@@ -119,6 +119,13 @@ boundaries retain the full solver. SVA similarly retains direct SVD at unstable
 rank boundaries. Filtering-state correlations are shared by statistics and
 overview plots only while that expression state remains unchanged.
 
+PCA imputation preserves its centered reconstruction input exactly when the
+requested rank covers the number of exactly distinct profiles on the smaller
+axis. This certifies a
+mathematical rank bound without a tolerance, avoiding reconstruction noise in
+null spaces. Small independent signals still follow the requested rank model;
+numerical-rank estimates alone never select the identity shortcut.
+
 Random FASTQ sampling retains the SHA-256 permutation and manifest contracts.
 Its private sorted position inventory uses compact integers and a bounded dense
 swap table for dense requests, with sparse storage for large populations. The

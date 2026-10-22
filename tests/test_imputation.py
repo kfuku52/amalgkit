@@ -7,6 +7,36 @@ import pytest
 from amalgkit.imputation import _truncated_svd_reconstruction, impute_expression
 
 
+@pytest.mark.parametrize('transpose', [False, True])
+@pytest.mark.parametrize('scale', [1e-200, 1., 1e200])
+def test_exact_profile_span_is_preserved_without_decomposition(transpose, scale, monkeypatch):
+    a = numpy.array([1., 2., 4., 8., 16.]) * scale
+    b = numpy.array([5., 3., 2., 1., 7.]) * scale
+    values = numpy.column_stack([a, a, b, b])
+    if transpose:
+        values = values.T.copy()
+
+    def unnecessary_solver(*args, **kwargs):
+        pytest.fail('An exactly contained profile span must not be reconstructed through a null space.')
+
+    monkeypatch.setattr(numpy.linalg, 'eigh', unnecessary_solver)
+    monkeypatch.setattr(numpy.linalg, 'svd', unnecessary_solver)
+    observed = _truncated_svd_reconstruction(values, num_pc=2)
+    numpy.testing.assert_array_equal(observed, values)
+    assert not numpy.shares_memory(observed, values)
+
+
+def test_small_independent_signal_is_still_truncated():
+    # Numerical rank is one at this scale, but the exact rank is two. A rank
+    # threshold alone must not turn a rank-one reconstruction into an identity.
+    values = numpy.array([[1e16, 0.], [-1e16, 0.], [0., 1.], [0., -1.]])
+    left, singular, right = numpy.linalg.svd(values, full_matrices=False)
+    expected = (left[:, :1] * singular[:1]) @ right[:1]
+    observed = _truncated_svd_reconstruction(values, num_pc=1)
+    numpy.testing.assert_array_equal(observed, expected)
+    numpy.testing.assert_allclose(observed[:, 1], 0., atol=1e-14)
+
+
 def test_truncated_svd_reconstruction_matches_full_svd_at_degenerate_boundary():
     values = numpy.zeros((8, 4), dtype=float)
     values[:4, :4] = numpy.eye(4)

@@ -9,7 +9,7 @@ from amalgkit.cstmm import cstmm_main
 from amalgkit.cstmm_diagnostics import write_observed_pair_diagnostics, plot_observed_pair_diagnostics
 from amalgkit.cstmm_python import _get_df_nonzero, _get_df_exp_single_copy_ortholog, _read_est_counts
 from amalgkit.imputation import impute_expression
-from amalgkit.normalization_tmm import run_tmm_rounds_for_cstmm
+from amalgkit.normalization_tmm import calc_factor_tmm, run_tmm_rounds_for_cstmm
 
 
 def test_species_block_imputation_respects_tenfold_depth_and_preserves_observations():
@@ -23,8 +23,16 @@ def test_species_block_imputation_respects_tenfold_depth_and_preserves_observati
     np.testing.assert_array_equal(scaled.to_numpy()[masked.notna()], complete.to_numpy()[masked.notna()])
     np.testing.assert_allclose(scaled, complete, rtol=1e-12)
     np.testing.assert_allclose(run_tmm_rounds_for_cstmm(scaled, libraries).round2_factors, 1, rtol=1e-12)
-    np.testing.assert_allclose(run_tmm_rounds_for_cstmm(raw, libraries).round2_factors,
-                               [np.sqrt(10), np.sqrt(10), 1 / np.sqrt(10), 1 / np.sqrt(10)])
+    expected_raw = complete.copy()
+    expected_raw.iloc[4:12, 2:] = np.column_stack([genes[4:12], genes[4:12]])
+    pd.testing.assert_frame_equal(raw, expected_raw, check_exact=True)
+    # Exact raw row-mean completion has eight ratios of 1 and twelve of 10.
+    # Their average ranks are 4.5 and 14.5, both outside inclusive ranks 7..14.
+    # Earlier sqrt(10) expectations were caused by SVD roundoff splitting ties.
+    diagnostic = {}
+    assert calc_factor_tmm(raw.B1, raw.A1, libraries.B1, libraries.A1, diagnostics=diagnostic) == 1.
+    assert diagnostic['status'] == 'no_pairs_after_trimming'
+    np.testing.assert_array_equal(run_tmm_rounds_for_cstmm(raw, libraries).round2_factors, np.ones(4))
     assert diagnostics['converged'] and diagnostics['missing_cells'] == 16
 
 
@@ -86,8 +94,9 @@ def test_orthology_missingness_distinguishes_copy_number_and_identifier(tmp_path
 
 @pytest.mark.integration
 def test_diagnostics_never_replace_applied_imputation_factors(tmp_path, stub_pdf_rendering):
-    # A/B have the review's block missingness. All original targets remain in
-    # merge, so the library sizes stay fixed while orthology annotation varies.
+    # Fourteen missing pairs put their exact average rank (7.5) inside trim
+    # bounds 7..14. Applied and observed factors then differ independently of
+    # SVD roundoff. All original targets remain in merge, fixing library sizes.
     merge = tmp_path / 'merge'
     genes = np.arange(1, 21) * 100.
     for species, depth in [('A', 1), ('B', 10)]:
@@ -100,7 +109,7 @@ def test_diagnostics_never_replace_applied_imputation_factors(tmp_path, stub_pdf
         merge / 'metadata.tsv', sep='\t', index=False)
     og = tmp_path / 'og.tsv'
     pd.DataFrame({'busco_id': [f'og{i}' for i in range(20)], 'Species_A': [f'g{i}' for i in range(20)],
-                  'Species_B': ['' if 4 <= i < 12 else f'g{i}' for i in range(20)]}).to_csv(og, sep='\t', index=False)
+                      'Species_B': ['' if 4 <= i < 18 else f'g{i}' for i in range(20)]}).to_csv(og, sep='\t', index=False)
     args = SimpleNamespace(out_dir=str(tmp_path), dir_count='inferred', orthogroup_table=str(og), dir_busco=None,
                            redo=True, tmm_imputation_scale='raw', tmm_reference_diagnostics=False)
     cstmm_main(args)

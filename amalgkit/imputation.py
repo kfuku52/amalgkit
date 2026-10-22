@@ -32,6 +32,24 @@ def _row_mean_impute(values):
     return out
 
 
+def _exact_profiles_fit_rank(values, num_pc):
+    """Certify a rank upper bound from exactly repeated rows or columns.
+
+    Unlike a numerical-rank threshold, this cannot retain a small independent
+    signal outside the requested subspace. Stop after k+1 distinct profiles;
+    keep only views of at most k+1 profiles, without sorting/copying the matrix.
+    """
+    profiles = values.T if values.shape[0] >= values.shape[1] else values
+    if len(profiles) > num_pc:
+        representatives = []
+        for profile in profiles:
+            if not any(numpy.array_equal(profile, prior) for prior in representatives):
+                representatives.append(profile)
+                if len(representatives) > num_pc:
+                    return False
+    return bool(numpy.isfinite(values).all())
+
+
 def _truncated_svd_reconstruction(centered, num_pc):
     """Return the rank-``num_pc`` SVD reconstruction without a full SVD.
 
@@ -46,6 +64,11 @@ def _truncated_svd_reconstruction(centered, num_pc):
     resolved_pc = min(max(0, int(num_pc)), min(values.shape))
     if resolved_pc < 1:
         raise ValueError('PCA could not resolve a principal component.')
+    if _exact_profiles_fit_rank(values, resolved_pc):
+        # The requested subspace contains the whole input exactly. Rebuilding
+        # it through an arbitrary null-space basis can split identical profiles
+        # at roundoff precision, then change exact downstream TMM trim ties.
+        return values.copy()
     if values.shape[0] >= values.shape[1]:
         eigenvalues, eigenvectors = numpy.linalg.eigh(values.T @ values)
         order = numpy.argsort(eigenvalues)[::-1]
