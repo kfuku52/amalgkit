@@ -843,23 +843,23 @@ def _build_averaged_cross_species_inputs(df_metadata, orthologs):
     label_df.loc[:, 'averaged_id'] = (
         label_df['species_tag'].astype(str) + '_' + label_df['sample_group'].astype(str)
     )
+    members = {}
+    for species, group, sample in zip(kept['species_tag'].astype(str), kept['sample_group'].astype(str), kept['sample_id'].astype(str)):
+        members.setdefault((species, group), []).append(sample)
     matrix_map = {'labels': label_df.copy()}
     for correction in ['uncorrected', 'corrected']:
-        matrix = orthologs.get(correction, pandas.DataFrame()).copy()
-        averaged = pandas.DataFrame(index=matrix.index, dtype=float)
+        matrix = orthologs.get(correction, pandas.DataFrame())
+        averaged_columns = {}
         for row in label_df.itertuples(index=False):
-            sample_ids = kept.loc[
-                kept['species_tag'].astype(str).eq(str(row.species_tag))
-                & kept['sample_group'].astype(str).eq(str(row.sample_group)),
-                'sample_id',
-            ].astype(str).tolist()
+            sample_ids = members.get((str(row.species_tag), str(row.sample_group)), [])
             sample_ids = [sample_id for sample_id in sample_ids if sample_id in matrix.columns]
             if len(sample_ids) == 0:
                 continue
             if len(sample_ids) == 1:
-                averaged.loc[:, row.averaged_id] = pandas.to_numeric(matrix.loc[:, sample_ids[0]], errors='coerce')
+                averaged_columns[row.averaged_id] = pandas.to_numeric(matrix.loc[:, sample_ids[0]], errors='coerce')
             else:
-                averaged.loc[:, row.averaged_id] = matrix.loc[:, sample_ids].apply(pandas.to_numeric, errors='coerce').mean(axis=1, skipna=True)
+                averaged_columns[row.averaged_id] = matrix.loc[:, sample_ids].apply(pandas.to_numeric, errors='coerce').mean(axis=1, skipna=True)
+        averaged = pandas.DataFrame(averaged_columns, index=matrix.index)
         available = [column for column in label_df['averaged_id'].tolist() if column in averaged.columns]
         matrix_map[correction] = averaged.loc[:, available].copy() if len(available) > 0 else pandas.DataFrame(index=matrix.index)
     available_ids = [
