@@ -119,6 +119,31 @@ benchmarks time position preparation, not FASTQ I/O; correlation benchmarks
 exclude PDF rendering. All-pair diagnostics still scale quadratically in the
 sample count; preserve their full output when comparing alternatives.
 
+## Validating the October candidate implementations
+
+`benchmark_recent_changes.py` also supports `tmm_rounds`, `averaged_inputs`,
+`select_exclusion`, `select_exclusion_unique`, and `provenance_hash`. These use
+the production functions in both source trees, including the actual base
+selection rules, TMM reference choices and averaged-table labels. Comparisons
+exit nonzero for unequal output or corrected-count hashes; the warmup is also
+checked. The `--allocation-scan` option measures Python allocations in a second
+call after timing and process peak RSS, so tracing overhead does not enter the
+reported wall/CPU interval.
+
+```bash
+python benchmarks/benchmark_recent_changes.py \
+  --baseline /tmp/amalgkit-baseline --repeats 5 --allocation-scan \
+  --cases tmm_rounds averaged_inputs select_exclusion select_exclusion_unique provenance_hash \
+  --genes 20000 --samples 90 --output /tmp/amalgkit-candidates
+```
+
+Repeated-text selection is expected to benefit most. The bounded cardinality
+probes are a heuristic: inputs engineered to fool both probes still incur one
+full factorization before rejection. Hashing retains SHA-256 and the same
+mutation/cache checks; its main expected benefit is bounded buffer allocation,
+not faster disk I/O. Keep host-load effects and whole-pipeline contribution
+separate from these kernel measurements.
+
 QC streaming bounds memory rather than promising faster parsing. Canonical TSV
 inputs need a bounded row-width pass before the C parser, which can otherwise
 ignore extra fields at chunk boundaries. Other formats use the strict Python

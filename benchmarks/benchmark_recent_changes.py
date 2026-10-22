@@ -23,10 +23,12 @@ import subprocess
 import sys
 import tempfile
 import time
+import tracemalloc
 from pathlib import Path
 
 CASES = ('quant_validation', 'fastq_scan', 'wsfilter', 'csfilter', 'tau', 'sva', 'cstmm')
-EXTRA_CASES = ('random_sampling', 'imputation', 'select_normalization', 'gsa_selection')
+EXTRA_CASES = ('random_sampling', 'imputation', 'select_normalization', 'gsa_selection',
+               'tmm_rounds', 'averaged_inputs', 'select_exclusion', 'select_exclusion_unique', 'provenance_hash')
 
 
 def digest_file(path):
@@ -34,10 +36,74 @@ def digest_file(path):
         return hashlib.file_digest(handle, 'sha256').hexdigest()
 
 
+def prepare_adoption_case(args, root):
+    import numpy as np
+    import pandas as pd
+    from types import SimpleNamespace
+
+    rng = np.random.default_rng(719)
+    if args.case == 'provenance_hash':
+        from amalgkit.quant_provenance import file_identity
+        path = root / 'input.bin'
+        block = np.arange(256 * 1024, dtype=np.uint8).tobytes()
+        with path.open('wb') as handle:
+            for _ in range(1024):
+                handle.write(block)
+
+        def run():
+            identity = file_identity(str(path), {})
+            return np.array([str(identity['size']), identity['sha256']])
+
+        return run, dict(bytes=256 * 2**20, identity_cache='miss', disk_cache='warm after warmup')
+    if args.case.startswith('select_exclusion'):
+        from amalgkit.select import apply_select_exclude_rules, read_select_rules
+        rules = read_select_rules(args.repo / 'amalgkit/select_rule_sets/base/select_rules.tsv')
+        rules = [rule for rule in rules if rule['stage'] == 'exclude']
+        columns = list(dict.fromkeys(column for rule in rules for column in rule['columns']))
+        vocabulary = ['bulk leaf healthy', 'single cell RNA', 'miRNA root', 'CONTROL', '', 'NA', '0001']
+        unique = args.case.endswith('_unique')
+        data = {}
+        for offset, column in enumerate(columns):
+            data[column] = [vocabulary[(i + offset) % len(vocabulary)] + (f' accession_{i}' if unique else '')
+                            for i in range(args.genes)]
+        data.update(run=[f'R{i}' for i in range(args.genes)], exclusion='no')
+        frame = pd.DataFrame(data)
+        return (lambda: apply_select_exclude_rules(SimpleNamespace(df=frame.copy()), rules).df,
+                dict(rows=args.genes, columns=len(columns), rules=len(rules), cardinality='unique' if unique else 'low'))
+    values = rng.gamma(2, 100, size=(args.genes, args.samples))
+    if args.case == 'tmm_rounds':
+        from amalgkit.normalization_tmm import run_tmm_rounds_for_cstmm
+        values *= np.geomspace(.2, 5, args.samples)[None, :]
+        counts = pd.DataFrame(values, columns=[f'R{i}' for i in range(args.samples)])
+
+        def run():
+            result = run_tmm_rounds_for_cstmm(counts)
+            return np.concatenate([result.round1_factors.to_numpy(), result.round2_factors.to_numpy(),
+                                   result.library_sizes.to_numpy(), [result.round1_reference_column],
+                                   result.median_reference_columns])
+
+        return run, dict(genes=args.genes, samples=args.samples, rounds=2, counts='fractional')
+    from amalgkit.cross_species_filter import _build_averaged_cross_species_inputs
+    # Five groups and three replicates per species; omit the final incomplete
+    # block rather than silently changing replicate weights between revisions.
+    sample_count = args.samples // 15 * 15
+    rows = [dict(species_tag=f'S{i//15}', scientific_name=f'Species {i//15}', run=f'R{i}',
+                 sample_group=f'T{i%5}', bioproject=f'P{i%3}', exclusion='no') for i in range(sample_count)]
+    metadata = pd.DataFrame(rows)
+    values = np.log2(values[:, :sample_count] + 1)
+    values[::31, ::7] = np.nan
+    matrix = pd.DataFrame(values, columns=[f'S{i//15}_R{i}' for i in range(sample_count)])
+    orthologs = dict(uncorrected=matrix, corrected=matrix * 1.1)
+    return (lambda: _build_averaged_cross_species_inputs(metadata, orthologs),
+            dict(genes=args.genes, samples=sample_count, species=sample_count//15, groups=5, replicates=3))
+
+
 def prepare_case(args, root):
     import numpy as np
     import pandas as pd
 
+    if args.case in {'tmm_rounds', 'averaged_inputs', 'select_exclusion', 'select_exclusion_unique', 'provenance_hash'}:
+        return prepare_adoption_case(args, root)
     if args.case == 'select_normalization':
         from amalgkit.select import normalize_select_metadata_frame, read_select_rules
         rules = read_select_rules(args.repo / 'amalgkit/select_rule_sets/plantae/select_rules.tsv')
@@ -237,10 +303,26 @@ def worker(args):
             cpu_elapsed = time.process_time() - cpu_start
         peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
         peak_mib = peak / (1024 ** 2 if sys.platform == 'darwin' else 1024)
+        allocation_peak = None
+        if args.allocation_scan:
+            gc.collect()
+            tracemalloc.start()
+            with args.output.with_suffix('.allocation.log').open('w') as log, contextlib.redirect_stdout(log):
+                result = function()
+            allocation_peak = tracemalloc.get_traced_memory()[1] / 2**20
+            tracemalloc.stop()
+        if isinstance(result, (dict, pd.DataFrame)):
+            frames = result if isinstance(result, dict) else {'metadata': result}
+            digest = hashlib.sha256()
+            for key, frame in frames.items():
+                digest.update(key.encode())
+                digest.update(frame.to_csv(sep='\t', index=True).encode())
+            result = np.frombuffer(digest.digest(), dtype=np.uint8)
         np.save(args.output.with_suffix('.npy'), result, allow_pickle=False)
         hashes = {path.name: digest_file(path) for path in sorted(root.glob('output/*/*_cstmm_counts.tsv'))}
     args.output.write_text(json.dumps(dict(
-        seconds=elapsed, cpu_seconds=cpu_elapsed, peak_rss_mib=peak_mib, workload=workload, corrected_count_sha256=hashes,
+        seconds=elapsed, cpu_seconds=cpu_elapsed, peak_rss_mib=peak_mib, peak_python_mib=allocation_peak,
+        workload=workload, corrected_count_sha256=hashes,
         environment=dict(python=sys.version, numpy=np.__version__, pandas=pd.__version__, scipy=scipy.__version__,
                          machine=platform.machine(), platform=platform.platform(),
                          threads={name: os.environ.get(name) for name in THREAD_VARS}, load_average=load_average),
@@ -269,6 +351,8 @@ def compare(args):
                            '--orthologs', str(args.orthologs), '--reads', str(args.reads), '--fraction', str(args.fraction)]
                 if args.without_pairs:
                     command.append('--without-pairs')
+                if args.allocation_scan:
+                    command.append('--allocation-scan')
                 subprocess.run(command, env=env, check=True)  # noqa: S603 - explicit local benchmark revisions
                 result = json.loads(path.read_text())
                 results[label] = (path, result)
@@ -297,7 +381,9 @@ def compare(args):
                         min_cpu_seconds=min(row['cpu_seconds'] for row in rows),
                         max_cpu_seconds=max(row['cpu_seconds'] for row in rows),
                         median_peak_rss_mib=statistics.median(row['peak_rss_mib'] for row in rows),
-                        max_peak_rss_mib=max(row['peak_rss_mib'] for row in rows), workload=rows[0]['workload'])
+                        max_peak_rss_mib=max(row['peak_rss_mib'] for row in rows),
+                        median_peak_python_mib=(statistics.median(row['peak_python_mib'] for row in rows)
+                                                if args.allocation_scan else None), workload=rows[0]['workload'])
             for label, rows in measurements.items()
         }
         summary[case]['equivalence'] = equivalence
@@ -305,6 +391,9 @@ def compare(args):
         summary[case]['cpu_ratio'] = summary[case]['current']['median_cpu_seconds'] / summary[case]['baseline']['median_cpu_seconds']
         summary[case]['rss_ratio'] = summary[case]['current']['median_peak_rss_mib'] / summary[case]['baseline']['median_peak_rss_mib']
         (args.output / 'summary.json').write_text(json.dumps(summary, indent=2) + '\n', encoding='utf-8')
+        if not all((row['outputs_identical'] or row['numeric_allclose']) and row['count_files_identical']
+                   for row in equivalence):
+            raise RuntimeError(f'{case} output equivalence failed; see {args.output / "summary.json"}')
 
 
 def main():
@@ -322,6 +411,8 @@ def main():
     parser.add_argument('--reads', type=int, default=1000000)
     parser.add_argument('--fraction', type=float, default=.1)
     parser.add_argument('--without-pairs', action='store_true')
+    parser.add_argument('--allocation-scan', action='store_true',
+                        help='Measure Python allocations separately, after timing and process peak RSS.')
     args = parser.parse_args()
     if (args.repeats < 1 or args.samples < 20 or args.samples % 10
             or min(args.genes, args.orthologs, args.reads) < 1 or not 0 < args.fraction <= 1):
