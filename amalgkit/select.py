@@ -42,6 +42,7 @@ SELECT_IGNORE_VALUES = {
 }
 
 SELECT_RULES_FILENAME = 'select_rules.tsv'
+_SELECT_REGEX_FACTOR_CACHE_KEY = object()
 SELECT_RULES_REQUIRED_COLUMNS = [
     'rule_id',
     'enabled',
@@ -1169,11 +1170,45 @@ def build_select_rule_match_mask(df, rule):
 
 
 def get_select_text_series(df, column, text_cache):
+    """Cache an invocation-local snapshot; clear it before editing source text."""
     if text_cache is None:
         return df[column].fillna('').astype(str)
     if column not in text_cache:
         text_cache[column] = df[column].fillna('').astype(str)
     return text_cache[column]
+
+
+def _factorize_select_text(text):
+    """Compress repeated annotations when a bounded sample predicts reuse."""
+    if len(text) < 4096:
+        return None
+    sample = text.iloc[::max(1, len(text) // 256)].iloc[:256]
+    if sample.nunique() >= 128 or text.iloc[:256].nunique() >= 128:
+        return None
+    # The cached text is already string-valued and has no missing values.
+    # A small initial hash table avoids reserving space for len(text) keys.
+    codes, unique = pandas.factorize(text.to_numpy(copy=False), sort=False, size_hint=1024)
+    if len(unique) * 4 > len(text):
+        return None
+    codes = codes.astype(numpy.min_scalar_type(len(unique) - 1), copy=False)
+    return codes, pandas.Series(unique, dtype=str)
+
+
+def _match_select_text(text, pattern, column, text_cache):
+    """Reuse factors for the same source Series within one rules invocation."""
+    cache_key = (_SELECT_REGEX_FACTOR_CACHE_KEY, column)
+    cached = text_cache.get(cache_key) if text_cache is not None else None
+    if cached is not None and cached[0] is text:
+        factors = cached[1]
+    else:
+        factors = _factorize_select_text(text)
+        if text_cache is not None:
+            text_cache[cache_key] = (text, factors)
+    if factors is None:
+        return text.str.contains(pattern, regex=True).fillna(False)
+    codes, unique = factors
+    matched = unique.str.contains(pattern, regex=True).fillna(False).to_numpy(dtype=bool)
+    return pandas.Series(matched[codes], index=text.index)
 
 
 def build_select_rule_match_mask_with_cache(df, rule, text_cache=None):
@@ -1183,7 +1218,11 @@ def build_select_rule_match_mask_with_cache(df, rule, text_cache=None):
         if column not in df.columns:
             continue
         text_col = get_select_text_series(df, column, text_cache=text_cache)
-        matched = matched | text_col.str.contains(compiled_pattern, regex=True).fillna(False)
+        if len(text_col) < 4096:
+            column_matches = text_col.str.contains(compiled_pattern, regex=True).fillna(False)
+        else:
+            column_matches = _match_select_text(text_col, compiled_pattern, column, text_cache)
+        matched = matched | column_matches
     return matched
 
 
