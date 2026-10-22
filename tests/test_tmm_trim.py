@@ -1,11 +1,13 @@
 """TMM partial selection must preserve exact count-key ranks and tie boundaries."""
 
 import runpy
+import weakref
 from decimal import localcontext
 from fractions import Fraction
 from pathlib import Path
 
 import numpy
+import pandas
 import pytest
 
 from amalgkit import normalization_tmm as tmm
@@ -154,3 +156,73 @@ def test_factor_and_diagnostics_preserve_full_rank_behavior(kind, weighted, monk
     expected = tmm.calc_factor_tmm(obs, ref, *libraries, do_weighting=weighted, diagnostics=expected_diagnostics)
     assert observed == expected
     assert observed_diagnostics == expected_diagnostics
+
+
+@pytest.mark.parametrize('value', [0., -0., .2, numpy.nan, numpy.inf, -numpy.inf, 5e-324, 1e308])
+@pytest.mark.parametrize('size', [0, 1, 7, 1024])
+def test_scalar_recycling_retains_float_bits_and_writable_storage(value, size):
+    source = numpy.array([value], dtype=float)
+    expected = numpy.resize(source, size)
+    actual = tmm._recycle(source, size)
+    assert actual.tobytes() == expected.tobytes()
+    assert actual.dtype == expected.dtype
+    assert actual.shape == (size,)
+    assert actual.flags.writeable
+    if size > 1:
+        actual[0] = 42.
+        assert source.tobytes() == numpy.array([value], dtype=float).tobytes()
+
+
+@pytest.mark.parametrize('values', [[], [3., 7.], [[1., 2.], [3., 4.]]])
+@pytest.mark.parametrize('size', [0, 1, 9])
+def test_nonscalar_recycling_preserves_resize_and_flattening(values, size):
+    source = numpy.asarray(values, dtype=float).reshape(-1)
+    expected = source if source.size == 0 else numpy.resize(source, size)
+    actual = tmm._recycle(values, size)
+    numpy.testing.assert_array_equal(actual, expected)
+
+
+@pytest.mark.parametrize('single_column', [False, True])
+def test_rounds_resolve_reference_once_and_release_filtered_copy(single_column, monkeypatch):
+    columns = ['0001'] if single_column else [1, '1', '0001', 'NA']
+    values = numpy.array([[0., 0., 0., 0.], [10., 20., 30., 40.], [30., 10., 40., 20.]])
+    counts = pandas.DataFrame(values[:, :len(columns)], columns=columns)
+    original_counts = counts.copy(deep=True)
+    libraries = counts.sum().iloc[::-1] * 3
+    references = []
+    filtered_references = []
+    original_resolve = tmm._resolve_tmm_reference_column
+    original_filter = tmm._remove_all_zero_rows
+    original_normalize = tmm.calc_norm_factors_tmm
+
+    def record_reference(matrix, lib_sizes):
+        reference = original_resolve(matrix, lib_sizes)
+        references.append(reference)
+        return reference
+
+    def record_filter(matrix):
+        filtered = original_filter(matrix)
+        if filtered is not matrix:
+            filtered_references.append(weakref.ref(filtered))
+        return filtered
+
+    def check_released_copy(*args, **kwargs):
+        assert all(reference() is None for reference in filtered_references)
+        return original_normalize(*args, **kwargs)
+
+    monkeypatch.setattr(tmm, '_resolve_tmm_reference_column', record_reference)
+    monkeypatch.setattr(tmm, '_remove_all_zero_rows', record_filter)
+    monkeypatch.setattr(tmm, 'calc_norm_factors_tmm', check_released_copy)
+    result = tmm.run_tmm_rounds_for_cstmm(counts, lib_size=libraries)
+
+    assert references == [result.round1_reference_column]
+    assert filtered_references and all(reference() is None for reference in filtered_references)
+    assert result.round1_factors.index.tolist() == columns
+    assert result.round2_factors.index.tolist() == columns
+    pandas.testing.assert_series_equal(result.library_sizes, libraries.reindex(columns))
+    pandas.testing.assert_frame_equal(counts, original_counts)
+    if single_column:
+        assert result.round1_reference_column == 0
+        assert result.median_reference_columns == [0]
+        numpy.testing.assert_array_equal(result.round1_factors, [1.])
+        numpy.testing.assert_array_equal(result.round2_factors, [1.])

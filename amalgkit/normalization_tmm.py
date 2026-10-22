@@ -63,6 +63,9 @@ def _recycle(values, size):
         return array
     if array.size == size:
         return array
+    if array.size == 1:
+        # Scalar library sizes need a writable vector, not repeated concatenation.
+        return numpy.full(size, array[0], dtype=float)
     return numpy.resize(array, size)
 
 
@@ -329,13 +332,14 @@ def run_tmm_rounds_for_cstmm(counts, lib_size=None):
     matrix, columns = _as_matrix_with_columns(counts)
     if matrix.shape[1] == 0:
         raise ValueError('TMM normalization requires at least one sample column.')
-    if _remove_all_zero_rows(matrix).shape[0] == 0:
+    if not numpy.any(matrix):
         raise ValueError('TMM normalization requires at least one positive count.')
     libs = _coerce_library_sizes(lib_size, matrix, columns)
     round1_counts = counts if isinstance(counts, pandas.DataFrame) else pandas.DataFrame(matrix, columns=columns)
-    round1 = calc_norm_factors_tmm(round1_counts, lib_size=libs, ref_column=None)
-    round1_values = round1.to_numpy(dtype=float)
+    # Drop the temporary filtered matrix before either normalization round.
     round1_reference_column = _resolve_tmm_reference_column(_remove_all_zero_rows(matrix), libs)
+    round1 = calc_norm_factors_tmm(round1_counts, lib_size=libs, ref_column=round1_reference_column)
+    round1_values = round1.to_numpy(dtype=float)
     median_reference_columns = [_resolve_median_reference_column(round1_values)]
     round2 = calc_norm_factors_tmm(round1_counts, lib_size=libs, ref_column=median_reference_columns)
     return TMMRoundTripResult(
