@@ -9,21 +9,20 @@ from amalgkit import imputation
 
 
 @pytest.mark.parametrize('transpose', [False, True])
-@pytest.mark.parametrize('collide', [False, True])
-def test_profile_buckets_verify_collisions_and_signed_zero(transpose, collide, monkeypatch):
-    # Every sample key collides, while the complete profiles differ. Include
-    # equal values with opposite zero bits after the bucket is promoted.
+def test_profile_buckets_verify_nested_collisions_and_signed_zero(transpose):
+    # Every sample key collides. Three distinct profiles require nested exact
+    # discriminators; opposite zero bits still describe the same profile.
     a = numpy.array([0., 1., 2., 0., 3., 0.])
     b = numpy.array([0., 4., 5., 0., 6., 0.])
     negative_zero_a = a.copy()
     negative_zero_a[a == 0.] = -0.
-    values = numpy.column_stack([a, b, negative_zero_a, b])
+    c = a.copy()
+    c[2] += 1.
+    values = numpy.column_stack([a, b, c, negative_zero_a, b])
     if transpose:
         values = values.T.copy()
-    if collide:
-        monkeypatch.setattr(imputation, '_profile_digest', lambda profile: b'collision')
-    assert imputation._exact_profiles_fit_rank(values, 2)
-    assert not imputation._exact_profiles_fit_rank(values, 1)
+    assert imputation._exact_profiles_fit_rank(values, 3)
+    assert not imputation._exact_profiles_fit_rank(values, 2)
 
 
 def test_distinct_sample_keys_do_not_scan_full_profiles(monkeypatch):
@@ -33,7 +32,7 @@ def test_distinct_sample_keys_do_not_scan_full_profiles(monkeypatch):
         pytest.fail('Distinct sample keys already prove more than k profiles.')
 
     monkeypatch.setattr(numpy, 'array_equal', unexpected_scan)
-    monkeypatch.setattr(imputation, '_profile_digest', unexpected_scan)
+    monkeypatch.setattr(numpy, 'any', unexpected_scan)
     assert not imputation._exact_profiles_fit_rank(values, 60)
 
 
