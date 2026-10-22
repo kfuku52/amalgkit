@@ -1,3 +1,4 @@
+import hashlib
 import warnings
 
 import numpy
@@ -32,21 +33,43 @@ def _row_mean_impute(values):
     return out
 
 
+def _profile_digest(profile):
+    # Equal profiles may have different signed-zero bits. Keep only the digest
+    # and original views; the canonical copy is bounded to one profile.
+    canonical = numpy.where(profile == 0., 0., profile)
+    return hashlib.sha256(canonical).digest()
+
+
 def _exact_profiles_fit_rank(values, num_pc):
     """Certify a rank upper bound from exactly repeated rows or columns.
 
     Unlike a numerical-rank threshold, this cannot retain a small independent
-    signal outside the requested subspace. Stop after k+1 distinct profiles;
-    keep only views of at most k+1 profiles, without sorting/copying the matrix.
+    signal outside the requested subspace. Stop after k+1 distinct profiles.
+    Sample keys separate ordinary profiles cheaply; ambiguous buckets use full
+    digests followed by exact equality, so hash collisions cannot certify rank.
     """
     profiles = values.T if values.shape[0] >= values.shape[1] else values
     if len(profiles) > num_pc:
-        representatives = []
+        representatives = {}
+        distinct = 0
         for profile in profiles:
-            if not any(numpy.array_equal(profile, prior) for prior in representatives):
-                representatives.append(profile)
-                if len(representatives) > num_pc:
-                    return False
+            key = (profile[0], profile[len(profile) // 2], profile[-1])
+            bucket = representatives.get(key)
+            if bucket is None:
+                representatives[key] = profile
+            else:
+                if isinstance(bucket, numpy.ndarray):
+                    if numpy.array_equal(profile, bucket):
+                        continue
+                    bucket = {_profile_digest(bucket): [bucket]}
+                    representatives[key] = bucket
+                matches = bucket.setdefault(_profile_digest(profile), [])
+                if any(numpy.array_equal(profile, prior) for prior in matches):
+                    continue
+                matches.append(profile)
+            distinct += 1
+            if distinct > num_pc:
+                return False
     return bool(numpy.isfinite(values).all())
 
 
