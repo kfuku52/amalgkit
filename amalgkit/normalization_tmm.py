@@ -75,8 +75,8 @@ def calc_factor_quantile(data, lib_size, p=0.75):
     return pandas.Series(factors / libs, index=columns, dtype=float)
 
 
-def _rank_count_expression(obs, ref, ref_libs, *, ratio):
-    """Average ranks before logs/library scaling can split equal count ratios.
+def _count_expression_keys(obs, ref, ref_libs, *, ratio):
+    """Build ordered keys before logs/library scaling can split count ties.
 
     Positive products/ratios are represented as mantissa + binary exponent to
     avoid overflow/underflow. No decimal rounding or tolerance merges distinct
@@ -93,7 +93,12 @@ def _rank_count_expression(obs, ref, ref_libs, *, ratio):
         mantissas = mantissas * lib_m if ratio else mantissas / lib_m
         exponents = exponents + lib_e if ratio else exponents - lib_e
     mantissas, shift = numpy.frexp(mantissas)
-    exponents = exponents + shift
+    return mantissas, exponents + shift
+
+
+def _rank_count_expression(obs, ref, ref_libs, *, ratio):
+    """Return average ranks of the represented positive count ratios/products."""
+    mantissas, exponents = _count_expression_keys(obs, ref, ref_libs, ratio=ratio)
     order = numpy.lexsort((mantissas, exponents))
     different = (exponents[order][1:] != exponents[order][:-1]) | (mantissas[order][1:] != mantissas[order][:-1])
     starts = numpy.r_[0, numpy.flatnonzero(different) + 1]
@@ -101,6 +106,55 @@ def _rank_count_expression(obs, ref, ref_libs, *, ratio):
     ranks = numpy.empty(len(order), dtype=float)
     ranks[order] = numpy.repeat((starts + ends + 1) / 2.0, ends - starts)
     return ranks
+
+
+def _trim_count_expression(obs, ref, ref_libs, *, ratio, low, high):
+    """Match inclusive average-rank bounds without sorting every count key.
+
+    The integer exponents have a bounded range for finite floating-point inputs.
+    Count them first, then partially select the mantissa at each trim boundary.
+    A boundary tie occupies ranks L+1 through L+E; its average rank is therefore
+    L+(E+1)/2, so the whole tie is kept or discarded exactly as with full ranks.
+    """
+    size = len(obs)
+    if high < low or low > size or high < 1:
+        return numpy.zeros(size, dtype=bool)
+    # Small vectors do not amortize the histogram and boundary selection work.
+    if size < 1024:
+        ranks = _rank_count_expression(obs, ref, ref_libs, ratio=ratio)
+        return (ranks >= low) & (ranks <= high)
+    if low <= 1 and high >= size:
+        return numpy.ones(size, dtype=bool)
+
+    mantissas, exponents = _count_expression_keys(obs, ref, ref_libs, ratio=ratio)
+    minimum = int(exponents.min())
+    cumulative = numpy.bincount(exponents - minimum).cumsum()
+    keep = numpy.ones(size, dtype=bool)
+    boundaries = []
+    if low > 1:
+        boundaries.append((low, True))
+    if high < size:
+        boundaries.append((high, False))
+    for rank, is_low in boundaries:
+        exponent_index = int(numpy.searchsorted(cumulative, rank, side='left'))
+        exponent = exponent_index + minimum
+        preceding = int(cumulative[exponent_index - 1]) if exponent_index else 0
+        same_exponent = exponents == exponent
+        subset = mantissas[same_exponent]
+        position = rank - preceding - 1
+        threshold = numpy.partition(subset, position)[position]
+        preceding += int(numpy.count_nonzero(subset < threshold))
+        equal = int(numpy.count_nonzero(subset == threshold))
+        average_rank = preceding + (equal + 1) / 2.0
+        if is_low:
+            keep &= (exponents > exponent) | (
+                same_exponent & ((mantissas > threshold) | ((mantissas == threshold) & (average_rank >= low)))
+            )
+        else:
+            keep &= (exponents < exponent) | (
+                same_exponent & ((mantissas < threshold) | ((mantissas == threshold) & (average_rank <= high)))
+            )
+    return keep
 
 
 def calc_factor_tmm(
@@ -174,12 +228,8 @@ def calc_factor_tmm(
     hi_l = int(n + 1 - lo_l)
     lo_s = int(math.floor(n * sum_trim) + 1)
     hi_s = int(n + 1 - lo_s)
-    rank_log_r = _rank_count_expression(obs_counts, ref_counts, ref_libs, ratio=True)
-    rank_abs_e = _rank_count_expression(obs_counts, ref_counts, ref_libs, ratio=False)
-    keep = (
-        (rank_log_r >= lo_l) & (rank_log_r <= hi_l) &
-        (rank_abs_e >= lo_s) & (rank_abs_e <= hi_s)
-    )
+    keep = _trim_count_expression(obs_counts, ref_counts, ref_libs, ratio=True, low=lo_l, high=hi_l)
+    keep &= _trim_count_expression(obs_counts, ref_counts, ref_libs, ratio=False, low=lo_s, high=hi_s)
     if not keep.any():
         if diagnostics is not None:
             diagnostics['status'] = 'no_pairs_after_trimming'
