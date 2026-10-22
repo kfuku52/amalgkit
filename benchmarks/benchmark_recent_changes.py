@@ -303,14 +303,6 @@ def worker(args):
             cpu_elapsed = time.process_time() - cpu_start
         peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
         peak_mib = peak / (1024 ** 2 if sys.platform == 'darwin' else 1024)
-        allocation_peak = None
-        if args.allocation_scan:
-            gc.collect()
-            tracemalloc.start()
-            with args.output.with_suffix('.allocation.log').open('w') as log, contextlib.redirect_stdout(log):
-                result = function()
-            allocation_peak = tracemalloc.get_traced_memory()[1] / 2**20
-            tracemalloc.stop()
         if isinstance(result, (dict, pd.DataFrame)):
             frames = result if isinstance(result, dict) else {'metadata': result}
             digest = hashlib.sha256()
@@ -320,6 +312,17 @@ def worker(args):
             result = np.frombuffer(digest.digest(), dtype=np.uint8)
         np.save(args.output.with_suffix('.npy'), result, allow_pickle=False)
         hashes = {path.name: digest_file(path) for path in sorted(root.glob('output/*/*_cstmm_counts.tsv'))}
+        # Preserve the timed call's output before a separate allocation scan can
+        # mutate shared return values or replace files in the output directory.
+        del result
+        allocation_peak = None
+        if args.allocation_scan:
+            gc.collect()
+            tracemalloc.start()
+            with args.output.with_suffix('.allocation.log').open('w') as log, contextlib.redirect_stdout(log):
+                function()
+            allocation_peak = tracemalloc.get_traced_memory()[1] / 2**20
+            tracemalloc.stop()
     args.output.write_text(json.dumps(dict(
         seconds=elapsed, cpu_seconds=cpu_elapsed, peak_rss_mib=peak_mib, peak_python_mib=allocation_peak,
         workload=workload, corrected_count_sha256=hashes,
@@ -363,7 +366,9 @@ def compare(args):
             left, right = (np.load(results[label][0].with_suffix('.npy'), allow_pickle=False)
                            for label in ('baseline', 'current'))
             numeric = left.dtype.kind in 'biufc' and right.dtype.kind in 'biufc'
-            if numeric:
+            if left.shape != right.shape:
+                same, difference, identical = False, None, False
+            elif numeric:
                 same = bool(np.allclose(left, right, rtol=1e-8, atol=1e-10, equal_nan=True))
                 finite = np.isfinite(left) & np.isfinite(right)
                 difference = float(np.max(np.abs(left[finite] - right[finite]))) if finite.any() else 0.
