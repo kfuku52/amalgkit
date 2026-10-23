@@ -29,6 +29,14 @@ Current AMALGKIT releases are Python-only. The main pipeline does not require `R
 
 Python package dependencies are installed with AMALGKIT. Important runtime libraries include `numpy`, `pandas`, `scipy`, `matplotlib`, `statsmodels`, `scikit-learn`, and `biopython`.
 
+The supported pandas range is `>=2.0.3,<3.1`. pandas 3.1 applies missing-value
+inference after CSV converters, which changes lexical identifiers such as `NA`
+in the current readers. It also deprecates APIs used by existing workflows;
+the repository treats those warnings as errors. The upper bound protects these
+data contracts until identifier/numeric-missing-value parsing and warning-strict
+workflow tests pass with pandas 3.1. See the
+[pandas 3.1 changes](https://pandas.pydata.org/pandas-docs/version/3.1/whatsnew/v3.1.0.html).
+
 AMALGKIT handles NCBI taxonomy lookups with its built-in SQLite backend. The NCBI taxonomy dump is downloaded automatically when a local taxonomy database is not available.
 
 Existing taxonomy caches created by ETE4 are supported without installing ETE4. AMALGKIT reads the ETE4 `taxa.sqlite` schema directly and reuses a colocated `taxdump.tar.gz` without modifying either file. For commands with `--download_dir`, the cache location remains `<download_dir>/ete_taxonomy`; for the default cache, AMALGKIT also detects ETE4's `~/.local/share/ete` directory. The optional ETE4 `taxa.sqlite.traverse.pkl` file is not needed by AMALGKIT.

@@ -662,7 +662,9 @@ class TestMappingRatePositionGroups:
             (tmp_path / run).mkdir()
 
         def runner(task_items, task_fn, max_workers):
-            return {'SRR1': ('SRR1', 12.0, None), 'SRR2': ('SRR2', object(), None)}, []
+            # An incompatible scalar can promote the dtype on pandas 2. Use a
+            # shape mismatch so assignment fails on every supported version.
+            return {'SRR1': ('SRR1', 12.0, None), 'SRR2': ('SRR2', numpy.array([1.0, 2.0]), None)}, []
 
         monkeypatch.setattr('amalgkit.util.run_tasks_with_optional_threads', runner)
         with pytest.raises((TypeError, ValueError)):

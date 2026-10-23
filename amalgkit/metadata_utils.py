@@ -3,6 +3,7 @@ import datetime
 import hashlib
 import io
 import json
+import numbers
 import os
 import re
 import sys
@@ -85,15 +86,39 @@ _SCIENTIFIC_NAME_BY_TAXID_CACHE = {}
 
 def parse_bool_flags(values, column_name='value', default=''):
     raw_values = list(values)
+    series = pandas.Series(raw_values)
+    numeric_default = isinstance(default, (numbers.Number, numpy.bool_))
+    legacy_downcast = numeric_default and pandas.__version__.split('.')[0] == '2'
+    if legacy_downcast:
+        try:
+            legacy_downcast = not pandas.get_option('future.no_silent_downcasting')
+        except pandas.errors.OptionError:
+            pass  # pandas < 2.2 always used the legacy inference.
+    if (isinstance(default, (bool, numpy.bool_))
+            and pandas.api.types.is_float_dtype(series.dtype) and series.isna().any()):
+        series = series.astype(object)
+    if numeric_default and pandas.api.types.is_object_dtype(series.dtype):
+        # Preserve the active pandas inference policy without deprecated
+        # implicit downcasting or changing the caller's global options.
+        series.loc[series.isna()] = default
+        if legacy_downcast:
+            series = series.infer_objects()
+    else:
+        series = series.fillna(default)
     normalized = (
-        pandas.Series(raw_values)
-        .fillna(default)
+        series
         .astype(str)
         .str.strip()
         .str.lower()
     )
     if default != '':
-        normalized = normalized.replace('', default)
+        if numeric_default:
+            normalized = normalized.astype(object)
+            normalized.loc[normalized.eq('')] = default
+            if legacy_downcast:
+                normalized = normalized.infer_objects()
+        else:
+            normalized = normalized.replace('', default)
     parsed = []
     parsed_by_value = {}
     invalid_values = []

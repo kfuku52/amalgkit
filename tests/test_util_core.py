@@ -1,3 +1,4 @@
+from contextlib import nullcontext
 import threading
 import time
 
@@ -82,6 +83,31 @@ class TestParseBoolFlags:
         result = parse_bool_flags(iter(()), default='no')
         assert result.dtype == numpy.dtype(bool)
         assert result.shape == (0,)
+
+    @pytest.mark.parametrize('default', [True, False, numpy.bool_(True), numpy.bool_(False)])
+    def test_boolean_default_fills_float_missing_values_without_warning(self, default):
+        result = parse_bool_flags([numpy.nan], default=default)
+        assert result.tolist() == [bool(default)]
+
+    @pytest.mark.parametrize('default', [1, numpy.int64(1)])
+    @pytest.mark.parametrize('future_downcasting', [False, True])
+    def test_numeric_default_preserves_active_object_inference(self, default, future_downcasting):
+        pandas_major, pandas_minor = (int(v) for v in pandas.__version__.split('.')[:2])
+        has_downcast_option = pandas_major == 2 and pandas_minor >= 2
+        context = (
+            pandas.option_context('future.no_silent_downcasting', future_downcasting)
+            if has_downcast_option else nullcontext()
+        )
+        legacy_inference = pandas_major == 2 and not (has_downcast_option and future_downcasting)
+        expected_invalid = '1.0, <NA>' if legacy_inference else '1.0'
+        with context:
+            with pytest.raises(ValueError) as error:
+                parse_bool_flags([1.0, pandas.NA], column_name='is_sampled', default=default)
+            assert str(error.value) == (
+                'Column "is_sampled" contains invalid boolean flag(s): ' + expected_invalid
+            )
+            if has_downcast_option:
+                assert pandas.get_option('future.no_silent_downcasting') is future_downcasting
 
 class TestRunTasksWithOptionalThreads:
     def test_empty_tasks(self):

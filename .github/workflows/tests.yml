@@ -22,13 +22,32 @@ env:
 
 jobs:
   test:
+    name: ${{ matrix.check-name }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
         # Python 3.14 is covered by the complete suite below.
-        python-version: ['3.11', '3.12', '3.13']
+        # Retain the existing check names and newest-compatible lanes; also
+        # exercise the newest pandas 2.x beyond the separate dependency floor.
+        include:
+          - python-version: '3.11'
+            pandas-spec: pandas
+            dependency-policy: latest
+            check-name: test (3.11)
+          - python-version: '3.12'
+            pandas-spec: pandas
+            dependency-policy: latest
+            check-name: test (3.12)
+          - python-version: '3.13'
+            pandas-spec: pandas
+            dependency-policy: latest
+            check-name: test (3.13)
+          - python-version: '3.11'
+            pandas-spec: pandas<3
+            dependency-policy: pandas-2
+            check-name: test (3.11, pandas 2.x)
 
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -36,10 +55,11 @@ jobs:
       - uses: ./.github/actions/python-env
         with:
           python-version: ${{ matrix.python-version }}
+          cache-suffix: ${{ matrix.dependency-policy }}
 
       - name: Install package and test dependencies
         run: |
-          uv pip install -e ".[test]"
+          uv pip install -e ".[test]" "${{ matrix.pandas-spec }}"
           uv pip check
 
       - name: Run fast tests

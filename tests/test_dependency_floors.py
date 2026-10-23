@@ -2,6 +2,8 @@ import re
 import tomllib
 from pathlib import Path
 
+from packaging.requirements import Requirement
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -30,9 +32,12 @@ def _parse_declared_floors():
     project = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     declared = {}
     for requirement in project["project"]["dependencies"]:
-        match = re.fullmatch(r"([A-Za-z0-9_.-]+)>=(.+)", requirement)
-        assert match is not None, requirement
-        declared[_normalize_name(match.group(1))] = match.group(2)
+        parsed = Requirement(requirement)
+        floors = [specifier.version for specifier in parsed.specifier if specifier.operator == ">="]
+        assert len(floors) == 1, requirement
+        floor = floors[0]
+        assert parsed.specifier.contains(floor), f"dependency floor violates another constraint: {requirement}"
+        declared[_normalize_name(parsed.name)] = floor
     return declared
 
 

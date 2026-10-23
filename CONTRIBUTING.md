@@ -49,6 +49,8 @@ compatibility changes; the separate minimum-dependency job verifies the declared
 floors. Do not replace these lanes with one frozen environment. A lock or frozen
 package listing for a reproducible experiment should be kept separately from
 library dependency metadata and these compatibility checks.
+The fast-test matrix also exercises the newest pandas 2.x in addition to the
+newest compatible pandas and the separate full dependency-floor suite.
 
 The shared Python action keys its download/wheel cache on `pyproject.toml`,
 `requirements/*.txt`, and the action definition, with separate suffixes for the

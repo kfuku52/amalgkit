@@ -34,6 +34,8 @@ CSTMM and the filters are optional; filters may be used in either order.
 ## Installation
 
 AMALGKIT requires Python 3.11 or later on Linux or macOS; CI covers Python 3.11–3.14.
+The supported pandas range is `>=2.0.3,<3.1`; see the
+[compatibility note](https://github.com/kfuku52/amalgkit/wiki/Installation-and-dependencies#runtime-model).
 
 ```bash
 # Latest default-branch version in an isolated environment
