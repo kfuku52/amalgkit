@@ -1255,8 +1255,12 @@ def get_mapping_rate(
         print('quant directory found: {}'.format(quant_dir))
         metadata.df.loc[:, 'mapping_rate'] = numpy.nan
         normalized_runs = metadata.df.loc[:, 'run'].fillna('').astype(str).str.strip()
+        run_positions = {}
+        for position, sra_id in enumerate(normalized_runs):
+            run_positions.setdefault(sra_id, []).append(position)
+        mapping_rate_column = metadata.df.columns.get_loc('mapping_rate')
         sra_dirs = []
-        for sra_id in dict.fromkeys(normalized_runs.tolist()):
+        for sra_id in run_positions:
             if pandas.isna(sra_id):
                 continue
             sra_id = str(sra_id)
@@ -1311,11 +1315,11 @@ def get_mapping_rate(
                 else:
                     sys.stderr.write('{}\n'.format(error))
                 continue
-            is_run = (normalized_runs == sra_id)
-            if not bool(is_run.any()):
+            positions = run_positions.get(sra_id)
+            if positions is None:
                 sys.stderr.write('Run ID from quant output was not found in metadata. Skipping {}.\n'.format(sra_id))
                 continue
-            metadata.df.loc[is_run, 'mapping_rate'] = mapping_rate
+            metadata.df.iloc[positions, mapping_rate_column] = mapping_rate
     else:
         txt = 'quant directory not found. Mapping rate cutoff will not be applied: {}\n'
         sys.stderr.write(txt.format(quant_dir))

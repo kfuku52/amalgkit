@@ -29,12 +29,81 @@ from pathlib import Path
 CASES = ('quant_validation', 'fastq_scan', 'wsfilter', 'csfilter', 'tau', 'sva', 'cstmm')
 EXTRA_CASES = ('random_sampling', 'imputation', 'select_normalization', 'gsa_selection',
                'tmm_rounds', 'averaged_inputs', 'select_exclusion', 'select_exclusion_unique', 'provenance_hash',
-               'outlier_groups', 'orthogroup_counts', 'orthogroup_counts_long')
+               'outlier_groups', 'orthogroup_counts', 'orthogroup_counts_long',
+               'mapping_rate', 'metadata_merge', 'tau_annotations', 'correlation_stats', 'tpm_transform')
 
 
 def digest_file(path):
     with path.open('rb') as handle:
         return hashlib.file_digest(handle, 'sha256').hexdigest()
+
+
+def prepare_table_case(args, root):
+    from types import SimpleNamespace
+
+    import numpy as np
+    import pandas as pd
+
+    rng = np.random.default_rng(719)
+    if args.case in {'mapping_rate', 'metadata_merge'}:
+        runs = [f'R{i:07d}' for i in range(args.genes)]
+    if args.case == 'mapping_rate':
+        from amalgkit.metadata_utils import get_mapping_rate
+        for index, run in enumerate(runs):
+            directory = root / run
+            directory.mkdir()
+            (directory / f'{run}_run_info.json').write_text(
+                json.dumps({'p_pseudoaligned': float(index % 100)}), encoding='utf-8')
+        frame = pd.DataFrame({'run': runs + [' ' + run + ' ' for run in runs[::10]] + ['0001', 'NA', ''],
+                              'mapping_rate': 88.})
+        frame.index = [index // 2 for index in range(len(frame))]
+
+        def run():
+            return get_mapping_rate(SimpleNamespace(df=frame.copy()), str(root), max_workers=1).df
+
+        return run, dict(runs=args.genes, rows=len(frame), workers=1, duplicate_normalized_runs=True)
+    if args.case == 'metadata_merge':
+        from amalgkit.filter_utils import merge_metadata_by_run
+        frame = pd.DataFrame({'run': runs, **{f'score{i}': rng.normal(size=args.genes) for i in range(12)}})
+        for column in range(4):
+            frame[f'annotation{column}'] = pd.Series(['original'] * args.genes, dtype='string')
+        update = frame.iloc[rng.permutation(args.genes)[:max(1, args.genes * 3 // 4)]].copy()
+        for column in range(12):
+            update[f'score{column}'] *= 2
+            update.iloc[::13, update.columns.get_loc(f'score{column}')] = np.nan
+        for column in range(4):
+            update[f'annotation{column}'] = pd.Series('updated', index=update.index, dtype='string')
+        return (lambda: merge_metadata_by_run(frame, update, overwrite_columns=('score0',)),
+                dict(rows=args.genes, updates=len(update), numeric_columns=12, string_columns=4, seed=719))
+    if args.case == 'tau_annotations':
+        from amalgkit.per_species_common import sample_group_to_tau
+        values = rng.gamma(2, 100, size=(args.genes, args.samples))
+        values[::19] = 0
+        values[1::23, :2] = 500
+        values[2::29, 0] = np.nan
+        groups = [f'tissue_{i:02d}' for i in range(args.samples)]
+        groups[:3] = ['0001', 'NA', r'tissue|escaped\name']
+        frame = pd.DataFrame(values, columns=groups, index=[f'gene{i}' for i in range(args.genes)])
+        return (lambda: sample_group_to_tau(frame, rich_annotation=True),
+                dict(genes=args.genes, groups=args.samples, rich_annotation=True, seed=719))
+    if args.case == 'tpm_transform':
+        from amalgkit.per_species_finalize_python import _transform_raw_to_tpm
+        columns = [f'R{i:07d}' for i in range(args.samples)]
+        index = pd.Index(['0001', 'NA'][:args.genes] + [f'gene{i}' for i in range(2, args.genes)])
+        counts = pd.DataFrame(rng.gamma(2, 100, size=(args.genes, args.samples)), index=index, columns=columns)
+        lengths = pd.DataFrame(rng.uniform(100, 3000, size=counts.shape), index=index, columns=columns)
+        return (lambda: _transform_raw_to_tpm(counts, lengths),
+                dict(genes=args.genes, samples=args.samples, transform='tpm', seed=719))
+    from amalgkit.per_species_outputs import save_correlation_statistics
+    runs = [f'R{i:07d}' for i in range(args.samples)]
+    frame = pd.DataFrame(rng.normal(size=(16, args.samples)), columns=runs)
+    metadata = pd.DataFrame({'run': runs, 'bioproject': [f'project_{i % 130}' for i in range(args.samples)],
+                             'sample_group': [f'tissue_{i % 19}' for i in range(args.samples)]})
+    correlation = rng.uniform(-1, 1, size=(args.samples, args.samples))
+    correlation[::137, ::151] = np.nan
+    return (lambda: save_correlation_statistics(frame, metadata, 'pearson', 0,
+                                                precomputed_tc_dist_matrix=correlation),
+            dict(samples=args.samples, matrix='precomputed', projects=130, groups=19, seed=719))
 
 
 def prepare_adoption_case(args, root):
@@ -131,6 +200,8 @@ def prepare_case(args, root):
     import numpy as np
     import pandas as pd
 
+    if args.case in {'mapping_rate', 'metadata_merge', 'tau_annotations', 'correlation_stats', 'tpm_transform'}:
+        return prepare_table_case(args, root)
     if args.case in {'tmm_rounds', 'averaged_inputs', 'select_exclusion', 'select_exclusion_unique', 'provenance_hash',
                      'outlier_groups', 'orthogroup_counts', 'orthogroup_counts_long'}:
         return prepare_adoption_case(args, root)

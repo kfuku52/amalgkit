@@ -361,6 +361,8 @@ def _transform_raw_to_tpm(counts_df, eff_length_df):
     ).to_numpy(dtype=float)
     with numpy.errstate(divide='ignore', invalid='ignore'):
         x = counts / effective_lengths
+        # The aligned length matrix is no longer needed by the normalization.
+        del effective_lengths
         values = x * 1e6 / numpy.nansum(x, axis=0, keepdims=True)
     values[~numpy.isfinite(values)] = 0.0
     return pandas.DataFrame(values, index=counts_df.index, columns=counts_df.columns)

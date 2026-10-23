@@ -83,6 +83,31 @@ def test_tau_annotation_lists_escape_group_delimiters():
     assert tau['highest'] == columns[0]
 
 
+def test_tau_annotations_keep_panel_ties_and_unicode_label_order():
+    from amalgkit.text_utils import parse_sample_group_argument
+
+    columns = [' z|tail ', 'á,leaf', r'a\root', '日本', 'A']
+    counts = pandas.DataFrame(
+        [[5., 5., 5., 0., 1.], [0., 2., 0., 2., 0.], [0., 0., 0., 0., 0.]],
+        columns=columns,
+        index=pandas.Index(['0001', 'NA', 'zero'], name='target_id'),
+    )
+    original = counts.copy(deep=True)
+    tau = sample_group_to_tau(counts)
+
+    assert tau['highest'].iloc[:2].tolist() == ['z|tail', 'á,leaf']
+    assert [parse_sample_group_argument(value) for value in tau['order'].iloc[:2]] == [
+        ['z|tail', 'á,leaf', r'a\root', 'A'], ['á,leaf', '日本'],
+    ]
+    assert [parse_sample_group_argument(value) for value in tau['highest_ties'].iloc[:2]] == [
+        [r'a\root', 'z|tail', 'á,leaf'], ['á,leaf', '日本'],
+    ]
+    assert tau.loc['zero', ['highest', 'order', 'highest_ties']].isna().all()
+    assert tau['tau_status'].tolist() == ['ok', 'ok', 'all_zero']
+    pandas.testing.assert_frame_equal(sample_group_to_tau(counts, rich_annotation=False), tau[['tau']])
+    pandas.testing.assert_frame_equal(counts, original)
+
+
 @pytest.mark.parametrize('unit', ['run', 'biosample', 'donor'])
 def test_tau_run_identity_and_unit_order_do_not_change_aggregation(unit):
     counts, metadata = _tau_fixture()

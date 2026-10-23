@@ -70,15 +70,19 @@ def _summarize_correlation_group(values):
     }
 
 
+def _label_equality_matrix(labels):
+    values = labels.astype(str).to_numpy()
+    # String conversion can retain missing values in pandas 3. Their original
+    # comparison behavior differs from the shared missing-value factor code.
+    if pandas.isna(values).any():
+        return numpy.equal.outer(values, values)
+    codes, _ = pandas.factorize(values, sort=False)
+    return numpy.equal.outer(codes, codes)
+
+
 def _build_correlation_row(tc_dist_matrix, metadata_df, batch_column, sample_group_column):
-    is_same_bp = numpy.equal.outer(
-        metadata_df.loc[:, batch_column].astype(str).to_numpy(),
-        metadata_df.loc[:, batch_column].astype(str).to_numpy(),
-    )
-    is_same_sample_group = numpy.equal.outer(
-        metadata_df.loc[:, sample_group_column].astype(str).to_numpy(),
-        metadata_df.loc[:, sample_group_column].astype(str).to_numpy(),
-    )
+    is_same_bp = _label_equality_matrix(metadata_df.loc[:, batch_column])
+    is_same_sample_group = _label_equality_matrix(metadata_df.loc[:, sample_group_column])
     pair_mask = numpy.triu(numpy.ones(tc_dist_matrix.shape, dtype=bool), k=1)
     stats = {}
     group_masks = {

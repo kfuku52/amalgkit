@@ -399,3 +399,60 @@ def test_merge_explicit_missing_scores_replace_stale_values_only_for_updated_row
     assert result.loc[0, 'annotation'] == 'preserve'
     # Backwards-compatible default for non-generated annotations.
     assert merge_metadata_by_run(source, update).loc[0, 'score'] == values[0]
+
+
+@pytest.mark.parametrize(
+    'dtype, original, replacements',
+    [
+        ('int8', [1, 2, 3], [7, 8]),
+        ('uint64', [2**63 + 1, 2**63 + 2, 2**63 + 3], [2**63 + 7, 2**63 + 8]),
+        ('float32', [1.25, 2.5, 3.75], [7.25, 8.5]),
+        ('float64', [1.25, 2.5, 3.75], [7.25, 8.5]),
+        ('complex128', [1 + 2j, 2 + 3j, 3 + 4j], [7 + 8j, 8 + 9j]),
+        ('bool', [True, False, True], [False, True]),
+    ],
+)
+def test_merge_numeric_shuffled_updates_preserve_dtype_order_and_inputs(dtype, original, replacements):
+    source = pandas.DataFrame({'run': [' 0001 ', 'NA', '1'], 'score': pandas.Series(original, dtype=dtype)})
+    update = pandas.DataFrame({'run': ['1', '0001'], 'score': pandas.Series(replacements, dtype=dtype)})
+    source_before = source.copy(deep=True)
+    update_before = update.copy(deep=True)
+    expected = pandas.DataFrame(
+        {'run': ['0001', 'NA', '1'], 'score': pandas.Series([replacements[1], original[1], replacements[0]], dtype=dtype)}
+    )
+
+    observed = merge_metadata_by_run(source, update)
+
+    pandas.testing.assert_frame_equal(observed, expected)
+    pandas.testing.assert_frame_equal(source, source_before)
+    pandas.testing.assert_frame_equal(update, update_before)
+
+
+def test_merge_numeric_shuffled_updates_preserve_widening_and_missing_policies():
+    source = pandas.DataFrame({'run': ['0001', 'NA', '1'], 'score': pandas.Series([1, 2, 3], dtype='int8')})
+    update = pandas.DataFrame({'run': ['1', '0001'], 'score': ['8.5', None]})
+
+    observed = merge_metadata_by_run(source, update, overwrite_columns=['score'])
+
+    expected = pandas.DataFrame({'run': ['0001', 'NA', '1'], 'score': [float('nan'), 2., 8.5]})
+    pandas.testing.assert_frame_equal(observed, expected)
+    expected.loc[0, 'score'] = 1.
+    pandas.testing.assert_frame_equal(merge_metadata_by_run(source, update), expected)
+
+
+def test_merge_string_shuffled_updates_preserve_missing_policies_and_inputs():
+    source = pandas.DataFrame(
+        {'run': ['0001', 'NA', '1'], 'annotation': pandas.Series(['a', 'b', 'c'], dtype='string[python]')}
+    )
+    update = pandas.DataFrame({'run': ['1', '0001'], 'annotation': [8, None]})
+    source_before = source.copy(deep=True)
+    update_before = update.copy(deep=True)
+    expected = pandas.DataFrame(
+        {'run': ['0001', 'NA', '1'], 'annotation': pandas.Series([None, 'b', '8.0'], dtype='string[python]')}
+    )
+
+    pandas.testing.assert_frame_equal(merge_metadata_by_run(source, update, overwrite_columns=['annotation']), expected)
+    expected.loc[0, 'annotation'] = 'a'
+    pandas.testing.assert_frame_equal(merge_metadata_by_run(source, update), expected)
+    pandas.testing.assert_frame_equal(source, source_before)
+    pandas.testing.assert_frame_equal(update, update_before)

@@ -612,3 +612,119 @@ class TestGenerateMultispBuscoTable:
         result = pandas.read_csv(str(outfile), sep='\t')
         assert 'Species_A' in result.columns
         assert 'Species_B' not in result.columns
+
+
+class TestMappingRatePositionGroups:
+    def test_lexical_ids_duplicate_labels_and_existing_float_column(self, tmp_path):
+        frame = pandas.DataFrame({
+            'run': ['0001', ' 0001 ', 'NA', '1', None],
+            'mapping_rate': [99.0] * 5,
+            'note': ['a', 'b', 'c', 'd', 'e'],
+        }, index=[2, 2, 1, 1, 2])
+        metadata = Metadata.from_DataFrame(frame.copy())
+        metadata.df = frame.copy()
+        for run, value in [('0001', 12.5), ('NA', 70), ('1', 100)]:
+            folder = tmp_path / run
+            folder.mkdir()
+            (folder / f'{run}_run_info.json').write_text(json.dumps({'p_pseudoaligned': value}))
+
+        result = get_mapping_rate(metadata, str(tmp_path), max_workers=1)
+
+        expected = frame.copy()
+        expected['mapping_rate'] = [12.5, 12.5, 70.0, 100.0, numpy.nan]
+        assert result is metadata
+        pandas.testing.assert_frame_equal(result.df, expected)
+
+    def test_injected_results_preserve_result_order_and_unknown_run_warning(self, tmp_path, monkeypatch, capsys):
+        frame = pandas.DataFrame({'run': ['SRR1', 'SRR2', 'SRR1'], 'mapping_rate': [99.0] * 3}, index=[4, 4, 4])
+        metadata = Metadata.from_DataFrame(frame.copy())
+        metadata.df = frame.copy()
+        for run in ['SRR1', 'SRR2']:
+            (tmp_path / run).mkdir()
+
+        def runner(task_items, task_fn, max_workers):
+            assert task_items == ['SRR1', 'SRR2']
+            return {'SRR1': ('unknown', 31.0, None), 'SRR2': ('SRR1', 18.0, None)}, []
+
+        monkeypatch.setattr('amalgkit.util.run_tasks_with_optional_threads', runner)
+        get_mapping_rate(metadata, str(tmp_path), max_workers=1)
+
+        expected = frame.copy()
+        expected['mapping_rate'] = [18.0, numpy.nan, 18.0]
+        pandas.testing.assert_frame_equal(metadata.df, expected)
+        assert capsys.readouterr().err == 'Run ID from quant output was not found in metadata. Skipping unknown.\n'
+
+    def test_injected_assignment_failure_preserves_prior_updates(self, tmp_path, monkeypatch):
+        frame = pandas.DataFrame({'run': ['SRR1', 'SRR2'], 'mapping_rate': [99.0, 99.0]})
+        metadata = Metadata.from_DataFrame(frame.copy())
+        metadata.df = frame.copy()
+        for run in ['SRR1', 'SRR2']:
+            (tmp_path / run).mkdir()
+
+        def runner(task_items, task_fn, max_workers):
+            return {'SRR1': ('SRR1', 12.0, None), 'SRR2': ('SRR2', object(), None)}, []
+
+        monkeypatch.setattr('amalgkit.util.run_tasks_with_optional_threads', runner)
+        with pytest.raises((TypeError, ValueError)):
+            get_mapping_rate(metadata, str(tmp_path), max_workers=1)
+
+        expected = frame.copy()
+        expected['mapping_rate'] = [12.0, numpy.nan]
+        pandas.testing.assert_frame_equal(metadata.df, expected)
+
+    def test_invalid_and_missing_json_diagnostics_follow_metadata_order(self, tmp_path, capsys):
+        frame = pandas.DataFrame({'run': ['missing', 'invalid', 'no_field', 'bad_percent', 'ok']})
+        metadata = Metadata.from_DataFrame(frame.copy())
+        metadata.df = frame.copy()
+        contents = {'invalid': '{', 'no_field': '{}', 'bad_percent': '{"p_pseudoaligned": 101}', 'ok': '{"p_pseudoaligned": 2.5}'}
+        for run in frame['run']:
+            folder = tmp_path / run
+            folder.mkdir()
+            if run in contents:
+                (folder / f'{run}_run_info.json').write_text(contents[run])
+
+        get_mapping_rate(metadata, str(tmp_path), max_workers=2)
+
+        expected = frame.copy()
+        expected['mapping_rate'] = [numpy.nan] * 4 + [2.5]
+        pandas.testing.assert_frame_equal(metadata.df, expected)
+        errors = capsys.readouterr().err.splitlines()
+        assert errors[0] == 'run_info.json not found. Skipping missing.'
+        assert errors[1].startswith('Failed to read run_info.json for invalid: ')
+        assert errors[2] == 'p_pseudoaligned missing in run_info.json for no_field.'
+        assert errors[3] == 'Invalid p_pseudoaligned value in run_info.json for bad_percent: 101'
+
+    def test_injected_runner_exception_keeps_initial_reset(self, tmp_path, monkeypatch):
+        frame = pandas.DataFrame({'run': ['SRR1'], 'mapping_rate': [99.0], 'note': ['keep']})
+        metadata = Metadata.from_DataFrame(frame.copy())
+        metadata.df = frame.copy()
+        (tmp_path / 'SRR1').mkdir()
+
+        def runner(task_items, task_fn, max_workers):
+            raise RuntimeError('injected runner failure')
+
+        monkeypatch.setattr('amalgkit.util.run_tasks_with_optional_threads', runner)
+        with pytest.raises(RuntimeError, match='injected runner failure'):
+            get_mapping_rate(metadata, str(tmp_path), max_workers=1)
+
+        expected = frame.copy()
+        expected['mapping_rate'] = numpy.nan
+        pandas.testing.assert_frame_equal(metadata.df, expected)
+
+    def test_injected_task_failure_overrides_success_in_metadata_order(self, tmp_path, monkeypatch, capsys):
+        frame = pandas.DataFrame({'run': ['SRR1', 'SRR2'], 'mapping_rate': [99.0, 99.0]})
+        metadata = Metadata.from_DataFrame(frame.copy())
+        metadata.df = frame.copy()
+        for run in ['SRR1', 'SRR2']:
+            (tmp_path / run).mkdir()
+
+        def runner(task_items, task_fn, max_workers):
+            return {'SRR1': ('SRR1', 12.0, None), 'SRR2': ('SRR2', 30.0, None)}, [('SRR1', RuntimeError('failed'))]
+
+        monkeypatch.setattr('amalgkit.util.run_tasks_with_optional_threads', runner)
+        get_mapping_rate(metadata, str(tmp_path), max_workers=1)
+
+        expected = frame.copy()
+        expected['mapping_rate'] = [numpy.nan, 30.0]
+        pandas.testing.assert_frame_equal(metadata.df, expected)
+        assert capsys.readouterr().err == 'Failed to read run_info.json for SRR1: failed\n'

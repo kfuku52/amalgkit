@@ -181,6 +181,8 @@ def sample_group_to_tau(tc_sample_group_df, rich_annotation=True):
     order_values = []
     highest_ties = []
     column_names = list(columns)
+    # Column names are already normalized and unique; escape each one only once.
+    escaped_names = {name: serialize_sample_groups([name]) for name in column_names}
     for row, is_valid in zip(values, valid):
         positive = row > 0
         if not is_valid:
@@ -193,8 +195,10 @@ def sample_group_to_tau(tc_sample_group_df, rich_annotation=True):
         order_idx = numpy.argsort(-positive_values, kind='mergesort')
         ordered_groups = [positive_names[idx] for idx in order_idx]
         highest_values.append(ordered_groups[0])
-        order_values.append(serialize_sample_groups(ordered_groups))
-        highest_ties.append(serialize_sample_groups(sorted(column_names[i] for i in numpy.flatnonzero(row == row.max()))))
+        order_values.append('|'.join(escaped_names[name] for name in ordered_groups))
+        highest_ties.append('|'.join(
+            escaped_names[name] for name in sorted(column_names[i] for i in numpy.flatnonzero(row == row.max()))
+        ))
 
     df_tau.loc[:, 'highest'] = highest_values
     df_tau.loc[:, 'order'] = order_values

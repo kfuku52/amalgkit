@@ -243,3 +243,67 @@ def test_save_state_overview_pdf_writes_pdf(tmp_path):
     assert observed == str(out_path)
     assert out_path.exists()
     assert out_path.stat().st_size > 0
+
+
+@pytest.mark.parametrize('labels', [
+    pandas.Series(['0001', '1', 'NA', '', '葉', 'leaf', '0001', 'NA']),
+    pandas.Series([1, '1', True, 'True', 'é', 'e\u0301', 1.0, '1.0'], dtype=object),
+    pandas.Series([None, numpy.nan, pandas.NA, 'nan', '<NA>', 'None', '', 'NA'], dtype=object),
+    pandas.Series(['x', None, 'x', '', 'NA', '葉', None, 'nan'], dtype='str'),
+    pandas.Series(['x', None, 'x', '', 'NA', '葉', None, '<NA>'], dtype='string'),
+    pandas.Series(pandas.Categorical(['x', None, 'x', 'NA', '葉', 'y', None, 'NA'])),
+    pandas.Series([1, None, 1, 2, 3, None, 5, 6], dtype='Int64'),
+    pandas.Series([True, False, True, None, False, None, True, False], dtype='boolean'),
+    pandas.Series(['same'] * 8),
+    pandas.Series([f'unique_{i}' for i in range(8)]),
+])
+def test_correlation_label_equality_preserves_converted_labels(labels):
+    from amalgkit.per_species_outputs import _label_equality_matrix
+
+    converted = labels.astype(str).to_numpy()
+    expected = numpy.equal.outer(converted, converted)
+    numpy.testing.assert_array_equal(_label_equality_matrix(labels), expected)
+
+
+@pytest.mark.parametrize('precomputed_frame', [False, True])
+def test_correlation_statistics_preserve_pair_order_and_nonfinite_values(precomputed_frame):
+    runs = ['0001', 'NA', 'RUN3', 'RUN4', 'RUN5', 'RUN6']
+    counts = pandas.DataFrame(numpy.zeros((2, 6)), columns=runs)
+    metadata = pandas.DataFrame({
+        'run': runs,
+        'bioproject': ['0001', '1', '0001', '1', '0001', '1'],
+        'sample_group': ['NA', 'NA', '葉', '葉', 'NA', 'NA'],
+    })
+    matrix = numpy.array([
+        [1., .75, .2, -.1, .9, .8],
+        [-.9, 1., numpy.nan, numpy.inf, .8, -.3],
+        [-.8, -.7, 1., -.5, .4, .6],
+        [-.6, -.5, -.4, 1., -numpy.inf, .1],
+        [-.3, -.2, -.1, 0., 1., -.2],
+        [.1, .2, .3, .4, .5, 1.],
+    ])
+    precomputed = pandas.DataFrame(matrix, index=runs, columns=runs) if precomputed_frame else matrix
+    # The public wrapper aligns DataFrame matrices by their run order and arrays
+    # by metadata order. Both paths must preserve their existing upper triangle.
+    ordered_metadata = metadata.iloc[::-1].reset_index(drop=True)
+    observed = save_correlation_statistics(
+        counts, ordered_metadata, 'pearson', 7, precomputed_tc_dist_matrix=precomputed,
+    )
+    aligned = metadata if precomputed_frame else ordered_metadata
+    values_by_group = {label: [] for label in ['bwbw', 'wibw', 'bwwi', 'wiwi']}
+    for i in range(6):
+        for j in range(i + 1, 6):
+            if not numpy.isfinite(matrix[i, j]):
+                continue
+            same_batch = aligned.iloc[i]['bioproject'] == aligned.iloc[j]['bioproject']
+            same_group = aligned.iloc[i]['sample_group'] == aligned.iloc[j]['sample_group']
+            label = ('wi' if same_batch else 'bw') + ('wi' if same_group else 'bw')
+            values_by_group[label].append(matrix[i, j])
+    expected = {}
+    for label, values in values_by_group.items():
+        expected[f'{label}_n'] = float(len(values))
+        expected[f'{label}_mean'] = float(numpy.mean(values)) if values else numpy.nan
+        expected[f'{label}_median'] = float(numpy.median(values)) if values else numpy.nan
+        expected[f'{label}_variance'] = float(numpy.var(values, ddof=1)) if len(values) > 1 else numpy.nan
+    expected = pandas.DataFrame([expected], index=['round_7'], columns=CORRELATION_STAT_COLUMNS)
+    pandas.testing.assert_frame_equal(observed, expected, check_exact=True)

@@ -86,8 +86,17 @@ def merge_metadata_by_run(source_df, update_df, *, overwrite_columns=()):
                 )
                 target_dtype = combined_values.dtype
                 source[col] = source[col].astype(target_dtype)
-                for run_id, value in numeric_values.items():
-                    source.loc[run_id, col] = value
+                # Keep extension/object assignments sequential: their scalar
+                # coercion and promotion rules can differ from a batch write.
+                if (
+                    pandas.api.types.is_numeric_dtype(target_dtype)
+                    and not pandas.api.types.is_extension_array_dtype(target_dtype)
+                    and not pandas.api.types.is_extension_array_dtype(numeric_values.dtype)
+                ):
+                    source.loc[numeric_values.index, col] = numeric_values
+                else:
+                    for run_id, value in numeric_values.items():
+                        source.loc[run_id, col] = value
                 continue
 
             warnings.warn(
@@ -107,8 +116,11 @@ def merge_metadata_by_run(source_df, update_df, *, overwrite_columns=()):
 
         if pandas.api.types.is_string_dtype(source_dtype) and not pandas.api.types.is_object_dtype(source_dtype):
             strings = update_values.astype(str).where(update_values.notna(), pandas.NA)
-            for run_id, value in strings.items():
-                source.loc[run_id, col] = value
+            if isinstance(source_dtype, pandas.StringDtype):
+                source.loc[strings.index, col] = strings
+            else:
+                for run_id, value in strings.items():
+                    source.loc[run_id, col] = value
             continue
 
         candidate = source[col].copy()

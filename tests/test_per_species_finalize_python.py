@@ -669,6 +669,64 @@ def test_transform_raw_to_tpm_is_cpm_when_effective_length_is_one():
     assert numpy.allclose(tpm['SRR001'], [5.0e5, 5.0e5])
 
 
+@pytest.mark.parametrize('dtype', ['float64', 'float32', 'int64', 'object', 'Float64'])
+def test_tpm_transform_preserves_arithmetic_and_input_ownership(dtype):
+    counts = pandas.DataFrame(
+        [[0, 2], [3, 5], [7, 11]],
+        index=pandas.Index(['0001', 'NA', 'other'], name='target_id'),
+        columns=pandas.Index(['0001', 'NA'], name='run'),
+        dtype=dtype,
+    )
+    lengths = pandas.DataFrame(
+        [[1.0, 7.0], [11.0, 13.0], [17.0, 19.0]],
+        index=counts.index,
+        columns=counts.columns,
+    ).iloc[::-1, ::-1]
+    counts_before = counts.copy(deep=True)
+    lengths_before = lengths.copy(deep=True)
+    aligned_lengths = lengths.reindex(index=counts.index, columns=counts.columns).to_numpy(dtype=float)
+    ratios = counts.to_numpy(dtype=float) / aligned_lengths
+    expected = ratios * 1e6 / numpy.nansum(ratios, axis=0, keepdims=True)
+
+    observed = _transform_raw_to_tpm(counts, lengths)
+
+    numpy.testing.assert_array_equal(observed.to_numpy().view(numpy.uint64), expected.view(numpy.uint64))
+    pandas.testing.assert_index_equal(observed.index, counts.index)
+    pandas.testing.assert_index_equal(observed.columns, counts.columns)
+    observed.iloc[:, :] = 123.0
+    pandas.testing.assert_frame_equal(counts, counts_before)
+    pandas.testing.assert_frame_equal(lengths, lengths_before)
+
+
+def test_tpm_transform_preserves_extreme_value_bits_and_warning_order():
+    import warnings
+
+    tiny = numpy.nextafter(0.0, 1.0)
+    maximum = numpy.finfo(float).max
+    counts = pandas.DataFrame([
+        [maximum, maximum, tiny, 0.0, -0.0],
+        [maximum, maximum, tiny * 3, -0.0, 0.0],
+    ])
+    lengths = pandas.DataFrame([
+        [1.0, tiny, maximum, 1.0, 2.0],
+        [1.0, tiny, 1.0, 3.0, 4.0],
+    ])
+    with warnings.catch_warnings(record=True) as expected_warnings:
+        warnings.simplefilter('always')
+        with numpy.errstate(divide='ignore', invalid='ignore'):
+            ratios = counts.to_numpy(dtype=float) / lengths.to_numpy(dtype=float)
+            expected = ratios * 1e6 / numpy.nansum(ratios, axis=0, keepdims=True)
+        expected[~numpy.isfinite(expected)] = 0.0
+    with warnings.catch_warnings(record=True) as observed_warnings:
+        warnings.simplefilter('always')
+        observed = _transform_raw_to_tpm(counts, lengths)
+
+    numpy.testing.assert_array_equal(observed.to_numpy().view(numpy.uint64), expected.view(numpy.uint64))
+    assert [(type(w.message), str(w.message)) for w in observed_warnings] == [
+        (type(w.message), str(w.message)) for w in expected_warnings
+    ]
+
+
 def test_apply_transformation_rejects_fpkm_without_effective_length():
     counts = pandas.DataFrame({'SRR001': [10.0, 10.0]}, index=['short', 'long'])
     eff = pandas.DataFrame({'SRR001': [1.0, 1.0]}, index=['short', 'long'])

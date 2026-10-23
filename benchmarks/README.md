@@ -167,3 +167,33 @@ python benchmarks/benchmark_recent_changes.py \
 
 Use CPU time and memory alongside elapsed time, and inspect host load. A busy
 host can obscure an elapsed-time improvement even in alternating isolated runs.
+
+The `mapping_rate`, `metadata_merge`, `tau_annotations`, and `correlation_stats`
+cases exercise complete mapping-rate JSON ingestion, mixed numeric/string
+metadata updates, rich tau annotations, and correlation summaries from a
+precomputed matrix. Each compares the full returned table exactly, including
+annotation strings. JSON input creation and correlation matrix construction are
+outside timing. `--genes` sets the number of metadata rows or tau genes;
+`--samples` sets tau groups or correlation samples. Correlation summaries still
+use quadratic matrix/mask storage.
+
+```bash
+python benchmarks/benchmark_recent_changes.py \
+  --baseline /tmp/amalgkit-baseline --repeats 5 --allocation-scan \
+  --cases mapping_rate metadata_merge --genes 2000 --samples 20 \
+  --output /tmp/amalgkit-metadata
+python benchmarks/benchmark_recent_changes.py \
+  --baseline /tmp/amalgkit-baseline --repeats 5 --allocation-scan \
+  --cases tau_annotations --genes 20000 --samples 50 --output /tmp/amalgkit-tau-annotations
+python benchmarks/benchmark_recent_changes.py \
+  --baseline /tmp/amalgkit-baseline --repeats 5 --allocation-scan \
+  --cases correlation_stats --samples 1500 --output /tmp/amalgkit-correlation-stats
+python benchmarks/benchmark_recent_changes.py \
+  --baseline /tmp/amalgkit-baseline --repeats 5 --allocation-scan \
+  --cases tpm_transform --genes 40000 --samples 150 --output /tmp/amalgkit-tpm
+```
+
+The `tpm_transform` case measures the complete raw-count/effective-length helper
+and its full output. Reduced temporary allocation does not necessarily lower
+whole-process RSS: alignment/validation also allocate matrices, and RSS includes
+input construction. Report allocation and RSS measurements separately.
