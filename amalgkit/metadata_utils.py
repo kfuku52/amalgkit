@@ -48,6 +48,25 @@ def iter_experiment_packages_per_run(root):
         if len(runs) <= 1:
             yield package
             continue
+        run_sets = package.findall('./RUN_SET')
+        if len(run_sets) == 1:
+            run_set = run_sets[0]
+            run_set_index = list(package).index(run_set)
+            for run_position, run in enumerate(run_set):
+                if run.tag != 'RUN':
+                    continue
+                # Prune a shallow view before copying so sibling RUN subtrees
+                # are never copied. Deepcopy the view to keep yielded packages
+                # independent of the source XML and of each other.
+                run_set_view = copy.copy(run_set)
+                run_set_view[:] = [
+                    child for index, child in enumerate(run_set)
+                    if child.tag != 'RUN' or index == run_position
+                ]
+                package_view = copy.copy(package)
+                package_view[run_set_index] = run_set_view
+                yield copy.deepcopy(package_view)
+            continue
         for run_index in range(len(runs)):
             package_copy = copy.deepcopy(package)
             run_set_copy = package_copy.find('./RUN_SET')
@@ -76,10 +95,15 @@ def parse_bool_flags(values, column_name='value', default=''):
     if default != '':
         normalized = normalized.replace('', default)
     parsed = []
+    parsed_by_value = {}
     invalid_values = []
     for raw_value, normalized_value in zip(raw_values, normalized.tolist()):
         try:
-            parsed.append(strtobool(normalized_value))
+            parsed_value = parsed_by_value.get(normalized_value)
+            if parsed_value is None:
+                parsed_value = strtobool(normalized_value)
+                parsed_by_value[normalized_value] = parsed_value
+            parsed.append(parsed_value)
         except ValueError:
             invalid_values.append(raw_value)
     if invalid_values:
@@ -818,36 +842,52 @@ class Metadata:
             self.df['sampling_seed'] = normalized_seed
             is_empty = (self.df['sample_group'] == '')
             self.df.loc[(self.df.loc[:, 'exclusion'] == 'no') & (~is_empty), 'is_qualified'] = 'yes'
-            grouped = self.df.groupby(['scientific_name', 'sample_group'], sort=False, dropna=False)
-            for (_, _), sp_sample_group in grouped:
-                sampled_group = sp_sample_group.copy()
-                if normalized_strategy == 'maximize_bioproject_diversity':
-                    sampled_group = self._maximize_bioproject_sampling(
-                        df=sampled_group,
-                        target_n=max_sample,
-                        rng=rng,
-                    )
-                elif normalized_strategy == 'largest_bioprojects_first':
-                    sampled_group = self._sample_bioprojects_by_size(
-                        df=sampled_group,
-                        target_n=max_sample,
-                        largest_first=True,
-                        rng=rng,
-                    )
-                elif normalized_strategy == 'smallest_bioprojects_first':
-                    sampled_group = self._sample_bioprojects_by_size(
-                        df=sampled_group,
-                        target_n=max_sample,
-                        largest_first=False,
-                        rng=rng,
-                    )
-                else:
-                    sampled_group = self._sample_random(
-                        df=sampled_group,
-                        target_n=max_sample,
-                        rng=rng,
-                    )
-                self.df.loc[sampled_group.index, 'is_sampled'] = sampled_group['is_sampled'].to_numpy()
+            # Sampling reads only these columns; avoid copying annotations for every group.
+            grouped = self.df.groupby(['scientific_name', 'sample_group'], sort=False, dropna=False)[
+                ['exclusion', 'bioproject', 'is_sampled']
+            ]
+            # A unique index allows one assignment after sampling all groups.
+            # Keep label-based writes for duplicate indices, whose selections can
+            # overlap across groups. Flush completed groups even if a later one fails.
+            unique_index = self.df.index.is_unique
+            sampled_flags = []
+            try:
+                for (_, _), sp_sample_group in grouped:
+                    sampled_group = sp_sample_group.copy()
+                    if normalized_strategy == 'maximize_bioproject_diversity':
+                        sampled_group = self._maximize_bioproject_sampling(
+                            df=sampled_group,
+                            target_n=max_sample,
+                            rng=rng,
+                        )
+                    elif normalized_strategy == 'largest_bioprojects_first':
+                        sampled_group = self._sample_bioprojects_by_size(
+                            df=sampled_group,
+                            target_n=max_sample,
+                            largest_first=True,
+                            rng=rng,
+                        )
+                    elif normalized_strategy == 'smallest_bioprojects_first':
+                        sampled_group = self._sample_bioprojects_by_size(
+                            df=sampled_group,
+                            target_n=max_sample,
+                            largest_first=False,
+                            rng=rng,
+                        )
+                    else:
+                        sampled_group = self._sample_random(
+                            df=sampled_group,
+                            target_n=max_sample,
+                            rng=rng,
+                        )
+                    if unique_index:
+                        sampled_flags.append(sampled_group['is_sampled'])
+                    else:
+                        self.df.loc[sampled_group.index, 'is_sampled'] = sampled_group['is_sampled'].to_numpy()
+            finally:
+                if sampled_flags:
+                    sampled_flags = pandas.concat(sampled_flags)
+                    self.df.loc[sampled_flags.index, 'is_sampled'] = sampled_flags.to_numpy()
             self.reorder(omit_misc=False)
         finally:
             pandas.set_option('mode.chained_assignment', previous_mode)

@@ -28,7 +28,8 @@ from pathlib import Path
 
 CASES = ('quant_validation', 'fastq_scan', 'wsfilter', 'csfilter', 'tau', 'sva', 'cstmm')
 EXTRA_CASES = ('random_sampling', 'imputation', 'select_normalization', 'gsa_selection',
-               'tmm_rounds', 'averaged_inputs', 'select_exclusion', 'select_exclusion_unique', 'provenance_hash')
+               'tmm_rounds', 'averaged_inputs', 'select_exclusion', 'select_exclusion_unique', 'provenance_hash',
+               'outlier_groups', 'orthogroup_counts', 'orthogroup_counts_long')
 
 
 def digest_file(path):
@@ -42,6 +43,34 @@ def prepare_adoption_case(args, root):
     from types import SimpleNamespace
 
     rng = np.random.default_rng(719)
+    if args.case.startswith('orthogroup_counts'):
+        from amalgkit.orthology_utils import orthogroup2genecount
+        species = [f'Species_{i:02d}' for i in range(min(args.samples, 50))]
+        data = {'busco_id': ['0001', 'NA'][:args.genes] + [f'OG{i:07d}' for i in range(2, args.genes)]}
+        for column, name in enumerate(species):
+            data[name] = [(','.join(f'g{column}_{row}_{copy}' for copy in range(1 + row % 3))
+                           if row % 11 else '-') for row in range(args.genes)]
+        if args.case.endswith('_long'):
+            data[species[0]][0] = 'long_gene_' + 'x' * 246
+        path, output = root / 'orthogroups.tsv', root / 'gene_counts.tsv'
+        pd.DataFrame(data).to_csv(path, sep='\t', index=False)
+
+        def run():
+            orthogroup2genecount(str(path), str(output), list(reversed(species)))
+            return np.frombuffer(hashlib.sha256(output.read_bytes()).digest(), dtype=np.uint8)
+
+        return run, dict(rows=args.genes, species=len(species), long_id=args.case.endswith('_long'))
+    if args.case == 'outlier_groups':
+        from amalgkit.outlier_utils import compute_groupwise_robust_z
+        values = rng.normal(size=args.genes)
+        groups = np.array([f'group{i % args.samples}' for i in range(args.genes)], dtype=object)
+        order = rng.permutation(args.genes)
+        values, groups = values[order], groups[order]
+        values[::137] = np.nan
+        values[::251] = np.inf
+        groups[::197] = ''
+        return (lambda: compute_groupwise_robust_z(values, groups),
+                dict(rows=args.genes, groups=args.samples, seed=719, min_group_size=3))
     if args.case == 'provenance_hash':
         from amalgkit.quant_provenance import file_identity
         path = root / 'input.bin'
@@ -102,7 +131,8 @@ def prepare_case(args, root):
     import numpy as np
     import pandas as pd
 
-    if args.case in {'tmm_rounds', 'averaged_inputs', 'select_exclusion', 'select_exclusion_unique', 'provenance_hash'}:
+    if args.case in {'tmm_rounds', 'averaged_inputs', 'select_exclusion', 'select_exclusion_unique', 'provenance_hash',
+                     'outlier_groups', 'orthogroup_counts', 'orthogroup_counts_long'}:
         return prepare_adoption_case(args, root)
     if args.case == 'select_normalization':
         from amalgkit.select import normalize_select_metadata_frame, read_select_rules

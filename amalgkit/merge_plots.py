@@ -115,6 +115,15 @@ def _insert_axis_breaks(values):
     return ticks
 
 
+def _group_species_plot_values(df_plot, value_col):
+    species_order = []
+    grouped_values = []
+    for species, values in df_plot.groupby('scientific_name', sort=True)[value_col]:
+        species_order.append(species)
+        grouped_values.append(values.to_numpy(dtype=float))
+    return species_order, grouped_values
+
+
 def _save_species_boxplot_pdf(df, value_col, out_path, y_label, font_size=8, y_limits=None):
     if value_col not in df.columns:
         print('{} column not found. Skipping plot generation.'.format(value_col), flush=True)
@@ -134,13 +143,7 @@ def _save_species_boxplot_pdf(df, value_col, out_path, y_label, font_size=8, y_l
     if df_plot.empty:
         print('No data available for {}. Skipping plot generation.'.format(value_col), flush=True)
         return
-    species_order = sorted(_ordered_unique(df_plot.loc[:, 'scientific_name']))
-    grouped = [
-        df_plot.loc[df_plot.loc[:, 'scientific_name'] == species, value_col].to_numpy(dtype=float)
-        for species in species_order
-    ]
-    grouped = [values for values in grouped if values.size > 0]
-    species_order = [species for species in species_order if (df_plot.loc[df_plot.loc[:, 'scientific_name'] == species, :].shape[0] > 0)]
+    species_order, grouped = _group_species_plot_values(df_plot, value_col)
     if len(grouped) == 0:
         return
     pyplot = _load_pyplot()
@@ -240,13 +243,7 @@ def _save_species_histogram_pdf(
     if df_plot.empty:
         print('No data available for {}. Skipping plot generation.'.format(value_col), flush=True)
         return
-    species_order = sorted(_ordered_unique(df_plot.loc[:, 'scientific_name']))
-    hist_values = [
-        df_plot.loc[df_plot.loc[:, 'scientific_name'] == species, value_col].to_numpy(dtype=float)
-        for species in species_order
-    ]
-    hist_values = [values for values in hist_values if values.size > 0]
-    species_order = [species for species in species_order if (df_plot.loc[df_plot.loc[:, 'scientific_name'] == species, :].shape[0] > 0)]
+    species_order, hist_values = _group_species_plot_values(df_plot, value_col)
     if len(hist_values) == 0:
         return
     breaks = _normalize_hist_breaks(df_plot.loc[:, value_col].to_numpy(dtype=float), bin_breaks=bin_breaks, bins=bins)

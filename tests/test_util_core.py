@@ -1,6 +1,8 @@
 import threading
 import time
 
+import numpy
+import pandas
 import pytest
 
 from amalgkit.parallel_utils import raise_task_failures
@@ -46,6 +48,40 @@ class TestParseBoolFlags:
     def test_raises_for_invalid_values(self):
         with pytest.raises(ValueError, match='invalid boolean flag'):
             parse_bool_flags(['yes', 'maybe'], column_name='is_sampled', default='no')
+
+    @pytest.mark.parametrize('as_generator', [False, True])
+    def test_preserves_boolean_tokens_mixed_values_and_order(self, as_generator):
+        true_tokens = ['y', 'YES', ' t ', 'True', 'ON', '1', True, 1]
+        false_tokens = ['n', 'NO', ' f ', 'False', 'OFF', '0', False, 0]
+        values = [value for pair in zip(true_tokens, false_tokens) for value in pair] * 3
+        result = parse_bool_flags((v for v in values) if as_generator else values)
+        assert isinstance(result, numpy.ndarray)
+        assert result.dtype == numpy.dtype(bool)
+        assert result.shape == (len(values),)
+        assert result.tolist() == [True, False] * len(true_tokens) * 3
+
+    @pytest.mark.parametrize('default, expected', [('no', False), ('yes', True), (1, True)])
+    def test_missing_values_with_string_or_numeric_default(self, default, expected):
+        result = parse_bool_flags([None, numpy.nan, pandas.NA], default=default)
+        assert result.tolist() == [expected] * 3
+
+    @pytest.mark.parametrize('default', [1, True, False])
+    def test_empty_string_preserves_nonstring_default_error(self, default):
+        with pytest.raises(AttributeError, match='lower'):
+            parse_bool_flags([''], default=default)
+
+    def test_invalid_values_report_original_sorted_unique_text(self):
+        values = [' MAYBE ', 'maybe', 'NA', '0001', ' MAYBE ', None, '']
+        with pytest.raises(ValueError) as error:
+            parse_bool_flags((v for v in values), column_name='is_sampled', default='no')
+        assert str(error.value) == (
+            'Column "is_sampled" contains invalid boolean flag(s):  MAYBE , 0001, NA, maybe'
+        )
+
+    def test_empty_iterable_is_one_dimensional_boolean_array(self):
+        result = parse_bool_flags(iter(()), default='no')
+        assert result.dtype == numpy.dtype(bool)
+        assert result.shape == (0,)
 
 class TestRunTasksWithOptionalThreads:
     def test_empty_tasks(self):

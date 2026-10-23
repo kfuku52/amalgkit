@@ -1,4 +1,5 @@
 import os
+import copy
 import re
 import shutil
 import json
@@ -273,13 +274,14 @@ def _get_df_exp_single_copy_ortholog(
 
 
 def _get_library_sizes(df_nonzero, uncorrected_by_species):
-    library_sizes = pandas.Series(index=df_nonzero.columns, dtype=float)
+    columns = df_nonzero.columns
+    library_sizes = numpy.full(len(columns), numpy.nan, dtype=float)
     for species_name, counts_df in uncorrected_by_species.items():
         del species_name
         for sample_id in counts_df.columns:
-            if sample_id in library_sizes.index:
-                library_sizes.loc[sample_id] = float(counts_df.loc[:, sample_id].sum(skipna=True))
-    return library_sizes
+            if sample_id in columns:
+                library_sizes[columns.get_loc(sample_id)] = float(counts_df.loc[:, sample_id].sum(skipna=True))
+    return pandas.Series(library_sizes, index=columns)
 
 
 def _build_norm_factor_frame(metadata_df, roundtrip):
@@ -324,11 +326,16 @@ def save_corrected_output_files_python(uncorrected_by_species, roundtrip, dir_co
     corrected = {}
     factors = roundtrip.round2_factors
     for species_name, dat in uncorrected_by_species.items():
-        corrected_dat = dat.astype(float).copy()
+        # Keep one independently owned array for division, avoiding full-frame
+        # copies and pandas assignment for each sample. Repeated factor IDs are
+        # still applied in order so their floating-point rounding is unchanged.
+        corrected_values = dat.astype(float).to_numpy(copy=True)
         for sample_id, factor in factors.items():
-            if sample_id in corrected_dat.columns:
-                corrected_dat.loc[:, sample_id] = corrected_dat.loc[:, sample_id].to_numpy(dtype=float) / float(factor)
-        dat_out = corrected_dat.copy()
+            if sample_id in dat.columns:
+                column = dat.columns.get_loc(sample_id)
+                corrected_values[:, column] /= float(factor)
+        dat_out = pandas.DataFrame(corrected_values, index=dat.index, columns=dat.columns, copy=False)
+        dat_out.attrs = copy.deepcopy(dat.attrs)
         dat_out.insert(0, 'target_id', dat_out.index)
         dat_out.columns = [
             col if col == 'target_id' else re.sub(r'^{}_'.format(re.escape(species_name)), '', str(col))

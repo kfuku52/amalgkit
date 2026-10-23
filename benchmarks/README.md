@@ -149,3 +149,21 @@ inputs need a bounded row-width pass before the C parser, which can otherwise
 ignore extra fields at chunk boundaries. Other formats use the strict Python
 parser. Report that CPU/I/O cost alongside memory savings; remove the extra
 pass only after malformed-boundary regressions pass with the underlying parser.
+
+The `outlier_groups`, `orthogroup_counts`, and `orthogroup_counts_long` cases
+also exercise grouped robust-z scoring and orthogroup gene counting. The latter
+two compare exact exported TSV hashes; the long-ID case changes one identifier
+to 256 characters to expose fixed-width string allocation costs.
+
+```bash
+python benchmarks/benchmark_recent_changes.py \
+  --baseline /tmp/amalgkit-baseline --repeats 5 --allocation-scan \
+  --cases outlier_groups --genes 30000 --samples 100 --output /tmp/amalgkit-outliers
+python benchmarks/benchmark_recent_changes.py \
+  --baseline /tmp/amalgkit-baseline --repeats 5 --allocation-scan \
+  --cases orthogroup_counts orthogroup_counts_long --genes 20000 --samples 20 \
+  --output /tmp/amalgkit-orthogroups
+```
+
+Use CPU time and memory alongside elapsed time, and inspect host load. A busy
+host can obscure an elapsed-time improvement even in alternating isolated runs.

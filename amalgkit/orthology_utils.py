@@ -56,10 +56,13 @@ def orthogroup2genecount(file_orthogroup, file_genecount, spp):
     orthogroup_df = pandas.DataFrame({'orthogroup_id': df['busco_id'].to_numpy()})
     is_spp = df.columns.isin(spp)
     df = df.loc[:, is_spp].fillna('').replace('-', '').astype(str)
-    values = df.to_numpy(dtype=str)
-    non_empty = (values != '')
-    comma_counts = numpy.char.count(values, ',').astype(int)
-    gc_values = non_empty.astype(int) + (comma_counts * non_empty)
+    # Avoid padding every cell to the longest gene list in the table.
+    values = df.to_numpy(dtype=object)
+    gc_values = numpy.fromiter(
+        (value.count(',') + bool(value) for value in values.flat),
+        dtype=int,
+        count=values.size,
+    ).reshape(values.shape)
     gc = pandas.DataFrame(gc_values, index=df.index, columns=df.columns)
     gc = pandas.concat([orthogroup_df, gc], axis=1)
     col_order = ['orthogroup_id'] + [col for col in gc.columns if col != 'orthogroup_id']

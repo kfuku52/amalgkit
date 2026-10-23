@@ -29,6 +29,37 @@ def test_compute_groupwise_robust_z_small_group_is_nan():
     assert numpy.isfinite(z[2:]).all()
 
 
+def test_compute_groupwise_robust_z_interleaved_lexical_groups_and_sd_fallback():
+    values = [0, 4, 2, 4, 4, 10, 'bad', numpy.inf, -numpy.inf, 100, 100]
+    groups = [' 0001 ', ' NA ', '0001', 'NA', '0001', 'NA', '0001', 'NA', 'NA', '', None]
+    z = compute_groupwise_robust_z(values, groups)
+    expected = [
+        -1 / 1.4826, 0, 0, 0, 1 / 1.4826, numpy.sqrt(3),
+        numpy.nan, numpy.nan, numpy.nan, numpy.nan, numpy.nan,
+    ]
+    numpy.testing.assert_allclose(z, expected, rtol=1e-15, atol=0, equal_nan=True)
+    assert z.shape == (len(values),)
+    assert z.dtype == numpy.dtype(float)
+
+
+@pytest.mark.parametrize(
+    'values,groups,min_group_size,expected',
+    [
+        ([7, 7, 7], ['g'] * 3, 3, [0, 0, 0]),
+        ([7], ['g'], 1, [0]),
+        ([0, 2, 4], ['g'], 3, [-1 / 1.4826, 0, 1 / 1.4826]),
+        ([0, 2, 4], 'g', 3, [-1 / 1.4826, 0, 1 / 1.4826]),
+        ([0, 2, 4], ['  '], 1, [numpy.nan] * 3),
+        ([0, 2, numpy.nan, numpy.inf], ['g'] * 4, 3, [numpy.nan] * 4),
+        ([0, 1, 2], ['', None, '  '], 1, [numpy.nan] * 3),
+        ([], [], 3, []),
+    ],
+)
+def test_compute_groupwise_robust_z_finite_group_boundaries(values, groups, min_group_size, expected):
+    z = compute_groupwise_robust_z(values, groups, min_group_size=min_group_size)
+    numpy.testing.assert_array_equal(z, expected)
+
+
 def test_flag_margin_outliers_default_policy_falls_back_to_absolute_margin():
     # Established behaviour (and the pre-port R behaviour): when the robust
     # z-score is unavailable, the absolute margin threshold decides on its own.

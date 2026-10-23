@@ -13,10 +13,15 @@ def compute_groupwise_robust_z(values, groups, mad_scale=1.4826, min_group_size=
     out = numpy.full((values_arr.shape[0],), numpy.nan, dtype=float)
     if values_arr.shape[0] == 0:
         return out
-    valid_group = groups_arr != ''
-    group_levels = list(dict.fromkeys(groups_arr[valid_group].tolist()))
-    for group_value in group_levels:
-        idx = numpy.where(valid_group & (groups_arr == group_value) & numpy.isfinite(values_arr))[0]
+    if groups_arr.size == 1:
+        groups_arr = numpy.broadcast_to(groups_arr, values_arr.shape)
+    finite_values = numpy.isfinite(values_arr)
+    # Partition positions once rather than scanning every row for each group.
+    group_indices = pandas.Series(values_arr, copy=False).groupby(groups_arr, sort=False).indices
+    for group_value, group_idx in group_indices.items():
+        if group_value == '':
+            continue
+        idx = group_idx[finite_values[group_idx]]
         if idx.size == 0:
             continue
         if idx.size < int(min_group_size):

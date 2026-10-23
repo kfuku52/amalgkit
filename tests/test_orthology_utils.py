@@ -47,6 +47,52 @@ def test_busco_merge_preserves_full_species_tokens_for_genecount(tmp_path):
     assert counts['Homo_sapiens_subsp'].tolist() == [1]
 
 
+def test_orthogroup_gene_counts_preserve_tokens_and_input_species_order(tmp_path):
+    orthogroups = tmp_path / 'orthogroups.tsv'
+    counts = tmp_path / 'counts.tsv'
+    orthogroups.write_text(
+        'busco_id\tSpecies_B\tdescription\tSpecies_A\tSpecies_C\n'
+        '0001\tNA\tignored, annotation\t0001\t-\n'
+        'NA\t\tannotation\tgene-name\tgene1, gene2\n'
+        'OG3\t,\tannotation\tgene,\t,gene\n'
+        'OG4\t \tannotation\t--\tgene,,other\n'
+        'OG5\tnan\tannotation\tNULL\tgène,遺伝子\n'
+        'OG6\ta,-\tannotation\t-\t\n'
+        'OG7\t' + 'long_gene_' + 'x' * 10000 + '\tannotation\tgene\tgene\n'
+    )
+
+    orthogroup2genecount(
+        str(orthogroups), str(counts), ['Species_C', 'Species_A', 'Species_B', 'Species_A'],
+    )
+
+    assert counts.read_text() == (
+        'orthogroup_id\tSpecies_B\tSpecies_A\tSpecies_C\n'
+        '0001\t1\t1\t0\n'
+        'NA\t0\t1\t2\n'
+        'OG3\t2\t2\t2\n'
+        'OG4\t1\t1\t3\n'
+        'OG5\t1\t1\t2\n'
+        'OG6\t2\t0\t0\n'
+        'OG7\t1\t1\t1\n'
+    )
+
+
+@pytest.mark.parametrize('rows', ['', '0001\tgene\nNA\t-\n'])
+@pytest.mark.parametrize('species', [[], ['Species_A']])
+def test_orthogroup_gene_counts_allow_empty_axes(tmp_path, rows, species):
+    orthogroups = tmp_path / 'orthogroups.tsv'
+    counts = tmp_path / 'counts.tsv'
+    orthogroups.write_text('busco_id\tSpecies_A\n' + rows)
+
+    orthogroup2genecount(str(orthogroups), str(counts), species)
+
+    if species:
+        expected = 'orthogroup_id\tSpecies_A\n' + ('0001\t1\nNA\t0\n' if rows else '')
+    else:
+        expected = 'orthogroup_id\n' + ('0001\nNA\n' if rows else '')
+    assert counts.read_text() == expected
+
+
 def test_single_copy_orthogroup_mask_uses_percentage_of_species():
     genecount = pandas.DataFrame(
         {
