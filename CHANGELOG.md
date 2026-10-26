@@ -5,6 +5,12 @@ Releases provide generated notes only for tagged releases. Patch-only updates
 remain on the default branch and are recorded below; consult this file rather
 than the Releases page for those changes.
 
+### 0.16.106 - 2026-10-26
+
+- Distinguish SRA Toolkit numeric spot names from paired-read mate indicators.
+  Continue checking spot IDs, order, counts, explicit slash suffixes and CASAVA
+  mate fields, including rejection of reversed private FASTQ inputs.
+
 ### 0.16.103 - 2026-10-22
 
 - Select exact TMM trim boundaries without sorting every count ratio/product;

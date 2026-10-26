@@ -996,6 +996,34 @@ class TestRenameFastq:
         assert (tmp_path / 'SRR001_1.amalgkit.fastq.gz').is_file()
         assert (tmp_path / 'SRR001_2.amalgkit.fastq.gz').is_file()
 
+    def test_accepts_sra_numeric_spot_names_in_both_mates(self, tmp_path):
+        sra_stat = {'sra_id': 'SRR22216434', 'layout': 'paired'}
+        for mate in (1, 2):
+            self._write_header_fastq_gz(
+                tmp_path / ('SRR22216434_' + str(mate) + '.fastq.gz'),
+                ['@SRR22216434.1 1 length=151', '@SRR22216434.2 2 length=151'],
+            )
+        rename_fastq(
+            sra_stat, str(tmp_path), '.fastq.gz', '.amalgkit.fastq.gz',
+            validate_fastq=True,
+        )
+        assert (tmp_path / 'SRR22216434_1.amalgkit.fastq.gz').is_file()
+        assert (tmp_path / 'SRR22216434_2.amalgkit.fastq.gz').is_file()
+
+    def test_sra_numeric_spot_names_do_not_hide_wrong_pair_order(self, tmp_path):
+        sra_stat = {'sra_id': 'SRR22216434', 'layout': 'paired'}
+        self._write_header_fastq_gz(
+            tmp_path / 'SRR22216434_1.fastq.gz', ['@SRR22216434.1 1 length=151'],
+        )
+        self._write_header_fastq_gz(
+            tmp_path / 'SRR22216434_2.fastq.gz', ['@SRR22216434.2 2 length=151'],
+        )
+        with pytest.raises(ValueError, match='mate ID/order mismatch'):
+            rename_fastq(
+                sra_stat, str(tmp_path), '.fastq.gz', '.amalgkit.fastq.gz',
+                validate_fastq=True,
+            )
+
     def test_rejects_wrong_whitespace_mate_field(self, tmp_path):
         sra_stat = {'sra_id': 'SRR001', 'layout': 'paired'}
         path1 = tmp_path / 'SRR001_1.fastq.gz'

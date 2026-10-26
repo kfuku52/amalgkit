@@ -4648,7 +4648,15 @@ def parse_paired_fastq_header(header_line):
     elif read_id.endswith('/2'):
         mate_index = 2
     elif len(fields) > 1:
-        mate_match = re.match(r'^([12])(?::|$)', fields[1])
+        # SRA Toolkit preserves a numeric spot name before length=..., in
+        # both mate files. A bare 1/2 in that documented header is not a
+        # mate indicator; slash suffixes and CASAVA fields remain explicit.
+        sra_spot_name = (
+            re.fullmatch(r'[SED]RR[0-9]+\.[0-9]+', read_id) is not None
+            and fields[1].isdigit()
+            and any(re.fullmatch(r'length=[0-9]+', field) for field in fields[2:])
+        )
+        mate_match = None if sra_spot_name else re.match(r'^([12])(?::|$)', fields[1])
         if mate_match is not None:
             mate_index = int(mate_match.group(1))
     return normalize_paired_read_core(read_id), mate_index
