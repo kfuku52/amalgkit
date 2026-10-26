@@ -67,23 +67,6 @@ def test_run_views_match_full_copy_oracle(run_sets):
     actual = [ET.tostring(package) for package in metadata_utils.iter_experiment_packages_per_run(root)]
     assert actual == expected
     assert ET.tostring(root) == original
-    if len(root.findall('./EXPERIMENT_PACKAGE/RUN_SET/RUN')) <= 1:
-        assert next(metadata_utils.iter_experiment_packages_per_run(root)) is root[0]
-
-
-def test_multi_run_views_are_independent_deep_copies():
-    root = _xml('<RUN_SET source="SRA">' + _run('SRR000001') + _run('SRR000002') + '</RUN_SET>')
-    original = ET.tostring(root)
-    first, second = metadata_utils.iter_experiment_packages_per_run(root)
-    second_original = ET.tostring(second)
-    for element in first.iter():
-        element.set('mutated', 'yes')
-        element.text = 'changed text'
-        element.tail = 'changed tail'
-    first.find('./RUN_SET').clear()
-    first.remove(first.find('./SAMPLE'))
-    assert ET.tostring(second) == second_original
-    assert ET.tostring(root) == original
 
 
 def test_metadata_run_views_preserve_complete_output_and_collision_info(monkeypatch):

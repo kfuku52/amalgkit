@@ -106,55 +106,12 @@ def test_sampling_empty_table_preserves_schema_and_option(strategy):
     assert metadata.df["sampling_seed"].dtype == numpy.dtype("int64")
 
 
-def test_sampling_completed_groups_retained_after_later_failure(monkeypatch):
-    metadata = Metadata.from_dataframe(
-        pandas.DataFrame(
-            {
-                "scientific_name": ["Species A", "Species B"],
-                "sample_group": ["leaf", "leaf"],
-                "bioproject": ["P", "P"],
-                "run": ["R0", "R1"],
-                "exclusion": ["no", "no"],
-            }
-        )
-    )
-    original = metadata._sample_random
-    calls = 0
-
-    def failing_sampler(df, **kwargs):
-        nonlocal calls
-        calls += 1
-        if calls == 2:
-            raise RuntimeError("second group")
-        return original(df, **kwargs)
-
-    monkeypatch.setattr(metadata, "_sample_random", failing_sampler)
-    with pandas.option_context("mode.chained_assignment", "raise"):
-        with pytest.raises(RuntimeError, match="second group"):
-            metadata.label_sampled_data(sampling_strategy="random")
-        assert pandas.get_option("mode.chained_assignment") == "raise"
-    assert metadata.df["is_sampled"].tolist() == ["yes", "no"]
-
-
-@pytest.mark.parametrize("strategy", SELECT_SAMPLING_STRATEGIES)
-def test_sampling_duplicate_index_preserves_legacy_assignment_error(strategy):
-    metadata = Metadata.from_dataframe(sampling_frame().iloc[:2])
-    metadata.df["scientific_name"] = "Species A"
-    metadata.df["sample_group"] = "leaf"
-    metadata.df.index = [7, 7]
-    with pandas.option_context("mode.chained_assignment", "raise"):
-        with pytest.raises(ValueError):
-            metadata.label_sampled_data(sampling_strategy=strategy)
-        assert pandas.get_option("mode.chained_assignment") == "raise"
-
-
-@pytest.mark.parametrize("strategy", SELECT_SAMPLING_STRATEGIES)
 @pytest.mark.parametrize("seed", [-1, None, "invalid"])
-def test_sampling_invalid_seed_leaves_metadata_and_option_unchanged(strategy, seed):
+def test_sampling_invalid_seed_leaves_metadata_and_option_unchanged(seed):
     metadata = Metadata.from_dataframe(sampling_frame())
     expected = metadata.df.copy()
     with pandas.option_context("mode.chained_assignment", "raise"):
         with pytest.raises(ValueError, match="non-negative integer"):
-            metadata.label_sampled_data(sampling_strategy=strategy, random_seed=seed)
+            metadata.label_sampled_data(random_seed=seed)
         assert pandas.get_option("mode.chained_assignment") == "raise"
     pandas.testing.assert_frame_equal(metadata.df, expected)

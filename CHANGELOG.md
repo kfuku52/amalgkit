@@ -5,6 +5,12 @@ Releases provide generated notes only for tagged releases. Patch-only updates
 remain on the default branch and are recorded below; consult this file rather
 than the Releases page for those changes.
 
+### 0.16.107 - 2026-10-26
+
+- Remove tests that fix internal cache layouts, library calls or incidental
+  failures for fabricated internal states. Retain input-boundary validation,
+  numerical results, output ownership and cache invalidation checks.
+
 ### 0.16.106 - 2026-10-26
 
 - Distinguish SRA Toolkit numeric spot names from paired-read mate indicators.

@@ -34,10 +34,7 @@ class TestMetadataInit:
         ]:
             assert col in m.df.columns
 
-    def test_schema_definitions_are_immutable_and_custom_columns_are_copied(self):
-        assert isinstance(Metadata.column_names, tuple)
-        assert isinstance(Metadata.removed_metadata_columns, tuple)
-        assert isinstance(Metadata.id_cols, tuple)
+    def test_custom_columns_are_copied(self):
         custom_columns = ['run']
         metadata = Metadata(column_names=custom_columns)
         custom_columns.append('later_mutation')

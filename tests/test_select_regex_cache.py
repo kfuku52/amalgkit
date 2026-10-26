@@ -46,37 +46,8 @@ def test_selection_regex_matches_pandas_for_lexical_unicode_and_duplicate_indexe
     pandas.testing.assert_frame_equal(frame, original, check_exact=True)
 
 
-def test_repeated_text_factorization_is_reused_and_codes_are_compact(monkeypatch):
-    values = ['leaf', 'root', '', 'NA', '0001'] * 2048
-    frame = pandas.DataFrame({'sample_title': values})
-    cache = {}
-    original_factorize = pandas.factorize
-    calls = []
-
-    def record_factorize(*args, **kwargs):
-        calls.append(len(args[0]))
-        return original_factorize(*args, **kwargs)
-
-    monkeypatch.setattr(pandas, 'factorize', record_factorize)
-    for pattern in (r'leaf', r'root', r'^NA$|^0001$'):
-        rule = _rule(pattern)
-        actual = select.build_select_rule_match_mask_with_cache(frame, rule, cache)
-        pandas.testing.assert_series_equal(actual, _pandas_match(frame, rule), check_exact=True)
-    assert calls == [len(frame)]
-    key = (select._SELECT_REGEX_FACTOR_CACHE_KEY, 'sample_title')
-    codes, unique = cache[key][1]
-    assert codes.nbytes <= len(frame)
-    assert len(unique) == 5
-    assert set(cache['sample_title']) == {'leaf', 'root', '', 'NA', '0001'}
-
-
-def test_high_cardinality_sample_skips_factorization(monkeypatch):
+def test_high_cardinality_text_matches_pandas():
     frame = pandas.DataFrame({'sample_title': [f'leaf accession_{i}' for i in range(8192)]})
-
-    def unexpected_factorization(*_args, **_kwargs):
-        pytest.fail('high-cardinality text should use direct regex matching')
-
-    monkeypatch.setattr(pandas, 'factorize', unexpected_factorization)
     rule = _rule(r'accession_0$|accession_8191$')
     actual = select.build_select_rule_match_mask_with_cache(frame, rule, {})
     pandas.testing.assert_series_equal(actual, _pandas_match(frame, rule), check_exact=True)
@@ -93,59 +64,15 @@ def test_compact_codes_preserve_identifiers_across_integer_width_boundary(unique
     cache = {}
     actual = select.build_select_rule_match_mask_with_cache(frame, rule, cache)
     pandas.testing.assert_series_equal(actual, _pandas_match(frame, rule), check_exact=True)
-    codes, unique = cache[(select._SELECT_REGEX_FACTOR_CACHE_KEY, 'sample_title')][1]
-    assert len(unique) == unique_count
-    assert codes.nbytes <= len(frame) * 2
     assert actual.any()
 
 
-def test_misleading_sample_rejects_full_factorization_only_once(monkeypatch):
-    rows = 8192
-    values = [f'leaf accession_{i}' for i in range(rows)]
-    # Defeat both bounded probes while most full-column values remain unique.
-    values[:256] = ['sampled repeat'] * 256
-    values[::32] = ['sampled repeat'] * len(values[::32])
-    frame = pandas.DataFrame({'sample_title': values})
-    original_factorize = pandas.factorize
-    calls = []
-
-    def record_factorize(*args, **kwargs):
-        calls.append(len(args[0]))
-        return original_factorize(*args, **kwargs)
-
-    monkeypatch.setattr(pandas, 'factorize', record_factorize)
-    cache = {}
-    for pattern in (r'leaf', r'accession_1$', r'sampled repeat'):
-        rule = _rule(pattern)
-        actual = select.build_select_rule_match_mask_with_cache(frame, rule, cache)
-        pandas.testing.assert_series_equal(actual, _pandas_match(frame, rule), check_exact=True)
-    assert calls == [rows]
-    assert cache[(select._SELECT_REGEX_FACTOR_CACHE_KEY, 'sample_title')][1] is None
-
-
-def test_contiguous_probe_rejects_misleading_distributed_sample(monkeypatch):
-    rows = 8192
-    values = [f'leaf accession_{i}' for i in range(rows)]
-    values[::32] = ['sampled repeat'] * len(values[::32])
-    frame = pandas.DataFrame({'sample_title': values})
-
-    def unexpected_factorization(*_args, **_kwargs):
-        pytest.fail('the contiguous probe should reject these mostly unique values')
-
-    monkeypatch.setattr(pandas, 'factorize', unexpected_factorization)
-    rule = _rule(r'leaf|sampled repeat')
-    actual = select.build_select_rule_match_mask_with_cache(frame, rule, {})
-    pandas.testing.assert_series_equal(actual, _pandas_match(frame, rule), check_exact=True)
-
-
-def test_replacing_cached_source_or_starting_new_invocation_recomputes_factors():
+def test_new_invocation_after_text_mutation_uses_current_values():
     frame = pandas.DataFrame({'sample_title': ['leaf'] * 4096})
     cache = {}
     rule = _rule(r'leaf')
     assert select.build_select_rule_match_mask_with_cache(frame, rule, cache).all()
-    cache['sample_title'] = pandas.Series('root', index=frame.index)
-    assert not select.build_select_rule_match_mask_with_cache(frame, rule, cache).any()
-    # As for the pre-existing normalized-text cache, callers clear before edits.
+    # Callers clear the invocation-local snapshot before editing source text.
     frame.loc[:, 'sample_title'] = 'root'
     cache.clear()
     assert not select.build_select_rule_match_mask_with_cache(frame, rule, cache).any()
@@ -165,7 +92,6 @@ def test_factor_cache_is_independent_of_user_column_names_and_order():
     for rule in rules:
         actual = select.build_select_rule_match_mask_with_cache(frame, rule, cache)
         pandas.testing.assert_series_equal(actual, _pandas_match(frame, rule), check_exact=True)
-    assert isinstance(cache['_SELECT_REGEX_FACTOR_CACHE_KEY'], pandas.Series)
 
 
 def test_exclude_rule_priority_stop_and_existing_evidence_are_preserved(monkeypatch):

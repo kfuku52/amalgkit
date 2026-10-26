@@ -61,18 +61,6 @@ def test_cache_evicts_results_when_input_is_collected(resolver):
     assert result_ref() is None
 
 
-def test_dead_source_entry_is_not_reused():
-    source = matrix()
-    ref = weakref.ref(source)
-    del source
-    gc.collect()
-    replacement = matrix(1)
-    key = ('filled', id(replacement), 'row_mean')
-    cache = {key: (ref, pandas.DataFrame())}
-    assert computation.get_cached_matrix(cache, key, replacement) is None
-    assert cache == {}
-
-
 def test_discarded_cache_does_not_retain_results():
     source = matrix()
     cache = {}

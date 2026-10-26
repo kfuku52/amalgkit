@@ -5,6 +5,12 @@ surfaces such as `getfastq`, `quant`, `select`, and utility helpers are split
 across focused `test_<command>_<responsibility>.py` modules so failures can be
 navigated without opening a monolithic test file.
 
+Test established behavior and contracts. Check invalid external input at its
+responsible boundary; internal helpers may rely on those validated invariants.
+Keep coverage for mutation and new trust boundaries. Avoid coupling tests to
+cache layouts, specific library calls, or incidental errors from fabricated
+internal states when output and boundary checks cover the requirement.
+
 Most tests are unmarked and belong to the fast unit-test lane. The registered
 markers have narrower purposes:
 
