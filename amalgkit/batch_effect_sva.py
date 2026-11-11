@@ -509,7 +509,8 @@ def f_pvalue(data_matrix, mod_matrix, mod0_matrix):
         fstats = ((rss0 - rss1) / float(numerator_df)) / (rss1 / float(denominator_df))
     fstats = numpy.nan_to_num(fstats, nan=0.0, posinf=numpy.inf, neginf=0.0)
     fstats = numpy.maximum(fstats, 0.0)
-    return 1.0 - stats.f.cdf(fstats, dfn=numerator_df, dfd=denominator_df)
+    # Evaluate the upper tail directly to retain small nonzero probabilities.
+    return stats.f.sf(fstats, dfn=numerator_df, dfd=denominator_df)
 
 
 def edge_lfdr(

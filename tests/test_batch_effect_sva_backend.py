@@ -170,6 +170,21 @@ def test_f_pvalue_maps_perfect_full_model_fit_to_zero_probability():
     assert p_values[0] == 0.0
 
 
+def test_f_pvalue_retains_small_nonzero_upper_tail():
+    # The two contrasts and the residual are mutually orthogonal. F(2, 2)
+    # has the closed-form upper tail 1/(1 + F).
+    first = numpy.array([1.0, -1.0, 0.0, 0.0, 0.0])
+    second = numpy.array([0.0, 0.0, 1.0, -1.0, 0.0])
+    residual = numpy.array([1.0, 1.0, -1.0, -1.0, 0.0])
+    error = 2.0 ** -28
+    mod0 = numpy.ones((5, 1))
+    mod = numpy.column_stack([mod0, first, second])
+    data = (first + 2.0 * second + error * residual)[None, :]
+    expected = 1.0 / (1.0 + 10.0 / (4.0 * error ** 2))
+
+    numpy.testing.assert_allclose(f_pvalue(data, mod, mod0), [expected], rtol=1e-7, atol=0)
+
+
 def test_irwsva_build_drops_degenerate_weighted_directions():
     data = numpy.array([
         [10.0, 12.0, 40.0, 42.0],
