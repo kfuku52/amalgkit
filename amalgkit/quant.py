@@ -84,6 +84,7 @@ QUANT_TOOL_TIMEOUT_SECONDS = 12 * 3600
 INDEX_FASTA_SUFFIXES = ('.fa', '.fasta', '.fa.gz', '.fasta.gz')
 KALLISTO_INDEX_SUFFIX = '.idx'
 OARFISH_INDEX_SUFFIX = '.mmi'
+SPEARFISH_INDEX_SUFFIX = '.sfi'
 FASTA_REFERENCE_STEM_SUFFIXES = ('_for_kallisto_index',)
 QUANT_BACKENDS = ('auto', 'kallisto', 'oarfish')
 OARFISH_SEQ_TECHS = ('auto', 'ont-cdna', 'ont-drna', 'pac-bio', 'pac-bio-hifi')
@@ -617,7 +618,7 @@ def _uses_spearfish(options):
     )
 
 
-def _oarfish_uses_fasta(args):
+def _oarfish_uses_spearfish(args):
     return _uses_spearfish(parse_quant_option_args(getattr(args, 'oarfish_options', None), '--oarfish_options'))
 
 
@@ -691,7 +692,11 @@ def build_oarfish_quant_command(args, in_files, output_prefix, index, seq_tech):
         raise ValueError(
             'oarfish requires exactly one input read file per run. Received {} input file(s).'.format(len(in_files))
         )
-    reference_flag = '--annotated' if _uses_spearfish(extra_option_args) else '--index'
+    reference_flag = (
+        '--annotated'
+        if _uses_spearfish(extra_option_args) and not os.fspath(index).endswith(SPEARFISH_INDEX_SUFFIX)
+        else '--index'
+    )
     return [
         'oarfish', '-j', str(args.threads),
         '--reads', in_files[0],
@@ -1586,11 +1591,13 @@ def _resolve_index_lock_options(args):
     return lock_poll_seconds, lock_timeout_seconds
 
 
+def _index_dir_path(args):
+    index_dir = getattr(args, 'index_dir', None)
+    return index_dir if index_dir is not None else os.path.join(args.out_dir, 'index')
+
+
 def _resolve_index_dir(args):
-    if args.index_dir is not None:
-        index_dir = args.index_dir
-    else:
-        index_dir = os.path.join(args.out_dir, 'index')
+    index_dir = _index_dir_path(args)
     if (not os.path.exists(index_dir)) and args.build_index:
         os.makedirs(index_dir, exist_ok=True)
     if not os.path.exists(index_dir):
@@ -1696,12 +1703,14 @@ def _resolve_index_suffix(backend):
         return KALLISTO_INDEX_SUFFIX
     if backend == 'oarfish':
         return OARFISH_INDEX_SUFFIX
+    if backend == 'spearfish':
+        return SPEARFISH_INDEX_SUFFIX
     raise ValueError('Unsupported quant backend: {}'.format(backend))
 
 
 def _build_index_stem(sci_name, backend='kallisto', oarfish_seq_tech=None):
     normalized_sci_name = _normalize_species_identifier(sci_name)
-    if backend == 'kallisto':
+    if backend in {'kallisto', 'spearfish'}:
         return normalized_sci_name
     if oarfish_seq_tech in {None, ''}:
         raise ValueError('oarfish index stem requires sequencing technology.')
@@ -1727,7 +1736,7 @@ def _find_single_index_file(
     fasta_path=None,
 ):
     _ = alias_names
-    backend_label = 'Kallisto' if backend == 'kallisto' else 'oarfish'
+    backend_label = {'kallisto': 'Kallisto', 'spearfish': 'Spearfish'}.get(backend, 'oarfish')
     index_suffix = _resolve_index_suffix(backend)
     species_prefixes = _build_species_identifier_candidates_from_values(sci_name)
     for species_prefix in species_prefixes:
@@ -1946,9 +1955,15 @@ def get_index(args, sci_name, runtime_context=None, backend=None, oarfish_seq_te
     backend = str(backend if backend is not None else getattr(args, 'quant_backend', 'kallisto')).strip().lower()
     if backend == 'auto':
         backend = 'kallisto'
-    if backend == 'oarfish' and _oarfish_uses_fasta(args):
-        # Spearfish builds its index in memory from the managed FASTA.
-        # The returned path is still the reference identity used for reuse.
+    if backend == 'oarfish' and _oarfish_uses_spearfish(args):
+        index_dir = _index_dir_path(args)
+        index = _find_single_index_file(
+            index_dir=index_dir, sci_name=sci_name, backend='spearfish',
+            entries=_resolve_prefetched_index_entries(index_dir, runtime_context=runtime_context),
+        )
+        if index is not None:
+            return index
+        # With no supplied index, Oarfish builds one in memory from the FASTA.
         return _resolve_single_fasta_file(args, sci_name, runtime_context=runtime_context)
     lock_poll_seconds, lock_timeout_seconds = _resolve_index_lock_options(args)
     index_dir = _resolve_index_dir(args)
@@ -2102,7 +2117,9 @@ def run_quant_for_sra(args, metadata, sra_id, sci_name, runtime_context=None):
     )
     if isinstance(index_cache, dict) and (index_cache_key in index_cache):
         index = index_cache[index_cache_key]
-        kind = 'FASTA' if backend == 'oarfish' and _oarfish_uses_fasta(args) else 'index'
+        uses_fasta = (backend == 'oarfish' and _oarfish_uses_spearfish(args)
+                      and not os.fspath(index).endswith(SPEARFISH_INDEX_SUFFIX))
+        kind = 'FASTA' if uses_fasta else 'index'
         print('Using pre-resolved {}: {}'.format(kind, index))
     else:
         print('Looking for index folder in {}'.format(args.out_dir))
@@ -2166,11 +2183,13 @@ def pre_resolve_species_indices(args, tasks, runtime_context=None):
     ]))
     if len(unique_targets) == 0:
         return {}
-    use_oarfish_fasta = any(target[0] == 'oarfish' for target in unique_targets) and _oarfish_uses_fasta(args)
-    uses_index = not use_oarfish_fasta or any(target[0] != 'oarfish' for target in unique_targets)
+    use_spearfish = any(target[0] == 'oarfish' for target in unique_targets) and _oarfish_uses_spearfish(args)
+    build_managed_indices = getattr(args, 'build_index', False) and (
+        not use_spearfish or any(target[0] != 'oarfish' for target in unique_targets)
+    )
     prefetched_fasta_entries = None
     prefetched_fasta_dir = None
-    if use_oarfish_fasta or getattr(args, 'build_index', False):
+    if use_spearfish or build_managed_indices:
         if args.fasta_dir == 'inferred':
             path_fasta_dir = os.path.join(args.out_dir, 'fasta')
         else:
@@ -2183,17 +2202,16 @@ def pre_resolve_species_indices(args, tasks, runtime_context=None):
         entries=prefetched_fasta_entries,
         path_dir=prefetched_fasta_dir,
     )
-    if uses_index:
-        index_dir = args.index_dir if args.index_dir is not None else os.path.join(args.out_dir, 'index')
-        if os.path.exists(index_dir) and (not os.path.isdir(index_dir)):
-            raise NotADirectoryError('Index path exists but is not a directory: {}'.format(index_dir))
-        if (not os.path.exists(index_dir)) and args.build_index:
-            os.makedirs(index_dir, exist_ok=True)
-        runtime_context.prefetched_index = PrefetchedDirEntries.from_entries(
-            entries=list_dir_entries(index_dir),
-            path_dir=index_dir,
-        )
-    label = 'references' if use_oarfish_fasta else 'indices'
+    index_dir = _index_dir_path(args)
+    if os.path.exists(index_dir) and (not os.path.isdir(index_dir)):
+        raise NotADirectoryError('Index path exists but is not a directory: {}'.format(index_dir))
+    if (not os.path.exists(index_dir)) and build_managed_indices:
+        os.makedirs(index_dir, exist_ok=True)
+    runtime_context.prefetched_index = PrefetchedDirEntries.from_entries(
+        entries=list_dir_entries(index_dir),
+        path_dir=index_dir,
+    )
+    label = 'references' if use_spearfish else 'indices'
     print('Resolving quant {} for {:,} target(s).'.format(label, len(unique_targets)), flush=True)
     requested_jobs = getattr(args, 'internal_jobs', 'auto')
     if is_auto_parallel_option(requested_jobs):
@@ -2217,7 +2235,7 @@ def pre_resolve_species_indices(args, tasks, runtime_context=None):
     if max_workers <= 1:
         resolved = dict()
         for backend, sci_name, oarfish_seq_tech in unique_targets:
-            kind = 'FASTA' if use_oarfish_fasta and backend == 'oarfish' else 'index'
+            kind = 'reference' if use_spearfish and backend == 'oarfish' else 'index'
             print('Pre-resolving {} for {} ({})'.format(kind, sci_name, backend), flush=True)
             cache_key = _build_index_cache_key(
                 backend,

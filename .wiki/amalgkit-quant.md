@@ -76,7 +76,7 @@ Accepted FASTA suffixes include:
 Generated index suffixes depend on the selected backend:
 
 - kallisto: `.idx`
-- oarfish: `.mmi`
+- oarfish rammap: `.mmi`
 
 Shared index-build locks prevent concurrent batch jobs from building the same species/backend index. Tune waiting with:
 
@@ -135,16 +135,24 @@ amalgkit quant --out_dir ./work \
     --clean_fastq no --oarfish_options="--mapper spearfish --coverage-model truncation"
 ```
 
-AMALGKIT passes that FASTA directly and checks its content before reusing
-quantification. Oarfish builds the Spearfish index in memory for each run;
-`--build_index` and the on-disk index directory are used only for the other
-mapping modes. Additional `--annotated` and `--novel` references cannot be
-passed through in Spearfish mode.
+If a matching `.sfi` is present in `--index_dir` (default `out_dir/index`),
+AMALGKIT uses it. Otherwise Oarfish builds the index in memory from the
+species FASTA. For example, with the standalone Spearfish tool installed:
 
-On the mixed SG-NEx direct RNA benchmark, Spearfish was faster but had a
-higher peak RAM and higher SIRV concentration error than rammap with the same
-truncation model. Compare both on representative libraries if that tradeoff
-matters for the analysis.
+```bash
+mkdir -p ./work/index
+spearfish index ./work/fasta/Test_species.fa.gz -o ./work/index/Test_species.sfi
+```
+
+Use a stem matching the species, with no sequencing preset suffix. AMALGKIT
+checks the content of whichever reference is used before reusing quantification.
+It does not generate `.sfi` files with `--build_index`. Additional `--annotated`
+and `--novel` references cannot be passed through in Spearfish mode.
+
+On the mixed SG-NEx direct RNA benchmark, Spearfish was faster and had higher
+SIRV concentration error than rammap with the same truncation model. It used
+more RAM when building from FASTA and substantially less with a prebuilt
+index. Compare both mappers on representative libraries when choosing a method.
 
 ## Single-end fragment lengths
 

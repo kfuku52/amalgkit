@@ -20,6 +20,19 @@ sum and each set of known molarities by its sum. For the log error, use
 Total variation is half the sum of absolute differences between the unfloored
 fractions. Spearman is undefined for the constant E0 truth.
 
+We also compared the estimated log2 fold change from E0 to E2 for each
+isoform with the known fold change in relative molarity. Use the same
+normalized fractions and half-read floor independently in each mix.
+
+| Model | Fold-change mean absolute log2 error | Fold-change RMSE (log2) | Spearman |
+| --- | ---: | ---: | ---: |
+| none | 0.705 | 1.203 | 0.893 |
+| logistic | 0.797 | 1.455 | 0.895 |
+| truncation | 0.554 | 1.338 | 0.924 |
+
+Truncation improved typical absolute error and rank agreement but increased
+the squared error on this fold-change comparison.
+
 ## Reproduction
 
 1. Obtain the original ENA FASTQs listed below and verify their checksums.
@@ -82,6 +95,11 @@ column for all three comparisons.
 These are two direct RNA replicates and one direct cDNA library from one cell
 line. The prefix subsamples are fixed, not random. Lower error on the controls
 does not validate endogenous transcript abundances or other protocols.
+The direct RNA replicates contain the same E2 mix, so their expected relative
+fold change is zero. Their mean absolute estimated log2 fold change was 0.537
+with no model, 0.532 with logistic, and 0.650 with truncation. Better estimates
+of absolute composition did not translate to closer agreement between these
+two replicates.
 
 ### Mapper speed and accuracy on the same direct RNA input
 
@@ -106,6 +124,20 @@ per transcript between repeats with the same mapper; the SIRV metrics were
 stable to the shown precision. On this sample Spearfish traded higher RAM
 and error for shorter runtime. Its error was still lower than rammap with
 no placement model (1.1271). This is a one-library mapper comparison.
+
+We also compared the two Spearfish reference modes on the same library
+using Oarfish directly with `-j 4`. After one warm-up, the median of three
+runs was 39.50 s and 2.67 GB peak RSS with `--annotated`, versus 29.83 s and
+0.79 GB with `--index`. All runs mapped 202,839 reads and gave the same SIRV
+metrics to the displayed precision. Between modes, individual transcript
+counts differed by at most 0.57 reads. The prebuilt file was 593 MiB and
+took 5.32 s to create with `spearfish index` 0.1.0 and four threads.
+
+To use it through AMALGKIT, save the index as `Test_species.sfi` in the
+workspace `index` directory and pass the same Spearfish options. A separate
+whole-`quant` run with each reference mode confirmed 2.62 GB versus 0.80 GB
+peak RSS. The prebuilt run used only the `.sfi` file, with no FASTA or
+adjacent index manifest.
 
 ### CPU allocation when only one run is eligible
 

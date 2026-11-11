@@ -94,7 +94,8 @@ def test_real_oarfish_filtered_read_denominator_and_reuse(tmp_path, compressed):
 
 
 @pytest.mark.skipif(shutil.which('oarfish') is None, reason='oarfish is required')
-def test_real_oarfish_spearfish_uses_managed_fasta_and_checks_reuse(tmp_path):
+@pytest.mark.parametrize('prebuilt', [False, True], ids=['fasta', 'prebuilt-index'])
+def test_real_oarfish_spearfish_checks_managed_reference_reuse(tmp_path, prebuilt):
     help_text = subprocess.run(['oarfish', '--help'], capture_output=True, text=True, check=True, timeout=30).stdout
     if 'spearfish' not in help_text:
         pytest.skip('oarfish does not provide the spearfish mapper')
@@ -103,6 +104,17 @@ def test_real_oarfish_spearfish_uses_managed_fasta_and_checks_reuse(tmp_path):
     fasta = tmp_path / 'fasta' / 'Test_species.fa.gz'
     fasta.parent.mkdir()
     fasta.write_bytes(gzip.compress(('>t1\n' + sequence + '\n').encode()))
+    reference = fasta
+    index_dir = tmp_path / 'index'
+    if prebuilt:
+        if shutil.which('spearfish') is None:
+            pytest.skip('spearfish is required to create the prebuilt index')
+        native_index = tmp_path / 'native.sfi'
+        subprocess.run(['spearfish', 'index', str(fasta), '-o', str(native_index), '-t', '1'],
+                       capture_output=True, check=True, timeout=60)
+        index_dir.mkdir()
+        reference = native_index.rename(index_dir / 'Test_species.sfi')
+        fasta.unlink()
     reads = tmp_path / 'getfastq' / 'R1' / 'R1.fastq'
     reads.parent.mkdir(parents=True)
     write_reads(reads, [sequence] * 12)
@@ -119,11 +131,15 @@ def test_real_oarfish_spearfish_uses_managed_fasta_and_checks_reuse(tmp_path):
     info_path = tmp_path / 'quant' / 'R1' / 'R1_run_info.json'
     info = json.loads(info_path.read_text())
     assert info['num_pseudoaligned'] == pytest.approx(12)
-    assert info['amalgkit_quant_inputs']['index']['sha256'] == hashlib.sha256(fasta.read_bytes()).hexdigest()
-    assert not (tmp_path / 'index').exists()
+    assert info['amalgkit_quant_inputs']['index']['sha256'] == hashlib.sha256(reference.read_bytes()).hexdigest()
+    assert index_dir.exists() == prebuilt
     before = info_path.stat().st_mtime_ns
     quant_main(args)
     assert info_path.stat().st_mtime_ns == before
-    fasta.write_bytes(gzip.compress(('>t2\n' + sequence + '\n').encode()))
+    if prebuilt:
+        with reference.open('ab') as handle:
+            handle.write(b'changed')
+    else:
+        fasta.write_bytes(gzip.compress(('>t2\n' + sequence + '\n').encode()))
     with pytest.raises(ValueError, match='reference index differs'):
         quant_main(args)

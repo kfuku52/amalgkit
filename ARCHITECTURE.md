@@ -74,8 +74,8 @@ before creating run paths so metadata behaves consistently across filesystems.
 Per-species workers validate complete raw/CSTMM count matrices (unique nonempty
 target IDs and finite nonnegative counts) before selecting samples or normalizing.
 New quant run-info files carry content identities for the Run ID, FASTQs and
-reference index (the managed FASTA for Oarfish Spearfish mode). Reuse requires
-matching identities or explicit safe-removal
+reference index (or the managed FASTA when Spearfish indexes in memory).
+Reuse requires matching identities or explicit safe-removal
 markers for recorded FASTQs; legacy quant results remain readable downstream but
 must be re-quantified to establish input provenance.
 
