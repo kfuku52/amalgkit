@@ -1,4 +1,4 @@
-# Oarfish placement models on direct RNA SIRV libraries
+# Oarfish quantification benchmarks
 
 Using Oarfish 0.11.0 (rammap) through AMALGKIT `quant`, the truncation model
 improved isoform quantification on two [Garalde et al. direct RNA
@@ -117,3 +117,51 @@ median wall time was 134.2 s before and 54.4 s after; the three paired
 improvements ranged from 39% to 59% under varying background load. Peak
 RSS was about 1.67 GB in both cases. All runs mapped 33,399 reads, and
 the maximum count difference was 0.034 reads per transcript.
+
+## Counterexamples on LRGASP simulated reads
+
+The [LRGASP human cDNA and mouse direct RNA simulations](https://cgl.gi.ucsc.edu/data/LRGASP/)
+provide the transcript of origin for each read. Oarfish 0.11.0 (rammap) with
+no placement or presence model gave a lower mean log error than either
+placement or presence modelling on these inputs. Within the truncation
+model, presence modelling assigned less mass to transcripts with no
+sampled reads, but detected fewer of the genuinely low-count transcripts.
+
+| Simulation | Placement | Presence | Mean absolute log2 error | Count mass on zero truth (%) | Recall at 1–3 true reads (%) | Total variation |
+| --- | --- | --- | ---: | ---: | ---: | ---: |
+| Human cDNA | none | none | 0.839 | 1.81 | 59.5 | 0.153 |
+| Human cDNA | none | spike-slab | 0.862 | 1.74 | 58.8 | 0.155 |
+| Human cDNA | none | bayes | 0.881 | 1.73 | 58.3 | 0.158 |
+| Human cDNA | truncation | none | 0.934 | 3.69 | 58.4 | 0.151 |
+| Human cDNA | truncation | spike-slab | 0.978 | 2.74 | 56.3 | 0.149 |
+| Human cDNA | truncation | bayes | 1.013 | 2.24 | 55.5 | 0.152 |
+| Mouse direct RNA | none | none | 0.566 | 0.84 | 67.5 | 0.076 |
+| Mouse direct RNA | truncation | none | 0.630 | 1.91 | 66.8 | 0.081 |
+| Mouse direct RNA | truncation | spike-slab | 0.657 | 1.45 | 65.4 | 0.079 |
+| Mouse direct RNA | truncation | bayes | 0.673 | 1.12 | 64.7 | 0.077 |
+
+For each simulation, retain the first 250,000 reads whose exact origin ID
+in `ground_truth/ONT.simulated.read_to_isoform.tsv.gz` occurs in the
+[GENCODE human v38](https://www.gencodegenes.org/human/release_38.html) or
+[GENCODE mouse vM27](https://www.gencodegenes.org/mouse/release_M27.html)
+transcript FASTA. Use `human.ONT.simulated.fq.gz` or
+`mouse.ONT.simulated.fq.gz` from the matching LRGASP simulation directory.
+Use only the versioned transcript ID before the first `|` in each FASTA
+header. We skipped 64,402 human and 156,791 mouse records with out-of-reference
+origins before reaching 250,000 retained records, and converted `U` to `T`
+in the mouse reads. The references contain 237,012 and 142,375 transcripts.
+
+Quantify through `amalgkit quant` with `--threads 4 --internal_jobs 1`,
+`--oarfish_seq_tech ont-cdna` for human or `ont-drna` for mouse, and pass
+`--coverage-model` and `--presence-model` in `--oarfish_options`.
+For mean absolute log2 error, first rescale estimated counts to sum to
+250,000, then compare `log2((estimate + 0.5) / (truth + 0.5))` over the
+transcripts with positive true counts. Count mass and total variation use
+all transcripts. Recall uses the unscaled estimate with a threshold of one
+read; its denominator contains only transcripts with 1–3 true reads.
+A zero true count means zero in this subsample. These are simulated reads,
+and the comparison excludes origins outside the supplied transcriptome.
+
+Changing `--score-prob-denom` also failed to improve the real Garalde E2
+library with truncation. The log2 errors for denominators 1, 3 (the default),
+10 and 30 were 0.764, 0.746, 0.761 and 0.808, respectively.

@@ -104,7 +104,9 @@ that uses where reads land on candidate transcripts. On the two public direct
 RNA SIRV mixes, it gave closer estimates of the known isoform concentrations
 than the default score-only model and the logistic coverage model. The
 [benchmark and inputs](https://github.com/kfuku52/amalgkit/blob/master/benchmarks/results/2026-11-11/README.md)
-include an independent comparison on three SG-NEx mixed libraries.
+include an independent comparison on three SG-NEx mixed libraries and two
+simulations where the default model gave lower mean log error. Compare on
+representative libraries before choosing the model for a new protocol.
 
 To try it on an ONT direct RNA workspace with a reference FASTA and processed
 FASTQs, use a separate output workspace for each model:
