@@ -22,6 +22,10 @@ Auto-select the backend using already prepared indices:
 amalgkit quant --out_dir ./ --threads 8
 ```
 
+`--threads` sets the total CPU budget. `quant` divides it among the eligible
+runs after filtering metadata. A single run receives the full budget, up to
+`--internal_cpu_budget`.
+
 Build missing indices from FASTA files:
 
 ```bash

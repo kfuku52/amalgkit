@@ -106,3 +106,14 @@ per transcript between repeats with the same mapper; the SIRV metrics were
 stable to the shown precision. On this sample Spearfish traded higher RAM
 and error for shorter runtime. Its error was still lower than rammap with
 no placement model (1.1271). This is a one-library mapper comparison.
+
+### CPU allocation when only one run is eligible
+
+With the first 80,000 reads from the same library, prebuilt rammap index,
+and truncation model, we ran `quant --threads 4 --internal_cpu_budget 4`
+with `--internal_jobs auto`. The previous allocation passed `-j 1` to
+Oarfish; the corrected allocation passed `-j 4`. After one warm-up,
+median wall time was 134.2 s before and 54.4 s after; the three paired
+improvements ranged from 39% to 59% under varying background load. Peak
+RSS was about 1.67 GB in both cases. All runs mapped 33,399 reads, and
+the maximum count difference was 0.034 reads per transcript.

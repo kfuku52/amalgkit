@@ -1142,11 +1142,13 @@ class TestQuantEdgeCases:
         assert pandas.isna(metadata.df.loc[0, 'total_bases'])
         assert pandas.isna(metadata.df.loc[0, 'spot_length'])
 
-    def test_quant_main_parallel_dispatch(self, tmp_path, monkeypatch):
+    @pytest.mark.parametrize('n_runs', [1, 2])
+    def test_quant_main_caps_workers_to_eligible_runs(self, tmp_path, monkeypatch, n_runs):
         args = SimpleNamespace(
             out_dir=str(tmp_path),
-            internal_jobs=2,
-            threads=2,
+            internal_jobs='auto',
+            threads=4,
+            internal_cpu_budget=4,
             redo=False,
             metadata='inferred',
             index_dir=None,
@@ -1159,18 +1161,14 @@ class TestQuantEdgeCases:
         metadata = Metadata.from_DataFrame(pandas.DataFrame({
             'run': ['SRR001', 'SRR002'],
             'scientific_name': ['Species A', 'Species B'],
-            'exclusion': ['no', 'no'],
+            'exclusion': ['no', 'no' if n_runs == 2 else 'manual'],
             'nominal_length': [200, 200],
         }))
         dispatched = []
         observed = {}
 
         monkeypatch.setattr('amalgkit.quant.check_kallisto_dependency', lambda args=None: None)
-        def fake_load_metadata(runtime_args):
-            observed['load_threads'] = runtime_args.threads
-            return metadata
-
-        monkeypatch.setattr('amalgkit.quant.load_metadata', fake_load_metadata)
+        monkeypatch.setattr('amalgkit.quant.load_metadata', lambda _args: metadata)
         monkeypatch.setattr('amalgkit.quant.pre_resolve_species_indices', lambda _args, _tasks, runtime_context=None: {})
         monkeypatch.setattr(
             'amalgkit.quant.run_quant_for_sra',
@@ -1183,7 +1181,9 @@ class TestQuantEdgeCases:
 
         quant_main(args)
 
-        assert set(dispatched) == {('SRR001', 'Species A'), ('SRR002', 'Species B')}
+        assert set(dispatched) == set([('SRR001', 'Species A'), ('SRR002', 'Species B')][:n_runs])
+        assert observed['run_threads'] == 4 // n_runs
+        assert observed['run_jobs'] == n_runs
 
     def test_quant_main_parallel_worker_system_exit_is_reported_as_runtime_error(self, tmp_path, monkeypatch):
         args = SimpleNamespace(
@@ -1245,11 +1245,7 @@ class TestQuantEdgeCases:
         observed = {}
 
         monkeypatch.setattr('amalgkit.quant.check_kallisto_dependency', lambda args=None: None)
-        def fake_load_metadata(runtime_args):
-            observed['load_threads'] = runtime_args.threads
-            return metadata
-
-        monkeypatch.setattr('amalgkit.quant.load_metadata', fake_load_metadata)
+        monkeypatch.setattr('amalgkit.quant.load_metadata', lambda _args: metadata)
         monkeypatch.setattr('amalgkit.quant.pre_resolve_species_indices', lambda _args, _tasks, runtime_context=None: {})
         monkeypatch.setattr(
             'amalgkit.quant.run_quant_for_sra',
@@ -1268,7 +1264,6 @@ class TestQuantEdgeCases:
         quant_main(args)
 
         assert set(dispatched) == {('SRR001', 'Species A'), ('SRR002', 'Species B')}
-        assert observed['load_threads'] == 1
         assert observed['run_threads'] == 1
         assert observed['run_jobs'] == 1
         assert args.threads == 4

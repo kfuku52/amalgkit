@@ -54,6 +54,7 @@ from amalgkit.parallel_utils import (
     resolve_detected_cpu_count,
     resolve_thread_worker_allocation,
     run_tasks_with_optional_threads,
+    validate_positive_int_option,
 )
 from amalgkit.runtime_utils import (
     normalize_species_token,
@@ -2387,33 +2388,41 @@ def build_quant_tasks(metadata):
 
 
 def quant_main(args):
-    threads, jobs, _ = resolve_thread_worker_allocation(
-        requested_threads=getattr(args, 'threads', 'auto'),
-        requested_workers=getattr(args, 'internal_jobs', 'auto'),
-        internal_cpu_budget=getattr(args, 'internal_cpu_budget', 'auto'),
-        worker_option_name='internal_jobs',
-        context='quant:',
-        disable_workers=(getattr(args, 'batch', None) is not None),
-    )
+    requested_threads = getattr(args, 'threads', 'auto')
+    requested_workers = getattr(args, 'internal_jobs', 'auto')
+    if not is_auto_parallel_option(requested_threads):
+        validate_positive_int_option(requested_threads, 'threads')
+    if not is_auto_parallel_option(requested_workers):
+        validate_positive_int_option(requested_workers, 'internal_jobs')
     out_dir = os.path.realpath(args.out_dir)
     if os.path.exists(out_dir) and (not os.path.isdir(out_dir)):
         raise NotADirectoryError('Output path exists but is not a directory: {}'.format(out_dir))
     quant_dir = os.path.join(out_dir, 'quant')
     if os.path.exists(quant_dir) and (not os.path.isdir(quant_dir)):
         raise NotADirectoryError('Quant path exists but is not a directory: {}'.format(quant_dir))
-    runtime_args = clone_namespace(args, threads=threads, internal_jobs=jobs, out_dir=out_dir, _prefer_gsa_snapshot=True)
+    metadata_args = clone_namespace(args, out_dir=out_dir, _prefer_gsa_snapshot=True)
     # Validate a shared fragment TSV against the full input, before load_metadata's
     # usual run-batch reduction. Reuse that same snapshot for batch selection.
-    has_fragment_file = bool(getattr(runtime_args, 'fragment_length_file', None))
-    load_args = clone_namespace(runtime_args, batch=None) if has_fragment_file else runtime_args
+    has_fragment_file = bool(getattr(metadata_args, 'fragment_length_file', None))
+    load_args = clone_namespace(metadata_args, batch=None) if has_fragment_file else metadata_args
     metadata = load_metadata(load_args)
-    validate_fragment_args(runtime_args)
-    runtime_args._fragment_length_by_run = fragment_file_records(
-        runtime_args, set(metadata.df['run'].astype(str).str.strip()),
+    validate_fragment_args(metadata_args)
+    metadata_args._fragment_length_by_run = fragment_file_records(
+        metadata_args, set(metadata.df['run'].astype(str).str.strip()),
     )
     if has_fragment_file:
-        metadata = apply_metadata_batch(metadata, runtime_args)
+        metadata = apply_metadata_batch(metadata, metadata_args)
     tasks = build_quant_tasks(metadata)
+    threads, jobs, _ = resolve_thread_worker_allocation(
+        requested_threads=requested_threads,
+        requested_workers=requested_workers,
+        internal_cpu_budget=getattr(args, 'internal_cpu_budget', 'auto'),
+        worker_option_name='internal_jobs',
+        context='quant:',
+        disable_workers=(getattr(args, 'batch', None) is not None),
+        task_count=len(tasks),
+    )
+    runtime_args = clone_namespace(metadata_args, threads=threads, internal_jobs=jobs)
     quant_metadata = _metadata_with_quant_input_sra_stats_for_tasks(
         runtime_args,
         metadata,
@@ -2432,13 +2441,12 @@ def quant_main(args):
         backend_by_run=backend_by_run,
         oarfish_seq_tech_by_run=oarfish_seq_tech_by_run,
     )
-    if (jobs == 1) or (len(tasks) <= 1):
+    if jobs == 1:
         for sra_id, sci_name in tasks:
             run_quant_for_sra(runtime_args, quant_metadata, sra_id, sci_name, runtime_context=runtime_context)
         return
 
-    max_workers = min(jobs, len(tasks))
-    print('Running quant for {:,} SRA runs with {:,} parallel jobs.'.format(len(tasks), max_workers), flush=True)
+    print('Running quant for {:,} SRA runs with {:,} parallel jobs.'.format(len(tasks), jobs), flush=True)
     _, failures = run_tasks_with_optional_threads(
         task_items=tasks,
         task_fn=lambda task: run_quant_for_sra(
@@ -2448,7 +2456,7 @@ def quant_main(args):
             task[1],
             runtime_context=runtime_context,
         ),
-        max_workers=max_workers,
+        max_workers=jobs,
     )
     if failures:
         details = '; '.join(['{}: {}'.format(task[0], err) for task, err in failures])
