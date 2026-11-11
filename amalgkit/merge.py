@@ -324,11 +324,17 @@ def load_quant_tables_once(detected_sra_ids, quant_out_paths, value_columns):
     if not quant_out_paths:
         return None, table_values
 
-    def read_frame(file_idx):
+    def read_frame(file_idx, expected_target_ids=None):
+        sra_id, path = detected_sra_ids[file_idx], quant_out_paths[file_idx]
         return read_quant_abundance(
-            quant_out_paths[file_idx],
+            path,
             ['length', *value_columns],
-            'quant output table for run {} ({})'.format(detected_sra_ids[file_idx], quant_out_paths[file_idx]),
+            'quant output table for run {} ({})'.format(sra_id, path),
+            expected_target_ids=expected_target_ids,
+            target_id_mismatch=(
+                'Mismatched target_id rows across quant files for one species. '
+                'First run: {}, current run: {} ({})'.format(detected_sra_ids[0], sra_id, path)
+            ),
         )
 
     first_frame = read_frame(0)
@@ -338,18 +344,9 @@ def load_quant_tables_once(detected_sra_ids, quant_out_paths, value_columns):
     del first_frame
 
     def read_one_quant_table(file_idx):
-        sra_id = detected_sra_ids[file_idx]
-        quant_out_path = quant_out_paths[file_idx]
-        quant_df = read_frame(file_idx)
-        row_values = {col: quant_df[col].to_numpy() for col in value_columns}
-        current_target_ids = quant_df['target_id'].to_numpy(copy=False)
-        if not numpy.array_equal(current_target_ids, target_ids):
-            raise ValueError(
-                'Mismatched target_id rows across quant files for one species. '
-                'First run: {}, current run: {} ({})'.format(detected_sra_ids[0], sra_id, quant_out_path)
-            )
+        quant_df = read_frame(file_idx, target_ids)
         # Retain a single ID vector, rather than one full copy for every run.
-        return row_values
+        return {col: quant_df[col].to_numpy() for col in value_columns}
 
     if len(quant_out_paths) <= 1:
         results_by_idx = {}

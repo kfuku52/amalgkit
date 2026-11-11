@@ -468,7 +468,13 @@ def test_merge_species_quant_tables_parallel_reads(tmp_path, monkeypatch):
     assert (merge_dir / 'Species_A' / 'Species_A_tpm.tsv').exists()
 
 
-def test_merge_species_quant_tables_rejects_mismatched_target_ids(tmp_path):
+@pytest.mark.parametrize('second_ids, second_counts, error', [
+    (['tx2', 'tx1'], [10.3, 10.4], 'Mismatched target_id rows across quant files'),
+    (['tx1', ' tx1 '], [10.3, 10.4], 'duplicate target_id values: tx1'),
+    (['tx1', ''], [10.3, 10.4], 'missing target_id values'),
+    (['tx1', 'tx2'], [10.3, -1.0], 'negative values in "est_counts"'),
+])
+def test_merge_species_quant_tables_checks_later_table(tmp_path, second_ids, second_counts, error):
     quant_dir = tmp_path / 'quant'
     merge_dir = tmp_path / 'merge'
     (quant_dir / 'SRR001').mkdir(parents=True)
@@ -481,10 +487,10 @@ def test_merge_species_quant_tables_rejects_mismatched_target_ids(tmp_path):
         'tpm': [1.5, 1.6],
     }).to_csv(quant_dir / 'SRR001' / 'SRR001_abundance.tsv', sep='\t', index=False)
     pandas.DataFrame({
-        'target_id': ['tx2', 'tx1'],
+        'target_id': second_ids,
         'length': 100.0,
         'eff_length': [10.1, 10.2],
-        'est_counts': [10.3, 10.4],
+        'est_counts': second_counts,
         'tpm': [10.5, 10.6],
     }).to_csv(quant_dir / 'SRR002' / 'SRR002_abundance.tsv', sep='\t', index=False)
 
@@ -495,7 +501,7 @@ def test_merge_species_quant_tables_rejects_mismatched_target_ids(tmp_path):
         'exclusion': ['no', 'no'],
     }))
 
-    with pytest.raises(ValueError, match='Mismatched target_id rows across quant files'):
+    with pytest.raises(ValueError, match=error):
         merge_species_quant_tables('Species A', metadata, str(quant_dir), str(merge_dir))
 
 

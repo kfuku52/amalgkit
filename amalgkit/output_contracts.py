@@ -50,12 +50,23 @@ def validate_table_frame(
         return f"{context} did not contain any data rows."
     if "target_id" in frame.columns:
         ids = frame["target_id"].fillna("").astype(str).str.strip()
-        if ids.eq("").any():
-            return f"{context} contains missing target_id values."
-        duplicates = ids.loc[ids.duplicated()]
-        if not duplicates.empty:
-            return f"{context} contains duplicate target_id values: {', '.join(sorted(set(duplicates))[:5])}."
-    for column in numeric_nonnegative_columns:
+        error = _validate_normalized_target_ids(ids, context)
+        if error:
+            return error
+    return _validate_nonnegative_columns(frame, numeric_nonnegative_columns, context)
+
+
+def _validate_normalized_target_ids(ids: pandas.Series, context: str) -> str:
+    if ids.eq("").any():
+        return f"{context} contains missing target_id values."
+    duplicates = ids.loc[ids.duplicated()]
+    if not duplicates.empty:
+        return f"{context} contains duplicate target_id values: {', '.join(sorted(set(duplicates))[:5])}."
+    return ""
+
+
+def _validate_nonnegative_columns(frame: pandas.DataFrame, columns: Iterable[str], context: str) -> str:
+    for column in columns:
         values = pandas.to_numeric(frame[column], errors="coerce").to_numpy(dtype=float)
         if not numpy.isfinite(values).all():
             return f'{context} contains non-finite values in "{column}".'
@@ -64,17 +75,40 @@ def validate_table_frame(
     return ""
 
 
-def read_quant_abundance(path: str, value_columns: Sequence[str], context: str) -> pandas.DataFrame:
-    """Read only needed quant columns once, preserving IDs and enforcing values."""
+def read_quant_abundance(
+    path: str,
+    value_columns: Sequence[str],
+    context: str,
+    *,
+    expected_target_ids: numpy.ndarray | None = None,
+    target_id_mismatch: str | None = None,
+) -> pandas.DataFrame:
+    """Read quant columns and check IDs against a validated first table if supplied."""
     columns = ["target_id", *value_columns]
     try:
         frame = read_identifier_tsv(path, identifier_columns=("target_id",), usecols=columns)
     except Exception as exc:
         raise ValueError(f"Failed to read {context}: {exc}") from exc
-    error = validate_table_frame(frame, columns, context, numeric_nonnegative_columns=value_columns)
+    if frame.empty:
+        raise ValueError(f"{context} did not contain any data rows.")
+    ids = frame["target_id"].str.strip()
+    # Equal ordered IDs inherit the first table's nonempty and unique checks.
+    matches = (
+        expected_target_ids is not None
+        and not ids.hasnans
+        and numpy.array_equal(
+            ids.to_numpy(copy=False),
+            expected_target_ids,
+        )
+    )
+    error = "" if matches else _validate_normalized_target_ids(ids.fillna(""), context)
+    if not error:
+        error = _validate_nonnegative_columns(frame, value_columns, context)
     if error:
         raise ValueError(error)
-    frame["target_id"] = frame["target_id"].str.strip()
+    if expected_target_ids is not None and not matches:
+        raise ValueError(target_id_mismatch or f"Mismatched target_id rows in {context}.")
+    frame["target_id"] = ids
     return frame
 
 
