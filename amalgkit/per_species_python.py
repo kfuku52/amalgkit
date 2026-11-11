@@ -99,56 +99,13 @@ def _finite_pair_correlation(left, right, method):
     return left.corr(right, method=method)
 
 
-def _compute_sample_group_correlation_metrics(tc, sra, selected_sample_groups, dist_method,
-                                              min_common_genes=0, reference_exclusion='run'):
-    dist_method = str(dist_method).strip().lower()
-    if dist_method not in {'pearson', 'spearman', 'kendall'}:
-        raise ValueError(
-            'Unsupported correlation method: {}. Choose pearson, spearman, or kendall.'.format(
-                dist_method
-            )
-        )
-    is_active = _is_non_excluded_flag(sra['exclusion'])
-    if min_common_genes < 0 or min_common_genes == 1:
-        raise ValueError('min_common_genes must be 0 (disabled) or at least 2')
-    if reference_exclusion not in {'run', 'bioproject'}:
-        raise ValueError('reference_exclusion must be run or bioproject')
-    if reference_exclusion == 'bioproject':
-        if 'bioproject' not in sra.columns:
-            raise ValueError('bioproject reference exclusion requires bioproject metadata')
-        active = sra.loc[is_active & sra['run'].astype(str).isin(tc.columns.astype(str)), 'bioproject']
-        if active.fillna('').astype(str).str.strip().isin(['', 'not_provided']).any():
-            raise ValueError('bioproject reference exclusion requires nonempty bioproject metadata')
-    active_ids = sra.loc[_is_non_excluded_flag(sra['exclusion']), 'run'].astype(str)
-    tc = tc.loc[:, tc.columns.astype(str).isin(active_ids)]
-    available_sample_groups = set(sra.loc[:, 'sample_group'].astype(str))
-    required_sample_groups = [group for group in selected_sample_groups if group in available_sample_groups]
-    out = sra.copy()
-    for column in [
-        'ws_within_group_cor',
-        'ws_max_nongroup_cor',
-        'ws_margin',
-        'ws_robust_z',
-        'ws_outlier_candidate',
-        'ws_small_group',
-    ]:
-        out.loc[:, column] = False if column in {'ws_outlier_candidate', 'ws_small_group'} else numpy.nan
-    out['ws_within_common_genes'] = 0
-    out['ws_min_nongroup_common_genes'] = 0
-    if (len(required_sample_groups) <= 1) or (tc.shape[1] == 0) or (out.shape[0] == 0):
-        return out
-    tc_ave = sample_group_mean(tc, out, required_sample_groups)['tc_ave']
-    if tc_ave.shape[1] <= 1:
-        return out
+def _correlate_group_means(tc, tc_ave, dist_method):
     corr_by_group = pandas.DataFrame(
         numpy.nan,
         index=tc.columns.astype(str),
         columns=tc_ave.columns.astype(str),
         dtype=float,
     )
-    # Reuse the same numeric columns in every leave-one-out reference. Keep
-    # pandas' mean/correlation arithmetic so strict margin decisions are stable.
-    tc = tc.apply(pandas.to_numeric, errors='coerce')
     tc_ave = tc_ave.apply(pandas.to_numeric, errors='coerce')
     tc_numeric = tc.to_numpy(dtype=float)
     tc_ave_numeric = tc_ave.to_numpy(dtype=float)
@@ -187,12 +144,82 @@ def _compute_sample_group_correlation_metrics(tc, sra, selected_sample_groups, d
                     method=dist_method,
                 )
                 corr_by_group.loc[run_id, sample_group] = corr_value
+    return corr_by_group, common_by_group
+
+
+def _update_reference_correlations(tc, runs, reference_group, other_runs, dist_method,
+                                   corr_by_group, common_by_group):
+    if not other_runs:
+        corr_by_group.loc[runs, reference_group] = numpy.nan
+        common_by_group.loc[runs, reference_group] = 0
+        return
+    reference = tc.loc[:, other_runs].mean(axis=1, skipna=True)
+    finite_reference = numpy.isfinite(reference)
+    for run_id in runs:
+        sample = tc.loc[:, run_id]
+        valid = numpy.isfinite(sample) & finite_reference
+        common_by_group.loc[run_id, reference_group] = int(valid.sum())
+        corr_by_group.loc[run_id, reference_group] = _finite_pair_correlation(sample, reference, method=dist_method)
+
+
+def _compute_sample_group_correlation_metrics(tc, sra, selected_sample_groups, dist_method,
+                                              min_common_genes=0, reference_exclusion='run'):
+    dist_method = str(dist_method).strip().lower()
+    if dist_method not in {'pearson', 'spearman', 'kendall'}:
+        raise ValueError(
+            'Unsupported correlation method: {}. Choose pearson, spearman, or kendall.'.format(
+                dist_method
+            )
+        )
+    is_active = _is_non_excluded_flag(sra['exclusion'])
+    if min_common_genes < 0 or min_common_genes == 1:
+        raise ValueError('min_common_genes must be 0 (disabled) or at least 2')
+    if reference_exclusion not in {'run', 'bioproject'}:
+        raise ValueError('reference_exclusion must be run or bioproject')
+    if reference_exclusion == 'bioproject':
+        if 'bioproject' not in sra.columns:
+            raise ValueError('bioproject reference exclusion requires bioproject metadata')
+        active = sra.loc[is_active & sra['run'].astype(str).isin(tc.columns.astype(str)), 'bioproject']
+        if active.fillna('').astype(str).str.strip().isin(['', 'not_provided']).any():
+            raise ValueError('bioproject reference exclusion requires nonempty bioproject metadata')
+    active_ids = sra.loc[is_active, 'run'].astype(str)
+    tc = tc.loc[:, tc.columns.astype(str).isin(active_ids)]
+    available_sample_groups = set(sra.loc[:, 'sample_group'].astype(str))
+    required_sample_groups = [group for group in selected_sample_groups if group in available_sample_groups]
+    out = sra.copy()
+    for column in [
+        'ws_within_group_cor',
+        'ws_max_nongroup_cor',
+        'ws_margin',
+        'ws_robust_z',
+        'ws_outlier_candidate',
+        'ws_small_group',
+    ]:
+        out.loc[:, column] = False if column in {'ws_outlier_candidate', 'ws_small_group'} else numpy.nan
+    out['ws_within_common_genes'] = 0
+    out['ws_min_nongroup_common_genes'] = 0
+    if (len(required_sample_groups) <= 1) or (tc.shape[1] == 0) or (out.shape[0] == 0):
+        return out
+    tc_ave = sample_group_mean(tc, out, required_sample_groups)['tc_ave']
+    if tc_ave.shape[1] <= 1:
+        return out
+    # Reuse numeric columns in each reference. Keep pandas' mean and
+    # correlation arithmetic so strict margin decisions are stable.
+    tc = tc.apply(pandas.to_numeric, errors='coerce')
+    if reference_exclusion == 'run':
+        corr_by_group, common_by_group = _correlate_group_means(tc, tc_ave, dist_method)
+    else:
+        # Project-excluded references replace every group mean, including the
+        # other groups, so there is no need to score the inclusive profiles.
+        index, columns = tc.columns.astype(str), tc_ave.columns.astype(str)
+        corr_by_group = pandas.DataFrame(numpy.nan, index=index, columns=columns, dtype=float)
+        common_by_group = pandas.DataFrame(0, index=index, columns=columns, dtype=numpy.int64)
 
     # A sample must not contribute to the reference profile used to judge that
     # same sample. Besides biasing correlations upward, self-inclusion can make
     # a two-sample group mean constant when the profiles oppose one another,
-    # turning an actionable negative margin into NaN. Non-group references do
-    # not contain the evaluated sample and can retain the precomputed means.
+    # turning an actionable negative margin into NaN. With run exclusion, the
+    # other groups can retain their precomputed means.
     group_members = {
         sample_group: [
             run_id
@@ -207,30 +234,29 @@ def _compute_sample_group_correlation_metrics(tc, sra, selected_sample_groups, d
     sample_group_by_run = dict(
         zip(out.loc[:, 'run'].astype(str), out.loc[:, 'sample_group'].astype(str))
     )
-    project_by_run = (
-        dict(zip(out['run'].astype(str), out['bioproject'].fillna('').astype(str).str.strip()))
-        if reference_exclusion == 'bioproject' else {}
-    )
-    for run_id in corr_by_group.index:
-        sample_group = sample_group_by_run.get(str(run_id))
-        if sample_group not in corr_by_group.columns:
-            continue
-        reference_groups = list(corr_by_group.columns) if reference_exclusion == 'bioproject' else [sample_group]
-        for reference_group in reference_groups:
-            other_runs = [
-                other_run for other_run in group_members.get(reference_group, [])
-                if other_run != str(run_id)
-                and (reference_exclusion == 'run' or project_by_run[other_run] != project_by_run[str(run_id)])
-            ]
-            if not other_runs:
-                corr_by_group.loc[run_id, reference_group] = numpy.nan
-                common_by_group.loc[run_id, reference_group] = 0
-                continue
-            reference = tc.loc[:, other_runs].mean(axis=1, skipna=True)
-            sample = tc.loc[:, run_id]
-            valid = numpy.isfinite(sample) & numpy.isfinite(reference)
-            common_by_group.loc[run_id, reference_group] = int(valid.sum())
-            corr_by_group.loc[run_id, reference_group] = _finite_pair_correlation(sample, reference, method=dist_method)
+    if reference_exclusion == 'bioproject':
+        project_by_run = dict(zip(out['run'].astype(str), out['bioproject'].fillna('').astype(str).str.strip()))
+        runs_by_project = {}
+        for run_id in corr_by_group.index:
+            if sample_group_by_run.get(run_id) in corr_by_group.columns:
+                runs_by_project.setdefault(project_by_run[run_id], []).append(run_id)
+        for project, runs in runs_by_project.items():
+            for reference_group in corr_by_group.columns:
+                other_runs = [
+                    other_run for other_run in group_members.get(reference_group, [])
+                    if project_by_run[other_run] != project
+                ]
+                _update_reference_correlations(
+                    tc, runs, reference_group, other_runs, dist_method, corr_by_group, common_by_group,
+                )
+    else:
+        for run_id in corr_by_group.index:
+            sample_group = sample_group_by_run.get(run_id)
+            if sample_group in corr_by_group.columns:
+                other_runs = [other_run for other_run in group_members.get(sample_group, []) if other_run != run_id]
+                _update_reference_correlations(
+                    tc, [run_id], sample_group, other_runs, dist_method, corr_by_group, common_by_group,
+                )
     run_values = out.loc[:, 'run'].astype(str).tolist()
     sample_group_values = out.loc[:, 'sample_group'].astype(str).tolist()
     within_values = []

@@ -100,6 +100,24 @@ def test_correlation_metrics_match_direct_pairwise_references(method, reference_
     pandas.testing.assert_frame_equal(counts, original)
 
 
+def test_project_exclusion_leaves_project_only_group_without_support():
+    counts = pandas.DataFrame({'a1': [1., 2., 3.], 'a2': [3., 1., 2.],
+                               'b1': [1., 3., 2.], 'b2': [2., 1., 3.]})
+    metadata = pandas.DataFrame(dict(
+        run=counts.columns, sample_group=['A', 'A', 'B', 'B'],
+        bioproject=['P1', 'P1', 'P1', 'P2'], exclusion='no',
+    ))
+    result = _compute_sample_group_correlation_metrics(
+        counts, metadata, ['A', 'B'], 'pearson', reference_exclusion='bioproject',
+    ).set_index('run')
+
+    assert result.loc[['a1', 'a2'], 'ws_within_common_genes'].eq(0).all()
+    assert result.loc[['a1', 'a2'], 'ws_within_group_cor'].isna().all()
+    assert result.loc['b1', 'ws_min_nongroup_common_genes'] == 0
+    assert numpy.isnan(result.loc['b1', 'ws_max_nongroup_cor'])
+    assert result.loc['b2', 'ws_min_nongroup_common_genes'] == 3
+
+
 def test_within_group_filter_stops_when_an_iteration_makes_no_progress():
     current = pandas.DataFrame({'RUN1': [1.0], 'RUN2': [2.0]}, index=['G1'])
     unchanged = current.copy()
