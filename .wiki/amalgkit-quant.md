@@ -93,6 +93,30 @@ Shared index-build locks prevent concurrent batch jobs from building the same sp
 Extra backend options cannot override AMALGKIT-managed inputs, output paths,
 indices, thread counts, layouts, or sequencing-technology flags.
 
+### Compare placement models for ONT direct RNA
+
+Oarfish 0.11.0 supports a [truncation model](https://combine-lab.github.io/oarfish/guides/models/)
+that uses where reads land on candidate transcripts. On the two public direct
+RNA SIRV mixes, it gave closer estimates of the known isoform concentrations
+than the default score-only model and the logistic coverage model. The
+[benchmark and inputs](https://github.com/kfuku52/amalgkit/blob/master/benchmarks/results/2026-11-11/README.md)
+describe which libraries were tested.
+
+To try it on an ONT direct RNA workspace with a reference FASTA and processed
+FASTQs, use a separate output workspace for each model:
+
+```bash
+amalgkit quant --out_dir ./work \
+    --quant_backend oarfish --oarfish_seq_tech ont-drna \
+    --build_index yes --clean_fastq no \
+    --oarfish_options="--coverage-model truncation"
+```
+
+Keep the reads, reference and all other options identical for the comparison.
+This option changes estimated counts. AMALGKIT records it in the run info and
+requires `--redo yes` to replace results made with other options in the same
+workspace.
+
 ## Single-end fragment lengths
 
 For single-end kallisto, supply the mean and standard deviation (SD) of the
