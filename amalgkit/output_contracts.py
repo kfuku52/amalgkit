@@ -128,7 +128,7 @@ def read_count_matrix(path: str) -> pandas.DataFrame:
         # replacing those columns or copying the matrix while setting its index.
         if not pandas.api.types.is_numeric_dtype(frame[column].dtype):
             frame[column] = pandas.to_numeric(frame[column], errors="raise")
-    frame.set_index("target_id", inplace=True)
+    frame.index = pandas.Index(frame.pop("target_id"), name="target_id")
     return frame
 
 
