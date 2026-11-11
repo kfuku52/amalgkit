@@ -110,6 +110,14 @@ def test_safe_correlation_is_invariant_to_scale(scale, direction):
     assert safe_correlation(left, right, 'pearson') == pytest.approx(direction)
 
 
+@pytest.mark.parametrize('offset', [1e12, 1e16, -1e16])
+def test_safe_pearson_keeps_small_differences_on_a_large_offset(offset):
+    left = offset + numpy.array([0., 2., 4., 6., 8., 10.])
+    right = -offset + numpy.array([2., 10., 0., 8., 4., 6.])
+
+    assert safe_correlation(left, right, 'pearson') == pytest.approx(1.0 / 7.0, rel=0, abs=1e-15)
+
+
 def test_resolve_matrix_for_embedding_strict_and_cache():
     matrix = pandas.DataFrame([[1.0, 2.0], [numpy.nan, 4.0]], columns=['A', 'B'])
     cache = {}

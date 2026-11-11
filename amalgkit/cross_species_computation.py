@@ -10,23 +10,38 @@ import pandas
 from amalgkit.imputation import impute_expression
 
 
+_PEARSON_OFFSET_TOLERANCE = float(numpy.sqrt(numpy.finfo(float).eps))
+
+
+def _scale_and_center(values: numpy.ndarray) -> numpy.ndarray | None:
+    low, high = float(values.min()), float(values.max())
+    if low == high:
+        return None
+    scale = max(abs(low), abs(high))
+    if (low > 0 or high < 0) and high - low <= _PEARSON_OFFSET_TOLERANCE * scale:
+        # In a narrow same-sign range the subtraction is exact. Remove the
+        # offset before division so rounding near one cannot erase differences.
+        centered = values - low
+        centered /= high - low
+    else:
+        # Broad ranges still need scaling first to avoid overflow.
+        centered = values / scale
+    centered -= numpy.mean(centered)
+    return centered
+
+
 def _pearson_correlation_on_pairs(left: numpy.ndarray, right: numpy.ndarray) -> float:
     """Calculate scale-safe Pearson correlation for already paired finite values."""
     if left.size <= 1:
         return numpy.nan
-    # Scale before centering so finite extremes cannot overflow or underflow the norm.
-    left_scale = float(numpy.max(numpy.abs(left)))
-    right_scale = float(numpy.max(numpy.abs(right)))
-    if left_scale == 0.0 or right_scale == 0.0:
+    left_centered = _scale_and_center(left)
+    right_centered = _scale_and_center(right)
+    if left_centered is None or right_centered is None:
         return numpy.nan
-    left = left / left_scale
-    right = right / right_scale
-    left = left - numpy.mean(left)
-    right = right - numpy.mean(right)
-    denominator = float(numpy.sqrt(numpy.dot(left, left) * numpy.dot(right, right)))
+    denominator = float(numpy.sqrt(numpy.dot(left_centered, left_centered) * numpy.dot(right_centered, right_centered)))
     if denominator <= 0.0:
         return numpy.nan
-    return float(numpy.clip(numpy.dot(left, right) / denominator, -1.0, 1.0))
+    return float(numpy.clip(numpy.dot(left_centered, right_centered) / denominator, -1.0, 1.0))
 
 
 def safe_correlation(left_values, right_values, method: str) -> float:
