@@ -314,6 +314,65 @@ def _supported_right_vectors(data, nsv, reference_scale=0.0):
     return right[:rank].T
 
 
+def _prepare_be_estimator(data, mod, random_seed):
+    if (data.shape[0] == 0) or (data.shape[1] == 0):
+        return lambda _B, _max_nsv: SVAEstimate(nsv=0, method='be')
+
+    hat = _compute_hat_matrix(mod)
+    residual = _residualize_by_design(data, hat)
+    # The exact trace of the projection is its rank. Ceiling the computed
+    # trace can discard a residual component if it rounds just above an integer.
+    ndf = min(data.shape) - int(numpy.linalg.matrix_rank(mod))
+    if ndf <= 0:
+        return lambda _B, _max_nsv: SVAEstimate(nsv=0, method='be')
+
+    singular_values = _singular_values_from_gram(residual)
+    if float(numpy.sum(singular_values[:ndf] ** 2)) <= 0:
+        return lambda _B, _max_nsv: SVAEstimate(nsv=None, method='be')
+    observed = _normalized_singular_energy(singular_values, ndf=ndf)
+    rng = numpy.random.default_rng(_coerce_int(random_seed))
+    exceeds = numpy.zeros(ndf, dtype=numpy.int64)
+    completed = 0
+    degenerate = False
+
+    def estimate(B_value, max_nsv):
+        nonlocal completed, degenerate
+        if degenerate:
+            return SVAEstimate(nsv=None, method='be')
+        while completed < B_value:
+            residual_perm = _permute_rows_without_replacement(residual, rng)
+            residual_perm -= (hat @ residual_perm.T).T
+            values = _singular_values_from_gram(residual_perm)
+            if float(numpy.sum(values[:ndf] ** 2)) <= 0:
+                degenerate = True
+                return SVAEstimate(nsv=None, method='be')
+            numpy.add(exceeds, _normalized_singular_energy(values, ndf=ndf) >= observed, out=exceeds)
+            completed += 1
+        psv = numpy.maximum.accumulate(exceeds / B_value)
+        nsv = int(numpy.sum(psv <= 0.10))
+        return SVAEstimate(nsv=min(max_nsv, nsv), method='be')
+
+    return estimate
+
+
+def _reusable_be_estimator(data, mod, random_seed):
+    # Each fixed-seed estimate starts with the same permutation sequence.
+    # The automatic resolver asks for increasing prefixes of that sequence.
+    estimate = None
+
+    def estimate_at_B(B_value, max_nsv):
+        nonlocal estimate
+        try:
+            if estimate is None:
+                estimate = _prepare_be_estimator(data, mod, random_seed)
+            return estimate(B_value, max_nsv)
+        except (FloatingPointError, ValueError, numpy.linalg.LinAlgError):
+            estimate = None
+            raise
+
+    return estimate_at_B
+
+
 def estimate_num_sv_be(
     data_matrix,
     mod_matrix,
@@ -335,44 +394,7 @@ def estimate_num_sv_be(
         B_value = 20
     if (max_nsv is None) or (max_nsv < 0):
         max_nsv = max(0, min(data.shape) - mod.shape[1] - 1)
-    if (data.shape[0] == 0) or (data.shape[1] == 0):
-        return SVAEstimate(nsv=0, method='be')
-
-    hat = _compute_hat_matrix(mod)
-    residual = _residualize_by_design(data, hat)
-    # The exact trace of the projection is its rank. Ceiling the computed
-    # trace can discard a residual component if it rounds just above an integer.
-    ndf = min(data.shape) - int(numpy.linalg.matrix_rank(mod))
-    if ndf <= 0:
-        return SVAEstimate(nsv=0, method='be')
-
-    singular_values = _singular_values_from_gram(residual)
-    if float(numpy.sum(singular_values[:ndf] ** 2)) <= 0:
-        return SVAEstimate(nsv=None, method='be')
-    observed = _normalized_singular_energy(singular_values, ndf=ndf)
-    if observed.shape[0] == 0:
-        return SVAEstimate(nsv=None, method='be')
-
-    rng = numpy.random.default_rng(_coerce_int(random_seed))
-    permuted_stats = numpy.zeros((B_value, ndf), dtype=float)
-    for idx in range(B_value):
-        residual_perm = _permute_rows_without_replacement(residual, rng)
-        residual_perm = _residualize_by_design(residual_perm, hat)
-        permuted_singular_values = _singular_values_from_gram(residual_perm)
-        if float(numpy.sum(permuted_singular_values[:ndf] ** 2)) <= 0:
-            return SVAEstimate(nsv=None, method='be')
-        permuted_stats[idx, :] = _normalized_singular_energy(
-            permuted_singular_values,
-            ndf=ndf,
-        )
-
-    psv = numpy.ones((ndf,), dtype=float)
-    for idx in range(ndf):
-        psv[idx] = float(numpy.mean(permuted_stats[:, idx] >= observed[idx]))
-    if ndf > 1:
-        psv = numpy.maximum.accumulate(psv)
-    nsv = int(numpy.sum(psv <= 0.10))
-    return SVAEstimate(nsv=min(max_nsv, max(0, nsv)), method='be')
+    return _prepare_be_estimator(data, mod, random_seed)(B_value, max_nsv)
 
 
 def estimate_num_sv_leek(data_matrix, mod_matrix, max_nsv):
@@ -450,17 +472,16 @@ def estimate_num_sv_at_B(
     max_nsv,
     random_seed=0,
     estimation_method='be_then_leek',
+    *,
+    _be_estimator=None,
 ):
     if estimation_method == 'leek':
         return estimate_num_sv_leek(data_matrix, mod_matrix, max_nsv)
     try:
-        be_estimate = estimate_num_sv_be(
-            data_matrix=data_matrix,
-            mod_matrix=mod_matrix,
-            B_value=B_value,
-            max_nsv=max_nsv,
-            random_seed=random_seed,
-        )
+        if _be_estimator is None:
+            be_estimate = estimate_num_sv_be(data_matrix, mod_matrix, B_value, max_nsv, random_seed)
+        else:
+            be_estimate = _be_estimator(B_value, max_nsv)
         if be_estimate.nsv is not None:
             return be_estimate
     except (FloatingPointError, ValueError, numpy.linalg.LinAlgError):
@@ -836,6 +857,11 @@ def run_sva_backend(
     # explicitly select the scale; count input follows svaseq's log(count + 1)
     # transform and is mapped back only after correction.
     correction_matrix = numpy.log1p(counts_matrix) if input_scale == "counts" else counts_matrix
+    be_estimator = (
+        _reusable_be_estimator(correction_matrix, mod_matrix, random_seed)
+        if str(B_setting).strip().lower() == 'auto' and _coerce_int(random_seed) is not None
+        else None
+    )
     resolved = resolve_sva_parameters(
         num_samples=counts_df.shape[1],
         design_columns=mod_matrix.shape[1],
@@ -849,8 +875,10 @@ def run_sva_backend(
             max_nsv=max_nsv,
             random_seed=random_seed,
             estimation_method=estimation_method,
+            _be_estimator=be_estimator,
         ),
     )
+    be_estimator = None  # Release the residual matrix before IRW allocates its own.
     if resolved.method.endswith("failed"):
         raise BatchModelError("sva_nsv_estimation_failed", "Could not estimate the number of surrogate variables.", {"trace_B": resolved.trace_B, "trace_method": resolved.trace_method})
     if resolved.nsv <= 0:

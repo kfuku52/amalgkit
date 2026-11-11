@@ -45,6 +45,20 @@ def test_sva_manual_fit_keeps_data_supported_signal_and_separates_irw_from_permu
     assert abs(np.corrcoef(w.iloc[:, 0], metadata['bioproject'])[0, 1]) > 0.95
 
 
+def test_sva_automatic_seeded_permutations_agree_with_fixed_final_budget():
+    counts = np.log1p(read('counts.tsv'))
+    metadata = pd.read_csv(ROOT / 'metadata.tsv', sep='\t')
+    automatic, _, summary = run_sva_backend(counts, metadata, random_seed=719, failure_policy='error')
+    fixed, _, fixed_summary = run_sva_backend(
+        counts, metadata, B_setting=summary['resolved_sva_B'], random_seed=719, failure_policy='error',
+    )
+
+    assert summary['trace_B'] == [10, 15]
+    assert summary['trace_nsv'] == [1, 1]
+    assert fixed_summary['resolved_sva_nsv'] == 1
+    pd.testing.assert_frame_equal(automatic, fixed, check_exact=True)
+
+
 def test_ruvr_kernel_matches_upstream_with_identical_edgeR_residuals():
     counts = read('counts.tsv')
     corrected, w = ruvr_correct_counts(counts, np.ones(len(counts), dtype=bool), 1, read('ruv_residuals.tsv'))
