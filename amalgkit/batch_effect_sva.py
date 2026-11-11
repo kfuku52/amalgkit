@@ -13,6 +13,7 @@ from amalgkit.linalg_utils import gram_components_require_svd_fallback as _gram_
 
 SVA_LFDR_MIN_GRID_POINTS = 512
 SVA_LFDR_MAX_GRID_POINTS = 4096
+SVA_F_TEST_BLOCK_ELEMENTS = 2 ** 18
 
 
 @dataclass
@@ -477,6 +478,7 @@ def estimate_num_sv_at_B(
 
 
 def f_pvalue(data_matrix, mod_matrix, mod0_matrix):
+    """Test nested, full-rank models using orthogonal sums of squares."""
     data = numpy.asarray(data_matrix, dtype=float)
     mod = numpy.asarray(mod_matrix, dtype=float)
     mod0 = numpy.asarray(mod0_matrix, dtype=float)
@@ -492,14 +494,6 @@ def f_pvalue(data_matrix, mod_matrix, mod0_matrix):
     sample_count = data.shape[1]
     df1 = mod.shape[1]
     df0 = mod0.shape[1]
-    identity = numpy.eye(sample_count)
-
-    resid = data @ (identity - _compute_hat_matrix(mod))
-    rss1 = numpy.sum(resid * resid, axis=1)
-
-    resid0 = data @ (identity - _compute_hat_matrix(mod0))
-    rss0 = numpy.sum(resid0 * resid0, axis=1)
-
     numerator_df = df1 - df0
     denominator_df = sample_count - df1
     if numerator_df <= 0:
@@ -507,10 +501,30 @@ def f_pvalue(data_matrix, mod_matrix, mod0_matrix):
     if denominator_df <= 0:
         raise ValueError('Not enough residual degrees of freedom.')
 
-    with numpy.errstate(divide='ignore', invalid='ignore'):
-        fstats = ((rss0 - rss1) / float(numerator_df)) / (rss1 / float(denominator_df))
-    fstats = numpy.nan_to_num(fstats, nan=0.0, posinf=numpy.inf, neginf=0.0)
-    fstats = numpy.maximum(fstats, 0.0)
+    # Project into the additional fitted directions and the full model's
+    # residual space directly, avoiding normal equations and RSS subtraction.
+    fitted = numpy.linalg.qr(mod, mode='reduced')[0]
+    q0 = numpy.linalg.qr(fitted.T @ mod0, mode='complete')[0]
+    contrasts = q0[:, df0:]
+    fstats = numpy.empty(data.shape[0], dtype=float)
+    block_rows = max(1, SVA_F_TEST_BLOCK_ELEMENTS // sample_count)
+    roundoff = numpy.finfo(float).eps * sample_count
+    for start in range(0, len(data), block_rows):
+        block = data[start:start + block_rows]
+        coordinates = block @ fitted
+        fitted_scores = coordinates @ contrasts
+        residual_scores = coordinates @ fitted.T
+        numpy.subtract(block, residual_scores, out=residual_scores)
+        added_ss = numpy.einsum('ij,ij->i', fitted_scores, fitted_scores)
+        residual_ss = numpy.einsum('ij,ij->i', residual_scores, residual_scores)
+        # Exact zero projections can retain floating-point noise after QR.
+        threshold = (numpy.max(numpy.abs(block), axis=1) * roundoff) ** 2
+        added_ss[added_ss <= threshold] = 0.0
+        residual_ss[residual_ss <= threshold] = 0.0
+        with numpy.errstate(divide='ignore', invalid='ignore'):
+            values = (added_ss / numerator_df) / (residual_ss / denominator_df)
+        values[numpy.isnan(values)] = 0.0
+        fstats[start:start + len(block)] = values
     # Evaluate the upper tail directly to retain small nonzero probabilities.
     return stats.f.sf(fstats, dfn=numerator_df, dfd=denominator_df)
 

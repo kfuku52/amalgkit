@@ -197,6 +197,19 @@ def test_f_pvalue_retains_small_nonzero_upper_tail():
     numpy.testing.assert_allclose(f_pvalue(data, mod, mod0), [expected], rtol=1e-7, atol=0)
 
 
+def test_f_pvalue_resolves_nearly_collinear_full_design():
+    first = numpy.array([1.0, -1.0, 0.0, 0.0, 0.0])
+    second = numpy.array([0.0, 0.0, 1.0, -1.0, 0.0])
+    residual = numpy.array([1.0, 1.0, -1.0, -1.0, 0.0])
+    mod0 = numpy.ones((5, 1))
+    mod = numpy.column_stack([mod0, first + second, first + (1.0 + 2.0 ** -28) * second])
+    data = (first + 2.0 * second + 0.5 * residual)[None, :]
+
+    # The full model still spans both independent contrasts: the sums of
+    # squares are 10 and 1, so F(2, 2) has an upper tail of 1/11.
+    numpy.testing.assert_allclose(f_pvalue(data, mod, mod0), [1.0 / 11.0], rtol=1e-6, atol=0)
+
+
 def test_irwsva_build_drops_degenerate_weighted_directions():
     data = numpy.array([
         [10.0, 12.0, 40.0, 42.0],
