@@ -209,11 +209,14 @@ def calc_factor_tmm(
         return 1.0
     obs_counts = _recycle(obs_vector, target_size)
     ref_counts = _recycle(ref_vector, target_size)
-    ref_libs = _recycle(n_ref_values, target_size)
+    per_pair_library = n_ref_values.size != 1
+    ref_libs = _recycle(n_ref_values, target_size) if per_pair_library else n_ref_values
     positive = (obs_counts > 0) & (ref_counts > 0)
     if diagnostics is not None:
         diagnostics['positive_pairs'] = int(positive.sum())
-    obs_counts, ref_counts, ref_libs = obs_counts[positive], ref_counts[positive], ref_libs[positive]
+    obs_counts, ref_counts = obs_counts[positive], ref_counts[positive]
+    if per_pair_library:
+        ref_libs = ref_libs[positive]
     log_obs = numpy.log2(obs_counts) - math.log2(n_obs)
     log_ref = numpy.log2(ref_counts) - numpy.log2(ref_libs)
     log_r = log_obs - log_ref
@@ -222,7 +225,9 @@ def calc_factor_tmm(
     above_cutoff = abs_e > acutoff
     if not above_cutoff.all():
         log_r = log_r[above_cutoff]
-        obs_counts, ref_counts, ref_libs = obs_counts[above_cutoff], ref_counts[above_cutoff], ref_libs[above_cutoff]
+        obs_counts, ref_counts = obs_counts[above_cutoff], ref_counts[above_cutoff]
+        if per_pair_library:
+            ref_libs = ref_libs[above_cutoff]
     if log_r.size == 0:
         return 1.0
     if float(numpy.max(numpy.abs(log_r))) < 1e-6:
@@ -243,7 +248,9 @@ def calc_factor_tmm(
     if diagnostics is not None:
         diagnostics.update(retained_pairs=int(keep.sum()), status='estimated')
     if do_weighting:
-        obs_counts, ref_counts, ref_libs = obs_counts[keep], ref_counts[keep], ref_libs[keep]
+        obs_counts, ref_counts = obs_counts[keep], ref_counts[keep]
+        if per_pair_library:
+            ref_libs = ref_libs[keep]
         with numpy.errstate(over='ignore', divide='ignore', invalid='ignore'):
             variances = (n_obs - obs_counts) / n_obs / obs_counts + (ref_libs - ref_counts) / ref_libs / ref_counts
         with numpy.errstate(divide='ignore', invalid='ignore'):
