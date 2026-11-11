@@ -524,12 +524,14 @@ def f_pvalue(data_matrix, mod_matrix, mod0_matrix):
 
     # Project into the additional fitted directions and the full model's
     # residual space directly, avoiding normal equations and RSS subtraction.
-    fitted = numpy.linalg.qr(mod, mode='reduced')[0]
+    fitted, triangular = numpy.linalg.qr(mod, mode='reduced')
     q0 = numpy.linalg.qr(fitted.T @ mod0, mode='complete')[0]
     contrasts = q0[:, df0:]
     fstats = numpy.empty(data.shape[0], dtype=float)
     block_rows = max(1, SVA_F_TEST_BLOCK_ELEMENTS // sample_count)
-    roundoff = numpy.finfo(float).eps * sample_count
+    epsilon = numpy.finfo(float).eps
+    roundoff = epsilon * sample_count
+    can_refine = None
     for start in range(0, len(data), block_rows):
         block = data[start:start + block_rows]
         coordinates = block @ fitted
@@ -539,7 +541,19 @@ def f_pvalue(data_matrix, mod_matrix, mod0_matrix):
         added_ss = numpy.einsum('ij,ij->i', fitted_scores, fitted_scores)
         residual_ss = numpy.einsum('ij,ij->i', residual_scores, residual_scores)
         # Exact zero projections can retain floating-point noise after QR.
-        threshold = (numpy.max(numpy.abs(block), axis=1) * roundoff) ** 2
+        scale = numpy.max(numpy.abs(block), axis=1)
+        threshold = (scale * roundoff) ** 2
+        small_residual = (residual_ss > threshold) & (residual_ss <= (scale * epsilon ** .25) ** 2)
+        if small_residual.any():
+            if can_refine is None:
+                can_refine = numpy.linalg.cond(triangular) < 1.0 / numpy.sqrt(epsilon)
+            if can_refine:
+                # Recompute very small residuals in the original design span.
+                # Roundoff in the QR basis itself can dominate a near-perfect
+                # fit; a well-conditioned triangular solve avoids that error.
+                coefficients = numpy.linalg.solve(triangular, coordinates[small_residual].T)
+                refined = block[small_residual] - (mod @ coefficients).T
+                residual_ss[small_residual] = numpy.einsum('ij,ij->i', refined, refined)
         added_ss[added_ss <= threshold] = 0.0
         residual_ss[residual_ss <= threshold] = 0.0
         with numpy.errstate(divide='ignore', invalid='ignore'):
