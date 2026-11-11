@@ -16,19 +16,18 @@ def _warn_row_mean_fallback(strategy, reason):
     )
 
 
-def _row_mean_impute(values):
+def _row_mean_impute(values, missing_mask):
     out = numpy.asarray(values, dtype=float).copy()
-    finite = numpy.isfinite(out)
-    row_sums = numpy.where(finite, out, 0.0).sum(axis=1)
-    row_counts = finite.sum(axis=1)
+    row_counts = out.shape[1] - missing_mask.sum(axis=1)
+    out[missing_mask] = 0.0
+    row_sums = out.sum(axis=1)
     row_means = numpy.divide(
         row_sums,
         row_counts,
         out=numpy.zeros_like(row_sums, dtype=float),
         where=row_counts > 0,
     )
-    missing_rows, missing_columns = numpy.where(~finite)
-    out[missing_rows, missing_columns] = row_means[missing_rows]
+    numpy.copyto(out, row_means[:, None], where=missing_mask)
     return out
 
 
@@ -174,7 +173,7 @@ def _fit_nipals(values, num_pc, max_iter, tol):
 
 
 def _iterative_pca_impute(values, missing_mask, num_pc, max_iter, tol, strategy, diagnostics=None):
-    imputed = _row_mean_impute(values)
+    imputed = _row_mean_impute(values, missing_mask)
     if diagnostics is not None:
         diagnostics.update(converged=False, iterations=0, final_delta=None)
     for _iteration in range(int(max_iter)):
@@ -193,8 +192,8 @@ def _iterative_pca_impute(values, missing_mask, num_pc, max_iter, tol, strategy,
                 centered=centered,
                 num_pc=num_pc,
             )
-        reconstructed = reconstructed + column_means.reshape(1, -1)
-        old_values = imputed[missing_mask].copy()
+        reconstructed += column_means.reshape(1, -1)
+        old_values = imputed[missing_mask]
         new_values = reconstructed[missing_mask]
         if not numpy.isfinite(new_values).all():
             raise ValueError('PCA imputation produced non-finite values.')
@@ -239,10 +238,8 @@ def impute_expression(
     diagnostics['missing_cells'] = int(missing_mask.sum())
     if not missing_mask.any():
         return (numeric.copy(), diagnostics) if return_diagnostics else numeric.copy()
-    values_for_imputation = values.copy()
-    values_for_imputation[missing_mask] = numpy.nan
     if strategy == 'row_mean':
-        imputed = _row_mean_impute(values_for_imputation)
+        imputed = _row_mean_impute(values, missing_mask)
     else:
         max_pc = min(values.shape[0] - 1, values.shape[1] - 1)
         if max_pc < 1:
@@ -253,13 +250,13 @@ def impute_expression(
                     values.shape[0], values.shape[1]
                 ),
             )
-            imputed = _row_mean_impute(values_for_imputation)
+            imputed = _row_mean_impute(values, missing_mask)
         else:
             resolved_pc = min(max(1, int(num_pc)), max_pc)
             diagnostics['resolved_rank'] = resolved_pc
             try:
                 imputed = _iterative_pca_impute(
-                    values=values_for_imputation,
+                    values=values,
                     missing_mask=missing_mask,
                     num_pc=resolved_pc,
                     max_iter=max_iter,
@@ -270,14 +267,13 @@ def impute_expression(
             except (ValueError, numpy.linalg.LinAlgError) as exc:
                 diagnostics.update(fallback=True, converged=False)
                 _warn_row_mean_fallback(strategy, 'failed to converge/resolve: {}'.format(exc))
-                imputed = _row_mean_impute(values_for_imputation)
+                imputed = _row_mean_impute(values, missing_mask)
     if minimum_imputed_value is not None:
         diagnostics['clipped_cells'] = int((imputed[missing_mask] < minimum_imputed_value).sum())
         imputed[missing_mask] = numpy.maximum(
             imputed[missing_mask],
             minimum_imputed_value,
         )
-    imputed[~missing_mask] = values[~missing_mask]
     result = pandas.DataFrame(imputed, index=numeric.index, columns=numeric.columns)
     return (result, diagnostics) if return_diagnostics else result
 
