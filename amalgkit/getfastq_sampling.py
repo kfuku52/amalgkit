@@ -234,12 +234,12 @@ def sample_spots(spots, output_paths, *, total, start, end, seed, run, min_lengt
                     raise ValueError("Sampling input layout differs from output layout")
                 spot = [tuple(line.rstrip(b"\r\n") + b"\n" for line in record) for record in spot]
                 candidate_count += 1
-                lengths = [len(record[1].rstrip(b"\r\n")) for record in spot]
+                lengths = [len(record[1]) - 1 for record in spot]
                 bases = sum(lengths)
                 candidate_bp += bases
-                for record in spot:
-                    for line in record:
-                        input_digest.update(line)
+                serialized = [b"".join(record) for record in spot]
+                for record in serialized:
+                    input_digest.update(record)
                 if number != next_selected:
                     continue
                 next_selected = next(selected, None)
@@ -250,8 +250,8 @@ def sample_spots(spots, output_paths, *, total, start, end, seed, run, min_lengt
                     counts["num_rejected"] += 1
                     counts["bp_rejected"] += bases
                     continue
-                for output, record in zip(outputs, spot, strict=True):
-                    output.writelines(record)
+                for output, record in zip(outputs, serialized, strict=True):
+                    output.write(record)
                 counts["num_written"] += 1
                 counts["bp_written"] += bases
         if candidate_count != total:
