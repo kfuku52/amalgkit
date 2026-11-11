@@ -67,6 +67,30 @@ def test_leave_out_reference_uses_median_with_row_specific_missingness(reference
         assert result.at[idx, 'within_common_genes_test'] == (matrix[column].notna() & reference.notna()).sum()
 
 
+def test_leave_out_run_updates_only_its_species_profile():
+    rng = numpy.random.default_rng(726)
+    runs = ['1', '2']
+    species = ['S', 'T', 'U', 'V']
+    samples = [f'{sp}_{run}' for sp in species for run in runs]
+    values = rng.integers(0, 12, size=(101, len(samples))).astype(float)
+    values[rng.random(values.shape) < .4] = numpy.nan
+    matrix = pandas.DataFrame(values, columns=samples)
+    metadata = pandas.DataFrame([
+        {'species_tag': sp, 'run': run, 'sample_group': 'A', 'exclusion': 'no'}
+        for sp in species for run in runs
+    ])
+    result = calculate_correlation_within_group(metadata, matrix, 'test', reference_exclusion='run')
+
+    for idx, column in enumerate(samples):
+        profiles = pandas.DataFrame({
+            sp: matrix[[f'{sp}_{run}' for run in runs if f'{sp}_{run}' != column]].mean(axis=1)
+            for sp in species
+        })
+        reference = profiles.median(axis=1)
+        assert result.at[idx, 'within_group_cor_test'] == pytest.approx(matrix[column].corr(reference))
+        assert result.at[idx, 'within_common_genes_test'] == (matrix[column].notna() & reference.notna()).sum()
+
+
 def test_safe_correlation_returns_nan_for_constant_vectors():
     assert numpy.isnan(safe_correlation([1.0, 1.0, 1.0], [1.0, 2.0, 3.0], 'pearson'))
     assert numpy.isnan(safe_correlation([1.0, 2.0, 3.0], [4.0, 4.0, 4.0], 'spearman'))

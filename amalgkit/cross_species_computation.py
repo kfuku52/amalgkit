@@ -62,6 +62,7 @@ def _median_neighbors(profiles):
     rows = numpy.arange(counts.size)
     mid = counts // 2
     return (
+        ordered[rows, numpy.maximum(mid - 2, 0)],
         ordered[rows, numpy.maximum(mid - 1, 0)],
         ordered[rows, numpy.minimum(mid, ordered.shape[1] - 1)],
         ordered[rows, numpy.minimum(mid + 1, ordered.shape[1] - 1)],
@@ -69,13 +70,8 @@ def _median_neighbors(profiles):
     )
 
 
-def _median_without_species(profiles, species_tag, reference, neighbors):
-    if species_tag not in profiles:
-        return reference
-    if neighbors is None:
-        return profiles.drop(columns=[species_tag]).median(axis=1, skipna=True).to_numpy(dtype=float)
-    left, mid, right, counts = neighbors
-    removed = profiles[species_tag].to_numpy(dtype=float)
+def _median_after_drop(removed, reference, neighbors):
+    _, left, mid, right, counts = neighbors
     # An even-sized row becomes odd: the median shifts left only when
     # removing a value in the upper half. Ties yield the same result.
     result = numpy.where(removed < mid, mid, left)
@@ -90,6 +86,79 @@ def _median_without_species(profiles, species_tag, reference, neighbors):
     result[counts <= 1] = numpy.nan
     missing = numpy.isnan(removed)
     result[missing] = reference[missing]
+    return result
+
+
+def _order_stat_after_replacement(previous, center, following, removed, replacement):
+    # The rank can move by only one. The removed value's position determines
+    # which neighboring values bound the replacement at this rank.
+    return numpy.clip(
+        replacement,
+        numpy.where(removed < center, center, previous),
+        numpy.where(removed > center, center, following),
+    )
+
+
+def _median_after_species_update(profiles, species_tag, reference, neighbors, replacement=None):
+    if species_tag not in profiles:
+        return reference
+    if neighbors is None or (replacement is not None and numpy.isinf(replacement).any()):
+        if replacement is None:
+            updated = profiles.drop(columns=[species_tag])
+        else:
+            updated = profiles.copy()
+            updated.loc[:, species_tag] = replacement
+        return updated.median(axis=1, skipna=True).to_numpy(dtype=float)
+    removed = profiles[species_tag].to_numpy(dtype=float)
+    result = _median_after_drop(removed, reference, neighbors)
+    if replacement is None:
+        return result
+    far_left, left, mid, right, counts = neighbors
+    observed = ~numpy.isnan(replacement)
+    had_profile = ~numpy.isnan(removed)
+    odd = counts % 2 == 1
+    sole = observed & (counts - had_profile == 0)
+    result[sole] = replacement[sole]
+
+    # When a species already contributed to the row, replace it in place.
+    change = observed & had_profile & (counts > 1)
+    take = change & odd
+    result[take] = _order_stat_after_replacement(
+        left[take],
+        mid[take],
+        right[take],
+        removed[take],
+        replacement[take],
+    )
+    take = change & ~odd
+    two = counts[take] == 2
+    lower = _order_stat_after_replacement(
+        numpy.where(two, -numpy.inf, far_left[take]),
+        left[take],
+        mid[take],
+        removed[take],
+        replacement[take],
+    )
+    upper = _order_stat_after_replacement(
+        left[take],
+        mid[take],
+        numpy.where(two, numpy.inf, right[take]),
+        removed[take],
+        replacement[take],
+    )
+    with numpy.errstate(over="ignore"):
+        result[take] = (lower + upper) / 2.0
+
+        # An otherwise missing species adds a value to the existing row.
+        insert = observed & ~had_profile & (counts > 0)
+        take = insert & ~odd
+        result[take] = numpy.clip(replacement[take], left[take], mid[take])
+        take = insert & odd
+        one = counts[take] == 1
+        inserted = numpy.clip(
+            replacement[take], numpy.where(one, -numpy.inf, left[take]), numpy.where(one, numpy.inf, right[take])
+        )
+        result[take] = (mid[take] + inserted) / 2.0
     return result
 
 
@@ -164,12 +233,16 @@ def calculate_correlation_within_group(
     group_references = {group: ortholog_med[group].to_numpy(dtype=float) for group in group_order}
     median_neighbors = {}
 
-    def reference_without_species(reference_group, species_tag):
+    def updated_reference(reference_group, species_tag, replacement=None):
         profiles = species_profiles_by_group[reference_group]
         if reference_group not in median_neighbors:
             median_neighbors[reference_group] = _median_neighbors(profiles)
-        return _median_without_species(
-            profiles, species_tag, group_references[reference_group], median_neighbors[reference_group]
+        return _median_after_species_update(
+            profiles,
+            species_tag,
+            group_references[reference_group],
+            median_neighbors[reference_group],
+            replacement,
         )
 
     # Group the work by species to retain at most one species' reference
@@ -192,24 +265,22 @@ def calculate_correlation_within_group(
         correlations = {}
         common_counts = {}
         for reference_group in group_order:
-            profiles = species_profiles_by_group[reference_group]
             if reference_exclusion == "species":
                 # Exclude the target species from BOTH within- and other-group references.
                 if reference_group not in species_references:
-                    species_references[reference_group] = reference_without_species(reference_group, species_tag)
+                    species_references[reference_group] = updated_reference(reference_group, species_tag)
                 reference = species_references[reference_group]
             elif reference_group == sample_group:
                 other_ids = [other for other in group_members[(species_tag, sample_group)] if other != sample_id]
-                if other_ids:
-                    profiles = profiles.copy()
-                    profiles.loc[:, species_tag] = (
-                        ortholog_matrix.loc[:, other_ids]
-                        .apply(pandas.to_numeric, errors="coerce")
-                        .mean(axis=1, skipna=True)
-                    )
-                    reference = profiles.median(axis=1, skipna=True).to_numpy(dtype=float)
-                else:
-                    reference = reference_without_species(reference_group, species_tag)
+                replacement = (
+                    ortholog_matrix.loc[:, other_ids]
+                    .apply(pandas.to_numeric, errors="coerce")
+                    .mean(axis=1, skipna=True)
+                    .to_numpy(dtype=float)
+                    if other_ids
+                    else None
+                )
+                reference = updated_reference(reference_group, species_tag, replacement)
             else:
                 reference = group_references[reference_group]
             valid = sample_finite & numpy.isfinite(reference)
