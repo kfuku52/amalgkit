@@ -21,13 +21,22 @@ def write_observed_pair_diagnostics(counts, library_sizes, factors, path, global
     fields = ['reference_sample', 'sample', 'shared_observed', 'shared_positive',
               'retained_pairs', 'status', 'observed_factor_ratio', 'applied_factor_ratio',
               'log2_ratio_difference', 'purpose', 'global_reference_sample']
-    values = counts.reindex(columns=factors.index).to_numpy(dtype=float)
     columns = list(factors.index)
     if global_reference is not None and global_reference not in columns:
         raise ValueError('The global TMM reference must be a retained sample.')
+    aligned = counts if counts.columns.equals(factors.index) else counts.reindex(columns=factors.index)
+    values = aligned.to_numpy(dtype=float)
+    # Complete samples do not need a mask. Keep one mask for each sample
+    # with missing observations rather than testing finiteness for every pair.
+    finite_masks = []
+    for sample_values in values.T:
+        finite = numpy.isfinite(sample_values)
+        finite_masks.append(None if finite.all() else finite)
+    library_values = [float(library_sizes[sample]) for sample in columns]
+    factor_values = [factors[sample] for sample in columns]
     with open(path, 'w', newline='', encoding='utf-8') as handle:
-        writer = csv.DictWriter(handle, fieldnames=fields, delimiter='\t')
-        writer.writeheader()
+        writer = csv.writer(handle, delimiter='\t')
+        writer.writerow(fields)
         for ref_idx, obs_idx in combinations(range(len(columns)), 2):
             # Compute directly against the actual global reference, including
             # when it occurs later in input order. Do not assume reciprocity at
@@ -35,24 +44,30 @@ def write_observed_pair_diagnostics(counts, library_sizes, factors, path, global
             if columns[obs_idx] == global_reference:
                 ref_idx, obs_idx = obs_idx, ref_idx
             reference, sample = columns[ref_idx], columns[obs_idx]
-            common = numpy.isfinite(values[:, ref_idx]) & numpy.isfinite(values[:, obs_idx])
+            ref_mask, obs_mask = finite_masks[ref_idx], finite_masks[obs_idx]
+            if ref_mask is None:
+                common = obs_mask
+            elif obs_mask is None:
+                common = ref_mask
+            else:
+                common = ref_mask & obs_mask
+            ref, obs = values[:, ref_idx], values[:, obs_idx]
+            if common is not None:
+                ref, obs = ref[common], obs[common]
             diagnostics = {}
             ratio = calc_factor_tmm(
-                obs=values[common, obs_idx], ref=values[common, ref_idx],
-                libsize_obs=float(library_sizes[sample]), libsize_ref=float(library_sizes[reference]),
+                obs=obs, ref=ref,
+                libsize_obs=library_values[obs_idx], libsize_ref=library_values[ref_idx],
                 diagnostics=diagnostics,
             )
             estimable = diagnostics['status'] in {'estimated', 'near_identical_rates'}
             estimable = estimable and numpy.isfinite(ratio) and ratio > 0
-            applied = float(factors[sample] / factors[reference])
-            writer.writerow(dict(
-                reference_sample=reference, sample=sample, shared_observed=int(common.sum()),
-                shared_positive=diagnostics['positive_pairs'], retained_pairs=diagnostics['retained_pairs'],
-                status=diagnostics['status'], observed_factor_ratio=ratio if estimable else '',
-                applied_factor_ratio=applied,
-                log2_ratio_difference=float(numpy.log2(ratio / applied)) if estimable else '',
-                purpose='reference_only',
-                global_reference_sample=global_reference if global_reference is not None else '',
+            applied = float(factor_values[obs_idx] / factor_values[ref_idx])
+            writer.writerow((
+                reference, sample, len(ref), diagnostics['positive_pairs'], diagnostics['retained_pairs'],
+                diagnostics['status'], ratio if estimable else '', applied,
+                float(numpy.log2(ratio / applied)) if estimable else '', 'reference_only',
+                global_reference if global_reference is not None else '',
             ))
 
 
