@@ -13,12 +13,11 @@ import hashlib
 import itertools
 import json
 import os
-import re
 
 import pandas
 import numpy
 
-from amalgkit.fastq_utils import is_private_file_value, open_fastq_binary
+from amalgkit.fastq_utils import is_private_file_value, open_fastq_binary, paired_fastq_header_status
 from amalgkit.output_utils import atomic_output_path
 
 ALGORITHM = "sha256-fisher-yates-v1"
@@ -167,15 +166,11 @@ def iter_spots(paths):
             if any(record is None for record in spot):
                 raise ValueError("Paired FASTQ record counts differ during sampling")
             if len(spot) == 2:
-                keys = [re.sub(rb"/[12]$", b"", record[0].split()[0]) for record in spot]
-                if keys[0] != keys[1]:
+                same_key, mates_consistent = paired_fastq_header_status(spot[0][0], spot[1][0])
+                if not same_key:
                     raise ValueError("Paired FASTQ read IDs/order differ during sampling")
-                for mate, record in enumerate(spot, 1):
-                    fields = record[0].split()
-                    suffix = re.search(rb"/([12])$", fields[0])
-                    marker = re.match(rb"([12]):", fields[1]) if len(fields) > 1 else None
-                    if any(match and int(match[1]) != mate for match in (suffix, marker)):
-                        raise ValueError("FASTQ header contradicts mate assignment during sampling")
+                if not mates_consistent:
+                    raise ValueError("FASTQ header contradicts mate assignment during sampling")
             yield spot
 
 

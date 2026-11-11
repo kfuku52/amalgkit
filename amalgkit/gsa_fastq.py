@@ -15,7 +15,7 @@ import zlib
 
 import pandas
 
-from amalgkit.fastq_utils import is_private_file_value
+from amalgkit.fastq_utils import is_private_file_value, paired_fastq_header_status
 from amalgkit.download_utils import acquire_exclusive_lock, calculate_file_md5, resolve_download_dir
 from amalgkit.fastq_download_integrity import validate_integrity_metadata
 from amalgkit.output_utils import atomic_output_path
@@ -157,11 +157,6 @@ def _records(handle, label):
         raise GsaCorruptInputError(label, "Invalid GSA FASTQ compression stream") from exc
 
 
-def _pair_key(header):
-    token = header.split(None, 1)[0]
-    return re.sub(rb"/[12]$", b"", token)
-
-
 def iter_spots(cache_dir, files):
     for _, entry_group in itertools.groupby(files, key=lambda entry: entry["group"]):
         entries = list(entry_group)
@@ -172,17 +167,11 @@ def iter_spots(cache_dir, files):
                 if any(record is None for record in spot):
                     raise ValueError("GSA paired FASTQ record counts differ: {}".format(paths))
                 if len(spot) == 2:
-                    if _pair_key(spot[0][0]) != _pair_key(spot[1][0]):
+                    same_key, mates_consistent = paired_fastq_header_status(spot[0][0], spot[1][0])
+                    if not same_key:
                         raise ValueError("GSA paired FASTQ read IDs/order differ: {}".format(paths))
-                    for mate, record in enumerate(spot, 1):
-                        fields = record[0].split()
-                        marker = re.search(rb"/([12])$", fields[0])
-                        if marker and int(marker[1]) != mate:
-                            raise ValueError("GSA FASTQ header contradicts its mate assignment: {}".format(paths))
-                        if len(fields) > 1:
-                            marker = re.match(rb"([12]):", fields[1])
-                            if marker and int(marker[1]) != mate:
-                                raise ValueError("GSA FASTQ header contradicts its mate assignment: {}".format(paths))
+                    if not mates_consistent:
+                        raise ValueError("GSA FASTQ header contradicts its mate assignment: {}".format(paths))
                 yield spot
 
 

@@ -32,6 +32,25 @@ def open_fastq_binary(path_fastq):
     return open(path_fastq, 'rb')
 
 
+def _explicit_mate_key(header, expected):
+    fields = header.split(None, 2)
+    name = fields[0]
+    consistent = True
+    if name.endswith((b'/1', b'/2')):
+        consistent = name[-1:] == expected
+        name = name[:-2]
+    if len(fields) > 1 and fields[1].startswith((b'1:', b'2:')):
+        consistent = consistent and fields[1][:1] == expected
+    return name, consistent
+
+
+def paired_fastq_header_status(first, second):
+    """Compare validated byte headers using explicit slash/CASAVA mate markers."""
+    first_key, first_ok = _explicit_mate_key(first, b'1')
+    second_key, second_ok = _explicit_mate_key(second, b'2')
+    return first_key == second_key, first_ok and second_ok
+
+
 def count_fastq_lines(path_fastq, chunk_size=DEFAULT_FASTQ_CHUNK_SIZE):
     num_lines = 0
     last_byte = b''

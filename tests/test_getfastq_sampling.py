@@ -318,6 +318,26 @@ def test_missing_final_newline_is_safe_across_rounds(tmp_path):
     assert len(set(ids(first))) == 4
 
 
+@pytest.mark.parametrize(
+    "headers, error",
+    [
+        ((b"@SRR1.2 2 length=1", b"@SRR1.2 2 length=1"), None),
+        ((b"@r/1 2:N:0:AC", b"@r/2 2:N:0:AC"), "contradicts mate assignment"),
+        ((b"@SRR1.1", b"@SRR1.2"), "read IDs/order differ"),
+    ],
+)
+def test_sampled_pairs_distinguish_spot_ids_from_explicit_mates(tmp_path, headers, error):
+    paths = [tmp_path / "r1.fq", tmp_path / "r2.fq"]
+    for path, header in zip(paths, headers, strict=True):
+        path.write_bytes(header + b"\nA\n+\nI\n")
+    if error:
+        with pytest.raises(ValueError, match=error):
+            list(sampling.iter_spots(paths))
+    else:
+        (spot,) = list(sampling.iter_spots(paths))
+        assert tuple(record[0].rstrip(b"\n") for record in spot) == headers
+
+
 @pytest.mark.parametrize("paired", [False, True])
 def test_empty_second_round_keeps_first_output(tmp_path, monkeypatch, paired):
     row = dict(
