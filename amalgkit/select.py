@@ -945,6 +945,7 @@ def normalize_select_metadata_frame(df, select_rules):
     fallback_sources = pandas.Series('', index=out_df.index, dtype=str)
     fallback_texts = pandas.Series('', index=out_df.index, dtype=str)
     resolved = pandas.Series(False, index=out_df.index)
+    regex_cache = {}
     for rule in normalize_rules:
         compiled_pattern = rule['regex']
         for column in rule['columns']:
@@ -960,8 +961,8 @@ def normalize_select_metadata_frame(df, select_rules):
             candidate_mask = nonempty_mask & (~resolved)
             if not candidate_mask.any():
                 continue
-            candidate_mask.loc[candidate_mask] = (
-                text_series.loc[candidate_mask].str.contains(compiled_pattern, regex=True).fillna(False)
+            candidate_mask.loc[candidate_mask] = _match_select_text(
+                text_series, compiled_pattern, column, regex_cache, row_mask=candidate_mask,
             )
             if not candidate_mask.any():
                 continue
@@ -1029,11 +1030,11 @@ def normalize_select_metadata_frame(df, select_rules):
     out_df['sample_group_normalization_source'] = sources
     out_df['sample_group_normalization_text'] = source_texts
     out_df['sample_group_normalization_rule_id'] = rule_ids
-    out_df = review_select_cross_field_tissue_conflicts(out_df, normalize_rules)
+    out_df = review_select_cross_field_tissue_conflicts(out_df, normalize_rules, copy=False)
     return out_df
 
 
-def review_select_cross_field_tissue_conflicts(df, normalize_rules):
+def review_select_cross_field_tissue_conflicts(df, normalize_rules, *, copy=True):
     safe_rule_ids = {
         rule['rule_id']
         for rule in normalize_rules
@@ -1051,7 +1052,7 @@ def review_select_cross_field_tissue_conflicts(df, normalize_rules):
     ]
     if (len(strong_columns) == 0) and (len(medium_columns) == 0):
         return df
-    out_df = df.copy(deep=True)
+    out_df = df.copy(deep=True) if copy else df
     assigned_groups = out_df['sample_group'].fillna('').astype(str).str.strip()
     eligible_mask = assigned_groups.isin(SELECT_NORMALIZE_ORGANS)
     if not eligible_mask.any():
@@ -1110,6 +1111,7 @@ def build_select_cross_field_tissue_conflict_records(
     conflict_mask = pandas.Series(False, index=out_df.index)
     conflict_sources = pandas.Series('', index=out_df.index, dtype=str)
     conflict_texts = pandas.Series('', index=out_df.index, dtype=str)
+    regex_cache = {}
     for column in columns:
         text_series = normalize_select_series(out_df[column])
         nonempty_mask = ~text_series.str.lower().isin(SELECT_IGNORE_VALUES)
@@ -1117,7 +1119,7 @@ def build_select_cross_field_tissue_conflict_records(
             continue
         safe_source_mask = (normalization_sources == column) & normalization_rule_ids.isin(safe_rule_ids)
         for organ, pattern in SELECT_CROSS_FIELD_ORGAN_PATTERNS.items():
-            organ_mask = text_series.str.contains(pattern, regex=True).fillna(False)
+            organ_mask = _match_select_text(text_series, pattern, column, regex_cache)
             current_mask = eligible_mask & nonempty_mask & organ_mask & (assigned_groups != organ)
             current_mask = current_mask & (~safe_source_mask)
             if not current_mask.any():
@@ -1194,7 +1196,7 @@ def _factorize_select_text(text):
     return codes, pandas.Series(unique, dtype=str)
 
 
-def _match_select_text(text, pattern, column, text_cache):
+def _match_select_text(text, pattern, column, text_cache, *, row_mask=None):
     """Reuse factors for the same source Series within one rules invocation."""
     cache_key = (_SELECT_REGEX_FACTOR_CACHE_KEY, column)
     cached = text_cache.get(cache_key) if text_cache is not None else None
@@ -1204,11 +1206,13 @@ def _match_select_text(text, pattern, column, text_cache):
         factors = _factorize_select_text(text)
         if text_cache is not None:
             text_cache[cache_key] = (text, factors)
+    selected = slice(None) if row_mask is None else row_mask.to_numpy(dtype=bool, copy=False)
     if factors is None:
-        return text.str.contains(pattern, regex=True).fillna(False)
+        subset = text if row_mask is None else text.iloc[selected]
+        return subset.str.contains(pattern, regex=True).fillna(False)
     codes, unique = factors
     matched = unique.str.contains(pattern, regex=True).fillna(False).to_numpy(dtype=bool)
-    return pandas.Series(matched[codes], index=text.index)
+    return pandas.Series(matched[codes[selected]], index=text.index[selected])
 
 
 def build_select_rule_match_mask_with_cache(df, rule, text_cache=None):
