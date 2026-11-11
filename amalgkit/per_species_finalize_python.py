@@ -175,6 +175,12 @@ def _exclude_inappropriate_sample_from_eff_length(eff_length_df, counts_df):
     return eff_length_df.loc[:, [run_id for run_id in counts_df.columns if run_id in eff_length_df.columns]].copy()
 
 
+def _coerce_expression_columns(frame):
+    if all(dtype == numpy.float64 for dtype in frame.dtypes):
+        return frame
+    return frame.apply(pandas.to_numeric, errors='coerce')
+
+
 def _align_effective_lengths(counts_df, eff_length_df):
     if counts_df.index.has_duplicates:
         duplicated = counts_df.index[counts_df.index.duplicated()].astype(str).unique().tolist()
@@ -182,25 +188,31 @@ def _align_effective_lengths(counts_df, eff_length_df):
     if eff_length_df.index.has_duplicates:
         duplicated = eff_length_df.index[eff_length_df.index.duplicated()].astype(str).unique().tolist()
         raise ValueError('Effective-length table contains duplicate target_id values: {}'.format(', '.join(duplicated)))
-    missing_genes = [str(gene_id) for gene_id in counts_df.index if gene_id not in eff_length_df.index]
-    if missing_genes:
+    same_genes = counts_df.index.equals(eff_length_df.index)
+    missing_genes = (
+        counts_df.index[~counts_df.index.isin(eff_length_df.index)] if not same_genes else ()
+    )
+    if len(missing_genes):
         raise ValueError(
             'Effective-length table is missing target_id values required by the count table: {}'.format(
-                ', '.join(missing_genes)
+                ', '.join(map(str, missing_genes))
             )
         )
-    missing_runs = [str(run_id) for run_id in counts_df.columns if run_id not in eff_length_df.columns]
-    if missing_runs:
+    same_runs = counts_df.columns.equals(eff_length_df.columns)
+    missing_runs = (
+        counts_df.columns[~counts_df.columns.isin(eff_length_df.columns)] if not same_runs else ()
+    )
+    if len(missing_runs):
         raise ValueError(
             'Effective-length table is missing run columns required by the count table: {}'.format(
-                ', '.join(missing_runs)
+                ', '.join(map(str, missing_runs))
             )
         )
-    aligned = eff_length_df.reindex(index=counts_df.index, columns=counts_df.columns).apply(
-        pandas.to_numeric,
-        errors='coerce',
+    aligned = eff_length_df if same_genes and same_runs else eff_length_df.reindex(
+        index=counts_df.index, columns=counts_df.columns,
     )
-    counts = counts_df.apply(pandas.to_numeric, errors='coerce').to_numpy(dtype=float)
+    aligned = _coerce_expression_columns(aligned)
+    counts = _coerce_expression_columns(counts_df).to_numpy(dtype=float)
     invalid_counts = (~numpy.isfinite(counts)) | (counts < 0)
     if invalid_counts.any():
         row_idx, column_idx = numpy.argwhere(invalid_counts)[0]
@@ -348,7 +360,9 @@ def _transform_raw_to_fpkm(counts_df, eff_length_df, metadata_df):
     ).to_numpy(dtype=float)
     counts = counts_df.to_numpy(dtype=float)
     with numpy.errstate(divide='ignore', invalid='ignore'):
-        values = counts / effective_lengths / library_sizes.reshape(1, -1) * 1e9
+        values = counts / effective_lengths
+        numpy.divide(values, library_sizes, out=values)
+        numpy.multiply(values, 1e9, out=values)
     values[~numpy.isfinite(values)] = 0.0
     return pandas.DataFrame(values, index=counts_df.index, columns=counts_df.columns)
 
@@ -453,14 +467,14 @@ def _apply_transformation_logic(
     else:
         raise ValueError('Unsupported batch effect algorithm for Python finalize worker: {}'.format(batch_effect_alg))
 
-    transformed = counts_df.copy()
-    if bool_fpkm_tpm:
-        if abundance_method == 'fpkm':
-            transformed = _transform_raw_to_fpkm(transformed, eff_length_df, metadata_df)
-        elif abundance_method == 'tpm':
-            transformed = _transform_raw_to_tpm(transformed, eff_length_df)
-        elif abundance_method == 'cpm':
-            transformed = _transform_raw_to_cpm(transformed, metadata_df)
+    if bool_fpkm_tpm and abundance_method == 'fpkm':
+        transformed = _transform_raw_to_fpkm(counts_df, eff_length_df, metadata_df)
+    elif bool_fpkm_tpm and abundance_method == 'tpm':
+        transformed = _transform_raw_to_tpm(counts_df, eff_length_df)
+    elif bool_fpkm_tpm and abundance_method == 'cpm':
+        transformed = _transform_raw_to_cpm(counts_df, metadata_df)
+    else:
+        transformed = counts_df.copy()
     if bool_log:
         values = transformed.to_numpy(dtype=float)
         with numpy.errstate(divide='ignore', invalid='ignore'):
