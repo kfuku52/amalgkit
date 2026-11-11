@@ -468,7 +468,7 @@ def build_parser(command_handlers, command_names, version, prog=None):
                      choices=['auto', 'ont-cdna', 'ont-drna', 'pac-bio', 'pac-bio-hifi'],
                      help='default=%(default)s: Override oarfish sequencing-technology preset. "auto" infers ONT/PacBio subtype from metadata where possible.')
     pqu.add_argument('--kallisto_options', metavar='STR', default=None, type=str, required=False, action='store',
-                     help='default=%(default)s: Additional shell-style option string passed through to `kallisto quant`. Example: --kallisto_options "--bias --seed 42".')
+                     help='default=%(default)s: Additional shell-style option string passed through to `kallisto quant`. Example for a confirmed reverse-stranded library: --kallisto_options="--rf-stranded".')
     pqu.add_argument('--fragment_length_file', metavar='PATH', default=None, type=str,
                      help='default=%(default)s: Run-specific single-end kallisto TSV: run, fragment_length_mean, '
                           'fragment_length_sd, source, source_detail. Overrides metadata and common CLI values.')

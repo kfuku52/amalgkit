@@ -97,6 +97,12 @@ Shared index-build locks prevent concurrent batch jobs from building the same sp
 Extra backend options cannot override AMALGKIT-managed inputs, output paths,
 indices, thread counts, layouts, or sequencing-technology flags.
 
+Set `--kallisto_options="--rf-stranded"` only when the protocol establishes
+that the first read is antisense to the transcript. Leave `--bias` off unless
+you have validated it on comparable libraries. On four pure ERCC libraries
+from two SEQC sites, it increased concentration and fold-change error in the
+[short-read benchmark](https://github.com/kfuku52/amalgkit/blob/master/benchmarks/results/2026-11-11/README.md#short-read-ercc-controls).
+
 ### Compare placement models for ONT direct RNA
 
 Oarfish 0.11.0 supports a [truncation model](https://combine-lab.github.io/oarfish/guides/models/)
@@ -162,6 +168,9 @@ lengths and a fastp insert-size peak are not estimates of this mean/SD pair.
 Instrument measurements should describe the insert after accounting for adapters.
 The [kallisto manual](https://pachterlab.github.io/kallisto/manual) requires both
 parameters in single-end mode; its 200/20 example is not a universal measurement.
+In the same SEQC benchmark, parameters estimated from the original pairs
+improved concentration estimates when quantifying with only the first mate.
+This comparison does not estimate fragment lengths from single-end reads.
 
 | Option | Default | Meaning |
 | --- | --- | --- |

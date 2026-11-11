@@ -1,4 +1,4 @@
-# Oarfish quantification benchmarks
+# RNA-seq quantification benchmarks
 
 Using Oarfish 0.11.0 (rammap) through AMALGKIT `quant`, the truncation model
 improved isoform quantification on two [Garalde et al. direct RNA
@@ -197,3 +197,44 @@ and the comparison excludes origins outside the supplied transcriptome.
 Changing `--score-prob-denom` also failed to improve the real Garalde E2
 library with truncation. The log2 errors for denominators 1, 3 (the default),
 10 and 30 were 0.764, 0.746, 0.761 and 0.808, respectively.
+## Short-read ERCC controls
+
+With kallisto 0.52.0, sequence-bias correction increased concentration error
+in four pure ERCC libraries from the [SEQC project](https://www.ncbi.nlm.nih.gov/bioproject/208369).
+Using a fragment distribution estimated from the original pairs instead of
+assuming 200/20 bp reduced concentration error when quantifying only read 1.
+
+| SEQC site and run | Mix | Fragment mean/SD (bp) | Paired-end MAE: default → `--bias` | Read-1 MAE: assumed → estimated | Read-1 fragments mapped: assumed → estimated |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| BGI [SRR896989](https://www.ebi.ac.uk/ena/browser/view/SRR896989) | 1 | 162.6/50.0 | 0.317 → 0.449 | 0.332 → 0.314 | 906,226 → 950,326 |
+| BGI [SRR897022](https://www.ebi.ac.uk/ena/browser/view/SRR897022) | 2 | 166.3/49.7 | 0.311 → 0.653 | 0.327 → 0.318 | 898,525 → 945,005 |
+| NYG [SRR1216112](https://www.ebi.ac.uk/ena/browser/view/SRR1216112) | 1 | 169.5/49.4 | 0.943 → 1.382 | 0.945 → 0.927 | 915,665 → 952,839 |
+| NYG [SRR1216126](https://www.ebi.ac.uk/ena/browser/view/SRR1216126) | 2 | 168.7/46.0 | 1.030 → 1.703 | 1.024 → 1.013 | 905,744 → 948,450 |
+
+For each library, MAE is mean absolute `log2((observed TPM + 0.5) /
+(expected TPM + 0.5))` among controls whose expected TPM is at least 20.
+Expected TPM is the molarity divided by total molarity within its mix, times
+one million. Bias correction did not change paired-end mapping counts.
+For the 54 controls meeting the threshold in both mixes, the paired-end
+Mix 1/Mix 2 fold-change MAE increased from 0.153 to 0.361 at BGI and 0.252 to
+0.454 at NYG. Estimated fragment lengths changed the read-1 fold-change MAE
+from 0.171 to 0.154 at BGI and 0.250 to 0.252 at NYG.
+
+To reproduce, take the first 1,000,000 synchronized pairs of each unfiltered
+ENA run. Index [ERCC92.fa](https://assets.thermofisher.com/TFS-Assets/LSG/manuals/ERCC92.zip)
+with kallisto's default k-mer size and use the
+[vendor's Mix 1 and Mix 2 concentrations](https://assets.thermofisher.com/TFS-Assets/LSG/manuals/cms_095046.txt).
+Run `kallisto quant -t 2` with the two FASTQs, once without extra options and
+once with `--bias`. The tested binary accepted `--bias` and logged bias
+learning; the [upstream manual](https://pachterlab.github.io/kallisto/manual)
+lists it as a legacy option. For the read-1 comparisons, add `--single -l 200
+-s 20` and then replace those two numbers with the weighted mean and
+population SD of the default paired run's `aux/fld` histogram in
+`abundance.h5`. The histogram contained 20,000 fragment lengths in each run.
+Compare `abundance.tsv` TPM in all cases.
+
+The inputs are fixed prefixes of pure spike-ins from two sites, with no
+endogenous transcripts. The estimated distributions used information from
+the original mates in the same data. They do not demonstrate recovery of
+fragment lengths from a genuinely single-end library or establish that
+sequence-bias correction is ineffective in other protocols.
