@@ -137,17 +137,18 @@ def _inverse_transform_for_tau(tc_sample_group_df, transform_method):
         transform_method += '-none'
     if transform_method not in EXPRESSION_NORMALIZATION_METHODS:
         raise ValueError('Unsupported tau input transformation: {}'.format(transform_method))
-    mat = tc_sample_group_df.astype(float).copy()
+    mat = tc_sample_group_df.to_numpy(dtype=float, copy=True, na_value=numpy.nan)
     method = str(transform_method).split('-')[0]
     if method == 'logn':
-        mat.loc[:, :] = numpy.exp(mat.to_numpy(dtype=float))
+        numpy.exp(mat, out=mat)
     elif method == 'log2':
-        mat.loc[:, :] = numpy.power(2.0, mat.to_numpy(dtype=float))
+        numpy.power(2.0, mat, out=mat)
     elif method == 'lognp1':
-        mat.loc[:, :] = numpy.expm1(mat.to_numpy(dtype=float))
+        numpy.expm1(mat, out=mat)
     elif method == 'log2p1':
-        mat.loc[:, :] = numpy.expm1(mat.to_numpy(dtype=float) * numpy.log(2.0))
-    return mat
+        mat *= numpy.log(2.0)
+        numpy.expm1(mat, out=mat)
+    return pandas.DataFrame(mat, index=tc_sample_group_df.index, columns=tc_sample_group_df.columns, copy=False)
 
 
 def sample_group_to_tau(tc_sample_group_df, rich_annotation=True):
@@ -156,49 +157,49 @@ def sample_group_to_tau(tc_sample_group_df, rich_annotation=True):
     Supply linear arithmetic means, with no further transform. Inverse transforms
     belong before replicate aggregation, in linear_sample_group_summary.
     """
-    transformed = tc_sample_group_df.astype(float)
-    columns = transformed.columns
+    columns = tc_sample_group_df.columns
     if columns.isna().any() or any(str(label).strip() == '' for label in columns):
         raise ValueError('Tau requires nonempty sample_group labels.')
     columns = columns.map(lambda label: str(label).strip())
     if columns.duplicated().any():
         raise ValueError('Tau requires unique sample_group labels.')
-    values = transformed.to_numpy(dtype=float)
-    n_groups = transformed.shape[1]
-    tau = numpy.full((transformed.shape[0],), numpy.nan, dtype=float)
-    complete = numpy.isfinite(values).all(axis=1)
+    values = tc_sample_group_df.to_numpy(dtype=float, na_value=numpy.nan)
+    n_groups = values.shape[1]
+    tau = numpy.full((values.shape[0],), numpy.nan, dtype=float)
+    if rich_annotation:
+        num_groups_observed = numpy.isfinite(values).sum(axis=1)
+        complete = num_groups_observed == n_groups
+    else:
+        complete = numpy.isfinite(values).all(axis=1)
     nonnegative = (values >= 0).all(axis=1)
     xmax = values.max(axis=1) if n_groups else numpy.zeros(values.shape[0])
     valid = complete & nonnegative & (xmax > 0) & (n_groups > 1)
     if valid.any():
         tau[valid] = numpy.sum(1.0 - values[valid] / xmax[valid, None], axis=1) / (n_groups - 1)
 
-    df_tau = pandas.DataFrame(index=transformed.index.copy(), data={'tau': tau})
+    df_tau = pandas.DataFrame(index=tc_sample_group_df.index.copy(), data={'tau': tau})
     if not rich_annotation:
         return df_tau
 
-    highest_values = []
-    order_values = []
-    highest_ties = []
+    highest_values = [numpy.nan] * len(values)
+    order_values = [numpy.nan] * len(values)
+    highest_ties = [numpy.nan] * len(values)
     column_names = list(columns)
     # Column names are already normalized and unique; escape each one only once.
-    escaped_names = {name: serialize_sample_groups([name]) for name in column_names}
-    for row, is_valid in zip(values, valid):
-        positive = row > 0
-        if not is_valid:
-            highest_values.append(numpy.nan)
-            order_values.append(numpy.nan)
-            highest_ties.append(numpy.nan)
-            continue
-        positive_names = [column_names[idx] for idx, is_positive in enumerate(positive) if bool(is_positive)]
-        positive_values = row[positive]
-        order_idx = numpy.argsort(-positive_values, kind='mergesort')
-        ordered_groups = [positive_names[idx] for idx in order_idx]
-        highest_values.append(ordered_groups[0])
-        order_values.append('|'.join(escaped_names[name] for name in ordered_groups))
-        highest_ties.append('|'.join(
-            escaped_names[name] for name in sorted(column_names[i] for i in numpy.flatnonzero(row == row.max()))
-        ))
+    escaped_names = [serialize_sample_groups([name]) for name in column_names]
+    alphabetical = numpy.array(sorted(range(n_groups), key=column_names.__getitem__), dtype=int)
+    valid_rows = numpy.flatnonzero(valid)
+    block_rows = max(1, 2**15 // max(1, n_groups))
+    for start in range(0, valid_rows.size, block_rows):
+        indices = valid_rows[start:start + block_rows]
+        block = values[indices]
+        order = numpy.argsort(-block, axis=1, kind='stable')
+        positive_counts = numpy.count_nonzero(block > 0, axis=1)
+        ties = block[:, alphabetical] == xmax[indices, None]
+        for row, ranks, positive_count, tied in zip(indices, order, positive_counts, ties):
+            highest_values[row] = column_names[ranks[0]]
+            order_values[row] = '|'.join(escaped_names[i] for i in ranks[:positive_count])
+            highest_ties[row] = '|'.join(escaped_names[i] for i in alphabetical[tied])
 
     df_tau.loc[:, 'highest'] = highest_values
     df_tau.loc[:, 'order'] = order_values
@@ -211,7 +212,7 @@ def sample_group_to_tau(tc_sample_group_df, rich_annotation=True):
         status[:] = 'insufficient_groups'
     df_tau.loc[:, 'tau_status'] = status
     df_tau['num_groups_required'] = n_groups
-    df_tau.loc[:, 'num_groups_observed'] = numpy.isfinite(values).sum(axis=1)
+    df_tau.loc[:, 'num_groups_observed'] = num_groups_observed
     return df_tau
 
 
@@ -230,8 +231,8 @@ def _linear_mean(values):
     if data.shape[1] and valid.any():
         rows = data[valid]
         scale = rows.max(axis=1)
-        scaled = numpy.divide(rows, scale[:, None], out=numpy.zeros_like(rows), where=scale[:, None] > 0)
-        result[valid] = scale * scaled.mean(axis=1)
+        numpy.divide(rows, scale[:, None], out=rows, where=scale[:, None] > 0)
+        result[valid] = scale * rows.mean(axis=1)
     return pandas.Series(result, index=values.index)
 
 
