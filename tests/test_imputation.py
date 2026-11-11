@@ -9,6 +9,22 @@ from amalgkit import imputation
 
 
 @pytest.mark.parametrize('transpose', [False, True])
+def test_large_pca_reconstruction_keeps_the_planted_leading_subspace(transpose):
+    rng = numpy.random.default_rng(650)
+    left, _ = numpy.linalg.qr(rng.normal(size=(560, 8)))
+    right, _ = numpy.linalg.qr(rng.normal(size=(512, 8)))
+    singular = numpy.array([9., 6., 4., 3., 1.5, .9, .4, .2])
+    matrix = (left * singular) @ right.T
+    expected = (left[:, :4] * singular[:4]) @ right[:, :4].T
+    if transpose:
+        matrix, expected = matrix.T, expected.T
+
+    observed = _truncated_svd_reconstruction(matrix, num_pc=4, partial=True)
+
+    numpy.testing.assert_allclose(observed, expected, rtol=1e-11, atol=1e-12)
+
+
+@pytest.mark.parametrize('transpose', [False, True])
 def test_profile_buckets_verify_nested_collisions_and_signed_zero(transpose):
     # Every sample key collides. Three distinct profiles require nested exact
     # discriminators; opposite zero bits still describe the same profile.

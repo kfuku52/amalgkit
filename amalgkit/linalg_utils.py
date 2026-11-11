@@ -71,3 +71,35 @@ def gram_components_require_svd_fallback(
         if boundary_gap <= tolerance:
             return True
     return False
+
+
+def leading_gram_components(
+    gram: numpy.ndarray, num_components: int, matrix_shape: Sequence[int], *, partial: bool
+) -> tuple[numpy.ndarray, numpy.ndarray]:
+    """Return descending eigenvalues and the leading vectors of a Gram matrix.
+
+    For a small leading subspace of a large Gram matrix, keep one additional
+    eigenvalue to verify the gap to the excluded directions. Use the full
+    spectrum when the partial solver cannot establish that gap.
+    """
+    size = gram.shape[0]
+    if partial and size >= 512 and num_components <= size // 8:
+        from scipy.linalg import eigh
+
+        width = num_components + 1
+        try:
+            values, vectors = eigh(gram, subset_by_index=(size - width, size - 1), driver="evx")
+        except (numpy.linalg.LinAlgError, ValueError):
+            pass  # The full solver retains its result or authoritative error.
+        else:
+            if (
+                values.shape == (width,)
+                and vectors.shape == (size, width)
+                and numpy.isfinite(values).all()
+                and numpy.isfinite(vectors).all()
+                and not gram_components_require_svd_fallback(values[::-1], num_components, matrix_shape)
+            ):
+                return values[::-1], vectors[:, ::-1][:, :num_components]
+    values, vectors = numpy.linalg.eigh(gram)
+    order = numpy.argsort(values)[::-1]
+    return values[order], vectors[:, order[:num_components]]

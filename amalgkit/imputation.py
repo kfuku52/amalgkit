@@ -4,6 +4,7 @@ import numpy
 import pandas
 
 from amalgkit.linalg_utils import gram_components_require_svd_fallback as _gram_components_require_svd_fallback
+from amalgkit.linalg_utils import leading_gram_components
 
 
 IMPUTATION_STRATEGIES = ('em_pca', 'nipals', 'row_mean')
@@ -71,7 +72,7 @@ def _exact_profiles_fit_rank(values, num_pc):
     return bool(numpy.isfinite(values).all())
 
 
-def _truncated_svd_reconstruction(centered, num_pc):
+def _truncated_svd_reconstruction(centered, num_pc, *, partial=False):
     """Return the rank-``num_pc`` SVD reconstruction without a full SVD.
 
     Expression matrices are normally much taller than they are wide.  The
@@ -91,27 +92,21 @@ def _truncated_svd_reconstruction(centered, num_pc):
         # at roundoff precision, then change exact downstream TMM trim ties.
         return values.copy()
     if values.shape[0] >= values.shape[1]:
-        eigenvalues, eigenvectors = numpy.linalg.eigh(values.T @ values)
-        order = numpy.argsort(eigenvalues)[::-1]
-        descending = eigenvalues[order]
+        descending, top = leading_gram_components(values.T @ values, resolved_pc, values.shape, partial=partial)
         if _gram_components_require_svd_fallback(
             descending,
             resolved_pc,
             values.shape,
         ):
             return _full_svd_reconstruction(values, resolved_pc)
-        top = eigenvectors[:, order[:resolved_pc]]
         return (values @ top) @ top.T
-    eigenvalues, eigenvectors = numpy.linalg.eigh(values @ values.T)
-    order = numpy.argsort(eigenvalues)[::-1]
-    descending = eigenvalues[order]
+    descending, top = leading_gram_components(values @ values.T, resolved_pc, values.shape, partial=partial)
     if _gram_components_require_svd_fallback(
         descending,
         resolved_pc,
         values.shape,
     ):
         return _full_svd_reconstruction(values, resolved_pc)
-    top = eigenvectors[:, order[:resolved_pc]]
     return top @ (top.T @ values)
 
 
@@ -191,6 +186,8 @@ def _iterative_pca_impute(values, missing_mask, num_pc, max_iter, tol, strategy,
             reconstructed = _truncated_svd_reconstruction(
                 centered=centered,
                 num_pc=num_pc,
+                # Avoid loading the partial solver for quick-converging fits.
+                partial=_iteration >= 2,
             )
         reconstructed += column_means.reshape(1, -1)
         old_values = imputed[missing_mask]

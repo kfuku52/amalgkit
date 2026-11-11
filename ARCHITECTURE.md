@@ -125,6 +125,9 @@ axis. This certifies a
 mathematical rank bound without a tolerance, avoiding reconstruction noise in
 null spaces. Small independent signals still follow the requested rank model;
 numerical-rank estimates alone never select the identity shortcut.
+After two full iterations, large Gram matrices with a small requested rank
+can use a partial eigensolve. The extra eigenvalue below the retained
+subspace checks its separation; unresolved boundaries retain the full solver.
 
 Random FASTQ sampling retains the SHA-256 permutation and manifest contracts.
 Its private sorted position inventory uses compact integers and a bounded dense
