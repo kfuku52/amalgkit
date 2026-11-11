@@ -197,3 +197,10 @@ The `tpm_transform` case measures the complete raw-count/effective-length helper
 and its full output. Reduced temporary allocation does not necessarily lower
 whole-process RSS: alignment/validation also allocate matrices, and RSS includes
 input construction. Report allocation and RSS measurements separately.
+
+## November 2026 comparisons
+
+The [pipeline efficiency measurements](results/2026-11-11/efficiency.md)
+compare unchanged outputs across revisions. The
+[quantification benchmarks](results/2026-11-11/README.md) measure accuracy and
+resource use on public long-read and short-read spike-in data.
