@@ -810,7 +810,6 @@ def adapt_oarfish_outputs(output_dir, sra_id, sra_stat, output_prefix, seq_tech,
         meta_info = json.load(meta_handle)
     if not isinstance(meta_info, dict):
         meta_info = {'oarfish_meta_info': meta_info}
-    mapped_reads = float(est_counts.sum())
     try:
         # Original library size is not the number of reads passed to quant
         # after sampling/filtering. Callers must supply the measured input size.
@@ -819,13 +818,17 @@ def adapt_oarfish_outputs(output_dir, sra_id, sra_stat, output_prefix, seq_tech,
         raise ValueError('Measured input_read_count is required for oarfish output adaptation.') from exc
     if (not math.isfinite(total_reads)) or total_reads <= 0 or not total_reads.is_integer():
         raise ValueError('Invalid input_read_count for oarfish output adaptation.')
-    if mapped_reads > total_reads:
+    mapped_reads = math.fsum(est_counts)
+    # Summing fractional assignments can exceed the observed count by a few
+    # floating-point steps when every read maps. Allow only roundoff here.
+    if mapped_reads - total_reads > 8 * math.ulp(total_reads):
         raise ValueError(
             'oarfish mapped-read count exceeds input_read_count: {} > {}.'.format(
                 mapped_reads,
                 total_reads,
             )
         )
+    mapped_reads = min(mapped_reads, total_reads)
     p_pseudoaligned = mapped_reads / total_reads * 100.0
     run_info = dict(meta_info)
     run_info['quant_backend'] = 'oarfish'

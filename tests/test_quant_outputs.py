@@ -349,6 +349,21 @@ def test_adapt_oarfish_outputs_uses_unlength_normalized_tpm(tmp_path):
     assert run_info['length_model'] == 'none'
 
 
+def test_oarfish_accepts_roundoff_at_full_mapping(tmp_path):
+    prefix = tmp_path / 'R1'
+    prefix.with_suffix('.quant').write_text(
+        'tname\tlen\tnum_reads\nt1\t100\t0.5\nt2\t100\t0.5000000000000002\n',
+        encoding='utf-8',
+    )
+    prefix.with_suffix('.meta_info.json').write_text('{}', encoding='utf-8')
+
+    adapt_oarfish_outputs(str(tmp_path), 'R1', {}, str(prefix), 'ont-drna', input_read_count=1)
+
+    info = json.loads((tmp_path / 'R1_run_info.json').read_text(encoding='utf-8'))
+    assert info['num_pseudoaligned'] == 1
+    assert info['p_pseudoaligned'] == 100
+
+
 @pytest.mark.parametrize('input_count', [None, 0, -1, 1.5, float('inf')])
 def test_oarfish_requires_measured_integral_input_count(tmp_path, input_count):
     prefix = tmp_path / 'R1'
