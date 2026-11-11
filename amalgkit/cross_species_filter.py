@@ -274,32 +274,30 @@ def _select_single_copy_orthogroups(
 
 def _extract_ortholog_unaveraged_expression_table(df_singleog, unaveraged_tcs):
     orthologs = {'uncorrected': pandas.DataFrame(index=df_singleog.index), 'corrected': pandas.DataFrame(index=df_singleog.index)}
+    gene_ids_by_species = {}
     for correction in ['uncorrected', 'corrected']:
         slices = []
         for sp in df_singleog.columns:
             tc = unaveraged_tcs[correction].get(sp)
             if tc is None:
                 continue
-            tc_prefixed = tc.copy()
+            # Only change labels before selecting rows. The large expression
+            # matrix itself is read-only here.
+            tc_prefixed = tc.copy(deep=False)
             tc_prefixed.index = tc_prefixed.index.astype(str)
-            tc_prefixed.columns = ['{}_{}'.format(sp, col) for col in tc_prefixed.columns]
-            raw_gene_ids = df_singleog.loc[:, sp]
-            row_idx = []
-            present_ids = []
-            for raw_gene_id in raw_gene_ids.tolist():
-                if pandas.isna(raw_gene_id):
-                    gene_id = None
-                else:
-                    normalized_gene_id = str(raw_gene_id).strip()
-                    gene_id = (
-                        normalized_gene_id
-                        if normalized_gene_id not in {'', '-'} and ',' not in normalized_gene_id
-                        else None
-                    )
-                row_idx.append(gene_id)
-                if gene_id is not None:
-                    present_ids.append(gene_id)
-            missing_ids = sorted(set(present_ids).difference(tc_prefixed.index))
+            if sp not in gene_ids_by_species:
+                row_idx = []
+                present_ids = set()
+                for raw_gene_id in df_singleog.loc[:, sp].tolist():
+                    gene_id = '' if pandas.isna(raw_gene_id) else str(raw_gene_id).strip()
+                    if gene_id in {'', '-'} or ',' in gene_id:
+                        row_idx.append(None)
+                    else:
+                        row_idx.append(gene_id)
+                        present_ids.add(gene_id)
+                gene_ids_by_species[sp] = row_idx, present_ids
+            row_idx, present_ids = gene_ids_by_species[sp]
+            missing_ids = sorted(present_ids.difference(tc_prefixed.index))
             if len(missing_ids) > 0:
                 examples = ', '.join(missing_ids[:10])
                 if len(missing_ids) > 10:
@@ -314,6 +312,7 @@ def _extract_ortholog_unaveraged_expression_table(df_singleog, unaveraged_tcs):
                 )
             tc_slice = tc_prefixed.reindex(row_idx)
             tc_slice.index = df_singleog.index
+            tc_slice.columns = ['{}_{}'.format(sp, col) for col in tc_slice.columns]
             slices.append(tc_slice)
         if len(slices) > 0:
             orthologs[correction] = pandas.concat(slices, axis=1)

@@ -314,13 +314,14 @@ def test_extract_ortholog_expression_rejects_missing_gene_ids():
 
 def test_extract_ortholog_expression_preserves_absent_and_multicopy_cells():
     df_singleog = pandas.DataFrame(
-        {'Species_A': ['gene_1', pandas.NA, 'gene_2,gene_3']},
-        index=['OG1', 'OG_absent', 'OG_multicopy'],
+        {'Species_A': ['0001', 'NA', pandas.NA, 'gene_2,gene_3']},
+        index=['OG1', 'OG2', 'OG_absent', 'OG_multicopy'],
     )
     expression = pandas.DataFrame(
-        {'sample_1': [1.0]},
-        index=['gene_1'],
+        {'sample_1': [1.0, 2.0]},
+        index=['0001', 'NA'],
     )
+    original = expression.copy()
     tables = {
         'uncorrected': {'Species_A': expression},
         'corrected': {'Species_A': expression},
@@ -330,7 +331,9 @@ def test_extract_ortholog_expression_preserves_absent_and_multicopy_cells():
 
     for correction in ['uncorrected', 'corrected']:
         assert observed[correction].loc['OG1', 'Species_A_sample_1'] == 1.0
+        assert observed[correction].loc['OG2', 'Species_A_sample_1'] == 2.0
         assert observed[correction].loc[['OG_absent', 'OG_multicopy']].isna().all().all()
+    pandas.testing.assert_frame_equal(expression, original)
 
 
 def test_mds_coordinates_leave_dropped_constant_sample_unassigned():
