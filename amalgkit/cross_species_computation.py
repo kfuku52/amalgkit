@@ -51,6 +51,48 @@ def safe_correlation(left_values, right_values, method: str) -> float:
         return numpy.nan
 
 
+def _median_neighbors(profiles):
+    """Get the central order statistics used by every species exclusion."""
+    values = profiles.to_numpy(dtype=float)
+    if numpy.isinf(values).any():
+        # Preserve pandas' handling of infinite values in nonstandard inputs.
+        return None
+    ordered = numpy.sort(values, axis=1)
+    counts = numpy.count_nonzero(~numpy.isnan(ordered), axis=1)
+    rows = numpy.arange(counts.size)
+    mid = counts // 2
+    return (
+        ordered[rows, numpy.maximum(mid - 1, 0)],
+        ordered[rows, numpy.minimum(mid, ordered.shape[1] - 1)],
+        ordered[rows, numpy.minimum(mid + 1, ordered.shape[1] - 1)],
+        counts,
+    )
+
+
+def _median_without_species(profiles, species_tag, reference, neighbors):
+    if species_tag not in profiles:
+        return reference
+    if neighbors is None:
+        return profiles.drop(columns=[species_tag]).median(axis=1, skipna=True).to_numpy(dtype=float)
+    left, mid, right, counts = neighbors
+    removed = profiles[species_tag].to_numpy(dtype=float)
+    # An even-sized row becomes odd: the median shifts left only when
+    # removing a value in the upper half. Ties yield the same result.
+    result = numpy.where(removed < mid, mid, left)
+    # An odd-sized row becomes even: average the middle value and its
+    # opposite neighbor, or both neighbors when removing the middle value.
+    odd = (counts % 2 == 1) & (counts > 1)
+    with numpy.errstate(over="ignore"):
+        result[odd] = (
+            numpy.where(removed[odd] < mid[odd], mid[odd], left[odd])
+            + numpy.where(removed[odd] > mid[odd], mid[odd], right[odd])
+        ) / 2.0
+    result[counts <= 1] = numpy.nan
+    missing = numpy.isnan(removed)
+    result[missing] = reference[missing]
+    return result
+
+
 def calculate_correlation_within_group(
     df_metadata: pandas.DataFrame,
     ortholog_matrix: pandas.DataFrame,
@@ -119,10 +161,30 @@ def calculate_correlation_within_group(
             continue
         species_profiles_by_group[sample_group] = species_profiles
         ortholog_med.loc[:, sample_group] = species_profiles.median(axis=1, skipna=True)
-    species_references = {}
     group_references = {group: ortholog_med[group].to_numpy(dtype=float) for group in group_order}
-    result_rows = []
-    for row_idx, species_tag, sample_group, sample_id in zip(kept.index, species, groups, samples):
+    median_neighbors = {}
+
+    def reference_without_species(reference_group, species_tag):
+        profiles = species_profiles_by_group[reference_group]
+        if reference_group not in median_neighbors:
+            median_neighbors[reference_group] = _median_neighbors(profiles)
+        return _median_without_species(
+            profiles, species_tag, group_references[reference_group], median_neighbors[reference_group]
+        )
+
+    # Group the work by species to retain at most one species' reference
+    # vectors at a time. Store scores in input order for repeated row labels.
+    positions: range | list[int] = range(len(samples))
+    if reference_exclusion == "species":
+        positions = sorted(positions, key=species.__getitem__)
+    previous_species = None
+    species_references: dict[str, numpy.ndarray] = {}
+    result_rows = [(numpy.nan, numpy.nan, 0, 0)] * len(samples)
+    for position in positions:
+        species_tag, sample_group, sample_id = species[position], groups[position], samples[position]
+        if species_tag != previous_species:
+            species_references.clear()
+            previous_species = species_tag
         sample_values = ortholog_matrix.loc[:, sample_id]
         numeric_sample = pandas.to_numeric(sample_values, errors="coerce").to_numpy(dtype=float)
         sample_finite = numpy.isfinite(numeric_sample)
@@ -133,26 +195,21 @@ def calculate_correlation_within_group(
             profiles = species_profiles_by_group[reference_group]
             if reference_exclusion == "species":
                 # Exclude the target species from BOTH within- and other-group references.
-                key = (species_tag, reference_group)
-                if key not in species_references:
-                    species_references[key] = (
-                        profiles.drop(columns=[species_tag], errors="ignore")
-                        .median(axis=1, skipna=True)
-                        .to_numpy(dtype=float)
-                    )
-                reference = species_references[key]
+                if reference_group not in species_references:
+                    species_references[reference_group] = reference_without_species(reference_group, species_tag)
+                reference = species_references[reference_group]
             elif reference_group == sample_group:
-                profiles = profiles.copy()
                 other_ids = [other for other in group_members[(species_tag, sample_group)] if other != sample_id]
                 if other_ids:
+                    profiles = profiles.copy()
                     profiles.loc[:, species_tag] = (
                         ortholog_matrix.loc[:, other_ids]
                         .apply(pandas.to_numeric, errors="coerce")
                         .mean(axis=1, skipna=True)
                     )
+                    reference = profiles.median(axis=1, skipna=True).to_numpy(dtype=float)
                 else:
-                    profiles = profiles.drop(columns=[species_tag], errors="ignore")
-                reference = profiles.median(axis=1, skipna=True).to_numpy(dtype=float)
+                    reference = reference_without_species(reference_group, species_tag)
             else:
                 reference = group_references[reference_group]
             valid = sample_finite & numpy.isfinite(reference)
@@ -169,7 +226,7 @@ def calculate_correlation_within_group(
         # A poorly supported competitor must not disappear from the maximum and
         # thereby make a sample look better. Keep pairwise gene sets independent.
         max_nongroup = max(other_values) if other_values and other_count >= min_common_genes else numpy.nan
-        result_rows.append((within_cor, max_nongroup, within_count, other_count))
+        result_rows[position] = (within_cor, max_nongroup, within_count, other_count)
     result_columns = [target_col, nongroup_col, within_count_col, other_count_col]
     if out.index.is_unique:
         for column_idx, column in enumerate(result_columns):

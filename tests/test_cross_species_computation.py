@@ -45,6 +45,28 @@ def test_cross_group_lookup_preserves_lexical_groups_and_pairwise_support(refere
     pandas.testing.assert_frame_equal(metadata, original)
 
 
+@pytest.mark.parametrize('reference_exclusion', ['run', 'species'])
+def test_leave_out_reference_uses_median_with_row_specific_missingness(reference_exclusion):
+    matrix = pandas.DataFrame(
+        [
+            [1., 2., 9., 10.], [9., 6., 2., numpy.nan], [3., 3., 3., numpy.nan],
+            [4., numpy.nan, numpy.nan, numpy.nan], [numpy.nan] * 4,
+            [numpy.nan, numpy.nan, 8., 1.], [7., 1., 0., 4.], [8., 5., 6., 3.],
+        ],
+        columns=['S_1', 'T_1', 'U_1', 'V_1'],
+    )
+    metadata = pandas.DataFrame(
+        {'species_tag': ['V', 'S', 'U', 'T'], 'run': '1', 'sample_group': 'A', 'exclusion': 'no'},
+    )
+    result = calculate_correlation_within_group(metadata, matrix, 'test', reference_exclusion)
+
+    for idx, species in metadata['species_tag'].items():
+        column = species + '_1'
+        reference = matrix.drop(columns=column).median(axis=1)
+        assert result.at[idx, 'within_group_cor_test'] == pytest.approx(matrix[column].corr(reference))
+        assert result.at[idx, 'within_common_genes_test'] == (matrix[column].notna() & reference.notna()).sum()
+
+
 def test_safe_correlation_returns_nan_for_constant_vectors():
     assert numpy.isnan(safe_correlation([1.0, 1.0, 1.0], [1.0, 2.0, 3.0], 'pearson'))
     assert numpy.isnan(safe_correlation([1.0, 2.0, 3.0], [4.0, 4.0, 4.0], 'spearman'))
