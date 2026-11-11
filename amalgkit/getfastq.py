@@ -4924,15 +4924,21 @@ def write_fastq_record(fout, record):
 def write_mmseqs_rrna_query_chunk(input_handles, input_path_by_suffix, chunk_root, chunk_index, chunk_spots):
     os.makedirs(chunk_root, exist_ok=True)
     query_path = os.path.join(chunk_root, 'query_{:06d}.fastq.gz'.format(chunk_index))
+    single_end = len(input_handles) == 1
+    # Limit scratch growth when retaining both the combined query and replay files.
+    compresslevel = 3 if single_end else 6
     chunk_input_path_by_suffix = {
-        suffix: os.path.join(chunk_root, 'input_{:06d}{}.fastq.gz'.format(chunk_index, suffix))
+        suffix: query_path if single_end else os.path.join(
+            chunk_root, 'input_{:06d}{}.fastq.gz'.format(chunk_index, suffix)
+        )
         for suffix in input_handles
     }
     num_spots = 0
     with ExitStack() as stack:
-        query_out = stack.enter_context(gzip.open(query_path, 'wb'))
-        chunk_outputs = {
-            suffix: stack.enter_context(gzip.open(path, 'wb'))
+        query_out = stack.enter_context(gzip.open(query_path, 'wb', compresslevel=compresslevel))
+        # For single-end data, the search query also serves as the replay file.
+        chunk_outputs = {} if single_end else {
+            suffix: stack.enter_context(gzip.open(path, 'wb', compresslevel=compresslevel))
             for suffix, path in chunk_input_path_by_suffix.items()
         }
         while num_spots < chunk_spots:
@@ -4981,11 +4987,13 @@ def write_mmseqs_rrna_query_chunk(input_handles, input_path_by_suffix, chunk_roo
                         )
                     )
             for suffix, record in records.items():
-                write_fastq_record(chunk_outputs[suffix], record)
-                write_fastq_record(query_out, record)
+                record_bytes = b''.join(record)
+                if not single_end:
+                    chunk_outputs[suffix].write(record_bytes)
+                query_out.write(record_bytes)
             num_spots += 1
     if num_spots == 0:
-        for path in [query_path] + list(chunk_input_path_by_suffix.values()):
+        for path in {query_path, *chunk_input_path_by_suffix.values()}:
             if os.path.exists(path):
                 os.remove(path)
     return num_spots, query_path, chunk_input_path_by_suffix

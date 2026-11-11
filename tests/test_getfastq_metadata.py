@@ -29,6 +29,7 @@ from amalgkit.getfastq import (
     append_mmseqs_memory_limit_option,
     filter_fastq_by_core_set,
     iter_synchronized_mmseqs_query_chunks,
+    write_mmseqs_rrna_query_chunk,
     normalize_paired_read_core,
     parse_mmseqs_search_matched_cores,
     infer_written_spots_from_written_reads,
@@ -465,6 +466,29 @@ class TestRrnaReadIdHandling:
     def test_missing_mmseqs_result_is_not_treated_as_no_hits(self, tmp_path):
         with pytest.raises(FileNotFoundError, match='was not generated'):
             parse_mmseqs_search_matched_cores(str(tmp_path / 'missing.tsv'))
+
+    def test_single_end_chunk_can_be_replayed_after_search(self, tmp_path):
+        keep = b'@SRR000001.2 original comment\nCCCC\n+\nIIII\n'
+        reads = BytesIO(b'@SRR000001.1\nAAAA\n+\nIIII\n' + keep)
+        chunk_dir = tmp_path / 'chunk'
+        spots, query, replay = write_mmseqs_rrna_query_chunk(
+            {'': reads}, {'': 'original.fastq'}, chunk_dir, 1, 10,
+        )
+        assert spots == 2
+        assert list(chunk_dir.iterdir()) == [pathlib.Path(query)]
+        with gzip.open(query, 'rb') as handle:
+            assert handle.read().endswith(keep)
+        output = tmp_path / 'filtered.fastq.gz'
+        assert filter_fastq_by_core_set(replay[''], output, {'SRR000001.1'}) == (2, 1, 8, 4)
+        with gzip.open(output, 'rb') as handle:
+            assert handle.read() == keep
+
+        empty_dir = tmp_path / 'empty'
+        spots, _, _ = write_mmseqs_rrna_query_chunk(
+            {'': reads}, {'': 'original.fastq'}, empty_dir, 2, 10,
+        )
+        assert spots == 0
+        assert not list(empty_dir.iterdir())
 
 
 class TestRunMmseqsRrnaFilter:
