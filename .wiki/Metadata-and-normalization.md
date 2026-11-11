@@ -89,6 +89,14 @@ million. For CSTMM counts this is TMM-CPM: `1e6 * raw_count / (L * factor)`.
 `log2p1-cpm` means `log2(CPM + 1)`, not edgeR logCPM with its library-scaled
 prior count. Neither transformation guarantees comparability across protocols.
 
+For 3′ tag libraries designed to count a tag per molecule, compare a
+count-based normalization such as `--norm log2p1-cpm` with length
+normalization on suitable controls. In the
+[short-read spike-in comparison](https://github.com/kfuku52/amalgkit/blob/master/benchmarks/results/2026-11-11/README.md#3-prime-tag-sequencing-and-length-correction),
+relative ERCC counts were closer to the known mixture than length-corrected
+TPM in two QuantSeq REV batches from the same study. This comparison does
+not validate endogenous transcript or isoform abundance.
+
 CSTMM and TPM cannot be combined: dividing by each corrected library's column
 sum would cancel the TMM factor. For the same reason, FPKM or CPM from CSTMM counts
 requires the **original** `tmm_library_size` in `cstmm/metadata.tsv` or a filtered

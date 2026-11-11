@@ -139,6 +139,12 @@ whole-`quant` run with each reference mode confirmed 2.62 GB versus 0.80 GB
 peak RSS. The prebuilt run used only the `.sfi` file, with no FASTA or
 adjacent index manifest.
 
+With the first 80,000 reads from the direct cDNA library above and the
+`ont-cdna` preset, both reference modes again worked through AMALGKIT.
+Both mapped 28,649 reads and returned the same target IDs and lengths.
+The sum of absolute per-target count differences was 0.015% of the total
+estimated counts. This run checked agreement, not throughput.
+
 ### CPU allocation when only one run is eligible
 
 With the first 80,000 reads from the same library, prebuilt rammap index,
@@ -238,3 +244,45 @@ endogenous transcripts. The estimated distributions used information from
 the original mates in the same data. They do not demonstrate recovery of
 fragment lengths from a genuinely single-end library or establish that
 sequence-bias correction is ineffective in other protocols.
+
+### 3-prime tag sequencing and length correction
+
+On the first 2 million untrimmed reads of a QuantSeq REV library
+([SRR10134316](https://www.ebi.ac.uk/ena/browser/view/SRR10134316), batch 5 of
+[Wu et al.](https://doi.org/10.1016/j.celrep.2020.01.068)), estimated counts
+were closer to the known ERCC Mix 1 composition than length-corrected TPM.
+`--single-overhang` mapped more reads to the controls but increased both
+errors. We used kallisto 0.52.0, the same ERCC-only reference, and
+`--single --rf-stranded`. Within each row, the only change is the use of
+`--single-overhang` in the second run.
+
+| Fragment mean/SD (bp) | Reads mapped to ERCC | TPM MAE | Relative count MAE |
+| --- | ---: | ---: | ---: |
+| 160/50 | 90,462 → 102,386 | 1.464 → 1.506 | 1.237 → 1.315 |
+| 200/20 | 90,400 → 102,386 | 1.508 → 1.552 | 1.236 → 1.315 |
+| 250/50 | 89,686 → 102,386 | 1.522 → 1.607 | 1.241 → 1.315 |
+
+Metrics use the same log2 error as above, now for expected TPM of at least
+100. Relative counts are `est_counts` divided by their sum over ERCC and
+multiplied by one million. The 3′ library is a mixed human and spike-in
+sample; this ERCC-only index does not quantify human transcripts.
+
+The direction held at 200/20 bp on one million reads from each of two
+batches in the same study. The batch 5 prefix came from ENA; the batch 2
+prefix was extracted from the public SRA object with `fastq-dump -X 1000000`.
+
+| Batch and run | Reads mapped to ERCC | TPM MAE | Relative count MAE |
+| --- | ---: | ---: | ---: |
+| 2 [SRR10134313](https://www.ebi.ac.uk/ena/browser/view/SRR10134313) | 37,308 → 40,330 | 1.684 → 1.707 | 1.521 → 1.550 |
+| 5 [SRR10134316](https://www.ebi.ac.uk/ena/browser/view/SRR10134316) | 45,175 → 51,245 | 1.664 → 1.703 | 1.377 → 1.441 |
+
+For the default placement runs, we also ran AMALGKIT `quant` with fragment
+mean 200, SD 20, and `--kallisto_options="--rf-stranded"`, then `merge` and
+`finalize --norm log2p1-cpm --batch_effect_alg no`. The merged counts matched
+the direct kallisto outputs. All 184 expression cells matched independent
+`log2(1 + 1e6 * count / library_size)` calculations to within 3.6e-15.
+
+In the four standard SEQC read-1 runs above, `--single-overhang` at 200/20 bp
+also mapped more reads, by 6.8 to 7.6 percentage points. Its fold-change
+MAE improved at BGI (0.171 → 0.158) and worsened at NYG (0.250 → 0.258).
+Mapping rate alone did not indicate which options recovered molarity best.
