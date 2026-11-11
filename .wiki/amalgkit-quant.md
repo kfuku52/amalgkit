@@ -100,7 +100,7 @@ that uses where reads land on candidate transcripts. On the two public direct
 RNA SIRV mixes, it gave closer estimates of the known isoform concentrations
 than the default score-only model and the logistic coverage model. The
 [benchmark and inputs](https://github.com/kfuku52/amalgkit/blob/master/benchmarks/results/2026-11-11/README.md)
-describe which libraries were tested.
+include an independent comparison on three SG-NEx mixed libraries.
 
 To try it on an ONT direct RNA workspace with a reference FASTA and processed
 FASTQs, use a separate output workspace for each model:
@@ -116,6 +116,29 @@ Keep the reads, reference and all other options identical for the comparison.
 This option changes estimated counts. AMALGKIT records it in the run info and
 requires `--redo yes` to replace results made with other options in the same
 workspace.
+
+### Compare Oarfish mapping speed and accuracy
+
+With Oarfish 0.11.0 or newer, `--oarfish_options` can select the optional
+[Spearfish mapper](https://combine-lab.github.io/spearfish/guide/quantification/).
+Supply the same species FASTA as for index building:
+
+```bash
+amalgkit quant --out_dir ./work \
+    --quant_backend oarfish --oarfish_seq_tech ont-drna \
+    --clean_fastq no --oarfish_options="--mapper spearfish --coverage-model truncation"
+```
+
+AMALGKIT passes that FASTA directly and checks its content before reusing
+quantification. Oarfish builds the Spearfish index in memory for each run;
+`--build_index` and the on-disk index directory are used only for the other
+mapping modes. Additional `--annotated` and `--novel` references cannot be
+passed through in Spearfish mode.
+
+On the mixed SG-NEx direct RNA benchmark, Spearfish was faster but had a
+higher peak RAM and higher SIRV concentration error than rammap with the same
+truncation model. Compare both on representative libraries if that tradeoff
+matters for the analysis.
 
 ## Single-end fragment lengths
 

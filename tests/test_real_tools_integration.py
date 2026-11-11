@@ -4,6 +4,7 @@ import gzip
 import hashlib
 import json
 import shutil
+import subprocess
 
 import numpy
 import pandas
@@ -89,4 +90,40 @@ def test_real_oarfish_filtered_read_denominator_and_reuse(tmp_path, compressed):
     assert (info_path.read_bytes(), info_path.stat().st_mtime_ns) == before
     args.oarfish_options = '--best-n 25'
     with pytest.raises(ValueError, match='oarfish options differ'):
+        quant_main(args)
+
+
+@pytest.mark.skipif(shutil.which('oarfish') is None, reason='oarfish is required')
+def test_real_oarfish_spearfish_uses_managed_fasta_and_checks_reuse(tmp_path):
+    help_text = subprocess.run(['oarfish', '--help'], capture_output=True, text=True, check=True, timeout=30).stdout
+    if 'spearfish' not in help_text:
+        pytest.skip('oarfish does not provide the spearfish mapper')
+    rng = numpy.random.default_rng(552)
+    sequence = ''.join(rng.choice(list('ACGT'), size=2400))
+    fasta = tmp_path / 'fasta' / 'Test_species.fa.gz'
+    fasta.parent.mkdir()
+    fasta.write_bytes(gzip.compress(('>t1\n' + sequence + '\n').encode()))
+    reads = tmp_path / 'getfastq' / 'R1' / 'R1.fastq'
+    reads.parent.mkdir(parents=True)
+    write_reads(reads, [sequence] * 12)
+    metadata = tmp_path / 'metadata.tsv'
+    pandas.DataFrame([dict(run='R1', scientific_name='Test species', lib_layout='single',
+                           platform='OXFORD_NANOPORE', total_spots=12, total_bases=28800,
+                           spot_length=2400, exclusion='no', is_sampled='yes')]).to_csv(metadata, sep='\t', index=False)
+    args = build_main_parser().parse_args([
+        'quant', '--out_dir', str(tmp_path), '--metadata', str(metadata), '--threads', '1',
+        '--quant_backend', 'oarfish', '--oarfish_seq_tech', 'ont-cdna', '--clean_fastq', 'no',
+        '--oarfish_options=--mapper=spearfish',
+    ])
+    quant_main(args)
+    info_path = tmp_path / 'quant' / 'R1' / 'R1_run_info.json'
+    info = json.loads(info_path.read_text())
+    assert info['num_pseudoaligned'] == pytest.approx(12)
+    assert info['amalgkit_quant_inputs']['index']['sha256'] == hashlib.sha256(fasta.read_bytes()).hexdigest()
+    assert not (tmp_path / 'index').exists()
+    before = info_path.stat().st_mtime_ns
+    quant_main(args)
+    assert info_path.stat().st_mtime_ns == before
+    fasta.write_bytes(gzip.compress(('>t2\n' + sequence + '\n').encode()))
+    with pytest.raises(ValueError, match='reference index differs'):
         quant_main(args)

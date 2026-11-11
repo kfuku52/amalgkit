@@ -160,6 +160,13 @@ class TestQuantBackendAuto:
 
 
 class TestQuantOptionPassthrough:
+    @pytest.mark.parametrize('reference_option', ['--annotated', '--novel'])
+    def test_spearfish_rejects_unmanaged_fasta(self, reference_option):
+        args = SimpleNamespace(threads=1, oarfish_options=f'--mapper=spearfish {reference_option}=other.fa')
+
+        with pytest.raises(ValueError, match=f'must not override amalgkit-managed option "{reference_option}"'):
+            build_oarfish_quant_command(args, ['reads.fastq.gz'], 'quant', 'managed.fa', 'ont-drna')
+
     def test_build_kallisto_quant_command_appends_user_options_before_input(self):
         args = SimpleNamespace(threads=4, kallisto_options='--bias --seed 42')
 
