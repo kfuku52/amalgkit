@@ -89,10 +89,14 @@ def _filter_low_mapping_rate(tc, sra, mapping_rate_cutoff):
     return tc.loc[:, keep_runs].copy(), out_sra, excluded_runs
 
 
-def _finite_pair_correlation(left, right, method):
-    valid = numpy.isfinite(left) & numpy.isfinite(right)
+def _finite_pair_correlation(left, right, method, valid=None):
+    if valid is None:
+        valid = numpy.isfinite(left) & numpy.isfinite(right)
     left, right = left.loc[valid], right.loc[valid]
-    if len(left) < 2 or left.nunique() <= 1 or right.nunique() <= 1:
+    if len(left) < 2:
+        return numpy.nan
+    left_values, right_values = left.to_numpy(copy=False), right.to_numpy(copy=False)
+    if (left_values == left_values[0]).all() or (right_values == right_values[0]).all():
         return numpy.nan
     # Preserve the established pandas arithmetic: even tiny rounding changes
     # near a zero margin can change the strict absolute-threshold decision.
@@ -111,11 +115,19 @@ def _correlate_group_means(tc, tc_ave, dist_method):
     tc_ave_numeric = tc_ave.to_numpy(dtype=float)
     finite_tc = numpy.isfinite(tc_numeric)
     finite_ave = numpy.isfinite(tc_ave_numeric)
-    all_finite = finite_tc.all() and finite_ave.all()
+    finite_references = finite_ave.all()
+    all_finite = finite_references and finite_tc.all()
+    shape = (tc.shape[1], tc_ave.shape[1])
+    if all_finite:
+        support = numpy.full(shape, tc.shape[0], dtype=numpy.int64)
+    elif finite_references:
+        support = numpy.repeat(finite_tc.sum(axis=0, dtype=numpy.int64)[:, None], shape[1], axis=1)
+    else:
+        # This product adds only zeros and ones, so float64 gives exact counts
+        # at any feasible gene count and can use optimized matrix multiplication.
+        support = (finite_tc.astype(float).T @ finite_ave.astype(float)).astype(numpy.int64)
     common_by_group = pandas.DataFrame(
-        numpy.full((tc.shape[1], tc_ave.shape[1]), tc.shape[0], dtype=numpy.int64)
-        if all_finite else finite_tc.astype(numpy.int64).T @ finite_ave.astype(numpy.int64),
-        index=corr_by_group.index, columns=corr_by_group.columns,
+        support, index=corr_by_group.index, columns=corr_by_group.columns,
     )
     can_vectorize = (
         str(dist_method).lower() == 'pearson'
@@ -159,7 +171,9 @@ def _update_reference_correlations(tc, runs, reference_group, other_runs, dist_m
         sample = tc.loc[:, run_id]
         valid = numpy.isfinite(sample) & finite_reference
         common_by_group.loc[run_id, reference_group] = int(valid.sum())
-        corr_by_group.loc[run_id, reference_group] = _finite_pair_correlation(sample, reference, method=dist_method)
+        corr_by_group.loc[run_id, reference_group] = _finite_pair_correlation(
+            sample, reference, method=dist_method, valid=valid,
+        )
 
 
 def _compute_sample_group_correlation_metrics(tc, sra, selected_sample_groups, dist_method,
