@@ -9,6 +9,7 @@ import pytest
 
 from amalgkit.command_context import PerSpeciesTableContext
 from amalgkit.metadata_utils import Metadata
+from amalgkit.per_species_common import linear_sample_group_summary, sample_group_to_tau
 from amalgkit.per_species_finalize_python import (
     _apply_transformation_logic,
     _compute_corr_matrix,
@@ -269,6 +270,20 @@ def test_cpm_transformation_occurs_at_exactly_one_batch_stage(algorithm):
     numpy.testing.assert_allclose(plotted, expected)
     if algorithm in {'ruvseq', 'combatseq', 'latent_glm'}:
         pandas.testing.assert_frame_equal(before, counts)
+
+
+@pytest.mark.parametrize('method', ['lognp1-none', 'log2p1-none'])
+def test_log_plus_one_preserves_small_positive_expression_for_tau(method):
+    counts = pandas.DataFrame([[2.0**-60, 2.0**-58], [0.0, 0.0]], columns=['A', 'B'])
+    metadata = pandas.DataFrame({
+        'run': ['A', 'B'], 'sample_group': ['root', 'leaf'], 'exclusion': ['no', 'no'],
+    })
+    transformed = _apply_transformation_logic(counts, None, method, 'no', 'before_batch', metadata)
+    linear = linear_sample_group_summary(transformed, metadata, transform_method=method)['linear_mean']
+    numpy.testing.assert_allclose(linear, counts, rtol=2e-15, atol=0)
+    tau = sample_group_to_tau(linear)
+    assert tau.loc[0, 'tau'] == pytest.approx(0.75)
+    assert tau['tau_status'].tolist() == ['ok', 'all_zero']
 
 
 def test_cpm_rejects_tmm_metadata_on_raw_counts():

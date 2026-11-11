@@ -483,9 +483,10 @@ def _apply_transformation_logic(
             elif log_method == 'log2':
                 values = numpy.log2(values)
             elif log_method == 'lognp1':
-                values = numpy.log(values + 1.0)
+                values = numpy.log1p(values)
             elif log_method == 'log2p1':
-                values = numpy.log2(values + 1.0)
+                values = numpy.log1p(values)
+                values /= numpy.log(2.0)
         transformed = pandas.DataFrame(values, index=transformed.index, columns=transformed.columns)
     return transformed
 
