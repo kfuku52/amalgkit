@@ -21,7 +21,14 @@ def classical_mds_coordinates(dist):
     if n >= 64 and numpy.isfinite(squared).all():
         from scipy.linalg import eigh
 
-        gram = -0.5 * (squared - squared.mean(axis=1)[:, None] - squared.mean(axis=0)[None, :] + squared.mean())
+        row_mean = squared.mean(axis=1)
+        column_mean = squared.mean(axis=0)
+        total_mean = squared.mean()
+        gram = squared if squared.dtype.kind in "fc" else squared.astype(float)
+        gram -= row_mean[:, None]
+        gram -= column_mean[None, :]
+        gram += total_mean
+        gram *= -0.5
         # Accept only the requested complete subspace. Some backends return
         # fewer eigenpairs at an exactly tied spectral boundary.
         try:
@@ -39,6 +46,10 @@ def classical_mds_coordinates(dist):
                 tolerance = numpy.finfo(float).eps * n * scale
                 if eigvals[1] > tolerance and eigvals[1] - eigvals[0] > tolerance:
                     return eigvecs[:, ::-1][:, :2] * numpy.sqrt(numpy.maximum(eigvals[::-1][:2], 0.0))
+        if gram is squared:
+            # The rare full-solver path still uses the original distances.
+            del gram, squared
+            squared = dist**2
     centering = numpy.eye(n) - numpy.ones((n, n), dtype=float) / float(n)
     gram = -0.5 * centering.dot(squared).dot(centering)
     eigvals, eigvecs = numpy.linalg.eigh(gram)
