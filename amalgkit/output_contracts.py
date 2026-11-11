@@ -124,8 +124,12 @@ def read_count_matrix(path: str) -> pandas.DataFrame:
         raise ValueError(f"{context} did not contain any sample columns.")
     frame["target_id"] = frame["target_id"].str.strip()
     for column in columns:
-        frame[column] = pandas.to_numeric(frame[column], errors="raise")
-    return frame.set_index("target_id")
+        # The parser already loaded most sample columns as numbers. Avoid
+        # replacing those columns or copying the matrix while setting its index.
+        if not pandas.api.types.is_numeric_dtype(frame[column].dtype):
+            frame[column] = pandas.to_numeric(frame[column], errors="raise")
+    frame.set_index("target_id", inplace=True)
+    return frame
 
 
 def validate_nonempty_table(
