@@ -164,18 +164,22 @@ def score_ruvseq_matrix(mat_df, metadata_df, n_pc=3, batch_column='bioproject', 
     )['score']
 
 
-def _upperquartile_normalize(counts_df, round_counts=True):
-    lib_sizes = counts_df.sum(axis=0).astype(float)
+def _upperquartile_effective_library_sizes(counts_df, lib_sizes):
     raw_factors = calc_factor_quantile(counts_df, lib_sizes, p=0.75).replace(0, numpy.nan)
     if raw_factors.isna().any():
         raw_factors = raw_factors.fillna(1.0)
     norm_factors = raw_factors / math.exp(float(numpy.mean(numpy.log(raw_factors.to_numpy(dtype=float)))))
-    normalized = counts_df.astype(float).copy()
-    normalized.loc[:, :] = normalized.to_numpy(dtype=float) / norm_factors.reindex(normalized.columns).to_numpy(dtype=float)
+    return lib_sizes * norm_factors
+
+
+def _scale_count_columns(counts_df, scales, *, multiplier=1.0, round_counts=False):
+    values = counts_df.to_numpy(dtype=float, copy=True)
+    values /= scales.reindex(counts_df.columns).to_numpy(dtype=float)
+    if multiplier != 1.0:
+        values *= multiplier
     if round_counts:
-        normalized.loc[:, :] = numpy.round(normalized.to_numpy(dtype=float))
-    effective_lib_sizes = lib_sizes * norm_factors
-    return normalized, norm_factors, effective_lib_sizes
+        numpy.round(values, out=values)
+    return pandas.DataFrame(values, index=counts_df.index, columns=counts_df.columns, copy=False)
 
 
 def _between_lane_normalize_upper(counts_df, round_counts=True):
@@ -188,24 +192,18 @@ def _between_lane_normalize_upper(counts_df, round_counts=True):
     # A sparse lane can have a 75th percentile of zero while the mean quantile
     # is positive, which would divide that column by zero and produce inf/NaN.
     # Such a lane carries no usable scale information, so it is left unscaled -
-    # the same policy _upperquartile_normalize already applies to its own
+    # the same policy _upperquartile_effective_library_sizes applies to its own
     # zero/non-finite factors.
     scales = scales.astype(float)
     unusable = ~numpy.isfinite(scales.to_numpy(dtype=float)) | (scales.to_numpy(dtype=float) <= 0)
     if unusable.any():
         scales.loc[unusable] = 1.0
-    normalized = counts_df.astype(float).copy()
-    normalized.loc[:, :] = normalized.to_numpy(dtype=float) / scales.reindex(normalized.columns).to_numpy(dtype=float)
-    if round_counts:
-        normalized.loc[:, :] = numpy.round(normalized.to_numpy(dtype=float))
-    return normalized, scales
+    return _scale_count_columns(counts_df, scales, round_counts=round_counts), scales
 
 
 def _counts_per_million(counts_df, effective_lib_sizes):
     denom = pandas.Series(effective_lib_sizes, index=counts_df.columns, dtype=float).replace(0, numpy.nan)
-    cpm = counts_df.astype(float).copy()
-    cpm.loc[:, :] = (cpm.to_numpy(dtype=float) / denom.reindex(cpm.columns).to_numpy(dtype=float)) * 1e6
-    return cpm
+    return _scale_count_columns(counts_df, denom, multiplier=1e6)
 
 
 def _load_statsmodels():
@@ -687,11 +685,12 @@ def run_ruvseq_backend(
     max_k = min(int(k_max), max(0, counts_df.shape[1] - design_df.shape[1] - 1))
     if max_k == 0 or (str(k_setting) != 'auto' and int(k_setting) > max_k):
         raise BatchModelError('ruvseq_insufficient_df', 'Requested k leaves no residual degrees of freedom.')
-    if (counts_df.sum(axis=0) <= 0).any():
+    lib_sizes = counts_df.sum(axis=0).astype(float)
+    if (lib_sizes <= 0).any():
         raise BatchModelError('ruvseq_zero_library', 'Cannot estimate offsets for a zero-count library.')
     # The count GLM uses the observed counts. The pseudo-count belongs only
     # to the log transformation used for the exploratory corrected matrix.
-    _edge_uq_df, _uq_factors, effective_lib_sizes = _upperquartile_normalize(counts_df, round_counts=False)
+    effective_lib_sizes = _upperquartile_effective_library_sizes(counts_df, lib_sizes)
     seq_uq_df, seq_uq_scales = _between_lane_normalize_upper(counts_df, round_counts=True)
     diagnostics = {
         'ruv_residual_method': 'glm_deviance',
