@@ -15,6 +15,9 @@ import pandas
 from amalgkit.batch_effect_common import BatchEffectResult, align_metadata_to_counts
 
 
+_MATRIX_CHANGE_BLOCK_ELEMENTS = 1024 * 1024
+
+
 class BatchModelError(RuntimeError):
     def __init__(self, reason, message, diagnostics=None):
         super().__init__(message)
@@ -48,18 +51,47 @@ def removal_basis(factors, design):
 def matrix_change(before, after, operation, scale):
     """Describe an actual postprocessing step, on its stated numeric scale."""
     before, after = numpy.asarray(before, dtype=float), numpy.asarray(after, dtype=float)
-    changed = before != after
-    # Equal log(0) cells are unchanged, not an undefined (-inf)-(-inf) delta.
-    delta = numpy.zeros_like(before)
-    numpy.subtract(after, before, out=delta, where=changed)
-    numpy.abs(delta, out=delta)
+    if after.shape != before.shape:
+        after = numpy.broadcast_to(after, before.shape)
+    transposed = before.flags.f_contiguous and not before.flags.c_contiguous
+    if transposed:
+        before, after = before.T, after.T
+    rows, columns = before.shape
+    changed_rows = numpy.zeros(rows, dtype=bool)
+    changed_columns = numpy.zeros(columns, dtype=bool)
+    changed_cells = 0
+    block_sums = []
+    maximum = 0.0
+    column_step = max(1, min(columns, _MATRIX_CHANGE_BLOCK_ELEMENTS))
+    row_step = _MATRIX_CHANGE_BLOCK_ELEMENTS // column_step
+    for first_row in range(0, rows, row_step):
+        row_slice = slice(first_row, first_row + row_step)
+        for first_column in range(0, columns, column_step):
+            column_slice = slice(first_column, first_column + column_step)
+            old = before[row_slice, column_slice]
+            new = after[row_slice, column_slice]
+            changed = old != new
+            count = int(numpy.count_nonzero(changed))
+            if count == 0:
+                continue
+            changed_cells += count
+            changed_rows[row_slice] |= changed.any(axis=1)
+            changed_columns[column_slice] |= changed.any(axis=0)
+            # Equal log(0) cells do not produce an undefined (-inf)-(-inf) delta.
+            delta = numpy.zeros_like(old)
+            numpy.subtract(new, old, out=delta, where=changed)
+            numpy.abs(delta, out=delta)
+            block_sums.append(float(delta.sum()))
+            maximum = float(numpy.maximum(maximum, delta.max()))
+    changed_genes = changed_columns if transposed else changed_rows
+    changed_runs = changed_rows if transposed else changed_columns
     return {
         'operation': operation, 'scale': scale,
-        'changed_cells': int(changed.sum()),
-        'changed_genes': int(changed.any(axis=1).sum()),
-        'changed_runs': int(changed.any(axis=0).sum()),
-        'absolute_change_sum': float(delta.sum()),
-        'maximum_absolute_change': float(delta.max()) if delta.size else 0.0,
+        'changed_cells': changed_cells,
+        'changed_genes': int(changed_genes.sum()),
+        'changed_runs': int(changed_runs.sum()),
+        'absolute_change_sum': float(numpy.sum(block_sums, dtype=float)),
+        'maximum_absolute_change': maximum,
     }
 
 

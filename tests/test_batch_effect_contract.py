@@ -6,7 +6,7 @@ import pandas as pd
 import pytest
 
 from amalgkit.batch_effect_combatseq import run_combatseq_backend
-from amalgkit.batch_effect_contract import BatchModelError, build_biological_design
+from amalgkit.batch_effect_contract import BatchModelError, build_biological_design, matrix_change
 from amalgkit.batch_effect_latent_glm import run_latent_glm_backend
 from amalgkit.batch_effect_ruvseq import run_ruvseq_backend, ruvr_correct_counts
 from amalgkit.batch_effect_sva import _stabilize_surrogate_matrix, irwsva_build, run_sva_backend
@@ -24,6 +24,24 @@ def fixture():
         'age': np.arange(12),
     })
     return counts, metadata
+
+
+@pytest.mark.parametrize('order', ['C', 'F'])
+def test_matrix_change_counts_changes_across_blocks_without_subtracting_equal_infinities(order, monkeypatch):
+    before = np.array([[-np.inf, 0., 1., 0.], [1., 2., 3., 4.],
+                       [5., 6., 7., 8.], [9., 10., 11., 12.]], order=order)
+    after = before.copy(order='K')
+    after[0, 1] = 2.
+    after[1, 1] = .5
+    after[3, 2] = 6.
+    after[3, 3] = 12.25
+    monkeypatch.setattr('amalgkit.batch_effect_contract._MATRIX_CHANGE_BLOCK_ELEMENTS', 3)
+
+    assert matrix_change(before, after, 'round', 'counts') == {
+        'operation': 'round', 'scale': 'counts', 'changed_cells': 4,
+        'changed_genes': 3, 'changed_runs': 3,
+        'absolute_change_sum': 8.75, 'maximum_absolute_change': 5.,
+    }
 
 
 @pytest.mark.parametrize('backend,options', [
