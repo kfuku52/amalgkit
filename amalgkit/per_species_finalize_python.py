@@ -473,6 +473,9 @@ def _apply_transformation_logic(
         transformed = _transform_raw_to_tpm(counts_df, eff_length_df)
     elif bool_fpkm_tpm and abundance_method == 'cpm':
         transformed = _transform_raw_to_cpm(counts_df, metadata_df)
+    elif bool_log and log_method != 'none':
+        # The log operation below allocates the result.
+        transformed = counts_df
     else:
         transformed = counts_df.copy()
     if bool_log:
