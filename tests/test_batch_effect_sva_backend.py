@@ -9,6 +9,7 @@ from amalgkit.batch_effect_sva import (
     f_pvalue,
     irwsva_build,
     estimate_num_sv_be,
+    estimate_num_sv_leek,
     estimate_num_sv_at_B,
     run_sva_backend,
 )
@@ -141,6 +142,31 @@ def test_estimate_num_sv_be_is_invariant_to_design_reparameterization():
     baseline = estimate_num_sv_be(data, design, B_value=20, max_nsv=2, random_seed=4)
     assert baseline.nsv == 1
     assert estimate_num_sv_be(data, alternative, B_value=20, max_nsv=2, random_seed=4) == baseline
+
+
+def test_dimension_estimators_do_not_count_a_nearly_collinear_protected_direction():
+    u = numpy.tile([1., -1., 1., -1.], 8)
+    v = numpy.tile([1., 1., -1., -1.], 8)
+    ordinary = numpy.column_stack([numpy.ones(32), u, v])
+    reencoded = numpy.column_stack([numpy.ones(32), u, u + 1e-9 * v])
+    rng = numpy.random.default_rng(810)
+    data = 2 + rng.normal(size=(1300, 1)) * u + rng.normal(size=(1300, 1)) * v * 3
+    data += rng.normal(size=data.shape) * .25
+    nuisance = rng.normal(size=(len(data), 1)) * (u * v) * .7
+
+    for observations, nsv in [(data, 0), (data + nuisance, 1)]:
+        for design in (ordinary, reencoded):
+            assert estimate_num_sv_be(observations, design, 30, 6, 91).nsv == nsv
+            assert estimate_num_sv_leek(observations, design, 6).nsv == nsv
+
+
+def test_be_estimator_does_not_normalize_roundoff_after_an_exact_fit():
+    u = numpy.tile([1., -1., 1., -1.], 30)
+    v = numpy.tile([1., 1., -1., -1.], 30)
+    design = numpy.column_stack([numpy.ones(120), u, v])
+    data = numpy.random.default_rng(3).integers(-10, 10, size=(200, 3)) @ design.T
+
+    assert estimate_num_sv_be(data, design, 30, 6, 91).nsv is None
 
 
 def test_estimate_num_sv_at_B_falls_back_to_leek_when_be_fails(monkeypatch):

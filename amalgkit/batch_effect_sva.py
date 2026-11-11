@@ -110,28 +110,24 @@ def _coerce_int(value):
         return None
 
 
-def _compute_hat_matrix(design_matrix):
+def _design_column_basis(design_matrix):
     design = numpy.asarray(design_matrix, dtype=float)
     if design.ndim != 2:
         raise ValueError('design_matrix must be two-dimensional.')
-    xtx = design.T @ design
-    try:
-        solved = numpy.linalg.solve(xtx, design.T)
-    except numpy.linalg.LinAlgError:
-        solved = numpy.linalg.pinv(xtx) @ design.T
-    return design @ solved
+    left, singular_values, _ = numpy.linalg.svd(design, full_matrices=False)
+    if singular_values.size == 0:
+        return left
+    # Match the numerical rank of the original design. Forming X.T @ X
+    # squares its condition number and can erase a protected direction.
+    tolerance = singular_values[0] * max(design.shape) * numpy.finfo(float).eps
+    return left[:, singular_values > tolerance]
 
 
-def _residualize_by_design(data_matrix, hat_matrix):
-    data = numpy.asarray(data_matrix, dtype=float)
-    hat = numpy.asarray(hat_matrix, dtype=float)
-    if data.ndim != 2:
-        raise ValueError('data_matrix must be two-dimensional.')
-    if hat.ndim != 2:
-        raise ValueError('hat_matrix must be two-dimensional.')
-    if data.shape[1] != hat.shape[0]:
-        raise ValueError('hat_matrix row count must match sample count.')
-    return data - (hat @ data.T).T
+def _design_projection(basis):
+    if 2 * basis.shape[1] >= basis.shape[0]:
+        hat = basis @ basis.T
+        return lambda values: values @ hat
+    return lambda values: (values @ basis) @ basis.T
 
 
 def _normalized_singular_energy(singular_values, ndf):
@@ -317,17 +313,24 @@ def _supported_right_vectors(data, nsv, reference_scale=0.0):
 def _prepare_be_estimator(data, mod, random_seed):
     if (data.shape[0] == 0) or (data.shape[1] == 0):
         return lambda _B, _max_nsv: SVAEstimate(nsv=0, method='be')
-
-    hat = _compute_hat_matrix(mod)
-    residual = _residualize_by_design(data, hat)
+    if data.shape[1] != mod.shape[0]:
+        raise ValueError('mod_matrix row count must match sample count.')
+    basis = _design_column_basis(mod)
     # The exact trace of the projection is its rank. Ceiling the computed
     # trace can discard a residual component if it rounds just above an integer.
-    ndf = min(data.shape) - int(numpy.linalg.matrix_rank(mod))
+    ndf = min(data.shape) - basis.shape[1]
     if ndf <= 0:
         return lambda _B, _max_nsv: SVAEstimate(nsv=0, method='be')
 
+    project = _design_projection(basis)
+    residual = data - project(data)
     singular_values = _singular_values_from_gram(residual)
-    if float(numpy.sum(singular_values[:ndf] ** 2)) <= 0:
+    observed_scale = math.sqrt(float(numpy.sum(singular_values[:ndf] ** 2)))
+    input_scale = float(numpy.linalg.norm(data))
+    roundoff = numpy.finfo(float).eps * max(mod.shape)
+    # The energy ratios are meaningless if all residual directions are at
+    # the roundoff scale of an exact fit. Keep the unresolved BE outcome.
+    if observed_scale <= 0 or (math.isfinite(input_scale) and observed_scale <= roundoff * input_scale):
         return lambda _B, _max_nsv: SVAEstimate(nsv=None, method='be')
     observed = _normalized_singular_energy(singular_values, ndf=ndf)
     rng = numpy.random.default_rng(_coerce_int(random_seed))
@@ -341,9 +344,12 @@ def _prepare_be_estimator(data, mod, random_seed):
             return SVAEstimate(nsv=None, method='be')
         while completed < B_value:
             residual_perm = _permute_rows_without_replacement(residual, rng)
-            residual_perm -= (hat @ residual_perm.T).T
+            residual_perm -= project(residual_perm)
             values = _singular_values_from_gram(residual_perm)
-            if float(numpy.sum(values[:ndf] ** 2)) <= 0:
+            permuted_scale = math.sqrt(float(numpy.sum(values[:ndf] ** 2)))
+            if permuted_scale <= 0 or (
+                math.isfinite(observed_scale) and permuted_scale <= roundoff * observed_scale
+            ):
                 degenerate = True
                 return SVAEstimate(nsv=None, method='be')
             numpy.add(exceeds, _normalized_singular_energy(values, ndf=ndf) >= observed, out=exceeds)
@@ -418,7 +424,8 @@ def estimate_num_sv_leek(data_matrix, mod_matrix, max_nsv):
     if block_size < 1:
         raise ValueError('Leek estimator requires at least one row per block.')
     rhat = numpy.zeros((100, 10), dtype=float)
-    projection = numpy.eye(dims[1]) - _compute_hat_matrix(mod)
+    basis = _design_column_basis(mod)
+    projection = numpy.eye(dims[1]) - basis @ basis.T
 
     for j in range(10):
         dats = data[: (j + 1) * block_size, :]
@@ -648,9 +655,8 @@ def irwsva_build(data_matrix, mod_matrix, mod0_matrix=None, nsv=1, B_iterations=
     if (B_iterations is None) or (B_iterations < 1):
         B_iterations = 5
 
-    sample_count = data.shape[1]
-    identity = numpy.eye(sample_count)
-    residual = data @ (identity - _compute_hat_matrix(mod))
+    project = _design_projection(_design_column_basis(mod))
+    residual = data - project(data)
     current_sv = _stabilize_surrogate_matrix(_supported_right_vectors(residual, nsv, numpy.linalg.norm(data)), mod)
     pprob_gam = numpy.zeros((data.shape[0],), dtype=float)
     pprob_b = numpy.zeros((data.shape[0],), dtype=float)

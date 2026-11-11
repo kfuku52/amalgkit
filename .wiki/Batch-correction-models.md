@@ -99,6 +99,9 @@ estimation only. `--sva_irw_iterations` independently controls IRW iterations
 (default 5). This changes historical runs where one B value controlled both.
 `--sva_estimation_method be` is the default; `leek` selects the other estimator,
 and `be_then_leek` explicitly permits switching when BE is unresolved.
+Dimension estimation and the initial IRW fit use an orthogonal basis of the
+protected design, so nearly collinear covariates do not become unwanted factors
+through roundoff in the normal equations.
 
 Zero or dependent candidate directions are removed, never filled with an
 arbitrary orthogonal basis. IRW reports its actual rank and completed iterations.
