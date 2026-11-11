@@ -129,6 +129,11 @@ Bayes dispersion procedure. NB failure does not revert to Poisson, and a failed
 GLM does not revert to OLS/ANOVA. The log transform for exploratory correction
 still uses a pseudocount of 1.
 
+For an intercept and disjoint group indicators, the Poisson fit uses each
+group's observed total divided by its total exposure when those totals are
+positive. Other designs use the iterative Poisson fit. The Poisson likelihood
+ratio and residuals use deviance terms that avoid cancellation at high counts.
+
 Controls are explicit choices:
 
 - `--ruvseq_control_genes all`: all retained genes, an explicit RUVr choice.

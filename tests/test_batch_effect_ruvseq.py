@@ -1,6 +1,8 @@
+from decimal import Decimal, localcontext
+
 import numpy
 import pandas
-from scipy.stats import f_oneway
+from scipy.stats import chi2, f_oneway
 
 import amalgkit.batch_effect_ruvseq as batch_effect_ruvseq
 from amalgkit.batch_effect_ruvseq import (
@@ -8,6 +10,36 @@ from amalgkit.batch_effect_ruvseq import (
     run_ruvseq_backend,
     ruvr_correct_counts,
 )
+
+
+def test_ruv_poisson_deviance_matches_high_precision_at_large_counts():
+    exposure = [1, 2, 4] * 4
+    rates = [10**10 - 50_000] * 6 + [10**10 + 50_000] * 6
+    noise = [-10_000, 0, 10_000] * 4
+    observed = [rate * scale + delta for rate, scale, delta in zip(rates, exposure, noise)]
+    runs = [f'R{i}' for i in range(len(observed))]
+    counts = pandas.DataFrame([observed], columns=runs, index=['gene'], dtype=float)
+    design = pandas.DataFrame({'Intercept': 1., 'B': [0.] * 6 + [1.] * 6}, index=runs)
+    lib_sizes = pandas.Series(exposure, index=runs, dtype=float)
+
+    with localcontext() as ctx:
+        ctx.prec = 60
+        null_rate = Decimal(sum(observed)) / sum(exposure)
+        full = []
+        null = []
+        residuals = []
+        for y, scale, rate in zip(map(Decimal, observed), exposure, rates):
+            mu_full = Decimal(rate * scale)
+            mu_null = null_rate * scale
+            full.append(2 * (y * (y / mu_full).ln() - y + mu_full))
+            null.append(2 * (y * (y / mu_null).ln() - y + mu_null))
+            residuals.append(float(full[-1].sqrt()) * numpy.sign(float(y - mu_full)))
+        expected_p = chi2.sf(float(sum(null) - sum(full)), df=1)
+
+    pvalues, actual = batch_effect_ruvseq._compute_glm_pvalues_and_residuals(counts, design, lib_sizes)
+
+    numpy.testing.assert_allclose(pvalues.to_numpy(), [expected_p], rtol=1e-9, atol=0.)
+    numpy.testing.assert_allclose(actual.to_numpy()[0], residuals, rtol=1e-9, atol=1e-9)
 
 
 def test_run_ruvseq_backend_skips_whole_matrix_when_glm_fails(monkeypatch):

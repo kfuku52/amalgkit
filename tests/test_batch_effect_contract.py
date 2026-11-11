@@ -217,7 +217,8 @@ def test_ruv_k_zero_bypasses_fitting(monkeypatch):
     assert summary['status'] == 'not_needed'
 
 
-def test_ruv_nb_failure_does_not_revert_to_poisson(monkeypatch):
+@pytest.mark.parametrize('covariates', [(), ('age',)])
+def test_ruv_nb_failure_does_not_revert_to_poisson(monkeypatch, covariates):
     import statsmodels.api as sm
     counts, metadata = fixture()
     original = sm.GLM
@@ -231,10 +232,12 @@ def test_ruv_nb_failure_does_not_revert_to_poisson(monkeypatch):
 
     monkeypatch.setattr(sm, 'GLM', glm)
     monkeypatch.setattr('amalgkit.batch_effect_ruvseq._estimate_nb_alpha_from_poisson_fit', lambda **kwargs: 0.1)
-    corrected, factors, summary = run_ruvseq_backend(counts, metadata, k_setting=1, control_mode='all')
+    corrected, factors, summary = run_ruvseq_backend(
+        counts, metadata, k_setting=1, control_mode='all', continuous_covariates=covariates,
+    )
     pd.testing.assert_frame_equal(corrected, counts)
     assert factors.empty
-    assert families == ['Poisson', 'NegativeBinomial']
+    assert families == (['Poisson', 'NegativeBinomial'] if covariates else ['NegativeBinomial'])
     assert summary['skip_reason'] == 'ruvseq_nb_glm_failed'
     assert summary['ruv_fallback_used'] is not True
 

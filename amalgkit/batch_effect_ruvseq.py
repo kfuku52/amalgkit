@@ -2,7 +2,6 @@ import math
 
 import numpy
 import pandas
-from scipy.special import gammaln, xlogy
 from scipy.stats import chi2, f
 
 from amalgkit.batch_effect_common import align_metadata_to_counts
@@ -15,11 +14,9 @@ RUVSEQ_POISSON_ALPHA_THRESHOLD = 1e-6
 # Absolute cutoff in GLM deviance-residual space, used to recognise numerical
 # no-effect fits.
 #
-# The control residuals come from statsmodels' fit.resid_deviance. They are not
-# raw-count quantities, so the cutoff must NOT be scaled by the raw count
-# magnitude: that mixes units and lets the threshold grow without bound with
-# library depth, eventually classifying nontrivial residual structure as
-# numerical noise.
+# The control residuals are not raw-count quantities, so the cutoff must NOT
+# be scaled by raw count magnitude. That mixes units and would eventually
+# classify nontrivial residual structure as numerical noise at high depths.
 #
 # Identical runs leave residuals at ~1.5e-8, the convergence-scale artifact of
 # the statsmodels IRLS fit. The 1e-6 floor sits safely above that measured
@@ -235,6 +232,41 @@ def _record_ruv_fallback(diagnostics, reason):
         reasons.append(reason)
 
 
+def _poisson_deviance(y, mu):
+    """Per-observation deviance without cancellation near a fitted count."""
+    delta = mu - y
+    deviance = mu.copy()  # The y=0 term is 2*mu.
+    positive = y > 0
+    near = positive & (numpy.abs(delta) <= 0.5 * y)
+    far = positive & ~near
+    with numpy.errstate(divide='ignore'):
+        deviance[far] = y[far] * (numpy.log(y[far]) - numpy.log(mu[far])) + delta[far]
+    relative = delta[near] / y[near]
+    small = numpy.abs(relative) < 1e-3
+    term = relative - numpy.log1p(relative)
+    r = relative[small]
+    # r - log1p(r) starts at r**2/2. Evaluate that difference directly.
+    term[small] = r * r * (0.5 + r * (-1/3 + r * (1/4 + r * (-1/5 + r * (1/6 - r/7)))))
+    deviance[near] = y[near] * term
+    return 2.0 * deviance
+
+
+def _group_poisson_offsets(design, offset_scale):
+    """Recognize an intercept and mutually exclusive treatment indicators."""
+    if not design.shape[1] or not (design[:, 0] == 1).all():
+        return None
+    indicators = design[:, 1:]
+    if not ((indicators == 0) | (indicators == 1)).all() or (indicators.sum(axis=1) > 1).any():
+        return None
+    group = numpy.zeros(design.shape[0], dtype=int)
+    rows, columns = numpy.nonzero(indicators)
+    group[rows] = columns + 1
+    totals = numpy.bincount(group, weights=offset_scale, minlength=design.shape[1])
+    if not numpy.isfinite(totals).all() or (totals <= 0).any():
+        return None
+    return group, totals
+
+
 def _compute_glm_pvalues_and_residuals(counts_df, design_df, effective_lib_sizes, diagnostics=None):
     if diagnostics is None:
         diagnostics = {}
@@ -250,26 +282,32 @@ def _compute_glm_pvalues_and_residuals(counts_df, design_df, effective_lib_sizes
     pvalues = numpy.ones((counts_df.shape[0],), dtype=float)
     rank_full = int(numpy.linalg.matrix_rank(x_full))
     df_diff = max(1, rank_full - 1)
+    group_offsets = _group_poisson_offsets(x_full, offset_scale)
     for row_idx in range(counts_df.shape[0]):
         y = counts_df.iloc[row_idx, :].to_numpy(dtype=float)
         if not y.any():
             residuals[row_idx, :] = 0.0
             pvalues[row_idx] = numpy.nan
             continue
-        try:
-            poisson_full = sm.GLM(y, x_full, family=sm.families.Poisson(), offset=offset).fit(maxiter=100, disp=0)
-        except (ValueError, FloatingPointError, numpy.linalg.LinAlgError, PerfectSeparationError) as exc:
-            raise BatchModelError('ruvseq_glm_failed', str(exc), {'failed_gene': str(counts_df.index[row_idx])}) from exc
-        if not poisson_full.converged:
-            raise BatchModelError('ruvseq_glm_not_converged', 'Poisson fit did not converge.', {'failed_gene': str(counts_df.index[row_idx])})
-        alpha = _estimate_nb_alpha_from_poisson_fit(y=y, mu=poisson_full.fittedvalues)
-        fit_full = poisson_full
-        y_sum = float(numpy.sum(y))
-        null_mean = offset_scale * (y_sum / offset_scale_sum)
-        poisson_null_llf = float(
-            numpy.sum(xlogy(y, null_mean) - null_mean - gammaln(y + 1.0))
-        )
-        null_llf = poisson_null_llf
+        poisson_mean = None
+        if group_offsets is not None:
+            group, totals = group_offsets
+            group_counts = numpy.bincount(group, weights=y, minlength=len(totals))
+            if (group_counts > 0).all():
+                # In this design each group has one free rate. Its Poisson
+                # MLE is total counts divided by the group's total exposure.
+                means = offset_scale * (group_counts / totals)[group]
+                if numpy.isfinite(means).all() and (means > 0).all():
+                    poisson_mean = means
+        if poisson_mean is None:
+            try:
+                poisson_full = sm.GLM(y, x_full, family=sm.families.Poisson(), offset=offset).fit(maxiter=100, disp=0)
+            except (ValueError, FloatingPointError, numpy.linalg.LinAlgError, PerfectSeparationError) as exc:
+                raise BatchModelError('ruvseq_glm_failed', str(exc), {'failed_gene': str(counts_df.index[row_idx])}) from exc
+            if not poisson_full.converged:
+                raise BatchModelError('ruvseq_glm_not_converged', 'Poisson fit did not converge.', {'failed_gene': str(counts_df.index[row_idx])})
+            poisson_mean = poisson_full.fittedvalues
+        alpha = _estimate_nb_alpha_from_poisson_fit(y=y, mu=poisson_mean)
         if alpha > RUVSEQ_POISSON_ALPHA_THRESHOLD:
             try:
                 nb_family = sm.families.NegativeBinomial(alpha=max(alpha, 1e-8))
@@ -280,13 +318,18 @@ def _compute_glm_pvalues_and_residuals(counts_df, design_df, effective_lib_sizes
                     family=nb_family,
                     offset=offset,
                 ).fit(maxiter=100, disp=0)
-                null_llf = float(fit_null.llf)
             except (ValueError, FloatingPointError, numpy.linalg.LinAlgError, PerfectSeparationError) as exc:
                 raise BatchModelError('ruvseq_nb_glm_failed', str(exc), {'failed_gene': str(counts_df.index[row_idx])}) from exc
             if not fit_full.converged or not fit_null.converged:
                 raise BatchModelError('ruvseq_glm_not_converged', 'NB fit did not converge.', {'failed_gene': str(counts_df.index[row_idx])})
-        residuals[row_idx, :] = numpy.asarray(fit_full.resid_deviance, dtype=float).reshape(-1)
-        llf_stat = max(0.0, 2.0 * float(fit_full.llf - null_llf))
+            residuals[row_idx, :] = numpy.asarray(fit_full.resid_deviance, dtype=float).reshape(-1)
+            llf_stat = 2.0 * float(fit_full.llf - fit_null.llf)
+        else:
+            null_mean = offset_scale * (float(numpy.sum(y)) / offset_scale_sum)
+            full_deviance = _poisson_deviance(y, poisson_mean)
+            residuals[row_idx, :] = numpy.sign(y - poisson_mean) * numpy.sqrt(full_deviance)
+            llf_stat = float(numpy.sum(_poisson_deviance(y, null_mean) - full_deviance))
+        llf_stat = max(0.0, llf_stat)
         pvalues[row_idx] = float(chi2.sf(llf_stat, df_diff))
         if not numpy.isfinite(pvalues[row_idx]) or not numpy.isfinite(residuals[row_idx]).all():
             raise BatchModelError('ruvseq_nonfinite_fit', 'GLM produced nonfinite diagnostics.', {'failed_gene': str(counts_df.index[row_idx])})
