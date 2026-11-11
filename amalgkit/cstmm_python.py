@@ -185,9 +185,14 @@ def _get_df_nonzero(df_counts, library_sizes=None, *, scale='raw', num_pc=4,
     if scale not in {'raw', 'library_size'}:
         raise ValueError('CSTMM imputation scale must be raw or library_size.')
     is_zero_col = (df_counts.sum(axis=0, skipna=True) == 0)
-    df_nonzero = df_counts.loc[:, ~is_zero_col].copy()
+    df_nonzero = df_counts.loc[:, ~is_zero_col] if is_zero_col.any() else df_counts
     # Rows absent from every retained sample provide no reference information.
-    df_nonzero = df_nonzero.loc[df_nonzero.notna().any(axis=1)].copy()
+    observed_mask = df_nonzero.notna()
+    reference_rows = observed_mask.any(axis=1)
+    complete_rows = int((observed_mask.all(axis=1) & reference_rows).sum())
+    del observed_mask
+    if not reference_rows.all():
+        df_nonzero = df_nonzero.loc[reference_rows]
     multipliers = pandas.Series(1.0, index=df_nonzero.columns)
     if scale == 'library_size':
         if library_sizes is None:
@@ -197,10 +202,21 @@ def _get_df_nonzero(df_counts, library_sizes=None, *, scale='raw', num_pc=4,
             raise ValueError('CSTMM imputation requires finite positive original library sizes.')
         # A fixed CPM scale makes tolerance independent of sequencing depth.
         multipliers = libraries / 1e6
+    complete = False
+    if complete_rows == len(df_nonzero):
+        observed = df_nonzero.to_numpy(dtype=float)
+        complete = numpy.isfinite(observed).all()
+        if complete:
+            # No value will be imputed. Keep the original counts instead of
+            # scaling every cell and then restoring it.
+            imputation_input = pandas.DataFrame(observed, index=df_nonzero.index, columns=df_nonzero.columns, copy=False)
+        del observed
+    if not complete:
+        imputation_input = df_nonzero.div(multipliers, axis=1)
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter('always', UserWarning)
         imputed, diagnostics = impute_expression(
-            df_nonzero.div(multipliers, axis=1), strategy='em_pca',
+            imputation_input, strategy='em_pca',
             num_pc=num_pc, max_iter=max_iter, tol=tol,
             minimum_imputed_value=0.0, return_diagnostics=True,
         )
@@ -215,11 +231,14 @@ def _get_df_nonzero(df_counts, library_sizes=None, *, scale='raw', num_pc=4,
         warnings.warn(message)
     for warning in caught:
         warnings.warn(str(warning.message), warning.category)
-    result = imputed.mul(multipliers, axis=1)
-    # Restore observed counts exactly, including zeros; imputation is internal only.
-    result = result.where(df_nonzero.isna(), df_nonzero)
+    if complete:
+        result = imputed
+    else:
+        result = imputed.mul(multipliers, axis=1)
+        # Restore observed counts exactly, including zeros; imputation is internal only.
+        result = result.where(df_nonzero.isna(), df_nonzero)
     diagnostics.update(scale=scale, reference_rows=int(result.shape[0]),
-                       complete_rows=int(df_nonzero.notna().all(axis=1).sum()),
+                       complete_rows=complete_rows,
                        dropped_all_missing_rows=int(df_counts.shape[0] - result.shape[0]),
                        allow_unconverged=bool(allow_unconverged))
     return (result, diagnostics) if return_diagnostics else result
