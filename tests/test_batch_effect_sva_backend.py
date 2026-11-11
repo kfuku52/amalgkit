@@ -131,6 +131,18 @@ def test_run_sva_backend_distinguishes_unresolved_nsv_from_zero():
     assert summary['skip_reason'] == 'sva_nsv_estimation_failed'
 
 
+def test_estimate_num_sv_be_is_invariant_to_design_reparameterization():
+    rng = numpy.random.default_rng(19)
+    data = rng.normal(size=(25, 5)) + rng.normal(size=(25, 2)) @ rng.normal(size=(2, 5))
+    design, _ = build_sample_group_design_matrix(['A', 'B', 'A', 'B', 'A'])
+    # Both designs protect the same subspace and have exactly rank two.
+    alternative = design @ numpy.array([[3.0, 3.0], [3.0, 0.0]])
+
+    baseline = estimate_num_sv_be(data, design, B_value=20, max_nsv=2, random_seed=4)
+    assert baseline.nsv == 1
+    assert estimate_num_sv_be(data, alternative, B_value=20, max_nsv=2, random_seed=4) == baseline
+
+
 def test_estimate_num_sv_at_B_falls_back_to_leek_when_be_fails(monkeypatch):
     data = numpy.array([
         [10.0, 12.0, 40.0, 42.0],

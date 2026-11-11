@@ -339,7 +339,9 @@ def estimate_num_sv_be(
 
     hat = _compute_hat_matrix(mod)
     residual = _residualize_by_design(data, hat)
-    ndf = min(data.shape) - int(math.ceil(float(numpy.trace(hat))))
+    # The exact trace of the projection is its rank. Ceiling the computed
+    # trace can discard a residual component if it rounds just above an integer.
+    ndf = min(data.shape) - int(numpy.linalg.matrix_rank(mod))
     if ndf <= 0:
         return SVAEstimate(nsv=0, method='be')
 
