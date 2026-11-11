@@ -413,20 +413,22 @@ def compute_design_residuals(seq_uq_df, design_df):
         ).transpose()
     x = design_df.to_numpy(dtype=float)
     beta, _, _, _ = numpy.linalg.lstsq(x, samples_by_genes, rcond=None)
-    fitted = x @ beta
-    residuals = samples_by_genes - fitted
-    return pandas.DataFrame(residuals.transpose(), index=seq_uq_df.index, columns=seq_uq_df.columns)
+    samples_by_genes -= x @ beta
+    return pandas.DataFrame(samples_by_genes.transpose(), index=seq_uq_df.index, columns=seq_uq_df.columns)
 
 
 def _compute_ruvr_basis(residuals_df, controls, center=True, tolerance=1e-8):
     residuals = residuals_df.to_numpy(dtype=float).transpose()
-    if center:
-        residuals = residuals - numpy.mean(residuals, axis=0, keepdims=True)
     controls = numpy.asarray(controls, dtype=bool).reshape(-1)
     if controls.size != residuals.shape[1]:
         raise ValueError('controls must have one element per gene.')
     e_controls = residuals[:, controls]
-    residual_scale = float(numpy.max(numpy.abs(e_controls))) if e_controls.size > 0 else 0.0
+    if e_controls.size == 0:
+        return numpy.zeros((residuals.shape[0], 0), dtype=float)
+    if center:
+        # Retain the original reduction order; only center the selected copy.
+        e_controls -= numpy.mean(residuals, axis=0)[controls]
+    residual_scale = max(abs(float(e_controls.min())), abs(float(e_controls.max())))
     if residual_scale <= RUVSEQ_RESIDUAL_NOISE_FLOOR:
         return numpy.zeros((residuals.shape[0], 0), dtype=float)
     eigenvectors, singular_values, _right_vectors = numpy.linalg.svd(
@@ -439,8 +441,6 @@ def _compute_ruvr_basis(residuals_df, controls, center=True, tolerance=1e-8):
 
 def ruvr_correct_counts(seq_uq_df, controls, k, residuals_df, center=True, round_counts=True, epsilon=1.0, tolerance=1e-8, is_log=False, residual_basis=None, design_matrix=None):
     x = seq_uq_df.to_numpy(dtype=float)
-    if (not is_log) and numpy.any(numpy.abs(x - numpy.round(x)) > 1e-8):
-        pass
     y = x.transpose() if is_log else numpy.log(x + float(epsilon)).transpose()
     controls = numpy.asarray(controls, dtype=bool).reshape(-1)
     if controls.size != x.shape[0]:
@@ -468,17 +468,19 @@ def ruvr_correct_counts(seq_uq_df, controls, k, residuals_df, center=True, round
     # orthogonal to the explicitly protected design.
     remove = w if design_matrix is None else removal_basis(w, design_matrix)
     alpha, _, _, _ = numpy.linalg.lstsq(remove, y, rcond=None)
-    corrected_y = y - (remove @ alpha)
+    corrected_y = remove @ alpha
+    numpy.subtract(y, corrected_y, out=corrected_y)
     if is_log:
         corrected = corrected_y.transpose()
     else:
-        corrected = numpy.exp(corrected_y).transpose() - float(epsilon)
+        unrounded = numpy.exp(corrected_y).transpose() - float(epsilon)
+        corrected = unrounded
         if round_counts:
             corrected = numpy.round(corrected)
             corrected[corrected < 0] = 0
     corrected_df = pandas.DataFrame(corrected, index=seq_uq_df.index, columns=seq_uq_df.columns)
     if not is_log:
-        corrected_df.attrs['postprocessing'] = [matrix_change(numpy.exp(corrected_y).T - float(epsilon), corrected, 'round_and_clip', 'upper_quartile_counts')]
+        corrected_df.attrs['postprocessing'] = [matrix_change(unrounded, corrected, 'round_and_clip', 'upper_quartile_counts')]
     w_df = pandas.DataFrame(
         w,
         index=seq_uq_df.columns,
