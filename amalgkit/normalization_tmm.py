@@ -51,7 +51,7 @@ def _coerce_library_sizes(lib_size, matrix, columns):
 
 
 def _remove_all_zero_rows(matrix):
-    keep = numpy.count_nonzero(matrix > 0, axis=1) != 0
+    keep = numpy.any(matrix, axis=1)
     if keep.all():
         return matrix
     return matrix[keep, :]
@@ -72,10 +72,14 @@ def _recycle(values, size):
 def calc_factor_quantile(data, lib_size, p=0.75):
     matrix, columns = _as_matrix_with_columns(data)
     libs = _coerce_library_sizes(lib_size, matrix, columns).to_numpy(dtype=float)
-    factors = numpy.ones((matrix.shape[1],), dtype=float)
+    return pandas.Series(_column_quantile_factors(matrix, libs, p), index=columns, dtype=float)
+
+
+def _column_quantile_factors(matrix, libs, p):
+    factors = numpy.empty(matrix.shape[1], dtype=float)
     for idx in range(matrix.shape[1]):
         factors[idx] = float(numpy.quantile(matrix[:, idx], q=p, method='linear'))
-    return pandas.Series(factors / libs, index=columns, dtype=float)
+    return factors / libs
 
 
 def _count_expression_keys(obs, ref, ref_libs, *, ratio):
@@ -214,12 +218,11 @@ def calc_factor_tmm(
     log_ref = numpy.log2(ref_counts) - numpy.log2(ref_libs)
     log_r = log_obs - log_ref
     abs_e = (log_obs + log_ref) / 2.0
-    with numpy.errstate(over='ignore', divide='ignore', invalid='ignore'):
-        variances = (n_obs - obs_counts) / n_obs / obs_counts + (ref_libs - ref_counts) / ref_libs / ref_counts
-    finite = numpy.isfinite(log_r) & numpy.isfinite(abs_e) & (abs_e > acutoff)
-    log_r = log_r[finite]
-    variances = variances[finite]
-    obs_counts, ref_counts, ref_libs = obs_counts[finite], ref_counts[finite], ref_libs[finite]
+    # Positive finite counts and library sizes have finite log2 values.
+    above_cutoff = abs_e > acutoff
+    if not above_cutoff.all():
+        log_r = log_r[above_cutoff]
+        obs_counts, ref_counts, ref_libs = obs_counts[above_cutoff], ref_counts[above_cutoff], ref_libs[above_cutoff]
     if log_r.size == 0:
         return 1.0
     if float(numpy.max(numpy.abs(log_r))) < 1e-6:
@@ -239,13 +242,16 @@ def calc_factor_tmm(
         return 1.0
     if diagnostics is not None:
         diagnostics.update(retained_pairs=int(keep.sum()), status='estimated')
-    with numpy.errstate(divide='ignore', invalid='ignore'):
-        if do_weighting:
-            numerator = numpy.nansum(log_r[keep] / variances[keep])
-            denominator = numpy.nansum(1.0 / variances[keep])
+    if do_weighting:
+        obs_counts, ref_counts, ref_libs = obs_counts[keep], ref_counts[keep], ref_libs[keep]
+        with numpy.errstate(over='ignore', divide='ignore', invalid='ignore'):
+            variances = (n_obs - obs_counts) / n_obs / obs_counts + (ref_libs - ref_counts) / ref_libs / ref_counts
+        with numpy.errstate(divide='ignore', invalid='ignore'):
+            numerator = numpy.nansum(log_r[keep] / variances)
+            denominator = numpy.nansum(1.0 / variances)
             factor_log = numerator / denominator
-        else:
-            factor_log = float(numpy.mean(log_r[keep]))
+    else:
+        factor_log = float(numpy.mean(log_r[keep]))
     if numpy.isnan(factor_log):
         if diagnostics is not None:
             diagnostics['status'] = 'undefined_weighted_mean'
@@ -258,7 +264,7 @@ def _resolve_tmm_reference_column(matrix, lib_sizes):
         lib_size_values = lib_sizes.to_numpy(dtype=float)
     else:
         lib_size_values = numpy.asarray(lib_sizes, dtype=float).reshape(-1)
-    f75 = calc_factor_quantile(matrix, lib_size_values).to_numpy(dtype=float)
+    f75 = _column_quantile_factors(matrix, lib_size_values, 0.75)
     if float(numpy.median(f75)) < 1e-20:
         ref_column = int(numpy.argmax(numpy.sum(numpy.sqrt(matrix), axis=0)))
     else:
@@ -294,10 +300,18 @@ def calc_norm_factors_tmm(
 ):
     matrix, columns = _as_matrix_with_columns(counts)
     libs = _coerce_library_sizes(lib_size, matrix, columns)
-    matrix = _remove_all_zero_rows(matrix)
+    return _calc_norm_factors_from_matrix(
+        _remove_all_zero_rows(matrix), libs, ref_column,
+        logratio_trim=logratio_trim, sum_trim=sum_trim, do_weighting=do_weighting, acutoff=acutoff,
+    )
+
+
+def _calc_norm_factors_from_matrix(
+    matrix, libs, ref_column, *, logratio_trim=0.3, sum_trim=0.05, do_weighting=True, acutoff=-1e10,
+):
     nsamples = matrix.shape[1]
     if (matrix.shape[0] == 0) or (nsamples == 1):
-        return pandas.Series(numpy.ones((nsamples,), dtype=float), index=columns, dtype=float)
+        return pandas.Series(numpy.ones((nsamples,), dtype=float), index=libs.index, dtype=float)
 
     if ref_column is None:
         resolved_ref = _resolve_tmm_reference_column(matrix, libs)
@@ -325,23 +339,23 @@ def calc_norm_factors_tmm(
             acutoff=acutoff,
         )
     factors = factors / math.exp(float(numpy.mean(numpy.log(factors))))
-    return pandas.Series(factors, index=columns, dtype=float)
+    return pandas.Series(factors, index=libs.index, dtype=float)
 
 
 def run_tmm_rounds_for_cstmm(counts, lib_size=None):
     matrix, columns = _as_matrix_with_columns(counts)
     if matrix.shape[1] == 0:
         raise ValueError('TMM normalization requires at least one sample column.')
-    if not numpy.any(matrix):
+    filtered = _remove_all_zero_rows(matrix)
+    if filtered.shape[0] == 0:
         raise ValueError('TMM normalization requires at least one positive count.')
     libs = _coerce_library_sizes(lib_size, matrix, columns)
-    round1_counts = counts if isinstance(counts, pandas.DataFrame) else pandas.DataFrame(matrix, columns=columns)
-    # Drop the temporary filtered matrix before either normalization round.
-    round1_reference_column = _resolve_tmm_reference_column(_remove_all_zero_rows(matrix), libs)
-    round1 = calc_norm_factors_tmm(round1_counts, lib_size=libs, ref_column=round1_reference_column)
+    # Both rounds use the same validated rows and the original library sizes.
+    round1_reference_column = _resolve_tmm_reference_column(filtered, libs)
+    round1 = _calc_norm_factors_from_matrix(filtered, libs, round1_reference_column)
     round1_values = round1.to_numpy(dtype=float)
     median_reference_columns = [_resolve_median_reference_column(round1_values)]
-    round2 = calc_norm_factors_tmm(round1_counts, lib_size=libs, ref_column=median_reference_columns)
+    round2 = _calc_norm_factors_from_matrix(filtered, libs, median_reference_columns)
     return TMMRoundTripResult(
         round1_factors=round1,
         round1_reference_column=round1_reference_column,

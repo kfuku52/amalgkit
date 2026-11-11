@@ -183,7 +183,7 @@ def test_nonscalar_recycling_preserves_resize_and_flattening(values, size):
 
 
 @pytest.mark.parametrize('single_column', [False, True])
-def test_rounds_resolve_reference_once_and_release_filtered_copy(single_column, monkeypatch):
+def test_rounds_reuse_one_filtered_matrix_and_release_it(single_column, monkeypatch):
     columns = ['0001'] if single_column else [1, '1', '0001', 'NA']
     values = numpy.array([[0., 0., 0., 0.], [10., 20., 30., 40.], [30., 10., 40., 20.]])
     counts = pandas.DataFrame(values[:, :len(columns)], columns=columns)
@@ -193,7 +193,6 @@ def test_rounds_resolve_reference_once_and_release_filtered_copy(single_column, 
     filtered_references = []
     original_resolve = tmm._resolve_tmm_reference_column
     original_filter = tmm._remove_all_zero_rows
-    original_normalize = tmm.calc_norm_factors_tmm
 
     def record_reference(matrix, lib_sizes):
         reference = original_resolve(matrix, lib_sizes)
@@ -206,17 +205,12 @@ def test_rounds_resolve_reference_once_and_release_filtered_copy(single_column, 
             filtered_references.append(weakref.ref(filtered))
         return filtered
 
-    def check_released_copy(*args, **kwargs):
-        assert all(reference() is None for reference in filtered_references)
-        return original_normalize(*args, **kwargs)
-
     monkeypatch.setattr(tmm, '_resolve_tmm_reference_column', record_reference)
     monkeypatch.setattr(tmm, '_remove_all_zero_rows', record_filter)
-    monkeypatch.setattr(tmm, 'calc_norm_factors_tmm', check_released_copy)
     result = tmm.run_tmm_rounds_for_cstmm(counts, lib_size=libraries)
 
     assert references == [result.round1_reference_column]
-    assert filtered_references and all(reference() is None for reference in filtered_references)
+    assert len(filtered_references) == 1 and filtered_references[0]() is None
     assert result.round1_factors.index.tolist() == columns
     assert result.round2_factors.index.tolist() == columns
     pandas.testing.assert_series_equal(result.library_sizes, libraries.reindex(columns))
