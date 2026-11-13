@@ -1407,6 +1407,55 @@ def _report_curl_failure(out, status_code, stderr_txt, source, artifact):
     )
 
 
+def _download_curl_ranges(curl, url, path, header_path, total, args, deadline):
+    """Complete an interrupted transfer using bounded, independently checked ranges."""
+    chunk_size = 16 * 1024**2
+    with _secure_download_temp_path(path, '.curlrange') as chunk_path:
+        while (start := _assert_regular_owned_resume_payload(path)) < total:
+            end = min(start + chunk_size, total) - 1
+            length = end - start + 1
+            for attempt in range(4):
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return False
+                for temporary in (header_path, chunk_path):
+                    if os.path.lexists(temporary):
+                        os.remove(temporary)
+                timeout = min(120, remaining)
+                tool_timeout = resolve_getfastq_tool_timeout_seconds(args)
+                if tool_timeout is not None:
+                    timeout = min(tool_timeout, timeout)
+                command = [
+                    curl, '--fail', '--silent', '--show-error', '--connect-timeout', '20',
+                    '--max-time', str(max(1, math.ceil(timeout))), '--proto', '=https',
+                    '--range', f'{start}-{end}', '--max-filesize', str(length),
+                    '--dump-header', header_path, '--write-out', 'AMALGKIT_CURL_STATUS:%{http_code}\n',
+                    '-o', chunk_path, url,
+                ]
+                try:
+                    result, stdout, _ = run_logged_command(
+                        command=command, runner=subprocess.run, timeout_seconds=timeout,
+                        print_command=True, print_output=False,
+                    )
+                except TimeoutError:
+                    status = None
+                else:
+                    status, _ = _parse_curl_response_metadata(stdout)
+                    if (result.returncode == 0 and status == 206
+                            and _read_curl_content_range(header_path) == (start, end, total)
+                            and _assert_regular_owned_resume_payload(chunk_path) == length):
+                        break
+                if status not in (None, 0, 206, 408, 429, 500, 502, 503, 504):
+                    return False
+                delay = 2 ** attempt
+                if attempt == 3 or deadline - time.monotonic() <= delay:
+                    return False
+                time.sleep(delay)
+            with open(chunk_path, 'rb') as chunk, open(path, 'ab') as output:
+                shutil.copyfileobj(chunk, output, length=1024**2)
+    return _assert_regular_owned_resume_payload(path) == total
+
+
 def _download_with_curl_resumable(
     source_url,
     output_path,
@@ -1513,8 +1562,17 @@ def _download_with_curl_resumable(
                 transient = out.returncode in (5, 6, 7, 18, 28, 35, 52, 55, 56, 92) or (
                     out.returncode == 22 and status_code in (408, 429, 500, 502, 503, 504)
                 )
-                if transient and retry_transfer():
-                    continue
+                if transient:
+                    if retry_transfer():
+                        continue
+                    if (sra_source_name.upper() == 'ENA' and valid_partial
+                            and status_code == 206 and content_range is not None
+                            and content_range[2] is not None and 0 < size < content_range[2]):
+                        sys.stderr.write('Continuing ENA transfer with bounded HTTP byte ranges.\n')
+                        return _download_curl_ranges(
+                            curl_exe, current_url, output_path, header_path, content_range[2],
+                            args, transfer_started_at + transfer_timeout,
+                        )
                 return False
             if status_code is None:
                 raise RuntimeError('curl did not report an HTTP response status.')

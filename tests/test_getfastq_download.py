@@ -10,6 +10,7 @@ import subprocess
 from contextlib import contextmanager
 
 import urllib.error
+from pathlib import Path
 from types import SimpleNamespace
 
 
@@ -1618,3 +1619,37 @@ def test_download_temp_path_is_inside_private_unpredictable_directory(tmp_path):
 
     with _secure_download_temp_path(output, '.urllibtmp') as second_path:
         assert os.path.dirname(second_path) != first_parent
+
+
+@pytest.mark.parametrize('bad_range', [False, True])
+def test_ena_retries_bounded_ranges_after_open_ended_resume_fails(tmp_path, monkeypatch, bad_range):
+    payload = b'abcdefgh'
+    output = tmp_path / 'reads.fastq.gz'
+    output.write_bytes(payload[:2])
+    requested = []
+
+    def fake_run(cmd, **kwargs):
+        destination = Path(cmd[cmd.index('-o') + 1])
+        headers = Path(cmd[cmd.index('--dump-header') + 1])
+        if '--range' in cmd:
+            requested.append(cmd[cmd.index('--range') + 1])
+            headers.write_bytes(b'HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 2-7/8\r\n\r\n')
+            destination.write_bytes(payload[2:])
+            if bad_range or len(requested) == 1:
+                headers.write_bytes(b'HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 1-7/8\r\n\r\n')
+        else:
+            headers.write_bytes(b'HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 2-7/8\r\n\r\n')
+        return subprocess.CompletedProcess(cmd, 0 if '--range' in cmd else 18,
+                                           stdout=b'AMALGKIT_CURL_STATUS:206\n', stderr=b'')
+
+    monkeypatch.setattr('amalgkit.getfastq.subprocess.run', fake_run)
+    monkeypatch.setattr('amalgkit.getfastq.time.sleep', lambda _: None)
+    result = download_with_curl(
+        source_url='https://ftp.sra.ebi.ac.uk/run.fastq.gz',
+        output_path=str(output),
+        args=SimpleNamespace(sra_download_transfer_timeout_seconds=60),
+        sra_source_name='ENA', artifact_label='Original FASTQ file', resume_existing=True,
+    )
+    assert result is (not bad_range)
+    assert requested == ['2-7'] * (4 if bad_range else 2)
+    assert output.read_bytes() == (payload[:2] if bad_range else payload)

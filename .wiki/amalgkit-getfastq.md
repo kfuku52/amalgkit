@@ -139,6 +139,11 @@ may be partial. Changing a semantic option invalidates only affected run directo
 files and valid outputs for other runs remain available. After every requested run reaches the complete
 phase, `getfastq/getfastq_completion.json` records the validated run set for workflow-level checks.
 
+When an ENA original FASTQ repeatedly disconnects during a resumable download,
+getfastq retries with bounded byte ranges. It retains accepted bytes and verifies
+the provider's size and checksum when available, along with gzip integrity, before
+using the completed file.
+
 Use `--redo yes` to discard the resumable products and reprocess every requested run.
 
 ## Optional MMseqs2 Filters

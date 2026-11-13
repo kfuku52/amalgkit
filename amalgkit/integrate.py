@@ -420,10 +420,11 @@ def _parse_paired_fastq_header(header):
     return read_id, mate_index
 
 
-def validate_paired_fastq_structure(read1_path, read2_path, run_id):
+def validate_paired_fastq_structure(read1_path, read2_path, run_id, *, max_records=None):
+    """Validate synchronized mate records, optionally bounding a preflight read."""
     num_records = 0
     with open_fastq_binary(read1_path) as read1_handle, open_fastq_binary(read2_path) as read2_handle:
-        while True:
+        while max_records is None or num_records < max_records:
             read1_record = _read_validated_fastq_record(read1_handle, read1_path)
             read2_record = _read_validated_fastq_record(read2_handle, read2_path)
             if read1_record is None and read2_record is None:
@@ -454,6 +455,7 @@ def validate_paired_fastq_structure(read1_path, read2_path, run_id):
                     )
                 )
             num_records += 1
+    return num_records
 
 
 def require_matching_validated_read_count(path_fastq, reported_count, validated_count, source):
