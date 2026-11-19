@@ -172,13 +172,15 @@ def _get_getfastq_output_candidates(sra_stat: Mapping[str, Any]) -> list[tuple[s
     ]
 
 
-def _snapshot_getfastq_outputs(run_dir: str, output_names: Sequence[str]) -> list[dict[str, Any]]:
+def _snapshot_getfastq_outputs(
+    run_dir: str, output_names: Sequence[str], *, allow_symlinks: bool = True
+) -> list[dict[str, Any]]:
     snapshots = []
     for output_name in output_names:
         output_path = os.path.join(run_dir, output_name)
         try:
-            path_stat = os.stat(output_path, follow_symlinks=False)
-            stat_result = os.stat(output_path, follow_symlinks=True)
+            path_stat = os.lstat(output_path)
+            stat_result = os.stat(output_path) if allow_symlinks and stat.S_ISLNK(path_stat.st_mode) else path_stat
         except FileNotFoundError as exc:
             raise FileNotFoundError("getfastq output is missing or is not a file: {}".format(output_path)) from exc
         if not stat.S_ISREG(stat_result.st_mode):
@@ -197,3 +199,11 @@ def _snapshot_getfastq_outputs(run_dir: str, output_names: Sequence[str]) -> lis
             }
         )
     return snapshots
+
+
+def _sha256_regular_file(path: str) -> str:
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+    with open(path, "rb", opener=lambda name, mode: os.open(name, mode | flags)) as handle:
+        if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+            raise OSError("Copied getfastq artifact is not a regular file: {}".format(path))
+        return hashlib.file_digest(handle, "sha256").hexdigest()

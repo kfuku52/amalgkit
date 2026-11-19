@@ -144,7 +144,48 @@ getfastq retries with bounded byte ranges. It retains accepted bytes and verifie
 the provider's size and checksum when available, along with gzip integrity, before
 using the completed file.
 
+For shared output storage that cannot provide a private directory, put the
+public original FASTQ fallback's partial downloads and locks on a local disk:
+
+```bash
+amalgkit getfastq --out_dir /shared/work --public_fastq_resume_dir /local/scratch/my-fastq-resume
+```
+
+The scratch directory must belong to the current user and have mode `0700`.
+Getfastq creates it with that mode if it is absent. Each canonical output run
+directory has its own scratch entry. Repeat the same option when restarting
+on that host, and keep the normal `--download_lock_dir` shared across jobs that
+use the same output workspace. With the option omitted, existing partial
+downloads are read from `getfastq/<RUN>/.amalgkit-original-fastq-resume` as usual.
+This option applies to the original FASTQ fallback for SRA runs. Native GSA
+downloads use the [GSA input cache](GSA-native-inputs).
+
 Use `--redo yes` to discard the resumable products and reprocess every requested run.
+
+### Resuming after a copy to another disk
+
+Copy the run directories with the final `.amalgkit.fastq.gz` files, their
+`getfastq_stats.tsv` and `getfastq_run_state.json` files, and any random-sampling
+manifest. Keep the original workspace available. Before running normal getfastq
+in the copy, use the same run selection, metadata and processing options with
+`--rebind_resume_from` pointing to the original `--out_dir`:
+
+```bash
+amalgkit getfastq --out_dir /mnt/new/work --metadata /mnt/new/work/metadata/metadata.tsv --rebind_resume_from /mnt/old/work
+amalgkit getfastq --out_dir /mnt/new/work --metadata /mnt/new/work/metadata/metadata.tsv
+```
+
+The first command checks the published first-round or complete state against the
+original FASTQs and stats, then compares the copied files with SHA-256. It
+updates the destination state for each verified run and exits. Runs must have
+regular FASTQ files for the recorded layout, including both mates for paired-end
+libraries. For GSA use the measured `getfastq/metadata.tsv` for verification.
+If verification fails, the failed run's files are available for inspection.
+After correcting the copy, the same command can verify already rebound runs
+and continue. If the workspace has other runs that still need FASTQ generation,
+repeat `--rebind_resume_run RUN` for each run you want to verify. Keep the original
+metadata and base budget for that command. The normal command resumes processing
+and writes the workspace completion manifest.
 
 ## Optional MMseqs2 Filters
 

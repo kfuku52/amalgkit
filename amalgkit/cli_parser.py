@@ -248,6 +248,15 @@ def build_parser(command_handlers, command_names, version, prog=None):
 
     pge_help = 'Retrieving fastq files. See `amalgkit getfastq -h`'
     pge = subparsers.add_parser('getfastq', help=pge_help, parents=[pp_out, pp_meta, pp_threads, pp_internal_jobs, pp_cpu_budget, pp_redo, pp_batch, pp_download])
+    pge.add_argument('--rebind_resume_from', metavar='PATH',
+                     help='Verify copied final FASTQs against the original AMALGKIT output directory and '
+                          'update their resume snapshots for --out_dir. Use the original run selection and settings.')
+    pge.add_argument('--rebind_resume_run', metavar='RUN', action='append',
+                     help='Verify only this run with --rebind_resume_from. Repeat for multiple runs. '
+                          'The input run selection and base budget still determine the resume fingerprint.')
+    pge.add_argument('--public_fastq_resume_dir', metavar='PATH',
+                     help='Private scratch directory for public original FASTQ fallback downloads and their locks. '
+                          'By default use the getfastq run directory.')
     pge.add_argument('--gsa_metadata_max_concurrency', default=1, type=nonnegative_int_or_auto,
                      help='Concurrent GSA metadata requests across processes sharing download_lock_dir; 0 disables the limit.')
     pge.add_argument('--gsa_metadata_timeout_seconds', default=30, type=int,

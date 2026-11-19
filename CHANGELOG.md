@@ -5,6 +5,15 @@ Releases provide generated notes only for tagged releases. Patch-only updates
 remain on the default branch and are recorded below; consult this file rather
 than the Releases page for those changes.
 
+### 0.16.110 - 2026-11-19
+
+- Verify copied getfastq FASTQs and statistics against the original workspace
+  before updating the destination's per-run resume state.
+- Allow a separate private scratch directory for public original FASTQ
+  fallback downloads and their locks.
+- Avoid repeated FASTQ structure scans when a getfastq invocation rechecks
+  the same file identities during resume and completion.
+
 ### 0.16.107 - 2026-10-26
 
 - Remove tests that fix internal cache layouts, library calls or incidental

@@ -3,7 +3,9 @@ import pandas
 import numpy
 import gzip
 import json
+import shutil
 import subprocess
+import sys
 
 import os
 from types import SimpleNamespace
@@ -37,6 +39,8 @@ from amalgkit.getfastq import (
     GETFASTQ_PHASE_FIRST_ROUND,
     GETFASTQ_PHASE_SECOND_ROUND_IN_PROGRESS,
     build_getfastq_run_fingerprint,
+    getfastq_main,
+    getfastq_metadata,
     inspect_getfastq_resume_output,
     read_getfastq_run_state,
     restore_getfastq_stats,
@@ -44,6 +48,8 @@ from amalgkit.getfastq import (
     write_getfastq_completion_manifest,
     write_getfastq_run_state,
 )
+from amalgkit.main import build_main_parser
+from amalgkit.getfastq_sampling import MANIFEST as SAMPLING_MANIFEST
 from amalgkit.util import Metadata
 
 
@@ -1236,6 +1242,143 @@ class TestGetfastqResume:
             for read_id in read_ids:
                 handle.write('@{}\nACGT\n+\nIIII\n'.format(read_id))
 
+    def _copy_resume_case(self, tmp_path, layout, phase, private=False, random=False, second_run=False):
+        _, metadata, _, sra_stat, source = self._make_case(tmp_path / 'original', layout)
+        destination_workspace = tmp_path / 'copied'
+        metadata_path = tmp_path / 'metadata.tsv'
+        if private:
+            private_fastq = tmp_path / 'private.fastq.gz'
+            self._write_fastq(private_fastq)
+            metadata.df['private_file'] = 'yes'
+            metadata.df['read1_path'] = str(private_fastq)
+        metadata_table = metadata.df
+        if second_run:
+            metadata_table = pandas.concat([metadata_table, metadata_table.assign(run='SRR002')], ignore_index=True)
+        metadata_table.to_csv(metadata_path, sep='\t', index=False)
+        command = ['getfastq', '--metadata', str(metadata_path), '--max_bp', '1000', '--fastp', 'no']
+        if random:
+            command += ['--sampling_method', 'random']
+        source_args = build_main_parser().parse_args(command + ['--out_dir', str(tmp_path / 'original')])
+        loaded = check_metadata_validity(getfastq_metadata(source_args))
+        g = initialize_global_params(source_args, loaded)
+        if layout == 'single':
+            self._write_fastq_ids(source / 'SRR001.amalgkit.fastq.gz', ['spot'])
+        else:
+            for mate in (1, 2):
+                self._write_fastq_ids(source / f'SRR001_{mate}.amalgkit.fastq.gz', [f'spot/{mate}'])
+        if random:
+            (source / SAMPLING_MANIFEST).write_text('{"fixture": true}\n')
+        write_getfastq_stats(sra_stat, metadata, str(source))
+        state = write_getfastq_run_state(source_args, sra_stat, g, loaded, phase)
+        destination = destination_workspace / 'getfastq' / 'SRR001'
+        shutil.copytree(source, destination)
+        command += ['--out_dir', str(destination_workspace), '--rebind_resume_from', str(tmp_path / 'original')]
+        return command, sra_stat, source, destination, state
+
+    @pytest.mark.integration
+    @pytest.mark.parametrize('layout,phase', [('single', GETFASTQ_PHASE_COMPLETE), ('paired', GETFASTQ_PHASE_FIRST_ROUND)])
+    def test_copy_rebinds_and_uses_normal_resume(self, tmp_path, layout, phase):
+        command, sra_stat, source, destination, state = self._copy_resume_case(tmp_path, layout, phase)
+        source_state_path = source / 'getfastq_run_state.json'
+        source_state_bytes = source_state_path.read_bytes()
+        cli = subprocess.run([sys.executable, '-m', 'amalgkit', *command], capture_output=True, text=True)
+        assert cli.returncode == 0, cli.stderr
+        assert 'Rebound copied getfastq resume state' in cli.stdout
+        assert source_state_path.read_bytes() == source_state_bytes
+        assert not (destination.parent / 'getfastq_completion.json').exists()
+
+        args = build_main_parser().parse_args(command[:-2])
+        metadata = check_metadata_validity(getfastq_metadata(args))
+        g = initialize_global_params(args, metadata)
+        sra_stat['getfastq_sra_dir'] = str(destination)
+        resume = inspect_getfastq_resume_output(args, sra_stat, g, metadata)
+        assert resume['phase'] == phase
+        assert resume['state']['outputs'] != state['outputs']
+        assert dict(resume['state'], outputs=state['outputs']) == state
+
+        destination_state_path = destination / 'getfastq_run_state.json'
+        before_inode = destination_state_path.stat().st_ino
+        getfastq_main(build_main_parser().parse_args(command))
+        assert destination_state_path.stat().st_ino == before_inode
+
+    def test_rebind_subset_preserves_the_original_run_budget(self, tmp_path):
+        command, _, _, destination, state = self._copy_resume_case(
+            tmp_path, 'single', GETFASTQ_PHASE_FIRST_ROUND, second_run=True,
+        )
+        parser = build_main_parser()
+        with pytest.raises(ValueError, match='outside the getfastq selection: SRR003'):
+            getfastq_main(parser.parse_args(command + ['--rebind_resume_run', 'SRR003']))
+        with pytest.raises(ValueError, match='requires --rebind_resume_from'):
+            getfastq_main(parser.parse_args(command[:-2] + ['--rebind_resume_run', 'SRR001']))
+        getfastq_main(parser.parse_args(command + ['--rebind_resume_run', 'SRR001']))
+        actual = read_getfastq_run_state(str(destination))
+        assert actual['fingerprint'] == state['fingerprint']
+        assert actual['outputs'] != state['outputs']
+        assert not (destination.parent / 'SRR002').exists()
+
+    @pytest.mark.parametrize('damage,reason', [
+        ('original_fastq', 'Original FASTQ snapshot differs'),
+        ('copied_fastq', 'Copied file differs'),
+        ('swapped_mates', 'Copied file differs'),
+        ('missing_mate', 'output is missing'),
+        ('original_stats', 'stats differ'),
+        ('copied_stats', 'stats differ'),
+        ('matched_bad_stats', 'stats differ'),
+        ('stats_bytes', 'Copied file differs'),
+        ('wrong_run', 'run or layout differs'),
+        ('wrong_copied_state', 'Copied resume state differs'),
+        ('option', 'options, target size, or run metadata changed'),
+        ('layout', 'run or layout differs'),
+        ('private_input', 'options, target size, or run metadata changed'),
+        ('manifest', 'sampling manifest changed'),
+        ('interrupted_second_round', '2nd round did not complete'),
+    ])
+    def test_rebind_rejects_mismatched_artifacts_without_discarding_the_copy(self, tmp_path, damage, reason):
+        private = damage == 'private_input'
+        layout = 'single' if private else 'paired'
+        phase = GETFASTQ_PHASE_SECOND_ROUND_IN_PROGRESS if damage == 'interrupted_second_round' else GETFASTQ_PHASE_COMPLETE
+        command, _, source, destination, state = self._copy_resume_case(
+            tmp_path, layout, phase, private=private, random=damage == 'manifest',
+        )
+        if damage in {'original_fastq', 'copied_fastq'}:
+            changed = source if damage == 'original_fastq' else destination
+            self._write_fastq_ids(changed / 'SRR001_1.amalgkit.fastq.gz', ['other/1'])
+        elif damage == 'swapped_mates':
+            first, second = [destination / f'SRR001_{mate}.amalgkit.fastq.gz' for mate in (1, 2)]
+            first_bytes, second_bytes = first.read_bytes(), second.read_bytes()
+            first.write_bytes(second_bytes)
+            second.write_bytes(first_bytes)
+        elif damage == 'missing_mate':
+            (destination / 'SRR001_2.amalgkit.fastq.gz').unlink()
+        elif damage in {'original_stats', 'copied_stats', 'matched_bad_stats'}:
+            damaged_dirs = {'original_stats': [source], 'copied_stats': [destination], 'matched_bad_stats': [source, destination]}
+            for directory in damaged_dirs[damage]:
+                stats_path = directory / 'getfastq_stats.tsv'
+                stats = pandas.read_csv(stats_path, sep='\t')
+                stats.at[0, 'bp_amalgkit'] += 1
+                stats.to_csv(stats_path, sep='\t', index=False)
+        elif damage == 'stats_bytes':
+            stats_path = destination / 'getfastq_stats.tsv'
+            stats_path.write_bytes(stats_path.read_bytes() + b'\n')
+        elif damage == 'wrong_run':
+            (source / 'getfastq_run_state.json').write_text(json.dumps(dict(state, run='SRR999')))
+        elif damage == 'wrong_copied_state':
+            (destination / 'getfastq_run_state.json').write_text(json.dumps(dict(state, run='SRR999')))
+        elif damage == 'option':
+            command += ['--min_read_length', '51']
+        elif damage == 'layout':
+            path = tmp_path / 'metadata.tsv'
+            path.write_text(path.read_text().replace('paired', 'single'))
+        elif private:
+            self._write_fastq_ids(tmp_path / 'private.fastq.gz', ['modified'])
+        elif damage == 'manifest':
+            (destination / SAMPLING_MANIFEST).write_text('{}\n')
+
+        artifacts = {path: path.read_bytes() for directory in (source, destination) for path in directory.iterdir()}
+        with pytest.raises((ValueError, OSError), match=reason):
+            getfastq_main(build_main_parser().parse_args(command))
+        assert {path: path.read_bytes() for path in artifacts} == artifacts
+
     def test_adopts_valid_unmarked_output_and_restores_stats(self, tmp_path):
         args, metadata, g, sra_stat, run_dir = self._make_case(tmp_path)
         self._write_fastq(run_dir / 'SRR001.amalgkit.fastq.gz')
@@ -1518,6 +1661,25 @@ class TestGetfastqResume:
         assert completion['status'] == GETFASTQ_PHASE_COMPLETE
         assert completion['run_count'] == 1
         assert completion['runs'][0]['run'] == 'SRR001'
+
+    def test_rechecks_replaced_fastq_before_publishing_completion(self, tmp_path):
+        args, metadata, g, sra_stat, run_dir = self._make_case(tmp_path)
+        args._validated_getfastq_outputs = {}
+        output = run_dir / 'SRR001.amalgkit.fastq.gz'
+        self._write_fastq(output)
+        write_getfastq_stats(sra_stat, metadata, str(run_dir))
+        write_getfastq_run_state(args, sra_stat, g, metadata, GETFASTQ_PHASE_COMPLETE)
+        assert inspect_getfastq_resume_output(args, sra_stat, g, metadata)['phase'] == GETFASTQ_PHASE_COMPLETE
+
+        replacement = run_dir / 'replacement.fastq.gz'
+        with gzip.open(replacement, 'wt') as handle:
+            handle.write('@r0\nACGT\n+\nIII\n')
+        os.replace(replacement, output)
+        write_getfastq_run_state(args, sra_stat, g, metadata, GETFASTQ_PHASE_COMPLETE, full_validation=False)
+
+        with pytest.raises(ValueError, match='sequence and quality lengths differ'):
+            write_getfastq_completion_manifest(args, metadata, [(0, 'SRR001')], g)
+        assert not (run_dir.parent / 'getfastq_completion.json').exists()
 
     def test_completion_manifest_holds_all_run_locks_in_sorted_order(
         self,

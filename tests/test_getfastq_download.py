@@ -1,12 +1,14 @@
 import pytest
 import pandas
 import numpy
+import errno
 import gzip
 import http.client
 import ssl
 import os
 import stat
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 
 import urllib.error
@@ -14,6 +16,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 
+from amalgkit import getfastq
 from amalgkit.getfastq import (
     initialize_columns,
     sequence_extraction_2nd_round,
@@ -1485,7 +1488,81 @@ def test_original_fastq_resume_directory_survives_interruption(tmp_path):
             assert handle.read() == b'partial'
 
 
-def test_paired_original_fastq_retry_reuses_the_verified_first_mate(tmp_path, monkeypatch):
+def test_external_fastq_resume_isolated_by_output_with_real_locks(tmp_path, monkeypatch):
+    output_a = tmp_path / 'output_a' / 'getfastq' / 'SRR001'
+    output_b = tmp_path / 'output_b' / 'getfastq' / 'SRR001'
+    alias = tmp_path / 'alias'
+    for directory in (output_a, output_b):
+        directory.mkdir(parents=True)
+    alias.symlink_to(output_a, target_is_directory=True)
+    scratch = tmp_path / 'scratch'
+    args = SimpleNamespace(public_fastq_resume_dir=str(scratch), sra_download_wait_timeout_seconds=1)
+    real_lock = getfastq.acquire_exclusive_lock
+    monkeypatch.setattr(getfastq, 'acquire_exclusive_lock', lambda *a, **kw: real_lock(*a, **kw, poll_seconds=1))
+
+    def check_other_output():
+        with _public_fastq_resume_directory(str(output_b), args) as resume:
+            assert not (Path(resume) / 'SRR001.fastq.gz').exists()
+            assert Path(resume + '.lock').is_file()
+            return resume
+
+    def compete_for_same_output():
+        with _public_fastq_resume_directory(str(alias), args):
+            pytest.fail('two callers acquired the same lock')
+
+    with ThreadPoolExecutor(max_workers=2) as pool, _public_fastq_resume_directory(str(output_a), args) as first:
+        payload = Path(first) / 'SRR001.fastq.gz'
+        payload.write_bytes(b'partial A')
+        assert Path(first).is_relative_to(scratch)
+        assert Path(first + '.lock').is_file()
+        assert stat.S_IMODE(scratch.stat().st_mode) == 0o700
+        assert stat.S_IMODE(Path(first).stat().st_mode) == 0o700
+        different_output = pool.submit(check_other_output)
+        same_output = pool.submit(compete_for_same_output)
+        assert different_output.result(timeout=3) != first
+        with pytest.raises(TimeoutError, match='original FASTQ resume lock'):
+            same_output.result(timeout=3)
+    with _public_fastq_resume_directory(str(alias), args) as reopened:
+        assert Path(reopened, payload.name).read_bytes() == b'partial A'
+
+
+@pytest.mark.parametrize('unsafe', ['wide_mode', 'symlink', 'wrong_owner', 'namespace_symlink', 'payload_symlink', 'lock_symlink'])
+def test_external_fastq_resume_rejects_unsafe_paths(tmp_path, monkeypatch, unsafe):
+    output = tmp_path / 'getfastq' / 'SRR001'
+    output.mkdir(parents=True)
+    scratch = tmp_path / 'scratch'
+    args = SimpleNamespace(public_fastq_resume_dir=str(scratch))
+    real = tmp_path / 'other'
+    real.mkdir(mode=0o700)
+    if unsafe in {'namespace_symlink', 'payload_symlink', 'lock_symlink'}:
+        with _public_fastq_resume_directory(str(output), args) as resume:
+            path = Path(resume)
+        if unsafe == 'namespace_symlink':
+            path.rmdir()
+            path = path.parent
+            path.rmdir()
+        elif unsafe == 'payload_symlink':
+            path.rmdir()
+        else:
+            path = Path(resume + '.lock')
+        path.symlink_to(real, target_is_directory=True)
+    elif unsafe == 'symlink':
+        scratch.symlink_to(real, target_is_directory=True)
+    else:
+        scratch.mkdir(mode=0o700)
+        if unsafe == 'wide_mode':
+            scratch.chmod(0o777)
+        else:
+            monkeypatch.setattr(os, 'geteuid', lambda: scratch.stat().st_uid + 1)
+
+    with pytest.raises(OSError, match='resume'):
+        with _public_fastq_resume_directory(str(output), args):
+            pytest.fail('accepted unsafe scratch storage')
+    assert not list(real.iterdir())
+
+
+@pytest.mark.parametrize('external', [False, True], ids=['default', 'external-cross-device'])
+def test_paired_original_fastq_retry_reuses_the_verified_first_mate(tmp_path, monkeypatch, external):
     sra_id = 'SRR001'
     download_calls = []
     mate2_attempts = {'count': 0}
@@ -1526,6 +1603,32 @@ def test_paired_original_fastq_retry_reuses_the_verified_first_mate(tmp_path, mo
         'total_spot': 1,
     }
     args = SimpleNamespace(sra_download_wait_timeout_seconds=5)
+    resume_directory = tmp_path / '.amalgkit-original-fastq-resume'
+    if external:
+        scratch = tmp_path / 'local' / 'scratch'
+        args.public_fastq_resume_dir = str(scratch)
+        tmp_path.chmod(0o777)
+        with _public_fastq_resume_directory(str(tmp_path), args) as resume:
+            resume_directory = Path(resume)
+        real_replace = os.replace
+        real_copyfile = getfastq.shutil.copyfile
+        failed_copy = False
+
+        def cross_device_replace(src, dst):
+            if Path(src).is_relative_to(scratch):
+                raise OSError(errno.EXDEV, 'different filesystem')
+            return real_replace(src, dst)
+
+        def interrupt_mate_copy(src, dst):
+            nonlocal failed_copy
+            if str(src).endswith('_2.fastq.gz') and not failed_copy:
+                failed_copy = True
+                Path(dst).write_bytes(b'partial copy')
+                raise OSError(errno.ENOSPC, 'destination is full')
+            return real_copyfile(src, dst)
+
+        monkeypatch.setattr(os, 'replace', cross_device_replace)
+        monkeypatch.setattr(getfastq.shutil, 'copyfile', interrupt_mate_copy)
 
     assert download_public_original_fastq_files(
         sra_stat=sra_stat,
@@ -1535,7 +1638,15 @@ def test_paired_original_fastq_retry_reuses_the_verified_first_mate(tmp_path, mo
         public_original_fastqs=entries,
         source_description='test',
     ) is None
-    assert (tmp_path / '.amalgkit-original-fastq-resume' / '{}_1.fastq.gz'.format(sra_id)).read_bytes() == b'mate'
+    assert (resume_directory / '{}_1.fastq.gz'.format(sra_id)).read_bytes() == b'mate'
+
+    if external:
+        assert download_public_original_fastq_files(
+            sra_stat=sra_stat, args=args, start=1, end=1, public_original_fastqs=entries,
+        ) is None
+        assert (resume_directory / f'{sra_id}_1.fastq.gz').read_bytes() == b'mate'
+        assert (resume_directory / f'{sra_id}_2.fastq.gz').read_bytes() == b'pair'
+        assert not list(tmp_path.glob('*.fastq.gz'))
 
     assert download_public_original_fastq_files(
         sra_stat=sra_stat,
@@ -1546,8 +1657,10 @@ def test_paired_original_fastq_retry_reuses_the_verified_first_mate(tmp_path, mo
         source_description='test',
     ) is not None
     assert download_calls.count('{}_1.fastq.gz'.format(sra_id)) == 1
+    assert download_calls.count('{}_2.fastq.gz'.format(sra_id)) == 2
     assert (tmp_path / '{}_1.fastq.gz'.format(sra_id)).read_bytes() == b'mate'
     assert (tmp_path / '{}_2.fastq.gz'.format(sra_id)).read_bytes() == b'pair'
+    assert not resume_directory.exists()
     assert not (tmp_path / '.amalgkit-original-fastq-resume').exists()
 
 

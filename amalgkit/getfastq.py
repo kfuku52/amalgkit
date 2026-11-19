@@ -1,6 +1,7 @@
 from Bio import Entrez
 from contextlib import ExitStack, contextmanager
 from defusedxml.ElementTree import fromstring as parse_untrusted_xml_string
+import errno
 import hashlib
 import itertools
 import json
@@ -62,6 +63,7 @@ from amalgkit.getfastq_resume import (
     _atomic_write_json as _atomic_write_json,
     read_getfastq_run_state as read_getfastq_run_state,
     _get_getfastq_output_candidates as _get_getfastq_output_candidates,
+    _sha256_regular_file,
     _snapshot_getfastq_outputs as _snapshot_getfastq_outputs,
 )
 from amalgkit.getfastq_file_state import (
@@ -97,6 +99,7 @@ from amalgkit.prefix_utils import find_run_prefixed_entries
 from amalgkit.runtime_utils import (
     get_getfastq_run_dir,
     safe_join_component,
+    safe_join_existing_input_component,
     validate_safe_path_component,
     validate_unique_run_ids,
 )
@@ -1316,21 +1319,33 @@ def _secure_download_temp_path(output_path, suffix):
 
 def _assert_private_resume_directory(path):
     """Create or validate a user-private directory for restartable payloads."""
-    if os.path.lexists(path):
-        st = os.stat(path, follow_symlinks=False)
-        if not stat.S_ISDIR(st.st_mode):
-            raise NotADirectoryError('FASTQ resume path is not a directory: {}'.format(path))
-        if st.st_uid != os.geteuid() or stat.S_IMODE(st.st_mode) != 0o700:
-            raise PermissionError('FASTQ resume directory ownership or mode is unsafe: {}'.format(path))
-        return
-    os.mkdir(path, 0o700)
+    try:
+        os.mkdir(path, 0o700)
+    except FileExistsError:
+        pass
+    st = os.lstat(path)
+    if not stat.S_ISDIR(st.st_mode):
+        raise NotADirectoryError('FASTQ resume path is not a directory: {}'.format(path))
+    if st.st_uid != os.geteuid() or stat.S_IMODE(st.st_mode) != 0o700:
+        raise PermissionError('FASTQ resume directory ownership or mode is unsafe: {}'.format(path))
 
 
 @contextmanager
 def _public_fastq_resume_directory(work_dir, args):
     """Lock one stable private directory that survives interrupted downloads."""
-    resume_dir = os.path.join(work_dir, '.amalgkit-original-fastq-resume')
-    lock_path = os.path.join(work_dir, '.amalgkit-original-fastq-resume.lock')
+    resume_parent = work_dir
+    resume_root = getattr(args, 'public_fastq_resume_dir', None)
+    if resume_root is not None:
+        if not str(resume_root).strip():
+            raise ValueError('--public_fastq_resume_dir requires a nonempty path.')
+        resume_root = os.path.abspath(os.path.expanduser(resume_root))
+        os.makedirs(os.path.dirname(resume_root), exist_ok=True)
+        _assert_private_resume_directory(resume_root)
+        work_dir_digest = hashlib.sha256(os.fsencode(os.path.realpath(work_dir))).hexdigest()
+        resume_parent = os.path.join(resume_root, work_dir_digest)
+        _assert_private_resume_directory(resume_parent)
+    resume_dir = os.path.join(resume_parent, '.amalgkit-original-fastq-resume')
+    lock_path = resume_dir + '.lock'
     timeout_seconds = resolve_positive_timeout_seconds(
         args=args,
         attr_name='sra_download_wait_timeout_seconds',
@@ -2071,6 +2086,17 @@ def download_verified_original_fastq(sra_id, entry, output_path, args):
             sys.stderr.write('Original FASTQ integrity failed for {}; retrying the transfer once.\n'.format(sra_id))
 
 
+def _publish_verified_original_fastq(resume_path, output_path):
+    try:
+        os.replace(resume_path, output_path)
+    except OSError as exc:
+        if exc.errno != errno.EXDEV:
+            raise
+        # Keep the verified scratch copy until all mates have been published.
+        with atomic_output_path(output_path) as temporary_path:
+            shutil.copyfile(resume_path, temporary_path)
+
+
 def download_public_original_fastq_files(
     sra_stat,
     args,
@@ -2122,20 +2148,27 @@ def download_public_original_fastq_files(
                 resume_path = os.path.join(resume_dir, output_filename)
                 download_verified_original_fastq(sra_id, fastq_entry, resume_path, args)
                 staged_fastqs.append((resume_path, output_path))
-            for resume_path, output_path in staged_fastqs:
-                if is_full_requested_spot_range(sra_stat=sra_stat, start=start, end=end):
-                    os.replace(resume_path, output_path)
-                else:
-                    run_seqkit_range_command(
-                        input_path=resume_path,
-                        output_path=output_path,
-                        start=start,
-                        end=end,
-                        args=args,
-                        command_label='Original FASTQ spot-range trim with seqkit',
-                    )
-                created_paths.append(output_path)
-            shutil.rmtree(resume_dir)
+            try:
+                full_range = is_full_requested_spot_range(sra_stat=sra_stat, start=start, end=end)
+                for resume_path, output_path in staged_fastqs:
+                    created_paths.append(output_path)
+                    if full_range:
+                        _publish_verified_original_fastq(resume_path, output_path)
+                    else:
+                        run_seqkit_range_command(
+                            input_path=resume_path,
+                            output_path=output_path,
+                            start=start,
+                            end=end,
+                            args=args,
+                            command_label='Original FASTQ spot-range trim with seqkit',
+                        )
+                shutil.rmtree(resume_dir)
+            except Exception:
+                for output_path in created_paths:
+                    if os.path.isfile(output_path):
+                        os.remove(output_path)
+                raise
         print(
             'Public original FASTQ fallback succeeded for {} with {:,} file(s).'.format(
                 sra_id,
@@ -2146,9 +2179,6 @@ def download_public_original_fastq_files(
         return RunFileState(work_dir=work_dir)
     except Exception as exc:
         sys.stderr.write('Public original FASTQ fallback failed for {}: {}\n'.format(sra_id, exc))
-        for output_path in created_paths:
-            if os.path.exists(output_path):
-                os.remove(output_path)
         return None
 
 
@@ -6242,7 +6272,9 @@ def _snapshot_getfastq_stats_row(stats_row):
     }
 
 
-def validate_getfastq_resume_output(sra_stat, state=None, is_private=False, full_validation=True):
+def validate_getfastq_resume_output(
+    sra_stat, state=None, is_private=False, full_validation=True, *, validated_outputs=None,
+):
     run_dir = sra_stat['getfastq_sra_dir']
     stats_row = _get_getfastq_resume_stats_row(sra_stat)
     zero_output_stage = _detect_zero_output_stage_from_stats(run_dir, sra_stat['sra_id'])
@@ -6282,8 +6314,12 @@ def validate_getfastq_resume_output(sra_stat, state=None, is_private=False, full
                 sra_stat['sra_id']
             )
         )
+    validated = {'stats_row': stats_row, 'outputs': current_snapshots, 'zero_output_stage': zero_output_stage}
     if not full_validation:
-        return {'stats_row': stats_row, 'outputs': current_snapshots, 'zero_output_stage': zero_output_stage}
+        return validated
+    cache_key = (run_dir, sra_stat['layout'])
+    if validated_outputs is not None and validated_outputs.get(cache_key) == current_snapshots:
+        return validated
 
     actual_output_names = []
     for output_name in output_names:
@@ -6312,7 +6348,13 @@ def validate_getfastq_resume_output(sra_stat, state=None, is_private=False, full
                         output_path
                     )
                 )
-    return {'stats_row': stats_row, 'outputs': current_snapshots, 'zero_output_stage': zero_output_stage}
+    if validated_outputs is not None:
+        # The same invocation may recheck this run after releasing its lock.
+        # Only reuse structural validation for the exact files that were read.
+        if _snapshot_getfastq_outputs(run_dir, output_names) != current_snapshots:
+            raise ValueError('getfastq outputs changed during FASTQ validation for {}.'.format(sra_stat['sra_id']))
+        validated_outputs[cache_key] = current_snapshots
+    return validated
 
 
 def restore_getfastq_stats(metadata, sra_stat, stats_row):
@@ -6386,6 +6428,38 @@ def discard_getfastq_run_resume_data(sra_stat, reason):
             os.remove(entry_path)
 
 
+def _validate_published_getfastq_resume_state(args, sra_stat, g, run_metadata, state):
+    if state.get('schema_version') != GETFASTQ_RESUME_SCHEMA_VERSION:
+        raise ValueError('resume-state schema version differs')
+    if state.get('run') != sra_stat['sra_id'] or state.get('layout') != sra_stat['layout']:
+        raise ValueError('resume-state run or layout differs')
+    if state.get('fingerprint') != build_getfastq_run_fingerprint(args, sra_stat, g, run_metadata):
+        raise ValueError('getfastq options, target size, or run metadata changed')
+    phase = state.get('phase')
+    if phase == GETFASTQ_PHASE_SECOND_ROUND_IN_PROGRESS:
+        raise ValueError('the previous 2nd round did not complete')
+    if phase not in [GETFASTQ_PHASE_FIRST_ROUND, GETFASTQ_PHASE_COMPLETE]:
+        raise ValueError('unknown resume phase: {}'.format(phase))
+    ind_sra = sra_stat.get('metadata_idx')
+    if ind_sra is None:
+        ind_sra = get_metadata_row_index_by_run(run_metadata, sra_stat['sra_id'])
+    if sampling.random_sampling(args, run_metadata.df.loc[ind_sra]) and not state.get('sampling_manifest_sha256'):
+        raise ValueError('sampling manifest changed or is missing')
+    return phase
+
+
+def _validate_published_getfastq_resume_output(
+    sra_stat, state, is_private, full_validation=True, *, validated_outputs=None,
+):
+    validated = validate_getfastq_resume_output(
+        sra_stat, state=state, is_private=is_private, full_validation=full_validation,
+        validated_outputs=validated_outputs,
+    )
+    if state is not None and state.get('stats') != _snapshot_getfastq_stats_row(validated['stats_row']):
+        raise ValueError('getfastq stats differ from the published resume state')
+    return validated
+
+
 def inspect_getfastq_resume_output(args, sra_stat, g, run_metadata):
     run_dir = sra_stat['getfastq_sra_dir']
     state_path = get_getfastq_run_state_path(run_dir)
@@ -6402,22 +6476,8 @@ def inspect_getfastq_resume_output(args, sra_stat, g, run_metadata):
         if ind_sra is None:
             ind_sra = get_metadata_row_index_by_run(run_metadata, sra_stat['sra_id'])
         state = read_getfastq_run_state(run_dir)
-        expected_fingerprint = build_getfastq_run_fingerprint(args, sra_stat, g, run_metadata)
         if state is not None:
-            if state.get('schema_version') != GETFASTQ_RESUME_SCHEMA_VERSION:
-                raise ValueError('resume-state schema version differs')
-            if state.get('run') != sra_stat['sra_id'] or state.get('layout') != sra_stat['layout']:
-                raise ValueError('resume-state run or layout differs')
-            if state.get('fingerprint') != expected_fingerprint:
-                raise ValueError('getfastq options, target size, or run metadata changed')
-            phase = state.get('phase')
-            if phase == GETFASTQ_PHASE_SECOND_ROUND_IN_PROGRESS:
-                raise ValueError('the previous 2nd round did not complete')
-            if phase not in [GETFASTQ_PHASE_FIRST_ROUND, GETFASTQ_PHASE_COMPLETE]:
-                raise ValueError('unknown resume phase: {}'.format(phase))
-            if sampling.random_sampling(args, run_metadata.df.loc[ind_sra]):
-                if state.get('sampling_manifest_sha256') != sampling.manifest_digest(run_dir):
-                    raise ValueError('sampling manifest changed or is missing')
+            phase = _validate_published_getfastq_resume_state(args, sra_stat, g, run_metadata, state)
         else:
             if is_private_file_value(run_metadata.df.loc[ind_sra].get('private_file', '')):
                 raise ValueError('legacy private output has no source-content provenance')
@@ -6430,13 +6490,10 @@ def inspect_getfastq_resume_output(args, sra_stat, g, run_metadata):
             ('private_file' in run_metadata.df.columns)
             and (is_private_file_value(run_metadata.df.at[ind_sra, 'private_file']))
         )
-        validated = validate_getfastq_resume_output(sra_stat, state=state, is_private=is_private)
-        if (
-            state is not None
-            and state.get('stats')
-            != _snapshot_getfastq_stats_row(validated['stats_row'])
-        ):
-            raise ValueError('getfastq stats differ from the published resume state')
+        validated = _validate_published_getfastq_resume_output(
+            sra_stat, state, is_private,
+            validated_outputs=getattr(args, '_validated_getfastq_outputs', None),
+        )
         if validated['zero_output_stage'] is not None:
             phase = GETFASTQ_PHASE_COMPLETE
         if state is None:
@@ -6457,6 +6514,55 @@ def inspect_getfastq_resume_output(args, sra_stat, g, run_metadata):
     except Exception as exc:
         discard_getfastq_run_resume_data(sra_stat, str(exc))
         return None
+
+
+def _rebind_getfastq_run_state(args, source_dir, sra_stat, g, metadata):
+    destination_dir = sra_stat['getfastq_sra_dir']
+    if os.path.samefile(source_dir, destination_dir):
+        raise ValueError('Source and destination getfastq run directories must be distinct.')
+    source_stat = dict(sra_stat, getfastq_sra_dir=source_dir)
+    stats_name = 'getfastq_stats.tsv'
+    companion_names = [GETFASTQ_RUN_STATE_FILENAME, stats_name]
+    source_companions = _snapshot_getfastq_outputs(source_dir, companion_names, allow_symlinks=False)
+    destination_companions = _snapshot_getfastq_outputs(destination_dir, companion_names, allow_symlinks=False)
+    source_state = read_getfastq_run_state(source_dir)
+    destination_state = read_getfastq_run_state(destination_dir)
+    if source_state is None or destination_state is None:
+        raise ValueError('Both directories require a published getfastq resume state.')
+    phase = _validate_published_getfastq_resume_state(args, source_stat, g, metadata, source_state)
+    if 'sampling_manifest_sha256' in source_state:
+        companion_names.append(sampling.MANIFEST)
+        source_companions += _snapshot_getfastq_outputs(source_dir, [sampling.MANIFEST], allow_symlinks=False)
+        destination_companions += _snapshot_getfastq_outputs(destination_dir, [sampling.MANIFEST], allow_symlinks=False)
+    output_names = [name for name, _ in _get_getfastq_output_candidates(sra_stat)]
+    source_outputs = _snapshot_getfastq_outputs(source_dir, output_names, allow_symlinks=False)
+    destination_outputs = _snapshot_getfastq_outputs(destination_dir, output_names, allow_symlinks=False)
+    if source_state.get('outputs') != source_outputs:
+        raise ValueError('Original FASTQ snapshot differs from the published resume state.')
+    rebound_state = dict(source_state, outputs=destination_outputs)
+    if destination_state != source_state and destination_state != rebound_state:
+        raise ValueError('Copied resume state differs from the original published state.')
+
+    is_private = is_private_file_value(metadata.df.loc[sra_stat['metadata_idx']].get('private_file', ''))
+    _validate_published_getfastq_resume_output(source_stat, source_state, is_private)
+    _validate_published_getfastq_resume_output(sra_stat, rebound_state, is_private, full_validation=False)
+    for name in [stats_name, *output_names]:
+        if _sha256_regular_file(os.path.join(source_dir, name)) != _sha256_regular_file(
+            os.path.join(destination_dir, name)
+        ):
+            raise ValueError('Copied file differs from the original: {}'.format(name))
+    for run_dir, files in [
+        (source_dir, source_companions + source_outputs),
+        (destination_dir, destination_companions + destination_outputs),
+    ]:
+        if _snapshot_getfastq_outputs(run_dir, companion_names + output_names, allow_symlinks=False) != files:
+            raise ValueError('Files changed while verifying the getfastq copy: {}'.format(run_dir))
+    if destination_state != rebound_state:
+        _atomic_write_json(rebound_state, get_getfastq_run_state_path(destination_dir))
+        print('Rebound copied getfastq resume state for {} (phase={}).'.format(sra_stat['sra_id'], phase), flush=True)
+    else:
+        print('Copied getfastq resume state already verified for {}.'.format(sra_stat['sra_id']), flush=True)
+
 
 def is_getfastq_output_present(sra_stat, files=None):
     if files is None:
@@ -7954,7 +8060,7 @@ def _write_getfastq_completion_manifest_locked(args, metadata, run_rows, g):
             sra_stat=sra_stat,
             state=state,
             is_private=is_private,
-            full_validation=True,
+            validated_outputs=getattr(args, '_validated_getfastq_outputs', None),
         )
         if state.get('outputs') != validated['outputs']:
             raise RuntimeError(
@@ -8035,8 +8141,49 @@ def run_getfastq_postprocessing(args, metadata, last_getfastq_sra_dir, flag_any_
         print_read_stats(args, metadata, g, sra_stat=None, individual=True)
 
 
+def _rebind_copied_getfastq_runs(args, source_out_dir, metadata):
+    source_args = clone_namespace(args, out_dir=source_out_dir)
+    source_root = safe_join_existing_input_component(source_out_dir, 'getfastq', label='Source getfastq directory')
+    destination_root = safe_join_existing_input_component(args.out_dir, 'getfastq', label='Copied getfastq directory')
+    if os.path.samefile(source_root, destination_root):
+        raise ValueError('--rebind_resume_from and --out_dir must refer to different workspaces.')
+    for _, row in metadata.df.iterrows():
+        if is_gsa_row(row) and row.get('read_count_status') != 'measured':
+            raise ValueError('Rebinding GSA output requires the measured getfastq metadata via --metadata.')
+    metadata = check_metadata_validity(metadata)
+    g = initialize_global_params(args, metadata)
+    # Use the input library layout, as normal getfastq does before any run is processed.
+    metadata.df = metadata.df.drop(columns=['layout_amalgkit'], errors='ignore')
+    run_ids = metadata.df['run'].tolist()
+    requested_runs = set(getattr(args, 'rebind_resume_run', None) or [])
+    if requested_runs:
+        unselected_runs = requested_runs.difference(run_ids)
+        if unselected_runs:
+            raise ValueError('Requested rebind run(s) are outside the getfastq selection: ' + ', '.join(sorted(unselected_runs)))
+        run_ids = [sra_id for sra_id in run_ids if sra_id in requested_runs]
+    for sra_id in run_ids:
+        try:
+            sra_stat = get_sra_stat(sra_id, metadata, g['num_bp_per_sra'])
+            source_dir = safe_join_existing_input_component(source_root, sra_id, label='Source run directory')
+            sra_stat['getfastq_sra_dir'] = safe_join_existing_input_component(
+                destination_root, sra_id, label='Copied run directory',
+            )
+            lock_paths = {resolve_getfastq_run_lock_path(workspace, sra_id) for workspace in (source_args, args)}
+            with ExitStack() as lock_stack:
+                for lock_path in sorted(lock_paths):
+                    lock_stack.enter_context(acquire_exclusive_lock(lock_path, lock_label='getfastq run ' + sra_id))
+                _rebind_getfastq_run_state(args, source_dir, sra_stat, g, metadata)
+        except (OSError, ValueError) as exc:
+            raise ValueError('Cannot rebind copied getfastq resume state for {}: {}'.format(sra_id, exc)) from exc
+
+
 def getfastq_main(args):
     sampling.validate_options(args)
+    rebind_source = getattr(args, 'rebind_resume_from', None)
+    if rebind_source is not None and (not os.fspath(rebind_source).strip() or getattr(args, 'redo', False)):
+        raise ValueError('--rebind_resume_from requires a source path and --redo no.')
+    if rebind_source is None and getattr(args, 'rebind_resume_run', None) is not None:
+        raise ValueError('--rebind_resume_run requires --rebind_resume_from.')
     if not is_auto_parallel_option(getattr(args, 'threads', 'auto')):
         validate_positive_int_option(getattr(args, 'threads', 'auto'), 'threads')
     if not is_auto_parallel_option(getattr(args, 'internal_jobs', 'auto')):
@@ -8056,10 +8203,13 @@ def getfastq_main(args):
         worker_option_name = 'rrna_filter_jobs'
         resolve_rrna_filter_chunk_spots(args)
         resolve_rrna_filter_memory_limit(args)
-    metadata_args = clone_namespace(args, _capture_gsa_source=True)
+    metadata_args = clone_namespace(args, _capture_gsa_source=rebind_source is None)
     metadata = getfastq_metadata(metadata_args)
     metadata = filter_getfastq_eligible_metadata(metadata)
     metadata = remove_experiment_without_run(metadata)
+    if rebind_source is not None:
+        _rebind_copied_getfastq_runs(args, os.path.expanduser(rebind_source), metadata)
+        return
     run_rows = list(zip(metadata.df.index.tolist(), metadata.df['run'].tolist()))
     threads, jobs, _ = resolve_thread_worker_allocation(
         requested_threads=getattr(args, 'threads', 'auto'),
@@ -8071,6 +8221,7 @@ def getfastq_main(args):
         task_count=len(run_rows),
     )
     runtime_args = clone_namespace(metadata_args, threads=threads, internal_jobs=jobs, rrna_filter_jobs=jobs)
+    runtime_args._validated_getfastq_outputs = {}
     runtime_args._requires_sra_toolkit = not all_gsa_rows(metadata.df)
     check_getfastq_dependency(runtime_args)
     metadata = prepare_gsa_metadata(runtime_args, metadata, download_file_from_candidate_sources)
